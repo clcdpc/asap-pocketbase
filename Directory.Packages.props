@@ -3,7 +3,7 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="Clc.Polaris.Api" Version="4.0.0-beta.3" />
+    <PackageVersion Include="Clc.Polaris.Api" Version="4.0.0-beta.5" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Hangfire.AspNetCore" Version="1.8.25" />
     <PackageVersion Include="Hangfire.SqlServer" Version="1.8.25" />

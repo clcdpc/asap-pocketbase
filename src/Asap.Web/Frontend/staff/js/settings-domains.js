@@ -290,7 +290,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     if (name === 'creators') {
       return values.map(item => clean(typeof item === 'string' ? item : property(item, 'value'))).filter(Boolean);
     }
-    return values.map(item => stringId(typeof item === 'string' ? item : property(item, 'id'))).filter(Boolean);
+    return values.map(item => stringId(typeof item === 'string' || typeof item === 'number' ? item : property(item, 'id'))).filter(Boolean);
   }
 
   function setOverrideUi(input, wrapper, overridden) {

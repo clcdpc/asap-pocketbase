@@ -31,14 +31,14 @@ public sealed class AnalyticsContractTests
     {
         var organizations = new[]
         {
-            new AnalyticsLibrary("20", "Library twenty"),
-            new AnalyticsLibrary("21", "Library twenty-one")
+            new AnalyticsLibrary(20, "Library twenty"),
+            new AnalyticsLibrary(21, "Library twenty-one")
         };
         var ordinary = Staff("staff", 20);
         var ordinaryResult = AnalyticsService.ResolveScope(ordinary, "21", organizations);
         Assert.IsTrue(ordinaryResult.IsValid);
         Assert.AreEqual(20, ordinaryResult.OrganizationId);
-        Assert.AreEqual("20", ordinaryResult.LibraryOrgId);
+        Assert.AreEqual(20, ordinaryResult.LibraryOrgId);
 
         var superAdmin = Staff("super_admin", 1);
         var all = AnalyticsService.ResolveScope(superAdmin, "system", organizations);

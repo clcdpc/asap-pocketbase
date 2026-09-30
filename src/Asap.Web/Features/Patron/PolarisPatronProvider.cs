@@ -91,7 +91,7 @@ public sealed partial class PolarisPatronProvider(
                 .OrderBy(row => row.Description, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(row => row.PatronCodeID)
                 .Select(row => new PolarisPatronCodeSnapshot(
-                    row.PatronCodeID.ToString(),
+                    row.PatronCodeID,
                     Clean(row.Description) ?? row.PatronCodeID.ToString()))
                 .ToArray();
         }
@@ -261,7 +261,7 @@ public sealed partial class PolarisPatronProvider(
                 settings.OrganizationIdForRequests is > 0 ? settings.OrganizationIdForRequests.Value : 0,
                 patron.HomeLibraryOrganizationId
             }.Where(item => item > 0).Distinct();
-            IReadOnlyList<PickupBranch> branches = [];
+            IReadOnlyList<int> branchIds = [];
             foreach (var organizationId in candidates)
             {
                 var response = await client.PickupBranchesGetAsync(organizationId, cancellationToken);
@@ -270,19 +270,29 @@ public sealed partial class PolarisPatronProvider(
                     continue;
                 }
 
-                branches = NormalizePickupBranches(response.Response.Content);
-                if (branches.Count > 0)
+                branchIds = ReadPickupBranchIds(response);
+                if (branchIds.Count > 0)
                 {
                     break;
                 }
             }
 
-            if (branches.Count == 0)
+            if (branchIds.Count == 0)
             {
                 throw new InvalidOperationException("Polaris did not return pickup branches.");
             }
 
-            return branches;
+            var organizations = (await LoadOrganizationsAsync(client, cancellationToken))
+                .ToDictionary(row => row.OrganizationID);
+            return branchIds.Select(id =>
+                {
+                    organizations.TryGetValue(id, out var organization);
+                    var label = Clean(organization?.DisplayName) ?? Clean(organization?.Name) ?? $"Branch {id}";
+                    return new PickupBranch(id, label);
+                })
+                .OrderBy(branch => branch.Label, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(branch => branch.Id)
+                .ToArray();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -316,13 +326,8 @@ public sealed partial class PolarisPatronProvider(
                     : 1,
                 RequestPickupBranchID = pickupBranchId
             };
-            var request = PapiRestRequest.Put(
-                $"/public/v1/1033/100/{organizationId}/patron/{WebUtility.UrlEncode(barcode)}",
-                body: update);
-            request.QueryParameters.Add("ignoresa", true);
-            var response = await client.ExecutePapiAsync<PatronUpdateResult>(
-                request,
-                cancellationToken);
+            var response = await client.PatronUpdateAsync(
+                barcode, update, cancellationToken: cancellationToken);
             var result = response.Data;
             if (response.Response?.IsSuccessStatusCode != true ||
                 !TryReadPapiErrorCode(response.Response.Content, out var papiErrorCode) ||
@@ -365,18 +370,10 @@ public sealed partial class PolarisPatronProvider(
             }
             attempts.Add(isbn);
 
-            var upcRequest = PapiRestRequest.Get(
-                $"/public/v1/1033/100/{branch}/search/bibs/keyword/UPC");
-            upcRequest.BlockStaffOverride = true;
-            upcRequest.QueryParameters.Add("q", identifier.Trim());
-            upcRequest.QueryParameters.Add("sort", SearchSortOptions.PDTI);
-            upcRequest.QueryParameters.Add("page", 1);
-            upcRequest.QueryParameters.Add("bibsperpage", 10);
-            upcRequest.QueryParameters.Add("limit", string.Empty);
-            var upc = InspectSearchResponse(
-                await client.ExecutePapiAsync<BibSearchResult>(
-                upcRequest,
-                cancellationToken));
+            var upcOptions = SearchOptions(identifier, branch, SearchQualifiers.KW);
+            upcOptions.SearchType = BibSearchTypes.boolean;
+            upcOptions.Term = "UPC=" + QuoteSearch(identifier.Trim());
+            var upc = InspectSearchResponse(await client.BibSearchAsync(upcOptions, cancellationToken));
             if (upc.Failure.HasValue)
             {
                 return FailureResult(upc.Failure.Value);
@@ -401,11 +398,7 @@ public sealed partial class PolarisPatronProvider(
             var filteredByMaterialType = false;
             var rows = allRows.Where(row =>
                 {
-                    var tom = attempts.SelectMany(item => item.PrimaryTomByControlNumber)
-                        .Where(item => item.Key == row.ControlNumber)
-                        .Select(item => item.Value)
-                        .FirstOrDefault() ?? row.TypeOfMaterial;
-                    var excluded = tom is "36" or "41";
+                    var excluded = row.PrimaryTypeOfMaterial is 36 or 41;
                     filteredByMaterialType |= excluded;
                     return !excluded;
                 })
@@ -444,7 +437,7 @@ public sealed partial class PolarisPatronProvider(
 
             return new IdentifierLookupResult(
                 IdentifierLookupOutcome.Found,
-                selected.ControlNumber.ToString(),
+                selected.ControlNumber,
                 MultipleMatches: rows.Length > 1 || attempts.Any(item => item.Data!.TotalRecordsFound > 1),
                 FilteredByMaterialType: filteredByMaterialType,
                 CatalogTitle: catalogTitle,
@@ -717,11 +710,7 @@ public sealed partial class PolarisPatronProvider(
             return NormalizeHoldResponse(
                 response.Response?.IsSuccessStatusCode == true,
                 response.Response?.Content,
-                response.Data?.StatusType,
-                response.Data?.StatusValue,
-                response.Data?.RequestGuid,
-                response.Data?.TxnGroupQualifier,
-                response.Data?.TxnQualifier,
+                response.Data,
                 isReply: false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -753,7 +742,7 @@ public sealed partial class PolarisPatronProvider(
             var createContext = new HoldRequestCreateResult
             {
                 RequestGuid = command.RequestGuid,
-                TxnGroupQualifier = command.TxnGroupQualifier,
+                TxnGroupQualifer = command.TxnGroupQualifier,
                 TxnQualifier = command.TxnQualifier
             };
             var response = await client.HoldRequestReplyAsync(
@@ -765,12 +754,9 @@ public sealed partial class PolarisPatronProvider(
             return NormalizeHoldResponse(
                 response.Response?.IsSuccessStatusCode == true,
                 response.Response?.Content,
-                null,
-                null,
-                command.RequestGuid,
-                command.TxnGroupQualifier,
-                command.TxnQualifier,
-                isReply: true);
+                response.Data,
+                isReply: true,
+                replyContext: command);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -780,7 +766,7 @@ public sealed partial class PolarisPatronProvider(
         {
             return new HoldProviderResult(
                 HoldProviderOutcome.Ambiguous,
-                command.RequestGuid.ToString(),
+                command.RequestGuid,
                 null,
                 command.TxnGroupQualifier,
                 command.TxnQualifier,
@@ -794,12 +780,9 @@ public sealed partial class PolarisPatronProvider(
     internal static HoldProviderResult NormalizeHoldResponse(
         bool httpSucceeded,
         string? content,
-        int? typedStatusType,
-        int? typedStatusValue,
-        Guid? typedRequestGuid,
-        string? typedTxnGroupQualifier,
-        string? typedTxnQualifier,
-        bool isReply)
+        HoldRequestCreateResult? data,
+        bool isReply,
+        HoldReplyCommand? replyContext = null)
     {
         if (!httpSucceeded || string.IsNullOrWhiteSpace(content))
         {
@@ -809,81 +792,85 @@ public sealed partial class PolarisPatronProvider(
         {
             using var document = JsonDocument.Parse(content);
             var root = document.RootElement;
-            if (!TryGetInt32(root, ["PAPIErrorCode"], out var papiErrorCode))
+            // The package owns deserialization. Raw validation detects absent/defaulted or
+            // duplicate fields before an external write is classified as a definitive outcome.
+            if (data is null || root.ValueKind != JsonValueKind.Object ||
+                root.EnumerateObject().Select(property => property.Name)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Count() != root.EnumerateObject().Count() ||
+                !TryGetUniqueProperty(root, "PAPIErrorCode", out var errorCode) ||
+                errorCode.ValueKind != JsonValueKind.Number || !errorCode.TryGetInt32(out var papiErrorCode) ||
+                papiErrorCode != data.PAPIErrorCode ||
+                !TryGetUniqueProperty(root, "StatusType", out var rawType) ||
+                rawType.ValueKind != JsonValueKind.Number || !rawType.TryGetInt32(out var statusType) ||
+                statusType != data.StatusType ||
+                !TryGetUniqueProperty(root, "StatusValue", out var rawValue) ||
+                rawValue.ValueKind != JsonValueKind.Number || !rawValue.TryGetInt32(out var statusValue) ||
+                statusValue != data.StatusValue)
             {
                 return Ambiguous(isReply, "provider_protocol_error");
             }
-            var statusType = ReadInt(root, "StatusType") ?? typedStatusType;
-            var statusValue = ReadInt(root, "StatusValue") ?? typedStatusValue;
-            var requestGuid = ReadString(root, "RequestGUID", "RequestGuid") ?? typedRequestGuid?.ToString();
-            var holdId = ReadString(root, "HoldRequestID", "HoldRequestId", "SysHoldRequestID");
-            var group = ReadString(root, "TxnGroupQualifier", "TxnGroupQualifer") ?? typedTxnGroupQualifier;
-            var qualifier = ReadString(root, "TxnQualifier") ?? typedTxnQualifier;
-            var common = new
-            {
-                requestGuid,
-                holdId,
-                group,
-                qualifier,
-                statusType,
-                statusValue
-            };
+            var requestGuid = data.RequestGuid ?? replyContext?.RequestGuid;
+            var group = Clean(data.TxnGroupQualifer) ?? replyContext?.TxnGroupQualifier;
+            var qualifier = Clean(data.TxnQualifier) ?? replyContext?.TxnQualifier;
+            // Create/reply return a conversation GUID, not a SysHoldRequestID. Final hold
+            // identity is established independently from the patron's typed hold listing.
             if (papiErrorCode != 0)
             {
                 return new HoldProviderResult(
                     HoldProviderOutcome.Ambiguous,
-                    common.requestGuid,
-                    common.holdId,
-                    common.group,
-                    common.qualifier,
-                    common.statusType,
-                    common.statusValue,
+                    requestGuid,
+                    null,
+                    group,
+                    qualifier,
+                    statusType,
+                    statusValue,
                     isReply ? "reply_papi_error" : "create_papi_error",
                     "provider_papi_error");
             }
             if (!isReply && statusType == 3 && statusValue == 5 &&
-                Guid.TryParse(requestGuid, out _) && !string.IsNullOrWhiteSpace(group) && !string.IsNullOrWhiteSpace(qualifier))
+                requestGuid is { } guid && guid != Guid.Empty &&
+                !string.IsNullOrWhiteSpace(group) && !string.IsNullOrWhiteSpace(qualifier))
             {
                 return new HoldProviderResult(
                     HoldProviderOutcome.ReplyRequired,
                     requestGuid,
-                    holdId,
+                    null,
                     group,
                     qualifier,
                     statusType,
                     statusValue,
                     "create_status_5_reply_required");
             }
-            if (statusType == 2 && statusValue.GetValueOrDefault() == 0)
+            if (statusType == 2 && statusValue == 1)
             {
                 return new HoldProviderResult(
                     HoldProviderOutcome.FinalSuccess,
                     requestGuid,
-                    holdId,
+                    null,
                     group,
                     qualifier,
                     statusType,
                     statusValue,
                     isReply ? "documented_reply_success" : "documented_create_success");
             }
-            if (!isReply && statusType == 1 && statusValue.HasValue &&
-                DocumentedCreateNoEffectStatuses.Contains(statusValue.Value))
+            if (statusType == 2 && statusValue == 0 ||
+                !isReply && statusType == 1 && DocumentedCreateNoEffectStatuses.Contains(statusValue))
             {
                 return new HoldProviderResult(
                     HoldProviderOutcome.DefinitiveNoEffect,
                     requestGuid,
-                    holdId,
+                    null,
                     group,
                     qualifier,
                     statusType,
                     statusValue,
-                    "documented_create_rejection",
-                    $"provider_status_{statusValue.Value}");
+                    isReply ? "documented_reply_rejection" : "documented_create_rejection",
+                    $"provider_status_{statusValue}");
             }
             return new HoldProviderResult(
                 HoldProviderOutcome.Ambiguous,
                 requestGuid,
-                holdId,
+                null,
                 group,
                 qualifier,
                 statusType,
@@ -907,28 +894,6 @@ public sealed partial class PolarisPatronProvider(
         null,
         isReply ? "reply_response_ambiguous" : "create_response_ambiguous",
         code);
-
-    private static int? ReadInt(JsonElement root, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (!root.TryGetProperty(name, out var value)) continue;
-            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)) return number;
-            if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out number)) return number;
-        }
-        return null;
-    }
-
-    private static string? ReadString(JsonElement root, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (!root.TryGetProperty(name, out var value)) continue;
-            if (value.ValueKind == JsonValueKind.String) return Clean(value.GetString());
-            if (value.ValueKind == JsonValueKind.Number) return value.GetRawText();
-        }
-        return null;
-    }
 
     private async Task<PatronSnapshot> LoadPatronAsync(
         PapiClient client,
@@ -994,7 +959,7 @@ public sealed partial class PolarisPatronProvider(
             Clean(patron.EmailAddress),
             Clean(patron.NameFirst),
             Clean(patron.NameLast),
-            patron.PatronCodeID <= 0 ? null : patron.PatronCodeID.ToString(),
+            patron.PatronCodeID <= 0 ? null : patron.PatronCodeID,
             null,
             patron.PatronOrgID,
             home.OrganizationID,
@@ -1104,129 +1069,36 @@ public sealed partial class PolarisPatronProvider(
     private static string? Clean(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    private static IReadOnlyList<PickupBranch> NormalizePickupBranches(string? content)
+    private static IReadOnlyList<int> ReadPickupBranchIds(IRestResponse<PickupBranchesGetResult> response)
     {
-        if (string.IsNullOrWhiteSpace(content))
+        var data = response.Data;
+        using var document = JsonDocument.Parse(response.Response?.Content ?? string.Empty);
+        var root = document.RootElement;
+        // Validate presence, uniqueness and range before trusting a model whose Int32
+        // fields default to zero when omitted. Mapping uses the package's typed IDs.
+        if (data is null || !TryReadPapiErrorCode(response.Response?.Content, out var code) ||
+            code < 0 || data.PAPIErrorCode != code ||
+            !TryGetUniqueProperty(root, "PickupBranchesRows", out var rows) ||
+            rows.ValueKind != JsonValueKind.Array || data.PickupBranchesRows is null ||
+            data.PickupBranchesRows.Count != rows.GetArrayLength())
         {
-            return [];
+            throw new PolarisOperationalException("polaris_pickup_protocol_failed",
+                "Polaris returned an invalid pickup branch response.");
         }
-
-        try
+        var index = 0;
+        foreach (var row in rows.EnumerateArray())
         {
-            using var document = JsonDocument.Parse(content);
-            var root = document.RootElement;
-            if (root.ValueKind == JsonValueKind.Object &&
-                TryGetInt32(root, ["PAPIErrorCode"], out var papiErrorCode) &&
-                papiErrorCode < 0)
+            var model = data.PickupBranchesRows[index++];
+            if (row.ValueKind != JsonValueKind.Object || model is null || HasDuplicateProperties(row) ||
+                !TryGetUniqueProperty(row, "ID", out var rawId) ||
+                rawId.ValueKind != JsonValueKind.Number || !rawId.TryGetInt32(out var id) ||
+                id <= 0 || id != model.ID)
             {
-                return [];
-            }
-
-            var rows = FindPickupBranchRows(root);
-            var byId = new Dictionary<int, PickupBranch>();
-            foreach (var row in rows)
-            {
-                if (row.ValueKind != JsonValueKind.Object ||
-                    !TryGetInt32(
-                        row,
-                        ["OrganizationID", "OrganizationId", "OrgID", "OrgId", "PickupBranchID",
-                         "PickupBranchId", "BranchID", "BranchId", "ID", "Id"],
-                        out var id) ||
-                    id <= 0 ||
-                    byId.ContainsKey(id))
-                {
-                    continue;
-                }
-
-                var label = TryGetString(
-                    row,
-                    ["DisplayName", "OrganizationName", "Name", "BranchName", "Description", "Label"]);
-                byId.Add(id, new PickupBranch(id, label ?? $"Branch {id}"));
-            }
-
-            return byId.Values
-                .OrderBy(item => item.Label, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(item => item.Id)
-                .ToArray();
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-    }
-
-    private static IEnumerable<JsonElement> FindPickupBranchRows(JsonElement root)
-    {
-        var container = root;
-        if (root.ValueKind == JsonValueKind.Object &&
-            TryGetProperty(root, ["PickupBranchesRows", "PickupBranchRows", "Branches"], out var found))
-        {
-            container = found;
-        }
-
-        if (container.ValueKind == JsonValueKind.Object &&
-            TryGetProperty(container, ["PickupBranchRow"], out found))
-        {
-            container = found;
-        }
-
-        return container.ValueKind switch
-        {
-            JsonValueKind.Array => container.EnumerateArray().ToArray(),
-            JsonValueKind.Object => [container],
-            _ => []
-        };
-    }
-
-    private static bool TryGetProperty(
-        JsonElement element,
-        IReadOnlyList<string> names,
-        out JsonElement value)
-    {
-        foreach (var name in names)
-        {
-            if (element.TryGetProperty(name, out value))
-            {
-                return true;
+                throw new PolarisOperationalException("polaris_pickup_protocol_failed",
+                    "Polaris returned an invalid pickup branch identity.");
             }
         }
-
-        value = default;
-        return false;
-    }
-
-    private static bool TryGetInt32(
-        JsonElement element,
-        IReadOnlyList<string> names,
-        out int value)
-    {
-        if (TryGetProperty(element, names, out var property))
-        {
-            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out value))
-            {
-                return true;
-            }
-
-            if (property.ValueKind == JsonValueKind.String &&
-                int.TryParse(property.GetString(), out value))
-            {
-                return true;
-            }
-        }
-
-        value = 0;
-        return false;
-    }
-
-    private static string? TryGetString(JsonElement element, IReadOnlyList<string> names)
-    {
-        if (!TryGetProperty(element, names, out var property) ||
-            property.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
-
-        return Clean(property.GetString());
+        return data.PickupBranchesRows.Select(row => row.ID).Distinct().ToArray();
     }
 
     private static BibSearchOptions SearchOptions(
@@ -1252,12 +1124,10 @@ public sealed partial class PolarisPatronProvider(
                 IsTransient(response.Response?.StatusCode)
                     ? IdentifierLookupOutcome.TransientFailure
                     : IdentifierLookupOutcome.OperationalFailure,
-                null,
-                new Dictionary<int, string>());
+                null);
         }
 
         var content = response.Response?.Content ?? string.Empty;
-        Dictionary<int, string> primaryTomByControlNumber;
         try
         {
             using var document = JsonDocument.Parse(content);
@@ -1287,10 +1157,7 @@ public sealed partial class PolarisPatronProvider(
                     return SearchAttempt.Operational;
                 }
 
-                return new SearchAttempt(
-                    null,
-                    data,
-                    new Dictionary<int, string>());
+                return new SearchAttempt(null, data);
             }
 
             if (code < 0)
@@ -1304,7 +1171,6 @@ public sealed partial class PolarisPatronProvider(
                 return SearchAttempt.Operational;
             }
 
-            primaryTomByControlNumber = new Dictionary<int, string>();
             var rowIndex = 0;
             foreach (var row in rowsElement.EnumerateArray())
             {
@@ -1313,15 +1179,11 @@ public sealed partial class PolarisPatronProvider(
                     !TryGetUniqueProperty(row, "ControlNumber", out var control) ||
                     !TryReadPositiveInt32(control, out var controlNumber) ||
                     controlNumber != model.ControlNumber ||
-                    HasUndocumentedBibIdentityAlias(row))
+                    HasUndocumentedBibIdentityAlias(row) || HasDuplicateProperties(row))
                 {
                     return SearchAttempt.Operational;
                 }
 
-                if (TryGetUniqueProperty(row, "PrimaryTypeOfMaterial", out var tom))
-                {
-                    primaryTomByControlNumber[controlNumber] = tom.ToString().Trim();
-                }
             }
         }
         catch (JsonException)
@@ -1329,7 +1191,7 @@ public sealed partial class PolarisPatronProvider(
             return SearchAttempt.Operational;
         }
 
-        return new SearchAttempt(null, response.Data, primaryTomByControlNumber);
+        return new SearchAttempt(null, response.Data);
     }
 
     private static bool HasUndocumentedBibIdentityAlias(JsonElement row)
@@ -1546,12 +1408,10 @@ public sealed partial class PolarisPatronProvider(
 
     private sealed record SearchAttempt(
         IdentifierLookupOutcome? Failure,
-        BibSearchResult? Data,
-        IReadOnlyDictionary<int, string> PrimaryTomByControlNumber)
+        BibSearchResult? Data)
     {
         public static SearchAttempt Operational { get; } = new(
             IdentifierLookupOutcome.OperationalFailure,
-            null,
-            new Dictionary<int, string>());
+            null);
     }
 }

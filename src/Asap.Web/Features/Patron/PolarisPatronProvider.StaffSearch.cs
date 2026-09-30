@@ -14,13 +14,12 @@ public sealed partial class PolarisPatronProvider
         try
         {
             var (client, settings) = await CreateClientAsync(cancellationToken);
-            var request = PapiRestRequest.Get(
-                $"/protected/v1/1033/100/{settings.OrganizationIdForRequests ?? 1}/{ProtectedToken.Placeholder}/search/patrons/boolean");
-            request.QueryParameters.Add("q", "PATNF=" + QuoteSearch(CleanSearch(query)));
-            request.QueryParameters.Add("sortby", "PATNF");
-            request.QueryParameters.Add("patronsperpage", 10);
-            request.QueryParameters.Add("page", 1);
-            var response = await client.ExecutePapiAsync<PatronSearchResult>(request, cancellationToken);
+            var response = await client.PatronSearchAsync(
+                "PATNF=" + QuoteSearch(CleanSearch(query)),
+                pageSize: 10,
+                sortBy: PatronSortKeys.PATN,
+                orgId: settings.OrganizationIdForRequests,
+                cancellationToken: cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             var data = response.Data;
             if (response.Response?.IsSuccessStatusCode != true || data is null ||

@@ -173,7 +173,7 @@ async function until(predicate, message) {
       }
       if (url.endsWith('/bib-lookup')) {
         return response(200, {
-          status: 'found', bibId: '9001', title: 'Catalog title', author: 'Catalog author',
+          status: 'found', bibId: 9001, title: 'Catalog title', author: 'Catalog author',
           identifier: '9780000000001', publication: '2026', format: 'Book'
         });
       }

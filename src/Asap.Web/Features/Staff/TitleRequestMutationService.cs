@@ -28,8 +28,36 @@ public sealed class TitleRequestActionInput
     public JsonElement ExactPublicationDate { get; init; }
     public JsonElement CustomFields { get; init; }
     public JsonElement Autohold { get; init; }
-    public JsonElement Bibid { get; init; }
-    public JsonElement StaffSelectedBibId { get; init; }
+    private int? bibid;
+    private int? staffSelectedBibId;
+
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public int? Bibid
+    {
+        get => bibid;
+        init
+        {
+            bibid = value;
+            BibidSupplied = true;
+        }
+    }
+
+    [JsonIgnore]
+    public bool BibidSupplied { get; private set; }
+
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public int? StaffSelectedBibId
+    {
+        get => staffSelectedBibId;
+        init
+        {
+            staffSelectedBibId = value;
+            StaffSelectedBibIdSupplied = true;
+        }
+    }
+
+    [JsonIgnore]
+    public bool StaffSelectedBibIdSupplied { get; private set; }
     public string? Notes { get; init; }
     public string? Format { get; init; }
     public bool EmailPurchaseReminder { get; init; }
@@ -47,7 +75,7 @@ public sealed record TitleRequestMutationResult(
     string? PatronNotificationReason = null,
     TitleRequestDuplicateConflict? Duplicate = null);
 
-public sealed record TitleRequestDuplicateConflict(long Id, string Title, string Status, string BibId, string MatchType);
+public sealed record TitleRequestDuplicateConflict(long Id, string Title, string Status, int BibId, string MatchType);
 
 public sealed class TitleRequestMutationService(
     IDbContextFactory<AsapDbContext> contextFactory,
@@ -361,17 +389,17 @@ public sealed class TitleRequestMutationService(
             }
         }
         var previewIdentifier = Clean(notificationRequest.Identifier);
-        var previewBib = Clean(notificationRequest.BibId);
+        var previewBib = notificationRequest.BibId;
         var previewIdentifierChanged = IsSupplied(input.Identifier) &&
             !string.Equals(Clean(ElementString(input.Identifier)), previewIdentifier, StringComparison.Ordinal);
-        var previewBibSupplied = IsSupplied(input.Bibid);
-        var previewProposedBib = previewBibSupplied ? Clean(ElementString(input.Bibid)) : previewBib;
+        var previewBibSupplied = input.BibidSupplied;
+        var previewProposedBib = previewBibSupplied ? input.Bibid : previewBib;
         var previewBibChanged = previewBibSupplied &&
-            !string.Equals(previewProposedBib, previewBib, StringComparison.Ordinal);
-        var previewSelectedBibId = IsSupplied(input.StaffSelectedBibId)
-            ? Clean(ElementString(input.StaffSelectedBibId)) : null;
+            previewProposedBib != previewBib;
+        var previewSelectedBibId = input.StaffSelectedBibIdSupplied
+            ? input.StaffSelectedBibId : null;
         var previewStaffSelectedBib = previewSelectedBibId is not null &&
-            string.Equals(previewSelectedBibId, previewProposedBib, StringComparison.Ordinal);
+            previewSelectedBibId == previewProposedBib;
         var notificationTargetStatus = ResolveStatus(input.Action, input.Status, notificationRequest.Status,
             ProjectBibAfterMutation(previewIdentifierChanged, previewBibChanged,
                 previewStaffSelectedBib, previewProposedBib));
@@ -451,15 +479,15 @@ public sealed class TitleRequestMutationService(
         var proposedIdentifier = identifierSupplied ? Clean(ElementString(input.Identifier)) : Clean(request.Identifier);
         var identifierChanged = identifierSupplied &&
                                 !string.Equals(Clean(proposedIdentifier), Clean(request.Identifier), StringComparison.Ordinal);
-        var bibSupplied = IsSupplied(input.Bibid);
-        var proposedBib = bibSupplied ? Clean(ElementString(input.Bibid)) : Clean(request.BibId);
+        var bibSupplied = input.BibidSupplied;
+        var proposedBib = bibSupplied ? input.Bibid : request.BibId;
         var bibChanged = bibSupplied &&
-                         !string.Equals(Clean(proposedBib), Clean(request.BibId), StringComparison.Ordinal);
-        var selectedBibId = IsSupplied(input.StaffSelectedBibId)
-            ? Clean(ElementString(input.StaffSelectedBibId))
+                         proposedBib != request.BibId;
+        var selectedBibId = input.StaffSelectedBibIdSupplied
+            ? input.StaffSelectedBibId
             : null;
         var staffSelectedBib = selectedBibId is not null &&
-                               string.Equals(selectedBibId, proposedBib, StringComparison.Ordinal);
+                               selectedBibId == proposedBib;
         var bibAfterMutation = ProjectBibAfterMutation(identifierChanged, bibChanged,
             staffSelectedBib, proposedBib);
         var autoHoldSupplied = input.Autohold.ValueKind is JsonValueKind.True or JsonValueKind.False;
@@ -490,7 +518,7 @@ public sealed class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult("identifier_locked_by_stage");
         }
-        if (requestedTarget == "pending_hold" && statusChanged && string.IsNullOrWhiteSpace(bibAfterMutation))
+        if (requestedTarget == "pending_hold" && statusChanged && bibAfterMutation is null)
         {
             return new TitleRequestMutationResult("bib_required");
         }
@@ -499,7 +527,7 @@ public sealed class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult("bib_unverified");
         }
-        if (bibChanged && proposedBib is not null && !IsPositiveInteger(proposedBib))
+        if (bibChanged && proposedBib is not null && proposedBib <= 0)
         {
             return new TitleRequestMutationResult("invalid_bib");
         }
@@ -515,12 +543,12 @@ public sealed class TitleRequestMutationService(
                 .OrderBy(item => item.Id)
                 .Select(item => new { item.Id, item.Title, item.Status, item.BibId })
                 .ToListAsync(cancellationToken);
-            var duplicate = otherOpenRequests.FirstOrDefault(other => SameBibIdentity(other.BibId, bibAfterMutation));
+            var duplicate = otherOpenRequests.FirstOrDefault(other => other.BibId == bibAfterMutation);
             if (duplicate is not null)
             {
                 return new TitleRequestMutationResult("duplicate_open_request", Duplicate:
                     new TitleRequestDuplicateConflict(duplicate.Id, duplicate.Title, duplicate.Status,
-                        duplicate.BibId!, "bibid"));
+                        duplicate.BibId!.Value, "bibid"));
             }
         }
 
@@ -582,7 +610,7 @@ public sealed class TitleRequestMutationService(
         }
         if (bibChanged || staffSelectedBib)
         {
-            request.BibId = Clean(proposedBib);
+            request.BibId = proposedBib;
             request.BibIdStaffVerified = request.BibId is not null;
         }
 
@@ -861,12 +889,12 @@ public sealed class TitleRequestMutationService(
         TitleRequestActionInput input,
         CancellationToken cancellationToken)
     {
-        var bibSupplied = IsSupplied(input.Bibid);
-        var selectedBibId = IsSupplied(input.StaffSelectedBibId)
-            ? Clean(ElementString(input.StaffSelectedBibId))
+        var bibSupplied = input.BibidSupplied;
+        var selectedBibId = input.StaffSelectedBibIdSupplied
+            ? input.StaffSelectedBibId
             : null;
-        if (IsSupplied(input.StaffSelectedBibId) &&
-            (!bibSupplied || selectedBibId is null || !IsPositiveInteger(selectedBibId)))
+        if (input.StaffSelectedBibIdSupplied &&
+            (!bibSupplied || selectedBibId is null || selectedBibId <= 0))
         {
             return "invalid_bib";
         }
@@ -876,8 +904,8 @@ public sealed class TitleRequestMutationService(
         {
             return null;
         }
-        var proposedBib = bibSupplied ? Clean(ElementString(input.Bibid)) : null;
-        if (proposedBib is not null && !IsPositiveInteger(proposedBib))
+        var proposedBib = bibSupplied ? input.Bibid : null;
+        if (proposedBib is not null && proposedBib <= 0)
         {
             return "invalid_bib";
         }
@@ -903,14 +931,14 @@ public sealed class TitleRequestMutationService(
 
         if (!bibSupplied)
         {
-            proposedBib = Clean(request.BibId);
+            proposedBib = request.BibId;
         }
         if (selectedBibId is not null &&
-            !string.Equals(selectedBibId, proposedBib, StringComparison.Ordinal))
+            selectedBibId != proposedBib)
         {
             return "invalid_bib";
         }
-        if (proposedBib is not null && !IsPositiveInteger(proposedBib))
+        if (proposedBib is not null && proposedBib <= 0)
         {
             return "invalid_bib";
         }
@@ -925,7 +953,7 @@ public sealed class TitleRequestMutationService(
         var proposedIdentifier = identifierSupplied ? Clean(ElementString(input.Identifier)) : Clean(request.Identifier);
         var identifierChanged = identifierSupplied &&
                                 !string.Equals(proposedIdentifier, Clean(request.Identifier), StringComparison.Ordinal);
-        var bibChanged = !string.Equals(proposedBib, Clean(request.BibId), StringComparison.Ordinal);
+        var bibChanged = proposedBib != request.BibId;
         var explicitlySuppliedBib = bibChanged || selectedBibId is not null;
         var bibAfterMutation = identifierChanged
             ? explicitlySuppliedBib ? proposedBib : null
@@ -961,7 +989,7 @@ public sealed class TitleRequestMutationService(
         {
             return "invalid_transition";
         }
-        if (targetStatus == "pending_hold" && enteringPendingHold && string.IsNullOrWhiteSpace(bibAfterMutation))
+        if (targetStatus == "pending_hold" && enteringPendingHold && bibAfterMutation is null)
         {
             return "bib_required";
         }
@@ -980,7 +1008,7 @@ public sealed class TitleRequestMutationService(
 
         try
         {
-            var result = await staffPolarisProvider.ValidateBibAsync(int.Parse(proposedBib), cancellationToken);
+            var result = await staffPolarisProvider.ValidateBibAsync(proposedBib.Value, cancellationToken);
             return result.IsValid ? null : "bib_not_found";
         }
         catch (PolarisOperationalException)
@@ -1635,7 +1663,7 @@ public sealed class TitleRequestMutationService(
         return (null, merged.Count == 0 ? null : JsonSerializer.Serialize(merged));
     }
 
-    private static string? ResolveStatus(string? actionValue, string? requestedStatus, string current, string? bib)
+    private static string? ResolveStatus(string? actionValue, string? requestedStatus, string current, int? bib)
     {
         var action = Clean(actionValue);
         var requested = Clean(requestedStatus);
@@ -1643,7 +1671,7 @@ public sealed class TitleRequestMutationService(
         {
             "edit" when requested is null || requested == current => current,
             "purchase" when current == "suggestion" =>
-                string.IsNullOrWhiteSpace(bib) ? "outstanding_purchase" : "pending_hold",
+                bib is null ? "outstanding_purchase" : "pending_hold",
             "alreadyOwn" when current == "suggestion" => "pending_hold",
             "catalogFound" when current is "suggestion" or "outstanding_purchase" => "pending_hold",
             "reject" or "silentClose" when current == "suggestion" => "closed",
@@ -1656,7 +1684,7 @@ public sealed class TitleRequestMutationService(
     }
 
     private static string? ResolveBibTargetStatus(string? action, string current, string? requestedTarget,
-        string? bib, bool autoHold, bool bibSupplied)
+        int? bib, bool autoHold, bool bibSupplied)
     {
         if (requestedTarget is null)
         {
@@ -1680,19 +1708,14 @@ public sealed class TitleRequestMutationService(
     };
 
     private static bool IsSupplied(JsonElement value) => value.ValueKind != JsonValueKind.Undefined;
-    private static string? ProjectBibAfterMutation(
+    private static int? ProjectBibAfterMutation(
         bool identifierChanged,
         bool bibChanged,
         bool staffSelectedBib,
-        string? proposedBib) => identifierChanged && !bibChanged && !staffSelectedBib ? null : proposedBib;
+        int? proposedBib) => identifierChanged && !bibChanged && !staffSelectedBib ? null : proposedBib;
     private static string? ElementString(JsonElement value) => value.ValueKind == JsonValueKind.String
         ? value.GetString()
         : value.ToString();
-    private static bool IsPositiveInteger(string? value) => int.TryParse(value, out var result) && result > 0;
-
-    private static bool SameBibIdentity(string? first, string? second) =>
-        int.TryParse(first, out var firstId) && firstId > 0 &&
-        int.TryParse(second, out var secondId) && firstId == secondId;
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static string DisplayName(StaffUser value) =>
         Clean(value.DisplayName) ?? Clean(value.UserPrincipalName) ?? "Staff";

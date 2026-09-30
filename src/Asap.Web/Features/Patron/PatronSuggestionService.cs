@@ -75,7 +75,7 @@ internal sealed record ValidatedSuggestion(
     string? CustomFieldsJson,
     DateOnly? ExactPublicationDate,
     string? Notes,
-    string? VerifiedBibId);
+    int? VerifiedBibId);
 
 internal sealed record CreationActor(
     string ActorType,
@@ -574,17 +574,16 @@ public sealed partial class PatronSuggestionService(
         }
     }
 
-    private async Task<string?> ValidateStaffBibAsync(
-        string? rawBibId,
+    private async Task<int?> ValidateStaffBibAsync(
+        int? bibId,
         CancellationToken cancellationToken)
     {
-        var bibId = Clean(rawBibId);
         if (bibId is null)
         {
             return null;
         }
 
-        if (!int.TryParse(bibId, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) || parsed <= 0)
+        if (bibId <= 0)
         {
             throw new PatronFlowException(
                 400,
@@ -600,7 +599,7 @@ public sealed partial class PatronSuggestionService(
         BibValidationResult result;
         try
         {
-            result = await staffPolaris.ValidateBibAsync(parsed, cancellationToken);
+            result = await staffPolaris.ValidateBibAsync(bibId.Value, cancellationToken);
         }
         catch (PolarisOperationalException exception)
         {
@@ -631,7 +630,7 @@ public sealed partial class PatronSuggestionService(
                 new { code = "bib_not_found" });
         }
 
-        return parsed.ToString(CultureInfo.InvariantCulture);
+        return bibId;
     }
 
     private async Task<(EffectivePatronConfiguration Configuration, ValidatedSuggestion Suggestion)>
@@ -641,7 +640,7 @@ public sealed partial class PatronSuggestionService(
         string barcode,
         PatronSnapshot patron,
         StaffSuggestionInput input,
-        string? verifiedBibId,
+        int? verifiedBibId,
         CancellationToken cancellationToken)
     {
         if (contextFactory is null || staffEligibility is null)
@@ -892,7 +891,7 @@ public sealed partial class PatronSuggestionService(
             Add(insert, "@email", SqlDbType.NVarChar, patron.Email, 320);
             Add(insert, "@nameFirst", SqlDbType.NVarChar, patron.NameFirst, 256);
             Add(insert, "@nameLast", SqlDbType.NVarChar, patron.NameLast, 256);
-            Add(insert, "@patronCodeId", SqlDbType.NVarChar, patron.PatronCodeId, 100);
+            Add(insert, "@patronCodeId", SqlDbType.Int, patron.PatronCodeId);
             Add(insert, "@patronCodeDescription", SqlDbType.NVarChar, patron.PatronCodeDescription, 256);
             Add(insert, "@pickupBranchId", SqlDbType.Int, selectedBranch.Id);
             Add(insert, "@pickupBranchName", SqlDbType.NVarChar, selectedBranch.Label, 256);
@@ -905,7 +904,7 @@ public sealed partial class PatronSuggestionService(
             Add(insert, "@customFieldsJson", SqlDbType.NVarChar, currentSuggestion.CustomFieldsJson, -1);
             Add(insert, "@autoHold", SqlDbType.Bit, currentSuggestion.AutoHold);
             Add(insert, "@notes", SqlDbType.NVarChar, currentSuggestion.Notes, -1);
-            Add(insert, "@bibId", SqlDbType.NVarChar, currentSuggestion.VerifiedBibId, 100);
+            Add(insert, "@bibId", SqlDbType.Int, currentSuggestion.VerifiedBibId);
             Add(insert, "@bibIdStaffVerified", SqlDbType.Bit, currentSuggestion.VerifiedBibId is not null);
             Add(insert, "@materialFormatId", SqlDbType.BigInt, currentSuggestion.Format.Id);
             Add(insert, "@isbnCheckStatus", SqlDbType.NVarChar,
@@ -1058,7 +1057,7 @@ public sealed partial class PatronSuggestionService(
             Add(insert, "@email", SqlDbType.NVarChar, patron.Email, 320);
             Add(insert, "@nameFirst", SqlDbType.NVarChar, patron.NameFirst, 256);
             Add(insert, "@nameLast", SqlDbType.NVarChar, patron.NameLast, 256);
-            Add(insert, "@patronCodeId", SqlDbType.NVarChar, patron.PatronCodeId, 100);
+            Add(insert, "@patronCodeId", SqlDbType.Int, patron.PatronCodeId);
             Add(insert, "@patronCodeDescription", SqlDbType.NVarChar, patron.PatronCodeDescription, 256);
             Add(insert, "@pickupBranchId", SqlDbType.Int, selectedBranch.Id);
             Add(insert, "@pickupBranchName", SqlDbType.NVarChar, selectedBranch.Label, 256);
@@ -1071,7 +1070,7 @@ public sealed partial class PatronSuggestionService(
             Add(insert, "@customFieldsJson", SqlDbType.NVarChar, suggestion.CustomFieldsJson, -1);
             Add(insert, "@autoHold", SqlDbType.Bit, suggestion.AutoHold);
             Add(insert, "@notes", SqlDbType.NVarChar, suggestion.Notes, -1);
-            Add(insert, "@bibId", SqlDbType.NVarChar, suggestion.VerifiedBibId, 100);
+            Add(insert, "@bibId", SqlDbType.Int, suggestion.VerifiedBibId);
             Add(insert, "@bibIdStaffVerified", SqlDbType.Bit, suggestion.VerifiedBibId is not null);
             Add(insert, "@materialFormatId", SqlDbType.BigInt, suggestion.Format.Id);
             Add(
@@ -1377,7 +1376,7 @@ public sealed partial class PatronSuggestionService(
         Add(command, "@organizationId", SqlDbType.Int, configuration.OrganizationId);
         Add(command, "@barcode", SqlDbType.NVarChar, barcode, 50);
         Add(command, "@identifier", SqlDbType.NVarChar, suggestion.Identifier, 100);
-        Add(command, "@bibId", SqlDbType.NVarChar, suggestion.VerifiedBibId, 100);
+        Add(command, "@bibId", SqlDbType.Int, suggestion.VerifiedBibId);
         Add(command, "@title", SqlDbType.NVarChar, suggestion.Title, 500);
         Add(command, "@materialFormatId", SqlDbType.BigInt, suggestion.Format.Id);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -1901,7 +1900,7 @@ public sealed partial class PatronSuggestionService(
 
         string currentTitle = null!;
         string? currentAuthor = null;
-        string? currentBibId = null;
+        int? currentBibId = null;
         var bibIdStaffVerified = false;
         var requestFound = false;
         await using (var request = new SqlCommand(
@@ -1928,7 +1927,7 @@ public sealed partial class PatronSuggestionService(
                 requestFound = true;
                 currentTitle = reader.GetString(0);
                 currentAuthor = reader.IsDBNull(1) ? null : reader.GetString(1);
-                currentBibId = reader.IsDBNull(2) ? null : reader.GetString(2);
+                currentBibId = reader.IsDBNull(2) ? null : reader.GetInt32(2);
                 bibIdStaffVerified = reader.GetBoolean(3);
             }
         }
@@ -1957,7 +1956,7 @@ public sealed partial class PatronSuggestionService(
 
         var status = result.Outcome switch
         {
-            IdentifierLookupOutcome.Found when !string.IsNullOrWhiteSpace(result.BibId) => "found",
+            IdentifierLookupOutcome.Found when result.BibId is > 0 => "found",
             IdentifierLookupOutcome.DefinitiveNotFound => "not_found",
             IdentifierLookupOutcome.TransientFailure => "pending",
             _ => null
@@ -2032,7 +2031,7 @@ public sealed partial class PatronSuggestionService(
         {
             Add(update, "@status", SqlDbType.NVarChar, status, 32);
             Add(update, "@retryIncrement", SqlDbType.Int, retryIncrement);
-            Add(update, "@bibId", SqlDbType.NVarChar, result.BibId, 100);
+            Add(update, "@bibId", SqlDbType.Int, result.BibId);
             Add(update, "@title", SqlDbType.NVarChar, reconciledTitle, 500);
             Add(update, "@author", SqlDbType.NVarChar, reconciledAuthor, 500);
             Add(update, "@errorCode", SqlDbType.NVarChar, result.ErrorCode, 100);
@@ -2149,7 +2148,7 @@ public sealed partial class PatronSuggestionService(
         bool? forcedAutoHold = null,
         DateOnly? exactPublicationDate = null,
         string? notes = null,
-        string? verifiedBibId = null)
+        int? verifiedBibId = null)
     {
         var formatCode = Clean(input.Format) ?? "book";
         var format = configuration.Formats.SingleOrDefault(item =>
@@ -2299,8 +2298,8 @@ public sealed partial class PatronSuggestionService(
     {
         if (!configuration.PatronCodeEligibilityEnabled ||
             configuration.AllowedPatronCodeIds.Count == 0 ||
-            string.IsNullOrWhiteSpace(patron.PatronCodeId) ||
-            configuration.AllowedPatronCodeIds.Contains(patron.PatronCodeId))
+            !patron.PatronCodeId.HasValue ||
+            configuration.AllowedPatronCodeIds.Contains(patron.PatronCodeId.Value))
         {
             return;
         }

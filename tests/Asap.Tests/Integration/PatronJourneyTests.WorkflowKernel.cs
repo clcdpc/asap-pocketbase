@@ -343,8 +343,8 @@ public sealed partial class PatronJourneyTests
         var seeded = await SeedCompletedHoldIdentityAsync(
             $"fulfillment-historical-{historicalFirst}",
             requestBarcode,
-            "9902",
-            holdRequestId: "200");
+            9902,
+            holdRequestId: 200);
         await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
         try
         {
@@ -386,8 +386,8 @@ public sealed partial class PatronJourneyTests
         var seeded = await SeedCompletedHoldIdentityAsync(
             "fulfillment-active-tracked",
             requestBarcode,
-            "9903",
-            holdRequestId: "200");
+            9903,
+            holdRequestId: 200);
         await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
         try
         {
@@ -433,8 +433,8 @@ public sealed partial class PatronJourneyTests
         var seeded = await SeedCompletedHoldIdentityAsync(
             "fulfillment-exact-id-conflict",
             requestBarcode,
-            "9904",
-            holdRequestId: "200");
+            9904,
+            holdRequestId: 200);
         await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
         try
         {
@@ -478,8 +478,8 @@ public sealed partial class PatronJourneyTests
         var placed = await SeedCompletedHoldIdentityAsync(
             "workflow-phase-stop-later",
             $"2000000000{Random.Shared.Next(100000, 999999)}",
-            "9910",
-            holdRequestId: "300");
+            9910,
+            holdRequestId: 300);
         await PrepareSingleItemCycleAsync(QueueNames.HoldPlacement, 2, pending.RequestId);
         await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, placed.RequestId);
         try
@@ -721,7 +721,7 @@ public sealed partial class PatronJourneyTests
             LookupCount++;
             return Task.FromResult(new IdentifierLookupResult(
                 IdentifierLookupOutcome.Found,
-                BibId: "9999",
+                BibId: 9999,
                 CatalogTitle: "Conflicting catalog title"));
         }
     }

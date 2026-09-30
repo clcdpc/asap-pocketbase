@@ -5,15 +5,17 @@ namespace Asap.Web.Infrastructure.Testing;
 
 public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
 {
+    private int nextHoldRequestId = 100000;
+
     private static readonly IReadOnlyList<PolarisPatronCodeSnapshot> PatronCodes =
     [
-        new("1", "Adult"),
-        new("2", "Juvenile"),
-        new("3", "Guest"),
-        new("14", "Young adult"),
-        new("28", "Video/VG Restricted"),
-        new("91", "Adult legacy"),
-        new("92", "Young adult legacy")
+        new(1, "Adult"),
+        new(2, "Juvenile"),
+        new(3, "Guest"),
+        new(14, "Young adult"),
+        new(28, "Video/VG Restricted"),
+        new(91, "Adult legacy"),
+        new(92, "Young adult legacy")
     ];
 
     private static readonly IReadOnlyList<PickupBranch> Branches =
@@ -131,10 +133,10 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
         {
             "FOUND" or "9780000000001" => new IdentifierLookupResult(
                 IdentifierLookupOutcome.Found,
-                "9001"),
+                9001),
             "MULTIPLE" => new IdentifierLookupResult(
                 IdentifierLookupOutcome.Found,
-                "9002",
+                9002,
                 MultipleMatches: true),
             "TRANSIENT" => new IdentifierLookupResult(
                 IdentifierLookupOutcome.TransientFailure,
@@ -161,7 +163,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
         var search = mode == "title_author" ? $"{title} {author}" : query;
         var results = search.Contains("NO MATCH", StringComparison.OrdinalIgnoreCase)
             ? []
-            : new[] { new StaffBibSearchRow("9001", "Catalog title 9001", "Catalog author",
+            : new[] { new StaffBibSearchRow(9001, "Catalog title 9001", "Catalog author",
                 "2026", "Book", "9780000000001") };
         return Task.FromResult(new StaffBibSearchResult(results, results.Length));
     }
@@ -231,12 +233,12 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(new HoldProviderResult(
             HoldProviderOutcome.FinalSuccess,
-            Guid.NewGuid().ToString(),
-            (command.BibId + 100000).ToString(),
+            Guid.NewGuid(),
+            Interlocked.Increment(ref nextHoldRequestId),
             null,
             null,
             2,
-            0,
+            1,
             "testing_documented_create_success"));
     }
 
@@ -247,12 +249,12 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(new HoldProviderResult(
             HoldProviderOutcome.FinalSuccess,
-            command.RequestGuid.ToString(),
+            command.RequestGuid,
             null,
             command.TxnGroupQualifier,
             command.TxnQualifier,
             2,
-            0,
+            1,
             "testing_documented_reply_success"));
     }
 
@@ -268,7 +270,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
         $"{barcode.Trim()}@example.org",
         firstName,
         lastName,
-        "1",
+        1,
         "Adult",
         patronOrganizationId,
         homeLibraryOrganizationId,

@@ -34,7 +34,7 @@ public sealed partial class PatronJourneyTests
             CollectionAssert.AreEqual(before.Values, (await ReadPatronCodeRowsAsync(1)).Values);
             Assert.AreEqual(beforeLibrary.SetCount, (await ReadPatronCodeRowsAsync(2)).SetCount);
             CollectionAssert.AreEqual(beforeLibrary.Values, (await ReadPatronCodeRowsAsync(2)).Values);
-            Assert.IsFalse((await ReadPatronCodeRowsAsync(1)).Values.Contains("provider-extra"));
+            Assert.IsFalse((await ReadPatronCodeRowsAsync(1)).Values.Contains(22));
         }
         finally
         {
@@ -77,6 +77,6 @@ public sealed partial class PatronJourneyTests
         public Task<IReadOnlyList<PolarisPatronCodeSnapshot>> GetPatronCodesAsync(
             CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PolarisPatronCodeSnapshot>>(
-            [new("1", "Adult"), new("provider-extra", "Provider-only reference")]);
+            [new(1, "Adult"), new(22, "Provider-only reference")]);
     }
 }

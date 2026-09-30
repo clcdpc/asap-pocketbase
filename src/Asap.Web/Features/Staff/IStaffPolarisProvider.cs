@@ -55,7 +55,7 @@ public sealed record BibValidationResult(
     string? Format = null, string? Identifier = null, string? Publisher = null);
 
 public sealed record StaffBibSearchRow(
-    string BibId, string? Title, string? Author, string? Publication, string? Format, string? Identifier);
+    int BibId, string? Title, string? Author, string? Publication, string? Format, string? Identifier);
 
 public sealed record StaffBibSearchResult(IReadOnlyList<StaffBibSearchRow> Results, int TotalMatches);
 
@@ -72,7 +72,7 @@ public sealed record PolarisHoldSnapshot(
 
 public sealed record PolarisCheckoutSnapshot(
     int BibId,
-    string? HoldRequestId = null,
+    int? HoldRequestId = null,
     string? PatronBarcode = null);
 
 public sealed record HoldCreateCommand(
@@ -99,8 +99,8 @@ public enum HoldProviderOutcome
 
 public sealed record HoldProviderResult(
     HoldProviderOutcome Outcome,
-    string? RequestGuid,
-    string? HoldRequestId,
+    Guid? RequestGuid,
+    int? HoldRequestId,
     string? TxnGroupQualifier,
     string? TxnQualifier,
     int? StatusType,

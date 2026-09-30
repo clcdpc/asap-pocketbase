@@ -17,6 +17,12 @@ namespace Asap.Tests.Integration;
 
 public sealed partial class PatronJourneyTests
 {
+    private static int? ReadNativeBib(JsonElement value) =>
+        value.ValueKind == JsonValueKind.Undefined ? null :
+            JsonSerializer.Deserialize<int?>(value.GetRawText(), new JsonSerializerOptions
+            {
+                NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
+            });
     [TestMethod]
     public async Task StaffSelectedBibSurvivesIdentifierReconciliationOutcomesIncludingIssnNoMatch()
     {
@@ -27,7 +33,7 @@ public sealed partial class PatronJourneyTests
         {
             ("found", "ownership-found", new IdentifierLookupResult(
                 IdentifierLookupOutcome.Found,
-                "456",
+                456,
                 CatalogTitle: "Different catalog title",
                 CatalogAuthor: "Different catalog author")),
             ("not-found", "ownership-not-found", new IdentifierLookupResult(IdentifierLookupOutcome.DefinitiveNotFound)),
@@ -62,8 +68,8 @@ public sealed partial class PatronJourneyTests
                     Action = "edit",
                     Status = "suggestion",
                     Identifier = selection.RootElement.GetProperty("identifier"),
-                    Bibid = selection.RootElement.GetProperty("bibid"),
-                    StaffSelectedBibId = selection.RootElement.GetProperty("staffSelectedBibId")
+                    Bibid = ReadNativeBib(selection.RootElement.GetProperty("bibid")),
+                    StaffSelectedBibId = ReadNativeBib(selection.RootElement.GetProperty("staffSelectedBibId"))
                 };
 
                 var mutation = await mutations.ActionAsync(actor, seeded.Id, input, CancellationToken.None);
@@ -72,7 +78,7 @@ public sealed partial class PatronJourneyTests
                 var afterSelection = await ReadBibOwnershipRequestAsync(seeded.Id);
                 Assert.AreEqual(identifier, afterSelection.Identifier,
                     "The explicitly selected BIB and the edited identifier must persist together.");
-                Assert.AreEqual("123", afterSelection.BibId);
+                Assert.AreEqual(123, afterSelection.BibId);
                 Assert.IsTrue(afterSelection.BibIdStaffVerified);
                 Assert.AreEqual("pending", afterSelection.IsbnCheckStatus);
 
@@ -86,7 +92,7 @@ public sealed partial class PatronJourneyTests
 
                 Assert.AreEqual(lookupResult.Outcome, outcome, scenario);
                 var afterLookup = await ReadBibOwnershipRequestAsync(seeded.Id);
-                Assert.AreEqual("123", afterLookup.BibId, $"The {scenario} lookup replaced the staff-selected BIB.");
+                Assert.AreEqual(123, afterLookup.BibId, $"The {scenario} lookup replaced the staff-selected BIB.");
                 Assert.IsTrue(afterLookup.BibIdStaffVerified);
                 Assert.AreEqual("Staff entered title", afterLookup.Title);
                 Assert.AreEqual("Staff entered author", afterLookup.Author);
@@ -108,7 +114,7 @@ public sealed partial class PatronJourneyTests
         try
         {
             var changedIdentifier = await SeedBibOwnershipRequestAsync(
-                "old-identifier", "456", staffVerified: false, isbnCheckStatus: "found");
+                "old-identifier", 456, staffVerified: false, isbnCheckStatus: "found");
             requests.Add(changedIdentifier.Id);
             using (var edit = JsonDocument.Parse("""{"identifier":"new-identifier","bibid":"456"}"""))
             {
@@ -118,7 +124,7 @@ public sealed partial class PatronJourneyTests
                     Action = "edit",
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
-                    Bibid = edit.RootElement.GetProperty("bibid")
+                    Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
                 }, CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
@@ -130,7 +136,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("pending", afterIdentifierEdit.IsbnCheckStatus);
 
             var incidentalBib = await SeedBibOwnershipRequestAsync(
-                "unchanged-identifier", "789", staffVerified: false, isbnCheckStatus: "found");
+                "unchanged-identifier", 789, staffVerified: false, isbnCheckStatus: "found");
             requests.Add(incidentalBib.Id);
             using (var edit = JsonDocument.Parse("""{"title":"Edited title","identifier":"unchanged-identifier","bibid":"789"}"""))
             {
@@ -141,18 +147,18 @@ public sealed partial class PatronJourneyTests
                     Status = "suggestion",
                     Title = edit.RootElement.GetProperty("title").GetString(),
                     Identifier = edit.RootElement.GetProperty("identifier"),
-                    Bibid = edit.RootElement.GetProperty("bibid")
+                    Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
                 }, CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
             var afterIncidentalEdit = await ReadBibOwnershipRequestAsync(incidentalBib.Id);
-            Assert.AreEqual("789", afterIncidentalEdit.BibId);
+            Assert.AreEqual(789, afterIncidentalEdit.BibId);
             Assert.IsFalse(afterIncidentalEdit.BibIdStaffVerified,
                 "An unchanged BIB carried by an ordinary edit must not gain staff authority.");
 
             var automationBibPendingTransition = await SeedBibOwnershipRequestAsync(
-                "pending-old-identifier", "654", staffVerified: false, isbnCheckStatus: "found");
+                "pending-old-identifier", 654, staffVerified: false, isbnCheckStatus: "found");
             requests.Add(automationBibPendingTransition.Id);
             using (var action = JsonDocument.Parse("""{"identifier":"pending-new-identifier","bibid":"654"}"""))
             {
@@ -162,7 +168,7 @@ public sealed partial class PatronJourneyTests
                     Action = "catalogFound",
                     Status = "pending_hold",
                     Identifier = action.RootElement.GetProperty("identifier"),
-                    Bibid = action.RootElement.GetProperty("bibid")
+                    Bibid = ReadNativeBib(action.RootElement.GetProperty("bibid"))
                 }, CancellationToken.None);
                 Assert.AreEqual("bib_required", result.Code,
                     "A transition must not pass using an automation BIB that the identifier edit will clear.");
@@ -170,12 +176,12 @@ public sealed partial class PatronJourneyTests
 
             var afterBlockedPendingTransition = await ReadBibOwnershipRequestAsync(automationBibPendingTransition.Id);
             Assert.AreEqual("pending-old-identifier", afterBlockedPendingTransition.Identifier);
-            Assert.AreEqual("654", afterBlockedPendingTransition.BibId);
+            Assert.AreEqual(654, afterBlockedPendingTransition.BibId);
             Assert.IsFalse(afterBlockedPendingTransition.BibIdStaffVerified);
             Assert.AreEqual("suggestion", afterBlockedPendingTransition.Status);
 
             var explicitlySelectedExistingBib = await SeedBibOwnershipRequestAsync(
-                "selected-existing", "321", staffVerified: false, isbnCheckStatus: "found");
+                "selected-existing", 321, staffVerified: false, isbnCheckStatus: "found");
             requests.Add(explicitlySelectedExistingBib.Id);
             using (var edit = JsonDocument.Parse("""{"identifier":"selected-existing","bibid":"321","staffSelectedBibId":"321"}"""))
             {
@@ -185,14 +191,14 @@ public sealed partial class PatronJourneyTests
                     Action = "edit",
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
-                    Bibid = edit.RootElement.GetProperty("bibid"),
-                    StaffSelectedBibId = edit.RootElement.GetProperty("staffSelectedBibId")
+                    Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid")),
+                    StaffSelectedBibId = ReadNativeBib(edit.RootElement.GetProperty("staffSelectedBibId"))
                 }, CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
             var afterExplicitSelection = await ReadBibOwnershipRequestAsync(explicitlySelectedExistingBib.Id);
-            Assert.AreEqual("321", afterExplicitSelection.BibId);
+            Assert.AreEqual(321, afterExplicitSelection.BibId);
             Assert.IsTrue(afterExplicitSelection.BibIdStaffVerified,
                 "An explicit same-BIB selection gains authority only after server validation.");
         }
@@ -214,7 +220,7 @@ public sealed partial class PatronJourneyTests
         {
             var incidental = await SeedBibOwnershipRequestAsync(
                 "identifier-A",
-                "123",
+                123,
                 staffVerified: true,
                 isbnCheckStatus: "pending",
                 retryCount: 4,
@@ -231,7 +237,7 @@ public sealed partial class PatronJourneyTests
                     Action = "edit",
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
-                    Bibid = edit.RootElement.GetProperty("bibid")
+                    Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
                 }, CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
@@ -245,7 +251,7 @@ public sealed partial class PatronJourneyTests
 
             var clearedIdentifier = await SeedBibOwnershipRequestAsync(
                 "identifier-to-clear",
-                "123",
+                123,
                 staffVerified: true,
                 isbnCheckStatus: "found",
                 checkResult: "Old identifier result.",
@@ -260,7 +266,7 @@ public sealed partial class PatronJourneyTests
                     Action = "edit",
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
-                    Bibid = edit.RootElement.GetProperty("bibid")
+                    Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
                 }, CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
@@ -274,7 +280,7 @@ public sealed partial class PatronJourneyTests
 
             var explicitlyReselected = await SeedBibOwnershipRequestAsync(
                 "identifier-A-same-bib",
-                "123",
+                123,
                 staffVerified: true,
                 isbnCheckStatus: "found",
                 checkResult: "Old identifier result.",
@@ -289,14 +295,14 @@ public sealed partial class PatronJourneyTests
                     Action = "edit",
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
-                    Bibid = edit.RootElement.GetProperty("bibid"),
-                    StaffSelectedBibId = edit.RootElement.GetProperty("staffSelectedBibId")
+                    Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid")),
+                    StaffSelectedBibId = ReadNativeBib(edit.RootElement.GetProperty("staffSelectedBibId"))
                 }, CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
             var afterReselection = await ReadBibOwnershipRequestAsync(explicitlyReselected.Id);
-            Assert.AreEqual("123", afterReselection.BibId);
+            Assert.AreEqual(123, afterReselection.BibId);
             Assert.IsTrue(afterReselection.BibIdStaffVerified);
             Assert.AreEqual("pending", afterReselection.IsbnCheckStatus,
                 "Validating a manual BIB does not create an identifier-found result.");
@@ -304,7 +310,7 @@ public sealed partial class PatronJourneyTests
 
             var explicitlyChanged = await SeedBibOwnershipRequestAsync(
                 "identifier-A-changed-bib",
-                "123",
+                123,
                 staffVerified: true,
                 isbnCheckStatus: "found",
                 checkResult: "Old identifier result.",
@@ -319,13 +325,13 @@ public sealed partial class PatronJourneyTests
                     Action = "edit",
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
-                    Bibid = edit.RootElement.GetProperty("bibid")
+                    Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
                 }, CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
             var afterChangedBib = await ReadBibOwnershipRequestAsync(explicitlyChanged.Id);
-            Assert.AreEqual("456", afterChangedBib.BibId);
+            Assert.AreEqual(456, afterChangedBib.BibId);
             Assert.IsTrue(afterChangedBib.BibIdStaffVerified);
             Assert.AreEqual("pending", afterChangedBib.IsbnCheckStatus);
             AssertIdentifierEvidenceWasCleared(afterChangedBib);
@@ -348,7 +354,7 @@ public sealed partial class PatronJourneyTests
         {
             var cleared = await SeedBibOwnershipRequestAsync(
                 "identifier-found-clear",
-                "123",
+                123,
                 staffVerified: false,
                 isbnCheckStatus: "found",
                 checkResult: "Identifier found BIB 123.",
@@ -363,7 +369,7 @@ public sealed partial class PatronJourneyTests
                     Action = "edit",
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
-                    Bibid = edit.RootElement.GetProperty("bibid")
+                    Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
                 }, CancellationToken.None);
                 Assert.AreEqual("updated", result.Code,
                     "Clearing an identifier-derived BIB must complete without violating CK_TitleRequest_FoundHasBib.");
@@ -377,7 +383,7 @@ public sealed partial class PatronJourneyTests
 
             var replaced = await SeedBibOwnershipRequestAsync(
                 "identifier-found-replace",
-                "123",
+                123,
                 staffVerified: false,
                 isbnCheckStatus: "found",
                 checkResult: "Identifier found BIB 123.",
@@ -392,13 +398,13 @@ public sealed partial class PatronJourneyTests
                     Action = "edit",
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
-                    Bibid = edit.RootElement.GetProperty("bibid")
+                    Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
                 }, CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
             var afterReplacement = await ReadBibOwnershipRequestAsync(replaced.Id);
-            Assert.AreEqual("456", afterReplacement.BibId);
+            Assert.AreEqual(456, afterReplacement.BibId);
             Assert.IsTrue(afterReplacement.BibIdStaffVerified);
             Assert.AreEqual("pending", afterReplacement.IsbnCheckStatus,
                 "A manually validated BIB must not inherit the previous identifier lookup's found state.");
@@ -406,7 +412,7 @@ public sealed partial class PatronJourneyTests
 
             var notFound = await SeedBibOwnershipRequestAsync(
                 "identifier-not-found-replace",
-                "789",
+                789,
                 staffVerified: true,
                 isbnCheckStatus: "not_found",
                 checkResult: "Identifier not found.",
@@ -421,13 +427,13 @@ public sealed partial class PatronJourneyTests
                     Action = "edit",
                     Status = "suggestion",
                     Identifier = rejectedEdit.RootElement.GetProperty("identifier"),
-                    Bibid = rejectedEdit.RootElement.GetProperty("bibid")
+                    Bibid = ReadNativeBib(rejectedEdit.RootElement.GetProperty("bibid"))
                 }, CancellationToken.None);
                 Assert.AreEqual("invalid_bib", result.Code);
             }
 
             var afterRejectedEdit = await ReadBibOwnershipRequestAsync(notFound.Id);
-            Assert.AreEqual("789", afterRejectedEdit.BibId);
+            Assert.AreEqual(789, afterRejectedEdit.BibId);
             Assert.IsTrue(afterRejectedEdit.BibIdStaffVerified);
             Assert.AreEqual("not_found", afterRejectedEdit.IsbnCheckStatus);
             Assert.AreEqual("Identifier not found.", afterRejectedEdit.IsbnCheckResult);
@@ -443,13 +449,13 @@ public sealed partial class PatronJourneyTests
                     Action = "edit",
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
-                    Bibid = edit.RootElement.GetProperty("bibid")
+                    Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
                 }, CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
             var afterNotFoundReplacement = await ReadBibOwnershipRequestAsync(notFound.Id);
-            Assert.AreEqual("456", afterNotFoundReplacement.BibId);
+            Assert.AreEqual(456, afterNotFoundReplacement.BibId);
             Assert.IsTrue(afterNotFoundReplacement.BibIdStaffVerified);
             Assert.AreEqual("pending", afterNotFoundReplacement.IsbnCheckStatus);
             AssertIdentifierEvidenceWasCleared(afterNotFoundReplacement);
@@ -470,11 +476,11 @@ public sealed partial class PatronJourneyTests
         var actor = await GetOwnershipTestActorAsync();
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var target = await SeedBibOwnershipRequestAsync(
-            "duplicate-action-target", action == "edit" ? "9002" : "9001",
+            "duplicate-action-target", action == "edit" ? 9002 : 9001,
             staffVerified: true, status: action == "edit" ? "pending_hold" : "suggestion",
             autoHold: true);
         var blocker = await SeedBibOwnershipRequestAsync(
-            "duplicate-action-blocker", "09001", staffVerified: true,
+            "duplicate-action-blocker", 9001, staffVerified: true,
             status: "pending_hold", autoHold: true);
         try
         {
@@ -488,21 +494,28 @@ public sealed partial class PatronJourneyTests
                 blockerVersion = blockerRow.RowVersion.ToArray();
             }
             using var bib = JsonDocument.Parse("\"9001\"");
-            var result = await factory.Services.GetRequiredService<TitleRequestMutationService>().ActionAsync(
-                actor, target.Id, new TitleRequestActionInput
+            var input = action == "edit"
+                ? new TitleRequestActionInput
                 {
                     Version = StaffVersion.Encode(target.RowVersion),
                     Action = action,
-                    Bibid = action == "edit" ? bib.RootElement : default
-                }, CancellationToken.None);
+                    Bibid = ReadNativeBib(bib.RootElement)
+                }
+                : new TitleRequestActionInput
+                {
+                    Version = StaffVersion.Encode(target.RowVersion),
+                    Action = action
+                };
+            var result = await factory.Services.GetRequiredService<TitleRequestMutationService>().ActionAsync(
+                actor, target.Id, input, CancellationToken.None);
             Assert.AreEqual("duplicate_open_request", result.Code);
             Assert.IsNotNull(result.Duplicate);
             Assert.AreEqual(blocker.Id, result.Duplicate.Id);
             Assert.AreEqual("Staff entered title", result.Duplicate.Title);
             Assert.AreEqual("pending_hold", result.Duplicate.Status);
-            Assert.AreEqual("09001", result.Duplicate.BibId);
+            Assert.AreEqual(9001, result.Duplicate.BibId);
             Assert.AreEqual("bibid", result.Duplicate.MatchType);
-            if (action == "purchase")
+            if (action is "purchase" or "edit")
             {
                 using var client = factory.CreateClient();
                 var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
@@ -514,7 +527,7 @@ public sealed partial class PatronJourneyTests
                 client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery",
                     sessionJson.RootElement.GetProperty("antiforgeryToken").GetString());
                 using var response = await client.PostAsJsonAsync($"/api/asap/staff/title-requests/{target.Id}/action",
-                    new { version = StaffVersion.Encode(target.RowVersion), action });
+                    new { version = StaffVersion.Encode(target.RowVersion), action, bibid = "09001" });
                 Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
                 using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
                 Assert.AreEqual("duplicate_open_request", body.RootElement.GetProperty("code").GetString());
@@ -522,18 +535,28 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(blocker.Id.ToString(), body.RootElement.GetProperty("duplicate").GetProperty("id").GetString());
                 Assert.AreEqual("Staff entered title", body.RootElement.GetProperty("duplicate").GetProperty("title").GetString());
                 Assert.AreEqual("pending_hold", body.RootElement.GetProperty("duplicate").GetProperty("status").GetString());
-                Assert.AreEqual("09001", body.RootElement.GetProperty("duplicate").GetProperty("bibid").GetString());
+                Assert.AreEqual(9001, body.RootElement.GetProperty("duplicate").GetProperty("bibid").GetInt32());
                 Assert.AreEqual("bibid", body.RootElement.GetProperty("duplicate").GetProperty("matchType").GetString());
+                if (action == "edit")
+                {
+                    foreach (var invalid in new[] { "0", "-1", "2147483648", "not-a-bib" })
+                    {
+                        using var invalidResponse = await client.PostAsJsonAsync(
+                            $"/api/asap/staff/title-requests/{target.Id}/action",
+                            new { version = StaffVersion.Encode(target.RowVersion), action, bibid = invalid });
+                        Assert.AreEqual(HttpStatusCode.BadRequest, invalidResponse.StatusCode, invalid);
+                    }
+                }
             }
             await using var verify = await contextFactory.CreateDbContextAsync();
             var unchanged = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == target.Id);
             var unchangedBlocker = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == blocker.Id);
             CollectionAssert.AreEqual(target.RowVersion, unchanged.RowVersion);
             Assert.AreEqual(action == "edit" ? "pending_hold" : "suggestion", unchanged.Status);
-            Assert.AreEqual(action == "edit" ? "9002" : "9001", unchanged.BibId);
+            Assert.AreEqual(action == "edit" ? 9002 : 9001, unchanged.BibId);
             CollectionAssert.AreEqual(blockerVersion, unchangedBlocker.RowVersion);
             Assert.AreEqual("pending_hold", unchangedBlocker.Status);
-            Assert.AreEqual("09001", unchangedBlocker.BibId);
+            Assert.AreEqual(9001, unchangedBlocker.BibId);
             Assert.IsFalse(await verify.TitleRequestEvents.AnyAsync(item => item.TitleRequestId == target.Id));
             Assert.IsFalse(await verify.HoldPlacementOperations.AnyAsync(item => item.TitleRequestId == target.Id));
         }
@@ -565,9 +588,9 @@ public sealed partial class PatronJourneyTests
             using var bib = JsonDocument.Parse("\"9001\"");
             var results = await Task.WhenAll(
                 mutations.ActionAsync(actor, first.Id, new TitleRequestActionInput
-                    { Version = StaffVersion.Encode(first.RowVersion), Action = "catalogFound", Bibid = bib.RootElement }, CancellationToken.None),
+                    { Version = StaffVersion.Encode(first.RowVersion), Action = "catalogFound", Bibid = ReadNativeBib(bib.RootElement) }, CancellationToken.None),
                 mutations.ActionAsync(actor, second.Id, new TitleRequestActionInput
-                    { Version = StaffVersion.Encode(secondVersion), Action = "catalogFound", Bibid = bib.RootElement }, CancellationToken.None));
+                    { Version = StaffVersion.Encode(secondVersion), Action = "catalogFound", Bibid = ReadNativeBib(bib.RootElement) }, CancellationToken.None));
             CollectionAssert.AreEquivalent(new[] { "updated", "duplicate_open_request" },
                 results.Select(item => item.Code).ToArray(),
                 string.Join(", ", results.Select(item => item.Code)));
@@ -600,8 +623,8 @@ public sealed partial class PatronJourneyTests
                 services.AddSingleton<IPatronProvider>(holdProvider);
                 services.AddSingleton<IStaffPolarisProvider>(holdProvider);
             }));
-        var first = await SeedBibOwnershipRequestAsync("duplicate-hold-first", "9001", true, status: "pending_hold", autoHold: true);
-        var second = await SeedBibOwnershipRequestAsync("duplicate-hold-second", "09001", true, status: "pending_hold", autoHold: true);
+        var first = await SeedBibOwnershipRequestAsync("duplicate-hold-first", 9001, true, status: "pending_hold", autoHold: true);
+        var second = await SeedBibOwnershipRequestAsync("duplicate-hold-second", 9001, true, status: "pending_hold", autoHold: true);
         try
         {
             byte[] secondVersion;
@@ -621,7 +644,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(second.Id, result.Duplicate.Id);
             Assert.AreEqual("Staff entered title", result.Duplicate.Title);
             Assert.AreEqual("pending_hold", result.Duplicate.Status);
-            Assert.AreEqual("09001", result.Duplicate.BibId);
+            Assert.AreEqual(9001, result.Duplicate.BibId);
             Assert.AreEqual("bibid", result.Duplicate.MatchType);
 
             using var client = holdFactory.CreateClient();
@@ -643,7 +666,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(second.Id.ToString(), body.RootElement.GetProperty("duplicate").GetProperty("id").GetString());
             Assert.AreEqual("Staff entered title", body.RootElement.GetProperty("duplicate").GetProperty("title").GetString());
             Assert.AreEqual("pending_hold", body.RootElement.GetProperty("duplicate").GetProperty("status").GetString());
-            Assert.AreEqual("09001", body.RootElement.GetProperty("duplicate").GetProperty("bibid").GetString());
+            Assert.AreEqual(9001, body.RootElement.GetProperty("duplicate").GetProperty("bibid").GetInt32());
             Assert.AreEqual("bibid", body.RootElement.GetProperty("duplicate").GetProperty("matchType").GetString());
 
             await using var verify = await contextFactory.CreateDbContextAsync();
@@ -653,8 +676,8 @@ public sealed partial class PatronJourneyTests
             CollectionAssert.AreEqual(secondVersion, unchangedSecond.RowVersion);
             Assert.AreEqual("pending_hold", unchangedFirst.Status);
             Assert.AreEqual("pending_hold", unchangedSecond.Status);
-            Assert.AreEqual("9001", unchangedFirst.BibId);
-            Assert.AreEqual("09001", unchangedSecond.BibId);
+            Assert.AreEqual(9001, unchangedFirst.BibId);
+            Assert.AreEqual(9001, unchangedSecond.BibId);
             Assert.IsFalse(await verify.HoldPlacementOperations.AnyAsync(item =>
                 item.TitleRequestId == first.Id || item.TitleRequestId == second.Id));
             Assert.IsFalse(await verify.TitleRequestEvents.AnyAsync(item =>
@@ -701,7 +724,7 @@ public sealed partial class PatronJourneyTests
 
         var seeded = await SeedBibOwnershipRequestAsync(
             "purchase-identifier-A",
-            "123",
+            123,
             staffVerified: true,
             isbnCheckStatus: "found",
             status: "outstanding_purchase",
@@ -724,7 +747,7 @@ public sealed partial class PatronJourneyTests
                     Action = "edit",
                     Status = "outstanding_purchase",
                     Identifier = edit.RootElement.GetProperty("identifier"),
-                    Bibid = edit.RootElement.GetProperty("bibid")
+                    Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
                 }, CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
@@ -756,7 +779,7 @@ public sealed partial class PatronJourneyTests
 
             var unverified = await SeedBibOwnershipRequestAsync(
                 "purchase-unverified-bib",
-                "456",
+                456,
                 staffVerified: false,
                 isbnCheckStatus: "found",
                 status: "outstanding_purchase",
@@ -769,19 +792,19 @@ public sealed partial class PatronJourneyTests
             var afterUnverifiedCycle = await ReadBibOwnershipRequestAsync(unverified.Id);
             Assert.AreEqual("outstanding_purchase", afterUnverifiedCycle.Status,
                 "Automatic promotion cannot enter Pending hold with an unverified effective BIB.");
-            Assert.AreEqual("456", afterUnverifiedCycle.BibId);
+            Assert.AreEqual(456, afterUnverifiedCycle.BibId);
             Assert.IsFalse(afterUnverifiedCycle.BibIdStaffVerified);
             await using var verifyUnverified = await contextFactory.CreateDbContextAsync();
             Assert.IsFalse(await verifyUnverified.TitleRequestEvents.AnyAsync(item =>
                 item.TitleRequestId == unverified.Id && item.EventType == "promoted"));
 
             var duplicateTarget = await SeedBibOwnershipRequestAsync(
-                "purchase-duplicate-target", "789", staffVerified: true,
+                "purchase-duplicate-target", 789, staffVerified: true,
                 status: "outstanding_purchase", autoHold: true,
                 libraryOrganizationId: scope);
             duplicateTargetId = duplicateTarget.Id;
             var duplicateBlocker = await SeedBibOwnershipRequestAsync(
-                "purchase-duplicate-blocker", "789", staffVerified: true,
+                "purchase-duplicate-blocker", 789, staffVerified: true,
                 status: "suggestion", autoHold: true,
                 libraryOrganizationId: scope);
             duplicateBlockerId = duplicateBlocker.Id;
@@ -841,7 +864,7 @@ public sealed partial class PatronJourneyTests
 
     private async Task<(long Id, byte[] RowVersion)> SeedBibOwnershipRequestAsync(
         string identifier,
-        string? bibId,
+        int? bibId,
         bool staffVerified,
         string? isbnCheckStatus = "pending",
         int retryCount = 0,
@@ -971,7 +994,7 @@ public sealed partial class PatronJourneyTests
         string Status,
         string? Author,
         string? Identifier,
-        string? BibId,
+        int? BibId,
         bool BibIdStaffVerified,
         string? IsbnCheckStatus,
         string? IsbnCheckResult,

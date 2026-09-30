@@ -21,18 +21,25 @@ public sealed partial class PatronJourneyTests
     {
         var actor = await GetOwnershipTestActorAsync();
         var seeded = await SeedBibOwnershipRequestAsync(
-            $"optout-{action}-{initialStatus}", supplyBib ? null : "9001",
+            $"optout-{action}-{initialStatus}", supplyBib ? null : 9001,
             staffVerified: !supplyBib, isbnCheckStatus: supplyBib ? "pending" : "found",
             status: initialStatus, autoHold: initialAutoHold);
         try
         {
-            var input = new TitleRequestActionInput
-            {
-                Version = StaffVersion.Encode(seeded.RowVersion),
-                Action = action,
-                Autohold = JsonSerializer.SerializeToElement(false),
-                Bibid = supplyBib || action == "edit" ? JsonSerializer.SerializeToElement("9001") : default
-            };
+            var input = supplyBib || action == "edit"
+                ? new TitleRequestActionInput
+                {
+                    Version = StaffVersion.Encode(seeded.RowVersion),
+                    Action = action,
+                    Autohold = JsonSerializer.SerializeToElement(false),
+                    Bibid = 9001
+                }
+                : new TitleRequestActionInput
+                {
+                    Version = StaffVersion.Encode(seeded.RowVersion),
+                    Action = action,
+                    Autohold = JsonSerializer.SerializeToElement(false)
+                };
             var result = await factory!.Services.GetRequiredService<TitleRequestMutationService>()
                 .ActionAsync(actor, seeded.Id, input, CancellationToken.None);
             Assert.AreEqual("updated", result.Code);
@@ -43,7 +50,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("closed", current.Status);
             Assert.AreEqual("purchased_no_hold", current.CloseReason);
             Assert.IsFalse(current.AutoHold);
-            Assert.AreEqual("9001", current.BibId);
+            Assert.AreEqual(9001, current.BibId);
             Assert.IsTrue(await context.TitleRequestEvents.AsNoTracking().AnyAsync(item =>
                 item.TitleRequestId == seeded.Id && item.EventType == "autohold_opt_out"));
             Assert.IsFalse(await context.HoldPlacementOperations.AsNoTracking().AnyAsync(item =>

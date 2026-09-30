@@ -30,7 +30,7 @@ UpdatedUtc datetime2 NOT NULL
 
 The integer changes only for contract-affecting schema changes. Application startup compares the expected build value with SQL. Mismatch keeps liveness healthy but readiness unhealthy and blocks normal application functions. It is not used to decide whether a DACPAC needs deployment.
 
-Schema 6 is the pre-release hard-reset boundary for email identity. A database carrying an earlier application schema is disposable and must be recreated from the schema-6 DACPAC; the post-deployment script refuses to advance a pre-6 version in place. Fresh creation contains only the final email-based staff and EmailOutbox shape.
+Schema 7 is the pre-release reset boundary for native Polaris identities. Recreate pre-7 databases from the schema-7 DACPAC; no string-to-number upgrade or compatibility columns are retained. Pre-deployment rejects older versions before altering schema, fresh import parses numeric source identities, and repeat deployment preserves existing native data.
 
 ### `[asap].[DeploymentState]`
 
@@ -39,7 +39,7 @@ Purpose: deployment bookkeeping independent of the application/database compatib
 ```text
 Id tinyint NOT NULL PK/check single row
 LastDacpacSha256 char(64) NULL
-LastHangfireSchemaVersion nvarchar(...) NULL
+LastHangfireSchemaVersion int NULL
 LastHangfireSchemaAssetSha256 char(64) NULL
 LastReleaseVersion nvarchar(...) NULL
 LastReleaseCommitSha char(40) NULL
@@ -227,7 +227,7 @@ PatronCodeEligibilitySet:
 
 PatronCodeEligibilityMember:
   OrganizationId int NOT NULL FK PatronCodeEligibilitySet(OrganizationId)
-  PatronCodeId nvarchar(...) NOT NULL
+  PatronCodeId int NOT NULL
   PRIMARY KEY (OrganizationId, PatronCodeId)
 ```
 
@@ -497,7 +497,7 @@ Barcode nvarchar(...) NOT NULL               -- historical snapshot
 Email nvarchar(...) NULL                     -- historical submission snapshot
 NameFirst nvarchar(...) NULL
 NameLast nvarchar(...) NULL
-PatronCodeId nvarchar(...) NULL
+PatronCodeId int NULL
 PatronCodeDescription nvarchar(...) NULL
 PreferredPickupBranchId int NULL                    -- current recorded pickup; mutable only via dedicated validated pickup workflow
 PreferredPickupBranchName nvarchar(...) NULL
@@ -514,8 +514,8 @@ MaterialFormatId bigint NOT NULL FK MaterialFormat
 
 Status nvarchar(...) NOT NULL CHECK (...)
 CloseReason nvarchar(...) NULL CHECK (...)
-BibId nvarchar(...) NULL
-BibIdStaffVerified bit NOT NULL DEFAULT (0) CHECK (BibIdStaffVerified = 0 OR NULLIF(LTRIM(RTRIM(BibId)), N'') IS NOT NULL)
+BibId int NULL
+BibIdStaffVerified bit NOT NULL DEFAULT (0) CHECK (BibIdStaffVerified = 0 OR BibId IS NOT NULL)
 Notes nvarchar(max) NULL
 
 ClaimedByStaffUserId bigint NULL FK StaffUser
@@ -593,7 +593,7 @@ PRIMARY KEY (TitleRequestId, WorkflowTagId)
 Id bigint IDENTITY PK
 SourceTitleRequestId bigint NULL FK TitleRequest ON DELETE SET NULL
 LibraryOrganizationId int NOT NULL FK Organization
-BibId nvarchar(...) NULL
+BibId int NULL
 Title nvarchar(...) NOT NULL
 Author nvarchar(...) NULL
 MaterialFormatId bigint NULL FK MaterialFormat
@@ -634,7 +634,7 @@ LibraryOrganizationId int NOT NULL
 Title nvarchar(...) NULL
 Author nvarchar(...) NULL
 Identifier nvarchar(...) NULL
-BibId nvarchar(...) NULL
+BibId int NULL
 Status nvarchar(...) NULL
 CloseReason nvarchar(...) NULL
 MaskedBarcode nvarchar(...) NULL
@@ -758,12 +758,12 @@ Purpose-specific durable journal, not a generic external-operation framework. `0
 Id bigint IDENTITY PK
 TitleRequestId bigint NOT NULL FK TitleRequest
 PatronBarcodeSnapshot nvarchar(...) NOT NULL
-PatronIdSnapshot nvarchar(...) NULL
-BibIdSnapshot nvarchar(...) NOT NULL
+PatronIdSnapshot int NULL
+BibIdSnapshot int NOT NULL
 PickupBranchIdSnapshot int NULL
 RequestingOrganizationIdSnapshot int NULL
 WorkstationIdSnapshot int NULL
-PolarisUserIdSnapshot nvarchar(...) NULL
+PolarisUserIdSnapshot int NULL
 AttemptNumber int NOT NULL
 State nvarchar(...) NOT NULL CHECK (in_progress/ambiguous/operator_required/succeeded/no_hold/failed)
 Phase nvarchar(...) NOT NULL CHECK (acquired/create_started/reply_ready/reply_started/result_recorded)
@@ -776,14 +776,14 @@ CreateResponseObservedUtc datetime2 NULL
 ReplyStartedUtc datetime2 NULL                -- committed before first reply call
 ReplyResponseObservedUtc datetime2 NULL
 CompletedUtc datetime2 NULL
-PolarisRequestGuid nvarchar(...) NULL         -- create/reply/recovery RequestGUID; not a final HoldRequestID
-PolarisHoldId nvarchar(...) NULL              -- authoritative final HoldRequestID for this placed/adopted hold
+PolarisRequestGuid uniqueidentifier NULL         -- create/reply/recovery RequestGUID; not a final HoldRequestID
+PolarisHoldId int NULL              -- authoritative final HoldRequestID for this placed/adopted hold
 TxnGroupQualifier nvarchar(...) NULL
 TxnQualifier nvarchar(...) NULL
-ReplyAnswer nvarchar(...) NULL
-ReplyState nvarchar(...) NULL
-ProviderStatusType nvarchar(...) NULL
-ProviderStatusValue nvarchar(...) NULL
+ReplyAnswer int NULL
+ReplyState int NULL
+ProviderStatusType int NULL
+ProviderStatusValue int NULL
 ResultCode nvarchar(...) NULL
 OutcomeEvidenceKind nvarchar(...) NULL
 RecoveryAttemptCount int NOT NULL DEFAULT 0

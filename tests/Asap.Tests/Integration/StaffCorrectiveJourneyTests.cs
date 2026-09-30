@@ -186,7 +186,7 @@ public sealed partial class PatronJourneyTests
         };
         var copy = new AdditionalCopyRequest
         {
-            LibraryOrganizationId = 2, BibId = "9001", Title = "Historical assignment target", Status = "open", CreatedUtc = now, UpdatedUtc = now
+            LibraryOrganizationId = 2, BibId = 9001, Title = "Historical assignment target", Status = "open", CreatedUtc = now, UpdatedUtc = now
         };
         context.TitleRequests.Add(title);
         context.AdditionalCopyRequests.Add(copy);
@@ -265,7 +265,7 @@ public sealed partial class PatronJourneyTests
         };
         AdditionalCopyRequest Copy(string status) => new()
         {
-            LibraryOrganizationId = 91907, BibId = "9001", Title = "Cleanup copy", Status = status,
+            LibraryOrganizationId = 91907, BibId = 9001, Title = "Cleanup copy", Status = status,
             ClaimedByStaffUserId = target.Id, ClaimedByDisplayName = target.DisplayName ?? target.UserPrincipalName,
             ClaimType = "manual", ClaimedAtUtc = now,
             CreatedUtc = now, UpdatedUtc = now, ClosedUtc = status == "closed" ? now : null, Notes = "Committed copy history."

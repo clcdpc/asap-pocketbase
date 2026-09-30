@@ -82,7 +82,7 @@ public sealed partial class PatronJourneyTests
                 context.TitleRequests.AddRange(first, second, foreign);
                 var copy = new AdditionalCopyRequest
                 {
-                    LibraryOrganizationId = 2, BibId = "9341", Title = title,
+                    LibraryOrganizationId = 2, BibId = 9341, Title = title,
                     Status = "open", CreatedUtc = now, UpdatedUtc = now
                 };
                 context.AdditionalCopyRequests.Add(copy);

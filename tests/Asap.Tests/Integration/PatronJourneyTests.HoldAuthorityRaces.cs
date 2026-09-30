@@ -22,7 +22,7 @@ public sealed partial class PatronJourneyTests
         using var client = holdFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
-        var requestId = await SeedPendingHoldRequestAsync("Revoked direct create", "20000000003211", "93211");
+        var requestId = await SeedPendingHoldRequestAsync("Revoked direct create", "20000000003211", 93211);
         var version = await HoldRequestVersionAsync(client, requestId);
 
         var placement = client.PostAsJsonAsync(
@@ -90,7 +90,7 @@ public sealed partial class PatronJourneyTests
         using var client = holdFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
-        var requestId = await SeedPendingHoldRequestAsync("Revoked recovery create", "20000000003212", "93212");
+        var requestId = await SeedPendingHoldRequestAsync("Revoked recovery create", "20000000003212", 93212);
         var operationId = await SeedHoldAuthorityOperationAsync(requestId, "acquired", provider.RequestGuid);
         var version = await HoldOperationVersionAsync(client, requestId);
 
@@ -141,7 +141,7 @@ public sealed partial class PatronJourneyTests
     {
         var provider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
         await using var holdFactory = HoldAuthorityFactory(provider);
-        var requestId = await SeedPendingHoldRequestAsync("Crashed acquired recovery", "20000000003215", "93215");
+        var requestId = await SeedPendingHoldRequestAsync("Crashed acquired recovery", "20000000003215", 93215);
         var operationId = await SeedHoldAuthorityOperationAsync(requestId, "acquired", provider.RequestGuid);
         await ExecuteNonQueryAsync(
             "UPDATE [asap].[HoldPlacementOperation] SET [OwnerToken] = NEWID(), " +
@@ -176,7 +176,7 @@ public sealed partial class PatronJourneyTests
         using var client = holdFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
-        var requestId = await SeedPendingHoldRequestAsync("Revoked direct reply", "20000000003213", "93213");
+        var requestId = await SeedPendingHoldRequestAsync("Revoked direct reply", "20000000003213", 93213);
         var version = await HoldRequestVersionAsync(client, requestId);
 
         var placement = client.PostAsJsonAsync(
@@ -236,7 +236,7 @@ public sealed partial class PatronJourneyTests
         using var client = holdFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
-        var requestId = await SeedPendingHoldRequestAsync("Revoked finalizer", "20000000003214", "93214");
+        var requestId = await SeedPendingHoldRequestAsync("Revoked finalizer", "20000000003214", 93214);
         var operationId = await SeedHoldAuthorityOperationAsync(requestId, "result_recorded", provider.RequestGuid);
         var version = await HoldOperationVersionAsync(client, requestId);
 

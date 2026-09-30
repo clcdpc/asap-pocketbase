@@ -258,7 +258,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("A Tracer Through The Stack", reader.GetString(1));
             Assert.AreEqual("suggestion", reader.GetString(2));
             Assert.AreEqual("found", reader.GetString(3));
-            Assert.AreEqual("9001", reader.GetString(4));
+            Assert.AreEqual(9001, reader.GetInt32(4));
             Assert.IsGreaterThanOrEqualTo(1, reader.GetInt32(5));
             Assert.AreEqual("pending", reader.GetString(6));
             Assert.AreEqual($"patron-submission:{requestId}", reader.GetString(7));
@@ -573,7 +573,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("Edited audience", verified.GetString(8));
         Assert.AreEqual("hardback", verified.GetString(9));
         Assert.AreEqual("Keep me", verified.GetString(10));
-        Assert.AreEqual("9001", verified.GetString(11));
+        Assert.AreEqual(9001, verified.GetInt32(11));
         await verified.CloseAsync();
 
         await using var resolution = verify.CreateCommand();
@@ -607,7 +607,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("succeeded", resolved.GetString(1));
         Assert.AreEqual("result_recorded", resolved.GetString(2));
         Assert.AreEqual(4L, resolved.GetInt64(3));
-        Assert.AreEqual("8456", resolved.GetString(4));
+        Assert.AreEqual(8456, resolved.GetInt32(4));
         Assert.AreEqual("operator_verified:authoritative_correlated_hold", resolved.GetString(5));
         Assert.AreEqual("Support report SR-BROWSER-2904", resolved.GetString(6));
         Assert.AreEqual("Polaris support final transaction report", resolved.GetString(7));
@@ -1226,11 +1226,11 @@ public sealed partial class PatronJourneyTests
         var originalCodesExist = originalCodes.GetProperty("exists").GetBoolean();
         var originalCodeValues = originalCodes.GetProperty("values")
             .EnumerateArray()
-            .Select(item => item.GetString()!)
+            .Select(item => item.GetInt32())
             .ToArray();
         var systemEffectiveCodes = initial.GetProperty("effective").GetProperty("allowedPatronCodeIds")
             .EnumerateArray()
-            .Select(item => item.GetString()!)
+            .Select(item => item.GetInt32())
             .ToArray();
 
         try
@@ -1239,8 +1239,8 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.OK, choicesResponse.StatusCode, await choicesResponse.Content.ReadAsStringAsync());
             using var choicesDocument = JsonDocument.Parse(await choicesResponse.Content.ReadAsStringAsync());
             var choices = choicesDocument.RootElement.GetProperty("data").EnumerateArray().ToArray();
-            Assert.IsTrue(choices.Any(item => item.GetProperty("id").GetString() == "1"));
-            Assert.IsTrue(choices.All(item => item.GetProperty("id").ValueKind == JsonValueKind.String));
+            Assert.IsTrue(choices.Any(item => item.GetProperty("id").GetInt32() == 1));
+            Assert.IsTrue(choices.All(item => item.GetProperty("id").ValueKind == JsonValueKind.Number));
 
             using var saveResponse = await client.PostAsJsonAsync(
                 "/api/asap/staff/settings",
@@ -1251,7 +1251,7 @@ public sealed partial class PatronJourneyTests
                     workflow = new
                     {
                         suggestionLimitMessage = "Library-specific limit message",
-                        allowedPatronCodeIds = new[] { "1" }
+                        allowedPatronCodeIds = new[] { 1 }
                     },
                     patron = new { loginNote = "Library-specific login note" }
                 });
@@ -1270,9 +1270,9 @@ public sealed partial class PatronJourneyTests
                 saved.GetProperty("stored").GetProperty("libraryOverride").GetProperty("patron")
                     .GetProperty("loginNote").GetString());
             CollectionAssert.AreEqual(
-                new[] { "1" },
+                new[] { 1 },
                 saved.GetProperty("stored").GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
-                    .GetProperty("values").EnumerateArray().Select(item => item.GetString()).ToArray());
+                    .GetProperty("values").EnumerateArray().Select(item => item.GetInt32()).ToArray());
 
             using var invalidResponse = await client.PostAsJsonAsync(
                 "/api/asap/staff/settings",
@@ -1280,7 +1280,7 @@ public sealed partial class PatronJourneyTests
                 {
                     orgId = "2",
                     version = saved.GetProperty("version").GetString(),
-                    workflow = new { allowedPatronCodeIds = new[] { "999" } }
+                    workflow = new { allowedPatronCodeIds = new[] { 999 } }
                 });
             Assert.AreEqual(HttpStatusCode.BadRequest, invalidResponse.StatusCode, await invalidResponse.Content.ReadAsStringAsync());
             using var invalidDocument = JsonDocument.Parse(await invalidResponse.Content.ReadAsStringAsync());
@@ -1291,9 +1291,9 @@ public sealed partial class PatronJourneyTests
             using var afterInvalidDocument = JsonDocument.Parse(await afterInvalidResponse.Content.ReadAsStringAsync());
             var afterInvalid = afterInvalidDocument.RootElement;
             CollectionAssert.AreEqual(
-                new[] { "1" },
+                new[] { 1 },
                 afterInvalid.GetProperty("stored").GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
-                    .GetProperty("values").EnumerateArray().Select(item => item.GetString()).ToArray());
+                    .GetProperty("values").EnumerateArray().Select(item => item.GetInt32()).ToArray());
 
             using var clearScalarResponse = await client.PostAsJsonAsync(
                 "/api/asap/staff/settings",
@@ -1323,7 +1323,7 @@ public sealed partial class PatronJourneyTests
                 {
                     orgId = "2",
                     version = afterScalarClear.GetProperty("version").GetString(),
-                    workflow = new { allowedPatronCodeIds = Array.Empty<string>() }
+                    workflow = new { allowedPatronCodeIds = Array.Empty<int>() }
                 });
             Assert.AreEqual(HttpStatusCode.OK, clearSetResponse.StatusCode, await clearSetResponse.Content.ReadAsStringAsync());
 
@@ -1334,9 +1334,9 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(final.GetProperty("stored").GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
                 .GetProperty("exists").GetBoolean());
             CollectionAssert.AreEqual(
-                Array.Empty<string>(),
+                Array.Empty<int>(),
                 final.GetProperty("effective").GetProperty("allowedPatronCodeIds")
-                    .EnumerateArray().Select(item => item.GetString()!).ToArray());
+                    .EnumerateArray().Select(item => item.GetInt32()).ToArray());
 
             await using var connection = new SqlConnection(databaseConnectionString);
             await connection.OpenAsync();
@@ -1356,7 +1356,7 @@ public sealed partial class PatronJourneyTests
                 {
                     orgId = "2",
                     version = final.GetProperty("version").GetString(),
-                    workflow = new { allowedPatronCodeIds = (string[]?)null }
+                    workflow = new { allowedPatronCodeIds = (int[]?)null }
                 });
             Assert.AreEqual(HttpStatusCode.OK, inheritResponse.StatusCode, await inheritResponse.Content.ReadAsStringAsync());
             using var inherited = await ReadSettingsDocumentAsync(client, "2");
@@ -1364,7 +1364,7 @@ public sealed partial class PatronJourneyTests
                 .GetProperty("allowedPatronCodeIds").GetProperty("exists").GetBoolean());
             CollectionAssert.AreEqual(systemEffectiveCodes,
                 inherited.RootElement.GetProperty("effective").GetProperty("allowedPatronCodeIds")
-                    .EnumerateArray().Select(item => item.GetString()!).ToArray());
+                    .EnumerateArray().Select(item => item.GetInt32()).ToArray());
         }
         finally
         {
@@ -1883,7 +1883,7 @@ public sealed partial class PatronJourneyTests
             Assert.IsFalse(inherited.RootElement.GetProperty("stored").GetProperty("libraryOverride")
                 .GetProperty("allowedPatronCodeIds").GetProperty("exists").GetBoolean());
             Assert.IsTrue(inherited.RootElement.GetProperty("effective").GetProperty("allowedPatronCodeIds")
-                .EnumerateArray().Any(item => item.GetString() == "1"));
+                .EnumerateArray().Any(item => item.GetInt32() == 1));
         }
         finally
         {
@@ -1925,7 +1925,7 @@ public sealed partial class PatronJourneyTests
                        (8829, N'Foreign Code Library', N'FCL', 1);
                 INSERT INTO [asap].[PatronCodeEligibilitySet] ([OrganizationId]) VALUES (8828), (8829);
                 INSERT INTO [asap].[PatronCodeEligibilityMember] ([OrganizationId], [PatronCodeId])
-                VALUES (8828, N'historical-8828'), (8829, N'foreign-8829');
+                VALUES (8828, 8828), (8829, 8829);
                 UPDATE [asap].[SystemSettings] SET [StaffApplicationUrl] = N'https://trusted.example.org/staff/'
                 WHERE [OrganizationId] = 1;
                 """;
@@ -1953,7 +1953,7 @@ public sealed partial class PatronJourneyTests
             {
                 orgId = libraryId.ToString(),
                 version = settings.RootElement.GetProperty("version").GetString(),
-                workflow = new { allowedPatronCodeIds = new[] { "historical-8828", "foreign-8829" } }
+                workflow = new { allowedPatronCodeIds = new[] { 8828, 8829 } }
             });
             Assert.AreEqual(HttpStatusCode.BadRequest, forged.StatusCode, await forged.Content.ReadAsStringAsync());
             using (var body = JsonDocument.Parse(await forged.Content.ReadAsStringAsync()))
@@ -1965,10 +1965,10 @@ public sealed partial class PatronJourneyTests
             {
                 orgId = libraryId.ToString(),
                 version = settings.RootElement.GetProperty("version").GetString(),
-                workflow = new { allowedPatronCodeIds = new[] { "historical-8828", "1" } }
+                workflow = new { allowedPatronCodeIds = new[] { 8828, 1 } }
             });
             Assert.AreEqual(HttpStatusCode.OK, preserved.StatusCode, await preserved.Content.ReadAsStringAsync());
-            CollectionAssert.AreEqual(new[] { "1", "historical-8828" },
+            CollectionAssert.AreEqual(new[] { 1, 8828 },
                 (await ReadPatronCodeRowsAsync(libraryId)).Values);
 
             await using (var connection = new SqlConnection(databaseConnectionString))
@@ -3353,7 +3353,7 @@ public sealed partial class PatronJourneyTests
                      [FormatSnapshot], [Status], [Notes], [CreatedByStaffUserId], [CreatedByDisplayName],
                      [CreatedUtc], [UpdatedUtc])
                 VALUES
-                    (2, N'Candidate Library Snapshot', N'candidate-api-bib', N'Candidate API task', @formatId,
+                    (2, N'Candidate Library Snapshot', 97001, N'Candidate API task', @formatId,
                      N'book', N'open', N'Candidate API note', @actorId, N'Candidate Actor',
                      '2026-09-01T12:00:00', '2026-09-01T12:00:00');
                 DECLARE @taskId bigint = SCOPE_IDENTITY();
@@ -3451,7 +3451,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("loaded", preview.Code);
         Assert.AreEqual(0, preview.Preview!.OpenCount);
         Assert.IsTrue(preview.Preview.EmailPurchaseReminderDefault);
-        Assert.AreEqual("slice3-bib-workflow", preview.Preview.Bibid);
+        Assert.AreEqual(95001, preview.Preview.Bibid);
 
         var created = await service.CreateAsync(
             actor,
@@ -3551,7 +3551,7 @@ public sealed partial class PatronJourneyTests
                 (SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] WHERE [Id]=@taskId),
                 (SELECT COUNT(*) FROM [asap].[DeletedRequestAudit]
                  WHERE [RequestType]=N'additional_copy' AND [OriginalRequestKey]=CONVERT(nvarchar(64), @taskId)
-                   AND [Title]=N'Legacy source workflow' AND [BibId]=N'slice3-bib-workflow'
+                   AND [Title]=N'Legacy source workflow' AND [BibId]=95001
                    AND [MaskedBarcode] IS NULL AND [CloseReason] IS NULL),
                 (SELECT COUNT(*) FROM [asap].[EmailOutbox]
                  WHERE [Id]=@outboxId AND [DeliveryClass]=N'staff_authorization_sensitive'
@@ -4281,9 +4281,9 @@ public sealed partial class PatronJourneyTests
         await using var result = await command.ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual("9780000002140", result.GetString(0));
-        Assert.AreEqual("9040", result.GetString(1));
+        Assert.AreEqual(9040, result.GetInt32(1));
         Assert.AreEqual("9780000002141", result.GetString(2));
-        Assert.AreEqual("9041", result.GetString(3));
+        Assert.AreEqual(9041, result.GetInt32(3));
         Assert.AreEqual(0, result.GetInt32(4));
     }
 
@@ -4474,7 +4474,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("hold_placed", result.GetString(1));
         Assert.AreEqual("Placed descriptive edit", result.GetString(2));
         Assert.AreEqual("9780000002152", result.GetString(3));
-        Assert.AreEqual("9052", result.GetString(4));
+        Assert.AreEqual(9052, result.GetInt32(4));
         Assert.AreEqual("found", result.GetString(5));
         Assert.AreEqual("Placed result", result.GetString(6));
 
@@ -4482,7 +4482,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(closedId, result.GetInt64(0));
         Assert.AreEqual("closed", result.GetString(1));
         Assert.AreEqual("9780000002153", result.GetString(3));
-        Assert.AreEqual("9053", result.GetString(4));
+        Assert.AreEqual(9053, result.GetInt32(4));
         Assert.AreEqual("found", result.GetString(5));
         Assert.AreEqual("Closed result", result.GetString(6));
     }
@@ -4599,7 +4599,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("Deleted audit title", result.GetString(3));
         Assert.AreEqual("Deleted author", result.GetString(4));
         Assert.AreEqual("9780000002142", result.GetString(5));
-        Assert.AreEqual("9042", result.GetString(6));
+        Assert.AreEqual(9042, result.GetInt32(6));
         Assert.AreEqual("closed", result.GetString(7));
         Assert.AreEqual("rejected", result.GetString(8));
         Assert.AreEqual("***2222", result.GetString(9));
@@ -4752,7 +4752,7 @@ public sealed partial class PatronJourneyTests
         var version = getBody.RootElement.GetProperty("version").GetString();
         string originalTitle;
         string originalStatus;
-        string originalBib;
+        int originalBib;
         byte[] originalRowVersion;
         int originalEventCount;
         int originalOperationCount;
@@ -4773,7 +4773,7 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(await baselineReader.ReadAsync());
             originalTitle = baselineReader.GetString(0);
             originalStatus = baselineReader.GetString(1);
-            originalBib = baselineReader.GetString(2);
+            originalBib = baselineReader.GetInt32(2);
             originalRowVersion = (byte[])baselineReader[3];
             originalEventCount = baselineReader.GetInt32(4);
             originalOperationCount = baselineReader.GetInt32(5);
@@ -4877,7 +4877,7 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(await reader.ReadAsync());
             Assert.AreEqual(originalTitle, reader.GetString(0));
             Assert.AreEqual(originalStatus, reader.GetString(1));
-            Assert.AreEqual(originalBib, reader.GetString(2));
+            Assert.AreEqual(originalBib, reader.GetInt32(2));
             CollectionAssert.AreEqual(originalRowVersion, (byte[])reader[3]);
             Assert.AreEqual(originalEventCount, reader.GetInt32(4));
             Assert.AreEqual(originalOperationCount, reader.GetInt32(5));
@@ -4966,7 +4966,7 @@ public sealed partial class PatronJourneyTests
         using var getBody = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
         var version = getBody.RootElement.GetProperty("version").GetString();
 
-        async Task<(string Title, string Status, string BibId, byte[] RowVersion, int EventCount,
+        async Task<(string Title, string Status, int BibId, byte[] RowVersion, int EventCount,
             int OperationCount, int OutboxCount)> ReadRequestStateAsync()
         {
             await using var connection = new SqlConnection(databaseConnectionString);
@@ -4989,7 +4989,7 @@ public sealed partial class PatronJourneyTests
             return (
                 reader.GetString(0),
                 reader.GetString(1),
-                reader.GetString(2),
+                reader.GetInt32(2),
                 (byte[])reader[3],
                 reader.GetInt32(4),
                 reader.GetInt32(5),
@@ -4998,7 +4998,7 @@ public sealed partial class PatronJourneyTests
 
         var original = await ReadRequestStateAsync();
         Assert.AreEqual("suggestion", original.Status);
-        Assert.AreEqual("9001", original.BibId);
+        Assert.AreEqual(9001, original.BibId);
         Assert.AreEqual(0, original.OperationCount);
         Assert.AreEqual(0, original.OutboxCount);
         var originalDispatchCount = dispatcher!.EnqueuedIds.Count;
@@ -5222,12 +5222,12 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual("succeeded", result.GetString(0));
         Assert.AreEqual("result_recorded", result.GetString(1));
-        Assert.AreEqual(holdProvider.RequestGuid.ToString(), result.GetString(2));
-        Assert.AreEqual("8123", result.GetString(3));
-        Assert.AreEqual("1", result.GetString(4));
-        Assert.AreEqual("3", result.GetString(5));
-        Assert.AreEqual("2", result.GetString(6));
-        Assert.AreEqual("0", result.GetString(7));
+        Assert.AreEqual(holdProvider.RequestGuid, result.GetGuid(2));
+        Assert.AreEqual(8123, result.GetInt32(3));
+        Assert.AreEqual(1, result.GetInt32(4));
+        Assert.AreEqual(3, result.GetInt32(5));
+        Assert.AreEqual(2, result.GetInt32(6));
+        Assert.AreEqual(1, result.GetInt32(7));
         for (var index = 8; index <= 12; index++) Assert.IsFalse(result.IsDBNull(index));
         Assert.AreEqual("hold_placed", result.GetString(13));
     }
@@ -5311,7 +5311,7 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual("succeeded", result.GetString(0));
         Assert.AreEqual("result_recorded", result.GetString(1));
-        Assert.AreEqual("8451", result.GetString(2));
+        Assert.AreEqual(8451, result.GetInt32(2));
         Assert.AreEqual("existing_hold_adoption", result.GetString(3));
         Assert.IsTrue(result.IsDBNull(4));
         Assert.IsTrue(result.IsDBNull(5));
@@ -5595,7 +5595,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.OK, start.StatusCode);
         }
 
-        var requestId = await SeedPendingHoldRequestAsync("Unverified acquired recovery", "20000000002133", "9033");
+        var requestId = await SeedPendingHoldRequestAsync("Unverified acquired recovery", "20000000002133", 9033);
         long operationId;
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
@@ -5750,7 +5750,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(2L, result.GetInt64(3));
         Assert.IsFalse(result.IsDBNull(4));
         Assert.IsFalse(result.IsDBNull(5));
-        Assert.AreEqual("8123", result.GetString(6));
+        Assert.AreEqual(8123, result.GetInt32(6));
         Assert.AreEqual(1, result.GetInt32(7));
         Assert.AreEqual(1, result.GetInt32(8));
     }
@@ -5838,11 +5838,11 @@ public sealed partial class PatronJourneyTests
         holdProvider.CompleteBlockedCreate(new HoldProviderResult(
             HoldProviderOutcome.FinalSuccess,
             null,
-            "8131",
+            8131,
             null,
             null,
             2,
-            0,
+            1,
             "documented_create_success"));
         using var originalResponse = await original;
         Assert.AreEqual(HttpStatusCode.Conflict, originalResponse.StatusCode, await originalResponse.Content.ReadAsStringAsync());
@@ -5898,7 +5898,7 @@ public sealed partial class PatronJourneyTests
         var actor = await ReadConfiguredSuperAdminAsync();
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
-        var requestId = await SeedPendingHoldRequestAsync("Late reply result title", "20000000002132", "9032");
+        var requestId = await SeedPendingHoldRequestAsync("Late reply result title", "20000000002132", 9032);
         using var request = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
         using var requestBody = JsonDocument.Parse(await request.Content.ReadAsStringAsync());
 
@@ -5922,12 +5922,12 @@ public sealed partial class PatronJourneyTests
 
         holdProvider.CompleteBlockedReply(new HoldProviderResult(
             HoldProviderOutcome.FinalSuccess,
-            holdProvider.RequestGuid.ToString(),
-            "8132",
+            holdProvider.RequestGuid,
+            8132,
             "group-qualifier",
             "transaction-qualifier",
             2,
-            0,
+            1,
             "documented_reply_success"));
         using var originalResponse = await original;
         Assert.AreEqual(HttpStatusCode.Conflict, originalResponse.StatusCode, await originalResponse.Content.ReadAsStringAsync());
@@ -6096,7 +6096,7 @@ public sealed partial class PatronJourneyTests
                 VALUES (@requestId, N'20000000002120', N'7120', N'9020', 101,
                         2, N'succeeded', N'result_recorded', 3, DATEADD(minute, -7, SYSUTCDATETIME()),
                         DATEADD(minute, -6, SYSUTCDATETIME()), DATEADD(minute, -5, SYSUTCDATETIME()),
-                        DATEADD(minute, -4, SYSUTCDATETIME()), N'9b934869-b681-4523-b2fb-8604dd0d0832', N'2', N'0',
+                        DATEADD(minute, -4, SYSUTCDATETIME()), N'9b934869-b681-4523-b2fb-8604dd0d0832', 2, 1,
                         N'success', N'provider_final_success_uncorrelated', 1, DATEADD(minute, -3, SYSUTCDATETIME()),
                         N'hold_identity_unavailable', N'{"providerResult":"success"}');
                 DECLARE @operationId bigint = SCOPE_IDENTITY();
@@ -6118,7 +6118,7 @@ public sealed partial class PatronJourneyTests
                 operationId,
                 requestVersion,
                 operationVersion,
-                new ProvenHoldIdentityEvidence("8460", "provider-operation-proof-9020"),
+                new ProvenHoldIdentityEvidence(8460, "provider-operation-proof-9020"),
                 CancellationToken.None);
         Assert.AreEqual("updated", result.Code);
 
@@ -6150,22 +6150,22 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(await enriched.ReadAsync());
         Assert.AreEqual("hold_placed", enriched.GetString(0));
         Assert.AreEqual("20000000002120", enriched.GetString(1));
-        Assert.AreEqual("9020", enriched.GetString(2));
+        Assert.AreEqual(9020, enriched.GetInt32(2));
         Assert.AreEqual("succeeded", enriched.GetString(4));
         Assert.AreEqual("result_recorded", enriched.GetString(5));
         Assert.IsFalse(enriched.IsDBNull(6));
-        Assert.AreEqual("9020", enriched.GetString(7));
+        Assert.AreEqual(9020, enriched.GetInt32(7));
         Assert.AreEqual(2, enriched.GetInt32(8));
         Assert.AreEqual(3L, enriched.GetInt64(9));
         Assert.AreEqual(1, enriched.GetInt32(10));
         Assert.IsFalse(enriched.IsDBNull(11));
         Assert.IsTrue(enriched.IsDBNull(12));
         Assert.IsTrue(enriched.IsDBNull(13));
-        Assert.AreEqual("9b934869-b681-4523-b2fb-8604dd0d0832", enriched.GetString(14));
-        Assert.AreEqual("2", enriched.GetString(15));
-        Assert.AreEqual("0", enriched.GetString(16));
+        Assert.AreEqual(Guid.Parse("9b934869-b681-4523-b2fb-8604dd0d0832"), enriched.GetGuid(14));
+        Assert.AreEqual(2, enriched.GetInt32(15));
+        Assert.AreEqual(1, enriched.GetInt32(16));
         Assert.AreEqual("success", enriched.GetString(17));
-        Assert.AreEqual("8460", enriched.GetString(18));
+        Assert.AreEqual(8460, enriched.GetInt32(18));
         Assert.AreEqual("authoritative_provider_operation_correlation", enriched.GetString(19));
         Assert.IsTrue(enriched.IsDBNull(20));
         using (var detail = JsonDocument.Parse(enriched.GetString(21)))
@@ -6184,20 +6184,20 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task StaffCompletedHoldIdentityEnrichmentAllowsOnlyOneCompetingWriter()
     {
-        var seeded = await SeedCompletedHoldIdentityAsync("competing", "20000000002121", "9021");
+        var seeded = await SeedCompletedHoldIdentityAsync("competing", "20000000002121", 9021);
         var service = factory!.Services.GetRequiredService<HoldPlacementService>();
         var writes = await Task.WhenAll(
             service.RecordCompletedIdentityAsync(
                 seeded.OperationId,
                 seeded.RequestVersion,
                 seeded.OperationVersion,
-                new ProvenHoldIdentityEvidence("8461", "provider-operation-proof-9021-a"),
+                new ProvenHoldIdentityEvidence(8461, "provider-operation-proof-9021-a"),
                 CancellationToken.None),
             service.RecordCompletedIdentityAsync(
                 seeded.OperationId,
                 seeded.RequestVersion,
                 seeded.OperationVersion,
-                new ProvenHoldIdentityEvidence("8462", "provider-operation-proof-9021-b"),
+                new ProvenHoldIdentityEvidence(8462, "provider-operation-proof-9021-b"),
                 CancellationToken.None));
         CollectionAssert.AreEquivalent(
             new[] { "updated", "stale_version" },
@@ -6211,15 +6211,15 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@id", seeded.OperationId);
         await using var reader = await command.ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
-        var storedId = reader.GetString(0);
+        var storedId = reader.GetInt32(0);
         using var detail = JsonDocument.Parse(reader.GetString(1));
         var storedReference = detail.RootElement
             .GetProperty("identityCorrelation")
             .GetProperty("evidenceReference")
             .GetString();
         Assert.IsTrue(
-            storedId == "8461" && storedReference == "provider-operation-proof-9021-a" ||
-            storedId == "8462" && storedReference == "provider-operation-proof-9021-b");
+            storedId == 8461 && storedReference == "provider-operation-proof-9021-a" ||
+            storedId == 8462 && storedReference == "provider-operation-proof-9021-b");
     }
 
     [TestMethod]
@@ -6228,14 +6228,14 @@ public sealed partial class PatronJourneyTests
         var seeded = await SeedCompletedHoldIdentityAsync(
             "existing",
             "20000000002122",
-            "9022",
-            holdRequestId: "8463");
+            9022,
+            holdRequestId: 8463);
         var result = await factory!.Services.GetRequiredService<HoldPlacementService>()
             .RecordCompletedIdentityAsync(
                 seeded.OperationId,
                 seeded.RequestVersion,
                 seeded.OperationVersion,
-                new ProvenHoldIdentityEvidence("9999", "provider-operation-proof-9022"),
+                new ProvenHoldIdentityEvidence(9999, "provider-operation-proof-9022"),
                 CancellationToken.None);
         Assert.AreEqual("hold_identity_already_recorded", result.Code);
         Assert.AreEqual("8463", await ReadHoldIdentityAsync(seeded.OperationId));
@@ -6244,8 +6244,8 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task StaffCompletedHoldIdentityEnrichmentRequiresCurrentRequestAndOperationVersions()
     {
-        var staleRequest = await SeedCompletedHoldIdentityAsync("stale-request", "20000000002123", "9023");
-        var staleOperation = await SeedCompletedHoldIdentityAsync("stale-operation", "20000000002124", "9024");
+        var staleRequest = await SeedCompletedHoldIdentityAsync("stale-request", "20000000002123", 9023);
+        var staleOperation = await SeedCompletedHoldIdentityAsync("stale-operation", "20000000002124", 9024);
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
@@ -6265,13 +6265,13 @@ public sealed partial class PatronJourneyTests
             staleRequest.OperationId,
             staleRequest.RequestVersion,
             staleRequest.OperationVersion,
-            new ProvenHoldIdentityEvidence("8464", "provider-operation-proof-9023"),
+            new ProvenHoldIdentityEvidence(8464, "provider-operation-proof-9023"),
             CancellationToken.None);
         var operationResult = await service.RecordCompletedIdentityAsync(
             staleOperation.OperationId,
             staleOperation.RequestVersion,
             staleOperation.OperationVersion,
-            new ProvenHoldIdentityEvidence("8465", "provider-operation-proof-9024"),
+            new ProvenHoldIdentityEvidence(8465, "provider-operation-proof-9024"),
             CancellationToken.None);
         Assert.AreEqual("stale_version", requestResult.Code);
         Assert.AreEqual("stale_version", operationResult.Code);
@@ -6285,14 +6285,14 @@ public sealed partial class PatronJourneyTests
         var changedPatron = await SeedCompletedHoldIdentityAsync(
             "changed-patron",
             "20000000002125",
-            "9025",
+            9025,
             operationBarcode: "20000000009999");
         var changedBib = await SeedCompletedHoldIdentityAsync(
             "changed-bib",
             "20000000002126",
-            "9026",
-            operationBibId: "9999");
-        var superseded = await SeedCompletedHoldIdentityAsync("superseded", "20000000002127", "9027");
+            9026,
+            operationBibId: 9999);
+        var superseded = await SeedCompletedHoldIdentityAsync("superseded", "20000000002127", 9027);
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
@@ -6315,19 +6315,19 @@ public sealed partial class PatronJourneyTests
             changedPatron.OperationId,
             changedPatron.RequestVersion,
             changedPatron.OperationVersion,
-            new ProvenHoldIdentityEvidence("8467", "provider-operation-proof-9025"),
+            new ProvenHoldIdentityEvidence(8467, "provider-operation-proof-9025"),
             CancellationToken.None);
         var bibResult = await service.RecordCompletedIdentityAsync(
             changedBib.OperationId,
             changedBib.RequestVersion,
             changedBib.OperationVersion,
-            new ProvenHoldIdentityEvidence("8468", "provider-operation-proof-9026"),
+            new ProvenHoldIdentityEvidence(8468, "provider-operation-proof-9026"),
             CancellationToken.None);
         var supersededResult = await service.RecordCompletedIdentityAsync(
             superseded.OperationId,
             superseded.RequestVersion,
             superseded.OperationVersion,
-            new ProvenHoldIdentityEvidence("8469", "provider-operation-proof-9027"),
+            new ProvenHoldIdentityEvidence(8469, "provider-operation-proof-9027"),
             CancellationToken.None);
         Assert.AreEqual("hold_identity_association_changed", patronResult.Code);
         Assert.AreEqual("hold_identity_association_changed", bibResult.Code);
@@ -6353,9 +6353,9 @@ public sealed partial class PatronJourneyTests
         var inactive = await SeedCompletedHoldIdentityAsync(
             "inactive",
             "20000000002128",
-            "9028",
+            9028,
             organizationId: inactiveOrganizationId);
-        var leased = await SeedCompletedHoldIdentityAsync("leased", "20000000002129", "9029");
+        var leased = await SeedCompletedHoldIdentityAsync("leased", "20000000002129", 9029);
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
@@ -6376,13 +6376,13 @@ public sealed partial class PatronJourneyTests
             inactive.OperationId,
             inactive.RequestVersion,
             inactive.OperationVersion,
-            new ProvenHoldIdentityEvidence("8470", "provider-operation-proof-9028"),
+            new ProvenHoldIdentityEvidence(8470, "provider-operation-proof-9028"),
             CancellationToken.None);
         var leasedResult = await service.RecordCompletedIdentityAsync(
             leased.OperationId,
             leased.RequestVersion,
             leased.OperationVersion,
-            new ProvenHoldIdentityEvidence("8471", "provider-operation-proof-9029"),
+            new ProvenHoldIdentityEvidence(8471, "provider-operation-proof-9029"),
             CancellationToken.None);
         Assert.AreEqual("organization_inactive", inactiveResult.Code);
         Assert.AreEqual("hold_identity_not_enrichable", leasedResult.Code);
@@ -7071,7 +7071,7 @@ public sealed partial class PatronJourneyTests
         {
             AddTestingStaffHeaders(createClient, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
             createClient.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(createClient));
-            var requestId = await SeedPendingHoldRequestAsync("Create marker fence", "20000000003201", "93201");
+            var requestId = await SeedPendingHoldRequestAsync("Create marker fence", "20000000003201", 93201);
             await InstallMarkerFenceTriggerAsync("create_started");
             try
             {
@@ -7104,7 +7104,7 @@ public sealed partial class PatronJourneyTests
         {
             AddTestingStaffHeaders(replyClient, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
             replyClient.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(replyClient));
-            var requestId = await SeedPendingHoldRequestAsync("Reply marker fence", "20000000003202", "93202");
+            var requestId = await SeedPendingHoldRequestAsync("Reply marker fence", "20000000003202", 93202);
             await InstallMarkerFenceTriggerAsync("reply_started");
             try
             {
@@ -7151,9 +7151,9 @@ public sealed partial class PatronJourneyTests
             {"PAPIErrorCode":0,"TotalRecordsFound":4,"BibSearchRows":[
               {"ControlNumber":9001,"Title":"  Catalog title  ","Author":"Catalog author",
                "PublicationDate":"2026","ISBN":"9780000000001","TypeOfMaterial":"1"},
-              {"ControlNumber":9002,"Title":"Electronic title","PrimaryTypeOfMaterial":"36"},
-              {"BibID":9003,"DisplayTitle":"Alternate title","PrimaryAuthor":"Second author",
-               "MaterialTypeDescription":"Book","UPC":"012345678901"},
+              {"ControlNumber":9002,"Title":"Electronic title","PrimaryTypeOfMaterial":36},
+              {"ControlNumber":9003,"Title":"Alternate title","Author":"Second author",
+               "TypeOfMaterial":"Book","UPC":"012345678901"},
               {"ControlNumber":9001,"Title":"Duplicate title"}]}
             """);
         var provider = await CreatePolarisProviderAsync(handler);
@@ -7161,16 +7161,19 @@ public sealed partial class PatronJourneyTests
         var byIdentifier = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", CancellationToken.None);
         Assert.AreEqual(2, byIdentifier.Results.Count);
         Assert.AreEqual(4, byIdentifier.TotalMatches);
-        Assert.AreEqual("9001", byIdentifier.Results[0].BibId);
+        Assert.AreEqual(9001, byIdentifier.Results[0].BibId);
         Assert.AreEqual("Catalog title", byIdentifier.Results[0].Title);
         Assert.AreEqual("2026", byIdentifier.Results[0].Publication);
-        Assert.AreEqual("9003", byIdentifier.Results[1].BibId);
+        Assert.AreEqual(9003, byIdentifier.Results[1].BibId);
         Assert.AreEqual("012345678901", byIdentifier.Results[1].Identifier);
         CollectionAssert.AreEqual(
-            new[] { "ISBN", "UPC", "LCCN" },
+            new[] { "ISBN", "boolean", "LCCN" },
             handler.RequestUris.Select(uri => uri.AbsolutePath.Split('/').Last()).ToArray());
+        StringAssert.Contains(Uri.UnescapeDataString(handler.RequestUris[1].Query), "q=UPC=\"9780000000001\"");
         Assert.IsTrue(handler.RequestUris.All(uri =>
-            Uri.UnescapeDataString(uri.Query).Contains("q=9780000000001", StringComparison.Ordinal)));
+            Uri.UnescapeDataString(uri.Query).Contains("sortby=PDTI", StringComparison.Ordinal) &&
+            Uri.UnescapeDataString(uri.Query).Contains("notran=1", StringComparison.Ordinal) &&
+            !Uri.UnescapeDataString(uri.Query).Contains("sort=", StringComparison.Ordinal)));
 
         handler.RequestUris.Clear();
         await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
@@ -7186,30 +7189,28 @@ public sealed partial class PatronJourneyTests
     public async Task PolarisStaffSearchAcceptsSparseRowsWithAValidBIBIdentity()
     {
         var handler = new StaticResponseHandler(HttpStatusCode.OK,
-            """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"BibID":9001}]}""");
+            """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001}]}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
         var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
 
         Assert.AreEqual(1, result.Results.Count);
-        Assert.AreEqual("9001", result.Results[0].BibId);
+        Assert.AreEqual(9001, result.Results[0].BibId);
         Assert.IsNull(result.Results[0].Title);
         Assert.AreEqual(1, result.TotalMatches);
     }
 
     [TestMethod]
-    [DataRow("{\"ControlNumber\":9001}")]
     [DataRow("{\"BibID\":9001}")]
     [DataRow("{\"BibliographicRecordID\":9001}")]
-    public async Task PolarisStaffSearchPreservesSupportedSparseBIBIdentityAliases(string row)
+    public async Task PolarisStaffSearchRejectsUndocumentedBIBIdentityAliases(string row)
     {
         var handler = new StaticResponseHandler(HttpStatusCode.OK,
             $$"""{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{{row}}]}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
-
-        Assert.AreEqual("9001", result.Results.Single().BibId);
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(() =>
+            provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None));
     }
 
     [TestMethod]
@@ -7263,7 +7264,7 @@ public sealed partial class PatronJourneyTests
 
         var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
 
-        Assert.AreEqual("9001", result.Results.Single().BibId);
+        Assert.AreEqual(9001, result.Results.Single().BibId);
     }
 
     [TestMethod]
@@ -7331,7 +7332,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.InternalServerError, "{}"));
         var firstProvider = await CreatePolarisProviderAsync(first);
         var firstResult = await firstProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
-        Assert.AreEqual("9001", firstResult.Results.Single().BibId);
+        Assert.AreEqual(9001, firstResult.Results.Single().BibId);
         Assert.AreEqual(3, first.RequestCount);
 
         var partial = new SequenceResponseHandler(
@@ -7343,7 +7344,7 @@ public sealed partial class PatronJourneyTests
         var result = await partialProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
 
         Assert.AreEqual(1, result.Results.Count);
-        Assert.AreEqual("9001", result.Results[0].BibId);
+        Assert.AreEqual(9001, result.Results[0].BibId);
         Assert.AreEqual(3, partial.RequestCount);
 
         var last = new SequenceResponseHandler(
@@ -7352,7 +7353,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK, valid));
         var lastProvider = await CreatePolarisProviderAsync(last);
         var lastResult = await lastProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
-        Assert.AreEqual("9001", lastResult.Results.Single().BibId);
+        Assert.AreEqual(9001, lastResult.Results.Single().BibId);
         Assert.AreEqual(3, last.RequestCount);
 
         var failed = new SequenceResponseHandler(
@@ -7414,7 +7415,7 @@ public sealed partial class PatronJourneyTests
         var result = await provider.LookupIdentifierAsync("9780000000001", CancellationToken.None);
 
         Assert.AreEqual(IdentifierLookupOutcome.Found, result.Outcome);
-        Assert.AreEqual("9001", result.BibId);
+        Assert.AreEqual(9001, result.BibId);
         Assert.IsTrue(result.MultipleMatches, "TotalRecordsFound may exceed the current page row count.");
         Assert.AreEqual(4, handler.RequestCount);
     }
@@ -7472,7 +7473,7 @@ public sealed partial class PatronJourneyTests
         var result = await provider.SearchBibsAsync("title_author", "", "A title", "An author", CancellationToken.None);
 
         Assert.AreEqual(1, result.Results.Count);
-        Assert.AreEqual("9002", result.Results[0].BibId);
+        Assert.AreEqual(9002, result.Results[0].BibId);
         Assert.AreEqual(2, handler.RequestCount);
     }
 
@@ -7571,7 +7572,7 @@ public sealed partial class PatronJourneyTests
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Email", seeded.Email);
 
-        async Task<(string Title, string Status, string? BibId, byte[] RowVersion, int EventCount)> ReadRequestStateAsync()
+        async Task<(string Title, string Status, int? BibId, byte[] RowVersion, int EventCount)> ReadRequestStateAsync()
         {
             await using var connection = new SqlConnection(databaseConnectionString);
             await connection.OpenAsync();
@@ -7588,7 +7589,7 @@ public sealed partial class PatronJourneyTests
             return (
                 reader.GetString(0),
                 reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(2) ? null : reader.GetInt32(2),
                 (byte[])reader[3],
                 reader.GetInt32(4));
         }
@@ -7607,7 +7608,7 @@ public sealed partial class PatronJourneyTests
 
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.AreEqual("9001", body.RootElement.GetProperty("bibId").GetString());
+        Assert.AreEqual(9001, body.RootElement.GetProperty("bibId").GetInt32());
         Assert.AreEqual("Verified title", body.RootElement.GetProperty("title").GetString());
         Assert.IsTrue(body.RootElement.GetProperty("holdingsUnavailable").GetBoolean());
         Assert.AreEqual(JsonValueKind.Null, body.RootElement.GetProperty("holdingsSummary").ValueKind);
@@ -7649,7 +7650,7 @@ public sealed partial class PatronJourneyTests
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Email", seeded.Email);
 
-        async Task<(string Title, string Status, string? BibId, byte[] RowVersion, int EventCount, int OutboxCount, int HoldOperationCount)> ReadRequestStateAsync()
+        async Task<(string Title, string Status, int? BibId, byte[] RowVersion, int EventCount, int OutboxCount, int HoldOperationCount)> ReadRequestStateAsync()
         {
             await using var connection = new SqlConnection(databaseConnectionString);
             await connection.OpenAsync();
@@ -7668,7 +7669,7 @@ public sealed partial class PatronJourneyTests
             return (
                 reader.GetString(0),
                 reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(2) ? null : reader.GetInt32(2),
                 (byte[])reader[3],
                 reader.GetInt32(4),
                 reader.GetInt32(5),
@@ -7689,7 +7690,7 @@ public sealed partial class PatronJourneyTests
 
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.AreEqual("9001", body.RootElement.GetProperty("bibId").GetString());
+        Assert.AreEqual(9001, body.RootElement.GetProperty("bibId").GetInt32());
         Assert.AreEqual("Verified title", body.RootElement.GetProperty("title").GetString());
         Assert.IsFalse(body.RootElement.GetProperty("holdingsUnavailable").GetBoolean());
         Assert.AreEqual(JsonValueKind.Null, body.RootElement.GetProperty("patronHasHold").ValueKind);
@@ -8188,39 +8189,43 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task PolarisPickupBranchesNormalizeRawNestedAliasesAndSortLabels()
+    public async Task PolarisPickupBranchesMapTypedIdsAndOrganizationLabels()
     {
-        var handler = new StaticResponseHandler(
-            HttpStatusCode.OK,
-            """
-            {"PAPIErrorCode":0,"PickupBranchesRows":{"PickupBranchRow":[
-              {"OrganizationID":3,"DisplayName":"Zulu Branch"},
-              {"OrgID":4,"OrganizationName":"Alpha Branch"},
-              {"PickupBranchID":3,"BranchName":"Duplicate Branch"}
-            ]}}
-            """);
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":3},{"ID":4},{"ID":3}]}"""),
+            (HttpStatusCode.OK, """
+            {"PAPIErrorCode":2,"OrganizationsGetRows":[
+              {"OrganizationID":3,"OrganizationCodeID":3,"DisplayName":"Zulu Branch"},
+              {"OrganizationID":4,"OrganizationCodeID":3,"DisplayName":"Alpha Branch"}
+            ]}
+            """));
         var provider = await CreatePolarisProviderAsync(handler);
-
         var branches = await provider.GetPickupBranchesAsync(
-            new PatronSnapshot(
-                30,
-                "20000000000033",
-                "patron@example.org",
-                "Test",
-                "Patron",
-                "1",
-                null,
-                77,
-                88,
-                "Home Library",
-                4),
-            CancellationToken.None);
+            new PatronSnapshot(30, "20000000000033", "patron@example.org", "Test", "Patron",
+                1, null, 77, 88, "Home Library", 4), CancellationToken.None);
+        CollectionAssert.AreEqual(new[] { 4, 3 }, branches.Select(item => item.Id).ToArray());
+        CollectionAssert.AreEqual(new[] { "Alpha Branch", "Zulu Branch" }, branches.Select(item => item.Label).ToArray());
+        Assert.AreEqual(2, handler.RequestCount);
+        StringAssert.Contains(handler.RequestUris[0].AbsolutePath, "/public/v1/1033/100/77/pickupbranches");
+        StringAssert.Contains(handler.RequestUris[1].AbsolutePath, "/organizations/");
+    }
 
-        CollectionAssert.AreEqual(
-            new[] { "4:Alpha Branch", "3:Zulu Branch" },
-            branches.Select(item => $"{item.Id}:{item.Label}").ToArray());
-        Assert.AreEqual(1, handler.RequestCount);
-        StringAssert.Contains(handler.RequestPaths[0], "/public/v1/1033/100/77/pickupbranches");
+    [TestMethod]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"OrgID":3}]}""")]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":0}]}""")]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":-1}]}""")]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":2147483648}]}""")]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":3,"id":4}]}""")]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":{"PickupBranchRow":[{"ID":3}]}}""")]
+    [DataRow("""{"PickupBranchesRows":[{"ID":3}]}""")]
+    public async Task PolarisPickupBranchesRejectUnmodeledOrAmbiguousIdentity(string json)
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK, json);
+        var provider = await CreatePolarisProviderAsync(handler);
+        await Assert.ThrowsAsync<PolarisOperationalException>(() => provider.GetPickupBranchesAsync(
+            new PatronSnapshot(30, "20000000000033", "patron@example.org", "Test", "Patron",
+                1, null, 77, 88, "Home Library", 4), CancellationToken.None));
+        Assert.AreEqual(1, handler.RequestCount, "A malformed branch identity must not cause a context fallback.");
     }
 
     [TestMethod]
@@ -9330,7 +9335,7 @@ public sealed partial class PatronJourneyTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private static async Task<long> SeedPendingHoldRequestAsync(string title, string barcode, string bibId)
+    private static async Task<long> SeedPendingHoldRequestAsync(string title, string barcode, int bibId)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -9386,10 +9391,10 @@ public sealed partial class PatronJourneyTests
     private static async Task<CompletedHoldIdentitySeed> SeedCompletedHoldIdentityAsync(
         string titleSuffix,
         string requestBarcode,
-        string requestBibId,
+        int requestBibId,
         string? operationBarcode = null,
-        string? operationBibId = null,
-        string? holdRequestId = null,
+        int? operationBibId = null,
+        int? holdRequestId = null,
         int organizationId = 2)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
@@ -9784,7 +9789,7 @@ public sealed partial class PatronJourneyTests
             VALUES
                 (2, N'Frozen source library ' + @suffix, N'20000000003' + RIGHT(N'000' + CONVERT(nvarchar(3), ABS(CHECKSUM(@suffix)) % 1000), 3),
                  N'Legacy source ' + @suffix, N'Slice 3 Author', N'9780000000300', N'Source publication', 1,
-                 @formatId, N'pending_hold', N'slice3-bib-' + @suffix, N'Original source note ' + @suffix,
+                 @formatId, N'pending_hold', CASE WHEN @suffix = N'workflow' THEN 95001 ELSE 100000 + ABS(CHECKSUM(@suffix)) % 100000000 END, N'Original source note ' + @suffix,
                  @currentId, N'Current claimant snapshot ' + @suffix, DATEADD(hour, -2, SYSUTCDATETIME()),
                  N'legacy', @ruleId, N'found', DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(hour, -1, SYSUTCDATETIME()));
             DECLARE @sourceId bigint = SCOPE_IDENTITY();
@@ -9944,7 +9949,7 @@ public sealed partial class PatronJourneyTests
                  [Status], [Notes], [CreatedUtc], [UpdatedUtc], [ClaimedByStaffUserId], [ClaimedByDisplayName],
                  [ClaimedAtUtc], [ClaimType], [ClosedUtc])
             VALUES
-                (2, N'Test Library snapshot', N'race-bib-' + @suffix, N'Race task ' + @suffix, @formatId, N'book',
+                (2, N'Test Library snapshot', 97003, N'Race task ' + @suffix, @formatId, N'book',
                  @status, N'Race note ' + @suffix, DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(hour, -1, SYSUTCDATETIME()),
                  CASE WHEN @claimed=1 THEN @staffId END,
                  CASE WHEN @claimed=1 THEN N'Race claimant snapshot ' + @suffix END,
@@ -10002,7 +10007,7 @@ public sealed partial class PatronJourneyTests
                  [Status], [Notes], [CreatedUtc], [UpdatedUtc], [ClaimedByStaffUserId], [ClaimedByDisplayName],
                  [ClaimedAtUtc], [ClaimType], [ClosedUtc])
             VALUES
-                (2, N'Test Library snapshot', N'candidate-bib', N'Candidate-change task', @formatId, N'book',
+                (2, N'Test Library snapshot', 97002, N'Candidate-change task', @formatId, N'book',
                  N'closed', N'Candidate note', DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(hour, -1, SYSUTCDATETIME()),
                  @firstId, N'First candidate snapshot', DATEADD(hour, -3, SYSUTCDATETIME()), N'manual',
                  DATEADD(minute, -30, SYSUTCDATETIME()));
@@ -10676,10 +10681,10 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(await reader.ReadAsync());
         var setCount = reader.GetInt32(0);
         Assert.IsTrue(await reader.NextResultAsync());
-        var values = new List<string>();
+        var values = new List<int>();
         while (await reader.ReadAsync())
         {
-            values.Add(reader.GetString(0));
+            values.Add(reader.GetInt32(0));
         }
 
         return new PatronCodeRows(setCount, values.ToArray());
@@ -11117,7 +11122,7 @@ public sealed partial class PatronJourneyTests
         string? ProviderMessageId,
         string? SuppressionReason);
 
-    private sealed record PatronCodeRows(int SetCount, string[] Values);
+    private sealed record PatronCodeRows(int SetCount, int[] Values);
 
     private sealed record ScalarSettingCase(string Section, string Name, object? SystemValue, object? LibraryValue);
 
@@ -11177,7 +11182,7 @@ public sealed partial class PatronJourneyTests
             command.CommandText = "SELECT [Id] FROM [asap].[Organization] WITH (UPDLOCK, NOWAIT) WHERE [Id] = 2;";
             await command.ExecuteScalarAsync(cancellationToken);
             LockProbeSucceeded = true;
-            return [new PolarisPatronCodeSnapshot("1", "Adult")];
+            return [new PolarisPatronCodeSnapshot(1, "Adult")];
         }
     }
 
@@ -11193,7 +11198,7 @@ public sealed partial class PatronJourneyTests
                 "patron@example.org",
                 "Test",
                 "Patron",
-                "1",
+                1,
                 null,
                 300,
                 2,
@@ -11255,7 +11260,7 @@ public sealed partial class PatronJourneyTests
                 "pickup@example.org",
                 "Pickup",
                 "Patron",
-                "1",
+                1,
                 "Adult",
                 101,
                 2,
@@ -11354,14 +11359,14 @@ public sealed partial class PatronJourneyTests
                 new HoldProviderResult(
                     HoldProviderOutcome.FinalSuccess,
                     null,
-                    "8123",
+                    8123,
                     "group-qualifier",
                     "transaction-qualifier",
                     2,
-                    0,
+                    1,
                     "documented_reply_success"));
-            provider.createResult = provider.createResult with { RequestGuid = provider.RequestGuid.ToString() };
-            provider.replyResult = provider.replyResult with { RequestGuid = provider.RequestGuid.ToString() };
+            provider.createResult = provider.createResult with { RequestGuid = provider.RequestGuid };
+            provider.replyResult = provider.replyResult with { RequestGuid = provider.RequestGuid };
             return provider;
         }
 
@@ -11430,7 +11435,7 @@ public sealed partial class PatronJourneyTests
                 "hold-patron@example.org",
                 "Hold",
                 "Patron",
-                "1",
+                1,
                 "Adult",
                 101,
                 2,

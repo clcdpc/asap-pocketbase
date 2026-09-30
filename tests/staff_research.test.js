@@ -13,14 +13,19 @@ const { JSDOM } = require('jsdom');
       path.join(temporary, 'research.js'));
     fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}');
     global.document = dom.window.document;
-    const { applyPolarisResultToControls, createPolarisLookup, mergeCatalogValue, selectedStaffBibId,
+    const { applyPolarisResultToControls, createPolarisLookup, mergeCatalogValue, selectedStaffBibId, positivePolarisId,
       researchUrl, renderResearchLinks } = await import(pathToFileURL(path.join(temporary, 'research.js')).href);
-    assert.equal(selectedStaffBibId({ requestId: '9007199254740993', bibId: '9001' },
-      '9007199254740993', '9001'), '9001');
+    assert.equal(positivePolarisId('09001'), 9001);
+    assert.equal(positivePolarisId(2147483647), 2147483647);
+    for (const value of [null, undefined, '', 'bad', '0', '-1', '2147483648', 0, -1, 1.5, 2147483648]) {
+      assert.equal(positivePolarisId(value), null);
+    }
+    assert.equal(selectedStaffBibId({ requestId: '9007199254740993', bibId: 9001 },
+      '9007199254740993', '9001'), 9001);
     assert.equal(selectedStaffBibId(null, '9007199254740993', '9001'), null);
-    assert.equal(selectedStaffBibId({ requestId: 'stale', bibId: '9001' },
+    assert.equal(selectedStaffBibId({ requestId: 'stale', bibId: 9001 },
       '9007199254740993', '9001'), null);
-    assert.equal(selectedStaffBibId({ requestId: '9007199254740993', bibId: '9001' },
+    assert.equal(selectedStaffBibId({ requestId: '9007199254740993', bibId: 9001 },
       '9007199254740993', '9002'), null);
     assert.equal(researchUrl('https://leap.example.test/bib/{{bibid}}', { bibid: '90/01' }, 'bibid'),
       'https://leap.example.test/bib/90%2F01');
@@ -32,7 +37,7 @@ const { JSDOM } = require('jsdom');
     assert.equal(researchUrl('https://leap.example.test/bib/', { bibid: '9001' }, 'bibid'), '');
 
     const links = document.querySelector('#links');
-    const request = { title: 'A & B / C', identifier: '978 1', bibid: '9001' };
+    const request = { title: 'A & B / C', identifier: '978 1', bibid: 9001 };
     renderResearchLinks(links, request, {
       leapBibUrlPattern: 'https://leap.example.test/bib/{{bibid}}',
       leapPatronUrlPattern: 'https://leap.example.test/patron/{{patronId}}',
@@ -53,6 +58,15 @@ const { JSDOM } = require('jsdom');
     renderResearchLinks(links, { ...request, bibid: 'not-a-bib' }, {
       leapBibUrlPattern: 'https://leap.example.test/bib/{{bibid}}', externalSearchProviders: []
     });
+    assert.equal(links.querySelectorAll('a').length, 0);
+
+    renderResearchLinks(links, request, {
+      leapBibUrlPattern: 'https://leap.example.test/bib/{{bibid}}', externalSearchProviders: []
+    }, { bibId: '09001' });
+    assert.equal(links.querySelector('a').href, 'https://leap.example.test/bib/9001');
+    renderResearchLinks(links, request, {
+      leapBibUrlPattern: 'https://leap.example.test/bib/{{bibid}}', externalSearchProviders: []
+    }, { bibId: '2147483648' });
     assert.equal(links.querySelectorAll('a').length, 0);
 
     renderResearchLinks(links, request, { externalSearchProviders: [] });
@@ -76,7 +90,7 @@ const { JSDOM } = require('jsdom');
       return control;
     };
     const catalogSelection = {
-      bibId: '9001',
+      bibId: 9001,
       title: 'Catalog Title',
       author: 'Alice Writer',
       identifier: '9782222222222'
@@ -127,7 +141,7 @@ const { JSDOM } = require('jsdom');
     dialog.close = () => { dialog.open = false; };
     const outgoingBodies = [];
     const exactDetail = {
-      bibId: '9001',
+      bibId: 9001,
       title: 'Catalog Title',
       author: 'Alice Writer',
       publication: '',
@@ -145,7 +159,7 @@ const { JSDOM } = require('jsdom');
       patronHasHold: true
     };
     const searchRow = {
-      bibId: '9001',
+      bibId: 9001,
       title: 'Search Row Title',
       author: 'Search Row Author',
       publication: '2026',
@@ -220,7 +234,8 @@ const { JSDOM } = require('jsdom');
     assert.equal(editor.publication.value, 'Library backlist');
     assert.equal(editor.format.value, 'book');
     assert.equal(verified.requestId, '9007199254740993');
-    assert.equal(verified.bibId, '9001');
+    assert.equal(verified.bibId, 9001);
+    assert.equal(outgoingBodies.findLast(body => body.mode === 'bib').bibId, 9001);
     assert.strictEqual(verified.detail, verified.selected);
     assert.equal(verified.detail.publication, '2026');
     assert.equal(verified.detail.format, 'Book');

@@ -3,13 +3,13 @@ ALTER DATABASE CURRENT SET COMPATIBILITY_LEVEL = 160;
 IF NOT EXISTS (SELECT 1 FROM [asap].[SchemaVersion] WHERE [Id] = 1)
 BEGIN
     INSERT INTO [asap].[SchemaVersion] ([Id], [Version], [UpdatedUtc])
-    VALUES (1, 6, SYSUTCDATETIME());
+    VALUES (1, 7, SYSUTCDATETIME());
 END;
-ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) < 6
+ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) < 7
 BEGIN
-    THROW 51000, 'Schema 6 is a pre-release reset boundary. Recreate the application database from this DACPAC.', 1;
+    THROW 51000, 'Schema 7 is a pre-release reset boundary. Recreate the application database from this DACPAC.', 1;
 END;
-ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) > 6
+ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) > 7
 BEGIN
     THROW 51000, 'The database schema is newer than this DACPAC.', 1;
 END;

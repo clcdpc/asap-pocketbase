@@ -82,7 +82,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         scenarioOptions.verifyBibAndInvalidateIdentifier ||
         scenarioOptions.unverifiedPendingHold || scenarioOptions.verifiedPendingHold ||
         scenarioOptions.verificationInvalidation ||
-        scenarioOptions.pickupWrappedResponse || scenarioOptions.stalePickup ? '9001' : null,
+        scenarioOptions.pickupWrappedResponse || scenarioOptions.stalePickup ? 9001 : null,
       bibidStaffVerified: Boolean(scenarioOptions.verificationInvalidation || scenarioOptions.verifiedUnchangedBib ||
         scenarioOptions.purchaseVerifiedBib || scenarioOptions.verifiedPendingHold),
       claimedByStaffUserId: scenarioOptions.unclaimedPreview ? null : scenarioOptions.autoClaimOther ? '21' : staff.id,
@@ -198,7 +198,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         const conflict = response(409, { code: 'duplicate_open_request', providerOutcomeRecorded: false,
           message: 'This patron already has an active request or hold for this BIB. No new hold was attempted.',
           duplicate: { id: otherId, title: 'Existing <img src=x onerror=alert(1)>',
-            status: 'pending_hold', bibid: '09001', matchType: 'bibid' } });
+            status: 'pending_hold', bibid: 9001, matchType: 'bibid' } });
         return scenarioOptions.duplicateLateResponse
           ? new Promise(resolve => { releaseDuplicate = () => resolve(conflict); })
           : conflict;
@@ -226,7 +226,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           message: 'Hold placement is blocked or requires reconciliation.' });
       }
       if (url.endsWith('/bib-lookup') && options.method === 'POST') {
-        return response(200, { bibId: '9001', title: 'Original title', author: null });
+        return response(200, { bibId: 9001, title: 'Original title', author: null });
       }
       if (url.includes('/api/asap/config?')) return response(200, configuration);
       if (url.includes('/research-configuration')) return response(200, { externalSearchProviders: [] });
@@ -253,7 +253,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           const conflict = response(409, { code: 'duplicate_open_request',
             message: 'This patron already has an open request or hold for this BIB. The request was not changed.',
             duplicate: { id: otherId, title: 'Existing <img src=x onerror=alert(1)>',
-              status: 'pending_hold', bibid: '09001', matchType: 'bibid' } });
+              status: 'pending_hold', bibid: 9001, matchType: 'bibid' } });
           return scenarioOptions.duplicateLateResponse
             ? new Promise(resolve => { releaseDuplicate = () => resolve(conflict); })
             : conflict;
@@ -395,7 +395,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       await until(() => payload !== null, 'confirmed legacy no-hold edit submitted');
       assert.equal(payload.action, 'edit');
-      assert.equal(payload.bibid, '9001');
+      assert.equal(payload.bibid, 9001);
       assert.equal(payload.autohold, false);
       return;
     }
@@ -455,7 +455,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
           await until(() => payload !== null, 'confirmed BIB save submitted');
           assert.equal(payload.autohold, false);
-          assert.equal(payload.staffSelectedBibId, '9001');
+          assert.equal(payload.staffSelectedBibId, 9001);
           await until(() => /Request changes saved/.test(document.querySelector('#app-status').textContent),
             'confirmed BIB save result rendered');
           return;
@@ -650,7 +650,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.match(panel.textContent, /Request 9007199254740994/);
       assert.match(panel.textContent, /Existing <img src=x onerror=alert\(1\)>/);
       assert.match(panel.textContent, /Pending hold/);
-      assert.match(panel.textContent, /BIB 09001/);
+      assert.match(panel.textContent, /BIB 9001/);
       assert.equal(panel.querySelector('img'), null);
       assert.match(panel.textContent, /attempted change was not saved/);
       assert.doesNotMatch(document.querySelector('#app-status').textContent, /Workflow action completed|Final state:/);

@@ -66,7 +66,7 @@ public sealed partial class PatronJourneyTests
                              .Where(item => seed.RequestIds.Contains(item.Id)).ToListAsync())
                 {
                     request.IsbnCheckStatus = "found";
-                    request.BibId = $"s5-{request.Id}";
+                    request.BibId = checked(95000 + (int)request.Id);
                 }
                 await hideSeedRows.SaveChangesAsync();
             }
@@ -488,7 +488,7 @@ public sealed partial class PatronJourneyTests
             {
                 var behind = await mutate.TitleRequests.SingleAsync(item => item.Id == seed.CursorIds[0]);
                 behind.IsbnCheckStatus = "found";
-                behind.BibId = "99901";
+                behind.BibId = 99901;
                 await mutate.SaveChangesAsync();
             }
 

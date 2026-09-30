@@ -84,7 +84,7 @@ public sealed partial class PatronJourneyTests
                 SubjectTemplate = "Library owns: {{title}}", BodyTemplate = "Hello {{firstName}}, {{title}} exists"
             });
 
-        TitleRequest Request(string title, string? bib, bool autoHold, string? email = "patron@example.org") => new()
+        TitleRequest Request(string title, int? bib, bool autoHold, string? email = "patron@example.org") => new()
         {
             LibraryOrganizationId = libraryId,
             Barcode = $"2{Guid.NewGuid():N}"[..14],
@@ -100,10 +100,10 @@ public sealed partial class PatronJourneyTests
             UpdatedUtc = DateTime.UtcNow
         };
         var purchase = Request("Purchase title", null, true);
-        var purchaseWithBib = Request("Pending title", "9001", true);
-        var alreadyOwned = Request("Owned title", "9001", false);
-        var missingRecipient = Request("Owned without email", "9001", false, null);
-        var unavailableRecipient = Request("Owned refresh unavailable", "9001", false);
+        var purchaseWithBib = Request("Pending title", 9001, true);
+        var alreadyOwned = Request("Owned title", 9001, false);
+        var missingRecipient = Request("Owned without email", 9001, false, null);
+        var unavailableRecipient = Request("Owned refresh unavailable", 9001, false);
         var rejected = Request("Rejected title", null, true);
         var rejectedUnavailable = Request("Rejected refresh unavailable", null, true);
         var cancelledPurchase = Request("Cancelled purchase", null, true);
@@ -248,7 +248,7 @@ public sealed partial class PatronJourneyTests
             }
             return Task.FromResult(new PatronSnapshot(7001, barcode,
                 barcode == MissingEmailBarcode ? null : "current-patron@example.org",
-                "Current", "Patron", "1", "Adult", 101, 2, "Test Library", 101));
+                "Current", "Patron", 1, "Adult", 101, 2, "Test Library", 101));
         }
 
         public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin,

@@ -19,7 +19,7 @@ public sealed record HoldOperationSummary(
     int AttemptNumber,
     long ExecutionEpoch,
     string PatronBarcodeSnapshotMasked,
-    string BibIdSnapshot,
+    int BibIdSnapshot,
     string Version,
     DateTime? LastRecoveryUtc,
     string? LastErrorCode,
@@ -59,7 +59,7 @@ public sealed record TitleRequestDto(
     string? Email,
     string? NameFirst,
     string? NameLast,
-    string? PatronCodeId,
+    int? PatronCodeId,
     string? PatronCodeDescription,
     int? PreferredPickupBranchId,
     string? PreferredPickupBranchName,
@@ -74,7 +74,7 @@ public sealed record TitleRequestDto(
     string FormatLabel,
     string Status,
     string? CloseReason,
-    string? Bibid,
+    int? Bibid,
     bool BibidStaffVerified,
     string? Notes,
     string? ClaimedByStaffUserId,
@@ -486,10 +486,9 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         {
             yield return $"identifier:{identifier}";
         }
-        var bib = NormalizeSimilarityValue(request.BibId);
-        if (bib.Length > 0)
+        if (request.BibId.HasValue)
         {
-            yield return $"bib:{bib}";
+            yield return $"bib:{request.BibId.Value}";
         }
         var title = NormalizeSimilarityValue(request.Title);
         if (title.Length > 0)

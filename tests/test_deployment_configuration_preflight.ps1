@@ -184,7 +184,7 @@ try {
         versionOrLabel = 'schema-contract-test'
         commitSha = '1111111111111111111111111111111111111111'
         buildUtc = '2026-09-17T00:00:00.000Z'
-        applicationSchemaVersion = 6
+        applicationSchemaVersion = 7
         hangfireSchemaVersion = 9
         dacpacSha256 = (Get-FileHash -LiteralPath (Join-Path $databaseRoot 'Asap.Database.dacpac') -Algorithm SHA256).Hash.ToLowerInvariant()
         webPayloadSha256 = $webIdentity.Hash
@@ -203,11 +203,11 @@ try {
         -ExpectedCommit $manifest.commitSha `
         -ExpectedLabel $manifest.versionOrLabel `
         -StagingPath (Join-Path $archiveFixtureRoot 'valid-staging')
-    if ([int] $accepted.Manifest.applicationSchemaVersion -ne 6) {
-        throw 'Schema 6 deployment manifest was not accepted.'
+    if ([int] $accepted.Manifest.applicationSchemaVersion -ne 7) {
+        throw 'Schema 7 deployment manifest was not accepted.'
     }
 
-    $manifest.applicationSchemaVersion = 5
+    $manifest.applicationSchemaVersion = 6
     [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     $invalidZip = Join-Path $archiveFixtureRoot 'invalid.zip'
     Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $invalidZip

@@ -66,7 +66,7 @@ public sealed record EffectivePatronConfiguration(
     bool AllowPatronAutoholdOptOut,
     bool PatronCodeEligibilityEnabled,
     string PatronCodeEligibilityMessage,
-    IReadOnlySet<string> AllowedPatronCodeIds,
+    IReadOnlySet<int> AllowedPatronCodeIds,
     string PageTitle,
     string BarcodeLabel,
     string PinLabel,
@@ -363,7 +363,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             .ToListAsync(cancellationToken);
     }
 
-    private static async Task<IReadOnlySet<string>> LoadPatronCodesAsync(
+    private static async Task<IReadOnlySet<int>> LoadPatronCodesAsync(
         AsapDbContext context,
         int organizationId,
         CancellationToken cancellationToken)
@@ -376,7 +376,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             .Where(item => item.OrganizationId == ownerId)
             .Select(item => item.PatronCodeId)
             .ToListAsync(cancellationToken);
-        return values.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return values.ToHashSet();
     }
 
     private static async Task<EffectiveEmailConfiguration> LoadEmailAsync(

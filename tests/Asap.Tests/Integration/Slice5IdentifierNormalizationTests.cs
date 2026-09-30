@@ -26,7 +26,7 @@ public sealed partial class PatronJourneyTests
                 Title = "Empty identifier normalization",
                 Author = "Slice Five",
                 Identifier = null,
-                BibId = "stale-bib-9001",
+                BibId = 9001,
                 MaterialFormatId = bookFormat.Id,
                 Status = "suggestion",
                 IsbnCheckStatus = "pending",
@@ -44,7 +44,7 @@ public sealed partial class PatronJourneyTests
                 Barcode = $"slice5-staff-bib-{Guid.NewGuid():N}",
                 Title = "Staff verified BIB with empty identifier",
                 Identifier = null,
-                BibId = "staff-bib-9002",
+                BibId = 9002,
                 BibIdStaffVerified = true,
                 MaterialFormatId = bookFormat.Id,
                 Status = "suggestion",
@@ -97,7 +97,7 @@ public sealed partial class PatronJourneyTests
             CollectionAssert.AreEquivalent(new[] { "slice5-unrelated" }, tags);
             var staffVerifiedRequest = await verify.TitleRequests.AsNoTracking()
                 .SingleAsync(item => item.Id == staffVerifiedRequestId);
-            Assert.AreEqual("staff-bib-9002", staffVerifiedRequest.BibId);
+            Assert.AreEqual(9002, staffVerifiedRequest.BibId);
             Assert.IsTrue(staffVerifiedRequest.BibIdStaffVerified);
             Assert.AreEqual("skipped_no_isbn", staffVerifiedRequest.IsbnCheckStatus);
             var progress = await verify.QueueProgress.AsNoTracking().SingleAsync(item =>

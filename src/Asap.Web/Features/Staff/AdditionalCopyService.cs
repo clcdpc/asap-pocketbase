@@ -28,7 +28,7 @@ public sealed record AdditionalCopyDto(
     string? SourceStatus,
     int LibraryOrgId,
     string LibraryOrgName,
-    string Bibid,
+    int Bibid,
     string Title,
     string? Author,
     string? Format,
@@ -67,7 +67,7 @@ public sealed record AdditionalCopyScopeResult(
     IReadOnlyList<object> AvailableLibraries);
 
 public sealed record AdditionalCopyPreview(
-    string Bibid,
+    int Bibid,
     int OpenCount,
     bool EmailPurchaseReminderDefault,
     string Version);
@@ -182,7 +182,7 @@ public sealed class AdditionalCopyService(
         {
             return ("source_stage_invalid", null);
         }
-        if (string.IsNullOrWhiteSpace(source.BibId))
+        if (source.BibId is not > 0)
         {
             return ("bib_required", null);
         }
@@ -191,7 +191,7 @@ public sealed class AdditionalCopyService(
                     item.BibId == source.BibId && item.Status == "open",
             cancellationToken);
         return ("loaded", new AdditionalCopyPreview(
-            source.BibId,
+            source.BibId.Value,
             count,
             actor.AdditionalCopyReminderDefault,
             StaffVersion.Encode(source.RowVersion)));
@@ -268,7 +268,7 @@ public sealed class AdditionalCopyService(
         {
             return new AdditionalCopyMutationResult("source_stage_invalid");
         }
-        if (string.IsNullOrWhiteSpace(source.BibId))
+        if (source.BibId is not > 0)
         {
             return new AdditionalCopyMutationResult("bib_required");
         }
@@ -277,7 +277,7 @@ public sealed class AdditionalCopyService(
         var openCount = await LockAndCountOpenAsync(
             context,
             source.LibraryOrganizationId,
-            source.BibId,
+            source.BibId.Value,
             cancellationToken);
         var format = await context.MaterialFormats.AsNoTracking()
             .Where(item => item.Id == source.MaterialFormatId)
@@ -288,7 +288,7 @@ public sealed class AdditionalCopyService(
             SourceTitleRequestId = source.Id,
             LibraryOrganizationId = source.LibraryOrganizationId,
             LibraryNameSnapshot = source.LibraryNameSnapshot,
-            BibId = source.BibId,
+            BibId = source.BibId.Value,
             Title = source.Title,
             Author = source.Author,
             Identifier = source.Identifier,
@@ -853,7 +853,7 @@ public sealed class AdditionalCopyService(
     private static async Task<int> LockAndCountOpenAsync(
         AsapDbContext context,
         int organizationId,
-        string bibId,
+        int bibId,
         CancellationToken cancellationToken)
     {
         var connection = context.Database.GetDbConnection();

@@ -4,6 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using Clc.Polaris.Api.Models;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Configuration;
@@ -28,14 +30,14 @@ public sealed record ResolveHoldOperationInput(
     bool OperationSpecificProofAttested,
     string? ProofSource,
     string? CausalConnection,
-    string? ProvenFinalHoldId,
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] int? ProvenFinalHoldId,
     bool OriginalExecutorExcluded,
     bool ExecutorExclusionAttested,
     string? ExecutorExclusionReference,
     string? ExecutorExclusionExplanation);
 
 internal sealed record ProvenHoldIdentityEvidence(
-    string HoldRequestId,
+    int HoldRequestId,
     string EvidenceReference);
 
 public sealed class HoldPlacementService(
@@ -321,7 +323,7 @@ public sealed class HoldPlacementService(
         var evidenceReference = Clean(input.EvidenceReference);
         var proofSource = Clean(input.ProofSource);
         var causalConnection = Clean(input.CausalConnection);
-        var provenFinalHoldId = Clean(input.ProvenFinalHoldId);
+        var provenFinalHoldId = input.ProvenFinalHoldId;
         var exclusionReference = Clean(input.ExecutorExclusionReference);
         var exclusionExplanation = Clean(input.ExecutorExclusionExplanation);
         if (actor.Role != "super_admin") return new HoldPlacementResult("hold_resolution_forbidden", operationId);
@@ -351,8 +353,7 @@ public sealed class HoldPlacementService(
         {
             return new HoldPlacementResult("invalid_resolution", operationId);
         }
-        if (provenFinalHoldId is not null &&
-            (!long.TryParse(provenFinalHoldId, NumberStyles.None, CultureInfo.InvariantCulture, out var numericHoldId) || numericHoldId <= 0))
+        if (provenFinalHoldId is <= 0)
         {
             return new HoldPlacementResult("invalid_resolution", operationId);
         }
@@ -362,7 +363,6 @@ public sealed class HoldPlacementService(
             {
                 return new HoldPlacementResult("unsupported_resolution_evidence", operationId);
             }
-            provenFinalHoldId = long.Parse(provenFinalHoldId, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
         }
         else if (provenFinalHoldId is not null)
         {
@@ -502,7 +502,7 @@ public sealed class HoldPlacementService(
             return new HoldPlacementResult("unsupported_resolution_evidence", operationId);
         }
         if (provenFinalHoldId is not null && operation.PolarisHoldId is not null &&
-            !string.Equals(provenFinalHoldId, operation.PolarisHoldId, StringComparison.Ordinal))
+            provenFinalHoldId != operation.PolarisHoldId)
         {
             return new HoldPlacementResult("hold_identity_conflict", operationId);
         }
@@ -665,15 +665,14 @@ public sealed class HoldPlacementService(
         ProvenHoldIdentityEvidence evidence,
         CancellationToken cancellationToken)
     {
-        var holdRequestId = Clean(evidence.HoldRequestId);
+        var holdRequestId = evidence.HoldRequestId;
         var evidenceReference = Clean(evidence.EvidenceReference);
         if (expectedRequestVersion.Length == 0 || expectedOperationVersion.Length == 0 ||
-            !long.TryParse(holdRequestId, out var numericHoldRequestId) || numericHoldRequestId <= 0 ||
+            holdRequestId <= 0 ||
             evidenceReference is null or { Length: > 1000 })
         {
             return new HoldPlacementResult("invalid_identity_evidence", operationId);
         }
-        holdRequestId = numericHoldRequestId.ToString(CultureInfo.InvariantCulture);
 
         HoldPlacementOperation? preOperation;
         TitleRequest? preRequest;
@@ -817,7 +816,11 @@ public sealed class HoldPlacementService(
         }
         if (!request.RowVersion.SequenceEqual(expectedVersion)) return new AcquisitionResult("stale_version");
         if (request.Status != "pending_hold" || !request.AutoHold) return new AcquisitionResult("hold_not_eligible");
-        if (!int.TryParse(request.BibId, out var bibId) || bibId <= 0) return new AcquisitionResult("bib_required");
+        if (request.BibId is not > 0)
+        {
+            return new AcquisitionResult("bib_required");
+        }
+        var bibId = request.BibId.Value;
         if (!request.BibIdStaffVerified) return new AcquisitionResult("bib_unverified");
         if (string.IsNullOrWhiteSpace(request.Barcode)) return new AcquisitionResult("patron_barcode_missing");
 
@@ -832,12 +835,12 @@ public sealed class HoldPlacementService(
             .OrderBy(item => item.Id)
             .Select(item => new { item.Id, item.Title, item.Status, item.BibId })
             .ToListAsync(cancellationToken);
-        var duplicate = otherActiveRequests.FirstOrDefault(other => SameBibIdentity(other.BibId, request.BibId!));
+        var duplicate = otherActiveRequests.FirstOrDefault(other => SameBibIdentity(other.BibId, request.BibId.Value));
         if (duplicate is not null)
         {
             return new AcquisitionResult("duplicate_open_request", Duplicate:
                 new TitleRequestDuplicateConflict(duplicate.Id, duplicate.Title, duplicate.Status,
-                    duplicate.BibId!, "bibid"));
+                    duplicate.BibId!.Value, "bibid"));
         }
         var attempt = await context.HoldPlacementOperations
             .Where(item => item.TitleRequestId == requestId)
@@ -872,7 +875,7 @@ public sealed class HoldPlacementService(
         {
             TitleRequestId = request.Id,
             PatronBarcodeSnapshot = request.Barcode,
-            BibIdSnapshot = bibId.ToString(),
+            BibIdSnapshot = bibId,
             PickupBranchIdSnapshot = request.PreferredPickupBranchId,
             AttemptNumber = checked(attempt + 1),
             State = "in_progress",
@@ -983,7 +986,7 @@ public sealed class HoldPlacementService(
                 owner,
                 token => staffPolarisProvider.CreateHoldAsync(new HoldCreateCommand(
                     patron.PatronId,
-                    int.Parse(operation.BibIdSnapshot),
+                    operation.BibIdSnapshot,
                     patron.PreferredPickupBranchId.Value,
                     settings.OrganizationIdForRequests.Value,
                     settings.WorkstationId.Value,
@@ -1039,7 +1042,7 @@ public sealed class HoldPlacementService(
     {
         var operation = await LoadOperationAsync(owner.Id, cancellationToken);
         if (operation is null || operation.Phase != "reply_ready" ||
-            !Guid.TryParse(operation.PolarisRequestGuid, out var requestGuid) ||
+            operation.PolarisRequestGuid is null || operation.PolarisRequestGuid == Guid.Empty ||
             string.IsNullOrWhiteSpace(operation.TxnGroupQualifier) ||
             string.IsNullOrWhiteSpace(operation.TxnQualifier) ||
             operation.RequestingOrganizationIdSnapshot is not > 0)
@@ -1059,7 +1062,7 @@ public sealed class HoldPlacementService(
             replyResult = await CallWithLeaseAsync(
                 owner,
                 token => staffPolarisProvider.ReplyToHoldAsync(new HoldReplyCommand(
-                    requestGuid,
+                    operation.PolarisRequestGuid.Value,
                     operation.TxnGroupQualifier,
                     operation.TxnQualifier,
                     operation.RequestingOrganizationIdSnapshot.Value), token),
@@ -1119,18 +1122,18 @@ public sealed class HoldPlacementService(
             UPDATE [asap].[HoldPlacementOperation]
             SET [Phase] = N'create_started', [CreateStartedUtc] = SYSUTCDATETIME(),
                 [LeaseExpiresUtc] = DATEADD(minute, 2, SYSUTCDATETIME()),
-                [PatronIdSnapshot] = {patron.PatronId.ToString()},
+                [PatronIdSnapshot] = {patron.PatronId},
                 [PickupBranchIdSnapshot] = {patron.PreferredPickupBranchId},
                 [RequestingOrganizationIdSnapshot] = {settings.OrganizationIdForRequests},
                 [WorkstationIdSnapshot] = {settings.WorkstationId},
-                [PolarisUserIdSnapshot] = {settings.SystemPolarisUserId!.Value.ToString()},
+                [PolarisUserIdSnapshot] = {settings.SystemPolarisUserId},
                 [DetailJson] = {detail}
             WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
               AND [State] = N'in_progress' AND [Phase] = N'acquired'
               AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
                   WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
                     AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
-                    AND TRY_CONVERT(int, request.[BibId]) = TRY_CONVERT(int, [BibIdSnapshot]))
+                    AND request.[BibId] = [BibIdSnapshot])
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             cancellationToken), cancellationToken);
@@ -1152,11 +1155,11 @@ public sealed class HoldPlacementService(
             $"""
             UPDATE [asap].[HoldPlacementOperation]
             SET [Phase] = {phase}, [State] = {state}, [CreateResponseObservedUtc] = SYSUTCDATETIME(),
-                [PolarisRequestGuid] = {Clean(result.RequestGuid)}, [PolarisHoldId] = {Clean(result.HoldRequestId)},
+                [PolarisRequestGuid] = {result.RequestGuid}, [PolarisHoldId] = {result.HoldRequestId},
                 [TxnGroupQualifier] = {Clean(result.TxnGroupQualifier)}, [TxnQualifier] = {Clean(result.TxnQualifier)},
-                [ReplyAnswer] = CASE WHEN {phase} = N'reply_ready' THEN N'1' ELSE [ReplyAnswer] END,
-                [ReplyState] = CASE WHEN {phase} = N'reply_ready' THEN N'3' ELSE [ReplyState] END,
-                [ProviderStatusType] = {result.StatusType?.ToString()}, [ProviderStatusValue] = {result.StatusValue?.ToString()},
+                [ReplyAnswer] = CASE WHEN {phase} = N'reply_ready' THEN {(int)HoldRequestReplyAnswer.Yes} ELSE [ReplyAnswer] END,
+                [ReplyState] = CASE WHEN {phase} = N'reply_ready' THEN {(int)HoldRequestReplyState.AcceptEvenWithExistingHolds} ELSE [ReplyState] END,
+                [ProviderStatusType] = {result.StatusType}, [ProviderStatusValue] = {result.StatusValue},
                 [ResultCode] = {resultCode}, [OutcomeEvidenceKind] = {result.EvidenceKind},
                 [LastErrorCode] = {result.SafeErrorCode}
             WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
@@ -1183,11 +1186,11 @@ public sealed class HoldPlacementService(
             WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
               AND [State] = N'in_progress' AND [Phase] = N'reply_ready'
               AND [PolarisRequestGuid] IS NOT NULL AND [TxnGroupQualifier] IS NOT NULL AND [TxnQualifier] IS NOT NULL
-              AND [ReplyAnswer] = N'1' AND [ReplyState] = N'3' AND [LeaseExpiresUtc] > SYSUTCDATETIME()
+              AND [ReplyAnswer] = {(int)HoldRequestReplyAnswer.Yes} AND [ReplyState] = {(int)HoldRequestReplyState.AcceptEvenWithExistingHolds} AND [LeaseExpiresUtc] > SYSUTCDATETIME()
               AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
                   WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
                     AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
-                    AND TRY_CONVERT(int, request.[BibId]) = TRY_CONVERT(int, [BibIdSnapshot]));
+                    AND request.[BibId] = [BibIdSnapshot]);
             """,
             cancellationToken), cancellationToken);
     }
@@ -1307,8 +1310,8 @@ public sealed class HoldPlacementService(
             $"""
             UPDATE [asap].[HoldPlacementOperation]
             SET [Phase] = {phase}, [State] = {state}, [ReplyResponseObservedUtc] = SYSUTCDATETIME(),
-                [PolarisHoldId] = COALESCE({Clean(result.HoldRequestId)}, [PolarisHoldId]),
-                [ProviderStatusType] = {result.StatusType?.ToString()}, [ProviderStatusValue] = {result.StatusValue?.ToString()},
+                [PolarisHoldId] = COALESCE({result.HoldRequestId}, [PolarisHoldId]),
+                [ProviderStatusType] = {result.StatusType}, [ProviderStatusValue] = {result.StatusValue},
                 [ResultCode] = {ResultCode(result)}, [OutcomeEvidenceKind] = {result.EvidenceKind},
                 [LastErrorCode] = {result.SafeErrorCode}
             WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
@@ -1327,16 +1330,17 @@ public sealed class HoldPlacementService(
         return await context.Database.ExecuteSqlInterpolatedAsync(
             $"""
             UPDATE [asap].[HoldPlacementOperation]
-            SET [Phase] = N'result_recorded', [PatronIdSnapshot] = {patron.PatronId.ToString()},
-                [PickupBranchIdSnapshot] = {patron.PreferredPickupBranchId}, [PolarisHoldId] = {hold.HoldRequestId.ToString()},
+            SET [Phase] = N'result_recorded', [PatronIdSnapshot] = {patron.PatronId},
+                [PickupBranchIdSnapshot] = {patron.PreferredPickupBranchId}, [PolarisHoldId] = {hold.HoldRequestId},
                 [ResultCode] = N'success', [OutcomeEvidenceKind] = N'existing_hold_adoption',
-                [ProviderStatusType] = {hold.StatusId.ToString()}, [ProviderStatusValue] = {Clean(hold.StatusDescription)}
+                [ProviderStatusType] = NULL, [ProviderStatusValue] = NULL,
+                [DetailJson] = {JsonSerializer.Serialize(new { adoptedHoldStatusId = hold.StatusId, adoptedHoldStatusDescription = hold.StatusDescription })}
             WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
               AND [State] = N'in_progress' AND [Phase] = N'acquired'
               AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
                   WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
                     AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
-                    AND TRY_CONVERT(int, request.[BibId]) = TRY_CONVERT(int, [BibIdSnapshot]))
+                    AND request.[BibId] = [BibIdSnapshot])
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             cancellationToken) == 1;
@@ -1787,12 +1791,11 @@ public sealed class HoldPlacementService(
 
     private static List<PolarisHoldSnapshot> ActiveSameBibHolds(
         IReadOnlyList<PolarisHoldSnapshot> holds,
-        string bibId) =>
-        holds.Where(item => item.BibId.ToString() == bibId && !IsTerminal(item.StatusId)).ToList();
+        int bibId) =>
+        holds.Where(item => item.BibId == bibId && !IsTerminal(item.StatusId)).ToList();
 
-    private static bool SameBibIdentity(string? currentBibId, string bibIdSnapshot) =>
-        int.TryParse(currentBibId, out var current) && current > 0 &&
-        int.TryParse(bibIdSnapshot, out var snapshot) && current == snapshot;
+    private static bool SameBibIdentity(int? currentBibId, int bibIdSnapshot) =>
+        currentBibId is > 0 && currentBibId == bibIdSnapshot;
 
     private static async Task<WorkflowSettings> EffectiveWorkflowAsync(
         AsapDbContext context,

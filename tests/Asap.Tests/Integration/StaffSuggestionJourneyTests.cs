@@ -59,7 +59,7 @@ public sealed partial class PatronJourneyTests
         var title = $"Canceled BIB {Guid.NewGuid():N}";
 
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
-            await service.CreateAsync(actor, StaffBibInput(title, "9001"), cancellation.Token));
+            await service.CreateAsync(actor, StaffBibInput(title, 9001), cancellation.Token));
 
         Assert.AreEqual(1, bib.ValidationCount);
         Assert.AreEqual(0, pickup.UpdateCount);
@@ -158,11 +158,22 @@ public sealed partial class PatronJourneyTests
         var title = $"Rejected BIB {Guid.NewGuid():N}";
 
         using var response = await client.PostAsJsonAsync(
-            "/api/asap/staff/suggestions", StaffBibInput(title, verifiedBibId));
+            "/api/asap/staff/suggestions", new
+            {
+                libraryOrgId = 2, barcode = "20000000001401", format = "book", title,
+                author = "Staff author", preferredPickupBranchId = 102,
+                currentPreferredPickupBranchIdAtLoad = 101,
+                autohold = false, emailPatronConfirmation = false,
+                customFields = new Dictionary<string, string?>(),
+                verifiedBibId, currentPreferredPickupBranchObservedAtLoad = true
+            });
 
         Assert.AreEqual(expectedStatus, response.StatusCode, await response.Content.ReadAsStringAsync());
-        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.AreEqual(expectedCode, body.RootElement.GetProperty("code").GetString());
+        if (expectedStatus != HttpStatusCode.BadRequest)
+        {
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.AreEqual(expectedCode, body.RootElement.GetProperty("code").GetString());
+        }
         Assert.AreEqual(expectedValidationCount, bib.ValidationCount);
         Assert.AreEqual(0, pickup.UpdateCount);
         await AssertNoStaffBibRequestAsync(title);
@@ -179,7 +190,7 @@ public sealed partial class PatronJourneyTests
             services.AddSingleton<IStaffPolarisProvider>(bib);
         }));
 
-    private static StaffSuggestionInput StaffBibInput(string title, string verifiedBibId) => new(
+    private static StaffSuggestionInput StaffBibInput(string title, int verifiedBibId) => new(
         2, "20000000001401", "book", title, "Staff author", null, null, null, null,
         102, 101, false, false, new Dictionary<string, string?>(), verifiedBibId, true);
 
@@ -362,7 +373,7 @@ public sealed partial class PatronJourneyTests
         var pickupProvider = await CreatePolarisProviderAsync(pickupHandler);
         var patron = new PatronSnapshot(
             7004, "20000000000045", "pickup@example.org", "Pickup", "Patron",
-            "1", "Adult", 101, 2, "Test Library", 101);
+            1, "Adult", 101, 2, "Test Library", 101);
         Exception? pickupResult = null;
         try
         {
@@ -410,7 +421,7 @@ public sealed partial class PatronJourneyTests
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
         var title = $"Provider timeout before pickup {Guid.NewGuid():N}";
         using var response = await client.PostAsJsonAsync("/api/asap/staff/suggestions",
-            StaffBibInput(title, "9001"));
+            StaffBibInput(title, 9001));
         Assert.AreEqual(HttpStatusCode.BadGateway, response.StatusCode,
             await response.Content.ReadAsStringAsync());
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -420,7 +431,7 @@ public sealed partial class PatronJourneyTests
 
         var persistence = scopedFactory.Services.GetRequiredService<PatronSuggestionService>();
         var persistenceFailure = await Assert.ThrowsExactlyAsync<PatronFlowException>(async () =>
-            await persistence.CreateForStaffAsync(actor, 2, StaffBibInput(title, "9001"),
+            await persistence.CreateForStaffAsync(actor, 2, StaffBibInput(title, 9001),
                 CancellationToken.None));
         Assert.AreEqual(502, persistenceFailure.StatusCode);
         Assert.AreEqual(expectedCode,
@@ -480,7 +491,7 @@ public sealed partial class PatronJourneyTests
         var persistence = scopedFactory.Services.GetRequiredService<PatronSuggestionService>();
         var title = $"Canceled before pickup {Guid.NewGuid():N}";
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
-            await persistence.CreateForStaffAsync(actor, 2, StaffBibInput(title, "9001"),
+            await persistence.CreateForStaffAsync(actor, 2, StaffBibInput(title, 9001),
                 persistenceCancellation.Token));
         Assert.AreEqual(0, pickup.UpdateCount);
         await AssertNoStaffBibRequestAsync(title);
@@ -1544,7 +1555,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(2, request.LibraryOrganizationId);
             Assert.AreEqual(2, request.StaffLibraryOrganizationIdCreatedBy);
             Assert.AreEqual(barcode, request.Barcode);
-            Assert.AreEqual("9001", request.BibId);
+            Assert.AreEqual(9001, request.BibId);
             Assert.IsTrue(request.BibIdStaffVerified);
             Assert.AreEqual(new DateOnly(2026, 12, 1), request.ExactPublicationDate);
             Assert.AreEqual("Created during the staff suggestion journey.", request.Notes);
@@ -1978,7 +1989,7 @@ public sealed partial class PatronJourneyTests
                     PatronOrganizationId = 101,
                     Barcode = "20000000001235",
                     Title = "Other patron BIB",
-                    BibId = "9001",
+                    BibId = 9001,
                     MaterialFormatId = formatId,
                     AutoHold = true,
                     Status = "suggestion",
@@ -1991,7 +2002,7 @@ public sealed partial class PatronJourneyTests
                     PatronOrganizationId = 101,
                     Barcode = barcode,
                     Title = "Other library BIB",
-                    BibId = "9001",
+                    BibId = 9001,
                     MaterialFormatId = formatId,
                     AutoHold = true,
                     Status = "suggestion",
@@ -2045,7 +2056,7 @@ public sealed partial class PatronJourneyTests
                     Barcode = barcode,
                     Title = "Identifier precedence",
                     Identifier = "BIB-PRECEDENCE-IDENTIFIER",
-                    BibId = "9001",
+                    BibId = 9001,
                     MaterialFormatId = formatId,
                     AutoHold = true,
                     Status = "closed",
@@ -2121,7 +2132,7 @@ public sealed partial class PatronJourneyTests
             .GetRequiredService<IDbContextFactory<AsapDbContext>>()
             .CreateDbContextAsync();
         Assert.AreEqual(1, await context.TitleRequests.AsNoTracking()
-            .CountAsync(item => item.LibraryOrganizationId == 2 && item.Barcode == barcode && item.BibId == "9001"));
+            .CountAsync(item => item.LibraryOrganizationId == 2 && item.Barcode == barcode && item.BibId == 9001));
     }
 
     private sealed class SuppressedEmailSender : IEmailSender

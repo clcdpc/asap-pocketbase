@@ -361,7 +361,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await storedBibPage.route(`**/api/asap/staff/title-requests/${args.primaryRequestId}*`, async route => {
       const response = await route.fetch();
       const request = await response.json();
-      await route.fulfill({ response, json: { ...request, bibid: '9001',
+      await route.fulfill({ response, json: { ...request, bibid: 9001,
         capabilities: { ...request.capabilities, canChangeBib: false } } });
     });
     await storedBibPage.goto(`${args.baseOrigin}/staff/?request=${args.primaryRequestId}`, { waitUntil: 'networkidle' });
@@ -508,7 +508,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       try {
         await route.fulfill({ status: 200, contentType: 'application/json',
           body: JSON.stringify({ status: 'found', totalMatches: 1,
-            results: [{ bibId: '9002', title: 'Older catalog result' }] }) });
+            results: [{ bibId: 9002, title: 'Older catalog result' }] }) });
       } catch {
         // The newer query may have aborted the old browser request.
       }
@@ -534,7 +534,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
         const result = await response.json();
         applyFallbackDetail = true;
         await route.fulfill({ response, json: { ...result, status: 'found', totalMatches: 1,
-          results: [{ bibId: '9001', title: 'Catalog title 9001', author: 'Catalog author',
+          results: [{ bibId: 9001, title: 'Catalog title 9001', author: 'Catalog author',
             publication: '2026', format: 'Book', identifier: '9780000000001' }] } });
         return;
       }
@@ -1985,6 +1985,12 @@ async function runOperatorResolution(browser, args, axeSource, report) {
     await page.goto(`${args.baseOrigin}/staff/?request=${args.resolutionRequestId}`, { waitUntil: 'networkidle' });
     await page.getByText(/Operation \d+; attempt 2; epoch 3; frozen patron \*+2904; frozen BIB 92904\./).waitFor();
     await fillOperatorResolution(page, true);
+    const provenIdInput = page.getByLabel('Proven final hold ID', { exact: true });
+    await provenIdInput.fill('2147483648');
+    await page.getByRole('button', { name: 'Resolve operation' }).click();
+    await page.locator('#app-status').filter({ hasText: /positive Polaris hold ID/ }).waitFor();
+    assert.equal(await provenIdInput.evaluate(input => document.activeElement === input), true);
+    await provenIdInput.fill('8456');
     const uncertainResolutionPath = /\/api\/asap\/staff\/hold-operations\/\d+\/resolve$/;
     const readinessUnavailable = route => route.fulfill({ status: 503, contentType: 'application/json',
       body: JSON.stringify({ code: 'hold_resolution_dependency_unavailable',
@@ -2023,6 +2029,7 @@ async function runOperatorResolution(browser, args, axeSource, report) {
       page.getByRole('button', { name: 'Resolve operation' }).click()
     ]);
     assert.equal(response.status(), 200, await response.text());
+    assert.equal(response.request().postDataJSON().provenFinalHoldId, 8456);
     await page.locator('#app-status').filter({ hasText: /Hold operation .* resolved as succeeded/ }).waitFor();
     const statusValue = page.locator('#request-dialog .status-badge');
     await statusValue.filter({ hasText: 'Hold placed' }).waitFor();

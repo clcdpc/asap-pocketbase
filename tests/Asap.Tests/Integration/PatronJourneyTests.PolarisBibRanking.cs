@@ -38,10 +38,10 @@ public sealed partial class PatronJourneyTests
 
         var result = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", CancellationToken.None);
 
-        CollectionAssert.AreEqual(new[] { "9102", "9101" }, result.Results.Select(row => row.BibId).ToArray());
+        CollectionAssert.AreEqual(new[] { 9102, 9101 }, result.Results.Select(row => row.BibId).ToArray());
         Assert.AreEqual(3, handler.RequestCount, "Fallback attempts run while fewer than ten candidates have been accepted.");
         CollectionAssert.AreEqual(
-            new[] { "/search/bibs/keyword/ISBN", "/search/bibs/keyword/UPC", "/search/bibs/keyword/LCCN" },
+            new[] { "/search/bibs/keyword/ISBN", "/search/bibs/boolean", "/search/bibs/keyword/LCCN" },
             handler.RequestUris.Select(SearchPath).ToArray());
     }
 
@@ -51,7 +51,7 @@ public sealed partial class PatronJourneyTests
         var firstRows = Enumerable.Range(1, 8)
             .Select(index => SearchRow(9300 + index, $"First attempt {index}", publication: "2020", identifierName: "ISBN", identifier: "different"))
             .ToList();
-        firstRows.Add(SearchRow(9390, "Electronic item", materialType: "36", identifierName: "ISBN", identifier: "9780000000001"));
+        firstRows.Add(SearchRow(9390, "Electronic item", materialType: 36, identifierName: "ISBN", identifier: "9780000000001"));
         firstRows.Add(SearchRow(9301, "Duplicate candidate with exact identifier", publication: "2026", identifierName: "ISBN", identifier: "9780000000001"));
         var secondRows = new[]
         {
@@ -68,8 +68,8 @@ public sealed partial class PatronJourneyTests
 
         Assert.AreEqual(10, result.Results.Count);
         Assert.AreEqual(2, handler.RequestCount);
-        Assert.AreEqual("/search/bibs/keyword/UPC", SearchPath(handler.RequestUris[1]));
-        CollectionAssert.Contains(result.Results.Select(row => row.BibId).ToArray(), "9402");
+        Assert.AreEqual("/search/bibs/boolean", SearchPath(handler.RequestUris[1]));
+        CollectionAssert.Contains(result.Results.Select(row => row.BibId).ToArray(), 9402);
     }
 
     [TestMethod]
@@ -100,7 +100,7 @@ public sealed partial class PatronJourneyTests
 
         var result = await provider.SearchBibsAsync("title_author", "", "A title", "An author", CancellationToken.None);
 
-        CollectionAssert.AreEqual(new[] { "9202", "9201" }, result.Results.Select(row => row.BibId).ToArray());
+        CollectionAssert.AreEqual(new[] { 9202, 9201 }, result.Results.Select(row => row.BibId).ToArray());
         Assert.AreEqual(2, handler.RequestCount);
         Assert.AreEqual("/search/bibs/keyword/TI", SearchPath(handler.RequestUris[1]));
     }
@@ -118,7 +118,7 @@ public sealed partial class PatronJourneyTests
 
         var result = await provider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
 
-        CollectionAssert.AreEqual(new[] { "9301", "9302" }, result.Results.Select(row => row.BibId).ToArray());
+        CollectionAssert.AreEqual(new[] { 9301, 9302 }, result.Results.Select(row => row.BibId).ToArray());
     }
 
     [TestMethod]
@@ -126,7 +126,7 @@ public sealed partial class PatronJourneyTests
     {
         var handler = new SequenceResponseHandler(
             (HttpStatusCode.OK,
-             """{"PAPIErrorCode":3,"TotalRecordsFound":4,"BibSearchRows":[{"ControlNumber":9500,"PrimaryTypeOfMaterial":"36","ISBN":"9780000000001"},{"ControlNumber":9501,"Title":"First accepted title","PublicationDate":"2020","ISBN":"different"},{"ControlNumber":9501,"Title":"Duplicate with exact identifier","PublicationDate":"2026","ISBN":"9780000000001"}]}"""),
+             """{"PAPIErrorCode":3,"TotalRecordsFound":4,"BibSearchRows":[{"ControlNumber":9500,"PrimaryTypeOfMaterial":36,"ISBN":"9780000000001"},{"ControlNumber":9501,"Title":"First accepted title","PublicationDate":"2020","ISBN":"different"},{"ControlNumber":9501,"Title":"Duplicate with exact identifier","PublicationDate":"2026","ISBN":"9780000000001"}]}"""),
             (HttpStatusCode.OK,
              """{"PAPIErrorCode":2,"TotalRecordsFound":2,"BibSearchRows":[{"ControlNumber":9501,"Title":"Later duplicate","PublicationDate":"2026","ISBN":"9780000000001"},{"ControlNumber":9502,"Title":"Second accepted title","PublicationDate":"2020","ISBN":"different"}]}"""),
             (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
@@ -134,7 +134,7 @@ public sealed partial class PatronJourneyTests
 
         var result = await provider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
 
-        CollectionAssert.AreEqual(new[] { "9501", "9502" }, result.Results.Select(row => row.BibId).ToArray());
+        CollectionAssert.AreEqual(new[] { 9501, 9502 }, result.Results.Select(row => row.BibId).ToArray());
         Assert.AreEqual("First accepted title", result.Results[0].Title,
             "A later duplicate must not replace the earliest accepted candidate before ranking.");
         Assert.AreEqual(4, result.TotalMatches);
@@ -155,7 +155,7 @@ public sealed partial class PatronJourneyTests
         string? publication = null,
         string? identifierName = null,
         string? identifier = null,
-        string? materialType = null)
+        int? materialType = null)
     {
         var row = new Dictionary<string, object?>
         {

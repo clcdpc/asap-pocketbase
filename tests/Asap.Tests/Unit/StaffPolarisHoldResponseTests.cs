@@ -1,112 +1,109 @@
+using System.Text.Json;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
+using Clc.Polaris.Api.Models;
 
 namespace Asap.Tests.Unit;
 
 [TestClass]
 public sealed class StaffPolarisHoldResponseTests
 {
-    [TestMethod]
-    public void CreateReplyRequiredUsesRawQualifierAliasWithoutInventingFinalId()
-    {
-        var requestGuid = Guid.NewGuid();
-        var result = PolarisPatronProvider.NormalizeHoldResponse(
-            httpSucceeded: true,
-            $$"""
-            {
-              "PAPIErrorCode": 0,
-              "StatusType": 3,
-              "StatusValue": 5,
-              "RequestGUID": "{{requestGuid}}",
-              "TxnGroupQualifer": "group-from-provider",
-              "TxnQualifier": "qualifier-from-provider"
-            }
-            """,
-            typedStatusType: null,
-            typedStatusValue: null,
-            typedRequestGuid: null,
-            typedTxnGroupQualifier: null,
-            typedTxnQualifier: null,
-            isReply: false);
+    private static readonly JsonSerializerOptions PackageJson = new() { PropertyNameCaseInsensitive = true };
 
-        Assert.AreEqual(HoldProviderOutcome.ReplyRequired, result.Outcome);
-        Assert.AreEqual(requestGuid.ToString(), result.RequestGuid);
-        Assert.IsNull(result.HoldRequestId);
-        Assert.AreEqual("group-from-provider", result.TxnGroupQualifier);
-        Assert.AreEqual("qualifier-from-provider", result.TxnQualifier);
+    [TestMethod]
+    public async Task TestingHoldIdentityIsIndependentOfBibAndDoesNotOverflowInt32()
+    {
+        var provider = new Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider();
+        var command = new HoldCreateCommand(7001, int.MaxValue, 101, 2, 99, 42);
+        var first = await provider.CreateHoldAsync(command, CancellationToken.None);
+        var second = await provider.CreateHoldAsync(command, CancellationToken.None);
+        Assert.IsTrue(first.HoldRequestId is > 0);
+        Assert.IsTrue(second.HoldRequestId is > 0);
+        Assert.AreNotEqual(first.HoldRequestId, second.HoldRequestId);
+        Assert.IsTrue(first.RequestGuid.HasValue);
+        Assert.AreEqual(int.MaxValue, command.BibId);
     }
 
     [TestMethod]
-    public void SuccessfulReplyKeepsFinalHoldIdSeparateFromRequestGuid()
+    public void CreateReplyRequiredMapsTypedConversationWithoutInventingFinalIdentity()
     {
-        var requestGuid = Guid.NewGuid();
-        var result = PolarisPatronProvider.NormalizeHoldResponse(
-            httpSucceeded: true,
-            $$"""
-            {
-              "PAPIErrorCode": 0,
-              "StatusType": 2,
-              "StatusValue": 0,
-              "RequestGuid": "{{requestGuid}}",
-              "HoldRequestID": 78123
-            }
-            """,
-            typedStatusType: null,
-            typedStatusValue: null,
-            typedRequestGuid: null,
-            typedTxnGroupQualifier: "typed-group",
-            typedTxnQualifier: "typed-qualifier",
-            isReply: true);
+        var guid = Guid.Parse("f782725d-1201-4390-a89a-1c047b2fa865");
+        var json = $$"""{"PAPIErrorCode":0,"StatusType":3,"StatusValue":5,"RequestGUID":"{{guid}}","TxnGroupQualifer":"group","TxnQualifier":"qualifier","QueuePosition":7}""";
+        var data = JsonSerializer.Deserialize<HoldRequestCreateResult>(json, PackageJson)!;
+        var result = PolarisPatronProvider.NormalizeHoldResponse(true, json, data, false);
+        Assert.AreEqual(HoldProviderOutcome.ReplyRequired, result.Outcome);
+        Assert.AreEqual(guid, result.RequestGuid);
+        Assert.IsNull(result.HoldRequestId);
+        Assert.AreEqual("group", result.TxnGroupQualifier);
+        Assert.AreEqual("qualifier", result.TxnQualifier);
+        Assert.AreEqual(3, result.StatusType);
+        Assert.AreEqual(5, result.StatusValue);
+        Assert.AreEqual(7, data.QueuePosition);
+    }
 
-        Assert.AreEqual(HoldProviderOutcome.FinalSuccess, result.Outcome);
-        Assert.AreEqual(requestGuid.ToString(), result.RequestGuid);
-        Assert.AreEqual("78123", result.HoldRequestId);
-        Assert.AreEqual("typed-group", result.TxnGroupQualifier);
-        Assert.AreEqual("typed-qualifier", result.TxnQualifier);
+    [TestMethod]
+    [DataRow(false, 0, HoldProviderOutcome.DefinitiveNoEffect)]
+    [DataRow(true, 0, HoldProviderOutcome.DefinitiveNoEffect)]
+    [DataRow(false, 1, HoldProviderOutcome.FinalSuccess)]
+    [DataRow(true, 1, HoldProviderOutcome.FinalSuccess)]
+    public void StatusTypeTwoUsesOneForPlacementSuccess(bool reply, int value, HoldProviderOutcome expected)
+    {
+        var guid = Guid.Parse("f782725d-1201-4390-a89a-1c047b2fa865");
+        var json = $$"""{"PAPIErrorCode":0,"StatusType":2,"StatusValue":{{value}},"RequestGUID":"{{guid}}","HoldRequestID":78123}""";
+        var data = JsonSerializer.Deserialize<HoldRequestReplyResult>(json, PackageJson)!;
+        var result = PolarisPatronProvider.NormalizeHoldResponse(true, json, data, reply,
+            reply ? new HoldReplyCommand(guid, "group", "qualifier", 2) : null);
+        Assert.AreEqual(expected, result.Outcome);
+        Assert.AreEqual(guid, result.RequestGuid);
+        Assert.IsNull(result.HoldRequestId, "An undocumented response field cannot establish final hold identity.");
+        if (reply)
+        {
+            Assert.AreEqual("group", result.TxnGroupQualifier);
+        }
     }
 
     [TestMethod]
     public void DocumentedCreateRejectionIsDefinitiveNoEffect()
     {
-        var result = PolarisPatronProvider.NormalizeHoldResponse(
-            httpSucceeded: true,
-            """{"PAPIErrorCode":0,"StatusType":1,"StatusValue":-4006}""",
-            typedStatusType: null,
-            typedStatusValue: null,
-            typedRequestGuid: null,
-            typedTxnGroupQualifier: null,
-            typedTxnQualifier: null,
-            isReply: false);
-
+        const string json = """{"PAPIErrorCode":0,"StatusType":1,"StatusValue":-4006}""";
+        var result = PolarisPatronProvider.NormalizeHoldResponse(true, json,
+            JsonSerializer.Deserialize<HoldRequestCreateResult>(json, PackageJson), false);
         Assert.AreEqual(HoldProviderOutcome.DefinitiveNoEffect, result.Outcome);
         Assert.AreEqual("provider_status_-4006", result.SafeErrorCode);
     }
 
     [TestMethod]
-    public void UnknownOrMalformedResponseIsAmbiguous()
+    [DataRow("not-json")]
+    [DataRow("""{"PAPIErrorCode":0,"StatusType":2}""")]
+    [DataRow("""{"PAPIErrorCode":0,"StatusType":2,"StatusValue":1,"statusvalue":0}""")]
+    [DataRow("""{"PAPIErrorCode":0,"StatusType":2,"StatusValue":"1"}""")]
+    public void MissingDuplicateOrMalformedOutcomeCannotBecomeSuccess(string json)
     {
-        var unclassified = PolarisPatronProvider.NormalizeHoldResponse(
-            httpSucceeded: true,
-            """{"PAPIErrorCode":0,"StatusType":9,"StatusValue":99}""",
-            typedStatusType: null,
-            typedStatusValue: null,
-            typedRequestGuid: null,
-            typedTxnGroupQualifier: null,
-            typedTxnQualifier: null,
-            isReply: false);
-        var malformed = PolarisPatronProvider.NormalizeHoldResponse(
-            httpSucceeded: true,
-            "not-json",
-            typedStatusType: null,
-            typedStatusValue: null,
-            typedRequestGuid: null,
-            typedTxnGroupQualifier: null,
-            typedTxnQualifier: null,
-            isReply: true);
+        var result = PolarisPatronProvider.NormalizeHoldResponse(true, json,
+            new HoldRequestCreateResult { StatusType = 2, StatusValue = 1 }, false);
+        Assert.AreEqual(HoldProviderOutcome.Ambiguous, result.Outcome);
+        Assert.AreEqual("provider_protocol_error", result.SafeErrorCode);
+    }
 
-        Assert.AreEqual(HoldProviderOutcome.Ambiguous, unclassified.Outcome);
-        Assert.AreEqual("provider_status_unclassified", unclassified.SafeErrorCode);
-        Assert.AreEqual(HoldProviderOutcome.Ambiguous, malformed.Outcome);
-        Assert.AreEqual("provider_protocol_error", malformed.SafeErrorCode);
+    [TestMethod]
+    public void TypedAndRawOutcomeMustAgree()
+    {
+        const string json = """{"PAPIErrorCode":0,"StatusType":2,"StatusValue":0}""";
+        var result = PolarisPatronProvider.NormalizeHoldResponse(true, json,
+            new HoldRequestCreateResult { StatusType = 2, StatusValue = 1 }, true);
+        Assert.AreEqual(HoldProviderOutcome.Ambiguous, result.Outcome);
+    }
+
+    [TestMethod]
+    public void UnknownStatusIsAmbiguousAndOutboundQualifierUsesCorrectSpelling()
+    {
+        const string json = """{"PAPIErrorCode":0,"StatusType":9,"StatusValue":99}""";
+        var result = PolarisPatronProvider.NormalizeHoldResponse(true, json,
+            JsonSerializer.Deserialize<HoldRequestCreateResult>(json, PackageJson), false);
+        Assert.AreEqual(HoldProviderOutcome.Ambiguous, result.Outcome);
+        Assert.AreEqual("provider_status_unclassified", result.SafeErrorCode);
+        using var outbound = JsonDocument.Parse(JsonSerializer.Serialize(new HoldRequestReplyData { TxnGroupQualifier = "group" }));
+        Assert.AreEqual("group", outbound.RootElement.GetProperty("TxnGroupQualifier").GetString());
+        Assert.IsFalse(outbound.RootElement.TryGetProperty("TxnGroupQualifer", out _));
     }
 }

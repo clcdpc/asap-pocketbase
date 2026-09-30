@@ -356,7 +356,7 @@ public static class AdministrationEndpoints
             });
         }
 
-        var manualRunId = Guid.NewGuid().ToString("N");
+        var manualRunId = Guid.NewGuid();
         var jobId = jobs.Enqueue<BackgroundWorkflowJobs>(job =>
             job.SendForcedWeeklyStaffSummaryAsync(evidence, effectiveScope, manualRunId, CancellationToken.None));
         return Results.Accepted(value: new

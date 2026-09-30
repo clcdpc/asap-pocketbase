@@ -368,8 +368,8 @@ public sealed class StaffSuggestionService(
 
         if (configuration.PatronCodeEligibilityEnabled &&
             configuration.AllowedPatronCodeIds.Count > 0 &&
-            !string.IsNullOrWhiteSpace(patron.PatronCodeId) &&
-            !configuration.AllowedPatronCodeIds.Contains(patron.PatronCodeId))
+            patron.PatronCodeId.HasValue &&
+            !configuration.AllowedPatronCodeIds.Contains(patron.PatronCodeId.Value))
         {
             return false;
         }

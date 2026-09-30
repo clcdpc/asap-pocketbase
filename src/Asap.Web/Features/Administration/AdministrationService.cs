@@ -1295,8 +1295,8 @@ public sealed class AdministrationService(
             : new AdministrationResult("staff_scope_forbidden");
 
     private sealed record PatronCodeValidation(
-        IReadOnlyList<string> Requested,
-        IReadOnlySet<string> Known);
+        IReadOnlyList<int> Requested,
+        IReadOnlySet<int> Known);
 
     private async Task<(PatronCodeValidation? Snapshot, AdministrationResult? Failure)> PreparePatronCodeValidationAsync(
         JsonElement payload,
@@ -1326,7 +1326,11 @@ public sealed class AdministrationService(
                 Message: "allowedPatronCodeIds must be an array or newline-delimited string."));
         }
 
-        var requested = ParseValues(value);
+        if (!TryParsePatronCodeIds(value, out var requested))
+        {
+            return (null, new AdministrationResult("patron_codes_invalid",
+                Message: "Patron-code IDs must be positive Int32 values."));
+        }
         if (requested.Count == 0)
         {
             return (null, null);
@@ -1354,11 +1358,7 @@ public sealed class AdministrationService(
                 Message: "Patron-code reference data is unavailable."));
         }
 
-        var known = choices
-            .Select(item => Clean(item.Id))
-            .Where(item => item is not null)
-            .Select(item => item!)
-            .ToHashSet(StringComparer.Ordinal);
+        var known = choices.Where(item => item.Id > 0).Select(item => item.Id).ToHashSet();
         return (new PatronCodeValidation(requested, known), null);
     }
 
@@ -1378,7 +1378,7 @@ public sealed class AdministrationService(
             .Where(item => item.OrganizationId == sourceOrganizationId)
             .Select(item => item.PatronCodeId)
             .ToListAsync(cancellationToken);
-        var preserved = previouslySelected.ToHashSet(StringComparer.Ordinal);
+        var preserved = previouslySelected.ToHashSet();
         var unknown = snapshot.Requested
             .Where(item => !snapshot.Known.Contains(item) && !preserved.Contains(item))
             .ToArray();
@@ -2366,7 +2366,7 @@ public sealed class AdministrationService(
         return rows.Where(item => item.OrganizationId == owner).Select(item => item.Value).ToArray();
     }
 
-    private static async Task<IReadOnlyList<string>> LoadPatronCodesAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<int>> LoadPatronCodesAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
         var owner = organizationId != 1 && await context.PatronCodeEligibilitySets.AsNoTracking()
             .AnyAsync(item => item.OrganizationId == organizationId, cancellationToken)
@@ -2532,7 +2532,10 @@ public sealed class AdministrationService(
 
         if (TryGetAny(workflow, out var patronCodes, "allowedPatronCodeIds", "patronCodeIds"))
         {
-            var values = ParseValues(patronCodes);
+            if (!TryParsePatronCodeIds(patronCodes, out var values))
+            {
+                throw new InvalidOperationException("Patron-code payload was not validated.");
+            }
             await ReplacePatronCodesAsync(context, organizationId, values,
                 patronCodes.ValueKind == JsonValueKind.Null, cancellationToken);
         }
@@ -2591,7 +2594,7 @@ public sealed class AdministrationService(
     private static async Task ReplacePatronCodesAsync(
         AsapDbContext context,
         int organizationId,
-        IReadOnlyList<string> values,
+        IReadOnlyList<int> values,
         bool resetToSystem,
         CancellationToken cancellationToken)
     {
@@ -2611,7 +2614,7 @@ public sealed class AdministrationService(
             return;
         }
 
-        var existingIds = members.Select(item => item.PatronCodeId).ToHashSet(StringComparer.Ordinal);
+        var existingIds = members.Select(item => item.PatronCodeId).ToHashSet();
         if (existingSet is not null && existingIds.Count == values.Count && existingIds.SetEquals(values))
         {
             return;
@@ -3619,6 +3622,46 @@ public sealed class AdministrationService(
             index++;
         }
         return result;
+    }
+
+    private static bool TryParsePatronCodeIds(JsonElement value, out IReadOnlyList<int> ids)
+    {
+        ids = [];
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+        IEnumerable<string> source;
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            source = (value.GetString() ?? string.Empty).Split(['\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            if (value.EnumerateArray().Any(item => item.ValueKind is not (JsonValueKind.String or JsonValueKind.Number)))
+            {
+                return false;
+            }
+            source = value.EnumerateArray().Select(item =>
+                item.ValueKind == JsonValueKind.String ? item.GetString() ?? string.Empty : item.GetRawText());
+        }
+        else
+        {
+            return false;
+        }
+        var result = new HashSet<int>();
+        foreach (var item in source)
+        {
+            if (!int.TryParse(item, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var id) || id <= 0)
+            {
+                return false;
+            }
+            result.Add(id);
+        }
+        ids = result.Order().ToArray();
+        return true;
     }
 
     private static IReadOnlyList<string> ParseValues(JsonElement value)

@@ -51,7 +51,7 @@ public sealed record StaffSuggestionInput(
     bool? Autohold,
     bool EmailPatronConfirmation,
     IReadOnlyDictionary<string, string?>? CustomFields,
-    string? VerifiedBibId = null,
+    int? VerifiedBibId = null,
     bool? CurrentPreferredPickupBranchObservedAtLoad = null);
 
 public sealed record StaffSuggestionConfiguration(

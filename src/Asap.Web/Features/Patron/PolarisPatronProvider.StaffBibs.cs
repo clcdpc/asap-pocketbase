@@ -22,16 +22,16 @@ public sealed partial class PolarisPatronProvider
         {
             "identifier" => new[]
             {
-                (Path: "keyword/ISBN", Query: NormalizeIdentifier(query), Sort: "PDTI", AuthorFilter: ""),
-                (Path: "keyword/UPC", Query: NormalizeIdentifier(query), Sort: "PDTI", AuthorFilter: ""),
-                (Path: "keyword/LCCN", Query: NormalizeIdentifier(query), Sort: "PDTI", AuthorFilter: "")
+                (Type: BibSearchTypes.keyword, Qualifier: SearchQualifiers.ISBN, Query: NormalizeIdentifier(query), Sort: SearchSortOptions.PDTI, AuthorFilter: ""),
+                (Type: BibSearchTypes.boolean, Qualifier: SearchQualifiers.KW, Query: "UPC=" + QuoteSearch(NormalizeIdentifier(query)), Sort: SearchSortOptions.PDTI, AuthorFilter: ""),
+                (Type: BibSearchTypes.keyword, Qualifier: SearchQualifiers.LCCN, Query: NormalizeIdentifier(query), Sort: SearchSortOptions.PDTI, AuthorFilter: "")
             },
-            "title" => new[] { (Path: "keyword/TI", Query: title.Length > 0 ? title : query, Sort: "RELEVANCE", AuthorFilter: "") },
-            "author" => new[] { (Path: "keyword/AU", Query: author.Length > 0 ? author : query, Sort: "AU", AuthorFilter: "") },
+            "title" => new[] { (Type: BibSearchTypes.keyword, Qualifier: SearchQualifiers.TI, Query: title.Length > 0 ? title : query, Sort: SearchSortOptions.RELEVANCE, AuthorFilter: "") },
+            "author" => new[] { (Type: BibSearchTypes.keyword, Qualifier: SearchQualifiers.AU, Query: author.Length > 0 ? author : query, Sort: SearchSortOptions.AU, AuthorFilter: "") },
             "title_author" => new[]
             {
-                (Path: "boolean", Query: $"TI={QuoteSearch(title)} AND AU={QuoteSearch(author)}", Sort: "PDTI", AuthorFilter: ""),
-                (Path: "keyword/TI", Query: title, Sort: "RELEVANCE", AuthorFilter: author)
+                (Type: BibSearchTypes.boolean, Qualifier: SearchQualifiers.KW, Query: $"TI={QuoteSearch(title)} AND AU={QuoteSearch(author)}", Sort: SearchSortOptions.PDTI, AuthorFilter: ""),
+                (Type: BibSearchTypes.keyword, Qualifier: SearchQualifiers.TI, Query: title, Sort: SearchSortOptions.RELEVANCE, AuthorFilter: author)
             },
             _ => throw new ArgumentException("Invalid Polaris search mode.", nameof(mode))
         };
@@ -43,23 +43,26 @@ public sealed partial class PolarisPatronProvider
                 ? settings.PickupOrganizationId.Value
                 : settings.OrganizationIdForRequests is > 0 ? settings.OrganizationIdForRequests.Value : 1;
             var results = new List<StaffBibSearchRow>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var seen = new HashSet<int>();
             var totalMatches = 0;
             var failed = false;
             foreach (var search in searches)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var request = PapiRestRequest.Get($"/public/v1/1033/100/{branch}/search/bibs/{search.Path}");
-                request.BlockStaffOverride = true;
-                request.QueryParameters.Add("q", search.Query);
-                request.QueryParameters.Add("sortby", search.Sort);
-                request.QueryParameters.Add("bibsperpage", StaffBibSearchLimit);
-                request.QueryParameters.Add("page", 1);
-                request.QueryParameters.Add("notran", 1);
+                var options = new BibSearchOptions
+                {
+                    Branch = branch,
+                    SearchType = search.Type,
+                    Qualifier = search.Qualifier,
+                    Term = search.Query,
+                    SortOption = search.Sort,
+                    PageSize = StaffBibSearchLimit,
+                    NoTransaction = true
+                };
                 StaffSearchAttempt inspected;
                 try
                 {
-                    var response = await client.ExecutePapiAsync<BibSearchResult>(request, cancellationToken);
+                    var response = await client.BibSearchAsync(options, cancellationToken);
                     inspected = InspectStaffSearchResponse(response);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -88,7 +91,7 @@ public sealed partial class PolarisPatronProvider
                 {
                     var row = candidate.Result;
                     var bibId = row.BibId;
-                    if (candidate.MaterialType is "36" or "41" || seen.Contains(bibId))
+                    if (candidate.MaterialType is 36 or 41 || seen.Contains(bibId))
                     {
                         continue;
                     }
@@ -224,53 +227,37 @@ public sealed partial class PolarisPatronProvider
         }
 
         var result = new List<StaffBibSearchCandidate>(rows.GetArrayLength());
+        var index = 0;
         foreach (var row in rows.EnumerateArray())
         {
-            if (row.ValueKind != JsonValueKind.Object || !TryResolveStaffBibId(row, out var bibId))
+            var model = data.BibSearchRows[index++];
+            if (row.ValueKind != JsonValueKind.Object || model is null ||
+                !TryGetUniqueProperty(row, "ControlNumber", out var control) ||
+                !TryReadPositiveInt32(control, out var bibId) || bibId != model.ControlNumber ||
+                HasUndocumentedBibIdentityAlias(row) || HasDuplicateProperties(row))
             {
                 return false;
             }
 
             result.Add(new StaffBibSearchCandidate(
                 new StaffBibSearchRow(
-                    bibId.ToString(CultureInfo.InvariantCulture),
-                    SearchText(row, "DisplayTitle", "FullTitle", "Title", "SortTitle"),
-                    SearchText(row, "Author", "PrimaryAuthor", "AuthorDisplay", "SortAuthor"),
-                    SearchText(row, "PublicationDate", "PublicationYear", "PublishDate", "Date"),
-                    SearchText(row, "MaterialTypeDescription", "MaterialType", "Format", "TypeOfMaterial"),
-                    SearchText(row, "ISBN", "ISSN", "UPC", "Identifier")),
-                SearchText(row, "PrimaryTypeOfMaterial", "TypeOfMaterial")));
+                    model.ControlNumber,
+                    Clean(model.Title),
+                    Clean(model.Author),
+                    Clean(model.PublicationDate),
+                    Clean(model.TypeOfMaterial),
+                    Clean(model.ISBN) ?? Clean(model.UPC)),
+                model.PrimaryTypeOfMaterial));
         }
 
         candidates = result;
         return true;
     }
 
-    private static bool TryResolveStaffBibId(JsonElement row, out int bibId)
+    private static bool HasDuplicateProperties(JsonElement row)
     {
-        bibId = default;
-        var found = false;
-        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var property in row.EnumerateObject())
-        {
-            if (!string.Equals(property.Name, "ControlNumber", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(property.Name, "BibID", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(property.Name, "BibliographicRecordID", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (!seenNames.Add(property.Name) || !TryReadPositiveInt32(property.Value, out var value) ||
-                found && value != bibId)
-            {
-                return false;
-            }
-
-            bibId = value;
-            found = true;
-        }
-
-        return found;
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return row.EnumerateObject().Any(property => !names.Add(property.Name));
     }
 
     private static bool TryReadPositiveInt32(JsonElement value, out int valueAsInt32)
@@ -286,7 +273,7 @@ public sealed partial class PolarisPatronProvider
                valueAsInt32 > 0;
     }
 
-    private sealed record StaffBibSearchCandidate(StaffBibSearchRow Result, string? MaterialType);
+    private sealed record StaffBibSearchCandidate(StaffBibSearchRow Result, int? MaterialType);
 
     public async Task<StaffBibHoldingsSummary> GetBibHoldingsAsync(
         int bibId, int organizationId, CancellationToken cancellationToken)
@@ -536,15 +523,4 @@ public sealed partial class PolarisPatronProvider
         "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
 
-    private static string? SearchText(JsonElement row, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (TryGetProperty(row, name, out var value) && Clean(value.ToString()) is { } text)
-            {
-                return text;
-            }
-        }
-        return null;
-    }
 }

@@ -15,12 +15,12 @@ const response = (status, body) => ({
 const payload = (scope, range, label) => ({
   scope: {
     mode: scope === 'all' ? 'all' : 'library',
-    libraryOrgId: scope === 'all' ? '' : scope,
+    libraryOrgId: scope === 'all' ? null : Number(scope),
     label,
     superAdmin: true
   },
   dateRange: { key: range, start: '2026-09-01T04:00:00Z', end: '2026-09-16T03:59:59Z' },
-  availableLibraries: [{ orgId: '2', name: 'Library Two' }, { orgId: '3', name: 'Library Three' }],
+  availableLibraries: [{ orgId: 2, name: 'Library Two' }, { orgId: 3, name: 'Library Three' }],
   summary: { newSuggestions: 1, openRequests: 2, closedRequests: 3, heldRequests: 4, averageDaysToHold: 2.5 },
   stageCounts: { suggestion: 1, outstanding_purchase: 0, pending_hold: 0, hold_placed: 1, closed: 1, additional_copies: 0 },
   closedReasons: [],

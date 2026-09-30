@@ -55,11 +55,11 @@ public sealed partial class PatronJourneyTests
                 var recent = NewRequest(scope, $"s5-def-recent-{Guid.NewGuid():N}"[..28], "hold_placed",
                     now.AddDays(-3), now.AddHours(-1));
                 recent.MaterialFormatId = formatId;
-                recent.BibId = "99041";
+                recent.BibId = 99041;
                 var due = NewRequest(scope, $"s5-def-due-{Guid.NewGuid():N}"[..28], "hold_placed",
                     now.AddDays(-2), now.AddDays(-2));
                 due.MaterialFormatId = formatId;
-                due.BibId = "99042";
+                due.BibId = 99042;
                 seed.TitleRequests.AddRange(recent, due);
                 await seed.SaveChangesAsync();
                 requestIds.AddRange([recent.Id, due.Id]);

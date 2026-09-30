@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Data;
@@ -12,7 +13,8 @@ public static class TitleRequestEndpoints
     private static readonly HashSet<string> SupportedResearchTokens =
         ["title", "identifier", "bibid", "patron-id", "patronId"];
 
-    public sealed record BibLookupInput(string? RequestId, int? LibraryOrgId, string? BibId,
+    public sealed record BibLookupInput(string? RequestId, int? LibraryOrgId,
+        [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] int? BibId,
         string? Mode, string? Query, string? Title, string? Author);
 
     public static IEndpointRouteBuilder MapTitleRequestEndpoints(this IEndpointRouteBuilder endpoints)
@@ -270,14 +272,14 @@ public static class TitleRequestEndpoints
             return scope.Error;
         }
         var mode = input.Mode?.Trim().ToLowerInvariant();
-        var bibText = input.BibId?.Trim();
+
         if (mode is not null && mode != "bib" &&
             mode is not ("identifier" or "title" or "author" or "title_author"))
         {
             return Results.BadRequest(new { code = "invalid_search_mode", message = "Choose a supported Polaris search mode." });
         }
-        var exact = mode == "bib" || !string.IsNullOrEmpty(bibText);
-        if (exact && (!int.TryParse(bibText, out var parsedBibId) || parsedBibId <= 0))
+        var exact = mode == "bib" || input.BibId.HasValue;
+        if (exact && input.BibId is not > 0)
         {
             return Results.BadRequest(new { code = "invalid_bib", message = "Enter a positive Polaris BIB ID." });
         }
@@ -301,7 +303,7 @@ public static class TitleRequestEndpoints
                 return Results.Json(new { status = search.Results.Count == 0 ? "not_found" : "found",
                     search.TotalMatches, results = search.Results.Take(10) });
             }
-            var bibId = int.Parse(bibText!);
+            var bibId = input.BibId!.Value;
             var bib = await polaris.ValidateBibAsync(bibId, cancellationToken);
             if (!bib.IsValid)
             {
@@ -332,7 +334,7 @@ public static class TitleRequestEndpoints
                         .LogWarning(exception, "Patron hold context was unavailable during BIB lookup");
                 }
             }
-            return Results.Json(new { bibId = bibId.ToString(), bib.Title, bib.Author,
+            return Results.Json(new { bibId, bib.Title, bib.Author,
                 bib.Publication, bib.Format, bib.Identifier, bib.Publisher,
                 holdingsSummary = holdings, holdingsUnavailable, patronHasHold });
         }

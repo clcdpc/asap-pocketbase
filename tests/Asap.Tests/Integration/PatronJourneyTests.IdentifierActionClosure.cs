@@ -10,11 +10,11 @@ public sealed partial class PatronJourneyTests
 {
     [TestMethod]
     [DataRow("purchase", null, "outstanding_purchase")]
-    [DataRow("catalogFound", "9001", "pending_hold")]
-    [DataRow("alreadyOwn", "9001", "pending_hold")]
+    [DataRow("catalogFound", 9001, "pending_hold")]
+    [DataRow("alreadyOwn", 9001, "pending_hold")]
     [DataRow("silentClose", null, "closed")]
     public async Task StaffActionLeavingSuggestionsDoesNotStrandIdentifierCheck(
-        string action, string? bibId, string expectedStatus)
+        string action, int? bibId, string expectedStatus)
     {
         var actor = await GetOwnershipTestActorAsync();
         var seeded = await SeedBibOwnershipRequestAsync(
@@ -26,7 +26,7 @@ public sealed partial class PatronJourneyTests
             {
                 Version = StaffVersion.Encode(seeded.RowVersion),
                 Action = action,
-                Bibid = bibId is null ? default : JsonSerializer.SerializeToElement(bibId)
+                Bibid = bibId
             };
             var result = await factory!.Services.GetRequiredService<TitleRequestMutationService>()
                 .ActionAsync(actor, seeded.Id, input, CancellationToken.None);

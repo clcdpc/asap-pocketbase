@@ -92,7 +92,7 @@ public sealed partial class PatronJourneyTests
                             ? "{\"shelf\":{\"value\":\"Reference\",\"type\":\"text\",\"label\":\"Shelf\"}}"
                             : null,
                         MaterialFormatId = index == 5 ? systemFormat.Id : formatId,
-                        BibId = index >= 5 ? "9001" : null,
+                        BibId = index >= 5 ? 9001 : null,
                         BibIdStaffVerified = index == 6,
                         AutoHold = index == 6,
                         Status = "suggestion",

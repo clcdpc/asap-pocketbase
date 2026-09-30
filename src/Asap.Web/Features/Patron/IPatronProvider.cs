@@ -34,7 +34,7 @@ public sealed record PatronSnapshot(
     string? Email,
     string? NameFirst,
     string? NameLast,
-    string? PatronCodeId,
+    int? PatronCodeId,
     string? PatronCodeDescription,
     int PatronOrganizationId,
     int HomeLibraryOrganizationId,
@@ -54,7 +54,7 @@ public enum IdentifierLookupOutcome
 
 public sealed record IdentifierLookupResult(
     IdentifierLookupOutcome Outcome,
-    string? BibId = null,
+    int? BibId = null,
     bool MultipleMatches = false,
     string? ErrorCode = null,
     bool FilteredByMaterialType = false,

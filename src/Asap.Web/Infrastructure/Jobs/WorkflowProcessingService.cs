@@ -17,7 +17,7 @@ public sealed record WorkflowRunResult(
     int Visited = 0,
     int Changed = 0,
     int Skipped = 0,
-    string? ManualRunId = null);
+    Guid? ManualRunId = null);
 
 internal sealed record WorkflowItemResult(
     string Code,
@@ -170,7 +170,7 @@ public sealed class WorkflowProcessingService(
     }
 
     public async Task<WorkflowRunResult> SendWeeklyStaffSummaryAsync(
-        string? manualRunId = null,
+        Guid? manualRunId = null,
         int? scopeOrganizationId = null,
         CancellationToken cancellationToken = default,
         StaffIdentityEvidence? manualActorEvidence = null)
@@ -190,8 +190,9 @@ public sealed class WorkflowProcessingService(
         if (manualRunId is not null && manualActorEvidence is not null)
         {
             await using var auditContext = await contextFactory.CreateDbContextAsync(cancellationToken);
+            var manualRunAuditKey = manualRunId.Value.ToString("N");
             var alreadyAudited = await auditContext.AdministrativeAudits.AnyAsync(item =>
-                item.Action == "weekly_summary_force_queued" && item.TargetId == manualRunId,
+                item.Action == "weekly_summary_force_queued" && item.TargetId == manualRunAuditKey,
                 cancellationToken);
             if (!alreadyAudited)
             {
@@ -202,7 +203,7 @@ public sealed class WorkflowProcessingService(
                     OrganizationId = scopeOrganizationId ?? 1,
                     Action = "weekly_summary_force_queued",
                     TargetType = "WeeklyStaffSummary",
-                    TargetId = manualRunId,
+                    TargetId = manualRunAuditKey,
                     DetailsJson = JsonSerializer.Serialize(new { manualRunId, scopeOrganizationId }),
                     CreatedUtc = now
                 });
@@ -244,7 +245,7 @@ public sealed class WorkflowProcessingService(
                 item.LibraryOrganizationId == authorizationOrganizationId).ToList();
             var newSubmissions = recipientRequests.Where(item => item.Status == "suggestion")
                 .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).ToList();
-            var purchases = recipientRequests.Where(item => item.Status == "outstanding_purchase" && string.IsNullOrWhiteSpace(item.BibId))
+            var purchases = recipientRequests.Where(item => item.Status == "outstanding_purchase" && item.BibId == null)
                 .OrderByDescending(item => item.UpdatedUtc).ThenByDescending(item => item.Id).ToList();
             var copies = copyRequests.Where(item => authorizationOrganizationId == 1 ||
                 item.LibraryOrganizationId == authorizationOrganizationId)
@@ -261,7 +262,7 @@ public sealed class WorkflowProcessingService(
             }
             var businessKey = manualRunId is null
                 ? $"weekly-summary:{recipientSnapshot.Id}:{periodStart:yyyyMMdd}-{periodEnd:yyyyMMdd}"
-                : $"weekly-summary-force:{manualRunId}:{recipientSnapshot.Id}";
+                : $"weekly-summary-force:{manualRunId.Value:N}:{recipientSnapshot.Id}";
             await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
             await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
             if (!await LockManualOrganizationsAsync(
@@ -942,7 +943,7 @@ public sealed class WorkflowProcessingService(
             {
                 code = "hold_operation_incomplete";
             }
-            else if (settings.AutoPromote == true && !string.IsNullOrWhiteSpace(request.BibId))
+            else if (settings.AutoPromote == true && request.BibId is > 0)
             {
                 var otherOpenBibs = request.AutoHold ? await context.TitleRequests.AsNoTracking().Where(item =>
                     item.LibraryOrganizationId == request.LibraryOrganizationId &&
@@ -950,9 +951,7 @@ public sealed class WorkflowProcessingService(
                     item.Id != request.Id && item.Status != "closed")
                     .Select(item => item.BibId!)
                     .ToListAsync(cancellationToken) : [];
-                var duplicate = otherOpenBibs.Any(otherBib =>
-                    int.TryParse(otherBib, out var otherId) &&
-                    int.TryParse(request.BibId, out var requestId) && otherId > 0 && otherId == requestId);
+                var duplicate = otherOpenBibs.Contains(request.BibId);
                 if (duplicate)
                 {
                     code = "duplicate_open_request";
@@ -1085,7 +1084,7 @@ public sealed class WorkflowProcessingService(
                 stop: true,
                 cancellationToken);
         }
-        if (checkouts.Any(item => item.BibId.ToString() == candidate.BibId))
+        if (checkouts.Any(item => item.BibId == candidate.BibId))
         {
             return await CloseFulfilledAsync(
                 candidate,
@@ -1133,7 +1132,7 @@ public sealed class WorkflowProcessingService(
                 manualActorEvidence);
         }
 
-        if (operation is null || string.IsNullOrWhiteSpace(operation.PolarisHoldId))
+        if (operation is null || operation.PolarisHoldId is not > 0)
         {
             return await RecordFulfillmentDiagnosticAsync(
                 candidate,
@@ -1159,7 +1158,7 @@ public sealed class WorkflowProcessingService(
                 manualActorEvidence);
         }
 
-        var tracked = holds.Where(item => item.HoldRequestId.ToString() == operation.PolarisHoldId).ToList();
+        var tracked = holds.Where(item => item.HoldRequestId == operation.PolarisHoldId).ToList();
         if (tracked.Count != 1)
         {
             return await RecordFulfillmentDiagnosticAsync(
@@ -1174,7 +1173,7 @@ public sealed class WorkflowProcessingService(
         }
 
         var trackedHold = tracked[0];
-        if (trackedHold.BibId.ToString() != candidate.BibId)
+        if (trackedHold.BibId != candidate.BibId)
         {
             return await RecordFulfillmentDiagnosticAsync(
                 candidate,
@@ -1907,8 +1906,8 @@ public sealed class WorkflowProcessingService(
         current.State == "succeeded" && current.CompletedUtc.HasValue &&
         current.RowVersion.SequenceEqual(expected.RowVersion) &&
         string.Equals(current.PatronBarcodeSnapshot, expected.PatronBarcodeSnapshot, StringComparison.Ordinal) &&
-        string.Equals(current.BibIdSnapshot, expected.BibIdSnapshot, StringComparison.Ordinal) &&
-        string.Equals(current.PolarisHoldId, expected.PolarisHoldId, StringComparison.Ordinal);
+        current.BibIdSnapshot == expected.BibIdSnapshot &&
+        current.PolarisHoldId == expected.PolarisHoldId;
 
     private sealed record FulfillmentEvidence(
         string? TerminalReason,
@@ -1973,7 +1972,7 @@ public sealed class WorkflowProcessingService(
         lines.AddRange(["", $"View new submissions: {WeeklyLink(staffUrl, "submitted")}", "", "Approved purchases without bibs", $"{purchases.Count} active requests", "Five most recent:"]);
         lines.AddRange(WeeklySampleLines(purchases.Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author))));
         lines.AddRange(["", $"View purchases awaiting bibs: {WeeklyLink(staffUrl, "purchased_waiting_for_bib")}", "", "Additional copies", $"{copies.Count} open tasks", "Five most recent:"]);
-        lines.AddRange(WeeklySampleLines(copies.Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author ?? item.BibId))));
+        lines.AddRange(WeeklySampleLines(copies.Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author ?? item.BibId.ToString(System.Globalization.CultureInfo.InvariantCulture)))));
         lines.Add($"\nView additional copies: {WeeklyLink(staffUrl, "additional_copies")}");
         return string.Join("\n", lines);
     }

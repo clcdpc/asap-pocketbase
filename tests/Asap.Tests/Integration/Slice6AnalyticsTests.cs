@@ -79,11 +79,11 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(1, selectedBody.RootElement.GetProperty("exceptions").GetProperty("identifierFailures").GetInt64());
             var availableLibraryIds = selectedBody.RootElement.GetProperty("availableLibraries")
                 .EnumerateArray()
-                .Select(item => item.GetProperty("orgId").GetString())
+                .Select(item => item.GetProperty("orgId").GetInt32())
                 .ToArray();
             Assert.IsGreaterThanOrEqualTo(3, availableLibraryIds.Length);
-            CollectionAssert.Contains(availableLibraryIds, organizationA.ToString());
-            CollectionAssert.Contains(availableLibraryIds, organizationB.ToString());
+            CollectionAssert.Contains(availableLibraryIds, organizationA);
+            CollectionAssert.Contains(availableLibraryIds, organizationB);
 
             using var other = await superClient.GetAsync(
                 $"/api/asap/staff/analytics?scope={organizationB}&range=last30");
@@ -125,10 +125,10 @@ public sealed partial class PatronJourneyTests
 
             var availableAfterDeactivation = systemAfterDeactivationBody.RootElement.GetProperty("availableLibraries")
                 .EnumerateArray()
-                .Select(item => item.GetProperty("orgId").GetString())
+                .Select(item => item.GetProperty("orgId").GetInt32())
                 .ToArray();
-            CollectionAssert.Contains(availableAfterDeactivation, organizationA.ToString());
-            Assert.IsFalse(availableAfterDeactivation.Contains(organizationB.ToString(), StringComparer.Ordinal));
+            CollectionAssert.Contains(availableAfterDeactivation, organizationA);
+            Assert.IsFalse(availableAfterDeactivation.Contains(organizationB));
 
             using var inactive = await superClient.GetAsync(
                 $"/api/asap/staff/analytics?scope={organizationB}&range=last30");
@@ -284,12 +284,12 @@ public sealed partial class PatronJourneyTests
             SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] ON;
             INSERT INTO [asap].[AdditionalCopyRequest]
                 ([Id], [LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
-            VALUES (@collisionId, @organizationA, N'analytics-copy-collision-' + @suffix,
+            VALUES (@collisionId, @organizationA, 98001,
                     N'Analytics A collision copy ' + @suffix, N'open', '2026-09-04T12:00:00', '2026-09-04T12:00:00');
             SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] OFF;
             INSERT INTO [asap].[AdditionalCopyRequest]
                 ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc], [ClosedUtc])
-            VALUES (@organizationA, N'analytics-copy-closed-' + @suffix, N'Analytics A closed copy ' + @suffix,
+            VALUES (@organizationA, 98002, N'Analytics A closed copy ' + @suffix,
                     N'closed', '2026-09-07T12:00:00', '2026-09-08T12:00:00', '2026-09-08T12:00:00');
 
             INSERT INTO [asap].[TitleRequest]
@@ -301,11 +301,11 @@ public sealed partial class PatronJourneyTests
 
             INSERT INTO [asap].[AdditionalCopyRequest]
                 ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
-            VALUES (@organizationB, N'analytics-b-copy-open-' + @suffix, N'Analytics B open copy ' + @suffix,
+            VALUES (@organizationB, 98003, N'Analytics B open copy ' + @suffix,
                     N'open', '2026-08-01T12:00:00', '2026-08-01T12:00:00');
             INSERT INTO [asap].[AdditionalCopyRequest]
                 ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc], [ClosedUtc])
-            VALUES (@organizationB, N'analytics-b-copy-closed-' + @suffix, N'Analytics B closed copy ' + @suffix,
+            VALUES (@organizationB, 98004, N'Analytics B closed copy ' + @suffix,
                     N'closed', '2026-09-02T12:00:00', '2026-09-03T12:00:00', '2026-09-03T12:00:00');
             """;
         command.Parameters.Add("@organizationA", SqlDbType.Int).Value = organizationA;
@@ -323,11 +323,11 @@ public sealed partial class PatronJourneyTests
             """
             INSERT INTO [asap].[AdditionalCopyRequest]
                 ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
-            VALUES (1, N'analytics-system-copy-open-' + @suffix, N'Analytics system open copy ' + @suffix,
+            VALUES (1, 98005, N'Analytics system open copy ' + @suffix,
                     N'open', '2026-07-01T12:00:00', '2026-07-01T12:00:00');
             INSERT INTO [asap].[AdditionalCopyRequest]
                 ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc], [ClosedUtc])
-            VALUES (1, N'analytics-system-copy-closed-' + @suffix, N'Analytics system closed copy ' + @suffix,
+            VALUES (1, 98006, N'Analytics system closed copy ' + @suffix,
                     N'closed', '2026-09-02T12:00:00', '2026-09-03T12:00:00', '2026-09-03T12:00:00');
             """;
         command.Parameters.Add("@suffix", SqlDbType.NVarChar, 32).Value = suffix;
@@ -349,7 +349,7 @@ public sealed partial class PatronJourneyTests
             WHERE [Code] IN (N'analytics-hold-failed-one-' + @suffix, N'analytics-hold-failed-two-' + @suffix);
             DELETE FROM [asap].[AdditionalCopyRequest]
             WHERE [LibraryOrganizationId] IN (@organizationA, @organizationB)
-               OR [BibId] IN (N'analytics-system-copy-open-' + @suffix, N'analytics-system-copy-closed-' + @suffix);
+               OR [BibId] IN (98005, 98006);
             DELETE FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] IN (@organizationA, @organizationB);
             DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] IN (@organizationA, @organizationB);
             DELETE FROM [asap].[StaffUser] WHERE [Id] = @staffId;
@@ -376,7 +376,14 @@ public sealed partial class PatronJourneyTests
     {
         var scope = body.GetProperty("scope");
         Assert.AreEqual(mode, scope.GetProperty("mode").GetString());
-        Assert.AreEqual(organizationId?.ToString() ?? string.Empty, scope.GetProperty("libraryOrgId").GetString());
+        if (organizationId is { } selected)
+        {
+            Assert.AreEqual(selected, scope.GetProperty("libraryOrgId").GetInt32());
+        }
+        else
+        {
+            Assert.AreEqual(JsonValueKind.Null, scope.GetProperty("libraryOrgId").ValueKind);
+        }
     }
 
     private static void AssertAnalyticsSummary(JsonElement body, AnalyticsSummaryExpectation expected)

@@ -59,13 +59,13 @@ const schemaVersions = {
   migrationProject: Number(migrationProject.match(/ExpectedSchemaVersion" Value="(\d+)"/)?.[1])
 };
 assert.ok(
-  Object.values(schemaVersions).every((version) => version === 6),
-  `application schema version must be 6 in every package/runtime contract: ${JSON.stringify(schemaVersions)}`
+  Object.values(schemaVersions).every((version) => version === 7),
+  `application schema version must be 7 in every package/runtime contract: ${JSON.stringify(schemaVersions)}`
 );
 assert.match(
   postDeployment,
-  /Schema 6 is a pre-release reset boundary\. Recreate the application database from this DACPAC\./,
-  'the DACPAC must reject in-place upgrades from pre-schema-6 databases'
+  /Schema 7 is a pre-release reset boundary\. Recreate the application database from this DACPAC\./,
+  'the DACPAC must reject in-place upgrades from pre-schema-7 databases'
 );
 
 const deploymentJobStart = workflow.indexOf('  deploy-test-iis:');

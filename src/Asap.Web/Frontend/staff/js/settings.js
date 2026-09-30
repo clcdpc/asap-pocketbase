@@ -1469,7 +1469,7 @@ export function createSettingsController({
     }
     if (domainData.domainsChanged.codes) {
       payload.workflow.allowedPatronCodeIds = isSystem() || !domainValues.codesUseSystem
-        ? domainValues.codes
+        ? domainValues.codes.map(value => Number(value))
         : null;
     }
     if (domainData.domainsChanged.providers) payload.providers = domainValues.providers;

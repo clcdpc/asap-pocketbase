@@ -6,8 +6,8 @@ and its file storage directly; it does not start PocketBase or call the web
 application.
 
 The executable is pinned to PocketBase source
-`150b30b776565194260cc327eeeffdfb46475e81`, DACPAC schema `6`, migration
-contract `email-identity-v1`, and export format `1`. Use `describe-contract` for the
+`150b30b776565194260cc327eeeffdfb46475e81`, DACPAC schema `7`, migration
+contract `polaris-native-v1`, and export format `1`. Use `describe-contract` for the
 machine-readable contract.
 
 ## Commands

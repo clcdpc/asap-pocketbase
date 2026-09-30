@@ -303,7 +303,7 @@ public sealed partial class PatronJourneyTests
             SourceTitleRequestId = sourceTitleRequestId,
             LibraryOrganizationId = organizationId,
             LibraryNameSnapshot = organizationId == 2 ? "Test Library" : "Out-of-scope library",
-            BibId = $"legacy-copy-{suffix}",
+            BibId = 9342,
             Title = title,
             MaterialFormatId = formatId,
             FormatSnapshot = "book",

@@ -14,7 +14,7 @@ import {
   rememberRecentRequest,
   validRequestId
 } from './recent-requests.js';
-import { applyPolarisResultToControls, createPolarisLookup, renderResearchLinks, selectedStaffBibId } from './research.js';
+import { applyPolarisResultToControls, createPolarisLookup, renderResearchLinks, selectedStaffBibId, positivePolarisId } from './research.js';
 import { loadAnalytics, resetAnalytics } from './analytics.js';
 import { sanitizedHtmlFragment } from '../../shared/html.js';
 import {
@@ -247,10 +247,10 @@ export function createWorkflowApp() {
     try {
       const saved = JSON.parse(window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation'));
       if (Number.isSafeInteger(saved?.libraryOrgId) && saved.libraryOrgId > 0 &&
-          typeof saved.bibid === 'string' && saved.bibid &&
+          positivePolarisId(saved.bibid) !== null &&
           typeof saved.sourceId === 'string' && /^\d+$/.test(saved.sourceId) &&
           typeof saved.version === 'string' && saved.version) {
-        return { ...saved, reviewReady: false, reviewed: false };
+        return { ...saved, bibid: positivePolarisId(saved.bibid), reviewReady: false, reviewed: false };
       }
     } catch {
       // A later create verifies storage availability before dispatch.
@@ -287,7 +287,7 @@ export function createWorkflowApp() {
     return state.verifiedBib?.requestId === String(request.id) &&
       state.verifiedBib.version === request.version &&
       state.verifiedBib.identifier === String(request.identifier || '').trim() &&
-      state.editControls?.bib.value.trim() === state.verifiedBib.bibId;
+      positivePolarisId(state.editControls?.bib.value) === state.verifiedBib.bibId;
   }
 
   function updateResearchLinks() {
@@ -1584,7 +1584,7 @@ export function createWorkflowApp() {
     if (reviewReady) {
       const matching = state.additionalCopies.filter(item =>
         String(item.libraryOrgId) === String(uncertainCreation.libraryOrgId) &&
-        String(item.bibid) === String(uncertainCreation.bibid));
+        item.bibid === uncertainCreation.bibid);
       const ids = matching.map(item => item.id).join(', ');
       dom.additionalCopyCreateReviewSummary.textContent =
         matching.length === 0
@@ -2332,7 +2332,7 @@ export function createWorkflowApp() {
           state.staffSuggestion?.stage === 'create',
         apply: selected => {
           applyPolarisResultToControls(selected, { bib, title, author, identifier });
-          state.staffSuggestion.verifiedBibId = String(selected.bibId);
+          state.staffSuggestion.verifiedBibId = selected.bibId;
           catalogStatus.textContent = `Verified Polaris BIB ${selected.bibId} selected.`;
         },
         editorFocus: title
@@ -2602,7 +2602,7 @@ export function createWorkflowApp() {
     if (state.verifiedBib && (state.verifiedBib.requestId !== String(request.id) ||
         state.verifiedBib.version !== request.version ||
         state.verifiedBib.identifier !== String(request.identifier || '').trim() ||
-        state.verifiedBib.bibId !== String(request.bibid || '').trim())) {
+        state.verifiedBib.bibId !== request.bibid)) {
       state.verifiedBib = null;
     }
     dom.dialogTitle.textContent = request.title;
@@ -2910,7 +2910,7 @@ export function createWorkflowApp() {
         isCurrent: () => isCurrentDialogRequest(request, 'title_request') && form.isConnected,
         returnFocus: searchButton,
         editorFocus: bib,
-        canApply: row => !bib.disabled || String(row.bibId) === bib.value.trim(),
+        canApply: row => !bib.disabled || row.bibId === positivePolarisId(bib.value),
         mode: bib.value.trim() ? 'bib' : identifier.value.trim() ? 'identifier' : 'title',
         query: bib.value.trim() || identifier.value.trim() || title.value.trim(),
         title: title.value.trim(),
@@ -2921,7 +2921,7 @@ export function createWorkflowApp() {
             requestId: String(request.id),
             version: request.version,
             identifier: String(identifier.value).trim(),
-            bibId: String(selected.bibId),
+            bibId: selected.bibId,
             detail: verifiedDetail
           };
           state.editorDirty = true;
@@ -2983,7 +2983,7 @@ export function createWorkflowApp() {
     function updatePreview() {
       const changed = [];
       const identifierChanged = !identifier.disabled && identifier.value.trim() !== (request.identifier || '').trim();
-      const bibChanged = !bib.disabled && bib.value.trim() !== (request.bibid || '').trim();
+      const bibChanged = !bib.disabled && positivePolarisId(bib.value) !== request.bibid;
       const selectedBib = selectedStaffBibId(state.verifiedBib, request.id, bib.value);
       let bibVerified = request.bibidStaffVerified === true;
       if (identifierChanged || bibChanged) bibVerified = false;
@@ -3034,7 +3034,12 @@ export function createWorkflowApp() {
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (save.disabled || !isCurrentDialogRequest(request, 'title_request')) return;
-      const bibWillChange = !bib.disabled && bib.value.trim() !== String(request.bibid || '').trim();
+      if (!bib.disabled && bib.value.trim() && positivePolarisId(bib.value) === null) {
+        announce('Enter a positive Polaris BIB ID up to 2147483647.', 'error');
+        bib.focus();
+        return;
+      }
+      const bibWillChange = !bib.disabled && positivePolarisId(bib.value) !== request.bibid;
       const bibSelected = Boolean(selectedStaffBibId(state.verifiedBib, request.id, bib.value));
       const turnsOffHoldForBib = request.autohold && !autohold.checked && Boolean(request.bibid);
       const closesExistingNoHold = Boolean(request.bibid) && !autohold.checked &&
@@ -3064,7 +3069,7 @@ export function createWorkflowApp() {
         title: title.value,
         author: author.value,
         identifier: identifier.disabled ? request.identifier : identifier.value.trim() || null,
-        bibid: bib.disabled ? request.bibid : bib.value.trim() || null,
+        bibid: bib.disabled ? request.bibid : positivePolarisId(bib.value),
         ...(selectedStaffBibId(state.verifiedBib, request.id, bib.value)
           ? { staffSelectedBibId: selectedStaffBibId(state.verifiedBib, request.id, bib.value) }
           : {}),
@@ -3166,7 +3171,7 @@ export function createWorkflowApp() {
         announce('Search Polaris, select the matching BIB, and save it before moving to Pending hold.', 'error');
         return;
       }
-      if (state.editorDirty || state.verifiedBib.bibId !== String(request.bibid || '').trim()) {
+      if (state.editorDirty || state.verifiedBib.bibId !== request.bibid) {
         announce('Save the current request edits before moving to Pending hold.', 'error');
         return;
       }
@@ -3449,7 +3454,7 @@ export function createWorkflowApp() {
       if (current) {
         if (body?.action === 'edit' && current.bibidStaffVerified === true && state.verifiedBib &&
             state.verifiedBib.requestId === String(current.id) &&
-            state.verifiedBib.bibId === String(current.bibid || '').trim() &&
+            state.verifiedBib.bibId === current.bibid &&
             state.verifiedBib.identifier === String(current.identifier || '').trim()) {
           state.verifiedBib.version = current.version;
         }
@@ -3767,6 +3772,12 @@ export function createWorkflowApp() {
     updateEvidence();
     form.addEventListener('submit', async event => {
       event.preventDefault();
+      const provenFinalHoldId = finalHoldId.disabled ? null : positivePolarisId(finalHoldId.value);
+      if (!finalHoldId.disabled && provenFinalHoldId === null) {
+        announce('Enter a positive Polaris hold ID no larger than 2147483647.');
+        finalHoldId.focus();
+        return;
+      }
       if (!confirmCurrent(request, 'title_request',
         `Resolve hold operation ${operation.id}, attempt ${operation.attemptNumber}, as ${outcome.value.replaceAll('_', ' ')} using ${evidence.selectedOptions[0]?.textContent || evidence.value}? The recorded evidence will determine whether this request has a placed hold or may be retried.`)) return;
       await mutateOperation(request, operation, 'resolve', {
@@ -3779,7 +3790,7 @@ export function createWorkflowApp() {
         operationSpecificProofAttested: !proofAttested.disabled && proofAttested.checked,
         proofSource: proofSource.disabled ? null : proofSource.value,
         causalConnection: causalConnection.disabled ? null : causalConnection.value,
-        provenFinalHoldId: finalHoldId.disabled ? null : finalHoldId.value,
+        provenFinalHoldId,
         originalExecutorExcluded: !excluded.disabled && excluded.checked,
         executorExclusionAttested: !exclusionAttested.disabled && exclusionAttested.checked,
         executorExclusionReference: exclusionReference.disabled ? null : exclusionReference.value,

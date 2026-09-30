@@ -111,8 +111,8 @@ public static class PatronEndpoints
 
         if (effective.PatronCodeEligibilityEnabled &&
             effective.AllowedPatronCodeIds.Count > 0 &&
-            !string.IsNullOrWhiteSpace(patron.PatronCodeId) &&
-            !effective.AllowedPatronCodeIds.Contains(patron.PatronCodeId))
+            patron.PatronCodeId.HasValue &&
+            !effective.AllowedPatronCodeIds.Contains(patron.PatronCodeId.Value))
         {
             return Results.Json(
                 new { message = effective.PatronCodeEligibilityMessage },

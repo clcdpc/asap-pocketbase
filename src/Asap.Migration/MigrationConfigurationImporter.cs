@@ -754,6 +754,11 @@ internal static class MigrationConfigurationImporter
         }
     }
 
+    private static IReadOnlyList<int> ParsePatronCodeIds(string? value) =>
+        SplitValues(value).Select(item =>
+            SourceRow.ParsePositiveInt32(item, "allowedPatronCodeIds", "source_patron_code_invalid")!.Value)
+            .Distinct().Order().ToArray();
+
     private static void ReplacePatronCodes(
         SqlConnection connection,
         SqlTransaction transaction,
@@ -761,11 +766,14 @@ internal static class MigrationConfigurationImporter
         string? sourceValue,
         bool isSystem)
     {
-        var values = SplitValues(sourceValue);
-        if (!isSystem && values.Count == 0) return;
+        var values = ParsePatronCodeIds(sourceValue);
+        if (!isSystem && values.Count == 0)
+        {
+            return;
+        }
         EnsureSet(connection, transaction, "PatronCodeEligibilitySet", organizationId);
         Execute(connection, transaction, "DELETE FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = @organizationId;", organizationId);
-        foreach (var value in values.Distinct(StringComparer.Ordinal))
+        foreach (var value in values.Distinct())
         {
             using var insert = new SqlCommand(
                 "INSERT INTO [asap].[PatronCodeEligibilityMember] ([OrganizationId], [PatronCodeId]) VALUES (@organizationId, @value);",
@@ -1255,7 +1263,7 @@ internal static class MigrationConfigurationImporter
         bool isSystem,
         ReconciliationCounter counter)
     {
-        var expected = SplitValues(rawValue).Distinct(StringComparer.Ordinal).ToArray();
+        var expected = ParsePatronCodeIds(rawValue).Distinct().ToArray();
         var expectedSet = isSystem || expected.Length > 0;
         using var setCommand = new SqlCommand(
             "SELECT COUNT(*) FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = @organizationId;",
@@ -1269,9 +1277,12 @@ internal static class MigrationConfigurationImporter
             transaction);
         command.Parameters.AddWithValue("@organizationId", organizationId);
         using var reader = command.ExecuteReader();
-        var actual = new List<string>();
-        while (reader.Read()) actual.Add(reader.GetString(0));
-        EnsureConfiguration(expected.Order(StringComparer.Ordinal).SequenceEqual(actual, StringComparer.Ordinal), "patron-code eligibility set");
+        var actual = new List<int>();
+        while (reader.Read())
+        {
+            actual.Add(reader.GetInt32(0));
+        }
+        EnsureConfiguration(expected.Order().SequenceEqual(actual), "patron-code eligibility set");
         counter.Relationships++;
         counter.Fields += expected.Length;
     }

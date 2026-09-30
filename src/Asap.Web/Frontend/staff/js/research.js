@@ -1,3 +1,12 @@
+export function positivePolarisId(value) {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!/^\d+$/.test(text)) return null;
+    value = Number(text);
+  }
+  return Number.isInteger(value) && value > 0 && value <= 2147483647 ? value : null;
+}
+
 const supportedTokens = new Set(['title', 'identifier', 'bibid', 'patron-id', 'patronId']);
 
 export function mergeCatalogValue(catalogValue, existingValue) {
@@ -25,9 +34,9 @@ export function applyPolarisResultToControls(selected, controls) {
 }
 
 export function selectedStaffBibId(selection, requestId, bibId) {
-  const selectedId = String(selection?.bibId ?? '').trim();
+  const selectedId = positivePolarisId(selection?.bibId);
   if (!selectedId || selection?.requestId !== String(requestId) ||
-      selectedId !== String(bibId ?? '').trim()) return null;
+      selectedId !== positivePolarisId(bibId)) return null;
   return selectedId;
 }
 
@@ -68,14 +77,14 @@ export function renderResearchLinks(container, request, research, draft = {}) {
   const values = {
     title: draft.title ?? request.title,
     identifier: draft.identifier ?? request.identifier,
-    bibid: draft.bibId ?? request.bibid,
+    bibid: positivePolarisId(draft.bibId ?? request.bibid),
     'patron-id': research?.patronId,
     patronId: research?.patronId
   };
   const add = (label, url) => {
     if (url) links.push(node('a', { href: url, target: '_blank', rel: 'noopener noreferrer', text: label }));
   };
-  if (/^[1-9][0-9]*$/.test(String(values.bibid || '').trim())) {
+  if (values.bibid !== null) {
     add('Open BIB in LEAP', researchUrl(research?.leapBibUrlPattern, values, 'bibid'));
   }
   const patronPattern = research?.leapPatronUrlPattern;
@@ -197,7 +206,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce }) 
         method: 'POST', body: { requestId: current.requestId, libraryOrgId: current.libraryOrgId,
           mode: 'bib', bibId: row.bibId }, signal: controller.signal
       });
-      if (!active(current, token) || String(detail.bibId) !== String(row.bibId)) return;
+      if (!active(current, token) || detail.bibId !== row.bibId) return;
       const selected = {
         ...row, ...detail,
         title: detail.title || row.title,
@@ -228,7 +237,14 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce }) 
     results.replaceChildren();
     status.textContent = 'Searching Polaris...';
     const body = { requestId: current.requestId, libraryOrgId: current.libraryOrgId, mode: mode.value };
-    if (mode.value === 'bib') body.bibId = query.value.trim();
+    if (mode.value === 'bib') {
+      body.bibId = positivePolarisId(query.value);
+      if (body.bibId === null) {
+        status.textContent = 'Enter a positive Polaris BIB ID up to 2147483647.';
+        announce(status.textContent, 'error');
+        return;
+      }
+    }
     else if (mode.value === 'title_author') {
       body.title = title.value.trim();
       body.author = author.value.trim();

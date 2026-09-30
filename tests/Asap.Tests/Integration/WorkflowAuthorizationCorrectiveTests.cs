@@ -37,7 +37,7 @@ public sealed partial class PatronJourneyTests
         var forgedOpen = Title("suggestion");
         var copy = new AdditionalCopyRequest
         {
-            LibraryOrganizationId = 2, BibId = "9288001", Title = "Closed deletion typed copy",
+            LibraryOrganizationId = 2, BibId = 9288001, Title = "Closed deletion typed copy",
             Status = "closed", CreatedUtc = now, UpdatedUtc = now, ClosedUtc = now
         };
         seed.TitleRequests.AddRange(reopened, deletable, forgedOpen);
@@ -108,7 +108,7 @@ public sealed partial class PatronJourneyTests
         };
         var copy = new AdditionalCopyRequest
         {
-            LibraryOrganizationId = 2, BibId = "9288002", Title = "Actor version copy",
+            LibraryOrganizationId = 2, BibId = 9288002, Title = "Actor version copy",
             Status = "closed", CreatedUtc = now, UpdatedUtc = now, ClosedUtc = now
         };
         if (!await seed.Organizations.AnyAsync(item => item.Id == 91906))
@@ -187,7 +187,7 @@ public sealed partial class PatronJourneyTests
                 {
                     var row = new AdditionalCopyRequest
                     {
-                        LibraryOrganizationId = 2, BibId = "12345", Title = "Privileged copy race",
+                        LibraryOrganizationId = 2, BibId = 12345, Title = "Privileged copy race",
                         Status = delete ? "closed" : "open", ClaimedByStaffUserId = assignee.Id,
                         ClaimedByDisplayName = assignee.DisplayName ?? assignee.UserPrincipalName,
                         ClaimType = "manual", ClaimedAtUtc = DateTime.UtcNow,
@@ -338,7 +338,7 @@ public sealed partial class PatronJourneyTests
         };
         AdditionalCopyRequest Copy(string status) => new()
         {
-            LibraryOrganizationId = otherLibrary, BibId = "19001", Title = "Global claimant cleanup barrier", Status = status,
+            LibraryOrganizationId = otherLibrary, BibId = 19001, Title = "Global claimant cleanup barrier", Status = status,
             ClaimedByStaffUserId = claimant.Id,
             ClaimedByDisplayName = claimant.DisplayName ?? claimant.UserPrincipalName,
             ClaimType = "automatic_format_rule", ClaimRuleId = rule.Id, ClaimedAtUtc = now,

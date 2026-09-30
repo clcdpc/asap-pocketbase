@@ -176,7 +176,7 @@ public sealed partial class PatronJourneyTests
                 Author = "Slice Five",
                 MaterialFormatId = format.Id,
                 Status = status,
-                BibId = queueName == QueueNames.IdentifierProcessing ? null : (90000 + index).ToString(),
+                BibId = queueName == QueueNames.IdentifierProcessing ? null : (90000 + index),
                 AutoHold = queueName == QueueNames.HoldPlacement,
                 IsbnCheckStatus = queueName == QueueNames.IdentifierProcessing ? "pending" : "found",
                 CreatedUtc = baseUtc.AddTicks(index),
@@ -193,7 +193,7 @@ public sealed partial class PatronJourneyTests
                 copies.Add(new AdditionalCopyRequest
                 {
                     LibraryOrganizationId = scope,
-                    BibId = (91000 + index).ToString(),
+                    BibId = (91000 + index),
                     Title = $"Slice 5 fairness copy {index}",
                     Status = "open",
                     CreatedUtc = baseUtc.AddTicks(index),
@@ -215,7 +215,7 @@ public sealed partial class PatronJourneyTests
                     Title = $"Slice 5 recovery {index}",
                     MaterialFormatId = format.Id,
                     Status = "suggestion",
-                    BibId = (92000 + index).ToString(),
+                    BibId = (92000 + index),
                     IsbnCheckStatus = "found",
                     CreatedUtc = baseUtc.AddTicks(index),
                     UpdatedUtc = baseUtc.AddTicks(index)
@@ -227,7 +227,7 @@ public sealed partial class PatronJourneyTests
             {
                 TitleRequestId = request.Id,
                 PatronBarcodeSnapshot = request.Barcode,
-                BibIdSnapshot = request.BibId!,
+                BibIdSnapshot = request.BibId!.Value,
                 AttemptNumber = 1,
                 State = "ambiguous",
                 Phase = "result_recorded",
@@ -317,7 +317,7 @@ public sealed partial class PatronJourneyTests
         public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken cancellationToken) => RefreshAsync(barcode, cancellationToken);
 
         public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken) =>
-            Task.FromResult(new PatronSnapshot(7105, barcode, "fairness@example.org", "Fair", "Tester", "1", "Standard", 2, 2, "Library", 101));
+            Task.FromResult(new PatronSnapshot(7105, barcode, "fairness@example.org", "Fair", "Tester", 1, "Standard", 2, 2, "Library", 101));
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PickupBranch>>([]);
@@ -341,14 +341,14 @@ public sealed partial class PatronJourneyTests
             CreateCount++;
             return Task.FromResult(new HoldProviderResult(
                 HoldProviderOutcome.DefinitiveNoEffect,
-                Guid.NewGuid().ToString(), null, null, null, 2, 0,
+                Guid.NewGuid(), null, null, null, 2, 0,
                 "provider_final_no_effect"));
         }
 
         public Task<HoldProviderResult> ReplyToHoldAsync(HoldReplyCommand command, CancellationToken cancellationToken) =>
             Task.FromResult(new HoldProviderResult(
                 HoldProviderOutcome.DefinitiveNoEffect,
-                command.RequestGuid.ToString(), null, command.TxnGroupQualifier, command.TxnQualifier, 2, 0,
+                command.RequestGuid, null, command.TxnGroupQualifier, command.TxnQualifier, 2, 0,
                 "provider_final_no_effect"));
     }
 }

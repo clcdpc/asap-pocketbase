@@ -24,5 +24,5 @@ public sealed record PolarisOrganizationSnapshot(
     int? ParentOrganizationId);
 
 public sealed record PolarisPatronCodeSnapshot(
-    string Id,
+    int Id,
     string Description);
