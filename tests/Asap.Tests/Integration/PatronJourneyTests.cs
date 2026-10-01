@@ -175,6 +175,8 @@ public sealed partial class PatronJourneyTests
                     descriptor.ServiceType == typeof(IHostedService) &&
                     descriptor.ImplementationType == typeof(HangfireWorkerHostedService));
                 services.Remove(worker);
+                services.RemoveAll<DeterministicTestingPatronProvider>();
+                services.AddSingleton(DeterministicJourneyScenario.Create());
                 services.RemoveAll<IEmailOutboxDispatcher>();
                 services.AddSingleton<IEmailOutboxDispatcher>(dispatcher!);
                 services.RemoveAll<IEmailSender>();
@@ -9250,7 +9252,7 @@ public sealed partial class PatronJourneyTests
         return body.RootElement.GetProperty("antiforgeryToken").GetString()!;
     }
 
-    private static async Task<OperatorResolutionSeed> SeedOperatorResolutionAsync(
+    private async Task<OperatorResolutionSeed> SeedOperatorResolutionAsync(
         string suffix,
         string phase,
         bool liveOwner = false)
@@ -9267,11 +9269,11 @@ public sealed partial class PatronJourneyTests
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
             VALUES (2, N'200000000031' + RIGHT(N'00' + CONVERT(nvarchar(2), ABS(CHECKSUM(NEWID())) % 100), 2),
                     N'Operator resolution ' + @suffix, 1, @formatId, N'pending_hold',
-                    CONVERT(nvarchar(20), 93100 + ABS(CHECKSUM(NEWID())) % 800),
+                    93100 + ABS(CHECKSUM(NEWID())) % 800,
                     101, N'Main Library', N'found', DATEADD(minute, -8, SYSUTCDATETIME()), DATEADD(minute, -8, SYSUTCDATETIME()));
             DECLARE @requestId bigint = SCOPE_IDENTITY();
             DECLARE @barcode nvarchar(100) = (SELECT [Barcode] FROM [asap].[TitleRequest] WHERE [Id] = @requestId);
-            DECLARE @bibId nvarchar(100) = (SELECT [BibId] FROM [asap].[TitleRequest] WHERE [Id] = @requestId);
+            DECLARE @bibId int = (SELECT [BibId] FROM [asap].[TitleRequest] WHERE [Id] = @requestId);
             INSERT INTO [asap].[HoldPlacementOperation]
                 ([TitleRequestId], [PatronBarcodeSnapshot], [PatronIdSnapshot], [BibIdSnapshot], [PickupBranchIdSnapshot],
                  [RequestingOrganizationIdSnapshot], [WorkstationIdSnapshot], [PolarisUserIdSnapshot],
@@ -9280,7 +9282,7 @@ public sealed partial class PatronJourneyTests
                  [TxnGroupQualifier], [TxnQualifier], [ReplyAnswer], [ReplyState], [ResultCode], [OutcomeEvidenceKind],
                  [RecoveryAttemptCount], [LastRecoveryUtc], [LastErrorCode], [DetailJson])
             VALUES
-                (@requestId, @barcode, N'7105', @bibId, 101, 1, 1, N'1',
+                (@requestId, @barcode, 7105, @bibId, 101, 2, 1, 1,
                  1, N'operator_required', @phase,
                  CASE WHEN @liveOwner = 1 THEN NEWID() ELSE NULL END, 2,
                  CASE WHEN @liveOwner = 1 THEN DATEADD(minute, 2, SYSUTCDATETIME()) ELSE NULL END,
@@ -9288,15 +9290,15 @@ public sealed partial class PatronJourneyTests
                  CASE WHEN @phase IN (N'create_started', N'reply_started') THEN DATEADD(minute, -6, SYSUTCDATETIME()) ELSE NULL END,
                  CASE WHEN @phase = N'reply_started' THEN DATEADD(minute, -5, SYSUTCDATETIME()) ELSE NULL END,
                  CASE WHEN @phase = N'reply_started' THEN DATEADD(minute, -4, SYSUTCDATETIME()) ELSE NULL END,
-                 CASE WHEN @phase = N'reply_started' THEN CONVERT(nvarchar(100), NEWID()) ELSE NULL END,
+                 CASE WHEN @phase = N'reply_started' THEN NEWID() ELSE NULL END,
                  CASE WHEN @phase = N'reply_started' THEN N'group-qualifier' ELSE NULL END,
                  CASE WHEN @phase = N'reply_started' THEN N'transaction-qualifier' ELSE NULL END,
-                 CASE WHEN @phase = N'reply_started' THEN N'Yes' ELSE NULL END,
-                 CASE WHEN @phase = N'reply_started' THEN N'3' ELSE NULL END,
+                 CASE WHEN @phase = N'reply_started' THEN 1 ELSE NULL END,
+                 CASE WHEN @phase = N'reply_started' THEN 3 ELSE NULL END,
                  N'ambiguous', N'provider_transport_ambiguous', 1, DATEADD(minute, -3, SYSUTCDATETIME()),
                  N'provider_timeout', N'{"providerObservation":{"result":"ambiguous","source":"CLC"}}');
             DECLARE @operationId bigint = SCOPE_IDENTITY();
-            SELECT @requestId, @operationId, request.[RowVersion], operation.[RowVersion]
+            SELECT @requestId, @operationId, request.[RowVersion], operation.[RowVersion], request.[Barcode]
             FROM [asap].[TitleRequest] request
             JOIN [asap].[HoldPlacementOperation] operation ON operation.[Id] = @operationId
             WHERE request.[Id] = @requestId;
@@ -9306,6 +9308,9 @@ public sealed partial class PatronJourneyTests
         seed.Parameters.AddWithValue("@liveOwner", liveOwner);
         await using var reader = await seed.ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
+        factory!.Services.GetRequiredService<DeterministicTestingPatronProvider>().AddPatron(
+            new PatronSnapshot(7105, reader.GetString(4), "operator@example.org", "Test", "Operator",
+                1, "Adult", 101, 2, "Test Library", 101), [new(101, "Main Library"), new(102, "North Branch")], 2);
         return new OperatorResolutionSeed(
             reader.GetInt64(0),
             reader.GetInt64(1),
@@ -10662,7 +10667,7 @@ public sealed partial class PatronJourneyTests
         return new PatronSuggestionService(
             configuration,
             factory!.Services.GetRequiredService<PatronConfigurationService>(),
-            new DeterministicTestingPatronProvider(),
+            DeterministicJourneyScenario.Create(),
             outboxDispatcher,
             emailSender ?? new RecordingEmailSender(),
             new RecipientDomainPolicy(configuration),

@@ -138,7 +138,11 @@ public sealed class StaffLifecycleService(
         foreach (var id in new[] { actor.Id, existingSnapshot?.Id ?? actor.Id }.Distinct().Order())
         {
             var row = await LockStaffAsync(context, id, cancellationToken);
-            if (row is null) return new StaffLifecycleResult("staff_session_invalid");
+            if (row is null)
+            {
+                return new StaffLifecycleResult("staff_session_invalid");
+            }
+
             locked[id] = row;
         }
         var lockedActor = locked[actor.Id];

@@ -4,6 +4,8 @@ using System.Text.Json;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
+using Asap.Web.Features.Patron;
+using Asap.Web.Infrastructure.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -80,6 +82,9 @@ public sealed partial class PatronJourneyTests
                     .Select(item => item.Id).FirstAsync();
                 for (var index = 0; index < 7; index++)
                 {
+                    factory.Services.GetRequiredService<DeterministicTestingPatronProvider>().AddPatron(
+                        new PatronSnapshot(7001 + index, $"20000000203{index:00}", "patron@example.org", "Test", "Example",
+                            1, "Adult", 101, 2, "Test Library", 101), [new(101, "Main Library")], 2);
                     context.TitleRequests.Add(new TitleRequest
                     {
                         LibraryOrganizationId = 2,
@@ -258,6 +263,8 @@ public sealed partial class PatronJourneyTests
                              builder.ConfigureServices(services =>
                              {
                                  services.RemoveAll<IEmailSender>();
+                                 services.RemoveAll<DeterministicTestingPatronProvider>();
+                                 services.AddSingleton(factory.Services.GetRequiredService<DeterministicTestingPatronProvider>());
                                  services.AddSingleton<IEmailSender, TimeoutReadinessEmailSender>();
                              })))
             {
@@ -331,6 +338,8 @@ public sealed partial class PatronJourneyTests
                              builder.ConfigureServices(services =>
                              {
                                  services.RemoveAll<IEmailOutboxDispatcher>();
+                                 services.RemoveAll<DeterministicTestingPatronProvider>();
+                                 services.AddSingleton(factory.Services.GetRequiredService<DeterministicTestingPatronProvider>());
                                  services.AddSingleton<IEmailOutboxDispatcher, CanceledOutboxDispatcher>();
                              })))
             {

@@ -977,9 +977,17 @@ public sealed class TitleRequestMutationService(
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var locked = await LockForMutationAsync(context, actor, requestId, [actor.Id], cancellationToken);
-        if (locked.Code != "locked") return new TitleRequestMutationResult(locked.Code);
+        if (locked.Code != "locked")
+        {
+            return new TitleRequestMutationResult(locked.Code);
+        }
+
         var request = locked.Request!;
-        if (!request.RowVersion.SequenceEqual(expectedVersion)) return new TitleRequestMutationResult("stale_version");
+        if (!request.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new TitleRequestMutationResult("stale_version");
+        }
+
         var operation = await context.HoldPlacementOperations.AnyAsync(
             item => item.TitleRequestId == request.Id && item.CompletedUtc == null,
             cancellationToken);
@@ -1045,15 +1053,31 @@ public sealed class TitleRequestMutationService(
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var locked = await LockForMutationAsync(context, actor, requestId, [actor.Id], cancellationToken);
-        if (locked.Code != "locked") return new TitleRequestMutationResult(locked.Code);
+        if (locked.Code != "locked")
+        {
+            return new TitleRequestMutationResult(locked.Code);
+        }
+
         var request = locked.Request!;
-        if (locked.Staff[actor.Id].Role is not (StaffRole.Admin or StaffRole.SuperAdmin)) return new TitleRequestMutationResult("delete_forbidden");
+        if (locked.Staff[actor.Id].Role is not (StaffRole.Admin or StaffRole.SuperAdmin))
+        {
+            return new TitleRequestMutationResult("delete_forbidden");
+        }
+
         if (!locked.Staff[actor.Id].RowVersion.SequenceEqual(expectedActorVersion))
         {
             return new TitleRequestMutationResult("actor_changed_since_preview");
         }
-        if (!request.RowVersion.SequenceEqual(expectedVersion)) return new TitleRequestMutationResult("stale_version");
-        if (request.Status != RequestStatus.Closed) return new TitleRequestMutationResult("request_not_closed");
+        if (!request.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new TitleRequestMutationResult("stale_version");
+        }
+
+        if (request.Status != RequestStatus.Closed)
+        {
+            return new TitleRequestMutationResult("request_not_closed");
+        }
+
         if (await PickupPreferenceMutationService.HasIncompleteAsync(context, request.Id, cancellationToken))
         {
             return new TitleRequestMutationResult("pickup_reconciliation_required");
@@ -1460,7 +1484,10 @@ public sealed class TitleRequestMutationService(
 
     private void Dispatch(EmailOutbox? outbox)
     {
-        if (outbox?.Status == "pending") outboxDispatcher.Enqueue(outbox.Id);
+        if (outbox?.Status == "pending")
+        {
+            outboxDispatcher.Enqueue(outbox.Id);
+        }
     }
 
     private static async Task RemoveIdentifierTagsAsync(

@@ -15,6 +15,8 @@ public sealed class StaffPolarisHoldResponseTests
     {
         var provider = new Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider();
         var command = new HoldCreateCommand(7001, int.MaxValue, 101, 2, 99, 42);
+        provider.ExpectCreate(command, new(HoldProviderOutcome.FinalSuccess, Guid.Parse("3e07e5a9-4b5e-45dc-8ad7-bca22a68ea5c"), 100001, null, null, 2, 1, "testing_success"));
+        provider.ExpectCreate(command, new(HoldProviderOutcome.FinalSuccess, Guid.Parse("599d28e8-3f5f-4d37-8325-e217b7f4cadf"), 100002, null, null, 2, 1, "testing_success"));
         var first = await provider.CreateHoldAsync(command, CancellationToken.None);
         var second = await provider.CreateHoldAsync(command, CancellationToken.None);
         Assert.IsTrue(first.HoldRequestId is > 0);

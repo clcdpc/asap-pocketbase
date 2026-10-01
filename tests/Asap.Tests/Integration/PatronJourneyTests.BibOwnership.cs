@@ -8,6 +8,7 @@ using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Jobs;
 using Asap.Web.Infrastructure.Security;
+using Asap.Web.Infrastructure.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -850,6 +851,11 @@ public sealed partial class PatronJourneyTests
 
     private async Task<CurrentStaff> GetOwnershipTestActorAsync()
     {
+        var provider = factory!.Services.GetRequiredService<DeterministicTestingPatronProvider>();
+        foreach (var bibId in new[] { 123, 321, 456 })
+        {
+            provider.SetBib(bibId, 2, new BibValidationResult(true, $"Declared ownership BIB {bibId}"));
+        }
         var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
         var result = await factory!.Services.GetRequiredService<StaffEligibilityService>().FindByEmailAsync(
             identity.UserPrincipalName!,
@@ -901,6 +907,9 @@ public sealed partial class PatronJourneyTests
             CreatedUtc = now,
             UpdatedUtc = now
         };
+        factory.Services.GetRequiredService<DeterministicTestingPatronProvider>().AddPatron(
+            new PatronSnapshot(7001, request.Barcode, "ownership@example.org", "Ownership", "Patron",
+                1, "Adult", 101, 2, "Test Library", 101), [new PickupBranch(101, "Main Library")], libraryOrganizationId);
         context.TitleRequests.Add(request);
         await context.SaveChangesAsync();
         if (identifierTags || identifierNotFoundTag)

@@ -103,10 +103,22 @@ public sealed partial class StaffPickupService(
         await using (var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken))
         {
             var locked = await LockAsync(context, actor, requestId, cancellationToken);
-            if (locked.Code != "locked") return new StaffPickupResult(locked.Code);
+            if (locked.Code != "locked")
+            {
+                return new StaffPickupResult(locked.Code);
+            }
+
             var request = locked.Request!;
-            if (!request.RowVersion.SequenceEqual(expectedVersion)) return new StaffPickupResult("stale_version");
-            if (request.Status is RequestStatus.HoldPlaced or RequestStatus.Closed) return new StaffPickupResult("pickup_read_only");
+            if (!request.RowVersion.SequenceEqual(expectedVersion))
+            {
+                return new StaffPickupResult("stale_version");
+            }
+
+            if (request.Status is RequestStatus.HoldPlaced or RequestStatus.Closed)
+            {
+                return new StaffPickupResult("pickup_read_only");
+            }
+
             if (await context.HoldPlacementOperations.AnyAsync(
                     item => item.TitleRequestId == request.Id && item.CompletedUtc == null,
                     cancellationToken))
@@ -323,7 +335,11 @@ public sealed partial class StaffPickupService(
             return new LockedPickup("organization_inactive");
         }
         var organization = context.Organizations.Local.Single(item => item.Id == snapshot.LibraryOrganizationId);
-        if (organization?.IsActive != true) return new LockedPickup("organization_inactive");
+        if (organization?.IsActive != true)
+        {
+            return new LockedPickup("organization_inactive");
+        }
+
         var staff = await context.StaffUsers.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {actor.Id}")
             .SingleOrDefaultAsync(cancellationToken);

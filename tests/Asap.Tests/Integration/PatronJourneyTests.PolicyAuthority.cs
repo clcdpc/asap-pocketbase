@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Asap.Web.Infrastructure.Jobs;
+using Asap.Web.Infrastructure.Testing;
 
 namespace Asap.Tests.Integration;
 
@@ -228,6 +229,9 @@ public sealed partial class PatronJourneyTests
         await startup.GetAsync("/api/asap/staff/session");
         var seed = await SeedLifecycleAutoClaimRaceAsync("349-invalid-email");
         const string barcode = "349-invalid-claim";
+        factory.Services.GetRequiredService<DeterministicTestingPatronProvider>().AddPatron(
+            new PatronSnapshot(7001, barcode, "claim@example.org", "Claim", "Patron", 1, "Adult", 101, 2, "Test Library", 101),
+            [new PickupBranch(101, "Main Library")], 2);
         try
         {
             await using (var connection = new SqlConnection(databaseConnectionString))

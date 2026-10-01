@@ -542,7 +542,11 @@ public static class MigrationImporter
 
     private static string? ReadOptionalSecretEnvironment(string? environmentName, string errorCode)
     {
-        if (string.IsNullOrWhiteSpace(environmentName)) return null;
+        if (string.IsNullOrWhiteSpace(environmentName))
+        {
+            return null;
+        }
+
         var value = Environment.GetEnvironmentVariable(environmentName);
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -555,7 +559,11 @@ public static class MigrationImporter
         ValidatedMigrationPackage package,
         string? postmarkToken)
     {
-        if (postmarkToken is not null) return true;
+        if (postmarkToken is not null)
+        {
+            return true;
+        }
+
         return MigrationPackageReader.ReadRowsOrEmpty(package, "polaris-settings.json", "polaris_settings")
             .Any(row => row.String("apiKey") is not null || row.String("adminPassword") is not null);
     }
@@ -1036,10 +1044,18 @@ public static class MigrationImporter
         var explicitSourceId = row.String("sourceTemplateId");
         if (explicitSourceId is not null)
         {
-            if (mapped.TryGetValue(explicitSourceId, out var targetId)) return targetId;
+            if (mapped.TryGetValue(explicitSourceId, out var targetId))
+            {
+                return targetId;
+            }
+
             throw new MigrationOperationException("email_template_source_unresolved", $"Email template {row.RequiredString("id")} has an unresolved source template.");
         }
-        if (isRejection) return null;
+        if (isRejection)
+        {
+            return null;
+        }
+
         return FindSystemTemplateId(connection, transaction, templateKey);
     }
 
@@ -1903,7 +1919,11 @@ public static class MigrationImporter
 
     private static DateTime? ParseUtcText(string? value, string errorCode)
     {
-        if (value is null) return null;
+        if (value is null)
+        {
+            return null;
+        }
+
         if (DateTimeOffset.TryParse(
                 value,
                 System.Globalization.CultureInfo.InvariantCulture,
@@ -2124,7 +2144,11 @@ public static class MigrationImporter
             }
             foreach (var sourceEvent in sourceEvents)
             {
-                if (evidence.Any(item => item.SourceRecordId == sourceEvent.Id)) continue;
+                if (evidence.Any(item => item.SourceRecordId == sourceEvent.Id))
+                {
+                    continue;
+                }
+
                 hints.AddRange(sourceEvent.BibSources.Select(source => new PlacementEvidence(
                     "event_bib_hint",
                     source.SourceCollection,
@@ -2207,7 +2231,11 @@ public static class MigrationImporter
             }
             foreach (var sourceEvent in requestEvents ?? [])
             {
-                if (!evidence.Any(item => item.SourceRecordId == sourceEvent.Id)) continue;
+                if (!evidence.Any(item => item.SourceRecordId == sourceEvent.Id))
+                {
+                    continue;
+                }
+
                 foreach (var sourceBib in sourceEvent.BibSources)
                 {
                     bibIds.Add(sourceBib.BibId);
@@ -2521,7 +2549,11 @@ public static class MigrationImporter
         ICollection<object> transformations)
     {
         importedCounts["migration_bootstrap_staff_users"] = 0;
-        if (HasUsableSuperAdministrator(connection, transaction, allowedTenantIds)) return null;
+        if (HasUsableSuperAdministrator(connection, transaction, allowedTenantIds))
+        {
+            return null;
+        }
+
         if (externalConfigurationPath is null)
         {
             throw new MigrationOperationException(
@@ -2656,7 +2688,10 @@ public static class MigrationImporter
     {
         foreach (var property in value.EnumerateObject())
         {
-            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) return property.Value;
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return property.Value;
+            }
         }
         throw new KeyNotFoundException(name);
     }
@@ -3144,7 +3179,11 @@ public static class MigrationImporter
         {
             var sourceId = row.RequiredString("id");
             var status = NormalizeIsbnStatus(sourceId, row.String("isbnCheckStatus"), row.String("identifier"), row.PositiveInt32("bibid", "source_bib_invalid"));
-            if (status != "found" || !requestIds.TryGetValue(sourceId, out var requestId)) continue;
+            if (status != "found" || !requestIds.TryGetValue(sourceId, out var requestId))
+            {
+                continue;
+            }
+
             var foundTagId = FindTagId(connection, transaction, "polaris_bib_found");
             if (foundTagId is null)
             {
@@ -3318,7 +3357,11 @@ public static class MigrationImporter
         foreach (var row in rows)
         {
             var sourceId = row.RequiredString("id");
-            if (!requestIds.TryGetValue(sourceId, out var requestId)) continue;
+            if (!requestIds.TryGetValue(sourceId, out var requestId))
+            {
+                continue;
+            }
+
             var formatId = ResolveRequestFormatId(connection, transaction, row, formatIds);
             var claim = ResolveRequestClaim(
                 connection,
@@ -3329,7 +3372,11 @@ public static class MigrationImporter
                 staffIds,
                 claimRuleIds,
                 allowedTenantIds);
-            if (!claim.RequiresMigrationAnnotation) continue;
+            if (!claim.RequiresMigrationAnnotation)
+            {
+                continue;
+            }
+
             expectedCount++;
             var metadata = BuildClaimAnnotationMetadata(row, sourceId, claim);
             using var command = new SqlCommand(
@@ -3513,8 +3560,16 @@ public static class MigrationImporter
 
     private static bool JsonEquals(SqlDataReader reader, int ordinal, string? expected)
     {
-        if (reader.IsDBNull(ordinal)) return expected is null;
-        if (expected is null) return false;
+        if (reader.IsDBNull(ordinal))
+        {
+            return expected is null;
+        }
+
+        if (expected is null)
+        {
+            return false;
+        }
+
         using var actualDocument = JsonDocument.Parse(reader.GetString(ordinal));
         using var expectedDocument = JsonDocument.Parse(expected);
         return JsonElement.DeepEquals(actualDocument.RootElement, expectedDocument.RootElement);
@@ -3620,7 +3675,11 @@ public static class MigrationImporter
         MigrationSemanticReconciliation semanticReconciliation)
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
         var json = JsonSerializer.Serialize(new
         {
             reportVersion = 5,
@@ -3786,7 +3845,11 @@ public static class MigrationImporter
         IReadOnlyDictionary<string, int> organizationIds)
     {
         var sourceValue = row.RequiredString(field);
-        if (organizationIds.TryGetValue(sourceValue, out var mapped)) return mapped;
+        if (organizationIds.TryGetValue(sourceValue, out var mapped))
+        {
+            return mapped;
+        }
+
         if (int.TryParse(sourceValue, out var organizationId) &&
             organizationId > 0 &&
             organizationIds.Values.Contains(organizationId))
@@ -3820,7 +3883,11 @@ public static class MigrationImporter
         string sourceId,
         string description)
     {
-        if (organizationId is null) return;
+        if (organizationId is null)
+        {
+            return;
+        }
+
         if (!validOrganizationIds.Contains(organizationId.Value))
         {
             throw new MigrationOperationException(
@@ -3867,7 +3934,11 @@ public static class MigrationImporter
         int sortOrder)
     {
         var existing = FindTagId(connection, transaction, code);
-        if (existing is not null) return existing.Value;
+        if (existing is not null)
+        {
+            return existing.Value;
+        }
+
         using var command = new SqlCommand(
             "INSERT INTO [asap].[WorkflowTag] ([Code], [Label], [SortOrder]) OUTPUT inserted.[Id] VALUES (@code, @label, @sortOrder);",
             connection,
@@ -3942,7 +4013,11 @@ public static class MigrationImporter
 
     private static long? ResolveOptionalMapping(string? sourceId, IReadOnlyDictionary<string, long> mappings)
     {
-        if (sourceId is null) return null;
+        if (sourceId is null)
+        {
+            return null;
+        }
+
         return mappings.TryGetValue(sourceId, out var mapped) ? mapped : null;
     }
 
@@ -3952,7 +4027,11 @@ public static class MigrationImporter
         string errorCode,
         string description)
     {
-        if (sourceId is null) return null;
+        if (sourceId is null)
+        {
+            return null;
+        }
+
         return mappings.TryGetValue(sourceId, out var mapped)
             ? mapped
             : throw new MigrationOperationException(
@@ -4128,8 +4207,16 @@ public static class MigrationImporter
             transaction);
         command.Parameters.AddWithValue("@id", staffUserId);
         using var reader = command.ExecuteReader();
-        if (!reader.Read()) return "claimant_unmapped";
-        if (!reader.GetBoolean(0)) return "claimant_inactive";
+        if (!reader.Read())
+        {
+            return "claimant_unmapped";
+        }
+
+        if (!reader.GetBoolean(0))
+        {
+            return "claimant_inactive";
+        }
+
         var role = reader.GetString(1);
         var organizationId = reader.GetInt32(2);
         var authenticationEmail = reader.IsDBNull(3) ? null : RealEmail(reader.GetString(3));
@@ -4221,7 +4308,11 @@ public static class MigrationImporter
         string? sourceValue,
         IReadOnlyDictionary<string, string> statuses)
     {
-        if (sourceValue is null) return null;
+        if (sourceValue is null)
+        {
+            return null;
+        }
+
         return statuses.TryGetValue(sourceValue, out var code) ? code : NormalizeStatus(sourceValue);
     }
 
@@ -4298,7 +4389,11 @@ public static class MigrationImporter
         IReadOnlyDictionary<string, string> values,
         string errorCode)
     {
-        if (reference is null) return null;
+        if (reference is null)
+        {
+            return null;
+        }
+
         return values.TryGetValue(reference, out var value)
             ? value
             : throw new MigrationOperationException(errorCode, $"Source reference {reference} cannot be resolved.");
@@ -4308,13 +4403,21 @@ public static class MigrationImporter
         string? sourceValue,
         IReadOnlyDictionary<string, string> closeReasons)
     {
-        if (sourceValue is null) return null;
+        if (sourceValue is null)
+        {
+            return null;
+        }
+
         return closeReasons.TryGetValue(sourceValue, out var code) ? code : NormalizeCloseReason(sourceValue);
     }
 
     private static JsonElement? ParseJsonElement(string? value)
     {
-        if (value is null) return null;
+        if (value is null)
+        {
+            return null;
+        }
+
         using var document = JsonDocument.Parse(value);
         return document.RootElement.Clone();
     }
@@ -4350,17 +4453,29 @@ public static class MigrationImporter
 
     private static string? NormalizeOptionalEnum(string? value, IReadOnlyCollection<string> allowed, string errorCode)
     {
-        if (value is null) return null;
+        if (value is null)
+        {
+            return null;
+        }
+
         var normalized = value.Trim();
         var canonical = allowed.FirstOrDefault(
             item => string.Equals(item, normalized, StringComparison.OrdinalIgnoreCase));
-        if (canonical is not null) return canonical;
+        if (canonical is not null)
+        {
+            return canonical;
+        }
+
         throw new MigrationOperationException(errorCode, $"Unknown source value: {value}");
     }
 
     private static DateTime? ParseDate(string? value, string errorCode)
     {
-        if (value is null) return null;
+        if (value is null)
+        {
+            return null;
+        }
+
         if (DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var date))
         {
             return date.Date;
@@ -4492,7 +4607,11 @@ public static class MigrationImporter
     private static string? RealEmail(string? value)
     {
         var clean = Clean(value);
-        if (clean is null || clean.EndsWith("@staff.asap.local", StringComparison.OrdinalIgnoreCase)) return null;
+        if (clean is null || clean.EndsWith("@staff.asap.local", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
         try
         {
             var address = new MailAddress(clean);

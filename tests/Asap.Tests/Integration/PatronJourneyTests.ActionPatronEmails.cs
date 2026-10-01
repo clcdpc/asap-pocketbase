@@ -1,6 +1,7 @@
 using Asap.Web.Features.Staff;
 using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Data;
+using Asap.Web.Infrastructure.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -21,6 +22,8 @@ public sealed partial class PatronJourneyTests
             services.AddSingleton<IPatronProvider>(patronProvider);
         }));
         await using var scope = scoped.Services.CreateAsyncScope();
+        scope.ServiceProvider.GetRequiredService<DeterministicTestingPatronProvider>()
+            .SetBib(9001, libraryId, new BibValidationResult(true, "Declared action-email BIB"));
         var contexts = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var seed = await contexts.CreateDbContextAsync();
         var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")

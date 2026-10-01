@@ -98,7 +98,10 @@ public sealed class EmailOperationsService(
         {
             var organization = await preflight.Organizations.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.Id == targetOrganizationId, cancellationToken);
-            if (organization?.IsActive != true) return new EmailOperationResult("organization_inactive");
+            if (organization?.IsActive != true)
+            {
+                return new EmailOperationResult("organization_inactive");
+            }
         }
 
         // Readiness may call the final transport/configuration boundary. Keep it outside
@@ -189,10 +192,18 @@ public sealed class EmailOperationsService(
         string? status,
         CancellationToken cancellationToken)
     {
-        if (!TryResolveScope(actor, organizationId, out var scope)) return [];
+        if (!TryResolveScope(actor, organizationId, out var scope))
+        {
+            return [];
+        }
+
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var query = context.EmailOutbox.AsNoTracking();
-        if (scope.HasValue) query = query.Where(item => item.OrganizationId == scope.Value);
+        if (scope.HasValue)
+        {
+            query = query.Where(item => item.OrganizationId == scope.Value);
+        }
+
         if (string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase))
         {
             query = query.Where(item => item.Status == "failed");
@@ -215,7 +226,11 @@ public sealed class EmailOperationsService(
         string? encodedVersion,
         CancellationToken cancellationToken)
     {
-        if (!CanOperate(actor)) return new EmailOperationResult("staff_scope_forbidden");
+        if (!CanOperate(actor))
+        {
+            return new EmailOperationResult("staff_scope_forbidden");
+        }
+
         if (!StaffVersion.TryDecode(encodedVersion, out var expectedVersion))
         {
             return new EmailOperationResult("invalid_version");
@@ -226,9 +241,15 @@ public sealed class EmailOperationsService(
             .Where(item => item.Id == id)
             .Select(item => new { item.OrganizationId })
             .SingleOrDefaultAsync(cancellationToken);
-        if (snapshot is null) return new EmailOperationResult("not_found");
+        if (snapshot is null)
+        {
+            return new EmailOperationResult("not_found");
+        }
+
         if (!TryResolveScope(actor, snapshot.OrganizationId, out _))
+        {
             return new EmailOperationResult("staff_scope_forbidden");
+        }
 
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         if (!await LockOrganizationsAsync(context, actor, snapshot.OrganizationId, cancellationToken))
@@ -251,9 +272,20 @@ public sealed class EmailOperationsService(
         var row = await context.EmailOutbox.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[EmailOutbox] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {id}")
             .SingleOrDefaultAsync(cancellationToken);
-        if (row is null) return new EmailOperationResult("not_found");
-        if (!row.RowVersion.SequenceEqual(expectedVersion)) return new EmailOperationResult("stale_version");
-        if (row.Status != "failed") return new EmailOperationResult("email_not_retryable");
+        if (row is null)
+        {
+            return new EmailOperationResult("not_found");
+        }
+
+        if (!row.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new EmailOperationResult("stale_version");
+        }
+
+        if (row.Status != "failed")
+        {
+            return new EmailOperationResult("email_not_retryable");
+        }
 
         row.Status = "pending";
         row.NextAttemptUtc = timeProvider.GetUtcNow().UtcDateTime;
@@ -299,7 +331,10 @@ public sealed class EmailOperationsService(
             var organization = await context.Organizations.FromSqlInterpolated(
                     $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {id}")
                 .SingleOrDefaultAsync(cancellationToken);
-            if (organization is null) return false;
+            if (organization is null)
+            {
+                return false;
+            }
         }
         return true;
     }

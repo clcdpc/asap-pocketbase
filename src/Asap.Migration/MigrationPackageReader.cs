@@ -39,7 +39,11 @@ internal static class MigrationPackageReader
         string collectionName)
     {
         var path = Path.Combine(package.RootPath, fileName);
-        if (!File.Exists(path)) return [];
+        if (!File.Exists(path))
+        {
+            return [];
+        }
+
         using var document = JsonDocument.Parse(File.ReadAllText(path));
         if (!document.RootElement.TryGetProperty("collections", out var collections) ||
             !collections.TryGetProperty(collectionName, out var rows))
@@ -152,7 +156,11 @@ internal sealed class SourceRow(IReadOnlyDictionary<string, JsonElement> values)
             return value.GetRawText();
         }
         var text = value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText();
-        if (string.IsNullOrWhiteSpace(text)) return null;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
         try
         {
             using var document = JsonDocument.Parse(text);
@@ -180,7 +188,11 @@ internal sealed class SourceRow(IReadOnlyDictionary<string, JsonElement> values)
     public string? JsonPropertyString(string name, string propertyName)
     {
         var json = JsonText(name);
-        if (json is null) return null;
+        if (json is null)
+        {
+            return null;
+        }
+
         using var document = JsonDocument.Parse(json);
         if (document.RootElement.ValueKind != JsonValueKind.Object)
         {
@@ -204,7 +216,11 @@ internal sealed class SourceRow(IReadOnlyDictionary<string, JsonElement> values)
     public int? Int32(string name)
     {
         var raw = String(name);
-        if (string.IsNullOrWhiteSpace(raw)) return null;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
         return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
             ? value
             : throw new MigrationOperationException("source_value_invalid", $"Source field {name} is not an integer.");
@@ -213,7 +229,11 @@ internal sealed class SourceRow(IReadOnlyDictionary<string, JsonElement> values)
     public bool Bool(string name, bool defaultValue = false)
     {
         var raw = String(name);
-        if (raw is null) return defaultValue;
+        if (raw is null)
+        {
+            return defaultValue;
+        }
+
         return raw.Trim().ToLowerInvariant() switch
         {
             "1" or "true" => true,
@@ -227,7 +247,11 @@ internal sealed class SourceRow(IReadOnlyDictionary<string, JsonElement> values)
     public DateTime? UtcDateTime(string name)
     {
         var raw = String(name);
-        if (raw is null) return null;
+        if (raw is null)
+        {
+            return null;
+        }
+
         if (!DateTimeOffset.TryParse(
                 raw,
                 CultureInfo.InvariantCulture,

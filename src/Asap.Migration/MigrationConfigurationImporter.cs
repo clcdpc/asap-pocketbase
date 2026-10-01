@@ -738,7 +738,11 @@ internal static class MigrationConfigurationImporter
         bool isSystem)
     {
         var values = SplitValues(sourceValue);
-        if (!isSystem && values.Count == 0) return;
+        if (!isSystem && values.Count == 0)
+        {
+            return;
+        }
+
         EnsureSet(connection, transaction, "CommonCreatorSet", organizationId);
         Execute(connection, transaction, "DELETE FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] = @organizationId;", organizationId);
         for (var index = 0; index < values.Count; index++)
@@ -804,7 +808,11 @@ internal static class MigrationConfigurationImporter
             var enabledField = $"externalSearch{slot}Enabled";
             var labelField = $"externalSearch{slot}Label";
             var urlField = $"externalSearch{slot}UrlTemplate";
-            if (!isSystem && !row.HasValue(enabledField) && !row.HasValue(labelField) && !row.HasValue(urlField)) continue;
+            if (!isSystem && !row.HasValue(enabledField) && !row.HasValue(labelField) && !row.HasValue(urlField))
+            {
+                continue;
+            }
+
             var providerKey = $"external_search_{slot}";
             long providerId;
             using (var lookup = new SqlCommand(
@@ -1059,7 +1067,11 @@ internal static class MigrationConfigurationImporter
             transaction);
         using var originsReader = originsCommand.ExecuteReader();
         var actualOrigins = new List<string>();
-        while (originsReader.Read()) actualOrigins.Add(originsReader.GetString(0));
+        while (originsReader.Read())
+        {
+            actualOrigins.Add(originsReader.GetString(0));
+        }
+
         EnsureConfiguration(expectedOrigins.SequenceEqual(actualOrigins, StringComparer.Ordinal), "patron embed origins");
         counter.Fields += expectedOrigins.Length;
     }
@@ -1071,7 +1083,11 @@ internal static class MigrationConfigurationImporter
         ReconciliationCounter counter)
     {
         var row = MigrationPackageReader.ReadRows(package, "polaris-settings.json", "polaris_settings").SingleOrDefault();
-        if (row is null) return;
+        if (row is null)
+        {
+            return;
+        }
+
         using var command = new SqlCommand(
             "SELECT [Host], [AccessId], [ProtectedApiKey], [StaffDomain], [AdminUser], [ProtectedAdminPassword], [WorkstationId], [SystemPolarisUserId] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;",
             connection,
@@ -1144,7 +1160,11 @@ internal static class MigrationConfigurationImporter
                 $"library:{group.Key}",
                 "fromName",
                 group.Select(row => new SenderCandidate(row.RequiredString("id"), row.Text("fromName"))));
-            if (expectedAddressForLibrary is null && expectedNameForLibrary is null) continue;
+            if (expectedAddressForLibrary is null && expectedNameForLibrary is null)
+            {
+                continue;
+            }
+
             using var command = new SqlCommand(
                 "SELECT [FromAddress], [FromName] FROM [asap].[EmailSettings] WHERE [OrganizationId] = @organizationId;",
                 connection,
@@ -1247,7 +1267,11 @@ internal static class MigrationConfigurationImporter
         command.Parameters.AddWithValue("@organizationId", organizationId);
         using var reader = command.ExecuteReader();
         var actual = new List<string>();
-        while (reader.Read()) actual.Add(reader.GetString(0));
+        while (reader.Read())
+        {
+            actual.Add(reader.GetString(0));
+        }
+
         EnsureConfiguration(expectedSet && expected.Count == 0 || expected.SequenceEqual(actual, StringComparer.Ordinal), "common creator set");
         counter.Relationships++;
         counter.Fields += expected.Count;
@@ -1305,7 +1329,11 @@ internal static class MigrationConfigurationImporter
             var enabledField = $"externalSearch{slot}Enabled";
             var labelField = $"externalSearch{slot}Label";
             var urlField = $"externalSearch{slot}UrlTemplate";
-            if (!isSystem && !row.HasValue(enabledField) && !row.HasValue(labelField) && !row.HasValue(urlField)) continue;
+            if (!isSystem && !row.HasValue(enabledField) && !row.HasValue(labelField) && !row.HasValue(urlField))
+            {
+                continue;
+            }
+
             var expectedEnabled = isSystem ? row.Bool(enabledField, defaults[slot - 1].Enabled) : row.NullableBool(enabledField);
             var expectedLabel = isSystem ? row.Text(labelField) ?? defaults[slot - 1].Label : ScopedText(row, labelField, false);
             var expectedUrl = isSystem ? row.Text(urlField) ?? defaults[slot - 1].Url : ScopedText(row, urlField, false);
@@ -1387,7 +1415,11 @@ internal static class MigrationConfigurationImporter
             var values = GetExpectedPatronValues(expected, organizationId);
             AddPatronOverrideValues(values, row);
             var raw = row.Text("publicationOptions");
-            if (!string.IsNullOrWhiteSpace(raw)) publicationRows[organizationId] = raw;
+            if (!string.IsNullOrWhiteSpace(raw))
+            {
+                publicationRows[organizationId] = raw;
+            }
+
             ReconcileCustomFields(
                 connection,
                 transaction,
@@ -1405,7 +1437,11 @@ internal static class MigrationConfigurationImporter
         foreach (var row in MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_library_settings"))
         {
             var organizationId = ResolveLibraryOrganization(row, "libraryOrganization", organizationIds);
-            if (modernOverrideOrganizations.Contains(organizationId)) continue;
+            if (modernOverrideOrganizations.Contains(organizationId))
+            {
+                continue;
+            }
+
             AddLegacyDuplicateLabelValues(GetExpectedPatronValues(expected, organizationId), row.JsonText("duplicateRequestStatusLabels"));
         }
 
@@ -1430,8 +1466,16 @@ internal static class MigrationConfigurationImporter
         if (!expected.TryGetValue(organizationId, out var values))
         {
             values = new Dictionary<string, string?>(StringComparer.Ordinal);
-            foreach (var (_, target) in PatronTextFields) values[target] = null;
-            foreach (var (_, target) in DuplicateLabelFields) values[target] = null;
+            foreach (var (_, target) in PatronTextFields)
+            {
+                values[target] = null;
+            }
+
+            foreach (var (_, target) in DuplicateLabelFields)
+            {
+                values[target] = null;
+            }
+
             expected.Add(organizationId, values);
         }
         return values;
@@ -1474,7 +1518,10 @@ internal static class MigrationConfigurationImporter
     {
         foreach (var (source, target) in PatronTextFields)
         {
-            if (isSystem || row.HasValue(source)) values[target] = ScopedText(row, source, isSystem);
+            if (isSystem || row.HasValue(source))
+            {
+                values[target] = ScopedText(row, source, isSystem);
+            }
         }
         if (isSystem)
         {
@@ -1534,7 +1581,11 @@ internal static class MigrationConfigurationImporter
         IReadOnlyDictionary<string, string?> expected,
         ReconciliationCounter counter)
     {
-        if (expected.Count == 0) return;
+        if (expected.Count == 0)
+        {
+            return;
+        }
+
         using var command = new SqlCommand(
             "SELECT [PageTitle], [BarcodeLabel], [PinLabel], [LoginPrompt], [LoginNote], [SuggestionFormNote], [NoEmailMessage], [SuccessTitle], [SuccessMessage], [AlreadySubmittedMessage], [EbookMessage], [EaudiobookMessage], [SuggestionStatusLabel], [OutstandingPurchaseStatusLabel], [PendingHoldStatusLabel], [HoldPlacedStatusLabel], [ClosedStatusLabel], [RejectedStatusLabel], [HoldCompletedStatusLabel], [HoldNotPickedUpStatusLabel], [ManualStatusLabel], [SilentStatusLabel] FROM [asap].[PatronSettings] WHERE [OrganizationId] = @organizationId;",
             connection,
@@ -1727,7 +1778,11 @@ internal static class MigrationConfigurationImporter
         ReconciliationCounter counter)
     {
         var formatRules = ParseRootObject(row.JsonText("patronFormatRules"));
-        if (formatRules is null) return;
+        if (formatRules is null)
+        {
+            return;
+        }
+
         var scopedFormats = ReadScopedFormats(connection, transaction, organizationId);
         foreach (var property in formatRules.Value.EnumerateObject())
         {
@@ -1792,7 +1847,11 @@ internal static class MigrationConfigurationImporter
         IReadOnlyDictionary<string, int> organizationIds)
     {
         var sourceValue = row.RequiredString(field);
-        if (organizationIds.TryGetValue(sourceValue, out var mapped) && mapped != 1) return mapped;
+        if (organizationIds.TryGetValue(sourceValue, out var mapped) && mapped != 1)
+        {
+            return mapped;
+        }
+
         if (int.TryParse(sourceValue, out var organizationId) &&
             organizationId != 1 &&
             organizationIds.Values.Contains(organizationId))
@@ -1815,7 +1874,11 @@ internal static class MigrationConfigurationImporter
         var explicitSourceId = row.String("sourceTemplateId");
         if (explicitSourceId is not null)
         {
-            if (mapped.TryGetValue(explicitSourceId, out var targetId)) return targetId;
+            if (mapped.TryGetValue(explicitSourceId, out var targetId))
+            {
+                return targetId;
+            }
+
             throw new MigrationOperationException(
                 "email_template_source_unresolved",
                 $"Email template {row.RequiredString("id")} has an unresolved source template.");
@@ -1857,7 +1920,11 @@ internal static class MigrationConfigurationImporter
         IReadOnlyCollection<string> allowed,
         string errorCode)
     {
-        if (value is null) return null;
+        if (value is null)
+        {
+            return null;
+        }
+
         var normalized = value.Trim();
         var canonical = allowed.FirstOrDefault(item =>
             string.Equals(item, normalized, StringComparison.OrdinalIgnoreCase));
@@ -2011,7 +2078,11 @@ internal static class MigrationConfigurationImporter
         Func<SourceRow, object?> expectedValue,
         string entity)
     {
-        if (!row.HasValue(sourceField)) return;
+        if (!row.HasValue(sourceField))
+        {
+            return;
+        }
+
         var expected = expectedValue(row);
         var matches = expected switch
         {
@@ -2795,7 +2866,11 @@ internal static class MigrationConfigurationImporter
         string[] allowed,
         string errorCode)
     {
-        if (value is null) return fallback;
+        if (value is null)
+        {
+            return fallback;
+        }
+
         var normalized = value.Trim();
         var canonical = allowed.FirstOrDefault(
             item => string.Equals(item, normalized, StringComparison.OrdinalIgnoreCase));
@@ -2822,7 +2897,11 @@ internal static class MigrationConfigurationImporter
         string? alt,
         DateTime updatedUtc)
     {
-        if (alt is null) return;
+        if (alt is null)
+        {
+            return;
+        }
+
         using var command = new SqlCommand(
             """
             IF EXISTS (SELECT 1 FROM [asap].[Branding] WHERE [OrganizationId] = @organizationId)
@@ -2841,10 +2920,22 @@ internal static class MigrationConfigurationImporter
     private static int ResolveScopedOrganization(SourceRow row, IReadOnlyDictionary<string, int> organizationIds)
     {
         var scope = row.RequiredString("scope").ToLowerInvariant();
-        if (scope == "system") return 1;
-        if (scope != "library") throw new MigrationOperationException("settings_scope_invalid", "A settings row has an invalid scope.");
+        if (scope == "system")
+        {
+            return 1;
+        }
+
+        if (scope != "library")
+        {
+            throw new MigrationOperationException("settings_scope_invalid", "A settings row has an invalid scope.");
+        }
+
         var sourceOrganization = row.RequiredString("libraryOrganization");
-        if (organizationIds.TryGetValue(sourceOrganization, out var organizationId) && organizationId != 1) return organizationId;
+        if (organizationIds.TryGetValue(sourceOrganization, out var organizationId) && organizationId != 1)
+        {
+            return organizationId;
+        }
+
         if (int.TryParse(sourceOrganization, out organizationId) &&
             organizationId != 1 &&
             organizationIds.Values.Contains(organizationId))
@@ -2919,7 +3010,11 @@ internal static class MigrationConfigurationImporter
 
     private static IReadOnlyDictionary<string, string> ParseObject(string? json)
     {
-        if (json is null) return new Dictionary<string, string>(StringComparer.Ordinal);
+        if (json is null)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
         using var document = JsonDocument.Parse(json);
         if (document.RootElement.ValueKind != JsonValueKind.Object)
         {
@@ -2949,7 +3044,11 @@ internal static class MigrationConfigurationImporter
 
     private static JsonElement? ParseRootObject(string? json)
     {
-        if (json is null) return null;
+        if (json is null)
+        {
+            return null;
+        }
+
         using var document = JsonDocument.Parse(json);
         if (document.RootElement.ValueKind != JsonValueKind.Object)
         {

@@ -397,7 +397,10 @@ public static class AdministrationEndpoints
         foreach (var queue in QueueNames.Configured.Append(QueueNames.HoldRecovery))
         {
             var snapshot = await progress.GetSnapshotAsync(queue, scope, cancellationToken);
-            if (snapshot is not null) items.Add(snapshot);
+            if (snapshot is not null)
+            {
+                items.Add(snapshot);
+            }
         }
         return Results.Json(new { scopeOrganizationId = scope, items });
     }

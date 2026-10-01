@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Asap.Web.Infrastructure.Security;
+using Asap.Web.Infrastructure.Testing;
 
 namespace Asap.Tests.Integration;
 
@@ -485,6 +486,11 @@ public sealed partial class PatronJourneyTests
             }));
 
         var pending = await SeedPendingHoldRequestAsync("workflow-phase-stop", scope);
+        var pendingBarcode = await ReadStringAsync(
+            "SELECT [Barcode] FROM [asap].[TitleRequest] WHERE [Id]=@id;", "@id", pending.RequestId);
+        workflowFactory.Services.GetRequiredService<DeterministicTestingPatronProvider>().AddPatron(
+            new PatronSnapshot(7001, pendingBarcode, "workflow@example.org", "Test", "Workflow",
+                1, "Adult", 101, scope, "Isolated fulfillment library", 101), [new(101, "Main Library")], scope);
         var placed = await SeedCompletedHoldIdentityAsync(
             "workflow-phase-stop-later",
             $"2000000000{Random.Shared.Next(100000, 999999)}",

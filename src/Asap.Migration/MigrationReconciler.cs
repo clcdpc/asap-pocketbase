@@ -98,7 +98,10 @@ public static class MigrationReconciler
         foreach (var table in tables)
         {
             Append(hash, $"table:{table.Name}");
-            foreach (var column in table.Columns) Append(hash, $"column:{column}");
+            foreach (var column in table.Columns)
+            {
+                Append(hash, $"column:{column}");
+            }
 
             using var command = connection.CreateCommand();
             var selected = string.Join(", ", table.Columns.Select(QuoteIdentifier));
@@ -161,7 +164,10 @@ public static class MigrationReconciler
             var column = reader.GetString(1);
             builder.Columns.Add(column);
             var keyOrdinal = reader.GetInt32(3);
-            if (keyOrdinal > 0) builder.Keys.Add((keyOrdinal, column));
+            if (keyOrdinal > 0)
+            {
+                builder.Keys.Add((keyOrdinal, column));
+            }
         }
         return builders.Select(item => new TargetTable(
                 item.Key,

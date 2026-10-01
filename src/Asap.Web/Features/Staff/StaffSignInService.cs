@@ -25,7 +25,11 @@ public sealed class StaffSignInService(IDbContextFactory<AsapDbContext> contextF
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var staff = await context.StaffUsers.SingleOrDefaultAsync(item => item.Id == staffUserId &&
             item.IsActive && item.NormalizedUserPrincipalName == normalizedEmail, cancellationToken);
-        if (staff is null) return;
+        if (staff is null)
+        {
+            return;
+        }
+
         var normalizedDisplayName = Clean(displayName);
         staff.EntraTenantId = tenantId;
         staff.EntraObjectId = objectId;
