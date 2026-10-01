@@ -45,7 +45,7 @@ assert.ok(!workflow.includes('\n    concurrency:'), 'build-test-package must not
 assert.ok(workflow.includes('Generate ephemeral SQL test credentials'), 'CI SQL credentials should be generated per run');
 assert.ok(!workflow.includes('Asap_Slice0_SQL_2026'), 'CI must not retain the historical hard-coded SQL password');
 assert.ok(workflow.includes('ref: ${{ github.sha }}'), 'the hosted job should check out the exact event SHA');
-assert.ok(workflow.includes('--minimum-expected-tests 699'), 'the non-browser real-SQL partition must retain its test-count guard');
+assert.ok(workflow.includes('--minimum-expected-tests 782'), 'the non-browser real-SQL partition must guard the current discovered test count');
 assert.ok(workflow.includes('run: npm test'), 'the frontend test gate must remain');
 assert.ok(workflow.includes('dotnet publish src/Asap.Web/Asap.Web.csproj'), 'Web publish must remain a hosted check');
 assert.ok(workflow.includes('dotnet publish src/Asap.Migration/Asap.Migration.csproj'), 'native migration publish check must remain');
@@ -135,6 +135,21 @@ assert.ok(!deployment.includes('SkipCertificateCheck'), 'readiness must use norm
 assert.ok(!deployment.includes('[asap].[DeploymentState]'), 'test deployment must not repurpose application DeploymentState');
 assert.ok(deployment.includes("'/p:BlockOnPossibleDataLoss=True'"), 'deployment must retain DACPAC data-loss protection');
 assert.ok(deployment.includes("'/p:DropObjectsNotInSource=False'"), 'deployment must preserve objects outside the DACPAC');
+assert.ok(deployment.includes("'/p:CreateNewDatabase=False'"), 'deployment must not recreate the database');
+assert.ok(deployment.includes("'/p:ScriptDatabaseOptions=False'"), 'DACPAC must leave generic environment options alone');
+assert.match(fs.readFileSync(path.join(root, 'src/Asap.Web/Infrastructure/Development/DacpacDeploymentService.cs'), 'utf8'),
+  /ScriptDatabaseOptions = false/, 'development publication must also preserve environment options');
+const recovery = deployment.indexOf('    Set-NonProductionDatabaseRecovery `', deployment.indexOf('$hostConfig = Read-HostConfiguration'));
+const exactSuccess = deployment.indexOf('The exact test-IIS artifact is already recorded and ready');
+assert.ok(recovery > deployment.indexOf('if ($hangfireVersion -gt 9)') && recovery < exactSuccess,
+  'recovery enforcement must follow host/schema preflight and precede exact-artifact success');
+assert.ok(recovery < deployment.indexOf('    if ($needsDacpac)'), 'recovery must run independently of DACPAC publication');
+assert.match(deployment.slice(recovery, exactSuccess), /-ConnectionString \$hostConfig\.AsapDatabaseConnectionString/);
+assert.strictEqual((deployment.match(/    Set-NonProductionDatabaseRecovery `/g) || []).length, 1, 'Hangfire must not receive a separate recovery command');
+assert.ok(!/RECOVERY\s+SIMPLE/i.test(postDeployment + fs.readFileSync(path.join(root, 'database/Asap.Database/Scripts/PreDeployment.sql'), 'utf8')),
+  'DACPAC scripts must not own recovery policy');
+assert.match(postDeployment, /ALTER DATABASE CURRENT SET COMPATIBILITY_LEVEL = 160;/);
+assert.ok(activation.includes('Environment.IsNonProduction=true') && activation.includes('SIMPLE recovery'));
 assert.ok(deployment.includes("[string] $ConfigPath = 'C:\\ProgramData\\clc-asap\\Config\\deployment.json'"), 'deployment should default to the conventional host config path');
 assert.ok(deployment.includes("(^|/)(application|deployment)\\.json$"), 'host-owned application and deployment JSON must be forbidden from the artifact');
 const archiveValidation = deployment.indexOf('$archive = Test-DeploymentArchive', deployment.indexOf('$hostConfig = Read-HostConfiguration'));

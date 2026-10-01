@@ -27,6 +27,16 @@ BEGIN
     UPDATE [asap].[PolarisSettings] SET [WorkstationId] = NULL WHERE [WorkstationId] <= 0;
     UPDATE [asap].[PolarisSettings] SET [SystemPolarisUserId] = NULL WHERE [SystemPolarisUserId] <= 0;
 END;
+-- The former native journal allowed system scope 1 as a previous/observed
+-- preference. It is absence, not a branch. Canonicalize before the stronger
+-- identity constraint while retaining the operation, state and all history.
+IF OBJECT_ID(N'[asap].[PickupPreferenceOperation]', N'U') IS NOT NULL
+BEGIN
+    UPDATE [asap].[PickupPreferenceOperation]
+        SET [FromPickupBranchId] = NULL WHERE [FromPickupBranchId] = 1;
+    UPDATE [asap].[PickupPreferenceOperation]
+        SET [ObservedPickupBranchId] = NULL WHERE [ObservedPickupBranchId] = 1;
+END;
 -- These former global member-library defaults are no longer target authority.
 -- Retire only these DACPAC-owned columns on a native schema-7 target; the row
 -- and its global credentials/integration identity remain intact.

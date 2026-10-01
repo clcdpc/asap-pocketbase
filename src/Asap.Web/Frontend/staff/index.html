@@ -298,7 +298,7 @@
               <fieldset id="settings-system-links" class="settings-fieldset" data-system-only="true">
                 <legend>System links</legend>
                 <div class="settings-grid">
-                  <label class="settings-field" data-setting-section="systemSettings" data-setting-key="staffUrl" data-system-only="true">
+                  <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="staffUrl" data-system-only="true">
                     <span>Staff URL</span><input id="system-staff-url" type="url" autocomplete="url">
                   </label>
                   <label class="settings-field" data-setting-section="systemSettings" data-setting-key="leapBibUrlPattern" data-system-only="true">
@@ -307,7 +307,7 @@
                   <label class="settings-field" data-setting-section="systemSettings" data-setting-key="leapPatronUrlPattern" data-system-only="true">
                     <span>Leap patron record URL pattern</span><input id="leap-patron-url-pattern" type="url">
                   </label>
-                  <label class="settings-field" data-setting-section="systemSettings" data-setting-key="formatIconUrlPattern" data-system-only="true">
+                  <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="formatIconUrlPattern" data-system-only="true">
                     <span>Format icon URL pattern</span><input id="format-icon-url-pattern" type="text">
                   </label>
                   <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="patronEmbedAllowedOrigins" data-system-only="true">
@@ -336,17 +336,30 @@
                 <p>System-only integration identity and reference synchronization.</p>
               </div>
               <fieldset class="settings-fieldset" data-system-only="true">
-                <legend>Polaris connection</legend>
+                <legend>Polaris API</legend>
                 <div class="settings-grid">
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="host" data-system-only="true"><span>Host</span><input id="polaris-host" type="text"></label>
+                  <label class="settings-field wide" data-setting-section="polaris" data-setting-key="host" data-system-only="true"><span>Host</span><input id="polaris-host" type="text"></label>
                   <label class="settings-field" data-setting-section="polaris" data-setting-key="accessId" data-system-only="true"><span>Access ID</span><input id="polaris-access-id" type="text"></label>
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="staffDomain" data-system-only="true"><span>Staff domain</span><input id="polaris-domain" type="text"></label>
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="adminUser" data-system-only="true"><span>System staff username</span><input id="polaris-admin-user" type="text"></label>
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="workstationId" data-system-only="true"><span>Polaris workstation ID</span><input id="polaris-workstation-id" type="number" min="1"></label>
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="systemPolarisUserId" data-system-only="true"><span>System Polaris user ID</span><input id="polaris-system-user-id" type="number" min="1"></label>
                   <label class="settings-field" data-setting-section="polaris" data-setting-key="apiKey" data-secret="true" data-system-only="true"><span>API key</span><input id="polaris-api-key" type="password" autocomplete="new-password"></label>
+                </div>
+              </fieldset>
+              <fieldset class="settings-fieldset" data-system-only="true">
+                <legend>System staff account</legend>
+                <div class="settings-grid">
+                  <label class="settings-field wide" data-setting-section="polaris" data-setting-key="staffDomain" data-system-only="true"><span>Staff domain</span><input id="polaris-domain" type="text"></label>
+                  <label class="settings-field" data-setting-section="polaris" data-setting-key="adminUser" data-system-only="true"><span>System staff username</span><input id="polaris-admin-user" type="text"></label>
                   <label class="settings-field" data-setting-section="polaris" data-setting-key="adminPassword" data-secret="true" data-system-only="true"><span>System staff password</span><input id="polaris-admin-pass" type="password" autocomplete="new-password"></label>
                 </div>
+              </fieldset>
+              <fieldset class="settings-fieldset" data-system-only="true">
+                <legend>System identity</legend>
+                <div class="settings-grid">
+                  <label class="settings-field" data-setting-section="polaris" data-setting-key="workstationId" data-system-only="true"><span>Polaris workstation ID</span><input id="polaris-workstation-id" type="number" min="1"></label>
+                  <label class="settings-field" data-setting-section="polaris" data-setting-key="systemPolarisUserId" data-system-only="true"><span>System Polaris user ID</span><input id="polaris-system-user-id" type="number" min="1"></label>
+                </div>
+              </fieldset>
+              <fieldset class="settings-fieldset" data-system-only="true">
+                <legend>Connection and synchronization</legend>
                 <div class="form-actions settings-inline-actions">
                   <button id="btn-test-polaris" class="secondary-button" type="button"><i class="fa fa-plug" aria-hidden="true"></i> Test connection</button>
                   <button id="btn-sync-organizations" class="secondary-button" type="button"><i class="fa fa-refresh" aria-hidden="true"></i> Sync organizations</button>
@@ -366,8 +379,13 @@
                 <div class="settings-grid">
                   <label class="settings-field" data-setting-section="email" data-setting-key="fromAddress"><span>From email address</span><input id="email-from-address" type="email" autocomplete="email"></label>
                   <label class="settings-field" data-setting-section="email" data-setting-key="fromName"><span>From name</span><input id="email-from-name" type="text"></label>
-                  <label class="settings-field" data-setting-section="email" data-setting-key="postmarkToken" data-secret="true" data-system-only="true"><span>Postmark server token (system only)</span><input id="email-postmark-token" type="password" autocomplete="new-password"></label>
-                  <label class="settings-field" data-system-only="true"><span>Clear stored Postmark token</span><input id="email-clear-postmark-token" type="checkbox"></label>
+                </div>
+              </fieldset>
+              <fieldset class="settings-fieldset" data-system-only="true">
+                <legend>Postmark connection</legend>
+                <div class="settings-grid">
+                  <label class="settings-field wide" data-setting-section="email" data-setting-key="postmarkToken" data-secret="true" data-system-only="true"><span>Postmark server token (system only)</span><input id="email-postmark-token" type="password" autocomplete="new-password"></label>
+                  <label class="settings-field wide check-field" data-system-only="true"><input id="email-clear-postmark-token" type="checkbox"><span>Clear stored Postmark token</span></label>
                 </div>
                 <p id="email-token-status" class="settings-result"></p>
               </fieldset>
@@ -381,7 +399,7 @@
               <fieldset class="settings-fieldset" data-settings-ignore="true">
                 <legend>Add staff user</legend>
                 <div class="settings-grid staff-access-form">
-                  <label class="settings-field"><span>Email</span><input id="staff-add-email" type="email" autocomplete="username"></label>
+                  <label class="settings-field wide"><span>Email</span><input id="staff-add-email" type="email" autocomplete="username"></label>
                   <label class="settings-field"><span>Role</span><select id="staff-add-role"></select></label>
                   <label class="settings-field"><span>Library</span><select id="staff-add-organization"></select></label>
                 </div>
@@ -421,13 +439,14 @@
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="allowAnyRegisteredCardLogin"><input id="allow-any-registered-card-login" type="checkbox"><span>Allow any registered card login</span></label>
                   <p class="settings-callout wide">When enabled, an eligible patron from another library can use this portal. Their suggestion follows this portal library's settings and workflow, not their home library's. <a id="cross-library-public-url" href="#" hidden>Open this library's patron portal</a></p>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="allowPatronAutoholdOptOut"><input id="allow-patron-autohold-opt-out" type="checkbox"><span>Allow patron auto-hold opt out</span></label>
-                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="patronCodeEligibilityEnabled"><input id="patron-code-eligibility-enabled" type="checkbox"><span>Require eligible patron code</span></label>
+                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="autoPromote"><input id="auto-promote" type="checkbox"><span>Automatically promote approved purchases</span></label>
+                  <label class="settings-field wide check-field" data-setting-section="workflow" data-setting-key="patronCodeEligibilityEnabled"><input id="patron-code-eligibility-enabled" type="checkbox"><span>Require eligible patron code</span></label>
                   <label class="settings-field wide" data-setting-section="workflow" data-setting-key="patronCodeEligibilityMessage"><span>Patron-code eligibility message</span><textarea id="patron-code-eligibility-message" rows="3"></textarea></label>
                   <p class="settings-callout wide">The suggestion limit message supports <code>{{next_available_date}}</code>. The patron-code eligibility message is displayed as written.</p>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset">
-                <legend>Timeouts and promotion</legend>
+                <legend>Timeouts</legend>
                 <div class="settings-grid">
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="outstandingTimeoutEnabled"><input id="outstanding-timeout-enabled" type="checkbox"><span>Auto-reject unreviewed suggestions</span></label>
                   <label class="settings-field" data-setting-section="workflow" data-setting-key="outstandingTimeoutDays"><span>Unreviewed suggestion days</span><input id="outstanding-timeout-days" type="number" min="1" max="3650"></label>
@@ -439,7 +458,6 @@
                   <label class="settings-field" data-setting-section="workflow" data-setting-key="pendingHoldTimeoutDays"><span>Pending hold days</span><input id="pending-hold-timeout-days" type="number" min="1" max="3650"></label>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="additionalCopyTimeoutEnabled"><input id="additional-copy-timeout-enabled" type="checkbox"><span>Close open additional-copy tasks automatically</span></label>
                   <label class="settings-field" data-setting-section="workflow" data-setting-key="additionalCopyTimeoutDays"><span>Additional-copy days</span><input id="additional-copy-timeout-days" type="number" min="1" max="3650"></label>
-                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="autoPromote"><input id="auto-promote" type="checkbox"><span>Automatically promote approved purchases</span></label>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset">
@@ -494,7 +512,7 @@
                 <legend>Patron text</legend>
                 <p>Rendered patron text supports <code>{{barcode_label}}</code> and <code>{{pin_label}}</code> for the configured labels. Examples include the page title, login and form notes, common-creator text, and success messages. The already-submitted message also supports <code>{{duplicate_date}}</code>, <code>{{duplicate_status}}</code>, <code>{{duplicate_title}}</code>, <code>{{duplicate_author}}</code>, <code>{{duplicate_format}}</code>, and <code>{{duplicate_match_type}}</code>; the legacy <code>{{title}}</code>, <code>{{author}}</code>, and <code>{{format}}</code> aliases also work there.</p>
                 <div class="settings-grid">
-                  <label class="settings-field" data-setting-section="patron" data-setting-key="pageTitle"><span>Page title</span><input id="patron-page-title" type="text"></label>
+                  <label class="settings-field wide" data-setting-section="patron" data-setting-key="pageTitle"><span>Page title</span><input id="patron-page-title" type="text"></label>
                   <label class="settings-field" data-setting-section="patron" data-setting-key="barcodeLabel"><span>Barcode label</span><input id="patron-barcode-label" type="text"></label>
                   <label class="settings-field" data-setting-section="patron" data-setting-key="pinLabel"><span>PIN label</span><input id="patron-pin-label" type="text"></label>
                   <label class="settings-field wide" data-setting-section="patron" data-setting-key="loginPrompt"><span>Login prompt</span><textarea id="patron-login-prompt" rows="2"></textarea></label>

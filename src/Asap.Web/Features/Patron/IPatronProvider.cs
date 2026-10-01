@@ -64,7 +64,7 @@ public sealed record IdentifierLookupResult(
 
 public sealed class PatronAuthenticationException(string message) : Exception(message);
 
-public sealed class PolarisOperationalException(string code, string message, Exception? innerException = null)
+public class PolarisOperationalException(string code, string message, Exception? innerException = null)
     : Exception(message, innerException)
 {
     public string Code { get; } = code;

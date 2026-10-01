@@ -20,18 +20,21 @@ CREATE TABLE [asap].[PickupPreferenceOperation]
     [ConfirmedByRead] bit NOT NULL,
     [ObservedPickupBranchId] int NULL,
     [ResolvedByStaffUserId] bigint NULL,
+    [FailureCode] nvarchar(80) NULL,
     [CompletedUtc] datetime2(7) NULL,
     CONSTRAINT [FK_PickupPreferenceOperation_Organization] FOREIGN KEY ([LibraryOrganizationId]) REFERENCES [asap].[Organization]([Id]),
     CONSTRAINT [CK_PickupPreferenceOperation_Identity] CHECK
-        ([PatronId] > 0 AND [LibraryOrganizationId] > 1 AND [ToPickupBranchId] > 0
-         AND ([FromPickupBranchId] IS NULL OR [FromPickupBranchId] > 0)
-         AND ([ObservedPickupBranchId] IS NULL OR [ObservedPickupBranchId] > 0)),
+        ([PatronId] > 0 AND [LibraryOrganizationId] > 1 AND [ToPickupBranchId] > 1
+         AND ([FromPickupBranchId] IS NULL OR [FromPickupBranchId] > 1)
+         AND ([ObservedPickupBranchId] IS NULL OR [ObservedPickupBranchId] > 1)),
     CONSTRAINT [CK_PickupPreferenceOperation_Origin] CHECK
         ([Origin] IN (N'request', N'patron_suggestion', N'staff_suggestion')),
     CONSTRAINT [CK_PickupPreferenceOperation_State] CHECK
         (([State] = 1 AND [CompletedUtc] IS NULL AND [ProviderConfirmedUtc] IS NULL)
          OR ([State] = 2 AND [CompletedUtc] IS NULL AND [ProviderConfirmedUtc] IS NOT NULL AND [DispatchFinishedUtc] IS NOT NULL)
-         OR ([State] = 3 AND [CompletedUtc] IS NOT NULL AND [ProviderConfirmedUtc] IS NOT NULL AND [DispatchFinishedUtc] IS NOT NULL))
+         OR ([State] = 3 AND [CompletedUtc] IS NOT NULL AND [ProviderConfirmedUtc] IS NOT NULL AND [DispatchFinishedUtc] IS NOT NULL)
+         OR ([State] = 4 AND [CompletedUtc] IS NOT NULL AND [ProviderConfirmedUtc] IS NULL
+             AND [DispatchFinishedUtc] IS NOT NULL AND [FailureCode] IS NOT NULL))
 );
 GO
 

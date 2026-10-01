@@ -60,14 +60,14 @@ public sealed partial class PolarisPatronProvider
                 StaffSearchAttempt inspected;
                 try
                 {
-                    var response = await client.BibSearchAsync(options, cancellationToken);
+                    var response = await client.CallAsync(() => client.BibSearchAsync(options, cancellationToken), cancellationToken);
                     inspected = InspectStaffSearchResponse(response);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     throw;
                 }
-                catch (Exception)
+                catch (Exception exception) when (IsExpectedProviderFailure(exception))
                 {
                     failed = true;
                     continue;
@@ -133,7 +133,7 @@ public sealed partial class PolarisPatronProvider
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (IsExpectedProviderFailure(exception))
         {
             throw Operational("polaris_bib_search_failed", exception);
         }
@@ -279,7 +279,7 @@ public sealed partial class PolarisPatronProvider
         try
         {
             var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
-            var response = await client.HoldingsGetAsync(bibId, cancellationToken);
+            var response = await client.CallAsync(() => client.HoldingsGetAsync(bibId, cancellationToken), cancellationToken);
             var data = response.Data;
             if (response.Response?.IsSuccessStatusCode != true || data is null)
             {
@@ -343,7 +343,7 @@ public sealed partial class PolarisPatronProvider
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (IsExpectedProviderFailure(exception))
         {
             throw Operational("polaris_bib_holdings_failed", exception);
         }

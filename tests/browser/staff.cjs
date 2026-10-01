@@ -3048,6 +3048,71 @@ async function runSettingsUnconfirmedSessionCase(browser, args) {
   }
 }
 
+async function runSettingsLayout(browser, args, axeSource, report) {
+  const sections = [
+    { name: 'start', pairs: [['leap-bib-url-pattern', 'leap-patron-url-pattern']], wide: ['system-staff-url', 'format-icon-url-pattern'] },
+    { name: 'polaris', pairs: [['polaris-access-id', 'polaris-api-key'], ['polaris-admin-user', 'polaris-admin-pass'], ['polaris-workstation-id', 'polaris-system-user-id']], wide: ['polaris-host', 'polaris-domain'] },
+    { name: 'smtp', pairs: [['email-from-address', 'email-from-name']], wide: ['email-postmark-token', 'email-clear-postmark-token'] },
+    { name: 'staff', pairs: [['staff-add-role', 'staff-add-organization']], wide: ['staff-add-email'] },
+    { name: 'patron', pairs: [['patron-barcode-label', 'patron-pin-label']], wide: ['patron-page-title'] },
+    { name: 'workflow', pairs: [
+      ['outstanding-timeout-enabled', 'outstanding-timeout-days'],
+      ['outstanding-timeout-send-email', 'outstanding-timeout-rejection-template-id'],
+      ['hold-pickup-timeout-enabled', 'hold-pickup-timeout-days'],
+      ['pending-hold-timeout-enabled', 'pending-hold-timeout-days'],
+      ['additional-copy-timeout-enabled', 'additional-copy-timeout-days']
+    ], wide: [] }
+  ];
+  for (const [name, viewport] of [['desktop', { width: 1280, height: 900 }], ['mobile', { width: 390, height: 844 }]]) {
+    const { context, traffic } = await createContext(browser, viewport, args.baseOrigin, args.superIdentity);
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    try {
+      for (const section of sections) {
+        await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=system#settings-${section.name}`,
+          { waitUntil: 'networkidle' });
+        await page.locator(`#settings-${section.name}`).waitFor({ state: 'visible' });
+        await page.waitForFunction(() => !document.getElementById('settings-form').hidden);
+        const layout = await page.evaluate(section => {
+          const bounds = id => {
+            const label = document.getElementById(id).closest('label');
+            const rect = label.getBoundingClientRect();
+            return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom,
+              width: rect.width, gridWidth: label.closest('.settings-grid').getBoundingClientRect().width };
+          };
+          return { pairs: section.pairs.map(pair => pair.map(bounds)), wide: section.wide.map(bounds) };
+        }, section);
+        for (const [first, second] of layout.pairs) {
+          if (name === 'desktop') {
+            assert.ok(Math.abs(first.top - second.top) < 1 && first.right < second.left,
+              `${section.name} should place related controls together in DOM order`);
+          } else {
+            assert.ok(first.bottom <= second.top && Math.abs(first.left - second.left) < 1,
+              `${section.name} should collapse related controls into one column`);
+          }
+        }
+        for (const field of layout.wide) {
+          assert.ok(Math.abs(field.width - field.gridWidth) < 1, `${section.name} full-width field has an arbitrary partner`);
+        }
+        if (section.name === 'polaris') {
+          await page.locator('#polaris-host').focus();
+          for (const id of ['polaris-access-id', 'polaris-api-key', 'polaris-domain', 'polaris-admin-user',
+            'polaris-admin-pass', 'polaris-workstation-id', 'polaris-system-user-id']) {
+            await page.keyboard.press('Tab');
+            assert.equal(await page.evaluate(() => document.activeElement.id), id);
+          }
+        }
+        await scan(page, axeSource, args.artifactRoot, report, name, `settings-${section.name}-layout`);
+      }
+      assert.deepEqual(errors, [], `${name} settings raised browser errors`);
+      assert.equal(traffic.externalRequests, 0, `${name} settings requested external assets`);
+    } finally {
+      await context.close();
+    }
+  }
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
   await fs.mkdir(args.artifactRoot, { recursive: true });
@@ -3070,7 +3135,8 @@ async function main() {
     await runScopedBlocked(browser, args, axeSource, report);
     await runStaffSuggestion(browser, args, axeSource, report);
     await runClosedDeletionControls(browser, args, axeSource, report);
-    assert.equal(report.states.length, 31, 'Expected thirty-one major staff browser states');
+    await runSettingsLayout(browser, args, axeSource, report);
+    assert.equal(report.states.length, 43, 'Expected forty-three major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),

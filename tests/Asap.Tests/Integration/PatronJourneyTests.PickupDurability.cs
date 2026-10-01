@@ -455,6 +455,7 @@ public sealed partial class PatronJourneyTests
         public int Writes { get; private set; }
         public int Reads { get; private set; }
         public bool FailBeforeEffect { get; set; }
+        public Exception? NoEffectFailure { get; set; }
         public Func<CancellationToken, Task>? AfterEffect { get; set; }
         public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken token) =>
             throw new InvalidOperationException("Authentication is not part of this scenario.");
@@ -483,6 +484,10 @@ public sealed partial class PatronJourneyTests
             Check(barcode, context, token);
             Assert.AreEqual(SecondBranch, branch);
             Writes++;
+            if (NoEffectFailure is not null)
+            {
+                throw NoEffectFailure;
+            }
             if (FailBeforeEffect)
             {
                 throw new PolarisOperationalException("testing_uncertain_pickup", "No confirmed provider result.");

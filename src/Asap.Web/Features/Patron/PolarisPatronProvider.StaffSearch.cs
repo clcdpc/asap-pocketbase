@@ -14,12 +14,12 @@ public sealed partial class PolarisPatronProvider
         try
         {
             var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
-            var response = await client.PatronSearchAsync(
+            var response = await client.CallAsync(() => client.PatronSearchAsync(
                 "PATNF=" + QuoteSearch(CleanSearch(query)),
                 pageSize: 10,
                 sortBy: PatronSortKeys.PATN,
                 orgId: organizationId,
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken), cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             var data = response.Data;
             if (response.Response?.IsSuccessStatusCode != true || data is null ||
@@ -69,7 +69,7 @@ public sealed partial class PolarisPatronProvider
             cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
-        catch (Exception exception) when (exception is not PolarisOperationalException)
+        catch (Exception exception) when (IsExpectedProviderFailure(exception))
         {
             cancellationToken.ThrowIfCancellationRequested();
             throw Operational("polaris_patron_search_failed", exception);

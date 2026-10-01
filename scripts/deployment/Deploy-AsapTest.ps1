@@ -376,6 +376,8 @@ function Read-ExternalConfiguration {
         throw 'The external application configuration is missing or invalid.'
     }
 
+    Assert-NonProductionConfiguration -Configuration $configuration
+
     if (-not (Test-Path -LiteralPath $keysPath -PathType Container)) {
         throw 'The external Data Protection key directory is unavailable.'
     }
@@ -386,6 +388,18 @@ function Read-ExternalConfiguration {
     }
 
     return $configuration
+}
+
+function Assert-NonProductionConfiguration {
+    param([Parameter(Mandatory = $true)] [object] $Configuration)
+
+    $environment = $Configuration.PSObject.Properties['Environment']
+    $marker = if ($null -ne $environment -and $null -ne $environment.Value) {
+        $environment.Value.PSObject.Properties['IsNonProduction']
+    }
+    if ($null -eq $marker -or $marker.Value -isnot [bool] -or $marker.Value -ne $true) {
+        throw 'Test deployment requires external Environment.IsNonProduction to be exactly true.'
+    }
 }
 
 function Get-SqlConnectionDetails {
@@ -485,7 +499,7 @@ function Read-HostConfiguration {
         throw 'Host configuration, state, staging and backup paths must be outside the replaceable web path.'
     }
 
-    [void] (Read-ExternalConfiguration -ApplicationConfigPath $applicationConfigPath -DeploymentPath $deploymentPath)
+    $externalConfiguration = Read-ExternalConfiguration -ApplicationConfigPath $applicationConfigPath -DeploymentPath $deploymentPath
 
     $readinessText = Get-RequiredText -Object $config -Name 'ReadinessUrl'
     try {
@@ -524,6 +538,7 @@ function Read-HostConfiguration {
         StagingRoot = $stagingRoot
         BackupRoot = $backupRoot
         ExternalApplicationConfigPath = $applicationConfigPath
+        ExternalConfiguration = $externalConfiguration
         ReadinessUrl = $readinessUri.AbsoluteUri
         AsapDatabaseConnectionString = Get-RequiredText -Object $config -Name 'AsapDatabaseConnectionString'
         HangfireDatabaseConnectionString = Get-RequiredText -Object $config -Name 'HangfireDatabaseConnectionString'
@@ -557,6 +572,50 @@ function Get-SqlCmdArguments {
     }
 
     return $arguments
+}
+
+function Get-DatabaseRecoveryModel {
+    param(
+        [Parameter(Mandatory = $true)] [string] $SqlCmdPath,
+        [Parameter(Mandatory = $true)] [string] $ConnectionString
+    )
+
+    $arguments = @(Get-SqlCmdArguments -ConnectionString $ConnectionString)
+    $output = & $SqlCmdPath @arguments '-Q' 'SET NOCOUNT ON; SELECT recovery_model_desc FROM sys.databases WHERE database_id = DB_ID();' 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw 'ASAP database recovery-model query failed.'
+    }
+    $models = @($output | ForEach-Object { ([string] $_).Trim() } | Where-Object { $_ -cmatch '^(SIMPLE|FULL|BULK_LOGGED)$' })
+    if ($models.Count -ne 1) {
+        throw 'ASAP database recovery-model query returned no unique usable model.'
+    }
+    return $models[0]
+}
+
+function Set-NonProductionDatabaseRecovery {
+    param(
+        [Parameter(Mandatory = $true)] [object] $ExternalConfiguration,
+        [Parameter(Mandatory = $true)] [string] $SqlCmdPath,
+        [Parameter(Mandatory = $true)] [string] $ConnectionString
+    )
+
+    Assert-NonProductionConfiguration -Configuration $ExternalConfiguration
+    $model = Get-DatabaseRecoveryModel -SqlCmdPath $SqlCmdPath -ConnectionString $ConnectionString
+    if ($model -eq 'SIMPLE') {
+        Write-Host 'Non-production ASAP database recovery is already SIMPLE; no change required.'
+        return
+    }
+
+    $arguments = @(Get-SqlCmdArguments -ConnectionString $ConnectionString)
+    $null = & $SqlCmdPath @arguments '-Q' 'ALTER DATABASE CURRENT SET RECOVERY SIMPLE;' 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not change the non-production ASAP database recovery model from $model to SIMPLE."
+    }
+    $verified = Get-DatabaseRecoveryModel -SqlCmdPath $SqlCmdPath -ConnectionString $ConnectionString
+    if ($verified -ne 'SIMPLE') {
+        throw "Non-production ASAP database recovery must be SIMPLE after enforcement (actual $verified)."
+    }
+    Write-Host "Changed non-production ASAP database recovery from $model to SIMPLE and verified it."
 }
 
 function Get-HangfireSchemaVersion {
@@ -655,7 +714,8 @@ function Invoke-DacpacPublish {
         "/TargetConnectionString:$ConnectionString",
         '/p:BlockOnPossibleDataLoss=True',
         '/p:CreateNewDatabase=False',
-        '/p:DropObjectsNotInSource=False'
+        '/p:DropObjectsNotInSource=False',
+        '/p:ScriptDatabaseOptions=False'
     )
     & $SqlPackagePath @arguments
     if ($LASTEXITCODE -ne 0) {
@@ -871,6 +931,11 @@ try {
     if ($hangfireVersion -gt 9) {
         throw "Hangfire schema version $hangfireVersion is newer than the tested version 9."
     }
+
+    Set-NonProductionDatabaseRecovery `
+        -ExternalConfiguration $hostConfig.ExternalConfiguration `
+        -SqlCmdPath $hostConfig.SqlCmdPath `
+        -ConnectionString $hostConfig.AsapDatabaseConnectionString
 
     if ($null -ne $state -and
         (Get-ManifestText -Manifest $state -Name 'deploymentZipSha256').Equals($archive.ZipHash, [StringComparison]::OrdinalIgnoreCase) -and

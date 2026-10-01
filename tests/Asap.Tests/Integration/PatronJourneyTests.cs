@@ -509,7 +509,7 @@ public sealed partial class PatronJourneyTests
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(31, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(43, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
             var analytics = report.RootElement.GetProperty("analytics");
             Assert.AreEqual("all", analytics.GetProperty("desktopSuperAdminScope").GetString());
             Assert.AreEqual("last90", analytics.GetProperty("desktopRange").GetString());
@@ -8254,6 +8254,7 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"OrgID":3}]}""")]
     [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":0}]}""")]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":1}]}""")]
     [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":-1}]}""")]
     [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":2147483648}]}""")]
     [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":3,"id":4}]}""")]
@@ -8276,7 +8277,8 @@ public sealed partial class PatronJourneyTests
         {
             (RequestField: "\"RequestPickupBranchID\":200,", Expected: (int?)200),
             (RequestField: string.Empty, Expected: (int?)300),
-            (RequestField: "\"RequestPickupBranchID\":0,", Expected: (int?)0)
+            (RequestField: "\"RequestPickupBranchID\":0,", Expected: (int?)null),
+            (RequestField: "\"RequestPickupBranchID\":1,", Expected: (int?)null)
         };
 
         foreach (var testCase in cases)
@@ -10544,7 +10546,7 @@ public sealed partial class PatronJourneyTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private async Task<PolarisPatronProvider> CreatePolarisProviderAsync(HttpMessageHandler handler)
+    private async Task<PolarisPatronProvider> CreatePolarisProviderAsync(HttpMessageHandler handler, string accessId = "test-access")
     {
         var services = factory!.Services;
         var protector = services.GetRequiredService<IntegrationCredentialProtector>();
@@ -10556,7 +10558,7 @@ public sealed partial class PatronJourneyTests
                 """
                 UPDATE [asap].[PolarisSettings]
                 SET [Host] = N'https://polaris.invalid',
-                    [AccessId] = N'test-access',
+                    [AccessId] = @accessId,
                     [ProtectedApiKey] = @apiKey,
                     [StaffDomain] = N'TEST',
                     [AdminUser] = N'test-admin',
@@ -10566,6 +10568,7 @@ public sealed partial class PatronJourneyTests
                     [UpdatedUtc] = SYSUTCDATETIME()
                 WHERE [OrganizationId] = 1;
                 """;
+            command.Parameters.AddWithValue("@accessId", accessId);
             command.Parameters.AddWithValue("@apiKey", protector.Protect("test-api-key"));
             command.Parameters.AddWithValue("@password", protector.Protect("test-password"));
             await command.ExecuteNonQueryAsync();

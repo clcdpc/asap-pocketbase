@@ -204,6 +204,104 @@ public sealed partial class DatabaseBaselineTests
     }
 
     [TestMethod]
+    [DataRow("SIMPLE")]
+    [DataRow("FULL")]
+    public async Task DacpacPublicationPreservesEnvironmentRecoveryAndAppliesExplicitCompatibility(string recovery)
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        var original = Convert.ToString(await Scalar(connection, "SELECT recovery_model_desc FROM sys.databases WHERE database_id = DB_ID();"));
+        try
+        {
+            // Both values come from the fixed test cases, against this fixture's
+            // generated local database. No deployment host/database is involved.
+            await NonQuery(connection, $"ALTER DATABASE CURRENT SET RECOVERY {recovery}; ALTER DATABASE CURRENT SET COMPATIBILITY_LEVEL = 150;");
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+            Assert.AreEqual(recovery, Convert.ToString(await Scalar(connection, "SELECT recovery_model_desc FROM sys.databases WHERE database_id = DB_ID();")));
+            Assert.AreEqual(160, Convert.ToInt32(await Scalar(connection, "SELECT compatibility_level FROM sys.databases WHERE database_id = DB_ID();")));
+        }
+        finally
+        {
+            Assert.IsTrue(original is "FULL" or "SIMPLE" or "BULK_LOGGED");
+            await NonQuery(connection, $"ALTER DATABASE CURRENT SET RECOVERY {original};");
+        }
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task NativePickupJournalUpgradeNormalizesSystemPreferenceWithoutLosingEvidence(bool completed)
+    {
+        var operationId = Guid.NewGuid();
+        var observedUtc = new DateTime(2026, 9, 30, 12, 0, 0, DateTimeKind.Utc);
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        try
+        {
+            // This is the prior native schema-10 invariant, which accepted system
+            // 1 as the provider's previous/observed preference. The target branch
+            // still uses a real native ID, as required by the mutation service.
+            await NonQuery(connection, """
+                ALTER TABLE [asap].[PickupPreferenceOperation] DROP CONSTRAINT [CK_PickupPreferenceOperation_Identity];
+                ALTER TABLE [asap].[PickupPreferenceOperation] ADD CONSTRAINT [CK_PickupPreferenceOperation_Identity] CHECK
+                    ([PatronId] > 0 AND [LibraryOrganizationId] > 1 AND [ToPickupBranchId] > 0
+                     AND ([FromPickupBranchId] IS NULL OR [FromPickupBranchId] > 0)
+                     AND ([ObservedPickupBranchId] IS NULL OR [ObservedPickupBranchId] > 0));
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (775511, N'Journal upgrade fixture', 1);
+                """);
+            await using (var insert = new SqlCommand("""
+                INSERT INTO [asap].[PickupPreferenceOperation]
+                    ([Id], [Barcode], [PatronId], [LibraryOrganizationId], [Origin], [FromPickupBranchId],
+                     [FromPickupBranchName], [ToPickupBranchId], [ToPickupBranchName], [State], [DispatchStartedUtc],
+                     [DispatchFinishedUtc], [ProviderConfirmedUtc], [ConfirmedByRead], [ObservedPickupBranchId], [CompletedUtc])
+                VALUES (@id, N'native-journal-upgrade', 7001, 775511, N'patron_suggestion', 1, N'Original provider label',
+                        775512, N'Real target branch', @state, @utc, @finished, @finished, 0, @observed, @finished);
+                """, connection))
+            {
+                insert.Parameters.AddWithValue("@id", operationId);
+                insert.Parameters.AddWithValue("@state", completed ? 3 : 1);
+                insert.Parameters.AddWithValue("@utc", observedUtc);
+                insert.Parameters.AddWithValue("@finished", completed ? observedUtc : DBNull.Value);
+                insert.Parameters.AddWithValue("@observed", completed ? 1 : DBNull.Value);
+                await insert.ExecuteNonQueryAsync();
+            }
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+            await using var query = new SqlCommand("""
+                SELECT [Id], [State], [FromPickupBranchId], [ObservedPickupBranchId], [ToPickupBranchId],
+                       [FromPickupBranchName], [DispatchStartedUtc], [DispatchFinishedUtc], [ProviderConfirmedUtc], [CompletedUtc]
+                FROM [asap].[PickupPreferenceOperation] WHERE [Id] = @id;
+                """, connection);
+            query.Parameters.AddWithValue("@id", operationId);
+            await using var rows = await query.ExecuteReaderAsync();
+            Assert.IsTrue(await rows.ReadAsync());
+            Assert.AreEqual(operationId, rows.GetGuid(0));
+            Assert.AreEqual(completed ? 3 : 1, rows.GetInt32(1));
+            Assert.IsTrue(rows.IsDBNull(2));
+            Assert.IsTrue(rows.IsDBNull(3));
+            Assert.AreEqual(775512, rows.GetInt32(4));
+            Assert.AreEqual("Original provider label", rows.GetString(5), "Historical diagnostics must be retained.");
+            Assert.AreEqual(observedUtc, rows.GetDateTime(6));
+            for (var column = 7; column <= 9; column++)
+            {
+                Assert.AreEqual(!completed, rows.IsDBNull(column));
+                if (completed)
+                {
+                    Assert.AreEqual(observedUtc, rows.GetDateTime(column));
+                }
+            }
+            Assert.IsFalse(await rows.ReadAsync(), "Normalization must retain the one original operation.");
+        }
+        finally
+        {
+            await NonQuery(connection, """
+                DELETE FROM [asap].[PickupPreferenceOperation] WHERE [LibraryOrganizationId] = 775511;
+                DELETE FROM [asap].[Organization] WHERE [Id] = 775511;
+                """);
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+        }
+    }
+
+    [TestMethod]
     public async Task SingletonConstraintsRejectSecondRows()
     {
         await using var connection = new SqlConnection(_databaseConnectionString);

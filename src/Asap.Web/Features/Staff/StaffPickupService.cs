@@ -92,7 +92,7 @@ public sealed partial class StaffPickupService(
         CancellationToken cancellationToken)
     {
         if (!StaffVersion.TryDecode(input.Version, out var expectedVersion) ||
-            input.PreferredPickupBranchId is not > 0)
+            input.PreferredPickupBranchId is not > PolarisConfigurationValidation.SystemOrganizationId)
         {
             return new StaffPickupResult("invalid_pickup");
         }

@@ -20,7 +20,8 @@ public sealed class DacpacDeploymentService
         {
             BlockOnPossibleDataLoss = true,
             CreateNewDatabase = false,
-            DropObjectsNotInSource = false
+            DropObjectsNotInSource = false,
+            ScriptDatabaseOptions = false
         };
 
         using var package = DacPackage.Load(dacpacPath);

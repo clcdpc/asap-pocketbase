@@ -1047,7 +1047,7 @@ public sealed class HoldPlacementService(
             await RequireOperatorAsync(owner, "existing_hold_identity_ambiguous", cancellationToken);
             return new HoldPlacementResult("hold_identity_ambiguous", owner.Id);
         }
-        if (patron.PreferredPickupBranchId is not > 0)
+        if (patron.PreferredPickupBranchId is not > PolarisConfigurationValidation.SystemOrganizationId)
         {
             await FinishWithoutDispatchAsync(owner, HoldOperationState.NoHold, "pickup_missing", "pickup_missing", cancellationToken);
             return new HoldPlacementResult("pickup_missing", owner.Id);
@@ -1095,6 +1095,10 @@ public sealed class HoldPlacementService(
         catch (ProviderCallTimeoutException)
         {
             createResult = AmbiguousResult("create_provider_timeout", "provider_timeout");
+        }
+        catch (PolarisMutationNotDispatchedException exception)
+        {
+            return await FinishLocalFailureAsync(owner, exception, cancellationToken);
         }
         catch (PolarisOperationalException exception)
         {
@@ -1199,6 +1203,10 @@ public sealed class HoldPlacementService(
                 TxnGroupQualifier = operation.TxnGroupQualifier,
                 TxnQualifier = operation.TxnQualifier
             };
+        }
+        catch (PolarisMutationNotDispatchedException exception)
+        {
+            return await FinishLocalFailureAsync(owner, exception, cancellationToken);
         }
 
         if (!await PersistReplyResultAsync(owner, replyResult, cancellationToken))
@@ -1694,6 +1702,32 @@ public sealed class HoldPlacementService(
         };
         context.EmailOutbox.Add(outbox);
         return outbox;
+    }
+
+    private async Task<HoldPlacementResult> FinishLocalFailureAsync(
+        OwnedOperation owner, PolarisMutationNotDispatchedException exception, CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var code = exception.InnerException is PolarisOperationalException operational
+            ? SafeProviderErrorCode(operational) : "provider_local_failure";
+        var changed = await context.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE [asap].[HoldPlacementOperation]
+            SET [State] = N'failed', [ResultCode] = N'local_not_dispatched',
+                [OutcomeEvidenceKind] = N'provider_transport_not_entered', [LastErrorCode] = {code},
+                [CompletedUtc] = SYSUTCDATETIME(), [OwnerToken] = NULL, [LeaseExpiresUtc] = NULL,
+                [RecoveryAttemptCount] = [RecoveryAttemptCount] + CASE WHEN {owner.IsRecovery} = CAST(1 AS bit) THEN 1 ELSE 0 END,
+                [LastRecoveryUtc] = CASE WHEN {owner.IsRecovery} = CAST(1 AS bit) THEN SYSUTCDATETIME() ELSE [LastRecoveryUtc] END
+            WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
+              AND [Phase] IN (N'create_started', N'reply_started') AND [CompletedUtc] IS NULL
+              AND [LeaseExpiresUtc] > SYSUTCDATETIME();
+            """, cancellationToken);
+        // Unexpected defects still reach normal exception handling after preserving
+        // the safe outcome. Ownership loss never authorizes this worker to finish.
+        if (exception.InnerException is not PolarisOperationalException)
+        {
+            exception.RethrowCause();
+        }
+        return new HoldPlacementResult(changed == 1 ? "hold_provider_error" : "operation_ownership_lost", owner.Id);
     }
 
     private async Task FinishWithoutDispatchAsync(
