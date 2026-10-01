@@ -24,6 +24,22 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(panels.filter(panel => !panel.hidden).map(panel => panel.id).join(','), 'settings-start');
     assert.strictEqual(document.getElementById('settings-organizations-list').tagName, 'UL');
 
+    const header = document.querySelector('#settings-view .settings-header');
+    assert.ok(header && !header.classList.contains('section-heading'));
+    assert.deepStrictEqual([...header.querySelectorAll('[id]')].map(element => element.id), [
+      'settings-title', 'settings-context-summary', 'settings-scope-field',
+      'settings-scope', 'settings-refresh', 'settings-message'
+    ], 'the compact header must preserve its hooks and logical reading order');
+    const toolbar = header.querySelector('.settings-toolbar');
+    assert.strictEqual(document.getElementById('settings-scope-field').parentElement, toolbar);
+    assert.strictEqual(document.getElementById('settings-refresh').parentElement, toolbar);
+    assert.strictEqual(document.getElementById('settings-message').getAttribute('role'), 'status');
+    assert.strictEqual(document.getElementById('settings-message').getAttribute('aria-live'), 'polite');
+    const settingsSource = fs.readFileSync(path.join(frontendRoot, 'staff', 'js', 'settings.js'), 'utf8');
+    for (const match of settingsSource.matchAll(/(?:querySelector\(['"]#|getElementById\(['"])([\w-]+)['"]\)/g)) {
+      assert.strictEqual(document.querySelectorAll(`#${match[1]}`).length, 1, match[1]);
+    }
+
     const controls = scope => [...scope.querySelectorAll('input, select, textarea')].map(control => control.id);
     const fieldset = id => document.getElementById(id).closest('fieldset');
     const legend = id => fieldset(id).querySelector('legend').textContent;
@@ -68,6 +84,8 @@ const { JSDOM } = require('jsdom');
       assert.ok(control.closest('label') || document.querySelector(`label[for="${control.id}"]`), control.id);
     }
     const css = fs.readFileSync(path.join(frontendRoot, 'staff', 'styles.css'), 'utf8');
+    assert.match(css, /\.settings-save-bar\s*\{\s*position:\s*static;/);
+    assert.match(css, /\.settings-save-bar\.attention\s*\{\s*position:\s*sticky;\s*bottom:\s*0;/);
     assert.match(css, /@media[^{}]*max-width:\s*760px[^]*?\.settings-grid\s*\{\s*grid-template-columns:\s*1fr;/);
 
     const formats = Array.from({ length: 6 }, (_, index) => ({
@@ -114,7 +132,7 @@ const { JSDOM } = require('jsdom');
     assert.ok(modes.every(select => select.getAttribute('aria-label')));
 
     dom.window.close();
-    console.log('Settings initial visibility, semantic lists, and dynamic format labels passed');
+    console.log('Settings header hooks, save-bar styles, field layout, and dynamic labels passed');
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }

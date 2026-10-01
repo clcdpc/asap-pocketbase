@@ -323,6 +323,14 @@ async function flush() {
       assert.match(document.getElementById('settings-message').textContent, /outcome is uncertain/i);
       assert.strictEqual(document.getElementById('settings-save-title').textContent,
         'Outcome uncertain; reload needed');
+      const saveBar = document.querySelector('.settings-save-bar');
+      assert.strictEqual(saveBar.classList.contains('attention'), true,
+        `${mutation} uncertainty must keep the save bar in attention state`);
+      if (mutation === 'reset' || mutation === 'clear') {
+        assert.strictEqual(controller.isDirty(), false,
+          `${mutation} must require attention even without a settings draft`);
+        assert.strictEqual(document.getElementById('settings-discard').hidden, true);
+      }
       assert.strictEqual(document.getElementById('settings-save').disabled, true);
       assert.strictEqual(document.getElementById('settings-reset').disabled, true);
       assert.strictEqual(document.getElementById('save-branding-logo').disabled, true);
@@ -354,11 +362,18 @@ async function flush() {
       assert.strictEqual(controller.hasUnconfirmedOutcome(), true,
         `${mutation} uncertainty must survive a failed authoritative reload`);
       assert.match(document.getElementById('settings-message').textContent, /still uncertain/i);
+      assert.strictEqual(saveBar.classList.contains('attention'), true);
       failReload = false;
       document.getElementById('settings-refresh').click();
       await flush();
       assert.strictEqual(controller.hasUnconfirmedOutcome(), false,
         `${mutation} uncertainty clears only after authoritative reload`);
+      assert.strictEqual(controller.isDirty(), false);
+      assert.strictEqual(saveBar.classList.contains('attention'), false,
+        `${mutation} attention clears after confirmed reload`);
+      assert.strictEqual(document.getElementById('settings-save').disabled, true);
+      assert.strictEqual(document.getElementById('settings-discard').hidden, true);
+      assert.strictEqual(document.getElementById('settings-reset').disabled, false);
       if (mutation === 'reset') {
         scope.value = 'system';
         scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));

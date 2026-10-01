@@ -110,6 +110,7 @@ async function flush() {
     let refreshFailureStatus = 0;
     let saveCount = 0;
     let committedCount = 0;
+    const savingRefreshes = [];
     const committedMessages = [];
     let settingsRequests = 0;
     let formatRows = [];
@@ -160,6 +161,17 @@ async function flush() {
       onCommitted: message => {
         committedCount += 1;
         committedMessages.push(message);
+      },
+      onRefreshed: () => {
+        if (!document.getElementById('settings-form').inert) return;
+        savingRefreshes.push({
+          dirty: controller.isDirty(),
+          title: document.getElementById('settings-save-title').textContent,
+          attention: document.querySelector('.settings-save-bar').classList.contains('attention'),
+          saveDisabled: document.getElementById('settings-save').disabled,
+          discardHidden: document.getElementById('settings-discard').hidden,
+          resetDisabled: document.getElementById('settings-reset').disabled
+        });
       }
     });
     controller.bind();
@@ -172,12 +184,26 @@ async function flush() {
     });
     await controller.activate();
 
+    const saveBar = document.querySelector('.settings-save-bar');
+    const save = document.getElementById('settings-save');
+    const discard = document.getElementById('settings-discard');
+    const reset = document.getElementById('settings-reset');
+    assert.strictEqual(saveBar.classList.contains('attention'), false);
+    assert.strictEqual(save.disabled, true);
+    assert.strictEqual(discard.hidden, true);
+    assert.strictEqual(reset.hidden, false);
+    assert.strictEqual(reset.disabled, false);
     const override = document.querySelector('[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle');
     override.checked = true;
     override.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     const note = document.getElementById('patron-login-note');
     note.value = 'Saved library note';
     note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    assert.strictEqual(saveBar.classList.contains('attention'), true);
+    assert.strictEqual(save.disabled, false);
+    assert.strictEqual(discard.hidden, false);
+    assert.strictEqual(reset.hidden, false);
+    assert.strictEqual(reset.disabled, false);
     document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
       bubbles: true,
       cancelable: true
@@ -191,6 +217,14 @@ async function flush() {
     assert.strictEqual(document.getElementById('settings-save').disabled, true);
     assert.strictEqual(document.getElementById('settings-save-title').textContent, 'No changes');
     assert.strictEqual(controller.isDirty(), false);
+    assert.deepStrictEqual(savingRefreshes, [{
+      dirty: false, title: 'No changes', attention: true,
+      saveDisabled: true, discardHidden: true, resetDisabled: true
+    }], 'an active save must retain attention after reload clears dirty and awaiting-reload state');
+    assert.strictEqual(saveBar.classList.contains('attention'), false);
+    assert.strictEqual(discard.hidden, true);
+    assert.strictEqual(reset.hidden, false);
+    assert.strictEqual(reset.disabled, false);
 
     note.value = 'Saved again';
     note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
@@ -204,12 +238,22 @@ async function flush() {
     assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Saved; reload needed');
     assert.strictEqual(document.getElementById('settings-save').disabled, true);
     assert.match(document.getElementById('settings-message').textContent, /Settings saved, but/);
+    assert.strictEqual(controller.isDirty(), false);
+    assert.strictEqual(saveBar.classList.contains('attention'), true,
+      'awaiting reload must retain attention even after the committed save clears dirty state');
+    assert.strictEqual(discard.hidden, true);
+    assert.strictEqual(reset.hidden, false);
+    assert.strictEqual(reset.disabled, true);
 
     refreshFailureStatus = 0;
     document.getElementById('settings-refresh').click();
     for (let attempt = 0; attempt < 20 &&
       document.getElementById('settings-save-title').textContent !== 'No changes'; attempt++) await flush();
     assert.strictEqual(document.getElementById('settings-version').value, 'after-save-2');
+    assert.strictEqual(saveBar.classList.contains('attention'), false);
+    assert.strictEqual(save.disabled, true);
+    assert.strictEqual(discard.hidden, true);
+    assert.strictEqual(reset.disabled, false);
     note.value = 'Saved after 401';
     note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
     refreshFailureStatus = 401;
@@ -222,6 +266,7 @@ async function flush() {
     assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Saved; reload needed');
     assert.strictEqual(document.getElementById('settings-save').disabled, true);
     assert.match(document.getElementById('settings-message').textContent, /Settings saved, but/);
+    assert.strictEqual(saveBar.classList.contains('attention'), true);
 
     formatRows = [
       { id: '101', version: 'format-v1', code: 'local_one', label: 'Local one', ownerOrganizationId: 2, isEnabled: true },
@@ -247,6 +292,7 @@ async function flush() {
     assert.match(document.getElementById('settings-message').textContent,
       /Settings saved\. Format deletions confirmed: 1 of 2\. A follow-up action failed/);
     assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Saved; reload needed');
+    assert.strictEqual(saveBar.classList.contains('attention'), true);
     dom.window.close();
     console.log('Settings save completion refreshes the baseline and leaves the form clean');
   } finally {

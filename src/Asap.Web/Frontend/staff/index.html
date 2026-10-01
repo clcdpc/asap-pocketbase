@@ -257,19 +257,21 @@
       </dialog>
 
       <section id="settings-view" aria-labelledby="settings-title" hidden>
-        <div class="section-heading">
-          <div>
+        <div class="settings-header">
+          <div class="settings-heading">
             <h1 id="settings-title" tabindex="-1">Settings</h1>
             <p id="settings-context-summary">Administration and configuration.</p>
           </div>
-          <label id="settings-scope-field" class="compact-field" hidden>
-            <span>Settings scope</span>
-            <select id="settings-scope" aria-label="Settings scope"></select>
-          </label>
-          <button id="settings-refresh" class="secondary-button" type="button" title="Reload settings" aria-label="Reload settings"><i class="fa fa-refresh" aria-hidden="true"></i></button>
+          <div class="settings-toolbar">
+            <label id="settings-scope-field" class="compact-field" hidden>
+              <span>Settings scope</span>
+              <select id="settings-scope" aria-label="Settings scope"></select>
+            </label>
+            <button id="settings-refresh" class="secondary-button" type="button" title="Reload settings" aria-label="Reload settings"><i class="fa fa-refresh" aria-hidden="true"></i></button>
+          </div>
+          <p id="settings-message" class="settings-message" role="status" aria-live="polite"></p>
         </div>
 
-        <p id="settings-message" class="settings-message" role="status" aria-live="polite"></p>
         <div id="settings-system-context" class="settings-callout" hidden>
           System-only controls are available at System level. Library settings can override only the fields enabled below.
           <button id="settings-switch-system" class="secondary-button" type="button" hidden>Switch to System level</button>

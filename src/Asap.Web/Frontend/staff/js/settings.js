@@ -261,6 +261,7 @@ export function createSettingsController({
     nav: [...root.querySelectorAll('#settings-nav [data-settings-panel]')],
     panels: [...root.querySelectorAll('[data-settings-panel-content]')],
     refresh: root.querySelector('#settings-refresh'),
+    saveBar: root.querySelector('.settings-save-bar'),
     save: root.querySelector('#settings-save'),
     discard: root.querySelector('#settings-discard'),
     reset: root.querySelector('#settings-reset'),
@@ -620,6 +621,8 @@ export function createSettingsController({
 
   function updateDirtyState() {
     const dirty = isDirty();
+    const needsAttention = dirty || state.awaitingReload || state.outcomeUncertain || state.saving;
+    dom.saveBar.classList.toggle('attention', needsAttention);
     dom.save.disabled = !dirty || state.awaitingReload || state.saving;
     dom.saveLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
     dom.clearLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);

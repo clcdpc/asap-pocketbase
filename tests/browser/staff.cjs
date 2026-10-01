@@ -2843,10 +2843,16 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await page.getByRole('button', { name: '{{name}}' }).click();
     assert.equal(await page.locator('#email-submit-subject').inputValue(), `{{name}}${originalSubject}`);
     assert.equal(await page.locator('#settings-save-title').textContent(), 'Unsaved changes');
+    assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'sticky');
     page.once('dialog', dialog => dialog.accept());
     await page.locator('#settings-discard').click();
     await page.waitForFunction(expected => document.getElementById('email-submit-subject').value === expected,
       originalSubject);
+    assert.equal(await page.locator('.settings-save-bar.attention').count(), 0);
+    assert.equal(await page.locator('.settings-save-bar').evaluate(bar => getComputedStyle(bar).position), 'static');
+    assert.equal(await page.locator('#settings-discard').isHidden(), true);
+    assert.equal(await page.locator('#settings-save').isDisabled(), true);
+    assert.equal(await page.locator('#settings-reset').isHidden(), true);
 
     await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=2#settings-workflow`,
       { waitUntil: 'networkidle' });
@@ -3074,6 +3080,83 @@ async function runSettingsLayout(browser, args, axeSource, report) {
           { waitUntil: 'networkidle' });
         await page.locator(`#settings-${section.name}`).waitFor({ state: 'visible' });
         await page.waitForFunction(() => !document.getElementById('settings-form').hidden);
+        assert.equal(await page.locator('.settings-save-bar.attention').count(), 0);
+        assert.equal(await page.locator('.settings-save-bar').evaluate(bar => getComputedStyle(bar).position), 'static');
+        assert.equal(await page.locator('#settings-save').isDisabled(), true);
+        assert.equal(await page.locator('#settings-discard').isHidden(), true);
+        assert.equal(await page.locator('#settings-reset').isHidden(), true);
+        if (section.name === 'start') {
+          const header = await page.evaluate(() => {
+            const header = document.querySelector('.settings-header');
+            const toolbar = header.querySelector('.settings-toolbar');
+            return {
+              columns: getComputedStyle(header).gridTemplateColumns.split(' ').length,
+              headingLeft: header.querySelector('.settings-heading').getBoundingClientRect().left,
+              toolbarLeft: toolbar.getBoundingClientRect().left,
+              headerBottom: header.getBoundingClientRect().bottom,
+              workspaceTop: document.querySelector('.settings-layout').getBoundingClientRect().top,
+              navigation: getComputedStyle(document.getElementById('settings-nav')).display,
+              sidebar: getComputedStyle(document.querySelector('.settings-sidebar')).position
+            };
+          });
+          assert.equal(header.columns, name === 'desktop' ? 2 : 1);
+          assert.equal(header.navigation, name === 'desktop' ? 'grid' : 'flex');
+          assert.equal(header.sidebar, name === 'desktop' ? 'sticky' : 'static');
+          assert.ok(header.headerBottom <= header.workspaceTop, 'Settings content must follow the compact header');
+          if (name === 'desktop') {
+            assert.ok(header.headingLeft < header.toolbarLeft, 'Settings title must sit left of the scope toolbar');
+          }
+          await page.locator('#settings-scope').focus();
+          await page.keyboard.press('Tab');
+          assert.equal(await page.evaluate(() => document.activeElement.id), 'settings-refresh');
+          await page.keyboard.press('Tab');
+          assert.equal(await page.evaluate(() => document.activeElement.id), 'settings-nav-start');
+          const reload = page.waitForResponse(response => response.url().endsWith('/api/asap/staff/settings?orgId=system'));
+          await page.locator('#settings-refresh').click();
+          assert.equal((await reload).status(), 200);
+          await page.locator('#settings-message').filter({ hasText: 'Settings loaded.' }).waitFor();
+
+          const failurePath = '**/api/asap/staff/settings?orgId=system';
+          const failureMessage = 'Settings could not be loaded. Check your connection, then reload current values before editing or saving this settings context.';
+          await page.route(failurePath, route => route.fulfill({
+            status: 503, contentType: 'application/json', body: JSON.stringify({ message: failureMessage })
+          }));
+          try {
+            await page.setViewportSize({ ...viewport, width: name === 'desktop' ? 761 : 320 });
+            await page.locator('#settings-refresh').click();
+            await page.locator('#settings-message').filter({ hasText: failureMessage }).waitFor();
+            assert.equal(await page.locator('#settings-title').evaluate(title => title.scrollWidth <= title.clientWidth), true,
+              'A long Settings error must wrap without squeezing the title');
+            await scan(page, axeSource, args.artifactRoot, report, name, 'settings-compact-header-error');
+          } finally {
+            await page.unroute(failurePath);
+            await page.setViewportSize(viewport);
+          }
+          await page.locator('#settings-refresh').click();
+          await page.locator('#settings-message').filter({ hasText: 'Settings loaded.' }).waitFor();
+
+          const draft = page.locator('#ui-misconfigured-msg');
+          const original = await draft.inputValue();
+          await draft.fill(`${original} Layout draft`);
+          assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'sticky');
+          assert.equal(await page.locator('#settings-save').isDisabled(), false);
+          assert.equal(await page.locator('#settings-discard').isVisible(), true);
+          await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+          const contentReachable = await page.locator('#settings-start input:not(:disabled), #settings-start textarea:not(:disabled)').last()
+            .evaluate(control => {
+              const bounds = control.getBoundingClientRect();
+              const bar = document.querySelector('.settings-save-bar').getBoundingClientRect();
+              return bounds.bottom <= bar.top && document.elementFromPoint(
+                bounds.left + bounds.width / 2, bounds.top + bounds.height / 2) === control;
+            });
+          assert.equal(contentReachable, true, 'The last Settings control must remain reachable above the sticky save bar');
+          await scan(page, axeSource, args.artifactRoot, report, name, 'settings-attention-save-bar');
+          await draft.fill(original);
+          assert.equal(await page.locator('.settings-save-bar.attention').count(), 0);
+          assert.equal(await page.locator('.settings-save-bar').evaluate(bar => getComputedStyle(bar).position), 'static');
+          assert.equal(await page.locator('#settings-save').isDisabled(), true);
+          assert.equal(await page.locator('#settings-discard').isHidden(), true);
+        }
         const layout = await page.evaluate(section => {
           const bounds = id => {
             const label = document.getElementById(id).closest('label');
@@ -3136,7 +3219,7 @@ async function main() {
     await runStaffSuggestion(browser, args, axeSource, report);
     await runClosedDeletionControls(browser, args, axeSource, report);
     await runSettingsLayout(browser, args, axeSource, report);
-    assert.equal(report.states.length, 43, 'Expected forty-three major staff browser states');
+    assert.equal(report.states.length, 47, 'Expected forty-seven major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),
