@@ -34,13 +34,14 @@ async function fixture(route, journey, options = {}) {
     const gridPath = path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js');
     delete require.cache[require.resolve(gridPath)];
     dom.window.gridjs = require(gridPath);
-    const staff = { id: '20', role: options.role || 'super_admin', organizationId: options.role === 'staff' ? 2 : 1,
-      organizationName: 'System', displayName: 'Staff', version: 'actor-v1' };
+    let staff = { id: '20', role: options.role || 'super_admin', organizationId: options.role === 'staff' ? 2 : 1,
+      organizationName: 'System', displayName: 'Staff', version: 'actor-v1', ...options.staff };
     const organizations = options.organizations ||
       [{ id: 2, name: 'Library A', active: true }, { id: 3, name: 'Library B', active: true }];
     if (options.retainedOperation) {
       dom.window.sessionStorage.setItem('asap.staff.operation..20', JSON.stringify(options.retainedOperation));
     }
+    for (const [key, value] of options.storage || []) dom.window.sessionStorage.setItem(key, value);
     let request = { id, type: 'title_request', version: 'v1', title: 'Saved title', author: null,
       identifier: '9780000000001', bibid: 9001, bibidStaffVerified: options.verified !== false,
       libraryOrgId: options.requestLibrary || 2, libraryOrgName: 'Library A',
@@ -53,10 +54,15 @@ async function fixture(route, journey, options = {}) {
     const confirms = [];
     let discard = false;
     let operationResponse = null;
+    let apiResponse = null;
     global.fetch = async (url, init = {}) => {
       calls.push({ url, init });
       const parsed = new URL(url, dom.window.location.href);
       const pathname = parsed.pathname;
+      if (apiResponse) {
+        const result = await apiResponse({ url, init, parsed, pathname, staff, request });
+        if (result !== undefined) return result;
+      }
       if (pathname.endsWith('/session')) return response(200, { authenticated: true, accessAllowed: true, staff, antiforgeryToken: 'token' });
       if (pathname.endsWith('/email-readiness')) return response(200, {});
       if (pathname.endsWith('/organizations')) return response(200, { code: 'ok', data: organizations });
@@ -71,7 +77,7 @@ async function fixture(route, journey, options = {}) {
         const scope = parsed.searchParams.get('scope') || 'all';
         return response(200, { scope, status: parsed.searchParams.get('status') || 'open',
           organizations, availableLibraries: organizations,
-          items: pathname.endsWith('/title-requests') ? [request] : [] });
+          items: pathname.endsWith('/title-requests') ? options.titleItems || [request] : options.copyItems || [] });
       }
       if (pathname.endsWith(`/title-requests/${id}`)) {
         const scope = parsed.searchParams.get('scope');
@@ -86,6 +92,15 @@ async function fixture(route, journey, options = {}) {
       }
       if (pathname.endsWith('/research-configuration')) return response(200, {});
       if (pathname.endsWith('/bib-lookup')) return response(200, { bibId: 9001, title: request.title, author: null });
+      if (pathname.endsWith('/additional-copy') && init.method === 'GET') return response(200, {
+        version: request.version, bibid: request.bibid, openCount: 0, emailPurchaseReminderDefault: false });
+      if (pathname.endsWith('/assignment-candidates')) return response(200, {
+        candidates: [{ id: '20', displayName: 'Staff A' }, { id: '21', displayName: 'Staff B' }] });
+      if (pathname.endsWith('/pickup-options')) return response(200, {
+        version: request.version, selectedPickupBranchId: 101, currentPreferredPickupBranchId: 101,
+        pickupBranches: [{ id: 101, label: 'Main' }, { id: 102, label: 'Branch' }] });
+      if (pathname.endsWith('/rejection-templates')) return response(200, {
+        items: [{ id: '1', name: 'Default' }, { id: '2', name: 'Other' }], defaultTemplateId: '1' });
       if (pathname.endsWith('/patron-lookup')) return response(200, {
         status: 'verified', libraryOrgId: 3, libraryOrgName: 'Library B',
         patron: { patron: { barcode: '20000000000001', name: 'Patron' },
@@ -94,6 +109,7 @@ async function fixture(route, journey, options = {}) {
       if (pathname.endsWith('/suggestions')) return operationResponse ? operationResponse() : response(409, {
         code: 'duplicate_open_request', duplicate: { id, matchType: 'title_format' } });
       if (pathname.endsWith('/workflow/queues') || pathname.endsWith('/email-operations')) return response(200, { items: [] });
+      if (init.method === 'DELETE') return operationResponse ? operationResponse() : response(200, { deleted: true });
       if (init.method === 'POST') {
         if (operationResponse) return operationResponse();
         request = { ...request, version: 'v2', title: JSON.parse(init.body || '{}').title || request.title };
@@ -114,10 +130,20 @@ async function fixture(route, journey, options = {}) {
       allowDiscard: () => { discard = true; },
       readRequest: () => request,
       setOperation: fn => { operationResponse = fn; },
+      setApi: fn => { apiResponse = fn; },
+      readStaff: () => staff,
+      setStaff: value => { staff = { ...staff, ...value }; },
       params: () => new URL(dom.window.location.href).searchParams,
       open: async () => { await until(() => get('.grid-open'), 'queue opener'); get('.grid-open').click();
         await until(() => get('#request-dialog').open, 'detail opened'); } });
   } finally {
+    if (dom && options.storage) {
+      options.storage.clear();
+      for (let index = 0; index < dom.window.sessionStorage.length; index += 1) {
+        const key = dom.window.sessionStorage.key(index);
+        options.storage.set(key, dom.window.sessionStorage.getItem(key));
+      }
+    }
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });
   }
@@ -503,6 +529,454 @@ test('reload preserves an unresolved operation and retries only its recorded ide
     assert.equal(ui.dom.window.sessionStorage.getItem('asap.staff.operation..20'), null);
   }, { retainedOperation: { path: '/api/asap/staff/workflow/weekly-summary/run-now?force=true',
     message: 'Forced weekly summary', scope: '3', operationId: '33333333-3333-4333-8333-333333333333' } }));
+
+function protectedUnload(ui) {
+  const event = new ui.dom.window.Event('beforeunload', { cancelable: true });
+  ui.dom.window.dispatchEvent(event);
+  return event.defaultPrevented;
+}
+
+const profileStaff = { notificationEmail: 'primary@example.org', weeklyActionSummaryEmail: 'weekly@example.org',
+  weeklyActionSummaryEnabled: true, purchaseReminderDefault: false,
+  additionalCopyReminderDefault: true, defaultMineUnclaimedFilter: false };
+
+for (const exit of ['top-level', 'back', 'forward', 'sign-out']) {
+  test(`Profile draft protects ${exit} and accepted discard resets the form`, () =>
+    fixture('?stage=suggestion&scope=2', async ui => {
+      ui.get('[data-view="profile"]').click(); await settle();
+      if (exit === 'forward') {
+        ui.get('[data-view="queue"]').click(); await settle(); await ui.back();
+      }
+      ui.edit('#weekly-email', 'draft@example.org');
+      const currentUrl = ui.dom.window.location.href;
+      assert.equal(protectedUnload(ui), true);
+      const leave = async () => {
+        if (exit === 'top-level') ui.get('[data-view="queue"]').click();
+        if (exit === 'back') await ui.back();
+        if (exit === 'forward') await ui.forward();
+        if (exit === 'sign-out') ui.get('#sign-out').click();
+        await settle();
+      };
+      await leave();
+      assert.equal(ui.dom.window.location.href, currentUrl);
+      assert.equal(ui.get('#profile-view').hidden, false);
+      assert.equal(ui.get('#weekly-email').value, 'draft@example.org');
+      assert.equal(ui.confirms.length, 1);
+      assert.ok(!ui.calls.some(call => call.url.endsWith('/sign-out')));
+      ui.allowDiscard(); await leave();
+      assert.equal(protectedUnload(ui), false);
+      if (exit === 'sign-out') {
+        assert.equal(ui.get('#workspace').hidden, true);
+      } else {
+        assert.equal(ui.params().get('stage'), 'suggestion');
+        ui.get('[data-view="profile"]').click(); await settle();
+        assert.equal(ui.get('#weekly-email').value, 'weekly@example.org');
+      }
+    }, { staff: profileStaff }));
+}
+
+for (const selector of ['#weekly-email', '#weekly-enabled', '#purchase-default', '#additional-copy-default', '#mine-default']) {
+  test(`returning Profile ${selector} to its baseline clears the draft`, () =>
+    fixture('?stage=profile', async ui => {
+      const control = ui.get(selector);
+      const original = control.type === 'checkbox' ? control.checked : control.value;
+      if (control.type === 'checkbox') control.checked = !original;
+      else ui.edit(selector, 'other@example.org');
+      control.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+      assert.equal(protectedUnload(ui), true);
+      if (control.type === 'checkbox') control.checked = original;
+      else ui.edit(selector, original);
+      control.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+      assert.equal(protectedUnload(ui), false);
+      ui.get('[data-view="queue"]').click(); await settle();
+      assert.equal(ui.confirms.length, 0);
+      assert.equal(ui.get('#profile-view').hidden, true);
+    }, { staff: profileStaff }));
+}
+
+const submitProfile = ui => ui.get('#profile-form').dispatchEvent(
+  new ui.dom.window.Event('submit', { cancelable: true }));
+
+test('Profile save is single-flight, guards navigation, and establishes the refreshed staff baseline', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    ui.get('[data-view="profile"]').click(); await settle();
+    ui.edit('#weekly-email', 'saved@example.org');
+    let resolve;
+    ui.setApi(({ pathname }) => pathname.endsWith('/profile')
+      ? new Promise(done => { resolve = done; }) : undefined);
+    submitProfile(ui); submitProfile(ui);
+    await until(() => resolve, 'profile mutation dispatched');
+    assert.equal(ui.calls.filter(call => call.url.endsWith('/profile')).length, 1);
+    assert.ok([...ui.get('#profile-form').querySelectorAll('input, button[type="submit"]')].every(control => control.disabled));
+    assert.equal(protectedUnload(ui), true);
+    const currentUrl = ui.dom.window.location.href;
+    await ui.back(); ui.get('[data-view="queue"]').click(); ui.get('#sign-out').click(); await settle();
+    assert.equal(ui.dom.window.location.href, currentUrl);
+    assert.equal(ui.confirms.length, 0);
+    assert.equal(ui.get('#weekly-email').value, 'saved@example.org');
+    // A concurrent preference change in the session must win over the older POST result.
+    const posted = { ...ui.readStaff(), version: 'actor-v2', weeklyActionSummaryEmail: 'saved@example.org' };
+    ui.setStaff({ ...posted, version: 'actor-v3', purchaseReminderDefault: true });
+    resolve(response(200, { staff: posted }));
+    await until(() => /Profile saved\./.test(ui.get('#app-status').textContent), 'profile saved');
+    assert.equal(ui.get('#purchase-default').checked, true);
+    assert.equal(protectedUnload(ui), false);
+    assert.equal(ui.get('#weekly-email').disabled, false);
+    ui.get('[data-view="queue"]').click(); await settle();
+    assert.equal(ui.confirms.length, 0);
+  }, { staff: profileStaff }));
+
+test('definite Profile failure preserves the editable draft and does not announce a save', () =>
+  fixture('?stage=profile', async ui => {
+    ui.edit('#weekly-email', 'draft@example.org');
+    ui.setApi(({ pathname }) => pathname.endsWith('/profile')
+      ? response(400, { message: 'Invalid email' }) : undefined);
+    submitProfile(ui); await settle();
+    assert.equal(ui.get('#weekly-email').value, 'draft@example.org');
+    assert.equal(ui.get('#weekly-email').disabled, false);
+    assert.equal(protectedUnload(ui), true);
+    assert.match(ui.get('#app-status').textContent, /Invalid email/);
+    ui.get('[data-view="queue"]').click(); await settle();
+    assert.equal(ui.params().get('stage'), 'profile');
+  }, { staff: profileStaff }));
+
+test('stale Profile save prefers authoritative staff values and the current rowversion without claiming success', () =>
+  fixture('?stage=profile', async ui => {
+    ui.edit('#weekly-email', 'discarded@example.org');
+    ui.setApi(({ pathname }) => {
+      if (!pathname.endsWith('/profile')) return undefined;
+      ui.setStaff({ version: 'actor-v3', weeklyActionSummaryEmail: 'authoritative@example.org' });
+      return response(409, { code: 'stale_version', message: 'Profile changed. Review current values.' });
+    });
+    submitProfile(ui); await until(() => ui.get('#weekly-email').value === 'authoritative@example.org', 'conflict refreshed');
+    assert.match(ui.get('#app-status').textContent, /Profile changed/);
+    assert.equal(protectedUnload(ui), false, 'authoritative conflict refresh replaces the rejected draft');
+    ui.setApi(({ pathname, init }) => pathname.endsWith('/profile')
+      ? response(400, { message: 'Stopped after version inspection' }) : undefined);
+    submitProfile(ui); await settle();
+    const posts = ui.calls.filter(call => call.url.endsWith('/profile'));
+    assert.equal(JSON.parse(posts[1].init.body).version, 'actor-v3');
+  }, { staff: profileStaff }));
+
+test('uncertain Profile save cannot retry or discard until explicit authoritative review', () =>
+  fixture('?stage=profile', async ui => {
+    ui.edit('#weekly-email', 'committed@example.org');
+    ui.setApi(({ pathname }) => {
+      if (!pathname.endsWith('/profile')) return undefined;
+      ui.setStaff({ version: 'actor-v2', weeklyActionSummaryEmail: 'committed@example.org' });
+      throw new Error('Response lost after commit');
+    });
+    submitProfile(ui); await until(() => !ui.get('#profile-refresh').hidden, 'uncertain profile recovery');
+    assert.match(ui.get('#app-status').textContent, /could not be confirmed/);
+    assert.equal(protectedUnload(ui), true);
+    submitProfile(ui); ui.get('[data-view="queue"]').click(); await settle();
+    assert.equal(ui.calls.filter(call => call.url.endsWith('/profile')).length, 1);
+    assert.equal(ui.params().get('stage'), 'profile');
+    ui.get('#profile-refresh').click(); await settle();
+    assert.equal(ui.get('#profile-refresh').hidden, false, 'declined reload retains unresolved state');
+    ui.allowDiscard(); ui.get('#profile-refresh').click();
+    await until(() => ui.get('#profile-refresh').hidden, 'authoritative profile reviewed');
+    assert.equal(ui.get('#weekly-email').value, 'committed@example.org');
+    assert.equal(protectedUnload(ui), false);
+  }, { staff: profileStaff }));
+
+async function previewBulk(ui, scope = '2') {
+  ui.get('#bulk-delete-closed').click();
+  ui.get('#bulk-delete-scope').value = scope;
+  ui.get('#bulk-delete-preview').click();
+  await until(() => ui.get('#bulk-delete-items li'), 'bulk population previewed');
+  ui.edit('#bulk-delete-confirmation', 'DELETE');
+}
+
+test('active bulk deletion rejects Back, top-level navigation, close, Sign out, and beforeunload', () =>
+  fixture('?stage=profile', async ui => {
+    ui.get('[data-view="queue"]').click();
+    ui.get('[data-status="closed"]').click(); await settle();
+    await previewBulk(ui);
+    let resolve;
+    ui.setApi(({ init }) => init.method === 'DELETE' ? new Promise(done => { resolve = done; }) : undefined);
+    ui.get('#bulk-delete-execute').click(); await until(() => resolve, 'delete dispatched');
+    const currentUrl = ui.dom.window.location.href;
+    assert.equal(protectedUnload(ui), true);
+    await ui.back();
+    ui.get('[data-view="profile"]').click(); ui.get('#sign-out').click(); ui.get('#bulk-delete-close').click();
+    await settle();
+    assert.equal(ui.dom.window.location.href, currentUrl);
+    assert.equal(ui.get('#queue-view').hidden, false);
+    assert.equal(ui.get('#bulk-delete-dialog').open, true);
+    assert.ok(!ui.calls.some(call => call.url.endsWith('/sign-out')));
+    resolve(response(200, { deleted: true }));
+    await until(() => /Both Closed views were refreshed/.test(ui.get('#bulk-delete-summary').textContent), 'batch completed');
+    assert.match(ui.get('#bulk-delete-results').textContent, /Confirmed deleted: 1 of 1/);
+    assert.equal(protectedUnload(ui), false);
+  }, { status: 'closed' }));
+
+for (const exit of ['back', 'top-level']) {
+  test(`non-submitting Bulk Delete preview closes cleanly on ${exit}`, () =>
+    fixture('?stage=profile', async ui => {
+      ui.get('[data-view="queue"]').click(); ui.get('[data-status="closed"]').click(); await settle();
+      await previewBulk(ui);
+      if (exit === 'back') await ui.back();
+      else ui.get('[data-view="profile"]').click();
+      await settle();
+      assert.equal(ui.get('#bulk-delete-dialog').open, false);
+      assert.equal(ui.get('#bulk-delete-items').childElementCount, 0);
+      assert.equal(ui.get('#bulk-delete-confirmation').value, '');
+      ui.get('#bulk-delete-execute').dispatchEvent(new ui.dom.window.Event('click'));
+      assert.equal(ui.calls.filter(call => call.init.method === 'DELETE').length, 0);
+      assert.equal(protectedUnload(ui), false);
+    }, { status: 'closed' }));
+}
+
+test('bulk completion aligns the selected scope with its URL and refreshes both Closed lists', () =>
+  fixture('?stage=closed&scope=2', async ui => {
+    await previewBulk(ui, '3');
+    ui.get('#bulk-delete-execute').click();
+    await until(() => /Both Closed views were refreshed/.test(ui.get('#bulk-delete-summary').textContent), 'closed refresh finished');
+    assert.equal(ui.params().get('scope'), '3');
+    assert.equal(ui.get('#library-scope').value, '3');
+    ui.get('#bulk-delete-close').click(); ui.get('[data-view="additional-copies"]').click(); await settle();
+    assert.equal(ui.params().get('copyStatus'), 'closed');
+    assert.ok(ui.calls.some(call => call.url.includes('/additional-copies?scope=3&status=closed')));
+  }, { status: 'closed', requestLibrary: 3 }));
+
+test('completed bulk deletion cannot overwrite an unrelated route during its refresh', () =>
+  fixture('?stage=closed&scope=2', async ui => {
+    await previewBulk(ui);
+    let resolveRefresh;
+    ui.setApi(({ pathname, init }) => pathname.endsWith('/title-requests') && init.method === 'GET'
+      ? new Promise(done => { resolveRefresh = done; }) : undefined);
+    ui.get('#bulk-delete-execute').click(); await until(() => resolveRefresh, 'completion refresh pending');
+    ui.get('[data-view="profile"]').click(); await settle();
+    const currentUrl = ui.dom.window.location.href;
+    assert.equal(ui.get('#bulk-delete-dialog').open, false);
+    resolveRefresh(response(200, { scope: '2', items: [], organizations: [] })); await settle();
+    assert.equal(ui.params().get('stage'), 'profile');
+    assert.equal(ui.dom.window.location.href, currentUrl);
+    assert.equal(document.activeElement, ui.get('#profile-title'));
+    assert.equal(ui.get('#bulk-delete-results').childElementCount, 0);
+  }, { status: 'closed' }));
+
+for (const loss of ['session', 'access']) {
+  test(`bulk ${loss} loss preserves attempted and not-attempted ledger without retry`, () =>
+    fixture('?stage=closed&scope=2', async ui => {
+      await previewBulk(ui);
+      ui.setApi(({ init }) => init.method === 'DELETE'
+        ? response(loss === 'session' ? 401 : 403, { code: 'staff_session_invalid', accessAllowed: false }) : undefined);
+      ui.get('#bulk-delete-execute').click();
+      await until(() => ui.get('#workspace').hidden, 'access loss signed out');
+      const ledger = ui.get('#signed-out-message').textContent;
+      assert.match(ledger, /Attempted: 1/);
+      assert.match(ledger, /forbidden\/out of scope/);
+      assert.match(ledger, /not attempted/);
+      assert.equal(ui.calls.filter(call => call.init.method === 'DELETE').length, 1);
+      assert.equal(ui.get('#bulk-delete-dialog').open, false);
+    }, { status: 'closed', copyItems: [{ id: '9007199254740994', type: 'additional_copy',
+      version: 'copy-v1', status: 'closed', libraryOrgId: 2, libraryOrgName: 'Library A', title: 'Copy' }] }));
+}
+
+const actorTenant = '11111111-1111-4111-8111-111111111111';
+const actorA = { id: '20', tenantId: actorTenant };
+const copyStorageKey = actor => `asap.staff.unconfirmedCopyCreation.${actor.tenantId}.${actor.id}`;
+const submitCopy = ui => ui.get('#additional-copy-create-form').dispatchEvent(
+  new ui.dom.window.Event('submit', { cancelable: true }));
+async function openCopyPreview(ui) {
+  [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Additional copy').click();
+  await until(() => ui.get('#additional-copy-create-dialog').open, 'additional-copy preview opened');
+}
+
+for (const exit of ['back', 'top-level', 'parent-close']) {
+  test(`Additional Copy child and parent discard their transient context on ${exit}`, () =>
+    fixture('?stage=pending_hold&scope=2', async ui => {
+      await ui.open(); await openCopyPreview(ui);
+      const form = ui.get('#additional-copy-create-form');
+      if (exit === 'back') await ui.back();
+      if (exit === 'top-level') ui.get('[data-view="profile"]').click();
+      if (exit === 'parent-close') ui.get('#close-request').click();
+      await settle();
+      assert.equal(ui.get('#additional-copy-create-dialog').open, false);
+      assert.equal(ui.get('#request-dialog').open, false);
+      assert.equal(ui.get('#request-dialog-body').childElementCount, 0);
+      assert.equal(ui.get('#additional-copy-create-summary').textContent, '');
+      assert.equal(form.querySelector('button[type="submit"]').disabled, true);
+      submitCopy(ui); await settle();
+      assert.ok(!ui.calls.some(call => call.init.method === 'POST' && call.url.endsWith('/additional-copy')));
+      assert.equal(ui.params().has('request'), false);
+    }, { status: 'pending_hold', staff: actorA }));
+}
+
+test('closing only the Additional Copy preview returns focus to its live parent action', () =>
+  fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    await openCopyPreview(ui);
+    ui.get('#cancel-additional-copy').click(); await settle();
+    assert.equal(ui.get('#request-dialog').open, true);
+    assert.equal(ui.get('#additional-copy-create-dialog').open, false);
+    assert.equal(document.activeElement.textContent.trim(), 'Additional copy');
+  }, { status: 'pending_hold', staff: actorA }));
+
+test('Additional Copy submission blocks departure; unresolved creation safely closes on navigation and survives reload', async () => {
+  const storage = new Map();
+  await fixture('?stage=pending_hold&scope=2', async ui => {
+    await ui.open(); await openCopyPreview(ui);
+    let reject;
+    ui.setApi(({ pathname, init }) => pathname.endsWith('/additional-copy') && init.method === 'POST'
+      ? new Promise((done, fail) => { reject = fail; }) : undefined);
+    submitCopy(ui); await until(() => reject, 'copy submission pending');
+    const currentUrl = ui.dom.window.location.href;
+    await ui.back(); ui.get('[data-view="profile"]').click(); ui.get('#cancel-additional-copy').click(); await settle();
+    assert.equal(ui.dom.window.location.href, currentUrl);
+    assert.equal(ui.get('#additional-copy-create-dialog').open, true);
+    reject(new Error('Creation response lost'));
+    await until(() => /could not be confirmed/.test(ui.get('#app-status').textContent), 'uncertain creation recorded');
+    ui.get('[data-view="profile"]').click(); await settle();
+    assert.equal(ui.get('#additional-copy-create-dialog').open, false);
+    assert.equal(ui.get('#request-dialog').open, false);
+    assert.ok(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)));
+    submitCopy(ui); await settle();
+    assert.equal(ui.calls.filter(call => call.init.method === 'POST' && call.url.endsWith('/additional-copy')).length, 1);
+  }, { status: 'pending_hold', staff: actorA, storage });
+  await fixture('?stage=additional_copies&scope=2', async ui => {
+    assert.equal(ui.get('#additional-copy-create-review').hidden, false);
+    assert.match(ui.get('#additional-copy-create-review-summary').textContent, /BIB 9001/);
+    const saved = JSON.parse(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)));
+    assert.deepEqual(saved, { libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' });
+  }, { staff: actorA, storage });
+});
+
+test('Additional Copy recovery survives A sign-out, cannot affect or be cleared by B, and restores when A returns', async () => {
+  const storage = new Map();
+  await fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    await openCopyPreview(ui);
+    ui.setApi(({ pathname, init }) => {
+      if (pathname.endsWith('/additional-copy') && init.method === 'POST') throw new Error('Response lost');
+    });
+    submitCopy(ui); await until(() => /could not be confirmed/.test(ui.get('#app-status').textContent), 'A unresolved creation');
+    ui.get('#sign-out').click(); await until(() => ui.get('#workspace').hidden, 'A signed out');
+    assert.ok(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)));
+  }, { status: 'pending_hold', staff: actorA, storage });
+  const original = storage.get(copyStorageKey(actorA));
+  await fixture(`?stage=pending_hold&scope=3&request=${id}`, async ui => {
+    assert.equal(ui.get('#additional-copy-create-review').hidden, true);
+    ui.get('#additional-copy-create-review-done').click();
+    await openCopyPreview(ui);
+    ui.setApi(({ pathname, init }) => pathname.endsWith('/additional-copy') && init.method === 'POST'
+      ? response(200, { committed: true, additionalCopyRequestId: '71', finalStatus: 'open',
+        additionalCopyRequest: { id: '71', status: 'open', version: 'copy-v1' } }) : undefined);
+    submitCopy(ui); await until(() => !ui.get('#additional-copy-create-dialog').open, 'B ordinary creation completed');
+    assert.equal(ui.calls.filter(call => call.init.method === 'POST' && call.url.endsWith('/additional-copy')).length, 1);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), original);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey({ ...actorA, id: '21' })), null);
+  }, { status: 'pending_hold', staff: { ...actorA, id: '21' }, requestLibrary: 3, storage });
+  await fixture('?stage=additional_copies&scope=2', async ui => {
+    assert.equal(ui.get('#additional-copy-create-review').hidden, false);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), original);
+  }, { staff: actorA, storage });
+});
+
+test('Additional Copy recovery is isolated across tenants even with the same StaffUser ID', () =>
+  fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    assert.equal(ui.get('#additional-copy-create-review').hidden, true);
+    await openCopyPreview(ui);
+    assert.ok(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)));
+  }, { status: 'pending_hold', staff: { ...actorA, tenantId: '22222222-2222-4222-8222-222222222222' },
+    storage: new Map([[copyStorageKey(actorA), JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' })]]) }));
+
+for (const saved of ['{broken', '{}', JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: '0', version: 'v1' }),
+  JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: '' })]) {
+  test(`malformed Additional Copy recovery is ignored (${saved})`, () =>
+    fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+      assert.equal(ui.get('#additional-copy-create-review').hidden, true);
+      await openCopyPreview(ui);
+    }, { status: 'pending_hold', staff: actorA, storage: new Map([[copyStorageKey(actorA), saved]]) }));
+}
+
+test('obsolete global Additional Copy marker is removed without assigning it to the signing-in actor', () =>
+  fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    await openCopyPreview(ui);
+    assert.equal(ui.dom.window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation'), null);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), null);
+  }, { status: 'pending_hold', staff: actorA, storage: new Map([['asap.staff.unconfirmedCopyCreation',
+    JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' })]]) }));
+
+for (const kind of ['action-choice', 'assignment', 'pickup', 'hold-resolution']) {
+  test(`${kind} draft is guarded and accepted navigation removes the form and its stale submit`, () =>
+    fixture(`?stage=${kind === 'pickup' ? 'pending_hold' : 'suggestion'}&scope=2&request=${id}`, async ui => {
+      let form;
+      if (kind === 'action-choice') {
+        [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Reject').click();
+        await until(() => ui.get('.action-choice select')?.options.length === 3, 'action choices loaded');
+        form = ui.get('.action-choice'); ui.edit('.action-choice select', '2');
+      }
+      if (kind === 'assignment') {
+        [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Assign').click();
+        await until(() => ui.get('.inline-form'), 'assignment loaded');
+        form = ui.get('.inline-form'); ui.edit('.inline-form select', '21');
+      }
+      if (kind === 'pickup') {
+        [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Pickup').click();
+        await until(() => ui.get('.inline-form'), 'pickup loaded');
+        form = ui.get('.inline-form'); ui.edit('.inline-form select', '102');
+      }
+      if (kind === 'hold-resolution') {
+        form = ui.get('.resolution-form'); ui.edit('.resolution-form textarea[required]', 'Unsaved evidence');
+      }
+      const currentUrl = ui.dom.window.location.href;
+      ui.get('[data-view="profile"]').click(); await settle();
+      assert.equal(ui.dom.window.location.href, currentUrl);
+      assert.equal(ui.get('#request-dialog').open, true);
+      assert.equal(protectedUnload(ui), true);
+      ui.allowDiscard(); ui.get('[data-view="profile"]').click(); await settle();
+      assert.equal(ui.params().get('stage'), 'profile');
+      assert.equal(ui.get('#request-dialog-body').childElementCount, 0);
+      assert.equal(form.isConnected, false);
+      const before = ui.calls.filter(call => call.init.method === 'POST').length;
+      form.dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true })); await settle();
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, before);
+    }, { status: kind === 'pickup' ? 'pending_hold' : 'suggestion', holdOperation: kind === 'hold-resolution'
+      ? { id: '71', version: 'op-v1', state: 'outcome_unknown', phase: 'acquired', canResolveNotPerformed: true }
+      : null }));
+}
+
+test('Recent Requests honors the dirty Profile discard boundary', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    await ui.open(); ui.get('#close-request').click(); await settle();
+    ui.get('[data-view="profile"]').click(); await settle();
+    ui.edit('#weekly-email', 'draft@example.org');
+    const currentUrl = ui.dom.window.location.href;
+    ui.get('#recent-request-list button').click(); await settle();
+    assert.equal(ui.dom.window.location.href, currentUrl);
+    assert.equal(ui.get('#request-dialog').open, false);
+    assert.equal(ui.get('#weekly-email').value, 'draft@example.org');
+    ui.allowDiscard(); ui.get('#recent-request-list button').click();
+    await until(() => ui.get('#request-dialog').open, 'confirmed Profile discard opens recent request');
+    assert.equal(ui.get('#weekly-email').value, 'weekly@example.org');
+    assert.equal(ui.params().get('request'), id);
+  }, { staff: { ...actorA, ...profileStaff, authenticationEmail: 'staff@example.org' } }));
+
+test('bulk access loss from a concurrent read retains the pending ledger until DELETE confirms, without attempting later items', () =>
+  fixture('?stage=profile', async ui => {
+    ui.get('[data-view="queue"]').click(); ui.get('[data-status="closed"]').click(); await settle();
+    await previewBulk(ui);
+    let resolveDelete;
+    ui.setApi(({ pathname, init }) => {
+      if (init.method === 'DELETE') return new Promise(done => { resolveDelete = done; });
+      if (pathname.endsWith('/title-requests')) return response(401, { code: 'staff_session_invalid' });
+    });
+    ui.get('#bulk-delete-execute').click(); await until(() => resolveDelete, 'destructive request pending');
+    const currentUrl = ui.dom.window.location.href;
+    ui.get('#refresh-queue').click(); await until(() => ui.get('#workspace').hidden, 'concurrent read lost access');
+    assert.match(ui.get('#signed-out-message').textContent, /outcome unconfirmed/);
+    assert.match(ui.get('#signed-out-message').textContent, /not attempted/);
+    assert.equal(protectedUnload(ui), true);
+    await ui.back(); assert.equal(ui.dom.window.location.href, currentUrl);
+    resolveDelete(response(200, { deleted: true }));
+    await until(() => /Confirmed deleted: 1 of 2/.test(ui.get('#signed-out-message').textContent), 'late DELETE result retained');
+    assert.match(ui.get('#signed-out-message').textContent, /Attempted: 1/);
+    assert.match(ui.get('#signed-out-message').textContent, /not attempted/);
+    assert.equal(ui.calls.filter(call => call.init.method === 'DELETE').length, 1);
+    assert.equal(protectedUnload(ui), false);
+  }, { status: 'closed', copyItems: [{ id: '71', type: 'additional_copy', status: 'closed', version: 'copy-v1',
+    libraryOrgId: 2, libraryOrgName: 'Library A', title: 'Not attempted copy' }] }));
 
 (async () => {
   let failed = 0;

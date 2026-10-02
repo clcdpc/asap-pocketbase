@@ -1164,7 +1164,36 @@ async function runStaleMutationCompletions(browser, args, report) {
       { version: assignedTitleA.version });
     assert.equal(repeatedTitleClear.status(), 409, await repeatedTitleClear.text());
 
+    const createSourceResponse = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/title-requests/${args.staleCreateSourceId}`);
+    assert.equal(createSourceResponse.status(), 200);
+    const createSource = await createSourceResponse.json();
+    let staleCreateSubmissions = 0;
+    const countStaleCreate = request => {
+      if (request.method() === 'POST' && request.url().endsWith(`/title-requests/${args.staleCreateSourceId}/additional-copy`)) {
+        staleCreateSubmissions += 1;
+      }
+    };
+    page.on('request', countStaleCreate);
+    for (const exit of ['back', 'top-level']) {
+      await page.goto(`${args.baseOrigin}/staff/?stage=${createSource.status}&scope=all`, { waitUntil: 'networkidle' });
+      await page.locator('#claim-filter').selectOption('all');
+      await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}`, exact: true }).click();
+      await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
+      await page.locator('#additional-copy-create-dialog[open]').waitFor();
+      if (exit === 'back') await page.goBack();
+      else await page.evaluate(() => document.querySelector('[data-view="profile"]').click());
+      await page.locator('#additional-copy-create-dialog').waitFor({ state: 'hidden' });
+      assert.equal(await page.locator('#request-dialog').isVisible(), false);
+      assert.equal(await page.locator('#request-dialog-body').evaluate(node => node.childElementCount), 0);
+      await page.evaluate(() => document.querySelector('#additional-copy-create-form')
+        .dispatchEvent(new Event('submit', { cancelable: true })));
+      await page.waitForTimeout(50);
+      assert.equal(staleCreateSubmissions, 0, 'a closed child dialog cannot dispatch a stale creation');
+    }
+    page.off('request', countStaleCreate);
     await page.goto(`${args.baseOrigin}/staff/?request=${args.staleCreateSourceId}`, { waitUntil: 'networkidle' });
+    const copyRecoveryKey = `asap.staff.unconfirmedCopyCreation.${args.superIdentity.tenantId.toLowerCase()}.${args.superIdentity.staffId}`;
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     await page.locator('#additional-copy-reminder').uncheck();
@@ -1175,7 +1204,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.route(createPath, noCommitCreate);
     await page.getByRole('button', { name: 'Create task' }).click();
     await page.locator('#app-status').filter({ hasText: /The task was not changed/ }).waitFor();
-    assert.equal(await page.evaluate(() => window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation')), null,
+    assert.equal(await page.evaluate(key => window.sessionStorage.getItem(key), copyRecoveryKey), null,
       'a definitive pre-mutation dependency error clears the pending attempt marker');
     assert.equal(await page.getByRole('button', { name: 'Create task' }).isEnabled(), true);
     await page.unroute(createPath, noCommitCreate);
@@ -1187,8 +1216,8 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.getByRole('button', { name: 'Create task' }).click();
     const acceptedCreate = await delayedMutation.accepted;
     assert.equal(acceptedCreate.status, 200);
-    const pendingAttempt = await page.evaluate(() =>
-      JSON.parse(window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation')));
+    const pendingAttempt = await page.evaluate(key =>
+      JSON.parse(window.sessionStorage.getItem(key)), copyRecoveryKey);
     assert.equal(pendingAttempt.sourceId, String(args.staleCreateSourceId),
       'the original source version must be saved before the task request is dispatched');
     const createdId = acceptedCreate.json.additionalCopyRequest.id;
@@ -1202,7 +1231,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     await delayedMutation.completed;
     await delayedMutation.dispose();
     await page.locator('#app-status').filter({ hasText: `Additional-copy task ${createdId} created.` }).waitFor();
-    assert.equal(await page.evaluate(() => window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation')), null);
+    assert.equal(await page.evaluate(key => window.sessionStorage.getItem(key), copyRecoveryKey), null);
     await page.locator('#additional-copy-create-dialog').waitFor({ state: 'hidden' });
     const createdResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${createdId}`
@@ -1315,7 +1344,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     assert.equal(fencedRetry.request().postDataJSON().version, uncertainSourceVersion,
       'the retry must submit the original source version, even after a newer preview');
     await page.locator('#additional-copy-create-dialog').waitFor({ state: 'hidden' });
-    assert.equal(await page.evaluate(() => window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation')), null,
+    assert.equal(await page.evaluate(key => window.sessionStorage.getItem(key), copyRecoveryKey), null,
       'the original-version retry fence clears after a definitive stale-version result');
     const refreshedTasks = await context.request.get(`${args.baseOrigin}/api/asap/staff/additional-copies?scope=all&status=open`);
     assert.equal(refreshedTasks.status(), 200, await refreshedTasks.text());
@@ -2172,10 +2201,20 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
     let sessionLoss = false;
     let actorChange = false;
     let timeoutFailure = false;
-    await page.route(/\/api\/asap\/staff\/requests\/9007199254741993$/, route => {
+    let releaseFirstDelete;
+    let firstDeleteRequested;
+    const firstDeleteStarted = new Promise(resolve => { firstDeleteRequested = resolve; });
+    let holdFirstDelete = true;
+    await page.route(/\/api\/asap\/staff\/requests\/9007199254741993$/, async route => {
       sent.push({ path: new URL(route.request().url()).pathname,
         version: route.request().postDataJSON().version,
         actorVersion: route.request().postDataJSON().actorVersion });
+      if (holdFirstDelete) {
+        holdFirstDelete = false;
+        const gate = new Promise(resolve => { releaseFirstDelete = resolve; });
+        firstDeleteRequested();
+        await gate;
+      }
       return route.fulfill({ status: actorChange ? 409 : 200, contentType: 'application/json',
         body: JSON.stringify(actorChange ? { code: 'actor_changed_since_preview' } : { deleted: true }) });
     });
@@ -2191,6 +2230,8 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
           : timeoutFailure && pathname.endsWith(highId) ? 'request_outcome_unconfirmed'
           : pathname.endsWith(nextId) ? 'not_found' : 'stale_version' }) });
     });
+    await page.getByRole('button', { name: 'Profile', exact: true }).click();
+    await page.getByRole('button', { name: 'Requests', exact: true }).click();
     await page.getByRole('button', { name: 'Delete closed work...' }).click();
     await page.locator('#bulk-delete-dialog[open]').waitFor();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'bulk-delete-scope');
@@ -2210,6 +2251,19 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
       button.click();
       button.click();
     });
+    await firstDeleteStarted;
+    const bulkRoute = page.url();
+    await page.evaluate(() => document.querySelector('[data-view="profile"]').click());
+    await page.goBack();
+    await page.waitForURL(bulkRoute);
+    assert.equal(await page.locator('#bulk-delete-dialog').isVisible(), true);
+    assert.equal(await page.locator('#queue-view').isVisible(), true);
+    assert.equal(await page.evaluate(() => {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    }), true, 'bulk deletion protects reload until the authoritative sequence completes');
+    releaseFirstDelete();
     await page.locator('#bulk-delete-results').filter({ hasText: 'Confirmed deleted: 1 of 3. Attempted: 3.' }).waitFor();
     assert.deepEqual(sent, [
       { path: '/api/asap/staff/requests/' + highId, version: title.version, actorVersion },
@@ -2581,6 +2635,27 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     await page.locator('#profile-view').waitFor({ state: 'visible' });
     await page.reload({ waitUntil: 'networkidle' });
     assert.equal(await page.locator('#profile-view').isVisible(), true);
+    const profileBaseline = await page.locator('#weekly-email').inputValue();
+    await page.locator('#weekly-email').fill('unsaved-profile@example.org');
+    const profileRoute = page.url();
+    assert.equal(await page.evaluate(() => {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    }), true);
+    await decideDiscard(() => page.getByRole('button', { name: 'Requests', exact: true }).click(), false, /Discard unsaved Profile/);
+    assert.equal(page.url(), profileRoute);
+    assert.equal(await page.locator('#weekly-email').inputValue(), 'unsaved-profile@example.org');
+    await decideDiscard(() => page.getByRole('button', { name: 'Requests', exact: true }).click(), true, /Discard unsaved Profile/);
+    assert.equal(await page.locator('#weekly-email').inputValue(), profileBaseline);
+    await page.goBack(); await page.locator('#profile-view').waitFor({ state: 'visible' });
+    await page.locator('#weekly-email').fill('forward-profile@example.org');
+    await decideDiscard(() => page.goForward(), false, /Discard unsaved Profile/);
+    await page.waitForURL(profileRoute);
+    assert.equal(await page.locator('#profile-view').isVisible(), true);
+    assert.equal(await page.locator('#weekly-email').inputValue(), 'forward-profile@example.org');
+    await page.locator('#weekly-email').fill(profileBaseline);
+    await page.goForward(); await page.locator('#queue-view').waitFor({ state: 'visible' });
     await page.getByRole('button', { name: 'Requests', exact: true }).click();
     await page.locator('#library-scope').selectOption('2');
     await page.locator('#claim-filter').selectOption('all');
@@ -3120,7 +3195,9 @@ async function runProfileSessionReplacementCase(browser, args, detectBeforeRespo
     const profileGate = new Promise(resolve => { releaseProfile = resolve; });
     let profileRequested;
     const profileStarted = new Promise(resolve => { profileRequested = resolve; });
+    let profileSubmissions = 0;
     await page.route('**/api/asap/staff/profile', async route => {
+      profileSubmissions += 1;
       profileRequested();
       await profileGate;
       await route.fulfill({ status: conflict ? 409 : 200, contentType: 'application/json',
@@ -3132,6 +3209,11 @@ async function runProfileSessionReplacementCase(browser, args, detectBeforeRespo
     await page.locator('#weekly-email').fill('saved-before-switch@example.org');
     await page.getByRole('button', { name: 'Save profile' }).click();
     await profileStarted;
+    await page.evaluate(() => document.querySelector('#profile-form')
+      .dispatchEvent(new Event('submit', { cancelable: true })));
+    await page.waitForTimeout(50);
+    assert.equal(profileSubmissions, 1, 'an unresolved Profile save cannot dispatch again');
+    assert.equal(await page.locator('#weekly-email').isDisabled(), true);
     await page.route('**/api/asap/staff/session', route => route.fulfill({ status: 200,
       contentType: 'application/json', body: JSON.stringify({ authenticated: true,
         accessAllowed: true, antiforgeryToken: 'replacement', staff: {
@@ -3139,10 +3221,11 @@ async function runProfileSessionReplacementCase(browser, args, detectBeforeRespo
           authenticationEmail: args.staffIdentity.email, role: 'staff', organizationId: 2
         } }) }));
     if (detectBeforeResponse) {
-      // Profile is now a real route. Refresh a protected queue to discover
-      // the replacement session while the earlier profile POST is still unresolved.
+      // The pending save protects the Profile route. A separate protected read
+      // still detects replacement access before the unresolved POST returns.
       await page.getByRole('button', { name: 'Requests', exact: true }).click();
-      await page.locator('#refresh-queue').click();
+      assert.equal(await page.locator('#profile-view').isVisible(), true);
+      await page.evaluate(() => document.querySelector('#refresh-queue').click());
       await page.locator('#workspace').waitFor({ state: 'hidden' });
     }
     releaseProfile();

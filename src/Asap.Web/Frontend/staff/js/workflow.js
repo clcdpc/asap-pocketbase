@@ -179,6 +179,7 @@ export function createWorkflowApp() {
     additionalCopyCreateReviewSummary: document.querySelector('#additional-copy-create-review-summary'),
     additionalCopyCreateReviewDone: document.querySelector('#additional-copy-create-review-done'),
     profile: document.querySelector('#profile-form'),
+    profileRefresh: document.querySelector('#profile-refresh'),
     notificationEmail: document.querySelector('#notification-email'),
     weeklyEmail: document.querySelector('#weekly-email'),
     weeklyEnabled: document.querySelector('#weekly-enabled'),
@@ -235,17 +236,20 @@ export function createWorkflowApp() {
     partialSessionFailureOwner: null,
     partialSessionFailureDetailAvailable: false,
     partialSessionFailureAfterQueueSequence: null,
-    unconfirmedCopyCreationAwaitingRefresh: readUnconfirmedCopyCreation(),
+    unconfirmedCopyCreationAwaitingRefresh: false,
     queueLoadSequence: 0,
     configurations: new Map(),
     research: null,
     currentRequest: null,
     editControls: null,
     editorDirty: false,
+    dialogDraftChecks: [],
     verifiedBib: null,
     dialogMutationInFlight: null,
     actionChoice: null,
     bulkDeleteState: null,
+    profileBaseline: null,
+    profileMutation: null,
     navigationGeneration: 0,
     routeSnapshot: null,
     restoringHistory: false,
@@ -264,7 +268,16 @@ export function createWorkflowApp() {
   function pushSettingsRouteParameter(scope, panel) { writeSettingsRouteParameter(scope, panel); rememberRoute(); }
 
   function hasRequestDraft() {
-    return dom.dialog.open && state.selectedRequestType === 'title_request' && state.editorDirty;
+    return dom.dialog.open && ((state.selectedRequestType === 'title_request' && state.editorDirty) ||
+      state.dialogDraftChecks.some(changed => changed()));
+  }
+
+  function trackDialogFormDraft(form) {
+    const value = control => control.type === 'checkbox' ? control.checked : control.value;
+    const baseline = [...form.querySelectorAll('input, select, textarea')]
+      .map(control => ({ control, value: value(control) }));
+    state.dialogDraftChecks.push(() => form.isConnected &&
+      baseline.some(item => value(item.control) !== item.value));
   }
 
   function hasSuggestionDraft() {
@@ -272,8 +285,35 @@ export function createWorkflowApp() {
       state.staffSuggestion?.controls?.queryInput?.value.trim());
   }
 
+  function profileValues() {
+    return {
+      notificationEmail: dom.notificationEmail.value,
+      weeklyActionSummaryEmail: dom.weeklyEmail.value,
+      weeklyActionSummaryEnabled: dom.weeklyEnabled.checked,
+      purchaseReminderDefault: dom.purchaseDefault.checked,
+      additionalCopyReminderDefault: dom.additionalCopyDefault.checked,
+      defaultMineUnclaimedFilter: dom.mineDefault.checked
+    };
+  }
+
+  function hasProfileDraft() {
+    if (!state.staff || !state.profileBaseline) return false;
+    const current = profileValues();
+    return Object.keys(current).some(key => current[key] !== state.profileBaseline[key]);
+  }
+
   function allowNavigation({ settings = true, request = true, suggestion = true } = {}) {
     if (state.closingDetailHistory || state.restoringHistory) return false;
+    if (state.bulkDeleteState?.submitting) {
+      announce('Deletion is in progress. Wait for the complete ledger before navigating away.', 'warning');
+      return false;
+    }
+    if (state.profileMutation) {
+      announce(state.profileMutation.outcomeUnconfirmed
+        ? 'Reload Profile to review the uncertain save before navigating away.'
+        : 'Wait for the Profile save to finish before navigating away.', 'warning');
+      return false;
+    }
     if (settings && settingsController.hasPendingMutation()) {
       announce('Wait for the settings change to finish before navigating away.', 'warning');
       return false;
@@ -296,13 +336,18 @@ export function createWorkflowApp() {
         !window.confirm('Discard unsaved request changes and navigate away?')) return false;
     if (suggestion && hasSuggestionDraft() &&
         !window.confirm('Discard the unsaved new suggestion and navigate away?')) return false;
+    if (hasProfileDraft() &&
+        !window.confirm('Discard unsaved Profile changes and navigate away?')) return false;
     if (settings && settingsController.isDirty()) settingsController.discardDraft();
+    if (hasProfileDraft()) populateProfile(state.staff);
+    closeBulkDelete({ navigation: true });
     return true;
   }
 
   function allowRequestMutation(request, saveDraft = false) {
     if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return false;
-    if (!saveDraft && hasRequestDraft()) {
+    // These mutations submit their own choice form; only unrelated request-editor edits block them.
+    if (!saveDraft && dom.dialog.open && state.editorDirty) {
       announce('Save or revert the current request edits before performing a workflow action.', 'warning');
       return false;
     }
@@ -355,14 +400,24 @@ export function createWorkflowApp() {
     return true;
   }
 
-  function readUnconfirmedCopyCreation() {
+  function copyCreationStorageKey(staff = state.staff) {
+    if (!staff?.tenantId || !validRequestId(String(staff.id))) return null;
+    return `asap.staff.unconfirmedCopyCreation.${String(staff.tenantId).toLowerCase()}.${staff.id}`;
+  }
+
+  function readUnconfirmedCopyCreation(staff) {
     try {
-      const saved = JSON.parse(window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation'));
+      // The obsolete record has no actor evidence and cannot be safely assigned to this account.
+      window.sessionStorage.removeItem('asap.staff.unconfirmedCopyCreation');
+      const storageKey = copyCreationStorageKey(staff);
+      if (!storageKey) return false;
+      const saved = JSON.parse(window.sessionStorage.getItem(storageKey));
       if (Number.isSafeInteger(saved?.libraryOrgId) && saved.libraryOrgId > 0 &&
           positivePolarisId(saved.bibid) !== null &&
-          typeof saved.sourceId === 'string' && /^\d+$/.test(saved.sourceId) &&
+          validRequestId(saved.sourceId) &&
           typeof saved.version === 'string' && saved.version) {
-        return { ...saved, bibid: positivePolarisId(saved.bibid), reviewReady: false, reviewed: false };
+        return { libraryOrgId: saved.libraryOrgId, bibid: positivePolarisId(saved.bibid),
+          sourceId: saved.sourceId, version: saved.version, storageKey, reviewReady: false, reviewed: false };
       }
     } catch {
       // A later create verifies storage availability before dispatch.
@@ -370,17 +425,18 @@ export function createWorkflowApp() {
     return false;
   }
 
-  function rememberUnconfirmedCopyCreation(value) {
+  function rememberUnconfirmedCopyCreation(value, storageKey = value?.storageKey || copyCreationStorageKey()) {
+    if (!storageKey) return false;
     try {
       if (value) {
-        window.sessionStorage.setItem('asap.staff.unconfirmedCopyCreation', JSON.stringify({
+        window.sessionStorage.setItem(storageKey, JSON.stringify({
           libraryOrgId: value.libraryOrgId,
           bibid: value.bibid,
           sourceId: value.sourceId,
           version: value.version
         }));
       } else {
-        window.sessionStorage.removeItem('asap.staff.unconfirmedCopyCreation');
+        window.sessionStorage.removeItem(storageKey);
       }
       return true;
     } catch {
@@ -725,17 +781,22 @@ export function createWorkflowApp() {
     dom.bulkDeleteCopies.hidden = !authorized || state.additionalCopyStatus !== 'closed';
   }
 
-  function closeBulkDelete(force = false) {
+  function closeBulkDelete(options = {}) {
     const batch = state.bulkDeleteState;
     if (!batch) return;
-    if (batch.submitting && !force) {
+    if (batch.submitting && !options.force) {
       dom.bulkDeleteSummary.textContent = 'Deletion is in progress. Wait for the result before closing.';
       return;
     }
     batch.previewAbort?.abort();
     state.bulkDeleteState = null;
     if (dom.bulkDeleteDialog.open) dom.bulkDeleteDialog.close();
-    if (batch.returnFocus?.isConnected && state.staff) batch.returnFocus.focus();
+    dom.bulkDeleteItems.replaceChildren();
+    dom.bulkDeleteResults.replaceChildren();
+    dom.bulkDeleteSummary.textContent = '';
+    dom.bulkDeleteConfirmation.value = '';
+    dom.bulkDeleteExecute.disabled = true;
+    if (!options.navigation && batch.returnFocus?.isConnected && state.staff) batch.returnFocus.focus();
   }
 
   function resetBulkDeletePreview() {
@@ -887,28 +948,49 @@ export function createWorkflowApp() {
     return 'operational_failure';
   }
 
-  function renderBulkLedger(batch) {
-    const deleted = batch.ledger.filter(item => item.outcome === 'deleted').length;
-    const attempted = batch.ledger.filter(item => item.outcome !== 'not_attempted').length;
+  function renderBulkLedger(batch, ledger = batch.ledger) {
+    const deleted = ledger.filter(item => item.outcome === 'deleted').length;
+    const attempted = ledger.filter(item => item.outcome !== 'not_attempted').length;
     const summary = 'Confirmed deleted: ' + deleted + ' of ' + batch.snapshot.items.length +
       '. Attempted: ' + attempted + '. Every record is rechecked by the server.';
     dom.bulkDeleteResults.replaceChildren(
       element('p', { text: summary }),
-      element('ul', {}, batch.ledger.map(item =>
+      element('ul', {}, ledger.map(item =>
         element('li', { text: bulkItemLabel(item) + ': ' + item.outcome.replaceAll('_', ' ') })))
     );
-    state.partialSessionFailureMessage = summary + ' ' + batch.ledger.map(item =>
+    state.partialSessionFailureMessage = summary + ' ' + ledger.map(item =>
       bulkItemLabel(item) + ': ' + item.outcome.replaceAll('_', ' ')).join('; ') +
       '. Sign in again and refresh Closed work before retrying.';
     state.partialSessionFailureOwner = batch;
     state.partialSessionFailureDetailAvailable = false;
     state.partialSessionFailureAfterQueueSequence = null;
+    if (!state.staff) dom.signedOutMessage.textContent = state.partialSessionFailureMessage;
+  }
+
+  function retainInterruptedBulkLedger() {
+    const batch = state.bulkDeleteState;
+    if (!batch?.submitting || !batch.currentItem) return;
+    const remaining = batch.snapshot.items.slice(batch.snapshot.items.indexOf(batch.currentItem) + 1);
+    // Losing access through another request does not determine the outstanding DELETE's outcome.
+    renderBulkLedger(batch, [...batch.ledger, { ...batch.currentItem, outcome: 'outcome_unconfirmed' },
+      ...remaining.map(item => ({ ...item, outcome: 'not_attempted' }))]);
   }
 
   async function executeBulkDelete() {
     const batch = state.bulkDeleteState;
     if (!batch?.snapshot || batch.submitting || dom.bulkDeleteConfirmation.value !== 'DELETE' ||
         dom.bulkDeleteScope.value !== batch.snapshot.scope || batch.snapshot.items.length === 0) return;
+    const owner = state.staff;
+    const navigationGeneration = state.navigationGeneration;
+    const view = state.activeView;
+    let expectedScope = state.scope;
+    let expectedStatus = state.status;
+    let expectedCopyStatus = state.additionalCopyStatus;
+    let expectedRoute = state.routeSnapshot?.href;
+    const isCurrentContext = () => state.bulkDeleteState === batch && state.staff === owner &&
+      state.navigationGeneration === navigationGeneration && state.activeView === view &&
+      state.scope === expectedScope && state.status === expectedStatus &&
+      state.additionalCopyStatus === expectedCopyStatus && window.location.href === expectedRoute;
     batch.submitting = true;
     dom.bulkDeleteExecute.disabled = true;
     dom.bulkDeletePreview.disabled = true;
@@ -916,7 +998,7 @@ export function createWorkflowApp() {
     dom.bulkDeleteConfirmation.disabled = true;
     let stop = false;
     for (const item of batch.snapshot.items) {
-      if (stop || state.bulkDeleteState !== batch || !state.staff) {
+      if (stop || state.bulkDeleteState !== batch || state.staff !== owner) {
         batch.ledger.push({ ...item, outcome: 'not_attempted' });
         continue;
       }
@@ -931,7 +1013,6 @@ export function createWorkflowApp() {
         batch.ledger.push({ ...item, outcome: result?.deleted === true ? 'deleted' : 'outcome_unconfirmed' });
         if (result?.deleted !== true) stop = true;
       } catch (error) {
-        if (state.bulkDeleteState !== batch) return;
         const outcome = bulkOutcome(error);
         batch.ledger.push({ ...item, outcome });
         stop = outcome === 'outcome_unconfirmed' || outcome === 'actor_changed' ||
@@ -940,20 +1021,33 @@ export function createWorkflowApp() {
       batch.currentItem = null;
       if (state.bulkDeleteState === batch) renderBulkLedger(batch);
     }
-    if (state.bulkDeleteState !== batch || !state.staff) return;
     batch.submitting = false;
+    if (state.bulkDeleteState !== batch) return;
     renderBulkLedger(batch);
+    if (!state.staff) {
+      state.bulkDeleteState = null;
+      return;
+    }
+    dom.bulkDeleteSummary.textContent = 'Deletion finished. Review the ledger and refresh Closed work before retrying.';
+    if (!isCurrentContext()) return;
     state.scope = batch.snapshot.scope;
     dom.scope.value = state.scope;
     dom.additionalCopyScope.value = state.scope;
     state.status = 'closed';
     state.additionalCopyStatus = 'closed';
+    expectedScope = state.scope;
+    expectedStatus = state.status;
+    expectedCopyStatus = state.additionalCopyStatus;
+    replaceStageParameter(view === 'additional-copies' ? 'additional_copies' : 'closed');
+    expectedRoute = state.routeSnapshot.href;
     for (const tab of dom.statusTabs) tab.setAttribute('aria-selected', String(tab.dataset.status === 'closed'));
     for (const tab of dom.additionalCopyStatusTabs) {
       tab.setAttribute('aria-selected', String(tab.dataset.copyStatus === 'closed'));
     }
     const queueRefreshed = await loadQueue({ skipDeepLink: true, silent: true });
+    if (!isCurrentContext()) return;
     const copiesRefreshed = await loadAdditionalCopies({ skipDeepLink: true, silent: true });
+    if (!isCurrentContext()) return;
     if (queueRefreshed === true && copiesRefreshed === true) clearCommittedSessionFallback(batch);
     if (state.bulkDeleteState === batch) {
       dom.bulkDeleteSummary.textContent = queueRefreshed === true && copiesRefreshed === true
@@ -984,7 +1078,7 @@ export function createWorkflowApp() {
     dom.recentList.replaceChildren();
     if (state.bulkDeleteState) {
       state.bulkDeleteState.previewAbort?.abort();
-      state.bulkDeleteState = null;
+      if (!state.bulkDeleteState.submitting) state.bulkDeleteState = null;
     }
     if (dom.bulkDeleteDialog.open) dom.bulkDeleteDialog.close();
     polarisLookup.close();
@@ -1015,12 +1109,17 @@ export function createWorkflowApp() {
     state.currentRequest = null;
     state.editControls = null;
     state.editorDirty = false;
+    state.dialogDraftChecks = [];
     state.selectedRequestId = null;
     state.selectedRequestType = null;
     state.selectedRequestVersion = null;
     state.returnFocus = null;
     state.createCopyRequest = null;
     state.createCopyReturnFocus = null;
+    state.unconfirmedCopyCreationAwaitingRefresh = false;
+    dom.additionalCopyCreateReview.hidden = true;
+    state.profileMutation = null;
+    populateProfile(null);
     state.staffSuggestion = null;
     state.staffSuggestionReturnFocus = null;
     latestLoads.begin('queue').abort();
@@ -1063,13 +1162,13 @@ export function createWorkflowApp() {
     state.partialSessionFailureOwner = null;
     state.partialSessionFailureDetailAvailable = false;
     state.partialSessionFailureAfterQueueSequence = null;
-    if (state.unconfirmedCopyCreationAwaitingRefresh) {
-      state.unconfirmedCopyCreationAwaitingRefresh.reviewReady = false;
-      state.unconfirmedCopyCreationAwaitingRefresh.reviewed = false;
-      state.additionalCopyLoaded = false;
-      dom.additionalCopyCreateReview.hidden = true;
-    }
     state.staff = staff;
+    state.unconfirmedCopyCreationAwaitingRefresh = readUnconfirmedCopyCreation(staff);
+    dom.additionalCopyCreateReview.hidden = true;
+    if (state.unconfirmedCopyCreationAwaitingRefresh) {
+      state.additionalCopyLoaded = false;
+    }
+    state.operationMutation = null;
     try {
       const retained = JSON.parse(window.sessionStorage.getItem(operationStorageKey(staff)) || 'null');
       if (retained?.operationId && typeof retained.path === 'string' &&
@@ -1113,12 +1212,14 @@ export function createWorkflowApp() {
   }
 
   function populateProfile(staff) {
-    dom.notificationEmail.value = staff.notificationEmail || '';
-    dom.weeklyEmail.value = staff.weeklyActionSummaryEmail || '';
-    dom.weeklyEnabled.checked = staff.weeklyActionSummaryEnabled;
-    dom.purchaseDefault.checked = staff.purchaseReminderDefault;
-    dom.additionalCopyDefault.checked = staff.additionalCopyReminderDefault;
-    dom.mineDefault.checked = staff.defaultMineUnclaimedFilter;
+    dom.notificationEmail.value = staff?.notificationEmail || '';
+    dom.weeklyEmail.value = staff?.weeklyActionSummaryEmail || '';
+    dom.weeklyEnabled.checked = Boolean(staff?.weeklyActionSummaryEnabled);
+    dom.purchaseDefault.checked = Boolean(staff?.purchaseReminderDefault);
+    dom.additionalCopyDefault.checked = Boolean(staff?.additionalCopyReminderDefault);
+    dom.mineDefault.checked = Boolean(staff?.defaultMineUnclaimedFilter);
+    state.profileBaseline = staff ? profileValues() : null;
+    updateProfileControls();
   }
 
   async function startSession() {
@@ -1145,7 +1246,10 @@ export function createWorkflowApp() {
   }
 
   async function navigateFromUrl() {
-    if (!state.staff) return;
+    if (!state.staff) {
+      if (state.bulkDeleteState?.submitting) rejectTraversal();
+      return;
+    }
     if (state.restoringHistory) {
       state.restoringHistory = false;
       return;
@@ -1839,8 +1943,8 @@ export function createWorkflowApp() {
   async function openAdditionalCopy(id, returnFocus, options = {}) {
     if (!state.staff) return false;
     if (state.closingDetailHistory || state.restoringHistory) return false;
-    if (!options.authoritativeRefresh && dom.dialog.open &&
-        !allowNavigation({ settings: false, suggestion: false })) return false;
+    if (!options.authoritativeRefresh && !allowNavigation({ suggestion: false })) return false;
+    if (!closeAdditionalCopyCreateDialog({ navigation: true })) return false;
     const navigationGeneration = ++state.navigationGeneration;
     const staff = state.staff;
     polarisLookup.close();
@@ -1911,6 +2015,7 @@ export function createWorkflowApp() {
   }
 
   function renderAdditionalCopy(request, { preserveDialogMutation = false } = {}) {
+    state.dialogDraftChecks = [];
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();
     cancelAdditionalCopyPreviewLoad();
@@ -2132,6 +2237,7 @@ export function createWorkflowApp() {
           assigneeId: select.value
         });
       });
+      trackDialogFormDraft(form);
       dom.dialogBody.prepend(form);
       select.focus();
       announce(candidates.length ? 'Choose an assignee.' : 'No eligible staff are available.');
@@ -2148,8 +2254,8 @@ export function createWorkflowApp() {
   async function openRequest(id, returnFocus, options = {}) {
     if (!state.staff) return;
     if (state.closingDetailHistory || state.restoringHistory) return false;
-    if (!options.authoritativeRefresh && dom.dialog.open &&
-        !allowNavigation({ settings: false, suggestion: false })) return false;
+    if (!options.authoritativeRefresh && !allowNavigation({ suggestion: false })) return false;
+    if (!closeAdditionalCopyCreateDialog({ navigation: true })) return false;
     const navigationGeneration = ++state.navigationGeneration;
     const staff = state.staff;
     polarisLookup.close();
@@ -2162,6 +2268,7 @@ export function createWorkflowApp() {
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();
     cancelDialogMutationCompletion();
+    cancelActionChoiceLoad();
     cancelAdditionalCopyPreviewLoad();
     cancelAdditionalCopyCreationCompletion();
     state.selectedRequestId = String(id);
@@ -2798,6 +2905,7 @@ export function createWorkflowApp() {
   }
 
   function renderRequest(request, configuration, { preserveDialogMutation = false } = {}) {
+    state.dialogDraftChecks = [];
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();
     cancelAdditionalCopyPreviewLoad();
@@ -3345,6 +3453,7 @@ export function createWorkflowApp() {
     const choice = { request, action, panel, returnFocus };
     state.actionChoice = choice;
     panel.append(element('div', { className: 'form-actions' }, [submit, cancel]));
+    if (action !== 'reject') trackDialogFormDraft(panel);
     panel.addEventListener('submit', async event => {
       event.preventDefault();
       if (state.actionChoice !== choice || !isCurrentDialogRequest(request, 'title_request')) return;
@@ -3370,6 +3479,7 @@ export function createWorkflowApp() {
           input.append(element('option', { value: String(item.id), text: item.name }));
         }
         input.value = data.defaultTemplateId || '';
+        trackDialogFormDraft(panel);
         submit.disabled = false;
       })
       .catch(error => {
@@ -3465,7 +3575,10 @@ export function createWorkflowApp() {
     state.createCopyRequest = null;
     const returnFocus = state.createCopyReturnFocus;
     state.createCopyReturnFocus = null;
-    if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+    dom.createCopySummary.textContent = '';
+    dom.createCopyReminder.checked = false;
+    dom.createCopyForm.querySelector('button[type="submit"]').disabled = true;
+    if (!options.navigation && returnFocus?.isConnected) returnFocus.focus();
     return true;
   }
 
@@ -3481,15 +3594,16 @@ export function createWorkflowApp() {
     const submit = dom.createCopyForm.querySelector('button[type="submit"]');
     submit.disabled = true;
     announce('Creating additional-copy task...');
+    const attempt = uncertainCreation || {
+      libraryOrgId: pending.request.libraryOrgId,
+      bibid: pending.request.bibid,
+      sourceId: String(pending.request.id),
+      version: pending.version,
+      storageKey: copyCreationStorageKey(),
+      reviewReady: false,
+      reviewed: false
+    };
     try {
-      const attempt = uncertainCreation || {
-        libraryOrgId: pending.request.libraryOrgId,
-        bibid: pending.request.bibid,
-        sourceId: String(pending.request.id),
-        version: pending.version,
-        reviewReady: false,
-        reviewed: false
-      };
       if (!rememberUnconfirmedCopyCreation(attempt)) {
         announce('This browser could not save the pending task attempt. Enable site storage before creating the task.', 'error');
         return;
@@ -3515,7 +3629,7 @@ export function createWorkflowApp() {
         throw unconfirmedResponseError();
       }
       state.unconfirmedCopyCreationAwaitingRefresh = false;
-      rememberUnconfirmedCopyCreation(false);
+      rememberUnconfirmedCopyCreation(false, attempt.storageKey);
       const taskId = result.additionalCopyRequest?.id || result.additionalCopyRequestId;
       const notification = notificationOutcome(result.notificationStatus, result.notificationReason, 'Purchase reminder');
       const message = `Additional-copy task ${taskId || ''} created. Final state: ${statusLabel(result.finalStatus || 'open')}.${notification.text}`;
@@ -3540,8 +3654,10 @@ export function createWorkflowApp() {
       const definiteNoCommit = [400, 401, 403, 404, 409].includes(error.status) ||
         (error.status === 503 && error.response?.code === 'notification_dependency_unavailable');
       if (definiteNoCommit) {
-        state.unconfirmedCopyCreationAwaitingRefresh = false;
-        rememberUnconfirmedCopyCreation(false);
+        if (state.unconfirmedCopyCreationAwaitingRefresh === attempt) {
+          state.unconfirmedCopyCreationAwaitingRefresh = false;
+        }
+        rememberUnconfirmedCopyCreation(false, attempt.storageKey);
       }
       const unconfirmedOutcome = !definiteNoCommit &&
         (isUnconfirmedMutationError(error, mutation.signal) || error.status === 408 || error.status >= 500);
@@ -3830,6 +3946,7 @@ export function createWorkflowApp() {
           assigneeId: select.value
         }, 'Request assigned.');
       });
+      trackDialogFormDraft(form);
       dom.dialogBody.prepend(form);
       select.focus();
       announce(candidates.length ? 'Choose an assignee.' : 'No eligible staff are available.');
@@ -3889,6 +4006,7 @@ export function createWorkflowApp() {
           }, 'Observed pickup preference reconciled.');
         }, 'secondary-button'));
       }
+      trackDialogFormDraft(form);
       dom.dialogBody.prepend(form);
       select.focus();
       announce('Current pickup preference loaded.');
@@ -4017,6 +4135,7 @@ export function createWorkflowApp() {
       ])
     );
     updateEvidence();
+    trackDialogFormDraft(form);
     form.addEventListener('submit', async event => {
       event.preventDefault();
       const provenFinalHoldId = finalHoldId.disabled ? null : positivePolarisId(finalHoldId.value);
@@ -4118,10 +4237,48 @@ export function createWorkflowApp() {
     }
   }
 
+  function updateProfileControls() {
+    const mutation = state.profileMutation;
+    for (const control of dom.profile.querySelectorAll('input, button')) {
+      control.disabled = Boolean(mutation);
+    }
+    dom.profile.setAttribute('aria-busy', String(Boolean(mutation?.pending)));
+    dom.profileRefresh.hidden = !mutation?.outcomeUnconfirmed;
+    dom.profileRefresh.disabled = Boolean(mutation?.pending);
+  }
+
+  async function refreshUnconfirmedProfile() {
+    const mutation = state.profileMutation;
+    if (!mutation?.outcomeUnconfirmed || mutation.pending || state.staff !== mutation.owner) return;
+    if (hasProfileDraft() && !window.confirm('Discard the Profile draft and reload current saved preferences to review the uncertain save?')) return;
+    mutation.pending = true;
+    updateProfileControls();
+    try {
+      const session = await loadStaffSession();
+      if (state.profileMutation !== mutation || state.staff !== mutation.owner) return;
+      if (!session.authenticated) { showSignedOut(); return; }
+      if (session.accessAllowed === false) { showAccessUnavailable(); return; }
+      state.staff = session.staff;
+      state.profileMutation = null;
+      populateProfile(session.staff);
+      announce('Current Profile loaded. Review the saved preferences before making another change.', 'warning');
+    } catch (error) {
+      if (state.profileMutation === mutation && error.status !== 401) {
+        announce('Profile could not refresh. Review current saved preferences before retrying.', 'error');
+      }
+    } finally {
+      if (state.profileMutation === mutation) mutation.pending = false;
+      updateProfileControls();
+    }
+  }
+
   async function saveProfile(event) {
     event.preventDefault();
     const owner = state.staff;
-    if (!owner) return;
+    if (!owner || state.profileMutation) return;
+    const mutation = { owner, pending: true, outcomeUnconfirmed: false };
+    state.profileMutation = mutation;
+    updateProfileControls();
     announce('Saving profile...');
     try {
       const result = await authorizedJson('/api/asap/staff/profile', {
@@ -4135,6 +4292,10 @@ export function createWorkflowApp() {
           defaultMineUnclaimedFilter: dom.mineDefault.checked
         }
       });
+      if (!result?.staff || String(result.staff.id) !== String(owner.id) ||
+          result.staff.tenantId !== owner.tenantId || !result.staff.version) {
+        throw unconfirmedResponseError();
+      }
       const committedMessage = 'Profile saved. Sign in again to review the saved profile.';
       if (state.staff !== owner) {
         state.partialSessionFailureMessage = committedMessage;
@@ -4155,7 +4316,8 @@ export function createWorkflowApp() {
         return;
       }
       state.partialSessionFailureMessage = null;
-      state.staff = result.staff;
+      // The session read supplies the latest rowversion and preferences, including concurrent changes.
+      state.staff = session.staff;
       populateProfile(state.staff);
       dom.claim.value = state.staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
       dom.additionalCopyClaim.value = state.staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
@@ -4186,7 +4348,19 @@ export function createWorkflowApp() {
         state.staff = session.staff;
         populateProfile(session.staff);
       }
-      if (error.status !== 401) announce(error.message || 'Profile could not be saved.', 'error');
+      const unconfirmed = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
+      if (unconfirmed) {
+        mutation.outcomeUnconfirmed = true;
+        announce('Profile save could not be confirmed. Reload Profile to review current saved preferences before retrying.', 'warning');
+      } else if (error.status !== 401) {
+        announce(error.message || 'Profile could not be saved.', 'error');
+      }
+    } finally {
+      if (state.profileMutation === mutation) {
+        mutation.pending = false;
+        if (!mutation.outcomeUnconfirmed) state.profileMutation = null;
+      }
+      updateProfileControls();
     }
   }
 
@@ -4265,6 +4439,7 @@ export function createWorkflowApp() {
     }
     if (!options.force && !options.guarded && !options.preserveMutation &&
         !allowNavigation({ settings: false, suggestion: false })) return false;
+    if (!closeAdditionalCopyCreateDialog({ navigation: true, force: options.force })) return false;
     polarisLookup.close();
     latestLoads.begin('research-configuration').abort();
     state.verifiedBib = null;
@@ -4272,6 +4447,7 @@ export function createWorkflowApp() {
     state.currentRequest = null;
     state.editControls = null;
     state.editorDirty = false;
+    state.dialogDraftChecks = [];
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();
@@ -4280,6 +4456,7 @@ export function createWorkflowApp() {
     cancelAdditionalCopyPreviewLoad();
     cancelAdditionalCopyCreationCompletion();
     if (dom.dialog.open) dom.dialog.close();
+    dom.dialogBody.replaceChildren();
     const selectedId = state.selectedRequestId;
     const wasAdditionalCopy = state.selectedRequestType === 'additional_copy';
     const returnFocus = state.returnFocus;
@@ -4338,14 +4515,7 @@ export function createWorkflowApp() {
 
   function bindEvents() {
     onSessionInvalid(error => {
-      const batch = state.bulkDeleteState;
-      if (batch?.submitting && batch.currentItem) {
-        batch.ledger.push({ ...batch.currentItem, outcome: 'forbidden/out_of_scope' });
-        const remaining = batch.snapshot.items.slice(batch.snapshot.items.indexOf(batch.currentItem) + 1);
-        batch.ledger.push(...remaining.map(item => ({ ...item, outcome: 'not_attempted' })));
-        renderBulkLedger(batch);
-        batch.currentItem = null;
-      }
+      retainInterruptedBulkLedger();
       const pickupChanged = error.response?.code === 'request_not_created_pickup_changed' &&
         error.response?.pickupPreferenceChanged === true;
       if (pickupChanged) {
@@ -4361,14 +4531,7 @@ export function createWorkflowApp() {
         'Your staff session ended or no longer has access. Sign in again.');
     });
     onAccessUnavailable(() => {
-      const batch = state.bulkDeleteState;
-      if (batch?.submitting && batch.currentItem) {
-        batch.ledger.push({ ...batch.currentItem, outcome: 'forbidden/out_of_scope' });
-        const remaining = batch.snapshot.items.slice(batch.snapshot.items.indexOf(batch.currentItem) + 1);
-        batch.ledger.push(...remaining.map(item => ({ ...item, outcome: 'not_attempted' })));
-        renderBulkLedger(batch);
-        batch.currentItem = null;
-      }
+      retainInterruptedBulkLedger();
       showAccessUnavailable();
     });
     settingsController.bind();
@@ -4514,6 +4677,7 @@ export function createWorkflowApp() {
     dom.additionalCopySearch.addEventListener('input', renderAdditionalCopyGrid);
     dom.additionalCopyClaim.addEventListener('change', renderAdditionalCopyGrid);
     dom.profile.addEventListener('submit', saveProfile);
+    dom.profileRefresh.addEventListener('click', refreshUnconfirmedProfile);
     for (const tab of dom.viewTabs) tab.addEventListener('click', () => {
       switchView(tab.dataset.view);
     });
@@ -4551,7 +4715,8 @@ export function createWorkflowApp() {
       closeStaffSuggestion();
     });
     window.addEventListener('beforeunload', event => {
-      if (!hasRequestDraft() && !hasSuggestionDraft()) return;
+      if (!hasRequestDraft() && !hasSuggestionDraft() && !hasProfileDraft() &&
+          !state.profileMutation && !state.bulkDeleteState?.submitting) return;
       event.preventDefault();
       event.returnValue = '';
     });
