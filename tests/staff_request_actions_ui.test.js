@@ -652,9 +652,14 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
         'newer request is present in the queue');
       document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+      assert.equal(document.querySelector('#request-dialog-title').textContent, 'Original title',
+        'opening another request must not abandon an unresolved workflow mutation');
+      releaseMutation();
+      await until(() => /Workflow action completed/.test(document.querySelector('#app-status').textContent),
+        'the authoritative workflow result must finish before navigation');
+      document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
       await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
         'forced newer request takes ownership of the dialog');
-      releaseMutation();
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(document.querySelector('#request-dialog-title').textContent, 'Other request');
       assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
@@ -669,9 +674,13 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
           'other request is in the queue');
         document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+        assert.equal(document.querySelector('#request-dialog-title').textContent, 'Original title',
+          'navigation must wait while the mutation has no authoritative result');
+        releaseDuplicate();
+        await until(() => document.querySelector('.duplicate-recovery'), 'authoritative duplicate response is handled');
+        document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
         await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
           'newer request takes ownership of the dialog');
-        releaseDuplicate();
         await new Promise(resolve => setImmediate(resolve));
         assert.equal(document.querySelector('#request-dialog-title').textContent, 'Other request');
         assert.equal(document.querySelector('.duplicate-recovery'), null);

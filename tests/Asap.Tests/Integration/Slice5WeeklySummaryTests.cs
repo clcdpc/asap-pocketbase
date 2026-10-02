@@ -281,6 +281,37 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task ForcedWeeklySummaryHttpRetryPreservesItsDurableManualRunIdentity()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var jobs = factory!.Services.GetRequiredService<IBackgroundJobClient>();
+        var storage = factory.Services.GetRequiredService<JobStorage>();
+        var operationId = Guid.Parse("d6fbf6a3-7f16-4f8f-b74e-4bef3d570100");
+        var jobIds = new List<string>();
+        try
+        {
+            using var client = factory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                using var response = await client.PostAsync(
+                    $"/api/asap/staff/workflow/weekly-summary/run-now?force=true&operationId={operationId:D}", null);
+                Assert.AreEqual(System.Net.HttpStatusCode.Accepted, response.StatusCode);
+                using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                Assert.AreEqual(operationId, body.RootElement.GetProperty("manualRunId").GetGuid());
+                var jobId = body.RootElement.GetProperty("jobId").GetString()!;
+                jobIds.Add(jobId);
+                Assert.AreEqual(operationId, (Guid)ReadEnqueuedHangfireJob(storage, jobId).Args[2]);
+            }
+        }
+        finally
+        {
+            DeleteHangfireJobs(jobs, jobIds);
+        }
+    }
+
+    [TestMethod]
     public async Task NormalWeeklySummaryUsesBusinessPeriodAndQueuesOnlyOnceForCurrentRecipient()
     {
         var superAdmin = await ReadConfiguredSuperAdminAsync();

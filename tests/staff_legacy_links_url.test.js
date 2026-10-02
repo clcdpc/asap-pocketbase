@@ -87,7 +87,7 @@ const switched = new URL(replaceStageUrl(sourceUrl, 'analytics'), origin);
 assert.equal(switched.searchParams.has('request'), false);
 assert.equal(switched.searchParams.get('stage'), 'analytics');
 assert.equal(switched.searchParams.get('status'), 'new');
-assert.equal(switched.searchParams.get('scope'), '2');
+assert.equal(switched.searchParams.has('scope'), false, 'operational scope must not leak into Analytics');
 assert.equal(switched.hash, '#details');
 
 const typed = new URL(requestUrl(url('?stage=additional_copies&request=42'), bigId, 'suggestion'), origin);

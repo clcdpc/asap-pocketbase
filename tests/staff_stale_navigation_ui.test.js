@@ -108,6 +108,8 @@ async function until(predicate, message) {
     document.querySelector(`[aria-label="Open request ${firstId}"]`).click();
     await until(() => document.getElementById('request-dialog-title').textContent === 'First title', 'first detail opens');
     document.getElementById('close-request').click();
+    await until(() => !new URL(dom.window.location.href).searchParams.has('request'),
+      'explicit close must return to its parent history entry');
     await until(() => document.querySelector('#recent-request-list button'), 'recent item recorded');
     staleRecentRead = deferred();
     document.querySelector('#recent-request-list button').click();

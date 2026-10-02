@@ -17,6 +17,35 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    public async Task TestEmailRetriesWithTheSameOperationIdCommitOneDurableIntent()
+    {
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var operationId = Guid.Parse("c3db5a60-f44d-43d7-905b-55bd5e29a123");
+        var service = new EmailOperationsService(contextFactory, new FailingEmailDispatcher(),
+            new ReadinessSender(_ => Task.FromResult(EmailTransportReadiness.Configured)),
+            factory.Services.GetRequiredService<RecipientDomainPolicy>(), TimeProvider.System,
+            factory.Services.GetRequiredService<StaffEligibilityService>());
+        var key = $"operational-test:1:{actor.Id}:{operationId:N}";
+        try
+        {
+            var results = await Task.WhenAll(
+                service.QueueTestAsync(actor, 1, CancellationToken.None, operationId),
+                service.QueueTestAsync(actor, 1, CancellationToken.None, operationId));
+            var first = JsonSerializer.SerializeToElement(results[0].Data).GetProperty("id").GetString();
+            var second = JsonSerializer.SerializeToElement(results[1].Data).GetProperty("id").GetString();
+            Assert.AreEqual(first, second);
+            Assert.IsTrue(results.All(result => result.Code is "queued" or "suppressed"));
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(item => item.BusinessKey == key));
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @key;", ("@key", key));
+        }
+    }
+
+    [TestMethod]
     public async Task TestEmailIntentRemainsQueuedWhenImmediateDispatchFailsAfterCommit()
     {
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();

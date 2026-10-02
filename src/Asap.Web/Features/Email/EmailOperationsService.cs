@@ -86,7 +86,8 @@ public sealed class EmailOperationsService(
     public async Task<EmailOperationResult> QueueTestAsync(
         CurrentStaff actor,
         int? organizationId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? operationId = null)
     {
         if (!TryResolveScope(actor, organizationId, out var scope))
         {
@@ -137,6 +138,20 @@ public sealed class EmailOperationsService(
         }
 
         var currentActor = locked.Staff!;
+        var businessKey = operationId.HasValue
+            ? $"operational-test:{targetOrganizationId}:{currentActor.Id}:{operationId.Value:N}"
+            : null;
+        if (businessKey is not null)
+        {
+            var existing = await context.EmailOutbox.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.BusinessKey == businessKey, cancellationToken);
+            if (existing is not null)
+            {
+                return new EmailOperationResult(existing.Status == "suppressed" ? "suppressed" : "queued",
+                    new { id = existing.Id.ToString(CultureInfo.InvariantCulture), code = existing.SuppressionReason,
+                        version = StaffVersion.Encode(existing.RowVersion), replayed = true, status = existing.Status });
+            }
+        }
         var settings = await ReadEffectiveSettingsAsync(context, targetOrganizationId, cancellationToken);
         var address = StaffEmail.TryNormalize(currentActor.NotificationEmail, out var normalized)
             ? normalized
@@ -149,7 +164,7 @@ public sealed class EmailOperationsService(
         var outbox = new EmailOutbox
         {
             OrganizationId = targetOrganizationId,
-            BusinessKey = null,
+            BusinessKey = businessKey,
             DeliveryClass = "operational_test",
             ToAddress = address,
             FromAddress = settings.FromAddress,

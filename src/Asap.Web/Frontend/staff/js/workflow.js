@@ -22,13 +22,19 @@ import {
   requestedSettingsPanelFromUrl,
   requestedSettingsScopeFromUrl,
   requestedStatusFromUrl,
-  pushRequestParameter,
-  pushSettingsPanelParameter,
-  pushSettingsRouteParameter,
-  pushSettingsScopeParameter,
-  pushStageParameter,
-  replaceRequestParameter,
-  replaceStageParameter
+  requestedOperationalScopeFromUrl,
+  requestedCopyStatusFromUrl,
+  initializeStaffHistory,
+  staffHistorySnapshot,
+  restoreStaffHistory,
+  closeDetailHistory,
+  pushRequestParameter as writeRequestParameter,
+  pushSettingsPanelParameter as writeSettingsPanelParameter,
+  pushSettingsRouteParameter as writeSettingsRouteParameter,
+  pushSettingsScopeParameter as writeSettingsScopeParameter,
+  pushStageParameter as writeStageParameter,
+  replaceRequestParameter as writeReplacedRequestParameter,
+  replaceStageParameter as writeReplacedStageParameter
 } from './url-utils.js';
 
 const STATUS_LABELS = {
@@ -219,6 +225,7 @@ export function createWorkflowApp() {
     additionalCopyLoaded: false,
     operationsScope: 'all',
     operationsLoaded: false,
+    operationMutation: null,
     createCopyRequest: null,
     createCopyReturnFocus: null,
     staffSuggestion: null,
@@ -240,8 +247,113 @@ export function createWorkflowApp() {
     actionChoice: null,
     bulkDeleteState: null,
     navigationGeneration: 0,
+    routeSnapshot: null,
+    restoringHistory: false,
+    closingDetailHistory: false,
     recentKey: null
   };
+
+  const queueRouteContext = () => ({ scope: state.scope, copyStatus: state.additionalCopyStatus });
+  function rememberRoute() { state.routeSnapshot = staffHistorySnapshot(); }
+  function pushRequestParameter(id, stage) { writeRequestParameter(id, stage, queueRouteContext()); rememberRoute(); }
+  function pushStageParameter(stage) { writeStageParameter(stage, queueRouteContext()); rememberRoute(); }
+  function replaceStageParameter(stage) { writeReplacedStageParameter(stage, queueRouteContext()); rememberRoute(); }
+  function replaceRequestParameter(id, copy = false) { writeReplacedRequestParameter(id, copy, queueRouteContext()); rememberRoute(); }
+  function pushSettingsPanelParameter(panel) { writeSettingsPanelParameter(panel); rememberRoute(); }
+  function pushSettingsScopeParameter(scope) { writeSettingsScopeParameter(scope); rememberRoute(); }
+  function pushSettingsRouteParameter(scope, panel) { writeSettingsRouteParameter(scope, panel); rememberRoute(); }
+
+  function hasRequestDraft() {
+    return dom.dialog.open && state.selectedRequestType === 'title_request' && state.editorDirty;
+  }
+
+  function hasSuggestionDraft() {
+    return dom.staffSuggestionDialog.open && Boolean(state.staffSuggestion?.dirty ||
+      state.staffSuggestion?.controls?.queryInput?.value.trim());
+  }
+
+  function allowNavigation({ settings = true, request = true, suggestion = true } = {}) {
+    if (state.closingDetailHistory || state.restoringHistory) return false;
+    if (settings && settingsController.hasPendingMutation()) {
+      announce('Wait for the settings change to finish before navigating away.', 'warning');
+      return false;
+    }
+    if (settings && settingsController.hasUnconfirmedOutcome()) {
+      announce('Reload current settings to verify the uncertain change before navigating away.', 'warning');
+      return false;
+    }
+    if (request && (state.dialogMutationInFlight || state.createCopyRequest?.submitting)) {
+      announce('The workflow action is in progress. Wait for its authoritative result before navigating away.', 'warning');
+      return false;
+    }
+    if (suggestion && (state.staffSuggestion?.submitting || state.staffSuggestion?.outcomeUnconfirmed)) {
+      setStaffSuggestionStatus('Creation is in progress or unconfirmed. Review its authoritative result before leaving.', 'error');
+      return false;
+    }
+    if (settings && settingsController.isDirty() &&
+        !window.confirm('Discard unsaved settings changes and navigate away?')) return false;
+    if (request && hasRequestDraft() &&
+        !window.confirm('Discard unsaved request changes and navigate away?')) return false;
+    if (suggestion && hasSuggestionDraft() &&
+        !window.confirm('Discard the unsaved new suggestion and navigate away?')) return false;
+    if (settings && settingsController.isDirty()) settingsController.discardDraft();
+    return true;
+  }
+
+  function allowRequestMutation(request, saveDraft = false) {
+    if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return false;
+    if (!saveDraft && hasRequestDraft()) {
+      announce('Save or revert the current request edits before performing a workflow action.', 'warning');
+      return false;
+    }
+    return true;
+  }
+
+  function disableDialogControls() {
+    const controls = [...dom.dialogBody.querySelectorAll('input, select, textarea, button')]
+      .map(control => ({ control, disabled: control.disabled }));
+    for (const item of controls) item.control.disabled = true;
+    return () => {
+      for (const item of controls) {
+        if (item.control.isConnected) item.control.disabled = item.disabled;
+      }
+    };
+  }
+
+  function rejectTraversal() {
+    if (state.routeSnapshot) state.restoringHistory = restoreStaffHistory(state.routeSnapshot);
+  }
+
+  async function restoreOperationalScope(navigationGeneration) {
+    const raw = requestedOperationalScopeFromUrl();
+    const defaultScope = state.staff.role === 'super_admin' ? 'all' : String(state.staff.organizationId);
+    let scope = defaultScope;
+    if (state.staff.role === 'super_admin' && raw && raw !== 'all' && /^[1-9]\d{0,9}$/.test(raw) && Number(raw) > 1) {
+      const owner = state.staff;
+      const load = latestLoads.begin('operational-scope');
+      try {
+        const result = await authorizedJson('/api/asap/staff/organizations', { signal: load.signal });
+        const organizations = result?.data ?? result;
+        if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration || owner !== state.staff) return false;
+        const available = organizations.filter(item => Number(item.id) > 1 && item.active !== false);
+        if (available.some(item => String(item.id) === raw)) scope = raw;
+        populateScopes(available, scope);
+      } catch (error) {
+        if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration || owner !== state.staff || error.status === 401) return false;
+        // An unavailable scope is never applied without current authorization evidence.
+      } finally {
+        latestLoads.finish('operational-scope', load.token);
+      }
+    }
+    if (state.scope !== scope) {
+      clearTitleQueueForContextChange();
+      clearAdditionalCopyQueueForScopeChange();
+    }
+    state.scope = scope;
+    dom.scope.value = scope;
+    dom.additionalCopyScope.value = scope;
+    return true;
+  }
 
   function readUnconfirmedCopyCreation() {
     try {
@@ -286,8 +398,15 @@ export function createWorkflowApp() {
   function isVerifiedDraft(request) {
     return state.verifiedBib?.requestId === String(request.id) &&
       state.verifiedBib.version === request.version &&
-      state.verifiedBib.identifier === String(request.identifier || '').trim() &&
+      state.verifiedBib.identifier === String(state.editControls?.identifier.value || '').trim() &&
       positivePolarisId(state.editControls?.bib.value) === state.verifiedBib.bibId;
+  }
+
+  function hasAuthoritativeBib(request) {
+    return request.bibidStaffVerified === true && positivePolarisId(request.bibid) !== null &&
+      isCurrentDialogRequest(request, 'title_request') &&
+      positivePolarisId(state.editControls?.bib.value) === request.bibid &&
+      String(state.editControls?.identifier.value || '').trim() === String(request.identifier || '').trim();
   }
 
   function updateResearchLinks() {
@@ -477,6 +596,8 @@ export function createWorkflowApp() {
     latestLoads.begin('queue').abort();
     latestLoads.begin('additional-copies').abort();
     latestLoads.begin('settings-route').abort();
+    latestLoads.begin('operational-scope').abort();
+    latestLoads.begin('operations').abort();
   }
 
   function cancelAssignmentCandidateLoad() {
@@ -530,11 +651,13 @@ export function createWorkflowApp() {
       setStaffSuggestionStatus('Creation is in progress. Please wait for the authoritative result.', 'error');
       return false;
     }
+    if (!options.force && !options.guarded && !allowNavigation({ settings: false, request: false })) return false;
     cancelStaffSuggestionLookup();
     cancelStaffSuggestionConfiguration();
     cancelStaffSuggestionMutation();
     polarisLookup.close();
     if (dom.staffSuggestionDialog.open) dom.staffSuggestionDialog.close();
+    dom.staffSuggestionForm.inert = false;
     const returnFocus = state.staffSuggestionReturnFocus;
     state.staffSuggestion = null;
     state.staffSuggestionReturnFocus = null;
@@ -891,6 +1014,7 @@ export function createWorkflowApp() {
     dom.dialogBody.replaceChildren();
     state.currentRequest = null;
     state.editControls = null;
+    state.editorDirty = false;
     state.selectedRequestId = null;
     state.selectedRequestType = null;
     state.selectedRequestVersion = null;
@@ -902,7 +1026,6 @@ export function createWorkflowApp() {
     latestLoads.begin('queue').abort();
     latestLoads.begin('additional-copies').abort();
     latestLoads.begin('operations').abort();
-    latestLoads.begin('operations-mutation').abort();
     latestLoads.begin('detail').abort();
     latestLoads.begin('additional-copy-detail').abort();
     latestLoads.begin('additional-copy-preview').abort();
@@ -947,6 +1070,14 @@ export function createWorkflowApp() {
       dom.additionalCopyCreateReview.hidden = true;
     }
     state.staff = staff;
+    try {
+      const retained = JSON.parse(window.sessionStorage.getItem(operationStorageKey(staff)) || 'null');
+      if (retained?.operationId && typeof retained.path === 'string' &&
+          /^\/api\/asap\/staff\/(workflow\/(run-now|weekly-summary\/run-now\?force=(true|false))|email-operations\/(test|[1-9]\d*\/retry))$/.test(retained.path)) {
+        state.operationMutation = { ...retained, storageKey: operationStorageKey(staff), uncertain: true, reviewed: false };
+      }
+    } catch { /* Malformed browser recovery data cannot dispatch an operation. */ }
+    updateOperationControls();
     state.recentKey = recentStorageKey(staff);
     renderRecentRequests();
     state.scope = staff.role === 'super_admin' ? 'all' : String(staff.organizationId);
@@ -1015,6 +1146,15 @@ export function createWorkflowApp() {
 
   async function navigateFromUrl() {
     if (!state.staff) return;
+    if (state.restoringHistory) {
+      state.restoringHistory = false;
+      return;
+    }
+    if (state.closingDetailHistory) {
+      state.closingDetailHistory = false;
+      rememberRoute();
+      return;
+    }
     const requestedSettingsStage = currentStageParameter();
     const requestedSettingsScope = requestedSettingsScopeFromUrl();
     const defaultSettingsScope = state.staff.role === 'super_admin'
@@ -1022,46 +1162,24 @@ export function createWorkflowApp() {
     const nextSettingsScope = requestedSettingsScope || defaultSettingsScope;
     const leavingSettingsContext = requestedSettingsStage !== 'settings' ||
       nextSettingsScope !== settingsController.currentScope();
-    if (state.activeView === 'settings' && settingsController.hasPendingMutation() &&
-        leavingSettingsContext) {
-      const restoredUrl = new URL(window.location.href);
-      restoredUrl.searchParams.set('stage', 'settings');
-      restoredUrl.searchParams.set('settingsScope', settingsController.currentScope());
-      restoredUrl.searchParams.delete('request');
-      restoredUrl.hash = `settings-${settingsController.currentPanel()}`;
-      window.history.replaceState(null, '', `${restoredUrl.pathname}${restoredUrl.search}${restoredUrl.hash}`);
-      announce('Wait for the settings change to finish before navigating away.', 'warning');
-      return;
-    }
-    if (state.activeView === 'settings' && settingsController.hasUnconfirmedOutcome() &&
-        leavingSettingsContext) {
-      const restoredUrl = new URL(window.location.href);
-      restoredUrl.searchParams.set('stage', 'settings');
-      restoredUrl.searchParams.set('settingsScope', settingsController.currentScope());
-      restoredUrl.searchParams.delete('request');
-      restoredUrl.hash = `settings-${settingsController.currentPanel()}`;
-      window.history.replaceState(null, '', `${restoredUrl.pathname}${restoredUrl.search}${restoredUrl.hash}`);
-      announce('Reload current settings to verify the uncertain change before navigating away.', 'warning');
-      return;
-    }
-    if (state.activeView === 'settings' && settingsController.isDirty() && leavingSettingsContext &&
-        !window.confirm('Discard unsaved settings changes and navigate away?')) {
-      const restoredUrl = new URL(window.location.href);
-      restoredUrl.searchParams.set('stage', 'settings');
-      restoredUrl.searchParams.set('settingsScope', settingsController.currentScope());
-      restoredUrl.searchParams.delete('request');
-      restoredUrl.hash = `settings-${settingsController.currentPanel()}`;
-      window.history.replaceState(null, '', `${restoredUrl.pathname}${restoredUrl.search}${restoredUrl.hash}`);
+    if (!allowNavigation({ settings: state.activeView === 'settings' && leavingSettingsContext })) {
+      rejectTraversal();
       return;
     }
     invalidateNavigation();
     const navigationGeneration = state.navigationGeneration;
     const requestedStage = currentStageParameter();
     const requestId = currentRequestParameter();
-    if (dom.dialog.open && !closeDialog({ navigation: true })) return;
+    const previousStage = state.status;
+    const previousScope = state.scope;
+    const previousCopyStatus = state.additionalCopyStatus;
+    if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
+    if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
+    rememberRoute();
     if (requestedStage === 'settings' || requestedStage === 'operations') {
       if (state.staff.role === 'staff') {
         switchView('queue', false);
+        replaceStageParameter(state.status);
         announce('This view requires administrator access.', 'error');
         await loadQueue({ skipDeepLink: true, silent: true });
         return;
@@ -1074,6 +1192,7 @@ export function createWorkflowApp() {
             requestedScope === String(state.staff.organizationId);
           if (!permittedShape || !permittedActor) {
             switchView('queue', false);
+            replaceStageParameter(state.status);
             announce('That Settings scope is not available to this staff account.', 'error');
             await loadQueue({ skipDeepLink: true, silent: true });
             return;
@@ -1087,6 +1206,7 @@ export function createWorkflowApp() {
             if (routeLoad.isCurrent() && navigationGeneration === state.navigationGeneration &&
                 staff === state.staff && error.status !== 401 && !isAbortError(error)) {
               switchView('queue', false);
+              replaceStageParameter(state.status);
               announce('That Settings scope is not available.', 'error');
               await loadQueue({ skipDeepLink: true, silent: true });
             }
@@ -1099,12 +1219,17 @@ export function createWorkflowApp() {
         }
       }
       switchView(requestedStage, false);
+      replaceStageParameter(requestedStage);
       if (requestedStage === 'operations') await loadOperations();
       return;
     }
     if (requestedStage === 'additional_copies') {
-      resetAdditionalCopyFilters();
+      if (!await restoreOperationalScope(navigationGeneration) || navigationGeneration !== state.navigationGeneration) return;
+      state.additionalCopyStatus = requestedCopyStatusFromUrl();
+      updateAdditionalCopyStatusTabs();
+      if (previousScope !== state.scope || previousCopyStatus !== state.additionalCopyStatus) resetAdditionalCopyFilters();
       switchView('additional-copies', false);
+      replaceRequestParameter(requestId || null, true);
       const loaded = await loadAdditionalCopies({ skipDeepLink: true });
       if (loaded === true && navigationGeneration === state.navigationGeneration && requestId) {
         await openAdditionalCopy(requestId, null, { fromDeepLink: true });
@@ -1113,14 +1238,27 @@ export function createWorkflowApp() {
     }
     if (requestedStage === 'analytics') {
       switchView('analytics', false);
+      replaceStageParameter('analytics');
       await loadAnalytics(dom.analyticsContainer);
       return;
     }
+    if (requestedStage === 'profile') {
+      switchView('profile', false);
+      replaceStageParameter('profile');
+      return;
+    }
+    if (!await restoreOperationalScope(navigationGeneration) || navigationGeneration !== state.navigationGeneration) return;
     state.status = STATUS_LABELS[requestedStage] && requestedStage !== 'open'
       ? requestedStage : 'suggestion';
     updateStatusTabs();
-    resetQueueFilters();
+    if (previousStage !== state.status || previousScope !== state.scope) resetQueueFilters();
     switchView('queue', false);
+    writeReplacedRequestParameter(requestId || null, false, queueRouteContext());
+    if (currentStageParameter() !== state.status) {
+      const pendingId = requestId;
+      replaceStageParameter(state.status);
+      if (pendingId) replaceRequestParameter(pendingId);
+    } else rememberRoute();
     const loaded = await loadQueue({ skipDeepLink: true });
     if (loaded === true && navigationGeneration === state.navigationGeneration && requestId) {
       await openRequest(requestId, null, { align: true });
@@ -1217,6 +1355,34 @@ export function createWorkflowApp() {
     return scope && scope !== 'all' ? `?organizationId=${encodeURIComponent(scope)}` : '';
   }
 
+  function operationStorageKey(staff = state.staff) {
+    return `asap.staff.operation.${staff?.tenantId || ''}.${staff?.id || ''}`;
+  }
+
+  function storeOperation(operation) {
+    try {
+      if (operation) window.sessionStorage.setItem(operation.storageKey, JSON.stringify(operation));
+      else if (state.operationMutation) window.sessionStorage.removeItem(state.operationMutation.storageKey);
+      return true;
+    } catch { return false; }
+  }
+
+  function updateOperationControls() {
+    const operation = state.operationMutation;
+    const locked = Boolean(operation);
+    for (const control of [dom.runWorkflowNow, dom.runWeeklyNow, dom.forceWeeklyNow, dom.sendTestEmail,
+      dom.operationsScope, ...dom.emailOperationsTable.querySelectorAll('button')]) control.disabled = locked;
+    const notice = document.querySelector('#operations-outcome');
+    notice.hidden = !operation?.uncertain;
+    notice.replaceChildren();
+    if (!operation?.uncertain) return;
+    notice.append(element('p', { text: `${operation.message} outcome is unconfirmed. Refresh Operations to review current work before retrying this same operation. A new operation remains blocked.` }));
+    if (operation.reviewed) {
+      notice.append(commandButton('Retry same operation', 'refresh', () =>
+        runOperation(operation.path, operation.message, operation)));
+    }
+  }
+
   function renderOperationsTable(container, columns, rows, emptyText) {
     if (!rows.length) {
       container.replaceChildren(element('p', { className: 'operations-empty', text: emptyText }));
@@ -1294,10 +1460,13 @@ export function createWorkflowApp() {
           : Promise.resolve(null)
       ]);
       if (!load.isCurrent() || requestedScope !== state.operationsScope) return false;
-      if (state.staff.role === 'super_admin' && Array.isArray(organizationResult)) {
-        populateScopes(organizationResult.filter(item => Number(item.id) > 1), requestedScope);
+      const organizations = organizationResult?.data ?? organizationResult;
+      if (state.staff.role === 'super_admin' && Array.isArray(organizations)) {
+        populateScopes(organizations.filter(item => Number(item.id) > 1 && item.active !== false), state.scope);
       }
       renderOperations({ queue, email });
+      if (state.operationMutation?.uncertain) state.operationMutation.reviewed = true;
+      updateOperationControls();
       state.operationsLoaded = true;
       if (!options.silent) announce('Workflow operations loaded.');
       return true;
@@ -1313,59 +1482,73 @@ export function createWorkflowApp() {
     }
   }
 
-  async function runOperation(path, message) {
-    const load = latestLoads.begin('operations-mutation');
-    const requestedScope = state.operationsScope;
-    const scopeQuery = operationsQuery();
+  async function runOperation(path, message, retry = null, body = undefined) {
+    if (!state.staff || state.operationMutation &&
+        (retry !== state.operationMutation || !retry.uncertain || !retry.reviewed)) return;
+    const owner = state.staff;
+    const operation = retry || { path, message, scope: state.operationsScope,
+      operationId: window.crypto.randomUUID(), storageKey: operationStorageKey(), body };
+    operation.uncertain = false;
+    operation.reviewed = false;
+    state.operationMutation = operation;
+    // Persist before dispatch: reload/session loss is never evidence that a POST rolled back.
+    if (!storeOperation(operation)) {
+      state.operationMutation = null;
+      announce('Operation recovery could not be saved. Enable session storage before running manual operations.', 'error');
+      return;
+    }
+    updateOperationControls();
+    const scopeQuery = path.endsWith('/retry') ? '' : operationsQuery(operation.scope);
     const query = scopeQuery ? `${path.includes('?') ? '&' : '?'}${scopeQuery.slice(1)}` : '';
+    const identityQuery = path.includes('force=true') || path.endsWith('/email-operations/test')
+      ? `${path.includes('?') || query ? '&' : '?'}operationId=${encodeURIComponent(operation.operationId)}` : '';
+    let committedMessage = '';
     try {
-      const result = await authorizedJson(`${path}${query}`, { method: 'POST', signal: load.signal });
-      if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
-      const committedMessage = result.manualRunId ? `${message} Run ${result.manualRunId} queued.` : message;
+      const result = await authorizedJson(`${path}${query}${identityQuery}`, { method: 'POST', body: operation.body });
+      if (!['queued', 'suppressed'].includes(result?.code)) throw unconfirmedResponseError();
+      committedMessage = result.data?.replayed ? `${message} was already recorded as ${result.data.status}. Review email operation ${result.data.id}.`
+        : result.code === 'suppressed' ? `${message} was suppressed; no email was sent.`
+        : result.manualRunId && !path.endsWith('/retry') ? `${message} Run ${result.manualRunId} queued.` : `${message} queued.`;
       state.partialSessionFailureMessage = `${committedMessage} Sign in again to review workflow operations.`;
-      state.partialSessionFailureOwner = load.token;
+      state.partialSessionFailureOwner = operation;
+      storeOperation(null);
+      state.operationMutation = null;
+      updateOperationControls();
+      if (state.staff !== owner) {
+        if (!state.staff) dom.signedOutMessage.textContent = state.partialSessionFailureMessage;
+        return;
+      }
       const refreshed = await loadOperations({ silent: true });
-      if (refreshed === true) clearCommittedSessionFallback(load.token);
-      if (load.isCurrent() && requestedScope === state.operationsScope && state.staff) {
+      if (refreshed === true) clearCommittedSessionFallback(operation);
+      if (operation.scope === state.operationsScope && state.staff && state.activeView === 'operations') {
         announce(refreshed ? committedMessage : `${committedMessage} Operations could not be refreshed.`,
           refreshed ? 'success' : 'warning');
       }
     } catch (error) {
-      if (load.isCurrent() && requestedScope === state.operationsScope &&
-          !isAbortError(error) && error.status !== 401) {
-        announce(error.message || 'The operation could not be queued.', 'error');
+      if (committedMessage) {
+        if (state.staff) announce(`${committedMessage} Operations could not be refreshed.`, 'warning');
+        return;
       }
-    } finally {
-      latestLoads.finish('operations-mutation', load.token);
+      const uncertain = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
+      if (uncertain) {
+        operation.uncertain = true;
+        storeOperation(operation);
+        retainUnconfirmedOutcome(`${message} outcome is unconfirmed. Review Operations before retrying.`, operation);
+      } else {
+        storeOperation(null);
+        state.operationMutation = null;
+      }
+      updateOperationControls();
+      if (state.staff === owner && state.activeView === 'operations' && error.status !== 401) {
+        announce(uncertain ? `${message} outcome is unconfirmed. Refresh Operations to review it before retrying.`
+          : error.message || 'The operation was not queued.', uncertain ? 'warning' : 'error');
+      }
     }
   }
 
   async function retryEmail(row) {
-    const load = latestLoads.begin('operations-mutation');
-    const requestedScope = state.operationsScope;
-    try {
-      await authorizedJson(`/api/asap/staff/email-operations/${encodeURIComponent(row.id)}/retry`, {
-        method: 'POST',
-        body: { version: row.version },
-        signal: load.signal
-      });
-      if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
-      state.partialSessionFailureMessage = `Email retry ${row.id} queued. Sign in again to review email operations.`;
-      state.partialSessionFailureOwner = load.token;
-      const refreshed = await loadOperations({ silent: true });
-      if (refreshed === true) clearCommittedSessionFallback(load.token);
-      if (load.isCurrent() && requestedScope === state.operationsScope && state.staff) {
-        announce(refreshed ? 'Email retry queued.' : 'Email retry queued. Operations could not be refreshed.',
-          refreshed ? 'success' : 'warning');
-      }
-    } catch (error) {
-      if (load.isCurrent() && requestedScope === state.operationsScope &&
-          !isAbortError(error) && error.status !== 401) {
-        announce(error.message || 'Email retry could not be queued.', 'error');
-      }
-    } finally {
-      latestLoads.finish('operations-mutation', load.token);
-    }
+    await runOperation(`/api/asap/staff/email-operations/${encodeURIComponent(row.id)}/retry`,
+      `Email retry ${row.id}`, null, { version: row.version });
   }
 
   function filteredRequests() {
@@ -1655,6 +1838,9 @@ export function createWorkflowApp() {
 
   async function openAdditionalCopy(id, returnFocus, options = {}) {
     if (!state.staff) return false;
+    if (state.closingDetailHistory || state.restoringHistory) return false;
+    if (!options.authoritativeRefresh && dom.dialog.open &&
+        !allowNavigation({ settings: false, suggestion: false })) return false;
     const navigationGeneration = ++state.navigationGeneration;
     const staff = state.staff;
     polarisLookup.close();
@@ -1853,7 +2039,7 @@ export function createWorkflowApp() {
         announce(message, messageKind);
         const refreshed = await loadAdditionalCopies({ skipDeepLink: true, silent: true });
         if (refreshed === true) clearCommittedSessionFallback(mutation.token);
-        if (refreshed === false && state.staff) announce(`${message} The task list could not refresh.`, 'warning');
+        if (refreshed === false && state.staff && mutation.isCurrent()) announce(`${message} The task list could not refresh.`, 'warning');
         return;
       }
       let current = result.request || (result.id ? result : null);
@@ -1904,7 +2090,7 @@ export function createWorkflowApp() {
         }
         const refreshed = await loadAdditionalCopies({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'additional_copy')) return;
-        const detailLoaded = await openAdditionalCopy(request.id);
+        const detailLoaded = await openAdditionalCopy(request.id, null, { authoritativeRefresh: true });
         if (unconfirmedOutcome && refreshed === true && detailLoaded === true) {
           clearCommittedSessionFallback(mutation.token);
         }
@@ -1961,6 +2147,9 @@ export function createWorkflowApp() {
 
   async function openRequest(id, returnFocus, options = {}) {
     if (!state.staff) return;
+    if (state.closingDetailHistory || state.restoringHistory) return false;
+    if (!options.authoritativeRefresh && dom.dialog.open &&
+        !allowNavigation({ settings: false, suggestion: false })) return false;
     const navigationGeneration = ++state.navigationGeneration;
     const staff = state.staff;
     polarisLookup.close();
@@ -2037,7 +2226,11 @@ export function createWorkflowApp() {
       if (options.history === 'push' || options.fromRecent) {
         pushRequestParameter(request.id, request.status);
       } else {
-        if (currentStageParameter() !== request.status) replaceStageParameter(request.status);
+        if (currentStageParameter() !== request.status) {
+          const url = new URL(window.location.href);
+          url.searchParams.set('stage', request.status);
+          window.history.replaceState(window.history.state, '', url);
+        }
         replaceRequestParameter(request.id, false);
       }
       renderRequest(request, configuration);
@@ -2278,14 +2471,14 @@ export function createWorkflowApp() {
     const fakeRequest = { customFields: {} };
     const availableFormats = Array.isArray(configuration.availableFormats)
       ? configuration.availableFormats : [];
-    const format = selectWithHistorical(availableFormats, null, configuration.formatLabels || {});
+    const format = selectWithHistorical(availableFormats, availableFormats[0] || null, configuration.formatLabels || {});
     format.setAttribute('aria-label', 'Material format');
     format.required = true;
     const title = element('input', { maxlength: '500', autocomplete: 'off' });
     const author = element('input', { maxlength: '500', autocomplete: 'off' });
     const identifier = element('input', { maxlength: '100', autocomplete: 'off' });
     const publication = selectWithHistorical(configuration.publicationOptions, null);
-    publication.prepend(element('option', { value: '', text: 'Not specified' }));
+    publication.options[0].textContent = 'Not specified';
     publication.value = '';
     const exactDate = element('input', { type: 'date' });
     const notes = element('textarea', { maxlength: '10000' });
@@ -2333,6 +2526,7 @@ export function createWorkflowApp() {
         apply: selected => {
           applyPolarisResultToControls(selected, { bib, title, author, identifier });
           state.staffSuggestion.verifiedBibId = selected.bibId;
+          state.staffSuggestion.dirty = true;
           catalogStatus.textContent = `Verified Polaris BIB ${selected.bibId} selected.`;
         },
         editorFocus: title
@@ -2415,7 +2609,11 @@ export function createWorkflowApp() {
     const changeButton = element('button', {
       type: 'button',
       className: 'secondary-button',
-      onclick: () => renderStaffSuggestionSearch({ query: patron.barcode, scopeId: String(result.libraryOrgId) })
+      onclick: () => {
+        if (allowNavigation({ settings: false, request: false })) {
+          renderStaffSuggestionSearch({ query: patron.barcode, scopeId: String(result.libraryOrgId) });
+        }
+      }
     }, 'Change patron');
     submitButton = element('button', { type: 'submit', className: 'primary-button' }, [icon('send'), 'Create suggestion']);
     dom.staffSuggestionActions.replaceChildren(changeButton, submitButton);
@@ -2443,9 +2641,10 @@ export function createWorkflowApp() {
 
   async function createStaffSuggestion() {
     const current = state.staffSuggestion;
-    if (!current || current.stage !== 'create' || current.submitting) return;
+    if (!current || current.stage !== 'create' || current.submitting || current.outcomeUnconfirmed) return;
     if (!dom.staffSuggestionForm.reportValidity()) return;
     current.submitting = true;
+    dom.staffSuggestionForm.inert = true;
     const controls = current.controls;
     const result = current.result;
     const mutation = latestLoads.begin('staff-suggestion-mutation');
@@ -2508,7 +2707,7 @@ export function createWorkflowApp() {
       let detailLoaded = false;
       if (state.staff) {
         try {
-          detailLoaded = await openRequest(id, dom.newSuggestion) === true;
+          detailLoaded = await openRequest(id, dom.newSuggestion, { align: true, history: 'push' }) === true;
         } catch {
           // The authoritative create response remains the success path if the detail refresh races.
         }
@@ -2518,7 +2717,12 @@ export function createWorkflowApp() {
         (queueRefreshed && detailLoaded ? '' : ' Current details could not be refreshed.'),
       queueRefreshed && detailLoaded ? 'success' : 'warning');
     } catch (error) {
-      if (!mutation.isCurrent() || isAbortError(error) || error.status === 401) return;
+      if (!mutation.isCurrent() || error.status === 401) return;
+      if (!error.status || error.status === 408 || error.status >= 500 || isAbortError(error)) {
+        current.outcomeUnconfirmed = true;
+        setStaffSuggestionStatus('Suggestion creation is unconfirmed. Reload and review the servicing library queue before attempting another submission.', 'error');
+        return;
+      }
       dom.staffSuggestionBody.querySelector('.staff-suggestion-conflict')?.remove();
       const duplicateId = error.response?.duplicate?.id;
       const partialPickupChange = error.response?.code === 'request_not_created_pickup_changed' &&
@@ -2536,8 +2740,8 @@ export function createWorkflowApp() {
             type: 'button',
             className: 'secondary-button',
             onclick: async () => {
-              closeStaffSuggestion({ focusButton: false });
-              await openRequest(duplicateId);
+              if (!closeStaffSuggestion({ focusButton: false })) return;
+              await openRequest(duplicateId, dom.newSuggestion, { align: true, history: 'push' });
             }
           }, 'Open existing request')
         ]));
@@ -2548,8 +2752,9 @@ export function createWorkflowApp() {
     } finally {
       if (mutation.isCurrent() && state.staffSuggestion === current) {
         current.submitting = false;
-        if (submit && submit.isConnected) submit.disabled = false;
-        if (controls.changeButton?.isConnected) controls.changeButton.disabled = false;
+        dom.staffSuggestionForm.inert = current.outcomeUnconfirmed === true;
+        if (submit && submit.isConnected) submit.disabled = current.outcomeUnconfirmed === true;
+        if (controls.changeButton?.isConnected) controls.changeButton.disabled = current.outcomeUnconfirmed === true;
       }
       latestLoads.finish('staff-suggestion-mutation', mutation.token);
     }
@@ -2566,6 +2771,10 @@ export function createWorkflowApp() {
 
   function openStaffSuggestion(returnFocus = null) {
     if (!state.staff) return;
+    if (dom.dialog.open) {
+      if (!closeDialog({ navigation: true })) return;
+      replaceStageParameter(state.status);
+    }
     if (!closeStaffSuggestion({ focusButton: false })) return;
     state.staffSuggestionReturnFocus = returnFocus || document.activeElement;
     state.staffSuggestion = {
@@ -2599,6 +2808,8 @@ export function createWorkflowApp() {
       state.selectedRequestVersion = request.version;
     }
     state.currentRequest = request;
+    state.editorDirty = false;
+    state.editControls = null;
     if (state.verifiedBib && (state.verifiedBib.requestId !== String(request.id) ||
         state.verifiedBib.version !== request.version ||
         state.verifiedBib.identifier !== String(request.identifier || '').trim() ||
@@ -2787,7 +2998,8 @@ export function createWorkflowApp() {
     if (historical && !values.includes(historical)) {
       select.append(element('option', { value: historical, text: labels[historical] || historical }));
     }
-    select.value = historical || values[0] || '';
+    if (!historical) select.prepend(element('option', { value: '', text: 'Not recorded' }));
+    select.value = historical;
     return select;
   }
 
@@ -2878,14 +3090,6 @@ export function createWorkflowApp() {
       }
     }
     return result;
-  }
-
-  function stableJson(value) {
-    if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-    if (value && typeof value === 'object') {
-      return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
-    }
-    return JSON.stringify(value);
   }
 
   function buildEditForm(request, configuration) {
@@ -2984,14 +3188,22 @@ export function createWorkflowApp() {
     let customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value);
     const pendingPreview = element('p', { className: 'pending-audit-preview wide', role: 'status' });
     const save = element('button', { type: 'submit', className: 'primary-button' }, [icon('save'), 'Save changes']);
+    const revert = commandButton('Revert changes', 'undo', () => {
+      if (!allowNavigation({ settings: false, suggestion: false })) return;
+      state.verifiedBib = null;
+      polarisLookup.invalidate();
+      renderRequest(request, configuration);
+      dom.dialogBody.querySelector('.edit-form input')?.focus();
+      announce('Unsaved request changes discarded.');
+    });
     function updatePreview() {
       const changed = [];
       const identifierChanged = !identifier.disabled && identifier.value.trim() !== (request.identifier || '').trim();
-      const bibChanged = !bib.disabled && positivePolarisId(bib.value) !== request.bibid;
-      const selectedBib = selectedStaffBibId(state.verifiedBib, request.id, bib.value);
+      const bibChanged = !bib.disabled && positivePolarisId(bib.value) !== positivePolarisId(request.bibid);
+      const selectedBib = isVerifiedDraft(request) ? selectedStaffBibId(state.verifiedBib, request.id, bib.value) : null;
       let bibVerified = request.bibidStaffVerified === true;
       if (identifierChanged || bibChanged) bibVerified = false;
-      if (bibChanged || selectedBib) bibVerified = Boolean(bib.value.trim());
+      if (selectedBib) bibVerified = true;
       if (title.value.trim() !== request.title) changed.push('title');
       if ((author.value.trim() || null) !== (request.author || null)) changed.push('author');
       if (identifierChanged) changed.push('identifier');
@@ -2999,11 +3211,11 @@ export function createWorkflowApp() {
       if (bibVerified !== (request.bibidStaffVerified === true)) changed.push('BIB verification');
       if ((publication.value.trim() || null) !== (request.publication || null)) changed.push('publication timing');
       if (exactDate.value !== (request.exactPublicationDate || '')) changed.push('exact publication date');
-      if (format.value !== request.format) changed.push('format');
-      if (autohold.checked !== request.autohold) changed.push('automatic hold');
+      if (format.value !== (request.format || '')) changed.push('format');
+      if (autohold.checked !== Boolean(request.autohold)) changed.push('automatic hold');
       if (notes.value !== (request.notes || '')) changed.push('notes');
-      if (stableJson(collectCustomFields(request, customFieldControls)) !==
-          stableJson(request.customFields || {})) changed.push('custom fields');
+      if ([...customFieldControls].some(([key, control]) => control.mode !== 'hidden' &&
+          control.input.value.trim() !== customFieldValue(request.customFields?.[key]).trim())) changed.push('custom fields');
       const claimantId = request.claimedByStaffUserId == null ? null : String(request.claimedByStaffUserId);
       const actorId = state.staff?.id == null ? null : String(state.staff.id);
       if (actorId && claimantId !== actorId) changed.push(claimantId ? 'claim transfer' : 'staff claim');
@@ -3012,6 +3224,7 @@ export function createWorkflowApp() {
         ? `Pending changes (not saved): ${changed.join(', ')}.`
         : 'No pending changes.';
       save.disabled = changed.length === 0;
+      revert.disabled = !state.editorDirty;
     }
     format.addEventListener('change', () => {
       customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value);
@@ -3032,7 +3245,7 @@ export function createWorkflowApp() {
       element('label', { className: 'check-field' }, [autohold, element('span', { text: 'Automatically place hold' })]),
       labeledInput('Notes', notes, 'wide'),
       pendingPreview,
-      element('div', { className: 'form-actions wide' }, [save])
+      element('div', { className: 'form-actions wide' }, [save, revert])
     );
     updatePreview();
     form.addEventListener('submit', async event => {
@@ -3044,7 +3257,8 @@ export function createWorkflowApp() {
         return;
       }
       const bibWillChange = !bib.disabled && positivePolarisId(bib.value) !== request.bibid;
-      const bibSelected = Boolean(selectedStaffBibId(state.verifiedBib, request.id, bib.value));
+      const selectedBibId = isVerifiedDraft(request) ? selectedStaffBibId(state.verifiedBib, request.id, bib.value) : null;
+      const bibSelected = Boolean(selectedBibId);
       const turnsOffHoldForBib = request.autohold && !autohold.checked && Boolean(request.bibid);
       const closesExistingNoHold = Boolean(request.bibid) && !autohold.checked &&
         (request.status === 'outstanding_purchase' || request.status === 'pending_hold');
@@ -3074,8 +3288,8 @@ export function createWorkflowApp() {
         author: author.value,
         identifier: identifier.disabled ? request.identifier : identifier.value.trim() || null,
         bibid: bib.disabled ? request.bibid : positivePolarisId(bib.value),
-        ...(selectedStaffBibId(state.verifiedBib, request.id, bib.value)
-          ? { staffSelectedBibId: selectedStaffBibId(state.verifiedBib, request.id, bib.value) }
+        ...(selectedBibId
+          ? { staffSelectedBibId: selectedBibId }
           : {}),
         publication: publication.value,
         exactPublicationDate: exactDate.value || null,
@@ -3105,7 +3319,7 @@ export function createWorkflowApp() {
   }
 
   function showActionChoice(request, action, returnFocus) {
-    if (!isCurrentDialogRequest(request, 'title_request')) return;
+    if (!allowRequestMutation(request)) return;
     cancelActionChoiceLoad();
     dom.dialogBody.querySelector('.action-choice')?.remove();
     const panel = element('form', { className: 'action-choice', 'aria-label': `${action} options` });
@@ -3170,13 +3384,17 @@ export function createWorkflowApp() {
   async function runAction(request, action, targetStatus, choices = {}) {
     const entersPendingHold = action === 'catalogFound' || action === 'alreadyOwn' ||
       targetStatus === 'pending_hold' || action === 'purchase' && Boolean(request.bibid);
-    if (entersPendingHold) {
-      if (!isVerifiedDraft(request)) {
-        announce('Search Polaris, select the matching BIB, and save it before moving to Pending hold.', 'error');
-        return;
+    if (!allowRequestMutation(request)) {
+      if (entersPendingHold && hasRequestDraft() && !state.dialogMutationInFlight) {
+        announce(isVerifiedDraft(request)
+          ? 'Save the current request edits before moving to Pending hold.'
+          : 'Search Polaris, select the matching BIB, and save it before moving to Pending hold.', 'error');
       }
-      if (state.editorDirty || state.verifiedBib.bibId !== request.bibid) {
-        announce('Save the current request edits before moving to Pending hold.', 'error');
+      return;
+    }
+    if (entersPendingHold) {
+      if (!hasAuthoritativeBib(request)) {
+        announce('Search Polaris, select the matching BIB, and save it before moving to Pending hold.', 'error');
         return;
       }
     }
@@ -3202,6 +3420,7 @@ export function createWorkflowApp() {
   }
 
   async function showAdditionalCopyPreview(request, returnFocus) {
+    if (!allowRequestMutation(request)) return;
     const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
     if (uncertainCreation && (!uncertainCreation.reviewed || uncertainCreation.sourceId !== String(request.id))) {
       announce('Additional-copy creation is unconfirmed. Refresh the open additional-copy task list for this library and review matching tasks before trying again.', 'warning');
@@ -3358,9 +3577,10 @@ export function createWorkflowApp() {
   }
 
   async function deleteTitleRequest(request) {
-    if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return;
+    if (!allowRequestMutation(request)) return;
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = 'title:' + request.id + ':' + request.version;
+    const restoreControls = disableDialogControls();
     announce('Permanently deleting title request...');
     try {
       const result = await authorizedJson('/api/asap/staff/requests/' + encodeURIComponent(request.id), {
@@ -3381,7 +3601,7 @@ export function createWorkflowApp() {
       announce(message, 'success');
       const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
       if (refreshed === true) clearCommittedSessionFallback(mutation.token);
-      if (refreshed === false && state.staff) announce(message + ' The Closed view could not refresh.', 'warning');
+      if (refreshed === false && state.staff && mutation.isCurrent()) announce(message + ' The Closed view could not refresh.', 'warning');
     } catch (error) {
       const uncertain = isUnconfirmedMutationError(error, mutation.signal) ||
         error.status === 408 || error.status >= 500;
@@ -3399,15 +3619,17 @@ export function createWorkflowApp() {
       if (state.dialogMutationInFlight === 'title:' + request.id + ':' + request.version) {
         state.dialogMutationInFlight = null;
       }
+      restoreControls();
       latestLoads.finish('dialog-mutation', mutation.token);
     }
   }
 
   async function mutateRequest(request, path, body, successMessage) {
-    if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight === `title:${request.id}:${request.version}`) return;
+    if (!allowRequestMutation(request, body?.action === 'edit')) return;
     const selectionGeneration = state.navigationGeneration;
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = `title:${request.id}:${request.version}`;
+    const restoreControls = disableDialogControls();
     announce('Saving request...');
     try {
       const result = await authorizedJson(path, { method: 'POST', body, signal: mutation.signal });
@@ -3510,7 +3732,7 @@ export function createWorkflowApp() {
         }
         const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
-        const detailLoaded = await openRequest(request.id);
+        const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
         if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired || pickupReviewRequired) &&
             refreshed === true && detailLoaded === true) {
           clearCommittedSessionFallback(mutation.token);
@@ -3522,6 +3744,7 @@ export function createWorkflowApp() {
       }
     } finally {
       if (state.dialogMutationInFlight === `title:${request.id}:${request.version}`) state.dialogMutationInFlight = null;
+      restoreControls();
       latestLoads.finish('dialog-mutation', mutation.token);
     }
   }
@@ -3532,7 +3755,7 @@ export function createWorkflowApp() {
     await loadQueue({ skipDeepLink: true, silent: true });
     if (!isCurrentDialogMutation(mutation, request, 'title_request') ||
         state.navigationGeneration !== selectionGeneration) return;
-    const detailLoaded = await openRequest(request.id);
+    const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
     if (detailLoaded !== true) {
       if (state.navigationGeneration === selectionGeneration + 1 &&
           isCurrentDialogSelection(request, 'title_request')) {
@@ -3825,10 +4048,10 @@ export function createWorkflowApp() {
   }
 
   async function mutateOperation(request, operation, action, body) {
-    if (!isCurrentDialogRequest(request, 'title_request') ||
-        state.dialogMutationInFlight === `hold:${operation.id}:${operation.version}`) return;
+    if (!allowRequestMutation(request)) return;
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = `hold:${operation.id}:${operation.version}`;
+    const restoreControls = disableDialogControls();
     announce(`${action === 'resolve' ? 'Resolving' : 'Reconciling'} hold operation...`);
     try {
       const result = await authorizedJson(`/api/asap/staff/hold-operations/${operation.id}/${action}`,
@@ -3851,7 +4074,7 @@ export function createWorkflowApp() {
       announce(message, notification.partial ? 'warning' : 'success');
       const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
       if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
-      const detailLoaded = await openRequest(request.id);
+      const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
       if (refreshed === true && detailLoaded === true) clearCommittedSessionFallback(mutation.token);
       if (isCurrentDialogSelection(request, 'title_request')) {
         state.partialSessionFailureDetailAvailable = Boolean(detailLoaded);
@@ -3878,7 +4101,7 @@ export function createWorkflowApp() {
         }
         const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
-        const detailLoaded = await openRequest(request.id);
+        const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
         if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired) &&
             refreshed === true && detailLoaded === true) {
           clearCommittedSessionFallback(mutation.token);
@@ -3890,6 +4113,7 @@ export function createWorkflowApp() {
       }
     } finally {
       if (state.dialogMutationInFlight === `hold:${operation.id}:${operation.version}`) state.dialogMutationInFlight = null;
+      restoreControls();
       latestLoads.finish('dialog-mutation', mutation.token);
     }
   }
@@ -3970,6 +4194,13 @@ export function createWorkflowApp() {
     if ((name === 'settings' || name === 'operations') &&
         !['admin', 'super_admin'].includes(state.staff?.role)) return;
     const previousView = state.activeView;
+    if (updateUrl && previousView === name && dom.dialog.open) return closeDialog();
+    if (updateUrl && previousView === name && dom.staffSuggestionDialog.open) return closeStaffSuggestion();
+    if (updateUrl && previousView !== name) {
+      if (!allowNavigation()) return false;
+      if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
+      if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
+    }
     if (previousView === 'settings' && name !== 'settings' &&
         settingsController.hasPendingMutation()) {
       announce('Wait for the settings change to finish before navigating away.', 'warning');
@@ -3980,9 +4211,6 @@ export function createWorkflowApp() {
       announce('Reload current settings to verify the uncertain change before navigating away.', 'warning');
       return;
     }
-    if (updateUrl && previousView === 'settings' && name !== 'settings' &&
-        settingsController.isDirty() &&
-        !window.confirm('Discard unsaved settings changes and navigate away?')) return;
     if (updateUrl && previousView !== name) invalidateNavigation();
     cancelDialogFocusReturn();
     if (previousView === 'settings' && name !== 'settings') settingsController.suspend();
@@ -4008,7 +4236,7 @@ export function createWorkflowApp() {
         pushSettingsRouteParameter(settingsController.currentScope(), settingsController.currentPanel());
       } else {
         pushStageParameter(name === 'additional-copies' ? 'additional_copies'
-          : name === 'analytics' ? 'analytics' : name === 'operations' ? 'operations' : state.status);
+          : ['analytics', 'operations', 'profile'].includes(name) ? name : state.status);
       }
     }
     const heading = name === 'queue'
@@ -4035,12 +4263,15 @@ export function createWorkflowApp() {
       dom.closeDialog.focus();
       return false;
     }
+    if (!options.force && !options.guarded && !options.preserveMutation &&
+        !allowNavigation({ settings: false, suggestion: false })) return false;
     polarisLookup.close();
     latestLoads.begin('research-configuration').abort();
     state.verifiedBib = null;
     state.research = null;
     state.currentRequest = null;
     state.editControls = null;
+    state.editorDirty = false;
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();
@@ -4061,8 +4292,9 @@ export function createWorkflowApp() {
     state.selectedRequestVersion = null;
     state.returnFocus = null;
     if (!options.navigation) {
-      pushStageParameter(wasAdditionalCopy || state.activeView === 'additional-copies'
-        ? 'additional_copies' : state.status);
+      state.closingDetailHistory = closeDetailHistory(wasAdditionalCopy || state.activeView === 'additional-copies'
+        ? 'additional_copies' : state.status, queueRouteContext());
+      if (!state.closingDetailHistory) rememberRoute();
     }
     if (options.preserveMutation === true) state.dialogMutationInFlight = null;
     if (options.navigation) return true;
@@ -4158,6 +4390,7 @@ export function createWorkflowApp() {
     });
     dom.bulkDeleteExecute.addEventListener('click', executeBulkDelete);
     dom.signOut.addEventListener('click', async () => {
+      if (!allowNavigation()) return;
       try {
         await authorizedJson('/api/asap/staff/sign-out', { method: 'POST' });
         showSignedOut('You are signed out.');
@@ -4170,6 +4403,9 @@ export function createWorkflowApp() {
     });
     dom.refresh.addEventListener('click', () => loadQueue({ skipDeepLink: true }));
     dom.scope.addEventListener('change', () => {
+      if (!allowNavigation()) { dom.scope.value = state.scope; return; }
+      if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
+      if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
       invalidateNavigation();
       state.scope = dom.scope.value;
       void refreshEmailReadiness();
@@ -4192,6 +4428,9 @@ export function createWorkflowApp() {
       announce('Additional-copy task list reviewed. You can open the request again if another task is needed.', 'success');
     });
     dom.additionalCopyScope.addEventListener('change', () => {
+      if (!allowNavigation()) { dom.additionalCopyScope.value = state.scope; return; }
+      if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
+      if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
       invalidateNavigation();
       state.scope = dom.additionalCopyScope.value;
       void refreshEmailReadiness();
@@ -4203,6 +4442,7 @@ export function createWorkflowApp() {
       loadAdditionalCopies({ skipDeepLink: true });
     });
     dom.operationsScope.addEventListener('change', () => {
+      if (state.operationMutation) { dom.operationsScope.value = state.operationsScope; return; }
       state.operationsScope = dom.operationsScope.value;
       void refreshEmailReadiness();
       loadOperations();
@@ -4219,6 +4459,9 @@ export function createWorkflowApp() {
     for (const tab of dom.statusTabs) {
       tab.addEventListener('click', () => {
         if (state.status === tab.dataset.status) return;
+        if (!allowNavigation()) return;
+        if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
+        if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
         invalidateNavigation();
         state.status = tab.dataset.status;
         resetQueueFilters();
@@ -4246,6 +4489,9 @@ export function createWorkflowApp() {
     for (const tab of dom.additionalCopyStatusTabs) {
       tab.addEventListener('click', () => {
         if (state.additionalCopyStatus === tab.dataset.copyStatus) return;
+        if (!allowNavigation()) return;
+        if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
+        if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
         invalidateNavigation();
         state.additionalCopyStatus = tab.dataset.copyStatus;
         resetAdditionalCopyFilters();
@@ -4269,8 +4515,6 @@ export function createWorkflowApp() {
     dom.additionalCopyClaim.addEventListener('change', renderAdditionalCopyGrid);
     dom.profile.addEventListener('submit', saveProfile);
     for (const tab of dom.viewTabs) tab.addEventListener('click', () => {
-      if (dom.dialog.open && !closeDialog()) return;
-      if (dom.staffSuggestionDialog.open) closeStaffSuggestion();
       switchView(tab.dataset.view);
     });
     dom.closeDialog.addEventListener('click', () => closeDialog());
@@ -4287,19 +4531,41 @@ export function createWorkflowApp() {
       closeAdditionalCopyCreateDialog();
     });
     dom.staffSuggestionForm.addEventListener('submit', submitStaffSuggestion);
+    for (const name of ['input', 'change']) {
+      dom.staffSuggestionForm.addEventListener(name, event => {
+        if (state.staffSuggestion && (event.target.value?.trim() || event.target.type === 'checkbox')) {
+          state.staffSuggestion.dirty = true;
+        }
+      });
+    }
     dom.closeStaffSuggestion.addEventListener('click', () => closeStaffSuggestion());
+    dom.staffSuggestionDialog.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      // Search inputs consume Escape to clear text before the dialog's native cancel.
+      // Route the key through the same draft decision before any field is cleared.
+      event.preventDefault();
+      closeStaffSuggestion();
+    });
     dom.staffSuggestionDialog.addEventListener('cancel', event => {
       event.preventDefault();
       closeStaffSuggestion();
     });
+    window.addEventListener('beforeunload', event => {
+      if (!hasRequestDraft() && !hasSuggestionDraft()) return;
+      event.preventDefault();
+      event.returnValue = '';
+    });
     window.addEventListener('popstate', () => { void navigateFromUrl(); });
     window.addEventListener('hashchange', () => {
-      if (currentStageParameter() === 'settings') void navigateFromUrl();
+      if (currentStageParameter() === 'settings' && !state.restoringHistory &&
+          state.routeSnapshot?.href !== window.location.href) void navigateFromUrl();
     });
   }
 
   return {
     async start() {
+      initializeStaffHistory();
+      rememberRoute();
       bindEvents();
       await startSession();
     }

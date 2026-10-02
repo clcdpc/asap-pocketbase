@@ -2062,6 +2062,12 @@ export function createSettingsController({
     return true;
   }
 
+  function discardDraft() {
+    if (state.pendingMutation || state.outcomeUncertain) return false;
+    if (state.data) populate(state.data);
+    return true;
+  }
+
   return {
     bind,
     setStaff,
@@ -2070,6 +2076,7 @@ export function createSettingsController({
     activatePanel,
     suspend,
     setScopeFromUrl,
+    discardDraft,
     load,
     isDirty,
     hasPendingMutation: () => Boolean(state.pendingMutation),

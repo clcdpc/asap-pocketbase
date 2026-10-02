@@ -40,6 +40,7 @@ async function until(predicate, message) {
     global.Node = dom.window.Node;
     global.HTMLElement = dom.window.HTMLElement;
     global.DOMParser = dom.window.DOMParser;
+    dom.window.confirm = () => true;
     dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
     dom.window.gridjs = require(path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js'));

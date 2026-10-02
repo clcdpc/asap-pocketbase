@@ -90,13 +90,13 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     global.fetch = async (url, options = {}) => {
       requests.push({ url, options });
       if (url.endsWith('/session')) return response(200, session);
-      if (url.endsWith('/api/asap/staff/organizations')) return response(200, organizations.map(item => ({
+      if (url.endsWith('/api/asap/staff/organizations')) return response(200, { code: 'ok', data: organizations.map(item => ({
         id: item.id,
         displayName: item.name,
         abbreviation: null,
         active: true,
         version: 'organization-version'
-      })));
+      })) });
       if (url.includes('/workflow/queues')) {
         const scope = new URL(`https://localhost${url}`).searchParams.get('organizationId') || 'all';
         const pending = operationsReads.get(`queue:${scope}`);
@@ -171,6 +171,8 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     document.querySelector('[data-view="queue"]').click();
     await settle();
     assert.equal(scope.value, '2', 'queue refresh must not overwrite Operations scope');
+    assert.equal(document.getElementById('library-scope').value, 'all',
+      'Operations loads must not overwrite the operational queue scope control');
     const readinessCount = requests.filter(item => item.url.includes('/email-readiness')).length;
     document.querySelector('[data-view="additional-copies"]').click();
     await settle();

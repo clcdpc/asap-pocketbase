@@ -960,11 +960,30 @@ async function runStaleMutationCompletions(browser, args, report) {
           claimFilter: '#claim-filter'
         };
 
-    async function holdCurrentB(type, id) {
+    async function holdCurrentB(type, id, mutation) {
       const target = scenario(type, id);
+      const originalUrl = page.url();
+      const originalKicker = await page.locator('#request-dialog-kicker').textContent();
       await page.keyboard.press('Escape');
       assert.equal(await page.locator('#request-dialog').isVisible(), true,
         'Escape must keep a consequential in-flight action visible until its result arrives');
+      await page.locator('[data-view="profile"]').evaluate(node => node.click());
+      assert.equal(page.url(), originalUrl, 'Unresolved mutations must block top-level navigation');
+      assert.equal(await page.locator('#request-dialog-kicker').textContent(), originalKicker);
+      const accepted = await mutation.accepted;
+      // Once the POST is authoritative, its later queue refresh may complete after
+      // navigating to B. Keep that real stale-completion boundary under test.
+      const followup = accepted.status < 400
+        ? await delayNextServerResponse(page, 'GET', target.listPath) : null;
+      mutation.release();
+      await mutation.completed;
+      if (followup) await followup.accepted;
+      else await page.locator('#app-status').filter({ hasText: /The task changed.*Reload before continuing/i }).waitFor();
+      if (await page.locator('#request-dialog').isVisible()) {
+        await page.getByRole('button', { name: 'Close request details' }).click();
+      }
+      await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => !new URL(location.href).searchParams.has('request'));
       if (type === 'additional_copy' &&
           await page.locator('[data-copy-status="closed"]').getAttribute('aria-selected') === 'true') {
         await page.locator('[data-copy-status="open"]').evaluate(node => node.click());
@@ -994,13 +1013,17 @@ async function runStaleMutationCompletions(browser, args, report) {
       await page.getByRole('button', { name: 'Assign', exact: true }).click();
       await candidates.requested;
       visible.status = await page.locator('#app-status').textContent();
-      return { target, before, visible, candidates };
+      return { target, before, visible, candidates, followup };
     }
 
     async function releaseMutationWithBPending(mutation, heldB) {
       try {
         mutation.release();
         await mutation.completed;
+        if (heldB.followup) {
+          heldB.followup.release();
+          await heldB.followup.completed;
+        }
         await page.waitForTimeout(100);
         assert.equal(await page.locator('#request-dialog').getAttribute('open'), '');
         assert.equal(await page.locator('#request-dialog-title').textContent(), heldB.visible.title);
@@ -1019,6 +1042,10 @@ async function runStaleMutationCompletions(browser, args, report) {
         await heldB.candidates.dispose();
         mutation.release();
         await mutation.dispose();
+        if (heldB.followup) {
+          heldB.followup.release();
+          await heldB.followup.dispose();
+        }
       }
       await page.getByLabel(heldB.target.picker).waitFor({ state: 'visible' });
     }
@@ -1046,7 +1073,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     );
     await page.getByRole('button', { name: 'Claim', exact: true }).click();
     assert.equal((await delayedMutation.accepted).status, 409);
-    let heldB = await holdCurrentB('additional_copy', args.staleCopyBId);
+    let heldB = await holdCurrentB('additional_copy', args.staleCopyBId, delayedMutation);
     await releaseMutationWithBPending(delayedMutation, heldB);
     const conflictedAResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${args.staleCopyAId}`
@@ -1064,7 +1091,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: 'Close task' }).click();
     assert.equal((await delayedMutation.accepted).status, 200);
-    heldB = await holdCurrentB('additional_copy', args.staleCopyBId);
+    heldB = await holdCurrentB('additional_copy', args.staleCopyBId, delayedMutation);
     await releaseMutationWithBPending(delayedMutation, heldB);
     const closedAResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${args.staleCopyAId}`
@@ -1080,7 +1107,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: 'Permanently delete task' }).click();
     assert.equal((await delayedMutation.accepted).status, 200);
-    heldB = await holdCurrentB('additional_copy', args.staleCopyBId);
+    heldB = await holdCurrentB('additional_copy', args.staleCopyBId, delayedMutation);
     await releaseMutationWithBPending(delayedMutation, heldB);
     const deletedAResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${args.staleCopyAId}`
@@ -1099,7 +1126,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     );
     await titlePicker.locator('xpath=ancestor::form').getByRole('button', { name: 'Assign', exact: true }).click();
     assert.equal((await delayedMutation.accepted).status, 200);
-    heldB = await holdCurrentB('title_request', args.staleTitleBId);
+    heldB = await holdCurrentB('title_request', args.staleTitleBId, delayedMutation);
     await releaseMutationWithBPending(delayedMutation, heldB);
     const assignedTitleAResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/title-requests/${args.staleTitleAId}`
@@ -1226,9 +1253,10 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
       'an uncertain create remains blocked after a full page reload');
-    await page.evaluate(() => document.querySelector('[data-copy-status="closed"]').click());
     await page.locator('#close-request').click();
+    await page.waitForFunction(() => !new URL(location.href).searchParams.has('request'));
     await page.locator('.view-tab[data-view="additional-copies"]').click();
+    await page.locator('[data-copy-status="closed"]').click();
     await page.locator('#refresh-additional-copies').click();
     await page.locator('.view-tab[data-view="queue"]').click();
     await page.locator('[data-status="hold_placed"]').click();
@@ -1304,7 +1332,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     );
     await page.getByRole('button', { name: 'Claim', exact: true }).click();
     assert.equal((await delayedMutation.accepted).status, 200);
-    heldB = await holdCurrentB('additional_copy', createdId);
+    heldB = await holdCurrentB('additional_copy', createdId, delayedMutation);
     await releaseMutationWithBPending(delayedMutation, heldB);
     const reopenedSameResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${createdId}`
@@ -1323,9 +1351,17 @@ async function runStaleMutationCompletions(browser, args, report) {
     assert.equal(await page.locator('#request-dialog').isVisible(), true,
       'Escape must retain the in-flight unclaim until its result is known');
     await page.getByRole('button', { name: 'Sign out' }).evaluate(node => node.click());
-    await page.locator('#signed-out').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#workspace').isVisible(), true,
+      'Sign-out must retain an unresolved task mutation');
+    const signedOutFollowup = await delayNextServerResponse(page, 'GET', '/api/asap/staff/additional-copies');
     delayedMutation.release();
     await delayedMutation.completed;
+    await signedOutFollowup.accepted;
+    await page.getByRole('button', { name: 'Sign out' }).evaluate(node => node.click());
+    await page.locator('#signed-out').waitFor({ state: 'visible' });
+    signedOutFollowup.release();
+    await signedOutFollowup.completed;
+    await signedOutFollowup.dispose();
     await delayedMutation.dispose();
     await page.waitForTimeout(100);
     assert.equal(await page.locator('#workspace').isVisible(), false);
@@ -1376,15 +1412,12 @@ async function runStaleOperationErrorCompletion(browser, args, report) {
     assert.equal(await page.locator('#request-dialog').isVisible(), true,
       'Escape must retain an in-flight hold resolution until its outcome is known');
     await page.locator('[data-status="suggestion"]').evaluate(node => node.click());
-    await page.locator('#claim-filter').selectOption('all');
-    await page.getByRole('button', { name: `Open request ${args.staleTitleBId}` }).evaluate(node => node.click());
-    await page.locator('#request-dialog-kicker').filter({ hasText: `Request ${args.staleTitleBId}` }).waitFor();
-    await page.keyboard.press('Escape');
-    await page.locator('#request-dialog').waitFor({ state: 'hidden' });
-    await page.locator('[data-status="pending_hold"]').click();
-
-    await page.getByRole('button', { name: `Open request ${args.resolutionRequestId}` }).click();
-    await page.locator('#request-dialog-kicker').filter({ hasText: `Request ${args.resolutionRequestId}` }).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get('request'), args.resolutionRequestId);
+    assert.equal(await page.locator('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true',
+      'A pending recovery action must block request/status navigation');
+    responses.releaseFirst();
+    await responses.firstCompleted;
+    await page.locator('#app-status').filter({ hasText: 'The hold recovery outcome could not be confirmed.' }).waitFor();
     await page.getByText('Hold placement recovery', { exact: true }).waitFor();
     await fillOperatorResolution(page, true);
     page.once('dialog', dialog => dialog.accept());
@@ -2500,6 +2533,7 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     await mobilePage.getByRole('button', { name: /Alex Example/ }).click();
     await mobilePage.getByLabel('Material format', { exact: true }).waitFor();
     await scan(mobilePage, axeSource, args.artifactRoot, report, 'mobile', 'staff-suggestion-editor');
+    mobilePage.once('dialog', dialog => dialog.accept());
     await mobilePage.keyboard.press('Escape');
     await mobilePage.locator('#staff-suggestion-dialog').waitFor({ state: 'hidden' });
     assert.deepEqual(mobileErrors, [], `Mobile staff suggestion flow raised an error: ${mobileErrors.join('; ')}`);
@@ -2525,6 +2559,129 @@ async function launch(chromium) {
   const executablePath = process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH;
   if (executablePath) await fs.access(executablePath);
   return chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+}
+
+async function runDraftRoutingJourneys(browser, args, axeSource, report) {
+  const { context, traffic } = await createContext(browser, { width: 1280, height: 900 },
+    args.baseOrigin, args.superIdentity);
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  async function decideDiscard(action, discard = false, message = /Discard unsaved request/) {
+    const confirmation = page.waitForEvent('dialog');
+    const acting = action();
+    const dialog = await confirmation;
+    assert.match(dialog.message(), message);
+    if (discard) await dialog.accept();
+    else await dialog.dismiss();
+    await acting;
+  }
+  try {
+    await page.goto(`${args.baseOrigin}/staff/?stage=profile`, { waitUntil: 'networkidle' });
+    await page.locator('#profile-view').waitFor({ state: 'visible' });
+    await page.reload({ waitUntil: 'networkidle' });
+    assert.equal(await page.locator('#profile-view').isVisible(), true);
+    await page.getByRole('button', { name: 'Requests', exact: true }).click();
+    await page.locator('#library-scope').selectOption('2');
+    await page.locator('#claim-filter').selectOption('all');
+    const listUrl = page.url();
+    const detail = page.locator('#request-dialog');
+    const opener = page.getByRole('button', { name: `Open request ${args.primaryRequestId}`, exact: true });
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      await opener.click(); await page.locator('#request-dialog[open]').waitFor();
+      await page.getByRole('button', { name: 'Close request details' }).click();
+      await page.waitForURL(listUrl);
+    }
+    await page.goBack();
+    assert.equal(await detail.isVisible(), false);
+    assert.equal(new URL(page.url()).searchParams.get('scope'), 'all');
+    await page.goBack();
+    await page.locator('#profile-view').waitFor({ state: 'visible' });
+    assert.equal(new URL(page.url()).searchParams.get('stage'), 'profile');
+    await page.goForward(); await page.goForward();
+    await page.locator('#library-scope').waitFor({ state: 'visible' });
+    await page.waitForFunction(() => document.querySelector('#library-scope').value === '2');
+    assert.equal(await page.locator('#library-scope').inputValue(), '2');
+    await page.reload({ waitUntil: 'networkidle' });
+    assert.equal(await page.locator('#library-scope').inputValue(), '2');
+    await page.locator('#claim-filter').selectOption('all');
+    await opener.click(); await page.locator('#request-dialog[open]').waitFor();
+    const detailUrl = page.url();
+    const title = page.getByLabel('Title', { exact: true });
+    await title.fill('Unsaved browser draft');
+    for (const action of ['close', 'escape', 'back', 'profile', 'sign-out']) {
+      await decideDiscard(() => {
+        if (action === 'close') return page.getByRole('button', { name: 'Close request details' }).click();
+        if (action === 'escape') return page.keyboard.press('Escape');
+        if (action === 'back') return page.goBack();
+        if (action === 'profile') return page.evaluate(() => document.querySelector('[data-view="profile"]').click());
+        return page.evaluate(() => document.getElementById('sign-out').click());
+      });
+      await page.waitForURL(detailUrl);
+      assert.equal(await detail.isVisible(), true);
+      assert.equal(await title.inputValue(), 'Unsaved browser draft');
+    }
+    await page.getByRole('button', { name: 'Unclaim', exact: true }).click();
+    await page.locator('#app-status').filter({ hasText: /Save or revert/ }).waitFor();
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'dirty-request-navigation');
+    await decideDiscard(() => page.getByRole('button', { name: 'Close request details' }).click(), true);
+    await page.waitForURL(listUrl);
+    await page.goto(`${args.baseOrigin}/staff/?stage=suggestion&scope=2&request=${args.primaryRequestId}`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#request-dialog[open]').waitFor();
+    await page.getByRole('button', { name: 'Close request details' }).click();
+    await page.waitForFunction(() => !new URL(location.href).searchParams.has('request'));
+    assert.equal(new URL(page.url()).searchParams.get('scope'), '2');
+
+    await page.getByRole('button', { name: 'Additional copies', exact: true }).click();
+    await page.locator('[data-copy-status="closed"]').click();
+    await page.reload({ waitUntil: 'networkidle' });
+    assert.equal(await page.locator('[data-copy-status="closed"]').getAttribute('aria-selected'), 'true');
+    await page.locator('[data-copy-status="open"]').click();
+    await page.goBack();
+    await page.locator('[data-copy-status="closed"][aria-selected="true"]').waitFor();
+    await page.goForward();
+    await page.locator('[data-copy-status="open"][aria-selected="true"]').waitFor();
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'copy-route-round-trip');
+    await page.getByRole('button', { name: 'Requests', exact: true }).click();
+    await page.getByRole('button', { name: 'New suggestion', exact: true }).click();
+    await page.getByLabel('Patron barcode or name', { exact: true }).fill('Unsaved patron lookup');
+    await decideDiscard(() => page.keyboard.press('Escape'), false, /Discard the unsaved new suggestion/);
+    assert.equal(await page.locator('#staff-suggestion-dialog').isVisible(), true);
+    await decideDiscard(() => page.evaluate(() => document.querySelector('[data-view="profile"]').click()),
+      false, /Discard the unsaved new suggestion/);
+    assert.equal(await page.locator('#staff-suggestion-dialog').isVisible(), true);
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'dirty-suggestion-navigation');
+    await decideDiscard(() => page.keyboard.press('Escape'), true, /Discard the unsaved new suggestion/);
+
+    await page.getByRole('button', { name: 'Operations', exact: true }).click();
+    const dispatched = deferred();
+    const release = deferred();
+    let posts = 0;
+    const operationRoute = async route => {
+      posts += 1; dispatched.resolve(); await release.promise;
+      await route.fulfill({ status: 202, contentType: 'application/json',
+        body: JSON.stringify({ code: 'queued', manualRunId: 'browser-run' }) });
+    };
+    await page.route('**/api/asap/staff/workflow/weekly-summary/run-now?*', operationRoute);
+    await page.evaluate(() => {
+      document.getElementById('force-weekly-now').click();
+      document.getElementById('force-weekly-now').click();
+      document.getElementById('send-test-email').click();
+    });
+    await dispatched.promise;
+    assert.equal(posts, 1);
+    assert.equal(await page.locator('#send-test-email').isDisabled(), true);
+    await page.getByRole('button', { name: 'Profile', exact: true }).click();
+    release.resolve();
+    await page.waitForFunction(() => !document.getElementById('send-test-email').disabled);
+    assert.equal(await page.locator('#profile-view').isVisible(), true);
+    await page.unroute('**/api/asap/staff/workflow/weekly-summary/run-now?*', operationRoute);
+    assert.deepEqual(errors, []);
+    assert.equal(traffic.externalRequests, 0);
+  } finally {
+    await context.close();
+  }
 }
 
 async function runNavigationSupport(browser, args, axeSource, report) {
@@ -2982,7 +3139,10 @@ async function runProfileSessionReplacementCase(browser, args, detectBeforeRespo
           authenticationEmail: args.staffIdentity.email, role: 'staff', organizationId: 2
         } }) }));
     if (detectBeforeResponse) {
-      await page.evaluate(() => window.dispatchEvent(new PopStateEvent('popstate')));
+      // Profile is now a real route. Refresh a protected queue to discover
+      // the replacement session while the earlier profile POST is still unresolved.
+      await page.getByRole('button', { name: 'Requests', exact: true }).click();
+      await page.locator('#refresh-queue').click();
       await page.locator('#workspace').waitFor({ state: 'hidden' });
     }
     releaseProfile();
@@ -3204,6 +3364,7 @@ async function main() {
   const report = { states: [] };
   try {
     await runAnonymous(browser, args, axeSource, report);
+    await runDraftRoutingJourneys(browser, args, axeSource, report);
     await runNavigationSupport(browser, args, axeSource, report);
     await runSettingsUnconfirmedSessionCase(browser, args);
     await runProfileSessionReplacement(browser, args);
@@ -3219,7 +3380,7 @@ async function main() {
     await runStaffSuggestion(browser, args, axeSource, report);
     await runClosedDeletionControls(browser, args, axeSource, report);
     await runSettingsLayout(browser, args, axeSource, report);
-    assert.equal(report.states.length, 47, 'Expected forty-seven major staff browser states');
+    assert.equal(report.states.length, 50, 'Expected fifty major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),

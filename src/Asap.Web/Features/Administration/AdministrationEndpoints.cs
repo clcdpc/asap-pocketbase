@@ -346,7 +346,8 @@ public static class AdministrationEndpoints
         HttpContext context,
         int? organizationId,
         IBackgroundJobClient jobs,
-        bool force = false)
+        bool force = false,
+        Guid? operationId = null)
     {
         var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
         if (!StaffEligibilityService.RoleMeets(actor.Role, StaffRoleRequirement.Admin) ||
@@ -369,7 +370,12 @@ public static class AdministrationEndpoints
             });
         }
 
-        var manualRunId = Guid.NewGuid();
+        if (operationId == Guid.Empty)
+        {
+            return Results.BadRequest(new { code = "operation_id_invalid" });
+        }
+        // Retries of one forced run share the existing durable per-recipient business keys.
+        var manualRunId = operationId ?? Guid.NewGuid();
         var jobId = jobs.Enqueue<BackgroundWorkflowJobs>(job =>
             job.SendForcedWeeklyStaffSummaryAsync(evidence, effectiveScope, manualRunId, CancellationToken.None));
         return Results.Accepted(value: new
@@ -429,10 +435,15 @@ public static class AdministrationEndpoints
         HttpContext context,
         int? organizationId,
         EmailOperationsService service,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? operationId = null)
     {
+        if (operationId == Guid.Empty)
+        {
+            return Results.BadRequest(new { code = "operation_id_invalid" });
+        }
         var result = await service.QueueTestAsync(
-            StaffAuthenticationEndpoints.RequireCurrentStaff(context), organizationId, cancellationToken);
+            StaffAuthenticationEndpoints.RequireCurrentStaff(context), organizationId, cancellationToken, operationId);
         var status = result.Code switch
         {
             "queued" => StatusCodes.Status202Accepted,
