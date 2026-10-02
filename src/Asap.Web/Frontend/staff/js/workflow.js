@@ -1,3 +1,4 @@
+import { createBulkDeleteController } from './bulk-delete.js';
 import { createSuggestionController } from './suggestion-controller.js';
 import { renderCustomFieldEditor } from './custom-fields.js';
 import { unconfirmedResponseError, notificationOutcome, isCommittedRequestResponse } from './mutation-outcome.js';
@@ -95,7 +96,6 @@ export function createWorkflowApp() {
     partialSessionFailureOwner: null,
     partialSessionFailureDetailAvailable: false,
     partialSessionFailureAfterQueueSequence: null,
-    bulkDeleteState: null,
     recentKey: null
   };
 
@@ -108,13 +108,12 @@ export function createWorkflowApp() {
     onContextChanged: (next, previous) => {
       titleQueue.contextChanged(next, previous);
       copyQueue.contextChanged(next, previous);
-      updateBulkDeleteButtons();
+      bulkDelete.contextChanged(navigation.context());
       if (emailReadinessScopeKey(next) !== emailReadinessScopeKey(previous)) void refreshEmailReadiness();
     },
     getFeatures: () => [
-      { key: 'bulk', inspectDeparture: () => ({ blocked: Boolean(state.bulkDeleteState?.submitting),
-          message: 'Deletion is in progress. Wait for the complete ledger before navigating away.' }),
-        discardDeparture: () => closeBulkDelete({ navigation: true }) },
+      { key: 'bulk', inspectDeparture: bulkDelete.inspectDeparture,
+        discardDeparture: () => bulkDelete.close({ navigation: true }) },
       { key: 'profile', inspectDeparture: profileController.inspectDeparture,
         discardDeparture: () => { if (profileController.isDirty()) profileController.discardDraft(); } },
       { key: 'settings', inspectDeparture: settingsController.inspectDeparture,
@@ -162,7 +161,7 @@ export function createWorkflowApp() {
     onScopeIntent: scope => navigation.changeQueueContext('queue', { scope }),
     onStatusIntent: status => navigation.changeQueueContext('queue', { status }),
     onScopeAccepted: scope => navigation.align({ scope }), onLibraries: populateScopes,
-    onRendered: updateBulkDeleteButtons,
+    onRendered: () => bulkDelete.contextChanged(navigation.context()),
     onRefreshed: ({ sequence }) => {
       renderRecentRequests();
       if (state.partialSessionFailureDetailAvailable && state.partialSessionFailureAfterQueueSequence !== null &&
@@ -223,7 +222,7 @@ export function createWorkflowApp() {
     onScopeIntent: scope => navigation.changeQueueContext('additional-copies', { scope }),
     onStatusIntent: additionalCopyStatus => navigation.changeQueueContext('additional-copies', { additionalCopyStatus }),
     onScopeAccepted: scope => navigation.align({ scope }), onLibraries: populateScopes,
-    onRendered: updateBulkDeleteButtons, onRefreshed() {},
+    onRendered: () => bulkDelete.contextChanged(navigation.context()), onRefreshed() {},
     recovery: {
       current: () => copyCreation.review.current(), begin: () => copyCreation.review.begin(),
       loaded: (evidence, result) => copyCreation.review.loaded(evidence, result),
@@ -331,6 +330,15 @@ export function createWorkflowApp() {
     beforeClose: () => navigation.allow({ settings: false, request: false }),
     openCreatedTitle: intent => navigation.openCreatedTitle(intent), openExistingTitle: intent => navigation.openExistingTitle(intent),
     onReceipt: recordFeatureReceipt, clearReceipt: clearCommittedSessionFallback
+  });
+
+  const bulkDelete = createBulkDeleteController({ root: document.querySelector('#bulk-delete-dialog'),
+    titleTrigger: dom.bulkDelete, copyTrigger: dom.bulkDeleteCopies, sessionIdentity,
+    getLibraries: () => titleQueue.libraries(), beforeOpen: () => navigation.allow(),
+    beforeExecute: () => navigation.allow({ bulk: false }),
+    captureReview: owner => navigation.captureClosedReview(owner), reviewClosed: intent => navigation.reviewClosed(intent),
+    onReceipt: recordFeatureReceipt, clearReceipt: clearCommittedSessionFallback,
+    onSessionLost: showSignedOut, onAccessUnavailable: showAccessUnavailable
   });
 
   const operationsController = createOperationsController({ root: dom.operationsView, sessionIdentity, announce,
@@ -466,281 +474,6 @@ export function createWorkflowApp() {
     operationsController.deactivate();
   }
 
-  function updateBulkDeleteButtons() {
-    const authorized = ['admin', 'super_admin'].includes(state.staff?.role);
-    dom.bulkDelete.hidden = !authorized || navigation.context().status !== 'closed';
-    dom.bulkDeleteCopies.hidden = !authorized || navigation.context().additionalCopyStatus !== 'closed';
-  }
-
-  function closeBulkDelete(options = {}) {
-    const batch = state.bulkDeleteState;
-    if (!batch) return;
-    if (batch.submitting && !options.force) {
-      dom.bulkDeleteSummary.textContent = 'Deletion is in progress. Wait for the result before closing.';
-      return;
-    }
-    batch.previewAbort?.abort();
-    state.bulkDeleteState = null;
-    if (dom.bulkDeleteDialog.open) dom.bulkDeleteDialog.close();
-    dom.bulkDeleteItems.replaceChildren();
-    dom.bulkDeleteResults.replaceChildren();
-    dom.bulkDeleteSummary.textContent = '';
-    dom.bulkDeleteConfirmation.value = '';
-    dom.bulkDeleteExecute.disabled = true;
-    if (!options.navigation && batch.returnFocus?.isConnected && state.staff) batch.returnFocus.focus();
-  }
-
-  function resetBulkDeletePreview() {
-    const batch = state.bulkDeleteState;
-    if (!batch || batch.submitting) return;
-    batch.previewAbort?.abort();
-    batch.previewAbort = null;
-    batch.snapshot = null;
-    dom.bulkDeleteSummary.textContent = '';
-    dom.bulkDeleteItems.replaceChildren();
-    dom.bulkDeleteResults.replaceChildren();
-    dom.bulkDeleteConfirmation.value = '';
-    dom.bulkDeleteExecute.disabled = true;
-    dom.bulkDeletePreview.disabled = false;
-    dom.bulkDeleteScope.disabled = false;
-    dom.bulkDeleteConfirmation.disabled = false;
-  }
-
-  function openBulkDelete(returnFocus) {
-    if (!['admin', 'super_admin'].includes(state.staff?.role)) return;
-    const batch = { returnFocus, previewAbort: null, snapshot: null, submitting: false, ledger: [] };
-    state.bulkDeleteState = batch;
-    dom.bulkDeleteScope.replaceChildren();
-    if (state.staff.role === 'super_admin') {
-      dom.bulkDeleteScope.append(element('option', { value: '', text: 'Choose a library scope' }));
-      dom.bulkDeleteScope.append(element('option', { value: 'all', text: 'All libraries' }));
-      for (const library of titleQueue.libraries()) {
-        dom.bulkDeleteScope.append(element('option', { value: library.id, text: library.name }));
-      }
-    } else {
-      dom.bulkDeleteScope.append(element('option', {
-        value: String(state.staff.organizationId), text: state.staff.organizationName || 'My library'
-      }));
-    }
-    dom.bulkDeleteScope.value = state.staff.role === 'super_admin' ? '' : String(state.staff.organizationId);
-    resetBulkDeletePreview();
-    dom.bulkDeleteDialog.showModal();
-    (state.staff.role === 'super_admin' ? dom.bulkDeleteScope : dom.bulkDeletePreview).focus();
-  }
-
-  function bulkItemLabel(item) {
-    return (item.type === 'title_request' ? 'Title request ' : 'Additional-copy task ') +
-      item.id + ' (' + item.libraryOrgName + ')';
-  }
-
-  function validateBulkItem(item, type, scope) {
-    return item?.type === type && typeof item.id === 'string' && /^[1-9]\d*$/.test(item.id) &&
-      typeof item.version === 'string' && item.version.length > 0 && item.status === 'closed' &&
-      Number.isSafeInteger(item.libraryOrgId) &&
-      (scope === 'all' || String(item.libraryOrgId) === scope);
-  }
-
-  async function previewBulkDelete() {
-    const batch = state.bulkDeleteState;
-    const scope = dom.bulkDeleteScope.value;
-    resetBulkDeletePreview();
-    if (!batch || !scope) {
-      dom.bulkDeleteSummary.textContent = 'Choose a library scope before previewing.';
-      dom.bulkDeleteScope.focus();
-      return;
-    }
-    const controller = new AbortController();
-    batch.previewAbort = controller;
-    dom.bulkDeletePreview.disabled = true;
-    dom.bulkDeleteSummary.textContent = 'Loading closed title requests and additional-copy tasks...';
-    try {
-      const session = await loadStaffSession({ signal: controller.signal });
-      if (state.bulkDeleteState !== batch || controller.signal.aborted) return;
-      if (!session.authenticated) {
-        showSignedOut();
-        return;
-      }
-      if (!session.accessAllowed) {
-        showAccessUnavailable();
-        return;
-      }
-      const previewActor = session.staff;
-      if (!previewActor || previewActor.id !== state.staff?.id ||
-          !['admin', 'super_admin'].includes(previewActor.role) ||
-          (scope === 'all' && previewActor.role !== 'super_admin') ||
-          (previewActor.role === 'admin' && scope !== String(previewActor.organizationId)) ||
-          typeof previewActor.version !== 'string' || !previewActor.version) {
-        throw new Error('Staff role or library scope changed. Reload the workspace before previewing deletion.');
-      }
-      const query = encodeURIComponent(scope);
-      const [titles, copies] = await Promise.all([
-        authorizedJson('/api/asap/staff/title-requests?scope=' + query, { signal: controller.signal }),
-        authorizedJson('/api/asap/staff/additional-copies?scope=' + query + '&status=closed',
-          { signal: controller.signal })
-      ]);
-      if (state.bulkDeleteState !== batch || controller.signal.aborted) return;
-      if (titles.scope !== scope || copies.scope !== scope || copies.status !== 'closed' ||
-          !Array.isArray(titles.items) || !Array.isArray(copies.items)) {
-        throw new Error('The requested deletion scope could not be verified.');
-      }
-      const titleItems = titles.items.filter(item => item.status === 'closed');
-      const copyItems = copies.items;
-      if (titleItems.some(item => !validateBulkItem(item, 'title_request', scope)) ||
-          copyItems.some(item => !validateBulkItem(item, 'additional_copy', scope))) {
-        throw new Error('The closed-work preview contained an invalid identity or scope.');
-      }
-      batch.snapshot = {
-        scope,
-        actorVersion: previewActor.version,
-        items: [...titleItems, ...copyItems].map(item => ({
-          type: item.type, id: item.id, version: item.version,
-          title: item.title, libraryOrgName: item.libraryOrgName,
-          libraryOrgId: item.libraryOrgId, closeReason: item.closeReason
-        }))
-      };
-      const scopeName = dom.bulkDeleteScope.selectedOptions[0]?.textContent || scope;
-      dom.bulkDeleteSummary.textContent = 'Preview for ' + scopeName + ': ' +
-        titleItems.length + ' closed title requests and ' + copyItems.length +
-        ' closed additional-copy tasks. Search, claim, tag, and grid filters do not affect this population.';
-      dom.bulkDeleteItems.replaceChildren(...batch.snapshot.items.map(item =>
-        element('li', { text: bulkItemLabel(item) + ' — ' + item.title +
-          (item.type === 'title_request' ? ' — ' + closeReasonLabel(item.closeReason) : '') })));
-      if (batch.snapshot.items.length === 0) {
-        dom.bulkDeleteSummary.textContent += ' There are no eligible records to submit.';
-      }
-      dom.bulkDeleteConfirmation.focus();
-    } catch (error) {
-      if (state.bulkDeleteState === batch && !controller.signal.aborted && error.status !== 401) {
-        dom.bulkDeleteSummary.textContent = error.message || 'The closed-work preview could not be loaded.';
-      }
-    } finally {
-      if (state.bulkDeleteState === batch) {
-        batch.previewAbort = null;
-        dom.bulkDeletePreview.disabled = false;
-      }
-    }
-  }
-
-  function bulkOutcome(error) {
-    const code = error.response?.code;
-    if (error.status === 404 || code === 'not_found') return 'not_found';
-    if (code === 'stale_version') return 'stale';
-    if (code === 'actor_changed_since_preview') return 'actor_changed';
-    if (code === 'request_not_closed' || code === 'delete_requires_closed') return 'not_closed';
-    if (error.status === 401 || error.status === 403 ||
-        ['delete_forbidden', 'staff_scope_forbidden', 'staff_session_invalid'].includes(code)) {
-      return 'forbidden/out_of_scope';
-    }
-    if (code === 'hold_history_retained') return 'blocked_hold_history';
-    if (isAbortError(error) || error.status === 408 || error.status >= 500 || !error.status) {
-      return 'outcome_unconfirmed';
-    }
-    return 'operational_failure';
-  }
-
-  function renderBulkLedger(batch, ledger = batch.ledger) {
-    const deleted = ledger.filter(item => item.outcome === 'deleted').length;
-    const attempted = ledger.filter(item => item.outcome !== 'not_attempted').length;
-    const summary = 'Confirmed deleted: ' + deleted + ' of ' + batch.snapshot.items.length +
-      '. Attempted: ' + attempted + '. Every record is rechecked by the server.';
-    dom.bulkDeleteResults.replaceChildren(
-      element('p', { text: summary }),
-      element('ul', {}, ledger.map(item =>
-        element('li', { text: bulkItemLabel(item) + ': ' + item.outcome.replaceAll('_', ' ') })))
-    );
-    state.partialSessionFailureMessage = summary + ' ' + ledger.map(item =>
-      bulkItemLabel(item) + ': ' + item.outcome.replaceAll('_', ' ')).join('; ') +
-      '. Sign in again and refresh Closed work before retrying.';
-    state.partialSessionFailureOwner = batch;
-    state.partialSessionFailureDetailAvailable = false;
-    state.partialSessionFailureAfterQueueSequence = null;
-    if (!state.staff) dom.signedOutMessage.textContent = state.partialSessionFailureMessage;
-  }
-
-  function retainInterruptedBulkLedger() {
-    const batch = state.bulkDeleteState;
-    if (!batch?.submitting || !batch.currentItem) return;
-    const remaining = batch.snapshot.items.slice(batch.snapshot.items.indexOf(batch.currentItem) + 1);
-    // Losing access through another request does not determine the outstanding DELETE's outcome.
-    renderBulkLedger(batch, [...batch.ledger, { ...batch.currentItem, outcome: 'outcome_unconfirmed' },
-      ...remaining.map(item => ({ ...item, outcome: 'not_attempted' }))]);
-  }
-
-  async function executeBulkDelete() {
-    const batch = state.bulkDeleteState;
-    if (!batch?.snapshot || batch.submitting || dom.bulkDeleteConfirmation.value !== 'DELETE' ||
-        dom.bulkDeleteScope.value !== batch.snapshot.scope || batch.snapshot.items.length === 0) return;
-    const owner = state.staff;
-    const navigationGeneration = navigation.generation();
-    const view = navigation.context().activeView;
-    let expectedScope = navigation.context().scope;
-    let expectedStatus = navigation.context().status;
-    let expectedCopyStatus = navigation.context().additionalCopyStatus;
-    let expectedRoute = router.snapshot()?.href;
-    const isCurrentContext = () => state.bulkDeleteState === batch && sessionIdentity.isCurrent(owner) &&
-      navigation.generation() === navigationGeneration && navigation.context().activeView === view &&
-      navigation.context().scope === expectedScope && navigation.context().status === expectedStatus &&
-      navigation.context().additionalCopyStatus === expectedCopyStatus && window.location.href === expectedRoute;
-    batch.submitting = true;
-    dom.bulkDeleteExecute.disabled = true;
-    dom.bulkDeletePreview.disabled = true;
-    dom.bulkDeleteScope.disabled = true;
-    dom.bulkDeleteConfirmation.disabled = true;
-    let stop = false;
-    for (const item of batch.snapshot.items) {
-      if (stop || state.bulkDeleteState !== batch || !sessionIdentity.isCurrent(owner)) {
-        batch.ledger.push({ ...item, outcome: 'not_attempted' });
-        continue;
-      }
-      const route = item.type === 'title_request'
-        ? '/api/asap/staff/requests/' : '/api/asap/staff/additional-copies/';
-      batch.currentItem = item;
-      try {
-        const result = await authorizedJson(route + encodeURIComponent(item.id),
-          { method: 'DELETE', body: {
-            version: item.version, actorVersion: batch.snapshot.actorVersion
-          } });
-        batch.ledger.push({ ...item, outcome: result?.deleted === true ? 'deleted' : 'outcome_unconfirmed' });
-        if (result?.deleted !== true) stop = true;
-      } catch (error) {
-        const outcome = bulkOutcome(error);
-        batch.ledger.push({ ...item, outcome });
-        stop = outcome === 'outcome_unconfirmed' || outcome === 'actor_changed' ||
-          error.status === 401 || error.status === 403;
-      }
-      batch.currentItem = null;
-      if (state.bulkDeleteState === batch) renderBulkLedger(batch);
-    }
-    batch.submitting = false;
-    if (state.bulkDeleteState !== batch) return;
-    renderBulkLedger(batch);
-    if (!state.staff) {
-      state.bulkDeleteState = null;
-      return;
-    }
-    dom.bulkDeleteSummary.textContent = 'Deletion finished. Review the ledger and refresh Closed work before retrying.';
-    if (!isCurrentContext()) return;
-    navigation.align({ scope: batch.snapshot.scope });
-    navigation.align({ status: 'closed' });
-    navigation.align({ additionalCopyStatus: 'closed' });
-    expectedScope = navigation.context().scope;
-    expectedStatus = navigation.context().status;
-    expectedCopyStatus = navigation.context().additionalCopyStatus;
-    replaceStageParameter(view === 'additional-copies' ? 'additional_copies' : 'closed');
-    expectedRoute = router.snapshot().href;
-    const queueRefreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
-    if (!isCurrentContext()) return;
-    const copiesRefreshed = await copyQueue.refresh({ skipDeepLink: true, silent: true });
-    if (!isCurrentContext()) return;
-    if (queueRefreshed === true && copiesRefreshed === true) clearCommittedSessionFallback(batch);
-    if (state.bulkDeleteState === batch) {
-      dom.bulkDeleteSummary.textContent = queueRefreshed === true && copiesRefreshed === true
-        ? 'Deletion finished. Both Closed views were refreshed from the server.'
-        : 'Deletion finished, but a Closed view could not refresh. Review the ledger and refresh before retrying.';
-      dom.bulkDeleteResults.focus();
-    }
-  }
-
   function showSignedOut(message) {
     const settingsMutationUnconfirmed = (settingsController.hasPendingMutation() ||
       settingsController.hasUnconfirmedOutcome()) && !state.settingsCommitPendingRefresh;
@@ -752,11 +485,7 @@ export function createWorkflowApp() {
     state.recentKey = null;
     dom.recentWork.open = false;
     dom.recentList.replaceChildren();
-    if (state.bulkDeleteState) {
-      state.bulkDeleteState.previewAbort?.abort();
-      if (!state.bulkDeleteState.submitting) state.bulkDeleteState = null;
-    }
-    if (dom.bulkDeleteDialog.open) dom.bulkDeleteDialog.close();
+    bulkDelete.signedOut();
     polarisLookup.close();
     latestLoads.begin('email-readiness').abort();
     dom.emailReadinessWarning.hidden = true;
@@ -835,7 +564,7 @@ export function createWorkflowApp() {
     dom.staffIdentity.textContent = staff.displayName || staff.userPrincipalName || 'Staff user';
     dom.staffIdentity.title = `${statusLabel(staff.role)} · ${staff.organizationName}`;
     dom.operationsTab.hidden = staff.role !== 'admin' && staff.role !== 'super_admin';
-    updateBulkDeleteButtons();
+    bulkDelete.contextChanged(navigation.context());
     settingsController.setStaff(staff);
     profileController.setStaff(staff);
     void refreshEmailReadiness();
@@ -878,31 +607,15 @@ export function createWorkflowApp() {
 
   function bindEvents() {
     onSessionInvalid(error => {
-      retainInterruptedBulkLedger();
+      bulkDelete.interrupt();
       showSignedOut(state.partialSessionFailureMessage ||
         'Your staff session ended or no longer has access. Sign in again.');
     });
     onAccessUnavailable(() => {
-      retainInterruptedBulkLedger();
+      bulkDelete.interrupt();
       showAccessUnavailable();
     });
     settingsController.bind();
-    dom.bulkDelete.addEventListener('click', event => openBulkDelete(event.currentTarget));
-    dom.bulkDeleteCopies.addEventListener('click', event => openBulkDelete(event.currentTarget));
-    dom.bulkDeleteClose.addEventListener('click', () => closeBulkDelete());
-    dom.bulkDeleteDialog.addEventListener('cancel', event => {
-      event.preventDefault();
-      closeBulkDelete();
-    });
-    dom.bulkDeleteScope.addEventListener('change', resetBulkDeletePreview);
-    dom.bulkDeletePreview.addEventListener('click', previewBulkDelete);
-    dom.bulkDeleteConfirmation.addEventListener('input', () => {
-      const batch = state.bulkDeleteState;
-      dom.bulkDeleteExecute.disabled = !batch?.snapshot?.items.length ||
-        batch.submitting || dom.bulkDeleteScope.value !== batch.snapshot.scope ||
-        dom.bulkDeleteConfirmation.value !== 'DELETE';
-    });
-    dom.bulkDeleteExecute.addEventListener('click', executeBulkDelete);
     dom.signOut.addEventListener('click', async () => {
       if (!navigation.allow()) return;
       try {
@@ -920,7 +633,7 @@ export function createWorkflowApp() {
     });
     window.addEventListener('beforeunload', event => {
       if (!titleDetail.isDirty() && !titleDetail.hasPendingMutation() && !copyDetail.isDirty() && !copyDetail.inspectDeparture().blocked && !copyCreation.hasPendingMutation() && !suggestionController.isDirty() && !suggestionController.inspectDeparture().blocked && !profileController.isDirty() &&
-          !profileController.hasPendingMutation() && !state.bulkDeleteState?.submitting) return;
+          !profileController.hasPendingMutation() && !bulkDelete.hasPendingMutation()) return;
       event.preventDefault();
       event.returnValue = '';
     });

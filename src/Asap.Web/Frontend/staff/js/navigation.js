@@ -220,7 +220,30 @@ export function createNavigationController({ router, sessionIdentity, getFeature
     return views.queue.openDetail(intent.id, intent.opener, { align: true, history: 'push' });
   }
 
+  function captureClosedReview(owner) {
+    const captured = context, ticket = generation, href = router.snapshot()?.href;
+    return Object.freeze({ view: captured.activeView,
+      isCurrent: () => !disposed && sessionIdentity.isCurrent(owner) && generation === ticket &&
+        Object.entries(captured).every(([key, value]) => context[key] === value) && window.location.href === href });
+  }
+
+  async function reviewClosed({ owner, scope, review }) {
+    if (!review?.isCurrent() || !['queue', 'additional-copies'].includes(review.view)) return null;
+    align({ scope, status: 'closed', additionalCopyStatus: 'closed' });
+    writeStage(review.view, true);
+    const completion = captureClosedReview(owner);
+    let titles = false, copies = false;
+    try { titles = await views.queue.refresh({ skipDeepLink: true, silent: true }) === true; }
+    catch { /* Completed DELETEs remain authoritative when a review read fails. */ }
+    if (!completion.isCurrent()) return null;
+    try { copies = await views['additional-copies'].refresh({ skipDeepLink: true, silent: true }) === true; }
+    catch { /* Retain the ledger receipt until both Closed lists are available. */ }
+    if (!completion.isCurrent()) return null;
+    return { refreshed: titles && copies, isCurrent: completion.isCurrent };
+  }
+
   return { context: () => context, generation: () => generation, align, allow, invalidate, openCreatedTitle, openExistingTitle,
+    captureClosedReview, reviewClosed,
     switchView, changeQueueContext, navigateFromUrl,
     start() { router.start(navigateFromUrl); },
     dispose() { disposed = true; reads.begin('route').abort(); router.dispose(); }
