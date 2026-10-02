@@ -23,10 +23,12 @@ import { applyPolarisResultToControls, createPolarisLookup, renderResearchLinks,
 import { loadAnalytics, resetAnalytics } from './analytics.js';
 import { sanitizedHtmlFragment } from '../../shared/html.js';
 import { requestedRequestIdFromUrl, requestedSettingsPanelFromUrl, requestedStatusFromUrl } from './url-utils.js';
+import { createDetailHost } from './detail-host.js';
+import { createTitleQueue, createCopyQueue } from './queues.js';
 import { createRouter } from './router.js';
 import { createNavigationController } from './navigation.js';
 
-import { STATUS_LABELS, element, icon, commandButton, text, dateTime, statusLabel, closeReasonLabel } from './ui.js';
+import { STATUS_LABELS, element, icon, commandButton, text, dateTime, statusLabel, closeReasonLabel, timeoutLabel } from './ui.js';
 
 function currentRequestParameter() {
   return requestedRequestIdFromUrl();
@@ -60,16 +62,6 @@ export function createWorkflowApp() {
     settingsView: document.querySelector('#settings-view'),
     settingsTab: document.querySelector('#settings-view-tab'),
     viewTabs: [...document.querySelectorAll('.view-tab')],
-    statusTabs: [...document.querySelectorAll('#status-tabs [data-status]')],
-    scopeField: document.querySelector('#scope-field'),
-    scope: document.querySelector('#library-scope'),
-    search: document.querySelector('#request-search'),
-    claim: document.querySelector('#claim-filter'),
-    tag: document.querySelector('#tag-filter'),
-    similar: document.querySelector('#similar-filter'),
-    similarField: document.querySelector('#similar-filter-field'),
-    queueAutomation: document.querySelector('#queue-automation'),
-    refresh: document.querySelector('#refresh-queue'),
     bulkDelete: document.querySelector('#bulk-delete-closed'),
     bulkDeleteCopies: document.querySelector('#bulk-delete-closed-copies'),
     bulkDeleteDialog: document.querySelector('#bulk-delete-dialog'),
@@ -82,26 +74,8 @@ export function createWorkflowApp() {
     bulkDeleteExecute: document.querySelector('#bulk-delete-execute'),
     bulkDeleteResults: document.querySelector('#bulk-delete-results'),
     newSuggestion: document.querySelector('#new-suggestion'),
-    summary: document.querySelector('#queue-summary'),
-    grid: document.querySelector('#request-grid'),
-    empty: document.querySelector('#queue-empty'),
-    additionalCopyStatusTabs: [...document.querySelectorAll('#additional-copy-status-tabs [data-copy-status]')],
-    additionalCopyScopeField: document.querySelector('#additional-copy-scope-field'),
-    additionalCopyScope: document.querySelector('#additional-copy-library-scope'),
-    additionalCopySearch: document.querySelector('#additional-copy-search'),
-    additionalCopyClaim: document.querySelector('#additional-copy-claim-filter'),
-    additionalCopyRefresh: document.querySelector('#refresh-additional-copies'),
-    additionalCopySummary: document.querySelector('#additional-copy-summary'),
-    additionalCopyGrid: document.querySelector('#additional-copy-grid'),
-    additionalCopyEmpty: document.querySelector('#additional-copy-empty'),
-    additionalCopyCreateReview: document.querySelector('#additional-copy-create-review'),
-    additionalCopyCreateReviewSummary: document.querySelector('#additional-copy-create-review-summary'),
-    additionalCopyCreateReviewDone: document.querySelector('#additional-copy-create-review-done'),
     dialog: document.querySelector('#request-dialog'),
-    dialogTitle: document.querySelector('#request-dialog-title'),
-    dialogKicker: document.querySelector('#request-dialog-kicker'),
     dialogBody: document.querySelector('#request-dialog-body'),
-    closeDialog: document.querySelector('#close-request'),
     createCopyDialog: document.querySelector('#additional-copy-create-dialog'),
     createCopyForm: document.querySelector('#additional-copy-create-form'),
     createCopySummary: document.querySelector('#additional-copy-create-summary'),
@@ -117,20 +91,9 @@ export function createWorkflowApp() {
 
   const state = {
     staff: null,
-    requests: [],
-    additionalCopies: [],
-    grid: null,
-    gridStatus: null,
-    queueLoadedScope: null,
-    additionalCopyGrid: null,
     selectedRequestId: null,
     selectedRequestType: null,
     selectedRequestVersion: null,
-    returnFocus: null,
-    cancelFocusReturn: null,
-    deepLinkHandled: false,
-    additionalCopyDeepLinkHandled: false,
-    additionalCopyLoaded: false,
     createCopyRequest: null,
     createCopyReturnFocus: null,
     staffSuggestion: null,
@@ -141,7 +104,6 @@ export function createWorkflowApp() {
     partialSessionFailureDetailAvailable: false,
     partialSessionFailureAfterQueueSequence: null,
     unconfirmedCopyCreationAwaitingRefresh: false,
-    queueLoadSequence: 0,
     configurations: new Map(),
     research: null,
     currentRequest: null,
@@ -158,14 +120,13 @@ export function createWorkflowApp() {
   const navigation = createNavigationController({ router, sessionIdentity, announce,
     present: presentView, onInvalidate: invalidateFeatureReads,
     closeTransient: () => {
-      if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
+      if (detailHost.isOpen()) closeDialog({ navigation: true, guarded: true });
       if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
     },
     onContextChanged: (next, previous) => {
-      dom.scope.value = next.scope;
-      dom.additionalCopyScope.value = next.scope;
-      if (next.status !== previous.status) { resetQueueFilters(); updateStatusTabs(); }
-      if (next.additionalCopyStatus !== previous.additionalCopyStatus) { resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); }
+      titleQueue.contextChanged(next, previous);
+      copyQueue.contextChanged(next, previous);
+      updateBulkDeleteButtons();
       if (emailReadinessScopeKey(next) !== emailReadinessScopeKey(previous)) void refreshEmailReadiness();
     },
     getFeatures: () => [
@@ -190,22 +151,20 @@ export function createWorkflowApp() {
     ],
     views: {
       queue: {
-        activate: ({ previous }) => { if (previous !== 'queue') resetQueueFilters(); updateStatusTabs(); },
-        refresh: options => loadQueue(options),
-        refreshOnEntry: ({ context, previous }) => {
-          if (previous !== 'queue' && state.queueLoadedScope !== context.scope) return loadQueue({ skipDeepLink: true });
-        },
-        setLibraries: libraries => populateScopes(libraries, navigation.context().scope),
+        activate: options => titleQueue.activate(options), deactivate: () => titleQueue.deactivate(),
+        refresh: options => titleQueue.refresh(options), render: () => titleQueue.render(),
+        refreshOnEntry: options => titleQueue.refreshOnEntry(options),
+        setLibraries: libraries => populateScopes(libraries),
         openDetail: id => openRequest(id, null, { align: true }),
-        closeOverlay: () => dom.dialog.open ? closeDialog() : dom.staffSuggestionDialog.open ? closeStaffSuggestion() : null
+        closeOverlay: () => detailHost.isOpen() ? closeDialog() : dom.staffSuggestionDialog.open ? closeStaffSuggestion() : null
       },
       'additional-copies': {
-        activate: ({ previous }) => { if (previous !== 'additional-copies') resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); },
-        refresh: options => loadAdditionalCopies(options),
-        refreshOnEntry: () => { if (!state.additionalCopyLoaded) return loadAdditionalCopies({ skipDeepLink: true }); },
-        setLibraries: libraries => populateScopes(libraries, navigation.context().scope),
+        activate: options => copyQueue.activate(options), deactivate: () => copyQueue.deactivate(),
+        refresh: options => copyQueue.refresh(options), render: () => copyQueue.render(),
+        refreshOnEntry: options => copyQueue.refreshOnEntry(options),
+        setLibraries: libraries => populateScopes(libraries),
         openDetail: id => openAdditionalCopy(id, null, { fromDeepLink: true }),
-        closeOverlay: () => dom.dialog.open ? closeDialog() : dom.staffSuggestionDialog.open ? closeStaffSuggestion() : null
+        closeOverlay: () => detailHost.isOpen() ? closeDialog() : dom.staffSuggestionDialog.open ? closeStaffSuggestion() : null
       },
       settings: {
         activate: () => { void settingsController.activate(requestedSettingsPanelFromUrl() || undefined); },
@@ -218,6 +177,55 @@ export function createWorkflowApp() {
       profile: { activate: () => profileController.activate(), deactivate: () => profileController.deactivate() },
       analytics: { deactivate: resetAnalytics, refresh: () => loadAnalytics(dom.analyticsContainer),
         refreshOnEntry: () => loadAnalytics(dom.analyticsContainer) }
+    }
+  });
+
+  const detailHost = createDetailHost({ root: document.querySelector('#request-dialog') });
+  let detailLease = null;
+  let detailReturnFocus = null;
+  const titleQueue = createTitleQueue({ root: dom.queueView, sessionIdentity,
+    getContext: () => navigation.context(), announce,
+    onOpen: (id, opener) => openRequest(id, opener, { history: 'push' }),
+    onScopeIntent: scope => navigation.changeQueueContext('queue', { scope }),
+    onStatusIntent: status => navigation.changeQueueContext('queue', { status }),
+    onScopeAccepted: scope => navigation.align({ scope }), onLibraries: populateScopes,
+    onRendered: updateBulkDeleteButtons,
+    onRefreshed: ({ sequence }) => {
+      renderRecentRequests();
+      if (state.partialSessionFailureDetailAvailable && state.partialSessionFailureAfterQueueSequence !== null &&
+          sequence > state.partialSessionFailureAfterQueueSequence) {
+        state.partialSessionFailureMessage = null; state.partialSessionFailureOwner = null;
+        state.partialSessionFailureDetailAvailable = false; state.partialSessionFailureAfterQueueSequence = null;
+      }
+    }
+  });
+  const copyQueue = createCopyQueue({ root: dom.additionalCopyView, sessionIdentity,
+    getContext: () => navigation.context(), announce,
+    onOpen: (id, opener) => openAdditionalCopy(id, opener, { history: 'push' }),
+    onScopeIntent: scope => navigation.changeQueueContext('additional-copies', { scope }),
+    onStatusIntent: additionalCopyStatus => navigation.changeQueueContext('additional-copies', { additionalCopyStatus }),
+    onScopeAccepted: scope => navigation.align({ scope }), onLibraries: populateScopes,
+    onRendered: updateBulkDeleteButtons, onRefreshed() {},
+    recovery: {
+      current: () => state.unconfirmedCopyCreationAwaitingRefresh || null,
+      begin() {
+        const current = state.unconfirmedCopyCreationAwaitingRefresh;
+        if (current) current.reviewReady = false;
+        return current;
+      },
+      loaded(evidence, result) {
+        const current = state.unconfirmedCopyCreationAwaitingRefresh;
+        if (!current) return false;
+        current.reviewReady = current === evidence && result.status === 'open' &&
+          (result.scope === 'all' || String(result.scope) === String(current.libraryOrgId));
+        return current.reviewReady;
+      },
+      acknowledge() {
+        const current = state.unconfirmedCopyCreationAwaitingRefresh;
+        if (!current?.reviewReady || navigation.context().additionalCopyStatus !== 'open' ||
+            (navigation.context().scope !== 'all' && String(navigation.context().scope) !== String(current.libraryOrgId))) return false;
+        current.reviewed = true; clearCommittedSessionFallback(state.partialSessionFailureOwner); return true;
+      }
     }
   });
 
@@ -260,7 +268,7 @@ export function createWorkflowApp() {
   function pushSettingsRouteParameter(scope, panel) { router.pushSettingsRoute(scope, panel); rememberRoute(); }
 
   function hasRequestDraft() {
-    return dom.dialog.open && interactionScope.isDirty();
+    return detailHost.isOpen() && interactionScope.isDirty();
   }
 
   function trackDialogFormDraft(form) {
@@ -416,10 +424,7 @@ export function createWorkflowApp() {
   const profileController = createProfileController({ root: dom.profileView, sessionIdentity, announce,
     onPreferences: (staff, owner) => {
       if (!updateStaffPreferences(staff, owner)) return false;
-      dom.claim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
-      dom.additionalCopyClaim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
-      renderGrid();
-      if (state.additionalCopyLoaded) renderAdditionalCopyGrid();
+      titleQueue.preferencesChanged(); copyQueue.preferencesChanged();
       return true;
     },
     onSessionLost: showSignedOut, onAccessUnavailable: showAccessUnavailable,
@@ -507,7 +512,7 @@ export function createWorkflowApp() {
       return;
     }
     for (const item of items) {
-      const current = state.requests.find(request => request.id === item.id);
+      const current = titleQueue.find(item.id);
       const label = current ? `${current.title} · Request ${item.id}` : `Request ${item.id}`;
       dom.recentList.append(element('button', {
         type: 'button',
@@ -533,64 +538,11 @@ export function createWorkflowApp() {
     renderRecentRequests();
   }
 
-  function resetQueueFilters() {
-    dom.search.value = '';
-    dom.tag.value = 'all';
-    dom.similar.value = 'all';
-    dom.claim.value = state.staff?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
-  }
-
-  function resetAdditionalCopyFilters() {
-    dom.additionalCopySearch.value = '';
-    dom.additionalCopyClaim.value = state.staff?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
-  }
-
-  function detachGridContainer(container) {
-    const replacement = container.cloneNode(false);
-    container.replaceWith(replacement);
-    return replacement;
-  }
-
-  function clearTitleQueueForContextChange() {
-    state.requests = [];
-    state.queueLoadedScope = null;
-    // An older Grid.js render can finish after navigation; keep its container detached.
-    dom.grid = detachGridContainer(dom.grid);
-    state.grid = null;
-    renderGrid();
-  }
-
-  function clearAdditionalCopyQueueForScopeChange() {
-    state.additionalCopies = [];
-    state.additionalCopyLoaded = false;
-    // An older Grid.js render can finish after the scope changes; keep its container detached.
-    dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid);
-    state.additionalCopyGrid = null;
-    renderAdditionalCopyGrid();
-  }
-
-  function updateStatusTabs() {
-    for (const tab of dom.statusTabs) {
-      const selected = tab.dataset.status === navigation.context().status;
-      tab.setAttribute('aria-selected', String(selected));
-      tab.tabIndex = selected ? 0 : -1;
-    }
-    dom.similarField.hidden = navigation.context().status !== 'suggestion';
-  }
-
-  function updateAdditionalCopyStatusTabs() {
-    for (const tab of dom.additionalCopyStatusTabs) {
-      const selected = tab.dataset.copyStatus === navigation.context().additionalCopyStatus;
-      tab.setAttribute('aria-selected', String(selected));
-      tab.tabIndex = selected ? 0 : -1;
-    }
-  }
-
   function invalidateFeatureReads() {
     latestLoads.begin('detail').abort();
     latestLoads.begin('additional-copy-detail').abort();
-    latestLoads.begin('queue').abort();
-    latestLoads.begin('additional-copies').abort();
+    titleQueue.invalidate();
+    copyQueue.invalidate();
     latestLoads.begin('settings-route').abort();
     latestLoads.begin('operational-scope').abort();
     operationsController.deactivate();
@@ -662,14 +614,9 @@ export function createWorkflowApp() {
     return true;
   }
 
-  function cancelDialogFocusReturn() {
-    state.cancelFocusReturn?.();
-    state.cancelFocusReturn = null;
-  }
-
   function isCurrentDialogSelection(request, requestType) {
     return !!state.staff &&
-      dom.dialog.open &&
+      detailHost.isOpen() &&
       state.selectedRequestType === requestType &&
       String(state.selectedRequestId) === String(request.id);
   }
@@ -760,9 +707,8 @@ export function createWorkflowApp() {
     if (state.staff.role === 'super_admin') {
       dom.bulkDeleteScope.append(element('option', { value: '', text: 'Choose a library scope' }));
       dom.bulkDeleteScope.append(element('option', { value: 'all', text: 'All libraries' }));
-      for (const option of dom.scope.options) {
-        if (option.value === 'all') continue;
-        dom.bulkDeleteScope.append(element('option', { value: option.value, text: option.textContent }));
+      for (const library of titleQueue.libraries()) {
+        dom.bulkDeleteScope.append(element('option', { value: library.id, text: library.name }));
       }
     } else {
       dom.bulkDeleteScope.append(element('option', {
@@ -968,8 +914,6 @@ export function createWorkflowApp() {
     dom.bulkDeleteSummary.textContent = 'Deletion finished. Review the ledger and refresh Closed work before retrying.';
     if (!isCurrentContext()) return;
     navigation.align({ scope: batch.snapshot.scope });
-    dom.scope.value = navigation.context().scope;
-    dom.additionalCopyScope.value = navigation.context().scope;
     navigation.align({ status: 'closed' });
     navigation.align({ additionalCopyStatus: 'closed' });
     expectedScope = navigation.context().scope;
@@ -977,13 +921,9 @@ export function createWorkflowApp() {
     expectedCopyStatus = navigation.context().additionalCopyStatus;
     replaceStageParameter(view === 'additional-copies' ? 'additional_copies' : 'closed');
     expectedRoute = router.snapshot().href;
-    for (const tab of dom.statusTabs) tab.setAttribute('aria-selected', String(tab.dataset.status === 'closed'));
-    for (const tab of dom.additionalCopyStatusTabs) {
-      tab.setAttribute('aria-selected', String(tab.dataset.copyStatus === 'closed'));
-    }
-    const queueRefreshed = await loadQueue({ skipDeepLink: true, silent: true });
+    const queueRefreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
     if (!isCurrentContext()) return;
-    const copiesRefreshed = await loadAdditionalCopies({ skipDeepLink: true, silent: true });
+    const copiesRefreshed = await copyQueue.refresh({ skipDeepLink: true, silent: true });
     if (!isCurrentContext()) return;
     if (queueRefreshed === true && copiesRefreshed === true) clearCommittedSessionFallback(batch);
     if (state.bulkDeleteState === batch) {
@@ -1024,26 +964,19 @@ export function createWorkflowApp() {
     dom.emailReadinessWarning.hidden = true;
     state.verifiedBib = null;
     state.research = null;
-    cancelDialogFocusReturn();
+    detailHost.cancelFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();
     cancelDialogMutationCompletion();
     cancelActionChoiceLoad();
     cancelAdditionalCopyCreationCompletion();
     closeStaffSuggestion({ focusButton: false, force: true });
-    if (dom.dialog.open) dom.dialog.close();
+    detailHost.reset();
     if (dom.createCopyDialog.open) dom.createCopyDialog.close();
     sessionIdentity.clear();
     state.staff = null;
     operationsController.signedOut();
-    state.requests = [];
-    state.additionalCopies = [];
-    state.queueLoadedScope = null;
-    state.additionalCopyLoaded = false;
-    state.grid = null;
-    state.additionalCopyGrid = null;
-    dom.grid = detachGridContainer(dom.grid);
-    dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid);
+    titleQueue.signedOut(); copyQueue.signedOut();
     dom.dialogBody.replaceChildren();
     state.currentRequest = null;
     state.editControls = null;
@@ -1053,16 +986,15 @@ export function createWorkflowApp() {
     state.selectedRequestId = null;
     state.selectedRequestType = null;
     state.selectedRequestVersion = null;
-    state.returnFocus = null;
+    detailReturnFocus = null;
     state.createCopyRequest = null;
     state.createCopyReturnFocus = null;
     state.unconfirmedCopyCreationAwaitingRefresh = false;
-    dom.additionalCopyCreateReview.hidden = true;
     profileController.signedOut();
     state.staffSuggestion = null;
     state.staffSuggestionReturnFocus = null;
-    latestLoads.begin('queue').abort();
-    latestLoads.begin('additional-copies').abort();
+    titleQueue.invalidate();
+    copyQueue.invalidate();
     operationsController.deactivate();
     latestLoads.begin('detail').abort();
     latestLoads.begin('additional-copy-detail').abort();
@@ -1113,31 +1045,22 @@ export function createWorkflowApp() {
     state.partialSessionFailureAfterQueueSequence = null;
     state.staff = sessionIdentity.accept(staff);
     state.unconfirmedCopyCreationAwaitingRefresh = readUnconfirmedCopyCreation(staff);
-    dom.additionalCopyCreateReview.hidden = true;
     if (state.unconfirmedCopyCreationAwaitingRefresh) {
-      state.additionalCopyLoaded = false;
+      copyQueue.markStale();
     }
     operationsController.setStaff(staff);
     state.recentKey = recentStorageKey(staff);
     renderRecentRequests();
     navigation.align({ scope: staff.role === 'super_admin' ? 'all' : String(staff.organizationId) });
-    for (const select of [dom.scope, dom.additionalCopyScope]) {
-      select.replaceChildren(element('option', { value: navigation.context().scope,
-        text: staff.role === 'super_admin' ? 'All libraries' : 'My library' }));
-    }
+    titleQueue.setStaff(staff); copyQueue.setStaff(staff);
     dom.signedOut.hidden = true;
     dom.workspace.hidden = false;
     dom.sessionActions.hidden = false;
     dom.staffIdentity.textContent = staff.displayName || staff.userPrincipalName || 'Staff user';
     dom.staffIdentity.title = `${statusLabel(staff.role)} · ${staff.organizationName}`;
-    dom.scopeField.hidden = staff.role !== 'super_admin';
-    dom.additionalCopyScopeField.hidden = staff.role !== 'super_admin';
     dom.operationsTab.hidden = staff.role !== 'admin' && staff.role !== 'super_admin';
     updateBulkDeleteButtons();
     settingsController.setStaff(staff);
-    dom.claim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
-    dom.similar.value = 'all';
-    dom.additionalCopyClaim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
     profileController.setStaff(staff);
     void refreshEmailReadiness();
   }
@@ -1172,360 +1095,9 @@ export function createWorkflowApp() {
     }
   }
 
-  function populateScopes(organizations, selectedScope) {
+  function populateScopes(organizations) {
     operationsController.setLibraries(organizations);
-    for (const select of [dom.scope, dom.additionalCopyScope]) {
-      if (!select) continue;
-      select.replaceChildren(element('option', { value: 'all', text: 'All libraries' }));
-      for (const organization of organizations || []) {
-        select.append(element('option', { value: organization.id, text: organization.name }));
-      }
-      select.value = selectedScope;
-    }
-  }
-
-  function populateTags() {
-    const selected = dom.tag.value;
-    const tags = [...new Set(state.requests.flatMap(request => request.workflowTags || []))]
-      .sort((first, second) => first.localeCompare(second));
-    dom.tag.replaceChildren(element('option', { value: 'all', text: 'All tags' }));
-    for (const tag of tags) dom.tag.append(element('option', { value: tag, text: tag }));
-    dom.tag.value = tags.includes(selected) ? selected : 'all';
-  }
-
-  async function loadQueue(options = {}) {
-    if (!state.staff) return;
-    const owner = state.staff;
-    const requestedScope = navigation.context().scope;
-    const load = latestLoads.begin('queue');
-    const queueSequence = ++state.queueLoadSequence;
-    dom.refresh.disabled = true;
-    if (!options.silent) announce('Loading authorized requests...');
-    try {
-      const scope = state.staff.role === 'super_admin' ? navigation.context().scope : String(state.staff.organizationId);
-      const result = await authorizedJson(`/api/asap/staff/title-requests?scope=${encodeURIComponent(scope)}`, {
-        signal: load.signal
-      });
-      if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== navigation.context().scope) return;
-      state.requests = Array.isArray(result.items) ? result.items : [];
-      const previousEmailScope = emailReadinessScopeKey();
-      navigation.align({ scope: result.scope });
-      if (emailReadinessScopeKey() !== previousEmailScope) void refreshEmailReadiness();
-      state.queueLoadedScope = result.scope;
-      if (state.staff.role === 'super_admin') populateScopes(result.organizations, result.scope);
-      populateTags();
-      renderRecentRequests();
-      renderGrid();
-      if (state.partialSessionFailureDetailAvailable &&
-          state.partialSessionFailureAfterQueueSequence !== null &&
-          queueSequence > state.partialSessionFailureAfterQueueSequence) {
-        state.partialSessionFailureMessage = null;
-        state.partialSessionFailureOwner = null;
-        state.partialSessionFailureDetailAvailable = false;
-        state.partialSessionFailureAfterQueueSequence = null;
-      }
-      if (!options.silent) announce(`${state.requests.length} authorized requests loaded.`);
-      if (!state.deepLinkHandled && !options.skipDeepLink) {
-        state.deepLinkHandled = true;
-        const deepLink = currentRequestParameter();
-        if (deepLink) await openRequest(deepLink, null, { align: true });
-      }
-      return true;
-    } catch (error) {
-      if (!load.isCurrent() || isAbortError(error) && load.signal.aborted) return;
-      if (!options.silent && error.status !== 401) {
-        announce(error.message || 'Requests could not be loaded.', 'error');
-      }
-      return false;
-    } finally {
-      if (load.isCurrent()) dom.refresh.disabled = false;
-      latestLoads.finish('queue', load.token);
-    }
-  }
-
-  function filteredRequests() {
-    const query = dom.search.value.trim().toLocaleLowerCase();
-    const claim = dom.claim.value;
-    const tag = dom.tag.value;
-    const similarity = dom.similar.value;
-    return state.requests.filter(request => {
-      if (request.status !== navigation.context().status) return false;
-      if (navigation.context().status === 'suggestion' && similarity !== 'all') {
-        const count = request.relatedRequests?.count;
-        if (!Number.isInteger(count) || (similarity === 'similar' ? count < 1 : count !== 0)) return false;
-      }
-      const mine = request.claimedByStaffUserId === state.staff?.id;
-      const unclaimed = !request.claimedByStaffUserId;
-      if (claim === 'mine' && !mine) return false;
-      if (claim === 'unclaimed' && !unclaimed) return false;
-      if (claim === 'mine_unclaimed' && !mine && !unclaimed) return false;
-      if (tag !== 'all' && !(request.workflowTags || []).includes(tag)) return false;
-      if (!query) return true;
-      return [request.title, request.author, request.nameFirst, request.nameLast,
-        request.barcode, request.identifier, request.bibid, request.libraryOrgName]
-        .filter(Boolean)
-        .some(value => String(value).toLocaleLowerCase().includes(query));
-    });
-  }
-
-  function scopeForLibraryOrAll(libraryOrgId) {
-    const libraryScope = String(libraryOrgId);
-    return [...dom.scope.options].some(option => option.value === libraryScope) ? libraryScope : 'all';
-  }
-
-  function timeoutLabel(enabled, days) {
-    return enabled && Number.isInteger(days) && days > 0 ? `${days} days` : 'Off';
-  }
-
-  function workflowLabel(request) {
-    const workflow = request.workflowContext;
-    if (!workflow) return 'Unavailable';
-    if (navigation.context().status === 'suggestion') return timeoutLabel(workflow.outstandingTimeoutEnabled, workflow.outstandingTimeoutDays);
-    if (navigation.context().status === 'outstanding_purchase') return workflow.autoPromote ? 'On' : 'Off';
-    if (navigation.context().status === 'pending_hold') return timeoutLabel(workflow.pendingHoldTimeoutEnabled, workflow.pendingHoldTimeoutDays);
-    if (navigation.context().status === 'hold_placed') return timeoutLabel(workflow.holdPickupTimeoutEnabled, workflow.holdPickupTimeoutDays);
-    return '—';
-  }
-
-  function queueColumns() {
-    const field = (label, value, width = '130px') => ({ label, value, width });
-    const title = field('Title', request => request.title, '220px');
-    const bib = field('BIB ID', request => request.bibid || '—');
-    const format = field('Format', request => request.formatLabel || request.format || '—');
-    const library = field('Library', request => request.libraryOrgName, '150px');
-    const patron = field('Patron', request => [request.nameLast, request.nameFirst].filter(Boolean).join(', ') || request.barcode, '150px');
-    const claim = field('Claim', request => request.claimedByDisplayName || 'Unclaimed', '145px');
-    claim.kind = 'claim';
-    const notes = field('Notes', request => request.notes?.trim() ? 'Present' : '—', '85px');
-    const tags = field('Tags', request => request.workflowTags?.join(', ') || 'None', '145px');
-    const open = field('Open', request => request.id, '85px');
-    open.kind = 'open';
-    const automation = label => field(label, workflowLabel, '145px');
-    switch (navigation.context().status) {
-      case 'suggestion':
-        return [title, field('Identifier', request => request.identifier || '—'), format,
-          field('Submitted', request => dateTime(request.created), '155px'), patron, library,
-          field('Related', request => request.relatedRequests?.count ?? '—', '90px'),
-          automation('Suggestion timeout'), tags, claim, notes, open];
-      case 'outstanding_purchase':
-        return [title, field('Identifier', request => request.identifier || '—'), bib, format,
-          field('Submitted', request => dateTime(request.created), '155px'),
-          field('Stage entered', request => dateTime(request.phaseEnteredAt), '155px'),
-          automation('Auto promotion'), library, claim, notes, open];
-      case 'pending_hold':
-        return [title, bib, format, field('Stage entered', request => dateTime(request.phaseEnteredAt), '155px'),
-          automation('Pending timeout'), patron, library, tags, claim, notes, open];
-      case 'hold_placed':
-        return [title, bib, format, field('Stage entered', request => dateTime(request.phaseEnteredAt), '155px'),
-          automation('Pickup timeout'), patron, library, claim, notes, open];
-      default:
-        return [title, bib, format, field('Close reason', request => closeReasonLabel(request.closeReason), '150px'),
-          field('Updated', request => dateTime(request.updated), '155px'), patron, library, claim, notes, open];
-    }
-  }
-
-  function renderGrid() {
-    updateBulkDeleteButtons();
-    const requests = filteredRequests();
-    dom.summary.textContent = `${requests.length} ${statusLabel(navigation.context().status).toLocaleLowerCase()} request${requests.length === 1 ? '' : 's'}`;
-    dom.empty.hidden = requests.length !== 0;
-    const stageRequests = state.requests.filter(request => request.status === navigation.context().status);
-    dom.queueAutomation.textContent = navigation.context().status === 'closed' ? ''
-      : navigation.context().scope === 'all' ? 'Workflow rules are shown for each request’s library.'
-      : stageRequests.length ? `${queueColumns().find(column => column.label.includes('timeout') || column.label === 'Auto promotion')?.label || 'Automation'}: ${workflowLabel(stageRequests[0])}.`
-        : 'Workflow rules will appear with requests in this stage.';
-    const definitions = queueColumns();
-    const rows = requests.map(request => definitions.map(column => column.value(request)));
-    if (state.grid && state.gridStatus !== navigation.context().status) {
-      state.grid.destroy?.();
-      dom.grid.replaceChildren();
-      state.grid = null;
-    }
-    if (!state.grid) {
-      state.gridStatus = navigation.context().status;
-      state.grid = new window.gridjs.Grid({
-        columns: definitions.map((column, index) => {
-          if (column.kind === 'claim') return {
-            name: column.label, width: column.width,
-            formatter: (cell, row) => {
-              const request = state.requests.find(item => item.id === row.cells.at(-1).data);
-              const mine = request && request.claimedByStaffUserId === state.staff?.id;
-              return window.gridjs.h('span', { className: `claim-label${mine ? ' mine' : ''}` }, cell);
-            }
-          };
-          if (column.kind === 'open') return {
-            name: column.label, width: column.width, sort: false,
-            formatter: id => window.gridjs.h('button', {
-              type: 'button', className: 'grid-open', 'aria-label': `Open request ${id}`,
-              onClick: event => openRequest(String(id), event.currentTarget, { history: 'push' })
-            }, [window.gridjs.h('i', { className: 'fa fa-chevron-right', 'aria-hidden': 'true' }), 'Open'])
-          };
-          return { name: column.label, width: column.width };
-        }),
-        data: rows,
-        sort: true,
-        pagination: { limit: 25, summary: true },
-        language: { noRecordsFound: 'No requests match these filters.' }
-      });
-      state.grid.render(dom.grid);
-    } else {
-      state.grid.updateConfig({ data: rows }).forceRender();
-    }
-  }
-
-  async function loadAdditionalCopies(options = {}) {
-    if (!state.staff) return;
-    const owner = state.staff;
-    const requestedScope = navigation.context().scope;
-    const requestedStatus = navigation.context().additionalCopyStatus;
-    const uncertaintyAtStart = state.unconfirmedCopyCreationAwaitingRefresh;
-    const load = latestLoads.begin('additional-copies');
-    dom.additionalCopyRefresh.disabled = true;
-    if (uncertaintyAtStart?.reviewReady) {
-      uncertaintyAtStart.reviewReady = false;
-      renderAdditionalCopyGrid();
-    }
-    if (!options.silent) announce('Loading authorized additional-copy tasks...');
-    try {
-      const scope = state.staff.role === 'super_admin' ? navigation.context().scope : String(state.staff.organizationId);
-      const result = await authorizedJson(
-        `/api/asap/staff/additional-copies?scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(navigation.context().additionalCopyStatus)}`,
-        { signal: load.signal }
-      );
-      if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== navigation.context().scope ||
-          requestedStatus !== navigation.context().additionalCopyStatus) return;
-      state.additionalCopies = Array.isArray(result.items) ? result.items : [];
-      const previousEmailScope = emailReadinessScopeKey();
-      navigation.align({ scope: result.scope });
-      if (emailReadinessScopeKey() !== previousEmailScope) void refreshEmailReadiness();
-      state.additionalCopyLoaded = true;
-      if (state.staff.role === 'super_admin') populateScopes(result.availableLibraries, result.scope);
-      const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
-      if (uncertainCreation && uncertaintyAtStart === uncertainCreation && result.status === 'open' &&
-          (result.scope === 'all' || String(result.scope) === String(uncertainCreation.libraryOrgId))) {
-        uncertainCreation.reviewReady = true;
-        dom.additionalCopySearch.value = '';
-        dom.additionalCopyClaim.value = 'all';
-      } else if (uncertainCreation) {
-        uncertainCreation.reviewReady = false;
-      }
-      renderAdditionalCopyGrid();
-      if (!options.silent) announce(uncertainCreation?.reviewReady
-        ? 'Open additional-copy tasks loaded. Review the matching tasks and acknowledge the review before trying again.'
-        : `${state.additionalCopies.length} authorized additional-copy tasks loaded.`);
-      if (!state.additionalCopyDeepLinkHandled && !options.skipDeepLink) {
-        state.additionalCopyDeepLinkHandled = true;
-        const deepLink = currentRequestParameter();
-        if (deepLink) await openAdditionalCopy(deepLink, null, { fromDeepLink: true });
-      }
-      return true;
-    } catch (error) {
-      if (load.isCurrent() && sessionIdentity.isCurrent(owner) && requestedScope === navigation.context().scope &&
-          requestedStatus === navigation.context().additionalCopyStatus &&
-          !options.silent && !isAbortError(error) && error.status !== 401) {
-        announce(error.message || 'Additional-copy tasks could not be loaded.', 'error');
-      }
-      return false;
-    } finally {
-      if (load.isCurrent()) dom.additionalCopyRefresh.disabled = false;
-      latestLoads.finish('additional-copies', load.token);
-    }
-  }
-
-  function filteredAdditionalCopies() {
-    const query = dom.additionalCopySearch.value.trim().toLocaleLowerCase();
-    const claim = dom.additionalCopyClaim.value;
-    return state.additionalCopies.filter(request => {
-      const mine = request.claimedByStaffUserId === state.staff?.id;
-      const unclaimed = !request.claimedByStaffUserId;
-      if (claim === 'mine' && !mine) return false;
-      if (claim === 'unclaimed' && !unclaimed) return false;
-      if (claim === 'mine_unclaimed' && !mine && !unclaimed) return false;
-      if (!query) return true;
-      return [request.title, request.author, request.bibid, request.identifier,
-        request.publication, request.libraryOrgName, request.claimedByDisplayName]
-        .filter(Boolean)
-        .some(value => String(value).toLocaleLowerCase().includes(query));
-    });
-  }
-
-  function renderAdditionalCopyGrid() {
-    updateBulkDeleteButtons();
-    const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
-    const reviewReady = Boolean(uncertainCreation?.reviewReady) && !uncertainCreation.reviewed &&
-      navigation.context().additionalCopyStatus === 'open' &&
-      (navigation.context().scope === 'all' || String(navigation.context().scope) === String(uncertainCreation.libraryOrgId));
-    dom.additionalCopyCreateReview.hidden = !reviewReady;
-    if (reviewReady) {
-      const matching = state.additionalCopies.filter(item =>
-        String(item.libraryOrgId) === String(uncertainCreation.libraryOrgId) &&
-        item.bibid === uncertainCreation.bibid);
-      const ids = matching.map(item => item.id).join(', ');
-      dom.additionalCopyCreateReviewSummary.textContent =
-        matching.length === 0
-          ? `Creation for BIB ${uncertainCreation.bibid} could not be confirmed. No matching open task is visible yet. Review the list before retrying; a retry will use the original request version so a completed earlier creation cannot be duplicated.`
-          : `Creation for BIB ${uncertainCreation.bibid} could not be confirmed. Review the ${matching.length} matching open task${matching.length === 1 ? '' : 's'} for this library before creating another: ${ids}.`;
-    }
-    const requests = filteredAdditionalCopies();
-    dom.additionalCopySummary.textContent = `${requests.length} ${navigation.context().additionalCopyStatus} task${requests.length === 1 ? '' : 's'}`;
-    dom.additionalCopyEmpty.hidden = requests.length !== 0;
-    const rows = requests.map(request => [
-      request.title,
-      request.author || '—',
-      request.bibid,
-      request.libraryOrgName,
-      request.formatLabel || request.format || 'Not recorded',
-      request.createdByUsername || 'Not recorded',
-      request.claimedByDisplayName || 'Unclaimed',
-      request.status === 'open'
-        ? request.timeoutContext ? timeoutLabel(request.timeoutContext.enabled, request.timeoutContext.days) : 'Unavailable'
-        : '—',
-      request.notes?.trim() ? 'Present' : '—',
-      dateTime(request.created),
-      request.id
-    ]);
-    if (!state.additionalCopyGrid) {
-      state.additionalCopyGrid = new window.gridjs.Grid({
-        columns: [
-          { name: 'Title', width: '220px' },
-          { name: 'Author', width: '155px' },
-          { name: 'BIB ID', width: '140px' },
-          { name: 'Library', width: '145px' },
-          { name: 'Format', width: '125px' },
-          { name: 'Created by', width: '145px' },
-          {
-            name: 'Claim',
-            width: '140px',
-            formatter: (cell, row) => {
-              const request = state.additionalCopies.find(item => item.id === row.cells[10].data);
-              const mine = request && request.claimedByStaffUserId === state.staff?.id;
-              return window.gridjs.h('span', { className: `claim-label${mine ? ' mine' : ''}` }, cell);
-            }
-          },
-          { name: 'Task timeout', width: '120px' },
-          { name: 'Notes', width: '85px' },
-          { name: 'Created', width: '155px' },
-          {
-            name: 'Open',
-            width: '74px',
-            sort: false,
-            formatter: id => window.gridjs.h('button', {
-              type: 'button',
-              className: 'grid-open additional-copy-open',
-              'aria-label': `Open additional-copy task ${id}`,
-              onClick: event => openAdditionalCopy(String(id), event.currentTarget, { history: 'push' })
-            }, [window.gridjs.h('i', { className: 'fa fa-chevron-right', 'aria-hidden': 'true' }), 'Open'])
-          }
-        ],
-        data: rows,
-        sort: true,
-        pagination: { limit: 25, summary: true },
-        language: { noRecordsFound: 'No additional-copy tasks match these filters.' }
-      });
-      state.additionalCopyGrid.render(dom.additionalCopyGrid);
-    } else {
-      state.additionalCopyGrid.updateConfig({ data: rows }).forceRender();
-    }
+    titleQueue.setLibraries(organizations); copyQueue.setLibraries(organizations);
   }
 
   async function openAdditionalCopy(id, returnFocus, options = {}) {
@@ -1541,17 +1113,20 @@ export function createWorkflowApp() {
     state.verifiedBib = null;
     state.currentRequest = null;
     state.editControls = null;
-    cancelDialogFocusReturn();
+    detailHost.cancelFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();
     cancelDialogMutationCompletion();
     cancelActionChoiceLoad();
     cancelAdditionalCopyPreviewLoad();
     cancelAdditionalCopyCreationCompletion();
+    detailLease = detailHost.acquire({ dispose: disposeMountedDetail, onClose: closeDialog,
+      onEscape: () => { if (state.dialogMutationInFlight) closeDialog(); else if (state.actionChoice) dismissActionChoice(); else closeDialog(); } });
+    dom.dialogBody = detailLease.content;
     state.selectedRequestId = String(id);
     state.selectedRequestType = 'additional_copy';
     state.selectedRequestVersion = null;
-    state.returnFocus = returnFocus || document.activeElement;
+    detailReturnFocus = returnFocus || document.activeElement;
     const load = latestLoads.begin('additional-copy-detail');
     announce('Loading additional-copy details...');
     try {
@@ -1563,22 +1138,19 @@ export function createWorkflowApp() {
           state.selectedRequestType !== 'additional_copy') return false;
       const statusChanged = options.fromDeepLink && request.status !== navigation.context().additionalCopyStatus &&
         ['open', 'closed'].includes(request.status);
-      const alignedScope = scopeForLibraryOrAll(request.libraryOrgId);
+      const alignedScope = titleQueue.libraryScope(request.libraryOrgId);
       const scopeChanged = options.fromDeepLink && staff.role === 'super_admin' &&
         navigation.context().scope !== 'all' && navigation.context().scope !== alignedScope;
       if (statusChanged || scopeChanged) {
         if (statusChanged) navigation.align({ additionalCopyStatus: request.status });
         if (scopeChanged) {
           navigation.align({ scope: alignedScope });
-          dom.scope.value = navigation.context().scope;
-          dom.additionalCopyScope.value = navigation.context().scope;
-          clearAdditionalCopyQueueForScopeChange();
-          clearTitleQueueForContextChange();
+          copyQueue.clear();
+          titleQueue.clear();
         }
-        resetAdditionalCopyFilters();
-        updateAdditionalCopyStatusTabs();
-        if (!scopeChanged) renderAdditionalCopyGrid();
-        const refreshed = await loadAdditionalCopies({ silent: true, skipDeepLink: true });
+        copyQueue.resetFilters();
+        if (!scopeChanged) copyQueue.render();
+        const refreshed = await copyQueue.refresh({ silent: true, skipDeepLink: true });
         if (refreshed !== true || navigationGeneration !== navigation.generation() ||
             !sessionIdentity.isCurrent(staff) || !load.isCurrent()) return false;
       }
@@ -1586,8 +1158,7 @@ export function createWorkflowApp() {
       if (options.history === 'push') pushRequestParameter(request.id, 'additional_copies');
       else replaceRequestParameter(request.id, true);
       renderAdditionalCopy(request);
-      if (!dom.dialog.open) dom.dialog.showModal();
-      dom.closeDialog.focus();
+      detailLease?.show();
       announce(`Opened additional-copy task ${request.id}.`);
       return true;
     } catch (error) {
@@ -1613,8 +1184,7 @@ export function createWorkflowApp() {
     if (state.selectedRequestType === 'additional_copy' && String(state.selectedRequestId) === String(request.id)) {
       state.selectedRequestVersion = request.version;
     }
-    dom.dialogTitle.textContent = request.title;
-    dom.dialogKicker.textContent = `${request.libraryOrgName} · Additional copy ${request.id}`;
+    detailLease?.heading(request.title, `${request.libraryOrgName} · Additional copy ${request.id}`);
     const body = document.createDocumentFragment();
     body.append(
       element('div', { className: 'detail-meta' }, [
@@ -1731,7 +1301,7 @@ export function createWorkflowApp() {
       if (operation === 'delete') {
         closeDialog({ preserveMutation: true });
         announce(message, messageKind);
-        const refreshed = await loadAdditionalCopies({ skipDeepLink: true, silent: true });
+        const refreshed = await copyQueue.refresh({ skipDeepLink: true, silent: true });
         if (refreshed === true) clearCommittedSessionFallback(mutation.token);
         if (refreshed === false && state.staff && mutation.isCurrent()) announce(`${message} The task list could not refresh.`, 'warning');
         return;
@@ -1759,12 +1329,12 @@ export function createWorkflowApp() {
         state.selectedRequestVersion = null;
         dom.dialogBody.replaceChildren(element('p', { text: 'The action committed. Reload this task to review current details.' }));
       }
-      dom.closeDialog.focus();
+      detailHost.focusClose();
       announce(message, messageKind);
       if (state.dialogMutationInFlight === `copy:${request.id}:${request.version}`) {
         state.dialogMutationInFlight = null;
       }
-      const refreshed = await loadAdditionalCopies({ skipDeepLink: true, silent: true });
+      const refreshed = await copyQueue.refresh({ skipDeepLink: true, silent: true });
       if (refreshed === true) clearCommittedSessionFallback(mutation.token);
       if (mutation.isCurrent() && isCurrentDialogSelection(request, 'additional_copy')) {
         if (refreshed === false) messageKind = 'warning';
@@ -1782,7 +1352,7 @@ export function createWorkflowApp() {
         if (unconfirmedOutcome && isCurrentDialogMutation(mutation, request, 'additional_copy')) {
           retainUnconfirmedOutcome(message, mutation.token);
         }
-        const refreshed = await loadAdditionalCopies({ skipDeepLink: true, silent: true });
+        const refreshed = await copyQueue.refresh({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'additional_copy')) return;
         const detailLoaded = await openAdditionalCopy(request.id, null, { authoritativeRefresh: true });
         if (unconfirmedOutcome && refreshed === true && detailLoaded === true) {
@@ -1850,23 +1420,27 @@ export function createWorkflowApp() {
     if (!closeAdditionalCopyCreateDialog({ navigation: true })) return false;
     const navigationGeneration = navigation.invalidate();
     const staff = state.staff;
+    const priorTitle = state.currentRequest?.title || `Request ${id}`;
     polarisLookup.close();
     latestLoads.begin('research-configuration').abort();
     state.research = null;
     if (String(state.selectedRequestId) !== String(id) || state.selectedRequestType !== 'title_request') {
       state.verifiedBib = null;
     }
-    cancelDialogFocusReturn();
+    detailHost.cancelFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();
     cancelDialogMutationCompletion();
     cancelActionChoiceLoad();
     cancelAdditionalCopyPreviewLoad();
     cancelAdditionalCopyCreationCompletion();
+    detailLease = detailHost.acquire({ dispose: disposeMountedDetail, onClose: closeDialog,
+      onEscape: () => { if (state.dialogMutationInFlight) closeDialog(); else if (state.actionChoice) dismissActionChoice(); else closeDialog(); } });
+    dom.dialogBody = detailLease.content;
     state.selectedRequestId = String(id);
     state.selectedRequestType = 'title_request';
     state.selectedRequestVersion = null;
-    state.returnFocus = returnFocus || document.activeElement;
+    detailReturnFocus = returnFocus || document.activeElement;
     const load = latestLoads.begin('detail');
     announce('Loading request details...');
     try {
@@ -1883,27 +1457,24 @@ export function createWorkflowApp() {
           !sessionIdentity.isCurrent(staff) || state.selectedRequestId !== String(id) ||
           state.selectedRequestType !== 'title_request') return false;
       if (options.align || options.fromRecent) {
-        const cachedStatus = state.requests.find(item => item.id === request.id)?.status;
+        const cachedStatus = titleQueue.find(request.id)?.status;
         const queueNeedsRefresh = navigation.context().status !== request.status || cachedStatus !== request.status;
-        const alignedScope = scopeForLibraryOrAll(request.libraryOrgId);
+        const alignedScope = titleQueue.libraryScope(request.libraryOrgId);
         const scopeChanged = staff.role === 'super_admin' && navigation.context().scope !== 'all' &&
           navigation.context().scope !== alignedScope;
-        resetQueueFilters();
+        titleQueue.resetFilters();
         if (STATUS_LABELS[request.status] && request.status !== 'open') navigation.align({ status: request.status });
-        updateStatusTabs();
         if (scopeChanged) {
           navigation.align({ scope: alignedScope });
-          dom.scope.value = navigation.context().scope;
-          dom.additionalCopyScope.value = navigation.context().scope;
-          clearAdditionalCopyQueueForScopeChange();
+          copyQueue.clear();
         }
         if (scopeChanged || queueNeedsRefresh) {
-          clearTitleQueueForContextChange();
-          const refreshed = await loadQueue({ silent: true, skipDeepLink: true });
+          titleQueue.clear();
+          const refreshed = await titleQueue.refresh({ silent: true, skipDeepLink: true });
           if (refreshed !== true || navigationGeneration !== navigation.generation() ||
               !sessionIdentity.isCurrent(staff) || !load.isCurrent()) return false;
         } else {
-          renderGrid();
+          titleQueue.render();
         }
         navigation.switchView('queue', false);
       }
@@ -1914,9 +1485,8 @@ export function createWorkflowApp() {
             state.selectedRequestType !== 'title_request') return false;
         if (request.status !== navigation.context().status) {
           navigation.align({ status: request.status });
-          updateStatusTabs();
-          clearTitleQueueForContextChange();
-          const refreshed = await loadQueue({ silent: true, skipDeepLink: true });
+          titleQueue.clear();
+          const refreshed = await titleQueue.refresh({ silent: true, skipDeepLink: true });
           if (refreshed !== true || navigationGeneration !== navigation.generation() ||
               !sessionIdentity.isCurrent(staff) || !load.isCurrent()) return false;
         }
@@ -1928,8 +1498,7 @@ export function createWorkflowApp() {
         replaceRequestParameter(request.id, false);
       }
       renderRequest(request, configuration);
-      if (!dom.dialog.open) dom.dialog.showModal();
-      dom.closeDialog.focus();
+      detailLease?.show();
       announce(`Opened ${request.title}.`);
       rememberOpenedRequest(request.id);
       loadResearchConfiguration(request);
@@ -1940,6 +1509,11 @@ export function createWorkflowApp() {
           state.selectedRequestType === 'title_request';
       if (current &&
           !(isAbortError(error) && load.signal.aborted) && error.status !== 401) {
+        if (options.authoritativeRefresh && detailLease?.isCurrent()) {
+          detailLease.heading(priorTitle, `Request ${id}`);
+          dom.dialogBody.replaceChildren(element('p', { text: 'Current details could not refresh. Reload this request before performing another action.' }));
+          detailLease.show();
+        }
         announce(error.status === 404 ? 'That request is no longer available.' : error.message, 'error');
       }
       if (current && options.fromRecent && error.status === 404) {
@@ -1971,9 +1545,7 @@ export function createWorkflowApp() {
         text: state.staff?.organizationName || 'My library'
       }];
     }
-    return [...(dom.scope?.options || [])]
-      .filter(option => option.value && option.value !== 'all')
-      .map(option => ({ value: option.value, text: option.textContent || option.value }));
+    return titleQueue.libraries().map(library => ({ value: library.id, text: library.name }));
   }
 
   function setStaffSuggestionStatus(message, kind = '') {
@@ -2389,11 +1961,10 @@ export function createWorkflowApp() {
       closeStaffSuggestion({ focusButton: false, force: true });
       if (state.staff?.role === 'super_admin') {
         navigation.align({ scope: targetLibraryId });
-        dom.scope.value = targetLibraryId;
       }
       let queueRefreshed = false;
       try {
-        queueRefreshed = await loadQueue({ skipDeepLink: true, silent: true }) === true;
+        queueRefreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true }) === true;
       } catch {
         // Queue refresh is follow-up presentation work. The create response is already
         // authoritative and must remain a visible success even if the refresh races.
@@ -2465,7 +2036,7 @@ export function createWorkflowApp() {
 
   function openStaffSuggestion(returnFocus = null) {
     if (!state.staff) return;
-    if (dom.dialog.open) {
+    if (detailHost.isOpen()) {
       if (!closeDialog({ navigation: true })) return;
       replaceStageParameter(navigation.context().status);
     }
@@ -2511,8 +2082,7 @@ export function createWorkflowApp() {
         state.verifiedBib.bibId !== request.bibid)) {
       state.verifiedBib = null;
     }
-    dom.dialogTitle.textContent = request.title;
-    dom.dialogKicker.textContent = `${request.libraryOrgName} · Request ${request.id}`;
+    detailLease?.heading(request.title, `${request.libraryOrgName} · Request ${request.id}`);
     const body = document.createDocumentFragment();
     const meta = element('div', { className: 'detail-meta' }, [
       element('span', { className: `status-badge${request.status === 'closed' ? ' closed' : ''}`, text: statusLabel(request.status) }),
@@ -3230,9 +2800,9 @@ export function createWorkflowApp() {
       state.partialSessionFailureOwner = mutation.token;
       state.partialSessionFailureDetailAvailable = Boolean(taskId);
       state.partialSessionFailureAfterQueueSequence = null;
-      state.additionalCopyLoaded = false;
+      copyQueue.markStale();
       announce(message, notification.partial ? 'warning' : 'success');
-      const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
+      const refreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
       if (isCurrentAdditionalCopyCreation(mutation, pending)) {
         const returnFocus = state.createCopyReturnFocus;
         closeAdditionalCopyCreateDialog({ preserveMutation: true });
@@ -3260,11 +2830,11 @@ export function createWorkflowApp() {
         retainUnconfirmedOutcome(message, mutation.token);
         state.unconfirmedCopyCreationAwaitingRefresh.reviewReady = false;
         state.unconfirmedCopyCreationAwaitingRefresh.reviewed = false;
-        renderAdditionalCopyGrid();
-        latestLoads.begin('additional-copies').abort();
+        copyQueue.render();
+        copyQueue.invalidate();
         announce(message, 'warning');
       } else if (error.status === 409) {
-        await loadQueue({ skipDeepLink: true, silent: true });
+        await titleQueue.refresh({ skipDeepLink: true, silent: true });
         if (isCurrentAdditionalCopyCreation(mutation, pending)) {
           closeAdditionalCopyCreateDialog({ preserveMutation: true });
           await openRequest(pending.request.id);
@@ -3308,7 +2878,7 @@ export function createWorkflowApp() {
       }
       closeDialog({ preserveMutation: true });
       announce(message, 'success');
-      const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
+      const refreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
       if (refreshed === true) clearCommittedSessionFallback(mutation.token);
       if (refreshed === false && state.staff && mutation.isCurrent()) announce(message + ' The Closed view could not refresh.', 'warning');
     } catch (error) {
@@ -3318,11 +2888,11 @@ export function createWorkflowApp() {
         retainUnconfirmedOutcome(
           'Title-request deletion could not be confirmed. Refresh Closed work before retrying.',
           mutation.token);
-        await loadQueue({ skipDeepLink: true, silent: true });
+        await titleQueue.refresh({ skipDeepLink: true, silent: true });
         announce('Title-request deletion could not be confirmed. Review Closed work before retrying.', 'warning');
       } else if (isCurrentDialogMutation(mutation, request, 'title_request') && error.status !== 401) {
         announce(error.message || 'The title request was not deleted. Review its current state.', 'error');
-        await loadQueue({ skipDeepLink: true, silent: true });
+        await titleQueue.refresh({ skipDeepLink: true, silent: true });
       }
     } finally {
       if (state.dialogMutationInFlight === 'title:' + request.id + ':' + request.version) {
@@ -3365,7 +2935,7 @@ export function createWorkflowApp() {
       state.partialSessionFailureMessage = sessionFailureMessage;
       state.partialSessionFailureOwner = committed ? mutation.token : null;
       state.partialSessionFailureDetailAvailable = committed && Boolean(current);
-      state.partialSessionFailureAfterQueueSequence = committed ? state.queueLoadSequence : null;
+      state.partialSessionFailureAfterQueueSequence = committed ? titleQueue.sequence() : null;
       if (!current && committed) {
         try {
           current = await authorizedJson(titleDetailPath(request.id),
@@ -3399,12 +2969,12 @@ export function createWorkflowApp() {
         state.selectedRequestVersion = null;
         dom.dialogBody.replaceChildren(element('p', { text: 'The action committed. Reload this request to review current details.' }));
       }
-      dom.closeDialog.focus();
+      detailHost.focusClose();
       announce(message, messageKind);
       if (state.dialogMutationInFlight === `title:${request.id}:${request.version}`) {
         state.dialogMutationInFlight = null;
       }
-      const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
+      const refreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
       if (mutation.isCurrent() && isCurrentDialogSelection(request, 'title_request')) {
         if (refreshed === false) messageKind = 'warning';
         announce(refreshed === false ? `${message} The queue could not refresh.` : message, messageKind);
@@ -3439,7 +3009,7 @@ export function createWorkflowApp() {
             isCurrentDialogMutation(mutation, request, 'title_request')) {
           retainUnconfirmedOutcome(message, mutation.token);
         }
-        const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
+        const refreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
         const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
         if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired || pickupReviewRequired) &&
@@ -3461,7 +3031,7 @@ export function createWorkflowApp() {
   async function showDuplicateRecovery(request, mutation, selectionGeneration, duplicate) {
     if (!isCurrentDialogMutation(mutation, request, 'title_request') ||
         navigation.generation() !== selectionGeneration) return;
-    await loadQueue({ skipDeepLink: true, silent: true });
+    await titleQueue.refresh({ skipDeepLink: true, silent: true });
     if (!isCurrentDialogMutation(mutation, request, 'title_request') ||
         navigation.generation() !== selectionGeneration) return;
     const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
@@ -3794,9 +3364,9 @@ export function createWorkflowApp() {
       state.partialSessionFailureMessage = `${message} Sign in again to review the committed recovery result.`;
       state.partialSessionFailureOwner = mutation.token;
       state.partialSessionFailureDetailAvailable = false;
-      state.partialSessionFailureAfterQueueSequence = state.queueLoadSequence;
+      state.partialSessionFailureAfterQueueSequence = titleQueue.sequence();
       announce(message, notification.partial ? 'warning' : 'success');
-      const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
+      const refreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
       if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
       const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
       if (refreshed === true && detailLoaded === true) clearCommittedSessionFallback(mutation.token);
@@ -3823,7 +3393,7 @@ export function createWorkflowApp() {
             isCurrentDialogMutation(mutation, request, 'title_request')) {
           retainUnconfirmedOutcome(message, mutation.token);
         }
-        const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
+        const refreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
         const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
         if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired) &&
@@ -3842,86 +3412,37 @@ export function createWorkflowApp() {
     }
   }
 
+  function disposeMountedDetail(options = {}) {
+    closeAdditionalCopyCreateDialog({ navigation: true, force: true });
+    polarisLookup.close(); latestLoads.begin('research-configuration').abort();
+    state.verifiedBib = null; state.research = null; state.currentRequest = null;
+    state.editControls = null; state.editorDirty = false; state.editorDraft = null;
+    resetDialogDrafts();
+    cancelAssignmentCandidateLoad(); cancelPickupOptionsLoad();
+    if (options.preserveMutation !== true) cancelDialogMutationCompletion();
+    cancelActionChoiceLoad(); cancelAdditionalCopyPreviewLoad(); cancelAdditionalCopyCreationCompletion();
+    state.selectedRequestId = null; state.selectedRequestType = null; state.selectedRequestVersion = null;
+    detailReturnFocus = null; detailLease = null;
+  }
+
   function closeDialog(options = {}) {
     if (state.dialogMutationInFlight && options.preserveMutation !== true && !options.force) {
       announce('The workflow action is in progress. Wait for its authoritative result before closing.', 'warning');
-      dom.closeDialog.focus();
-      return false;
+      detailHost.focusClose(); return false;
     }
     if (!options.force && !options.guarded && !options.preserveMutation &&
         !navigation.allow({ settings: false, suggestion: false })) return false;
     if (!closeAdditionalCopyCreateDialog({ navigation: true, force: options.force })) return false;
-    polarisLookup.close();
-    latestLoads.begin('research-configuration').abort();
-    state.verifiedBib = null;
-    state.research = null;
-    state.currentRequest = null;
-    state.editControls = null;
-    state.editorDirty = false;
-    state.editorDraft = null;
-    resetDialogDrafts();
-    cancelDialogFocusReturn();
-    cancelAssignmentCandidateLoad();
-    cancelPickupOptionsLoad();
-    if (options.preserveMutation !== true) cancelDialogMutationCompletion();
-    cancelActionChoiceLoad();
-    cancelAdditionalCopyPreviewLoad();
-    cancelAdditionalCopyCreationCompletion();
-    if (dom.dialog.open) dom.dialog.close();
-    dom.dialogBody.replaceChildren();
     const selectedId = state.selectedRequestId;
     const wasAdditionalCopy = state.selectedRequestType === 'additional_copy';
-    const returnFocus = state.returnFocus;
-    const staff = state.staff;
-    const view = navigation.context().activeView;
-    const scope = navigation.context().scope;
-    const status = wasAdditionalCopy ? navigation.context().additionalCopyStatus : navigation.context().status;
-    state.selectedRequestId = null;
-    state.selectedRequestType = null;
-    state.selectedRequestVersion = null;
-    state.returnFocus = null;
+    const focusReturn = options.navigation ? null : (wasAdditionalCopy ? copyQueue : titleQueue).focusReturn(selectedId, detailReturnFocus);
+    detailLease?.release({ ...options, focusReturn });
     if (!options.navigation) {
       router.closeDetail(wasAdditionalCopy || navigation.context().activeView === 'additional-copies'
         ? 'additional_copies' : navigation.context().status, queueRouteContext());
       if (!router.busy()) rememberRoute();
     }
     if (options.preserveMutation === true) state.dialogMutationInFlight = null;
-    if (options.navigation) return true;
-    const ariaLabel = wasAdditionalCopy
-      ? `Open additional-copy task ${selectedId}`
-      : `Open request ${selectedId}`;
-    const grid = wasAdditionalCopy ? dom.additionalCopyGrid : dom.grid;
-    let frame;
-    let focusedReturnTarget;
-    const focusReturnButton = () => {
-      if (!sessionIdentity.isCurrent(staff) || !staff || navigation.context().activeView !== view || navigation.context().scope !== scope ||
-          (wasAdditionalCopy ? navigation.context().additionalCopyStatus : navigation.context().status) !== status ||
-          dom.dialog.open || state.selectedRequestId !== null) {
-        cancelDialogFocusReturn();
-        return;
-      }
-      const liveGridButton = [...grid.querySelectorAll('.grid-open')]
-        .find(button => button.getAttribute('aria-label') === ariaLabel);
-      const focusTarget = liveGridButton ||
-        (returnFocus?.isConnected && !dom.dialog.contains(returnFocus) ? returnFocus : null);
-      if (focusTarget) {
-        focusedReturnTarget = focusTarget;
-        focusTarget.focus();
-      }
-    };
-    const focusMoved = event => {
-      if (event.target !== focusedReturnTarget && !dom.dialog.contains(event.target)) cancelDialogFocusReturn();
-    };
-    // Grid.js may first render old rows, then replace them. Follow the opener until focus moves elsewhere.
-    const observer = new window.MutationObserver(focusReturnButton);
-    state.cancelFocusReturn = () => {
-      observer.disconnect();
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener('focusin', focusMoved);
-    };
-    observer.observe(grid, { childList: true, subtree: true });
-    document.addEventListener('focusin', focusMoved);
-    frame = window.requestAnimationFrame(focusReturnButton);
     return true;
   }
 
@@ -3977,112 +3498,8 @@ export function createWorkflowApp() {
         }
       }
     });
-    dom.refresh.addEventListener('click', () => loadQueue({ skipDeepLink: true }));
-    dom.scope.addEventListener('change', () => {
-      if (!navigation.allow()) { dom.scope.value = navigation.context().scope; return; }
-      if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
-      if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
-      navigation.invalidate();
-      navigation.align({ scope: dom.scope.value });
-      void refreshEmailReadiness();
-      dom.additionalCopyScope.value = navigation.context().scope;
-      resetQueueFilters();
-      clearTitleQueueForContextChange();
-      clearAdditionalCopyQueueForScopeChange();
-      pushStageParameter(navigation.context().status);
-      loadQueue({ skipDeepLink: true });
-    });
-    dom.additionalCopyRefresh.addEventListener('click', () => loadAdditionalCopies({ skipDeepLink: true }));
-    dom.additionalCopyCreateReviewDone.addEventListener('click', () => {
-      if (!state.unconfirmedCopyCreationAwaitingRefresh?.reviewReady ||
-          navigation.context().additionalCopyStatus !== 'open' ||
-          (navigation.context().scope !== 'all' && String(navigation.context().scope) !== String(state.unconfirmedCopyCreationAwaitingRefresh.libraryOrgId))) return;
-      state.unconfirmedCopyCreationAwaitingRefresh.reviewed = true;
-      clearCommittedSessionFallback(state.partialSessionFailureOwner);
-      renderAdditionalCopyGrid();
-      dom.additionalCopyRefresh.focus();
-      announce('Additional-copy task list reviewed. You can open the request again if another task is needed.', 'success');
-    });
-    dom.additionalCopyScope.addEventListener('change', () => {
-      if (!navigation.allow()) { dom.additionalCopyScope.value = navigation.context().scope; return; }
-      if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
-      if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
-      navigation.invalidate();
-      navigation.align({ scope: dom.additionalCopyScope.value });
-      void refreshEmailReadiness();
-      dom.scope.value = navigation.context().scope;
-      resetAdditionalCopyFilters();
-      clearAdditionalCopyQueueForScopeChange();
-      clearTitleQueueForContextChange();
-      pushStageParameter('additional_copies');
-      loadAdditionalCopies({ skipDeepLink: true });
-    });
-    for (const tab of dom.statusTabs) {
-      tab.addEventListener('click', () => {
-        if (navigation.context().status === tab.dataset.status) return;
-        if (!navigation.allow()) return;
-        if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
-        if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
-        navigation.invalidate();
-        navigation.align({ status: tab.dataset.status });
-        resetQueueFilters();
-        updateStatusTabs();
-        pushStageParameter(navigation.context().status);
-        renderGrid();
-        loadQueue({ skipDeepLink: true, silent: true });
-      });
-      tab.addEventListener('keydown', event => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-        event.preventDefault();
-        const index = dom.statusTabs.indexOf(tab);
-        const offset = event.key === 'ArrowRight' ? 1 : -1;
-        const target = event.key === 'Home' ? dom.statusTabs[0]
-          : event.key === 'End' ? dom.statusTabs.at(-1)
-          : dom.statusTabs[(index + offset + dom.statusTabs.length) % dom.statusTabs.length];
-        target.focus();
-        target.click();
-      });
-    }
-    dom.search.addEventListener('input', renderGrid);
-    dom.claim.addEventListener('change', renderGrid);
-    dom.tag.addEventListener('change', renderGrid);
-    dom.similar.addEventListener('change', renderGrid);
-    for (const tab of dom.additionalCopyStatusTabs) {
-      tab.addEventListener('click', () => {
-        if (navigation.context().additionalCopyStatus === tab.dataset.copyStatus) return;
-        if (!navigation.allow()) return;
-        if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
-        if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
-        navigation.invalidate();
-        navigation.align({ additionalCopyStatus: tab.dataset.copyStatus });
-        resetAdditionalCopyFilters();
-        updateAdditionalCopyStatusTabs();
-        pushStageParameter('additional_copies');
-        loadAdditionalCopies({ skipDeepLink: true });
-      });
-      tab.addEventListener('keydown', event => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-        event.preventDefault();
-        const index = dom.additionalCopyStatusTabs.indexOf(tab);
-        const offset = event.key === 'ArrowRight' ? 1 : -1;
-        const target = event.key === 'Home' ? dom.additionalCopyStatusTabs[0]
-          : event.key === 'End' ? dom.additionalCopyStatusTabs.at(-1)
-          : dom.additionalCopyStatusTabs[(index + offset + dom.additionalCopyStatusTabs.length) % dom.additionalCopyStatusTabs.length];
-        target.focus();
-        target.click();
-      });
-    }
-    dom.additionalCopySearch.addEventListener('input', renderAdditionalCopyGrid);
-    dom.additionalCopyClaim.addEventListener('change', renderAdditionalCopyGrid);
     for (const tab of dom.viewTabs) tab.addEventListener('click', () => {
       navigation.switchView(tab.dataset.view);
-    });
-    dom.closeDialog.addEventListener('click', () => closeDialog());
-    dom.dialog.addEventListener('cancel', event => {
-      event.preventDefault();
-      if (state.dialogMutationInFlight) closeDialog();
-      else if (state.actionChoice) dismissActionChoice();
-      else closeDialog();
     });
     dom.createCopyForm.addEventListener('submit', createAdditionalCopy);
     dom.cancelCreateCopy.addEventListener('click', closeAdditionalCopyCreateDialog);

@@ -92,6 +92,17 @@ export function createNavigationController({ router, sessionIdentity, getFeature
     return true;
   }
 
+  function changeQueueContext(name, changes) {
+    if (!sessionIdentity.actor() || !['queue', 'additional-copies'].includes(name)) return false;
+    const same = Object.entries(changes).every(([key, value]) => context[key] === value);
+    if (same) return true;
+    if (!allow()) return false;
+    closeTransient(); invalidate(); align(changes);
+    writeStage(name);
+    void views[name].refresh?.({ silent: name === 'queue' && !Object.hasOwn(changes, 'scope') });
+    return true;
+  }
+
   async function validate(route, signal, owner) {
     let stage = route.stage;
     let warning = '';
@@ -189,7 +200,7 @@ export function createNavigationController({ router, sessionIdentity, getFeature
   }
 
   return { context: () => context, generation: () => generation, align, allow, invalidate,
-    switchView, navigateFromUrl,
+    switchView, changeQueueContext, navigateFromUrl,
     start() { router.start(navigateFromUrl); },
     dispose() { disposed = true; reads.begin('route').abort(); router.dispose(); }
   };

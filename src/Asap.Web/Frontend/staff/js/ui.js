@@ -7,6 +7,10 @@ export const STATUS_LABELS = {
   closed: 'Closed'
 };
 
+export function timeoutLabel(enabled, days) {
+  return enabled && Number.isInteger(days) && days > 0 ? `${days} days` : 'Off';
+}
+
 export function element(tag, attributes = {}, children = []) {
   const node = document.createElement(tag);
   for (const [name, value] of Object.entries(attributes)) {
@@ -62,4 +66,3 @@ export function closeReasonLabel(value) {
   return Object.hasOwn(labels, value) ? labels[value]
     : value ? String(value).replaceAll('_', ' ') : 'No reason recorded';
 }
-
