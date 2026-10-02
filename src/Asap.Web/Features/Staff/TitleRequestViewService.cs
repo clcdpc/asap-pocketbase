@@ -10,7 +10,11 @@ public sealed record TitleRequestCapabilities(
     bool CanChangeBib,
     bool CanRetryIdentifierCheck,
     bool CanChangeWorkflowState,
-    string? BlockingReason);
+    string? BlockingReason)
+{
+    public IReadOnlyList<string> AllowedActions { get; init; } = [];
+    public bool CanPlaceHold { get; init; }
+}
 
 public sealed record HoldOperationSummary(
     string Id,
@@ -19,13 +23,38 @@ public sealed record HoldOperationSummary(
     int AttemptNumber,
     long ExecutionEpoch,
     string PatronBarcodeSnapshotMasked,
-    string BibIdSnapshot,
+    int BibIdSnapshot,
     string Version,
     DateTime? LastRecoveryUtc,
     string? LastErrorCode,
     bool CanReconcile,
     bool CanResolveSucceeded,
     bool CanResolveNotPerformed);
+
+public sealed record PickupOperationSummary(Guid Id, int State, int TargetBranchId, string TargetBranchName);
+
+internal sealed record PickupOperationRead(long RequestId, Guid Id, int State, int TargetBranchId, string TargetBranchName);
+
+public sealed record TitleRequestActivity(
+    string Id,
+    string EventType,
+    string ActorType,
+    string? ActorName,
+    string? Message,
+    DateTime Created);
+
+public sealed record RelatedRequestCount(string Status, int LibraryOrgId, string LibraryOrgName, int Count);
+
+public sealed record RelatedRequestSummary(int Count, IReadOnlyList<RelatedRequestCount> StatusAndLibraryCounts);
+
+public sealed record RequestWorkflowContext(
+    bool AutoPromote,
+    bool OutstandingTimeoutEnabled,
+    int? OutstandingTimeoutDays,
+    bool PendingHoldTimeoutEnabled,
+    int? PendingHoldTimeoutDays,
+    bool HoldPickupTimeoutEnabled,
+    int? HoldPickupTimeoutDays);
 
 public sealed record TitleRequestDto(
     string Id,
@@ -38,7 +67,7 @@ public sealed record TitleRequestDto(
     string? Email,
     string? NameFirst,
     string? NameLast,
-    string? PatronCodeId,
+    int? PatronCodeId,
     string? PatronCodeDescription,
     int? PreferredPickupBranchId,
     string? PreferredPickupBranchName,
@@ -47,13 +76,14 @@ public sealed record TitleRequestDto(
     string? Identifier,
     string? Publication,
     DateOnly? ExactPublicationDate,
-    object CustomFields,
+    IReadOnlyDictionary<string, JsonElement> CustomFields,
     bool Autohold,
     string Format,
     string FormatLabel,
     string Status,
     string? CloseReason,
-    string? Bibid,
+    int? Bibid,
+    bool BibidStaffVerified,
     string? Notes,
     string? ClaimedByStaffUserId,
     string? ClaimedByDisplayName,
@@ -71,60 +101,31 @@ public sealed record TitleRequestDto(
     DateTime Updated,
     string Version,
     TitleRequestCapabilities Capabilities,
-    HoldOperationSummary? HoldOperation);
+    HoldOperationSummary? HoldOperation,
+    IReadOnlyList<TitleRequestActivity> Activity,
+    bool? Committed = null,
+    string? FinalStatus = null,
+    string? NotificationStatus = null,
+    string? NotificationReason = null,
+    string? PatronNotificationStatus = null,
+    string? PatronNotificationReason = null)
+{
+    public RelatedRequestSummary? RelatedRequests { get; init; }
+    public RequestWorkflowContext? WorkflowContext { get; init; }
+    public PickupOperationSummary? PickupOperation { get; init; }
+}
 
 public sealed record TitleRequestScopeResult(
     IReadOnlyList<TitleRequestDto> Items,
     string Scope,
-    IReadOnlyList<object> Organizations);
+    IReadOnlyList<OrganizationChoice> Organizations);
 
-public static class TitleRequestCapabilityPolicy
-{
-    private static readonly HashSet<string> PrePlacementStatuses =
-        ["suggestion", "outstanding_purchase", "pending_hold"];
 
-    public static TitleRequestCapabilities Evaluate(
-        TitleRequest request,
-        bool hasIncompleteOperation,
-        bool hasPlacedProtection)
-    {
-        if (hasIncompleteOperation)
-        {
-            return new TitleRequestCapabilities(
-                false,
-                false,
-                false,
-                false,
-                "hold_operation_incomplete");
-        }
-
-        if (request.Status is "hold_placed" or "closed" || hasPlacedProtection)
-        {
-            return new TitleRequestCapabilities(
-                false,
-                false,
-                false,
-                true,
-                "identifier_locked_by_stage");
-        }
-
-        var canEdit = PrePlacementStatuses.Contains(request.Status);
-        return new TitleRequestCapabilities(
-            canEdit,
-            canEdit,
-            request.Status == "suggestion" &&
-            !string.IsNullOrWhiteSpace(request.Identifier) &&
-            request.IsbnCheckStatus == "error_max_retries",
-            true,
-            canEdit ? null : "identifier_locked_by_stage");
-    }
-}
-
-public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> contextFactory)
+public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> contextFactory, TimeProvider timeProvider)
 {
     public async Task<TitleRequestScopeResult?> ListAsync(
         CurrentStaff staff,
-        string? scope,
+        LibraryScope scope,
         CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -134,45 +135,30 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             .ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
 
-        int? organizationId;
-        string normalizedScope;
-        if (staff.Role == "super_admin")
+        var resolvedScope = staff.Role == StaffRole.SuperAdmin ? scope : LibraryScope.ForLibrary(staff.OrganizationId);
+        if (resolvedScope.Kind == LibraryScopeKind.System ||
+            resolvedScope.Kind == LibraryScopeKind.Library && !organizations.Any(item => item.Id == resolvedScope.OrganizationId))
         {
-            if (string.IsNullOrWhiteSpace(scope) || string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase))
-            {
-                organizationId = null;
-                normalizedScope = "all";
-            }
-            else if (int.TryParse(scope, out var selectedId) && organizations.Any(item => item.Id == selectedId))
-            {
-                organizationId = selectedId;
-                normalizedScope = selectedId.ToString();
-            }
-            else
-            {
-                return null;
-            }
+            return null;
         }
-        else
-        {
-            organizationId = staff.OrganizationId;
-            normalizedScope = staff.OrganizationId.ToString();
-        }
+        var organizationId = resolvedScope.OrganizationId;
+        var normalizedScope = resolvedScope.ToTransportValue();
 
         var requestQuery = context.TitleRequests.AsNoTracking()
             .Where(item => organizationId == null || item.LibraryOrganizationId == organizationId);
         var requests = await requestQuery.ToListAsync(cancellationToken);
-        var items = await BuildDtosAsync(context, requests, staff, cancellationToken);
+        var items = await BuildDtosAsync(context, requests, requests, staff, includeActivity: false, cancellationToken);
         return new TitleRequestScopeResult(
             items,
             normalizedScope,
-            organizations.Select(item => (object)new { id = item.Id, name = item.DisplayName }).ToList());
+            organizations.Select(item => new OrganizationChoice(item.Id, item.DisplayName)).ToList());
     }
 
     public async Task<TitleRequestDto?> GetAsync(
         CurrentStaff staff,
         string id,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        LibraryScope? scope = null)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var requestId = await LegacyRequestLinkResolver.ResolveAsync(
@@ -192,42 +178,50 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         {
             return null;
         }
-        return (await BuildDtosAsync(context, [request], staff, cancellationToken)).Single();
+        int? relatedOrganizationId = staff.Role == StaffRole.SuperAdmin ? null : staff.OrganizationId;
+        if (staff.Role == StaffRole.SuperAdmin && scope is { Kind: not LibraryScopeKind.All } selectedScope)
+        {
+            if (selectedScope.Kind != LibraryScopeKind.Library ||
+                selectedScope.OrganizationId != request.LibraryOrganizationId ||
+                !await context.Organizations.AsNoTracking().AnyAsync(item =>
+                    item.Id == selectedScope.OrganizationId && item.IsActive, cancellationToken))
+            {
+                return null;
+            }
+            relatedOrganizationId = selectedScope.OrganizationId;
+        }
+        var relatedCandidates = await context.TitleRequests.AsNoTracking()
+            .Where(item => relatedOrganizationId == null || item.LibraryOrganizationId == relatedOrganizationId)
+            .ToListAsync(cancellationToken);
+        return (await BuildDtosAsync(context, [request], relatedCandidates, staff, includeActivity: true, cancellationToken)).Single();
+    }
+
+    public async Task<IReadOnlyList<RejectionTemplateChoice>?> GetRejectionTemplatesAsync(
+        CurrentStaff staff,
+        string id,
+        CancellationToken cancellationToken)
+    {
+        var request = await GetAsync(staff, id, cancellationToken);
+        if (request is null)
+        {
+            return null;
+        }
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var rows = await context.EmailTemplates.AsNoTracking()
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == request.LibraryOrgId)
+            .ToListAsync(cancellationToken);
+        return RejectionTemplatePolicy.Choices(rows, request.LibraryOrgId);
     }
 
     internal static bool CanAccess(CurrentStaff staff, int organizationId) =>
-        staff.Role == "super_admin" || staff.OrganizationId == organizationId;
+        StaffEligibilityService.CanAccess(staff, organizationId);
 
-    internal static bool HasLegacyPlacedProtection(IEnumerable<TitleRequestEvent> events)
-    {
-        foreach (var item in events)
-        {
-            if (string.IsNullOrWhiteSpace(item.MetadataJson))
-            {
-                continue;
-            }
-            try
-            {
-                using var document = JsonDocument.Parse(item.MetadataJson);
-                if (document.RootElement.ValueKind == JsonValueKind.Object &&
-                    document.RootElement.TryGetProperty("legacyBibProtection", out var marker) &&
-                    marker.ValueKind == JsonValueKind.True)
-                {
-                    return true;
-                }
-            }
-            catch (JsonException)
-            {
-                // Database constraints keep new metadata valid; malformed imported evidence is not authority.
-            }
-        }
-        return false;
-    }
-
-    private static async Task<IReadOnlyList<TitleRequestDto>> BuildDtosAsync(
+    private async Task<IReadOnlyList<TitleRequestDto>> BuildDtosAsync(
         AsapDbContext context,
         IReadOnlyList<TitleRequest> requests,
+        IReadOnlyList<TitleRequest> relatedCandidates,
         CurrentStaff staff,
+        bool includeActivity,
         CancellationToken cancellationToken)
     {
         if (requests.Count == 0)
@@ -235,9 +229,27 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             return [];
         }
         var ids = requests.Select(item => item.Id).ToArray();
+        var visibleOrganizationIds = relatedCandidates.Select(item => item.LibraryOrganizationId).Distinct().ToArray();
         var organizations = await context.Organizations.AsNoTracking()
-            .Where(item => requests.Select(request => request.LibraryOrganizationId).Contains(item.Id))
+            .Where(item => visibleOrganizationIds.Contains(item.Id))
             .ToDictionaryAsync(item => item.Id, cancellationToken);
+        var workflowRows = await context.WorkflowSettings.AsNoTracking()
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || visibleOrganizationIds.Contains(item.OrganizationId))
+            .ToDictionaryAsync(item => item.OrganizationId, cancellationToken);
+        workflowRows.TryGetValue(1, out var systemWorkflow);
+        var relatedByKey = new Dictionary<string, List<TitleRequest>>(StringComparer.Ordinal);
+        foreach (var candidate in relatedCandidates)
+        {
+            foreach (var key in SimilarityKeys(candidate))
+            {
+                if (!relatedByKey.TryGetValue(key, out var matching))
+                {
+                    matching = [];
+                    relatedByKey[key] = matching;
+                }
+                matching.Add(candidate);
+            }
+        }
         var formats = await context.MaterialFormats.AsNoTracking()
             .Where(item => requests.Select(request => request.MaterialFormatId).Contains(item.Id))
             .ToDictionaryAsync(item => item.Id, cancellationToken);
@@ -264,9 +276,14 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         var incomplete = operations.Where(item => item.CompletedUtc == null)
             .GroupBy(item => item.TitleRequestId)
             .ToDictionary(item => item.Key, item => item.First());
-        var latestSuccessful = operations.Where(item => item.State == "succeeded")
+        var latestSuccessful = operations.Where(item => item.State == HoldOperationState.Succeeded)
             .GroupBy(item => item.TitleRequestId)
             .ToDictionary(item => item.Key, item => item.First());
+        var pendingPickups = await context.Database.SqlQuery<PickupOperationRead>($"""
+            SELECT [TitleRequestId] AS [RequestId], [Id], [State],
+                   [ToPickupBranchId] AS [TargetBranchId], [ToPickupBranchName] AS [TargetBranchName]
+            FROM [asap].[PickupPreferenceOperation] WHERE [CompletedUtc] IS NULL AND [TitleRequestId] IS NOT NULL
+            """).Where(item => ids.Contains(item.RequestId)).ToDictionaryAsync(item => item.RequestId, cancellationToken);
 
         var result = new List<TitleRequestDto>(requests.Count);
         foreach (var request in requests)
@@ -276,17 +293,35 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             var successfulOperation = latestSuccessful.GetValueOrDefault(request.Id);
             var operation = incompleteOperation ??
                 (successfulOperation is { PolarisHoldId: null } ? successfulOperation : null);
-            var protectedHistory = successfulOperation is not null || HasLegacyPlacedProtection(requestEvents);
-            var capabilities = TitleRequestCapabilityPolicy.Evaluate(request, incompleteOperation is not null, protectedHistory);
+            var protectedHistory = successfulOperation is not null || request.LegacyHoldProtected;
+            var pendingPickup = pendingPickups.GetValueOrDefault(request.Id);
+            var capabilities = TitleRequestWorkflowPolicy.Evaluate(request, incompleteOperation is not null,
+                protectedHistory, pendingPickup is not null);
             var canTakeOverOperation = incompleteOperation is not null &&
                                        (!incompleteOperation.OwnerToken.HasValue ||
-                                        incompleteOperation.LeaseExpiresUtc <= DateTime.UtcNow);
-            var canResolveOperation = canTakeOverOperation && operation!.State == "operator_required";
+                                        incompleteOperation.LeaseExpiresUtc <= timeProvider.GetUtcNow().UtcDateTime);
+            var canResolveOperation = canTakeOverOperation && operation!.State == HoldOperationState.OperatorRequired;
             var phaseEnteredAt = requestEvents
                 .Where(item => item.EventType == "status_changed" && item.Status == request.Status)
                 .Select(item => (DateTime?)item.CreatedUtc)
                 .LastOrDefault() ?? request.CreatedUtc;
             formats.TryGetValue(request.MaterialFormatId, out var format);
+            workflowRows.TryGetValue(request.LibraryOrganizationId, out var libraryWorkflow);
+            var related = SimilarityKeys(request)
+                .SelectMany(key => relatedByKey.GetValueOrDefault(key) ?? [])
+                .Where(candidate => candidate.Id != request.Id)
+                .DistinctBy(candidate => candidate.Id)
+                .ToList();
+            var relatedCounts = related
+                .GroupBy(item => new { item.Status, item.LibraryOrganizationId })
+                .Select(group => new RelatedRequestCount(
+                    group.Key.Status,
+                    group.Key.LibraryOrganizationId,
+                    organizations.GetValueOrDefault(group.Key.LibraryOrganizationId)?.DisplayName ?? string.Empty,
+                    group.Count()))
+                .OrderBy(item => item.LibraryOrgName)
+                .ThenBy(item => item.Status)
+                .ToArray();
             result.Add(new TitleRequestDto(
                 request.Id.ToString(CultureInfo.InvariantCulture),
                 "title_request",
@@ -314,6 +349,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                 request.Status,
                 request.CloseReason,
                 request.BibId,
+                request.BibIdStaffVerified,
                 request.Notes,
                 request.ClaimedByStaffUserId?.ToString(CultureInfo.InvariantCulture),
                 request.ClaimedByDisplayName,
@@ -342,9 +378,29 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                     StaffVersion.Encode(operation.RowVersion),
                     AsUtc(operation.LastRecoveryUtc),
                     operation.LastErrorCode,
-                    staff.Role == "super_admin" && canTakeOverOperation,
-                    staff.Role == "super_admin" && canResolveOperation && operation.Phase != "acquired",
-                    staff.Role == "super_admin" && canResolveOperation)));
+                    staff.Role == StaffRole.SuperAdmin && canTakeOverOperation,
+                    staff.Role == StaffRole.SuperAdmin && canResolveOperation && operation.Phase != HoldOperationPhase.Acquired,
+                    staff.Role == StaffRole.SuperAdmin && canResolveOperation),
+                includeActivity ? requestEvents.Select(item => new TitleRequestActivity(
+                    item.Id.ToString(CultureInfo.InvariantCulture),
+                    item.EventType,
+                    item.ActorType,
+                    item.ActorName,
+                    item.Message,
+                    AsUtc(item.CreatedUtc))).ToArray() : [])
+            {
+                PickupOperation = pendingPickup is null ? null : new PickupOperationSummary(pendingPickup.Id,
+                    pendingPickup.State, pendingPickup.TargetBranchId, pendingPickup.TargetBranchName),
+                RelatedRequests = new RelatedRequestSummary(related.Count, relatedCounts),
+                WorkflowContext = new RequestWorkflowContext(
+                    libraryWorkflow?.AutoPromote ?? systemWorkflow?.AutoPromote == true,
+                    libraryWorkflow?.OutstandingTimeoutEnabled ?? systemWorkflow?.OutstandingTimeoutEnabled == true,
+                    libraryWorkflow?.OutstandingTimeoutDays ?? systemWorkflow?.OutstandingTimeoutDays,
+                    libraryWorkflow?.PendingHoldTimeoutEnabled ?? systemWorkflow?.PendingHoldTimeoutEnabled == true,
+                    libraryWorkflow?.PendingHoldTimeoutDays ?? systemWorkflow?.PendingHoldTimeoutDays,
+                    libraryWorkflow?.HoldPickupTimeoutEnabled ?? systemWorkflow?.HoldPickupTimeoutEnabled == true,
+                    libraryWorkflow?.HoldPickupTimeoutDays ?? systemWorkflow?.HoldPickupTimeoutDays)
+            });
         }
 
         return result
@@ -355,19 +411,40 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             .ToList();
     }
 
-    private static object ParseCustomFields(string? value)
+    private static IEnumerable<string> SimilarityKeys(TitleRequest request)
+    {
+        var identifier = NormalizeSimilarityValue(request.Identifier);
+        if (identifier.Length > 0)
+        {
+            yield return $"identifier:{identifier}";
+        }
+        if (request.BibId.HasValue)
+        {
+            yield return $"bib:{request.BibId.Value}";
+        }
+        var title = NormalizeSimilarityValue(request.Title);
+        if (title.Length > 0)
+        {
+            yield return $"title:{title}";
+        }
+    }
+
+    private static string NormalizeSimilarityValue(string? value) =>
+        new((value ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
+    private static IReadOnlyDictionary<string, JsonElement> ParseCustomFields(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
-            return new Dictionary<string, object?>();
+            return new Dictionary<string, JsonElement>();
         }
         try
         {
-            return JsonSerializer.Deserialize<Dictionary<string, object?>>(value) ?? [];
+            return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(value) ?? [];
         }
         catch (JsonException)
         {
-            return new Dictionary<string, object?>();
+            return new Dictionary<string, JsonElement>();
         }
     }
 

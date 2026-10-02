@@ -175,6 +175,8 @@ public sealed partial class PatronJourneyTests
                     descriptor.ServiceType == typeof(IHostedService) &&
                     descriptor.ImplementationType == typeof(HangfireWorkerHostedService));
                 services.Remove(worker);
+                services.RemoveAll<DeterministicTestingPatronProvider>();
+                services.AddSingleton(DeterministicJourneyScenario.Create());
                 services.RemoveAll<IEmailOutboxDispatcher>();
                 services.AddSingleton<IEmailOutboxDispatcher>(dispatcher!);
                 services.RemoveAll<IEmailSender>();
@@ -196,6 +198,9 @@ public sealed partial class PatronJourneyTests
         {
             await factory.DisposeAsync();
         }
+        // Failed external writes intentionally leave durable evidence. Each test
+        // owns its journal rows; clear them after all assertions, including recovery.
+        await ExecuteNonQueryAsync("DELETE FROM [asap].[PickupPreferenceOperation];");
         await CleanupSharedSlice2TestConfigurationAsync();
     }
 
@@ -258,7 +263,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("A Tracer Through The Stack", reader.GetString(1));
             Assert.AreEqual("suggestion", reader.GetString(2));
             Assert.AreEqual("found", reader.GetString(3));
-            Assert.AreEqual("9001", reader.GetString(4));
+            Assert.AreEqual(9001, reader.GetInt32(4));
             Assert.IsGreaterThanOrEqualTo(1, reader.GetInt32(5));
             Assert.AreEqual("pending", reader.GetString(6));
             Assert.AreEqual($"patron-submission:{requestId}", reader.GetString(7));
@@ -366,6 +371,30 @@ public sealed partial class PatronJourneyTests
     public async Task StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers()
     {
         factory!.UseKestrel(0);
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var snapshot = await contextFactory.CreateDbContextAsync();
+        var originalSettings = await snapshot.SystemSettings.AsNoTracking()
+            .Where(item => item.OrganizationId == 1)
+            .Select(item => new { item.LeapBibUrlPattern, item.LeapPatronUrlPattern, item.StaffApplicationUrl })
+            .SingleAsync();
+        var originalBranding = await snapshot.Branding.AsNoTracking()
+            .Where(item => item.OrganizationId == 1)
+            .Select(item => new { item.LogoAltText })
+            .SingleOrDefaultAsync();
+        var originalProviders = await snapshot.ExternalSearchProviders.AsNoTracking()
+            .Where(item => item.ProviderKey == "external_search_1" || item.ProviderKey == "external_search_3")
+            .Select(item => new { item.Id, item.Label, item.UrlTemplate, item.IsEnabled })
+            .ToListAsync();
+        var provider2Id = await snapshot.ExternalSearchProviders.AsNoTracking()
+            .Where(item => item.ProviderKey == "external_search_2")
+            .Select(item => item.Id)
+            .SingleAsync();
+        var originalProvider2Override = await snapshot.ExternalSearchProviderOverrides.AsNoTracking()
+            .Where(item => item.LibraryOrganizationId == 2 && item.ExternalSearchProviderId == provider2Id)
+            .Select(item => new { item.IsEnabled, item.Label, item.UrlTemplate })
+            .SingleOrDefaultAsync();
+        try
+        {
         using var client = factory.CreateClient();
         var baseAddress = client.BaseAddress
             ?? throw new InvalidOperationException("The Kestrel test host did not expose a base address.");
@@ -375,6 +404,56 @@ public sealed partial class PatronJourneyTests
             Guid.Parse(identity.TenantId!),
             Guid.Parse(identity.ObjectId!),
             staffObjectId);
+        await using (var linkContext = await contextFactory.CreateDbContextAsync())
+        {
+            var systemLinks = await linkContext.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            systemLinks.StaffApplicationUrl = $"{baseAddress.GetLeftPart(UriPartial.Authority)}/staff/";
+            var systemBranding = await linkContext.Branding.SingleOrDefaultAsync(item => item.OrganizationId == 1);
+            if (systemBranding is null)
+            {
+                systemBranding = new Branding { OrganizationId = 1 };
+                linkContext.Branding.Add(systemBranding);
+            }
+            systemBranding.LogoAltText = "Browser saved system alt";
+            await linkContext.SaveChangesAsync();
+        }
+
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", seeded.StaffId.ToString());
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Email", "browser.staff@example.org");
+        using var researchSession = await client.GetAsync("/api/asap/staff/session");
+        using var researchSessionBody = JsonDocument.Parse(await researchSession.Content.ReadAsStringAsync());
+        var researchToken = researchSessionBody.RootElement.GetProperty("antiforgeryToken").GetString();
+        using var noToken = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
+            new { requestId = seeded.PrimaryRequestId.ToString(), mode = "title", query = "catalog" });
+        Assert.AreEqual(HttpStatusCode.BadRequest, noToken.StatusCode);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", researchToken);
+        using var foreignLookup = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
+            new { requestId = seeded.OtherRequestId.ToString(), mode = "title", query = "catalog" });
+        Assert.AreEqual(HttpStatusCode.NotFound, foreignLookup.StatusCode);
+        foreach (var requestId in new[] { "0", "-1", "not-a-number", "9223372036854775808" })
+        {
+            using var invalidRequestId = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
+                new { requestId, libraryOrgId = 2, mode = "title", query = "catalog" });
+            Assert.AreEqual(HttpStatusCode.BadRequest, invalidRequestId.StatusCode, requestId);
+        }
+        using var exactBigintLookup = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
+            new { requestId = "9007199254741993", mode = "title", query = "Browser staff title" });
+        Assert.AreEqual(HttpStatusCode.OK, exactBigintLookup.StatusCode,
+            await exactBigintLookup.Content.ReadAsStringAsync());
+        using var mismatchedRequestLibrary = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
+            new { requestId = "9007199254741993", libraryOrgId = 82, mode = "title", query = "catalog" });
+        Assert.AreEqual(HttpStatusCode.BadRequest, mismatchedRequestLibrary.StatusCode);
+        using var mismatchedRequestLibraryBody = JsonDocument.Parse(
+            await mismatchedRequestLibrary.Content.ReadAsStringAsync());
+        Assert.AreEqual("library_scope_mismatch",
+            mismatchedRequestLibraryBody.RootElement.GetProperty("code").GetString());
+        using var foreignLibrarySearch = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
+            new { libraryOrgId = 82, mode = "title", query = "catalog" });
+        Assert.AreEqual(HttpStatusCode.Forbidden, foreignLibrarySearch.StatusCode);
+        using var foreignResearch = await client.GetAsync(
+            $"/api/asap/staff/research-configuration?requestId={seeded.OtherRequestId}");
+        Assert.AreEqual(HttpStatusCode.NotFound, foreignResearch.StatusCode);
 
         var repositoryRoot = Path.GetDirectoryName(TestArtifactPaths.FindRepositoryFile("Asap.sln"))!;
         var artifactDirectory = Path.Combine(
@@ -430,7 +509,7 @@ public sealed partial class PatronJourneyTests
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(20, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(50, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
             var analytics = report.RootElement.GetProperty("analytics");
             Assert.AreEqual("all", analytics.GetProperty("desktopSuperAdminScope").GetString());
             Assert.AreEqual("last90", analytics.GetProperty("desktopRange").GetString());
@@ -479,7 +558,7 @@ public sealed partial class PatronJourneyTests
                    r.[Publication],
                    JSON_VALUE(r.[CustomFieldsJson], '$.audience_note.value'),
                    JSON_VALUE(r.[CustomFieldsJson], '$.binding.value'),
-                   JSON_VALUE(r.[CustomFieldsJson], '$.retired.value')
+                   JSON_VALUE(r.[CustomFieldsJson], '$.retired.value'), r.[BibId]
             FROM [asap].[TitleRequest] r
             JOIN [asap].[StaffUser] s ON s.[Id] = @superId
             WHERE r.[Id] = @requestId;
@@ -488,17 +567,18 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@superId", seeded.SuperId);
         await using var verified = await command.ExecuteReaderAsync();
         Assert.IsTrue(await verified.ReadAsync());
-        Assert.AreEqual("Browser staff title edited", verified.GetString(0));
-        Assert.AreEqual("outstanding_purchase", verified.GetString(1));
+        Assert.AreEqual("Catalog title 9001 (Browser staff title edited)", verified.GetString(0));
+        Assert.AreEqual("closed", verified.GetString(1));
         Assert.AreEqual(seeded.SuperId, verified.GetInt64(2));
         Assert.IsTrue(verified.GetBoolean(3));
         Assert.AreEqual("browser-weekly@example.org", verified.GetString(4));
         Assert.IsTrue(verified.GetBoolean(5));
-        Assert.AreEqual(4, verified.GetInt32(6));
+        Assert.AreEqual(2, verified.GetInt32(6));
         Assert.AreEqual("Library backlist", verified.GetString(7));
         Assert.AreEqual("Edited audience", verified.GetString(8));
         Assert.AreEqual("hardback", verified.GetString(9));
         Assert.AreEqual("Keep me", verified.GetString(10));
+        Assert.AreEqual(9001, verified.GetInt32(11));
         await verified.CloseAsync();
 
         await using var resolution = verify.CreateCommand();
@@ -532,7 +612,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("succeeded", resolved.GetString(1));
         Assert.AreEqual("result_recorded", resolved.GetString(2));
         Assert.AreEqual(4L, resolved.GetInt64(3));
-        Assert.AreEqual("8456", resolved.GetString(4));
+        Assert.AreEqual(8456, resolved.GetInt32(4));
         Assert.AreEqual("operator_verified:authoritative_correlated_hold", resolved.GetString(5));
         Assert.AreEqual("Support report SR-BROWSER-2904", resolved.GetString(6));
         Assert.AreEqual("Polaris support final transaction report", resolved.GetString(7));
@@ -558,7 +638,11 @@ public sealed partial class PatronJourneyTests
                 (SELECT COUNT(*) FROM [asap].[TitleRequest]
                  WHERE [Id]=@copySourceId
                    AND [Status]=N'hold_placed'
-                   AND [Notes] LIKE N'%Additional copy request created for BIB 92905.%'),
+                   AND COALESCE([Notes], N'') NOT LIKE N'%Additional copy request created for BIB 92905.%'),
+                (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
+                 WHERE [TitleRequestId]=@copySourceId
+                   AND [EventType]=N'additional_copy_created'
+                   AND [Message] LIKE N'%BIB 92905%'),
                 (SELECT COUNT(*) FROM [asap].[EmailOutbox]
                  WHERE [Subject]=N'ASAP additional-copy reminder'
                    AND [BodyText] LIKE N'%Browser additional copy source (BIB 92905)%'
@@ -592,7 +676,95 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(1, copyState.GetInt32(2));
         Assert.AreEqual(1, copyState.GetInt32(3));
         Assert.AreEqual(1, copyState.GetInt32(4));
-        Assert.AreEqual(0, copyState.GetInt32(5));
+        Assert.AreEqual(1, copyState.GetInt32(5));
+        Assert.AreEqual(0, copyState.GetInt32(6));
+        }
+        finally
+        {
+            await using var restore = await contextFactory.CreateDbContextAsync();
+            var settings = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            settings.LeapBibUrlPattern = originalSettings.LeapBibUrlPattern;
+            settings.LeapPatronUrlPattern = originalSettings.LeapPatronUrlPattern;
+            settings.StaffApplicationUrl = originalSettings.StaffApplicationUrl;
+            var branding = await restore.Branding.SingleOrDefaultAsync(item => item.OrganizationId == 1);
+            if (originalBranding is null && branding is not null)
+            {
+                restore.Branding.Remove(branding);
+            }
+            else if (originalBranding is not null && branding is not null)
+            {
+                branding.LogoAltText = originalBranding.LogoAltText;
+            }
+            foreach (var original in originalProviders)
+            {
+                var provider = await restore.ExternalSearchProviders.SingleAsync(item => item.Id == original.Id);
+                provider.Label = original.Label;
+                provider.UrlTemplate = original.UrlTemplate;
+                provider.IsEnabled = original.IsEnabled;
+            }
+            var provider2Override = await restore.ExternalSearchProviderOverrides.SingleOrDefaultAsync(item =>
+                item.LibraryOrganizationId == 2 && item.ExternalSearchProviderId == provider2Id);
+            if (originalProvider2Override is null && provider2Override is not null)
+            {
+                restore.ExternalSearchProviderOverrides.Remove(provider2Override);
+            }
+            else if (originalProvider2Override is not null && provider2Override is not null)
+            {
+                provider2Override.IsEnabled = originalProvider2Override.IsEnabled;
+                provider2Override.Label = originalProvider2Override.Label;
+                provider2Override.UrlTemplate = originalProvider2Override.UrlTemplate;
+            }
+            await restore.SaveChangesAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task SystemBrandingAltClearReturnsEffectiveFallback()
+    {
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var context = await contextFactory.CreateDbContextAsync();
+        var branding = await context.Branding.SingleOrDefaultAsync(item => item.OrganizationId == 1);
+        var originalAlt = branding?.LogoAltText;
+        var created = branding is null;
+        branding ??= new Branding { OrganizationId = 1 };
+        try
+        {
+            if (created)
+            {
+                context.Branding.Add(branding);
+            }
+            branding.LogoAltText = "Saved system alternate text";
+            await context.SaveChangesAsync();
+
+            var actor = await ReadConfiguredSuperAdminAsync();
+            using var client = factory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            using var before = await ReadSettingsDocumentAsync(client, "system");
+            Assert.AreEqual("Saved system alternate text", before.RootElement.GetProperty("effective")
+                .GetProperty("logoAltText").GetString());
+            using var saved = await SaveSettingsDocumentAsync(client, before.RootElement, "system",
+                new Dictionary<string, object?> { ["branding"] = new { altText = (string?)null } });
+            using var after = await ReadSettingsDocumentAsync(client, "system");
+            Assert.AreEqual(JsonValueKind.Null, after.RootElement.GetProperty("stored")
+                .GetProperty("configuredSystem").GetProperty("branding").GetProperty("altText").ValueKind);
+            Assert.AreEqual("Library Logo", after.RootElement.GetProperty("effective")
+                .GetProperty("logoAltText").GetString());
+        }
+        finally
+        {
+            await using var restore = await contextFactory.CreateDbContextAsync();
+            var restoredBranding = await restore.Branding.SingleOrDefaultAsync(item => item.OrganizationId == 1);
+            if (created && restoredBranding is not null)
+            {
+                restore.Branding.Remove(restoredBranding);
+            }
+            else if (restoredBranding is not null)
+            {
+                restoredBranding.LogoAltText = originalAlt;
+            }
+            await restore.SaveChangesAsync();
+        }
     }
 
     [TestMethod]
@@ -1059,11 +1231,11 @@ public sealed partial class PatronJourneyTests
         var originalCodesExist = originalCodes.GetProperty("exists").GetBoolean();
         var originalCodeValues = originalCodes.GetProperty("values")
             .EnumerateArray()
-            .Select(item => item.GetString()!)
+            .Select(item => item.GetInt32())
             .ToArray();
         var systemEffectiveCodes = initial.GetProperty("effective").GetProperty("allowedPatronCodeIds")
             .EnumerateArray()
-            .Select(item => item.GetString()!)
+            .Select(item => item.GetInt32())
             .ToArray();
 
         try
@@ -1072,8 +1244,8 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.OK, choicesResponse.StatusCode, await choicesResponse.Content.ReadAsStringAsync());
             using var choicesDocument = JsonDocument.Parse(await choicesResponse.Content.ReadAsStringAsync());
             var choices = choicesDocument.RootElement.GetProperty("data").EnumerateArray().ToArray();
-            Assert.IsTrue(choices.Any(item => item.GetProperty("id").GetString() == "1"));
-            Assert.IsTrue(choices.All(item => item.GetProperty("id").ValueKind == JsonValueKind.String));
+            Assert.IsTrue(choices.Any(item => item.GetProperty("id").GetInt32() == 1));
+            Assert.IsTrue(choices.All(item => item.GetProperty("id").ValueKind == JsonValueKind.Number));
 
             using var saveResponse = await client.PostAsJsonAsync(
                 "/api/asap/staff/settings",
@@ -1084,7 +1256,7 @@ public sealed partial class PatronJourneyTests
                     workflow = new
                     {
                         suggestionLimitMessage = "Library-specific limit message",
-                        allowedPatronCodeIds = new[] { "1" }
+                        allowedPatronCodeIds = new[] { 1 }
                     },
                     patron = new { loginNote = "Library-specific login note" }
                 });
@@ -1103,9 +1275,9 @@ public sealed partial class PatronJourneyTests
                 saved.GetProperty("stored").GetProperty("libraryOverride").GetProperty("patron")
                     .GetProperty("loginNote").GetString());
             CollectionAssert.AreEqual(
-                new[] { "1" },
+                new[] { 1 },
                 saved.GetProperty("stored").GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
-                    .GetProperty("values").EnumerateArray().Select(item => item.GetString()).ToArray());
+                    .GetProperty("values").EnumerateArray().Select(item => item.GetInt32()).ToArray());
 
             using var invalidResponse = await client.PostAsJsonAsync(
                 "/api/asap/staff/settings",
@@ -1113,7 +1285,7 @@ public sealed partial class PatronJourneyTests
                 {
                     orgId = "2",
                     version = saved.GetProperty("version").GetString(),
-                    workflow = new { allowedPatronCodeIds = new[] { "999" } }
+                    workflow = new { allowedPatronCodeIds = new[] { 999 } }
                 });
             Assert.AreEqual(HttpStatusCode.BadRequest, invalidResponse.StatusCode, await invalidResponse.Content.ReadAsStringAsync());
             using var invalidDocument = JsonDocument.Parse(await invalidResponse.Content.ReadAsStringAsync());
@@ -1124,9 +1296,9 @@ public sealed partial class PatronJourneyTests
             using var afterInvalidDocument = JsonDocument.Parse(await afterInvalidResponse.Content.ReadAsStringAsync());
             var afterInvalid = afterInvalidDocument.RootElement;
             CollectionAssert.AreEqual(
-                new[] { "1" },
+                new[] { 1 },
                 afterInvalid.GetProperty("stored").GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
-                    .GetProperty("values").EnumerateArray().Select(item => item.GetString()).ToArray());
+                    .GetProperty("values").EnumerateArray().Select(item => item.GetInt32()).ToArray());
 
             using var clearScalarResponse = await client.PostAsJsonAsync(
                 "/api/asap/staff/settings",
@@ -1156,7 +1328,7 @@ public sealed partial class PatronJourneyTests
                 {
                     orgId = "2",
                     version = afterScalarClear.GetProperty("version").GetString(),
-                    workflow = new { allowedPatronCodeIds = Array.Empty<string>() }
+                    workflow = new { allowedPatronCodeIds = Array.Empty<int>() }
                 });
             Assert.AreEqual(HttpStatusCode.OK, clearSetResponse.StatusCode, await clearSetResponse.Content.ReadAsStringAsync());
 
@@ -1164,12 +1336,12 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.OK, finalResponse.StatusCode, await finalResponse.Content.ReadAsStringAsync());
             using var finalDocument = JsonDocument.Parse(await finalResponse.Content.ReadAsStringAsync());
             var final = finalDocument.RootElement;
-            Assert.IsFalse(final.GetProperty("stored").GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
+            Assert.IsTrue(final.GetProperty("stored").GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
                 .GetProperty("exists").GetBoolean());
             CollectionAssert.AreEqual(
-                systemEffectiveCodes,
+                Array.Empty<int>(),
                 final.GetProperty("effective").GetProperty("allowedPatronCodeIds")
-                    .EnumerateArray().Select(item => item.GetString()).ToArray());
+                    .EnumerateArray().Select(item => item.GetInt32()).ToArray());
 
             await using var connection = new SqlConnection(databaseConnectionString);
             await connection.OpenAsync();
@@ -1179,8 +1351,25 @@ public sealed partial class PatronJourneyTests
                 "(SELECT COUNT(*) FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = 2);";
             await using var reader = await verify.ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
-            Assert.AreEqual(0, reader.GetInt32(0));
+            Assert.AreEqual(1, reader.GetInt32(0));
             Assert.AreEqual(0, reader.GetInt32(1));
+            await reader.DisposeAsync();
+
+            using var inheritResponse = await client.PostAsJsonAsync(
+                "/api/asap/staff/settings",
+                new
+                {
+                    orgId = "2",
+                    version = final.GetProperty("version").GetString(),
+                    workflow = new { allowedPatronCodeIds = (int[]?)null }
+                });
+            Assert.AreEqual(HttpStatusCode.OK, inheritResponse.StatusCode, await inheritResponse.Content.ReadAsStringAsync());
+            using var inherited = await ReadSettingsDocumentAsync(client, "2");
+            Assert.IsFalse(inherited.RootElement.GetProperty("stored").GetProperty("libraryOverride")
+                .GetProperty("allowedPatronCodeIds").GetProperty("exists").GetBoolean());
+            CollectionAssert.AreEqual(systemEffectiveCodes,
+                inherited.RootElement.GetProperty("effective").GetProperty("allowedPatronCodeIds")
+                    .EnumerateArray().Select(item => item.GetInt32()).ToArray());
         }
         finally
         {
@@ -1197,7 +1386,7 @@ public sealed partial class PatronJourneyTests
                         workflow = new
                         {
                             suggestionLimitMessage = originalWorkflowMessage,
-                            allowedPatronCodeIds = originalCodesExist ? originalCodeValues : Array.Empty<string>()
+                            allowedPatronCodeIds = originalCodesExist ? originalCodeValues : null
                         },
                         patron = new { loginNote = originalLoginNote }
                     });
@@ -1331,46 +1520,63 @@ public sealed partial class PatronJourneyTests
                 AssertScalarEquals(sentinel.LibraryValue, librarySection, sentinel.Name, $"preserved peer override {field.Section}.{sentinel.Name}");
             }
 
+            await using (var connection = new SqlConnection(databaseConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var legacy = connection.CreateCommand();
+                legacy.CommandText = "UPDATE [asap].[EmailSettings] SET [ProtectedServerToken] = N'legacy-library-token' WHERE [OrganizationId] = @organizationId";
+                legacy.Parameters.AddWithValue("@organizationId", libraryId);
+                Assert.AreEqual(1, await legacy.ExecuteNonQueryAsync());
+            }
+
             using var secretBase = await ReadSettingsDocumentAsync(client, libraryId.ToString());
-            using (var saveLibrarySecret = await SaveSettingsDocumentAsync(
-                       client,
-                       secretBase.RootElement,
-                       libraryId.ToString(),
-                       new Dictionary<string, object?>
+            Assert.IsFalse(secretBase.RootElement.GetRawText().Contains("legacy-library-token", StringComparison.Ordinal));
+            foreach (var mutation in new object[]
+            {
+                new { postmarkToken = "forged-library-token" },
+                new { clearPostmarkToken = true },
+                new { serverToken = "forged-legacy-alias" },
+                new { clearServerToken = true }
+            })
+            {
+                using var forged = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+                {
+                    orgId = libraryId.ToString(),
+                    version = secretBase.RootElement.GetProperty("version").GetString(),
+                    email = mutation
+                });
+                Assert.AreEqual(HttpStatusCode.BadRequest, forged.StatusCode);
+                using var rejected = JsonDocument.Parse(await forged.Content.ReadAsStringAsync());
+                Assert.AreEqual("postmark_token_system_only", rejected.RootElement.GetProperty("code").GetString());
+            }
+
+            using (var saveSender = await SaveSettingsDocumentAsync(client, secretBase.RootElement,
+                       libraryId.ToString(), new Dictionary<string, object?>
                        {
                            ["email"] = new Dictionary<string, object?>
                            {
                                ["fromAddress"] = "slice4-secret-sentinel@example.org",
-                               ["postmarkToken"] = "slice4-library-secret-token"
+                               ["fromName"] = "Library sender"
                            }
                        }))
             {
-                Assert.AreEqual("saved", saveLibrarySecret.RootElement.GetProperty("code").GetString());
+                Assert.AreEqual("saved", saveSender.RootElement.GetProperty("code").GetString());
             }
 
-            using var withSecret = await ReadSettingsDocumentAsync(client, libraryId.ToString());
-            AssertScalarEquals(true, withSecret.RootElement.GetProperty("stored")
-                .GetProperty("libraryOverride").GetProperty("email"), "hasPostmarkToken", "library secret saved");
-            using var clearSecret = await SaveSettingsDocumentAsync(
-                client,
-                withSecret.RootElement,
-                libraryId.ToString(),
-                new Dictionary<string, object?>
-                {
-                    ["email"] = new Dictionary<string, object?>
-                    {
-                        ["clearPostmarkToken"] = true,
-                        ["fromAddress"] = "slice4-secret-sentinel@example.org"
-                    }
-                });
-            Assert.AreEqual("saved", clearSecret.RootElement.GetProperty("code").GetString());
-
-            using var afterSecretClear = await ReadSettingsDocumentAsync(client, libraryId.ToString());
-            var emailOverride = afterSecretClear.RootElement.GetProperty("stored")
-                .GetProperty("libraryOverride")
-                .GetProperty("email");
-            AssertScalarEquals(false, emailOverride, "hasPostmarkToken", "library secret cleared");
-            AssertScalarEquals("slice4-secret-sentinel@example.org", emailOverride, "fromAddress", "sender override preserved beside secret clear");
+            using var afterSenderSave = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            var emailOverride = afterSenderSave.RootElement.GetProperty("stored")
+                .GetProperty("libraryOverride").GetProperty("email");
+            AssertScalarEquals(false, emailOverride, "hasPostmarkToken", "legacy library token is not offered as an override");
+            AssertScalarEquals("slice4-secret-sentinel@example.org", emailOverride, "fromAddress", "sender address override");
+            AssertScalarEquals("Library sender", emailOverride, "fromName", "sender name override");
+            await using (var connection = new SqlConnection(databaseConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var verify = connection.CreateCommand();
+                verify.CommandText = "SELECT [ProtectedServerToken] FROM [asap].[EmailSettings] WHERE [OrganizationId] = @organizationId";
+                verify.Parameters.AddWithValue("@organizationId", libraryId);
+                Assert.AreEqual("legacy-library-token", await verify.ExecuteScalarAsync());
+            }
         }
         finally
         {
@@ -1385,6 +1591,101 @@ public sealed partial class PatronJourneyTests
             }
 
             await CleanupScalarSettingsTestDataAsync(libraryId, templateKeyA, templateKeyB);
+        }
+    }
+
+    [TestMethod]
+    public async Task ReferencedCustomRejectionTemplateCannotBeDeletedUntilWorkflowReferenceIsSavedAway()
+    {
+        using var client = factory!.CreateClient();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        const int libraryId = 91405;
+        var key = $"rejection:dependency_{Guid.NewGuid():N}";
+        await UpsertTestOrganizationAsync(libraryId, "Template Dependency Library", "TDL");
+        try
+        {
+            using var initial = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using var created = await SaveSettingsDocumentAsync(client, initial.RootElement,
+                libraryId.ToString(), new Dictionary<string, object?>
+                {
+                    ["templates"] = new object[]
+                    {
+                        new { templateKey = key, isCustom = true, displayName = "Dependency test",
+                            subject = "Subject", body = "Body", enabled = true }
+                    }
+                });
+            Assert.AreEqual("saved", created.RootElement.GetProperty("code").GetString());
+
+            using var withTemplate = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            var templateId = withTemplate.RootElement.GetProperty("stored").GetProperty("templates")
+                .EnumerateArray().Single(item => item.GetProperty("templateKey").GetString() == key)
+                .GetProperty("id").GetString();
+            using var referenced = await SaveSettingsDocumentAsync(client, withTemplate.RootElement,
+                libraryId.ToString(), new Dictionary<string, object?>
+                {
+                    ["workflow"] = new { outstandingTimeoutRejectionTemplateId = templateId }
+                });
+            Assert.AreEqual("saved", referenced.RootElement.GetProperty("code").GetString());
+
+            using var current = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using var blocked = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = current.RootElement.GetProperty("version").GetString(),
+                templates = new[] { new { templateKey = key, isCustom = true, reset = true } }
+            });
+            Assert.AreEqual(HttpStatusCode.Conflict, blocked.StatusCode);
+            using var blockedBody = JsonDocument.Parse(await blocked.Content.ReadAsStringAsync());
+            Assert.AreEqual("template_referenced", blockedBody.RootElement.GetProperty("code").GetString());
+
+            using var legacyBlocked = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = current.RootElement.GetProperty("version").GetString(),
+                emails = new { rejection_templates = new[] { new { templateKey = key, isCustom = true, reset = true } } }
+            });
+            Assert.AreEqual(HttpStatusCode.Conflict, legacyBlocked.StatusCode);
+            using var legacyBlockedBody = JsonDocument.Parse(await legacyBlocked.Content.ReadAsStringAsync());
+            Assert.AreEqual("template_referenced", legacyBlockedBody.RootElement.GetProperty("code").GetString());
+
+            using var namedLegacyBlocked = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = current.RootElement.GetProperty("version").GetString(),
+                emails = new Dictionary<string, object?>
+                {
+                    [key] = new { libraryCustom = true, reset = true }
+                }
+            });
+            Assert.AreEqual(HttpStatusCode.Conflict, namedLegacyBlocked.StatusCode);
+            using var namedLegacyBlockedBody = JsonDocument.Parse(await namedLegacyBlocked.Content.ReadAsStringAsync());
+            Assert.AreEqual("template_referenced", namedLegacyBlockedBody.RootElement.GetProperty("code").GetString());
+
+            using var stillReferenced = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            Assert.AreEqual(templateId, stillReferenced.RootElement.GetProperty("stored")
+                .GetProperty("libraryOverride").GetProperty("workflow")
+                .GetProperty("outstandingTimeoutRejectionTemplateId").GetString());
+            Assert.IsTrue(stillReferenced.RootElement.GetProperty("stored").GetProperty("templates")
+                .EnumerateArray().Any(item => item.GetProperty("templateKey").GetString() == key));
+
+            using var changedWorkflow = await SaveSettingsDocumentAsync(client, stillReferenced.RootElement,
+                libraryId.ToString(), new Dictionary<string, object?>
+                {
+                    ["workflow"] = new { outstandingTimeoutRejectionTemplateId = (string?)null }
+                });
+            using var withoutReference = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using var deleted = await SaveSettingsDocumentAsync(client, withoutReference.RootElement,
+                libraryId.ToString(), new Dictionary<string, object?>
+                {
+                    ["templates"] = new object[] { new { templateKey = key, isCustom = true, reset = true } }
+                });
+            Assert.AreEqual("saved", deleted.RootElement.GetProperty("code").GetString());
+        }
+        finally
+        {
+            await CleanupScalarSettingsTestDataAsync(libraryId, key, key);
         }
     }
 
@@ -1498,6 +1799,214 @@ public sealed partial class PatronJourneyTests
         var after = await ReadPatronCodeRowsAsync(2);
         Assert.AreEqual(before.SetCount, after.SetCount);
         CollectionAssert.AreEqual(before.Values, after.Values);
+    }
+
+    [TestMethod]
+    public async Task PatronCodeReferenceLookupRunsBeforeSettingsLocks()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var provider = new LockProbePatronCodeReferenceProvider(databaseConnectionString);
+        await using var probeFactory = CreateApplicationFactory(configurationPath, provider);
+        using var client = probeFactory.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+        using var response = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+        {
+            orgId = "2",
+            version = Convert.ToBase64String(new byte[32]),
+            workflow = new { allowedPatronCodeIds = new[] { "1" } }
+        });
+        Assert.IsTrue(provider.LockProbeSucceeded, "Polaris lookup must happen before actor and organization locks.");
+        Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode, await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("stale_version", body.RootElement.GetProperty("code").GetString());
+    }
+
+    [TestMethod]
+    public async Task LibraryEmptyPatronCodeOverrideRemainsDistinctFromInheritance()
+    {
+        const int libraryId = 8830;
+        bool addedSystemCode;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var seed = connection.CreateCommand();
+            seed.CommandText =
+                """
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
+                VALUES (8830, N'Empty Code Override Library', N'ECL', 1);
+                SELECT COUNT(*) FROM [asap].[PatronCodeEligibilityMember]
+                WHERE [OrganizationId] = 1 AND [PatronCodeId] = N'1';
+                """;
+            addedSystemCode = Convert.ToInt32(await seed.ExecuteScalarAsync()) == 0;
+            if (addedSystemCode)
+            {
+                seed.CommandText =
+                    "INSERT INTO [asap].[PatronCodeEligibilityMember] ([OrganizationId], [PatronCodeId]) VALUES (1, N'1');";
+                await seed.ExecuteNonQueryAsync();
+            }
+        }
+
+        try
+        {
+            var actor = await ReadConfiguredSuperAdminAsync();
+            using var client = factory!.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            using var system = await ReadSettingsDocumentAsync(client, "system");
+            using var invalidSystemInheritance = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = "system",
+                version = system.RootElement.GetProperty("version").GetString(),
+                workflow = new { allowedPatronCodeIds = (string[]?)null }
+            });
+            Assert.AreEqual(HttpStatusCode.BadRequest, invalidSystemInheritance.StatusCode,
+                await invalidSystemInheritance.Content.ReadAsStringAsync());
+            using var initial = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using var emptySave = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = initial.RootElement.GetProperty("version").GetString(),
+                workflow = new { patronCodeEligibilityEnabled = true, allowedPatronCodeIds = Array.Empty<string>() }
+            });
+            Assert.AreEqual(HttpStatusCode.OK, emptySave.StatusCode, await emptySave.Content.ReadAsStringAsync());
+            using var empty = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            Assert.IsTrue(empty.RootElement.GetProperty("stored").GetProperty("libraryOverride")
+                .GetProperty("allowedPatronCodeIds").GetProperty("exists").GetBoolean());
+            Assert.IsTrue(empty.RootElement.GetProperty("effective").GetProperty("patronCodeEligibilityEnabled").GetBoolean());
+            Assert.AreEqual(0, empty.RootElement.GetProperty("effective").GetProperty("allowedPatronCodeIds").GetArrayLength());
+
+            using var reset = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = empty.RootElement.GetProperty("version").GetString(),
+                workflow = new { allowedPatronCodeIds = (string[]?)null }
+            });
+            Assert.AreEqual(HttpStatusCode.OK, reset.StatusCode, await reset.Content.ReadAsStringAsync());
+            using var inherited = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            Assert.IsFalse(inherited.RootElement.GetProperty("stored").GetProperty("libraryOverride")
+                .GetProperty("allowedPatronCodeIds").GetProperty("exists").GetBoolean());
+            Assert.IsTrue(inherited.RootElement.GetProperty("effective").GetProperty("allowedPatronCodeIds")
+                .EnumerateArray().Any(item => item.GetInt32() == 1));
+        }
+        finally
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var cleanup = connection.CreateCommand();
+            cleanup.CommandText =
+                """
+                DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] = 8830;
+                DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 8830;
+                DELETE FROM [asap].[PatronSettings] WHERE [OrganizationId] = 8830;
+                DELETE FROM [asap].[EmailSettings] WHERE [OrganizationId] = 8830;
+                DELETE FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = 8830;
+                DELETE FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = 8830;
+                DELETE FROM [asap].[Organization] WHERE [Id] = 8830;
+                """ + (addedSystemCode
+                    ? "DELETE FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = 1 AND [PatronCodeId] = N'1';"
+                    : string.Empty);
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task SettingsPublicLinksIgnoreRequestHostAndHistoricalCodesStayScoped()
+    {
+        const int libraryId = 8828;
+        string? previousStaffUrl;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var seed = connection.CreateCommand();
+            seed.CommandText =
+                "SELECT [StaffApplicationUrl] FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1;";
+            previousStaffUrl = (await seed.ExecuteScalarAsync()) as string;
+            seed.CommandText =
+                """
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
+                VALUES (8828, N'Patron Link Library', N'PLL', 1),
+                       (8829, N'Foreign Code Library', N'FCL', 1);
+                INSERT INTO [asap].[PatronCodeEligibilitySet] ([OrganizationId]) VALUES (8828), (8829);
+                INSERT INTO [asap].[PatronCodeEligibilityMember] ([OrganizationId], [PatronCodeId])
+                VALUES (8828, 8828), (8829, 8829);
+                UPDATE [asap].[SystemSettings] SET [StaffApplicationUrl] = N'https://trusted.example.org/staff/'
+                WHERE [OrganizationId] = 1;
+                """;
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            var actor = await ReadConfiguredSuperAdminAsync();
+            using var client = factory!.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Host = "poison.example.org";
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+            using var settings = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            var links = settings.RootElement.GetProperty("publicPatron");
+            Assert.AreEqual("https://trusted.example.org/patron/?libraryOrgId=8828",
+                links.GetProperty("url").GetString());
+            Assert.IsFalse(links.GetProperty("autoResize").GetString()!.Contains("poison.example.org", StringComparison.Ordinal));
+
+            using var system = await ReadSettingsDocumentAsync(client, "system");
+            Assert.AreEqual(JsonValueKind.Null, system.RootElement.GetProperty("publicPatron").ValueKind);
+
+            using var forged = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = settings.RootElement.GetProperty("version").GetString(),
+                workflow = new { allowedPatronCodeIds = new[] { 8828, 8829 } }
+            });
+            Assert.AreEqual(HttpStatusCode.BadRequest, forged.StatusCode, await forged.Content.ReadAsStringAsync());
+            using (var body = JsonDocument.Parse(await forged.Content.ReadAsStringAsync()))
+            {
+                Assert.AreEqual("patron_code_unknown", body.RootElement.GetProperty("code").GetString());
+            }
+
+            using var preserved = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = settings.RootElement.GetProperty("version").GetString(),
+                workflow = new { allowedPatronCodeIds = new[] { 8828, 1 } }
+            });
+            Assert.AreEqual(HttpStatusCode.OK, preserved.StatusCode, await preserved.Content.ReadAsStringAsync());
+            CollectionAssert.AreEqual(new[] { 1, 8828 },
+                (await ReadPatronCodeRowsAsync(libraryId)).Values);
+
+            await using (var connection = new SqlConnection(databaseConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var deactivate = new SqlCommand(
+                    "UPDATE [asap].[Organization] SET [IsActive] = 0 WHERE [Id] = @id;", connection);
+                deactivate.Parameters.AddWithValue("@id", libraryId);
+                await deactivate.ExecuteNonQueryAsync();
+            }
+            using var inactive = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            Assert.AreEqual(JsonValueKind.Null, inactive.RootElement.GetProperty("publicPatron").ValueKind);
+            StringAssert.Contains(inactive.RootElement.GetProperty("publicPatronUnavailableReason").GetString()!, "inactive");
+        }
+        finally
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var cleanup = connection.CreateCommand();
+            cleanup.CommandText =
+                """
+                UPDATE [asap].[SystemSettings] SET [StaffApplicationUrl] = @staffUrl WHERE [OrganizationId] = 1;
+                DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] IN (8828, 8829);
+                DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] IN (8828, 8829);
+                DELETE FROM [asap].[PatronSettings] WHERE [OrganizationId] IN (8828, 8829);
+                DELETE FROM [asap].[EmailSettings] WHERE [OrganizationId] IN (8828, 8829);
+                DELETE FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] IN (8828, 8829);
+                DELETE FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] IN (8828, 8829);
+                DELETE FROM [asap].[Organization] WHERE [Id] IN (8828, 8829);
+                """;
+            cleanup.Parameters.AddWithValue("@staffUrl", (object?)previousStaffUrl ?? DBNull.Value);
+            await cleanup.ExecuteNonQueryAsync();
+        }
     }
 
     [TestMethod]
@@ -1674,6 +2183,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.OK, baselineSession.StatusCode);
         }
 
+        await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.OK, "{}"));
         var isolatedTenantId = Guid.NewGuid();
         var isolatedObjectId = Guid.NewGuid();
         var settingsPath = await WriteStaffConfigurationAsync(
@@ -1700,6 +2210,7 @@ public sealed partial class PatronJourneyTests
 
         Assert.AreEqual(HttpStatusCode.OK, live.StatusCode);
         Assert.AreEqual(HttpStatusCode.OK, ready.StatusCode);
+        Assert.AreEqual("{\"status\":\"healthy\"}", await ready.Content.ReadAsStringAsync());
         Assert.AreEqual(HttpStatusCode.OK, business.StatusCode);
         Assert.AreEqual(HttpStatusCode.OK, staffShell.StatusCode);
 
@@ -1948,7 +2459,7 @@ public sealed partial class PatronJourneyTests
             await using var command = new SqlCommand(
                 "SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG';",
                 connection);
-            actorId = Convert.ToInt64(await command.ExecuteScalarAsync());
+            actorId = Convert.ToInt64(await WithFixtureClock(command).ExecuteScalarAsync());
         }
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
@@ -2029,7 +2540,7 @@ public sealed partial class PatronJourneyTests
                 SELECT CAST(SCOPE_IDENTITY() AS bigint);
                 """;
             command.Parameters.AddWithValue("@staffId", staffId);
-            openRequestId = Convert.ToInt64(await command.ExecuteScalarAsync());
+            openRequestId = Convert.ToInt64(await WithFixtureClock(command).ExecuteScalarAsync());
 
             command.CommandText =
                 """
@@ -2041,7 +2552,7 @@ public sealed partial class PatronJourneyTests
                         @staffId, N'Workflow Staff', SYSUTCDATETIME(), N'manual', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT CAST(SCOPE_IDENTITY() AS bigint);
                 """;
-            closedRequestId = Convert.ToInt64(await command.ExecuteScalarAsync());
+            closedRequestId = Convert.ToInt64(await WithFixtureClock(command).ExecuteScalarAsync());
         }
 
         using var deactivateRequest = new HttpRequestMessage(HttpMethod.Delete, $"/api/asap/staff/users/{staffId}")
@@ -2071,7 +2582,7 @@ public sealed partial class PatronJourneyTests
         verifyCommand.Parameters.AddWithValue("@staffId", staffId);
         verifyCommand.Parameters.AddWithValue("@openId", openRequestId);
         verifyCommand.Parameters.AddWithValue("@closedId", closedRequestId);
-        await using var reader = await verifyCommand.ExecuteReaderAsync();
+        await using var reader = await WithFixtureClock(verifyCommand).ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
         Assert.IsFalse(reader.GetBoolean(0));
         Assert.IsTrue(reader.IsDBNull(1));
@@ -2142,7 +2653,7 @@ public sealed partial class PatronJourneyTests
             seed.Parameters.AddWithValue("@actorObjectId", Guid.Parse(identity.ObjectId!));
             seed.Parameters.AddWithValue("@tenantId", Guid.Parse(identity.TenantId!));
             seed.Parameters.AddWithValue("@targetObjectId", targetObjectId);
-            await using var reader = await seed.ExecuteReaderAsync();
+            await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
             targetId = reader.GetInt64(1);
@@ -2189,7 +2700,7 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@inScopeId", inScopeRequestId);
         command.Parameters.AddWithValue("@outOfScopeId", outOfScopeRequestId);
         command.Parameters.AddWithValue("@closedId", closedRequestId);
-        await using var result = await command.ExecuteReaderAsync();
+        await using var result = await WithFixtureClock(command).ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual("admin", result.GetString(0));
         Assert.AreEqual(2, result.GetInt32(1));
@@ -2631,6 +3142,12 @@ public sealed partial class PatronJourneyTests
             firstResult = await submit;
             Assert.AreEqual("updated", (await deactivate).Code);
         }
+        await using (var clockContext = await factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync())
+        {
+            var created = await clockContext.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == firstResult.Id);
+            Assert.AreEqual(timeProvider!.GetUtcNow().UtcDateTime, created.CreatedUtc);
+            Assert.AreEqual(created.CreatedUtc, created.UpdatedUtc);
+        }
         await AssertAutomaticRuleRaceStateAsync(
             submissionFirst,
             firstResult.Id,
@@ -2849,7 +3366,7 @@ public sealed partial class PatronJourneyTests
                      [FormatSnapshot], [Status], [Notes], [CreatedByStaffUserId], [CreatedByDisplayName],
                      [CreatedUtc], [UpdatedUtc])
                 VALUES
-                    (2, N'Candidate Library Snapshot', N'candidate-api-bib', N'Candidate API task', @formatId,
+                    (2, N'Candidate Library Snapshot', 97001, N'Candidate API task', @formatId,
                      N'book', N'open', N'Candidate API note', @actorId, N'Candidate Actor',
                      '2026-09-01T12:00:00', '2026-09-01T12:00:00');
                 DECLARE @taskId bigint = SCOPE_IDENTITY();
@@ -2947,7 +3464,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("loaded", preview.Code);
         Assert.AreEqual(0, preview.Preview!.OpenCount);
         Assert.IsTrue(preview.Preview.EmailPurchaseReminderDefault);
-        Assert.AreEqual("slice3-bib-workflow", preview.Preview.Bibid);
+        Assert.AreEqual(95001, preview.Preview.Bibid);
 
         var created = await service.CreateAsync(
             actor,
@@ -3016,7 +3533,7 @@ public sealed partial class PatronJourneyTests
         var sourceDelete = await factory.Services.GetRequiredService<TitleRequestMutationService>().DeleteClosedAsync(
             actor,
             seeded.SourceRequestId,
-            new VersionInput(StaffVersion.Encode(sourceVersion)),
+            new VersionInput(StaffVersion.Encode(sourceVersion), StaffVersion.Encode(actor.RowVersion)),
             CancellationToken.None);
         Assert.AreEqual("deleted", sourceDelete.Code);
         task = await service.GetAsync(actor, task.Id, null, CancellationToken.None);
@@ -3034,7 +3551,7 @@ public sealed partial class PatronJourneyTests
         var deleted = await service.DeleteClosedAsync(
             actor,
             created.RequestId.Value,
-            new VersionInput(task!.Version),
+            new VersionInput(task!.Version, StaffVersion.Encode(actor.RowVersion)),
             CancellationToken.None);
         Assert.AreEqual("deleted", deleted.Code);
 
@@ -3047,7 +3564,7 @@ public sealed partial class PatronJourneyTests
                 (SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] WHERE [Id]=@taskId),
                 (SELECT COUNT(*) FROM [asap].[DeletedRequestAudit]
                  WHERE [RequestType]=N'additional_copy' AND [OriginalRequestKey]=CONVERT(nvarchar(64), @taskId)
-                   AND [Title]=N'Legacy source workflow' AND [BibId]=N'slice3-bib-workflow'
+                   AND [Title]=N'Legacy source workflow' AND [BibId]=95001
                    AND [MaskedBarcode] IS NULL AND [CloseReason] IS NULL),
                 (SELECT COUNT(*) FROM [asap].[EmailOutbox]
                  WHERE [Id]=@outboxId AND [DeliveryClass]=N'staff_authorization_sensitive'
@@ -3554,6 +4071,7 @@ public sealed partial class PatronJourneyTests
                     ([TitleRequestId], [EventType], [Status], [ActorType], [Message], [MetadataJson], [CreatedUtc])
                 VALUES (@protectedId, N'legacy_status_imported', N'hold_placed', N'system', N'Imported placement evidence.',
                         N'{"legacyBibProtection":true,"legacyBibId":null}', DATEADD(day, -1, SYSUTCDATETIME()));
+                UPDATE [asap].[TitleRequest] SET [LegacyHoldProtected] = 1 WHERE [Id] = @protectedId;
                 SELECT @requestId, @protectedId;
                 """;
             await using var seeded = await seed.ExecuteReaderAsync();
@@ -3656,27 +4174,14 @@ public sealed partial class PatronJourneyTests
         {
             using var protectedBody = JsonDocument.Parse(await protectedGet.Content.ReadAsStringAsync());
             protectedVersion = protectedBody.RootElement.GetProperty("version").GetString()!;
+            Assert.IsFalse(protectedBody.RootElement.GetProperty("capabilities").GetProperty("canChangeWorkflowState").GetBoolean());
         }
         using var reopen = await client.PostAsJsonAsync(
             $"/api/asap/staff/title-requests/{protectedRequestId}/action",
             new { version = protectedVersion, action = "reopen", status = "suggestion" });
-        Assert.AreEqual(HttpStatusCode.OK, reopen.StatusCode, await reopen.Content.ReadAsStringAsync());
+        Assert.AreEqual(HttpStatusCode.Conflict, reopen.StatusCode, await reopen.Content.ReadAsStringAsync());
         using var reopenBody = JsonDocument.Parse(await reopen.Content.ReadAsStringAsync());
-        Assert.IsFalse(reopenBody.RootElement.GetProperty("capabilities").GetProperty("canEditIdentifier").GetBoolean());
-        Assert.AreEqual(
-            "identifier_locked_by_stage",
-            reopenBody.RootElement.GetProperty("capabilities").GetProperty("blockingReason").GetString());
-
-        using var protectedEdit = await client.PostAsJsonAsync(
-            $"/api/asap/staff/title-requests/{protectedRequestId}/action",
-            new
-            {
-                version = reopenBody.RootElement.GetProperty("version").GetString(),
-                action = "edit",
-                status = "suggestion",
-                identifier = "9780000000999"
-            });
-        Assert.AreEqual(HttpStatusCode.Conflict, protectedEdit.StatusCode);
+        Assert.AreEqual("hold_history_retained", reopenBody.RootElement.GetProperty("code").GetString());
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
@@ -3700,7 +4205,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task StaffReopenedKnownLegacyAndSuccessfulHoldHistoryRemainIdentifierProtected()
+    public async Task StaffClosedPlacedHoldHistoryCannotReopenWithoutProviderCompensation()
     {
         var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
         using var client = factory!.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
@@ -3727,6 +4232,7 @@ public sealed partial class PatronJourneyTests
                     ([TitleRequestId], [EventType], [Status], [ActorType], [Message], [MetadataJson], [CreatedUtc])
                 VALUES (@legacyId, N'legacy_status_imported', N'closed', N'system', N'Imported placement evidence.',
                         N'{"legacyBibProtection":true,"bibId":"9040"}', DATEADD(day, -1, SYSUTCDATETIME()));
+                UPDATE [asap].[TitleRequest] SET [LegacyHoldProtected] = 1 WHERE [Id] = @legacyId;
 
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [Identifier], [AutoHold], [MaterialFormatId],
@@ -3755,44 +4261,21 @@ public sealed partial class PatronJourneyTests
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
 
-        async Task<JsonDocument> ReopenAsync(long requestId)
+        async Task AssertReopenBlockedAsync(long requestId)
         {
             using var get = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
             using var body = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
+            Assert.IsFalse(body.RootElement.GetProperty("capabilities").GetProperty("canChangeWorkflowState").GetBoolean());
             using var reopen = await client.PostAsJsonAsync(
                 $"/api/asap/staff/title-requests/{requestId}/action",
                 new { version = body.RootElement.GetProperty("version").GetString(), action = "reopen", status = "suggestion" });
-            Assert.AreEqual(HttpStatusCode.OK, reopen.StatusCode, await reopen.Content.ReadAsStringAsync());
-            return JsonDocument.Parse(await reopen.Content.ReadAsStringAsync());
+            Assert.AreEqual(HttpStatusCode.Conflict, reopen.StatusCode, await reopen.Content.ReadAsStringAsync());
+            using var result = JsonDocument.Parse(await reopen.Content.ReadAsStringAsync());
+            Assert.AreEqual("hold_history_retained", result.RootElement.GetProperty("code").GetString());
         }
 
-        using var legacyReopened = await ReopenAsync(legacyRequestId);
-        Assert.IsFalse(legacyReopened.RootElement.GetProperty("capabilities").GetProperty("canEditIdentifier").GetBoolean());
-        using var legacyEdit = await client.PostAsJsonAsync(
-            $"/api/asap/staff/title-requests/{legacyRequestId}/action",
-            new
-            {
-                version = legacyReopened.RootElement.GetProperty("version").GetString(),
-                action = "edit",
-                status = "suggestion",
-                identifier = "9780000002199",
-                bibid = "9999"
-            });
-        Assert.AreEqual(HttpStatusCode.Conflict, legacyEdit.StatusCode, await legacyEdit.Content.ReadAsStringAsync());
-
-        using var successfulReopened = await ReopenAsync(successfulRequestId);
-        Assert.IsFalse(successfulReopened.RootElement.GetProperty("capabilities").GetProperty("canChangeBib").GetBoolean());
-        using var successfulEdit = await client.PostAsJsonAsync(
-            $"/api/asap/staff/title-requests/{successfulRequestId}/action",
-            new
-            {
-                version = successfulReopened.RootElement.GetProperty("version").GetString(),
-                action = "edit",
-                status = "suggestion",
-                identifier = "9780000002141",
-                bibid = (string?)null
-            });
-        Assert.AreEqual(HttpStatusCode.Conflict, successfulEdit.StatusCode, await successfulEdit.Content.ReadAsStringAsync());
+        await AssertReopenBlockedAsync(legacyRequestId);
+        await AssertReopenBlockedAsync(successfulRequestId);
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
@@ -3813,9 +4296,9 @@ public sealed partial class PatronJourneyTests
         await using var result = await command.ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual("9780000002140", result.GetString(0));
-        Assert.AreEqual("9040", result.GetString(1));
+        Assert.AreEqual(9040, result.GetInt32(1));
         Assert.AreEqual("9780000002141", result.GetString(2));
-        Assert.AreEqual("9041", result.GetString(3));
+        Assert.AreEqual(9041, result.GetInt32(3));
         Assert.AreEqual(0, result.GetInt32(4));
     }
 
@@ -3876,7 +4359,7 @@ public sealed partial class PatronJourneyTests
                 SELECT @actorId, @outstandingId, @pendingHoldId, @placedId, @closedId;
                 """;
             seed.Parameters.AddWithValue("@objectId", Guid.Parse(identity.ObjectId!));
-            await using var reader = await seed.ExecuteReaderAsync();
+            await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
             outstandingId = reader.GetInt64(1);
@@ -3975,14 +4458,15 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@pendingHoldId", pendingHoldId);
         command.Parameters.AddWithValue("@placedId", placedId);
         command.Parameters.AddWithValue("@closedId", closedId);
-        await using var result = await command.ExecuteReaderAsync();
+        await using var result = await WithFixtureClock(command).ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual(outstandingId, result.GetInt64(0));
         Assert.AreEqual("outstanding_purchase", result.GetString(1));
         Assert.AreEqual("9780000002190", result.GetString(3));
         Assert.IsTrue(result.IsDBNull(4));
-        Assert.AreEqual("pending", result.GetString(5));
-        Assert.IsTrue(result.IsDBNull(6));
+        Assert.IsTrue(result.IsDBNull(5));
+        Assert.AreEqual("Identifier processing was not completed before this request left suggestions.",
+            result.GetString(6));
         Assert.AreEqual(0, result.GetInt32(7));
         Assert.IsTrue(result.IsDBNull(8));
         Assert.IsTrue(result.IsDBNull(9));
@@ -4005,7 +4489,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("hold_placed", result.GetString(1));
         Assert.AreEqual("Placed descriptive edit", result.GetString(2));
         Assert.AreEqual("9780000002152", result.GetString(3));
-        Assert.AreEqual("9052", result.GetString(4));
+        Assert.AreEqual(9052, result.GetInt32(4));
         Assert.AreEqual("found", result.GetString(5));
         Assert.AreEqual("Placed result", result.GetString(6));
 
@@ -4013,7 +4497,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(closedId, result.GetInt64(0));
         Assert.AreEqual("closed", result.GetString(1));
         Assert.AreEqual("9780000002153", result.GetString(3));
-        Assert.AreEqual("9053", result.GetString(4));
+        Assert.AreEqual(9053, result.GetInt32(4));
         Assert.AreEqual("found", result.GetString(5));
         Assert.AreEqual("Closed result", result.GetString(6));
     }
@@ -4072,6 +4556,7 @@ public sealed partial class PatronJourneyTests
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
+        var actorVersion = sessionBody.RootElement.GetProperty("staff").GetProperty("version").GetString()!;
 
         async Task<string> VersionAsync(long requestId)
         {
@@ -4082,7 +4567,7 @@ public sealed partial class PatronJourneyTests
 
         using var retained = new HttpRequestMessage(HttpMethod.Delete, $"/api/asap/staff/requests/{retainedId}")
         {
-            Content = JsonContent.Create(new { version = await VersionAsync(retainedId) })
+            Content = JsonContent.Create(new { version = await VersionAsync(retainedId), actorVersion })
         };
         using var retainedResponse = await client.SendAsync(retained);
         Assert.AreEqual(HttpStatusCode.Conflict, retainedResponse.StatusCode, await retainedResponse.Content.ReadAsStringAsync());
@@ -4093,14 +4578,14 @@ public sealed partial class PatronJourneyTests
 
         using var stale = new HttpRequestMessage(HttpMethod.Delete, $"/api/asap/staff/requests/{deletableId}")
         {
-            Content = JsonContent.Create(new { version = Convert.ToBase64String(new byte[8]) })
+            Content = JsonContent.Create(new { version = Convert.ToBase64String(new byte[8]), actorVersion })
         };
         using var staleResponse = await client.SendAsync(stale);
         Assert.AreEqual(HttpStatusCode.Conflict, staleResponse.StatusCode, await staleResponse.Content.ReadAsStringAsync());
 
         using var delete = new HttpRequestMessage(HttpMethod.Delete, $"/api/asap/staff/requests/{deletableId}")
         {
-            Content = JsonContent.Create(new { version = await VersionAsync(deletableId) })
+            Content = JsonContent.Create(new { version = await VersionAsync(deletableId), actorVersion })
         };
         using var deleted = await client.SendAsync(delete);
         Assert.AreEqual(HttpStatusCode.OK, deleted.StatusCode, await deleted.Content.ReadAsStringAsync());
@@ -4129,7 +4614,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("Deleted audit title", result.GetString(3));
         Assert.AreEqual("Deleted author", result.GetString(4));
         Assert.AreEqual("9780000002142", result.GetString(5));
-        Assert.AreEqual("9042", result.GetString(6));
+        Assert.AreEqual(9042, result.GetInt32(6));
         Assert.AreEqual("closed", result.GetString(7));
         Assert.AreEqual("rejected", result.GetString(8));
         Assert.AreEqual("***2222", result.GetString(9));
@@ -4173,7 +4658,7 @@ public sealed partial class PatronJourneyTests
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
             seed.Parameters.AddWithValue("@objectId", Guid.Parse(identity.ObjectId!));
-            await using var reader = await seed.ExecuteReaderAsync();
+            await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
             requestId = reader.GetInt64(1);
@@ -4182,7 +4667,7 @@ public sealed partial class PatronJourneyTests
             await using var count = new SqlCommand(
                 "SELECT COUNT(*) FROM [HangFire].[Job] WHERE [InvocationData] LIKE N'%IdentifierLookupJobs%';",
                 connection);
-            initialIdentifierJobCount = Convert.ToInt32(await count.ExecuteScalarAsync());
+            initialIdentifierJobCount = Convert.ToInt32(await WithFixtureClock(count).ExecuteScalarAsync());
         }
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
@@ -4215,7 +4700,7 @@ public sealed partial class PatronJourneyTests
             """,
             verify);
         command.Parameters.AddWithValue("@id", requestId);
-        await using var result = await command.ExecuteReaderAsync();
+        await using var result = await WithFixtureClock(command).ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual("pending", result.GetString(0));
         Assert.AreEqual(0, result.GetInt32(1));
@@ -4263,6 +4748,221 @@ public sealed partial class PatronJourneyTests
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
             seed.Parameters.AddWithValue("@objectId", Guid.Parse(identity.ObjectId!));
+            await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            actorId = reader.GetInt64(0);
+            requestId = reader.GetInt64(1);
+        }
+
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+        using var session = await client.GetAsync("/api/asap/staff/session");
+        using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+        client.DefaultRequestHeaders.Add(
+            "X-ASAP-Antiforgery",
+            sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
+
+        using var get = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
+        using var getBody = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
+        var version = getBody.RootElement.GetProperty("version").GetString();
+        string originalTitle;
+        string originalStatus;
+        int originalBib;
+        byte[] originalRowVersion;
+        int originalEventCount;
+        int originalOperationCount;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var baselineCommand = connection.CreateCommand();
+            baselineCommand.CommandText =
+                """
+                SELECT r.[Title], r.[Status], r.[BibId], r.[RowVersion],
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e WHERE e.[TitleRequestId] = r.[Id]),
+                       (SELECT COUNT(*) FROM [asap].[HoldPlacementOperation] h WHERE h.[TitleRequestId] = r.[Id])
+                FROM [asap].[TitleRequest] r
+                WHERE r.[Id] = @id;
+                """;
+            baselineCommand.Parameters.AddWithValue("@id", requestId);
+            await using var baselineReader = await WithFixtureClock(baselineCommand).ExecuteReaderAsync();
+            Assert.IsTrue(await baselineReader.ReadAsync());
+            originalTitle = baselineReader.GetString(0);
+            originalStatus = baselineReader.GetString(1);
+            originalBib = baselineReader.GetInt32(2);
+            originalRowVersion = (byte[])baselineReader[3];
+            originalEventCount = baselineReader.GetInt32(4);
+            originalOperationCount = baselineReader.GetInt32(5);
+        }
+        var originalDispatchCount = dispatcher!.EnqueuedIds.Count;
+
+        using var update = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/action",
+            new { version, action = "edit", status = "suggestion", bibid = "7777" });
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, update.StatusCode, await update.Content.ReadAsStringAsync());
+        using var updateBody = JsonDocument.Parse(await update.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_not_found", updateBody.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(1, rejectingProvider.ValidationCount);
+
+        using var transition = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/action",
+            new { version, action = "alreadyOwn" });
+        Assert.AreEqual(HttpStatusCode.BadRequest, transition.StatusCode,
+            await transition.Content.ReadAsStringAsync());
+        using var transitionBody = JsonDocument.Parse(await transition.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_not_found", transitionBody.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(2, rejectingProvider.ValidationCount,
+            "An unchanged stored BIB must be checked before a manual Pending hold transition.");
+
+        using var purchase = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/action",
+            new { version, action = "purchase" });
+        Assert.AreEqual(HttpStatusCode.BadRequest, purchase.StatusCode,
+            await purchase.Content.ReadAsStringAsync());
+        using var purchaseBody = JsonDocument.Parse(await purchase.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_not_found", purchaseBody.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(3, rejectingProvider.ValidationCount,
+            "Purchase must validate an unchanged BIB when it resolves to Pending hold.");
+
+        rejectingProvider.OperationalFailure = true;
+        using var exactLookup = await client.PostAsJsonAsync(
+            "/api/asap/staff/bib-lookup",
+            new { requestId = requestId.ToString(), mode = "bib", bibId = "9001" });
+        Assert.AreEqual(HttpStatusCode.BadGateway, exactLookup.StatusCode,
+            await exactLookup.Content.ReadAsStringAsync());
+        using var exactLookupBody = JsonDocument.Parse(await exactLookup.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_validation_unavailable", exactLookupBody.RootElement.GetProperty("code").GetString());
+
+        foreach (var (action, status) in new[]
+                 {
+                     ("edit", "suggestion"),
+                     ("alreadyOwn", (string?)null),
+                     ("purchase", (string?)null)
+                 })
+        {
+            var input = new Dictionary<string, object?>
+            {
+                ["version"] = version,
+                ["action"] = action
+            };
+            if (status is not null)
+            {
+                input["status"] = status;
+            }
+            if (action == "edit")
+            {
+                input["bibid"] = "7777";
+            }
+
+            using var unavailable = await client.PostAsJsonAsync(
+                $"/api/asap/staff/title-requests/{requestId}/action",
+                input);
+            Assert.AreEqual(HttpStatusCode.ServiceUnavailable, unavailable.StatusCode,
+                await unavailable.Content.ReadAsStringAsync());
+            using var unavailableBody = JsonDocument.Parse(await unavailable.Content.ReadAsStringAsync());
+            Assert.AreEqual("bib_validation_unavailable", unavailableBody.RootElement.GetProperty("code").GetString());
+        }
+        Assert.AreEqual(7, rejectingProvider.ValidationCount);
+
+        rejectingProvider.OperationalFailure = false;
+        rejectingProvider.ValidationException = new OperationCanceledException("Provider timeout");
+        using var timedOut = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/action",
+            new { version, action = "alreadyOwn" });
+        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, timedOut.StatusCode,
+            await timedOut.Content.ReadAsStringAsync());
+        using var timedOutBody = JsonDocument.Parse(await timedOut.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_validation_unavailable", timedOutBody.RootElement.GetProperty("code").GetString());
+        rejectingProvider.ValidationException = null;
+
+        await using var verify = new SqlConnection(databaseConnectionString);
+        await verify.OpenAsync();
+        await using var command = new SqlCommand(
+            """
+            SELECT r.[Title], r.[Status], r.[BibId], r.[RowVersion],
+                   (SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e WHERE e.[TitleRequestId] = r.[Id]),
+                   (SELECT COUNT(*) FROM [asap].[HoldPlacementOperation] h WHERE h.[TitleRequestId] = r.[Id])
+            FROM [asap].[TitleRequest] r
+            WHERE r.[Id] = @id;
+            """,
+            verify);
+        command.Parameters.AddWithValue("@id", requestId);
+        await using (var reader = await WithFixtureClock(command).ExecuteReaderAsync())
+        {
+            Assert.IsTrue(await reader.ReadAsync());
+            Assert.AreEqual(originalTitle, reader.GetString(0));
+            Assert.AreEqual(originalStatus, reader.GetString(1));
+            Assert.AreEqual(originalBib, reader.GetInt32(2));
+            CollectionAssert.AreEqual(originalRowVersion, (byte[])reader[3]);
+            Assert.AreEqual(originalEventCount, reader.GetInt32(4));
+            Assert.AreEqual(originalOperationCount, reader.GetInt32(5));
+        }
+        Assert.AreEqual(originalDispatchCount, dispatcher.EnqueuedIds.Count);
+
+        rejectingProvider.ValidBib = true;
+        using var unverified = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/action",
+            new { version, action = "alreadyOwn" });
+        Assert.AreEqual(HttpStatusCode.Conflict, unverified.StatusCode,
+            await unverified.Content.ReadAsStringAsync());
+        using var unverifiedBody = JsonDocument.Parse(await unverified.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_unverified", unverifiedBody.RootElement.GetProperty("code").GetString());
+
+        using var selected = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/action",
+            new { version, action = "alreadyOwn", bibid = "9001", staffSelectedBibId = "9001" });
+        Assert.AreEqual(HttpStatusCode.OK, selected.StatusCode, await selected.Content.ReadAsStringAsync());
+        using var selectedBody = JsonDocument.Parse(await selected.Content.ReadAsStringAsync());
+        Assert.AreEqual("pending_hold", selectedBody.RootElement.GetProperty("finalStatus").GetString());
+        Assert.IsTrue(selectedBody.RootElement.GetProperty("bibidStaffVerified").GetBoolean());
+
+        using var repeated = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/action",
+            new { version, action = "alreadyOwn", bibid = "9001", staffSelectedBibId = "9001" });
+        Assert.AreEqual(HttpStatusCode.Conflict, repeated.StatusCode,
+            await repeated.Content.ReadAsStringAsync());
+    }
+
+    [TestMethod]
+    public async Task MalformedNominalBibGetSuccessCannotMoveRequestToPendingHold()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """
+            {"PAPIErrorCode":0,"BibGetRows":[{}]}
+            """);
+        var polarisProvider = await CreatePolarisProviderAsync(handler);
+        await using var malformedFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IStaffPolarisProvider>(polarisProvider);
+            }));
+        using var client = malformedFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        using (var start = await client.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, start.StatusCode);
+        }
+
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        long actorId;
+        long requestId;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var seed = connection.CreateCommand();
+            seed.CommandText =
+                """
+                DECLARE @actorId bigint = (
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
+                DECLARE @formatId bigint = (
+                    SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
+                INSERT INTO [asap].[TitleRequest]
+                    ([LibraryOrganizationId], [Barcode], [Title], [Identifier], [AutoHold], [MaterialFormatId],
+                     [Status], [BibId], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
+                VALUES (2, N'20000000002106', N'Malformed BIB validation title', N'9780000000216', 1, @formatId,
+                        N'suggestion', N'9001', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
+                SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
+                """;
             await using var reader = await seed.ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
@@ -4280,22 +4980,64 @@ public sealed partial class PatronJourneyTests
         using var get = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
         using var getBody = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
         var version = getBody.RootElement.GetProperty("version").GetString();
-        using var update = await client.PostAsJsonAsync(
+
+        async Task<(string Title, string Status, int BibId, byte[] RowVersion, int EventCount,
+            int OperationCount, int OutboxCount)> ReadRequestStateAsync()
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = new SqlCommand(
+                """
+                SELECT r.[Title], r.[Status], r.[BibId], r.[RowVersion],
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e WHERE e.[TitleRequestId] = r.[Id]),
+                       (SELECT COUNT(*) FROM [asap].[HoldPlacementOperation] h WHERE h.[TitleRequestId] = r.[Id]),
+                       (SELECT COUNT(*) FROM [asap].[EmailOutbox] o
+                        WHERE o.[BusinessKey] LIKE N'purchase-reminder:' + CONVERT(nvarchar(20), r.[Id]) + N':%'
+                           OR o.[BusinessKey] LIKE N'title-hold-placed:' + CONVERT(nvarchar(20), r.[Id]) + N':%')
+                FROM [asap].[TitleRequest] r
+                WHERE r.[Id] = @id;
+                """,
+                connection);
+            command.Parameters.AddWithValue("@id", requestId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            return (
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetInt32(2),
+                (byte[])reader[3],
+                reader.GetInt32(4),
+                reader.GetInt32(5),
+                reader.GetInt32(6));
+        }
+
+        var original = await ReadRequestStateAsync();
+        Assert.AreEqual("suggestion", original.Status);
+        Assert.AreEqual(9001, original.BibId);
+        Assert.AreEqual(0, original.OperationCount);
+        Assert.AreEqual(0, original.OutboxCount);
+        var originalDispatchCount = dispatcher!.EnqueuedIds.Count;
+
+        using var transition = await client.PostAsJsonAsync(
             $"/api/asap/staff/title-requests/{requestId}/action",
-            new { version, action = "edit", status = "suggestion", bibid = "7777" });
+            new { version, action = "alreadyOwn" });
 
-        Assert.AreEqual(HttpStatusCode.BadRequest, update.StatusCode, await update.Content.ReadAsStringAsync());
-        using var updateBody = JsonDocument.Parse(await update.Content.ReadAsStringAsync());
-        Assert.AreEqual("bib_not_found", updateBody.RootElement.GetProperty("code").GetString());
-        Assert.AreEqual(1, rejectingProvider.ValidationCount);
+        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, transition.StatusCode,
+            await transition.Content.ReadAsStringAsync());
+        using var transitionBody = JsonDocument.Parse(await transition.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_validation_unavailable", transitionBody.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(1, handler.RequestCount);
+        StringAssert.Contains(handler.RequestPaths[0], "/bib/9001");
 
-        await using var verify = new SqlConnection(databaseConnectionString);
-        await verify.OpenAsync();
-        await using var command = new SqlCommand(
-            "SELECT [BibId] FROM [asap].[TitleRequest] WHERE [Id] = @id;",
-            verify);
-        command.Parameters.AddWithValue("@id", requestId);
-        Assert.AreEqual("9001", await command.ExecuteScalarAsync());
+        var after = await ReadRequestStateAsync();
+        Assert.AreEqual(original.Title, after.Title);
+        Assert.AreEqual("suggestion", after.Status);
+        Assert.AreEqual(original.BibId, after.BibId);
+        CollectionAssert.AreEqual(original.RowVersion, after.RowVersion);
+        Assert.AreEqual(original.EventCount, after.EventCount);
+        Assert.AreEqual(original.OperationCount, after.OperationCount);
+        Assert.AreEqual(original.OutboxCount, after.OutboxCount);
+        Assert.AreEqual(originalDispatchCount, dispatcher.EnqueuedIds.Count);
     }
 
     [TestMethod]
@@ -4349,6 +5091,8 @@ public sealed partial class PatronJourneyTests
             "X-ASAP-Antiforgery",
             sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
 
+        timeProvider!.SetUtcNow(DateTimeOffset.UtcNow);
+
         using var options = await client.PostAsJsonAsync(
             $"/api/asap/staff/title-requests/{requestId}/pickup-options",
             new { forceRefresh = false });
@@ -4370,23 +5114,31 @@ public sealed partial class PatronJourneyTests
         using var failed = await client.PostAsJsonAsync(
             $"/api/asap/staff/title-requests/{requestId}/pickup-preference",
             new { version, preferredPickupBranchId = 102, currentPreferredPickupBranchIdAtLoad = 101 });
-        Assert.AreEqual(HttpStatusCode.BadGateway, failed.StatusCode, await failed.Content.ReadAsStringAsync());
+        Assert.AreEqual(HttpStatusCode.Conflict, failed.StatusCode, await failed.Content.ReadAsStringAsync());
         Assert.AreEqual(1, pickupProvider.UpdateCount);
         Assert.AreEqual(101, await ReadPickupSnapshotAsync(requestId));
 
         pickupProvider.FailUpdate = false;
+        using var uncertainRetry = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/pickup-preference",
+            new { version, preferredPickupBranchId = 102, currentPreferredPickupBranchIdAtLoad = 101 });
+        Assert.AreEqual(HttpStatusCode.Conflict, uncertainRetry.StatusCode);
+        Assert.AreEqual(1, pickupProvider.UpdateCount, "An uncertain dispatch must not be repeated.");
+
+        // A subsequent authoritative read proves the desired value is now live.
+        pickupProvider.CurrentPickupBranchId = 102;
         using var updated = await client.PostAsJsonAsync(
             $"/api/asap/staff/title-requests/{requestId}/pickup-preference",
             new { version, preferredPickupBranchId = 102, currentPreferredPickupBranchIdAtLoad = 101 });
         Assert.AreEqual(HttpStatusCode.OK, updated.StatusCode, await updated.Content.ReadAsStringAsync());
-        Assert.AreEqual(2, pickupProvider.UpdateCount);
+        Assert.AreEqual(1, pickupProvider.UpdateCount);
         Assert.AreEqual(102, pickupProvider.CurrentPickupBranchId);
         Assert.AreEqual(102, await ReadPickupSnapshotAsync(requestId));
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
         await using var eventCount = new SqlCommand(
-            "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = @id AND [EventType] = N'pickup_preference_changed';",
+            "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = @id AND [EventType] = N'pickup_preference_reconciled';",
             verify);
         eventCount.Parameters.AddWithValue("@id", requestId);
         Assert.AreEqual(1, Convert.ToInt32(await eventCount.ExecuteScalarAsync()));
@@ -4401,8 +5153,10 @@ public sealed partial class PatronJourneyTests
             {
                 services.RemoveAll<IPatronProvider>();
                 services.RemoveAll<IStaffPolarisProvider>();
+                services.RemoveAll<IEmailOutboxDispatcher>();
                 services.AddSingleton<IPatronProvider>(holdProvider);
                 services.AddSingleton<IStaffPolarisProvider>(holdProvider);
+                services.AddSingleton<IEmailOutboxDispatcher, CanceledOutboxDispatcher>();
             }));
         using var client = holdFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         using (var start = await client.GetAsync("/api/asap/staff/session"))
@@ -4426,7 +5180,7 @@ public sealed partial class PatronJourneyTests
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002105', N'Hold placement title', 1, @formatId, N'pending_hold', N'9001',
+                VALUES (2, N'20000000002105', N'Hold placement title', 1, @formatId, N'pending_hold', N'09001',
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -4447,12 +5201,31 @@ public sealed partial class PatronJourneyTests
         using var get = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
         using var getBody = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
 
-        using var placed = await client.PostAsJsonAsync(
+        using var unverified = await client.PostAsJsonAsync(
             $"/api/asap/staff/title-requests/{requestId}/place-hold",
             new { version = getBody.RootElement.GetProperty("version").GetString() });
+        Assert.AreEqual(HttpStatusCode.Conflict, unverified.StatusCode);
+        using var unverifiedBody = JsonDocument.Parse(await unverified.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_unverified", unverifiedBody.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(0, holdProvider.CreateCount);
+        await using (var markVerified = new SqlConnection(databaseConnectionString))
+        {
+            await markVerified.OpenAsync();
+            await using var update = new SqlCommand(
+                "UPDATE [asap].[TitleRequest] SET [BibIdStaffVerified] = 1 WHERE [Id] = @id;", markVerified);
+            update.Parameters.AddWithValue("@id", requestId);
+            Assert.AreEqual(1, await update.ExecuteNonQueryAsync());
+        }
+        using var verifiedGet = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
+        using var verifiedBody = JsonDocument.Parse(await verifiedGet.Content.ReadAsStringAsync());
+
+        using var placed = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/place-hold",
+            new { version = verifiedBody.RootElement.GetProperty("version").GetString() });
         Assert.AreEqual(HttpStatusCode.OK, placed.StatusCode, await placed.Content.ReadAsStringAsync());
         using var placedBody = JsonDocument.Parse(await placed.Content.ReadAsStringAsync());
         Assert.AreEqual("hold_placed", placedBody.RootElement.GetProperty("status").GetString());
+        Assert.AreEqual("dispatch_failed", placedBody.RootElement.GetProperty("notificationStatus").GetString());
         Assert.AreEqual(1, holdProvider.CreateCount);
         Assert.AreEqual(1, holdProvider.ReplyCount);
 
@@ -4474,12 +5247,12 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual("succeeded", result.GetString(0));
         Assert.AreEqual("result_recorded", result.GetString(1));
-        Assert.AreEqual(holdProvider.RequestGuid.ToString(), result.GetString(2));
-        Assert.AreEqual("8123", result.GetString(3));
-        Assert.AreEqual("1", result.GetString(4));
-        Assert.AreEqual("3", result.GetString(5));
-        Assert.AreEqual("2", result.GetString(6));
-        Assert.AreEqual("0", result.GetString(7));
+        Assert.AreEqual(holdProvider.RequestGuid, result.GetGuid(2));
+        Assert.AreEqual(8123, result.GetInt32(3));
+        Assert.AreEqual(1, result.GetInt32(4));
+        Assert.AreEqual(3, result.GetInt32(5));
+        Assert.AreEqual(2, result.GetInt32(6));
+        Assert.AreEqual(1, result.GetInt32(7));
         for (var index = 8; index <= 12; index++) Assert.IsFalse(result.IsDBNull(index));
         Assert.AreEqual("hold_placed", result.GetString(13));
     }
@@ -4488,7 +5261,7 @@ public sealed partial class PatronJourneyTests
     public async Task StaffHoldPlacementAdoptsOneLiveSameBibHoldWithoutMutationMarkers()
     {
         var holdProvider = ScriptedHoldProvider.AmbiguousCreate();
-        holdProvider.Holds = [new PolarisHoldSnapshot(8451, 9002, 2, "Active", 101)];
+        holdProvider.Holds = [new PolarisHoldSnapshot(8451, 9002, 3, "Active", 101)];
         await using var holdFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
@@ -4517,9 +5290,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002107', N'Existing hold adoption title', 1, @formatId, N'pending_hold', N'9002',
+                VALUES (2, N'20000000002107', N'Existing hold adoption title', 1, @formatId, N'pending_hold', N'09002', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -4563,7 +5336,7 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual("succeeded", result.GetString(0));
         Assert.AreEqual("result_recorded", result.GetString(1));
-        Assert.AreEqual("8451", result.GetString(2));
+        Assert.AreEqual(8451, result.GetInt32(2));
         Assert.AreEqual("existing_hold_adoption", result.GetString(3));
         Assert.IsTrue(result.IsDBNull(4));
         Assert.IsTrue(result.IsDBNull(5));
@@ -4604,9 +5377,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002108', N'Throwing hold placement title', 1, @formatId, N'pending_hold', N'9003',
+                VALUES (2, N'20000000002108', N'Throwing hold placement title', 1, @formatId, N'pending_hold', N'9003', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -4675,9 +5448,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002109', N'Correlated ambiguous hold title', 1, @formatId, N'pending_hold', N'9004',
+                VALUES (2, N'20000000002109', N'Correlated ambiguous hold title', 1, @formatId, N'pending_hold', N'9004', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -4765,9 +5538,9 @@ public sealed partial class PatronJourneyTests
                 INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
                 VALUES (91211, N'Inactive recovery library', N'IRL', 0);
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (91211, N'20000000002111', N'Expired acquired hold title', 1, @formatId, N'pending_hold', N'9005',
+                VALUES (91211, N'20000000002111', N'Expired acquired hold title', 1, @formatId, N'pending_hold', N'9005', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 DECLARE @requestId bigint = SCOPE_IDENTITY();
                 INSERT INTO [asap].[HoldPlacementOperation]
@@ -4830,7 +5603,90 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task StaffHoldReconcileResumesDurableReplyReadyWithoutRepeatingCreate()
+    public async Task StaffHoldReconcileWillNotDispatchAcquiredWorkAfterBibVerificationIsLost()
+    {
+        var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
+        await using var holdFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(holdProvider);
+                services.AddSingleton<IStaffPolarisProvider>(holdProvider);
+            }));
+        using var client = holdFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        using (var start = await client.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, start.StatusCode);
+        }
+
+        var requestId = await SeedPendingHoldRequestAsync("Unverified acquired recovery", "20000000002133", 9033);
+        long operationId;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var seed = new SqlCommand(
+                """
+                UPDATE [asap].[TitleRequest] SET [BibIdStaffVerified] = 0 WHERE [Id] = @requestId;
+                INSERT INTO [asap].[HoldPlacementOperation]
+                    ([TitleRequestId], [PatronBarcodeSnapshot], [BibIdSnapshot], [PickupBranchIdSnapshot],
+                     [AttemptNumber], [State], [Phase], [OwnerToken], [ExecutionEpoch], [LeaseExpiresUtc], [RequestStartedUtc])
+                VALUES (@requestId, N'20000000002133', N'9033', 101, 1, N'in_progress', N'acquired',
+                        NEWID(), 1, DATEADD(minute, -1, SYSUTCDATETIME()), SYSUTCDATETIME());
+                SELECT CONVERT(bigint, SCOPE_IDENTITY());
+                """, connection);
+            seed.Parameters.AddWithValue("@requestId", requestId);
+            operationId = Convert.ToInt64(await seed.ExecuteScalarAsync());
+        }
+
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var actor = new SqlCommand(
+                "SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG';", connection);
+            client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", Convert.ToInt64(await actor.ExecuteScalarAsync()).ToString());
+        }
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+        using var session = await client.GetAsync("/api/asap/staff/session");
+        using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery",
+            sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
+        using var detail = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
+        using var detailBody = JsonDocument.Parse(await detail.Content.ReadAsStringAsync());
+        var version = detailBody.RootElement.GetProperty("holdOperation").GetProperty("version").GetString();
+
+        using var reconcile = await client.PostAsJsonAsync(
+            $"/api/asap/staff/hold-operations/{operationId}/reconcile", new { version });
+        Assert.AreEqual(HttpStatusCode.Conflict, reconcile.StatusCode);
+        using var responseBody = JsonDocument.Parse(await reconcile.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_unverified", responseBody.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(0, holdProvider.CreateCount);
+        Assert.AreEqual(0, holdProvider.ReplyCount);
+
+        await using var verify = new SqlConnection(databaseConnectionString);
+        await verify.OpenAsync();
+        await using var command = new SqlCommand(
+            """
+            SELECT operation.[State], operation.[Phase], operation.[CreateStartedUtc], request.[Status]
+            FROM [asap].[HoldPlacementOperation] operation
+            JOIN [asap].[TitleRequest] request ON request.[Id] = operation.[TitleRequestId]
+            WHERE operation.[Id] = @operationId;
+            """, verify);
+        command.Parameters.AddWithValue("@operationId", operationId);
+        await using var result = await command.ExecuteReaderAsync();
+        Assert.IsTrue(await result.ReadAsync());
+        Assert.AreEqual("operator_required", result.GetString(0));
+        Assert.AreEqual("acquired", result.GetString(1));
+        Assert.IsTrue(result.IsDBNull(2));
+        Assert.AreEqual("pending_hold", result.GetString(3));
+    }
+
+    [TestMethod]
+    [DataRow(2)]
+    [DataRow(1)]
+    [DataRow(3)]
+    public async Task StaffHoldReconcileResumesDurableReplyReadyWithoutRepeatingCreate(int requestingOrganizationId)
     {
         var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
         await using var holdFactory = factory!.WithWebHostBuilder(builder =>
@@ -4856,9 +5712,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002130', N'Reply ready recovery title', 1, @formatId, N'pending_hold', N'9030',
+                VALUES (2, N'20000000002130', N'Reply ready recovery title', 1, @formatId, N'pending_hold', N'9030', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 DECLARE @requestId bigint = SCOPE_IDENTITY();
                 INSERT INTO [asap].[HoldPlacementOperation]
@@ -4868,7 +5724,7 @@ public sealed partial class PatronJourneyTests
                      [LeaseExpiresUtc], [RequestStartedUtc], [CreateStartedUtc], [CreateResponseObservedUtc],
                      [PolarisRequestGuid], [TxnGroupQualifier], [TxnQualifier], [ReplyAnswer], [ReplyState],
                      [ProviderStatusType], [ProviderStatusValue], [ResultCode], [OutcomeEvidenceKind])
-                VALUES (@requestId, N'20000000002130', N'7130', N'9030', 101, 1, 1, N'1', 1,
+                VALUES (@requestId, N'20000000002130', 7130, 9030, 101, @requestingOrg, 1, 1, 1,
                         N'in_progress', N'reply_ready', NEWID(), 1, DATEADD(minute, -1, SYSUTCDATETIME()),
                         DATEADD(minute, -5, SYSUTCDATETIME()), DATEADD(minute, -4, SYSUTCDATETIME()),
                         DATEADD(minute, -3, SYSUTCDATETIME()), @requestGuid, N'group-qualifier',
@@ -4877,7 +5733,8 @@ public sealed partial class PatronJourneyTests
                 SELECT @actorId, @requestId;
                 """;
             seed.Parameters.AddWithValue("@objectId", Guid.Parse(identity.ObjectId!));
-            seed.Parameters.AddWithValue("@requestGuid", holdProvider.RequestGuid.ToString());
+            seed.Parameters.AddWithValue("@requestGuid", holdProvider.RequestGuid);
+            seed.Parameters.AddWithValue("@requestingOrg", requestingOrganizationId);
             await using var reader = await seed.ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
@@ -4895,9 +5752,10 @@ public sealed partial class PatronJourneyTests
         using var reconcile = await client.PostAsJsonAsync(
             $"/api/asap/staff/hold-operations/{operation.GetProperty("id").GetString()}/reconcile",
             new { version = operation.GetProperty("version").GetString() });
-        Assert.AreEqual(HttpStatusCode.OK, reconcile.StatusCode, await reconcile.Content.ReadAsStringAsync());
+        Assert.AreEqual(requestingOrganizationId == 2 ? HttpStatusCode.OK : HttpStatusCode.Conflict,
+            reconcile.StatusCode, await reconcile.Content.ReadAsStringAsync());
         Assert.AreEqual(0, holdProvider.CreateCount);
-        Assert.AreEqual(1, holdProvider.ReplyCount);
+        Assert.AreEqual(requestingOrganizationId == 2 ? 1 : 0, holdProvider.ReplyCount);
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
@@ -4916,13 +5774,24 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@requestId", requestId);
         await using var result = await command.ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
+        if (requestingOrganizationId != 2)
+        {
+            Assert.AreEqual("pending_hold", result.GetString(0));
+            Assert.AreEqual("operator_required", result.GetString(1));
+            Assert.AreEqual("reply_ready", result.GetString(2));
+            Assert.IsTrue(result.IsDBNull(4));
+            Assert.IsTrue(result.IsDBNull(5));
+            Assert.IsTrue(result.IsDBNull(6));
+            Assert.AreEqual(0, result.GetInt32(8));
+            return;
+        }
         Assert.AreEqual("hold_placed", result.GetString(0));
         Assert.AreEqual("succeeded", result.GetString(1));
         Assert.AreEqual("result_recorded", result.GetString(2));
         Assert.AreEqual(2L, result.GetInt64(3));
         Assert.IsFalse(result.IsDBNull(4));
         Assert.IsFalse(result.IsDBNull(5));
-        Assert.AreEqual("8123", result.GetString(6));
+        Assert.AreEqual(8123, result.GetInt32(6));
         Assert.AreEqual(1, result.GetInt32(7));
         Assert.AreEqual(1, result.GetInt32(8));
     }
@@ -4955,9 +5824,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002131', N'Late create result title', 1, @formatId, N'pending_hold', N'9031',
+                VALUES (2, N'20000000002131', N'Late create result title', 1, @formatId, N'pending_hold', N'9031', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -5010,11 +5879,11 @@ public sealed partial class PatronJourneyTests
         holdProvider.CompleteBlockedCreate(new HoldProviderResult(
             HoldProviderOutcome.FinalSuccess,
             null,
-            "8131",
+            8131,
             null,
             null,
             2,
-            0,
+            1,
             "documented_create_success"));
         using var originalResponse = await original;
         Assert.AreEqual(HttpStatusCode.Conflict, originalResponse.StatusCode, await originalResponse.Content.ReadAsStringAsync());
@@ -5070,7 +5939,7 @@ public sealed partial class PatronJourneyTests
         var actor = await ReadConfiguredSuperAdminAsync();
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
-        var requestId = await SeedPendingHoldRequestAsync("Late reply result title", "20000000002132", "9032");
+        var requestId = await SeedPendingHoldRequestAsync("Late reply result title", "20000000002132", 9032);
         using var request = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
         using var requestBody = JsonDocument.Parse(await request.Content.ReadAsStringAsync());
 
@@ -5094,12 +5963,12 @@ public sealed partial class PatronJourneyTests
 
         holdProvider.CompleteBlockedReply(new HoldProviderResult(
             HoldProviderOutcome.FinalSuccess,
-            holdProvider.RequestGuid.ToString(),
-            "8132",
+            holdProvider.RequestGuid,
+            8132,
             "group-qualifier",
             "transaction-qualifier",
             2,
-            0,
+            1,
             "documented_reply_success"));
         using var originalResponse = await original;
         Assert.AreEqual(HttpStatusCode.Conflict, originalResponse.StatusCode, await originalResponse.Content.ReadAsStringAsync());
@@ -5268,7 +6137,7 @@ public sealed partial class PatronJourneyTests
                 VALUES (@requestId, N'20000000002120', N'7120', N'9020', 101,
                         2, N'succeeded', N'result_recorded', 3, DATEADD(minute, -7, SYSUTCDATETIME()),
                         DATEADD(minute, -6, SYSUTCDATETIME()), DATEADD(minute, -5, SYSUTCDATETIME()),
-                        DATEADD(minute, -4, SYSUTCDATETIME()), N'9b934869-b681-4523-b2fb-8604dd0d0832', N'2', N'0',
+                        DATEADD(minute, -4, SYSUTCDATETIME()), N'9b934869-b681-4523-b2fb-8604dd0d0832', 2, 1,
                         N'success', N'provider_final_success_uncorrelated', 1, DATEADD(minute, -3, SYSUTCDATETIME()),
                         N'hold_identity_unavailable', N'{"providerResult":"success"}');
                 DECLARE @operationId bigint = SCOPE_IDENTITY();
@@ -5290,7 +6159,7 @@ public sealed partial class PatronJourneyTests
                 operationId,
                 requestVersion,
                 operationVersion,
-                new ProvenHoldIdentityEvidence("8460", "provider-operation-proof-9020"),
+                new ProvenHoldIdentityEvidence(8460, "provider-operation-proof-9020"),
                 CancellationToken.None);
         Assert.AreEqual("updated", result.Code);
 
@@ -5322,22 +6191,22 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(await enriched.ReadAsync());
         Assert.AreEqual("hold_placed", enriched.GetString(0));
         Assert.AreEqual("20000000002120", enriched.GetString(1));
-        Assert.AreEqual("9020", enriched.GetString(2));
+        Assert.AreEqual(9020, enriched.GetInt32(2));
         Assert.AreEqual("succeeded", enriched.GetString(4));
         Assert.AreEqual("result_recorded", enriched.GetString(5));
         Assert.IsFalse(enriched.IsDBNull(6));
-        Assert.AreEqual("9020", enriched.GetString(7));
+        Assert.AreEqual(9020, enriched.GetInt32(7));
         Assert.AreEqual(2, enriched.GetInt32(8));
         Assert.AreEqual(3L, enriched.GetInt64(9));
         Assert.AreEqual(1, enriched.GetInt32(10));
         Assert.IsFalse(enriched.IsDBNull(11));
         Assert.IsTrue(enriched.IsDBNull(12));
         Assert.IsTrue(enriched.IsDBNull(13));
-        Assert.AreEqual("9b934869-b681-4523-b2fb-8604dd0d0832", enriched.GetString(14));
-        Assert.AreEqual("2", enriched.GetString(15));
-        Assert.AreEqual("0", enriched.GetString(16));
+        Assert.AreEqual(Guid.Parse("9b934869-b681-4523-b2fb-8604dd0d0832"), enriched.GetGuid(14));
+        Assert.AreEqual(2, enriched.GetInt32(15));
+        Assert.AreEqual(1, enriched.GetInt32(16));
         Assert.AreEqual("success", enriched.GetString(17));
-        Assert.AreEqual("8460", enriched.GetString(18));
+        Assert.AreEqual(8460, enriched.GetInt32(18));
         Assert.AreEqual("authoritative_provider_operation_correlation", enriched.GetString(19));
         Assert.IsTrue(enriched.IsDBNull(20));
         using (var detail = JsonDocument.Parse(enriched.GetString(21)))
@@ -5356,20 +6225,20 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task StaffCompletedHoldIdentityEnrichmentAllowsOnlyOneCompetingWriter()
     {
-        var seeded = await SeedCompletedHoldIdentityAsync("competing", "20000000002121", "9021");
+        var seeded = await SeedCompletedHoldIdentityAsync("competing", "20000000002121", 9021);
         var service = factory!.Services.GetRequiredService<HoldPlacementService>();
         var writes = await Task.WhenAll(
             service.RecordCompletedIdentityAsync(
                 seeded.OperationId,
                 seeded.RequestVersion,
                 seeded.OperationVersion,
-                new ProvenHoldIdentityEvidence("8461", "provider-operation-proof-9021-a"),
+                new ProvenHoldIdentityEvidence(8461, "provider-operation-proof-9021-a"),
                 CancellationToken.None),
             service.RecordCompletedIdentityAsync(
                 seeded.OperationId,
                 seeded.RequestVersion,
                 seeded.OperationVersion,
-                new ProvenHoldIdentityEvidence("8462", "provider-operation-proof-9021-b"),
+                new ProvenHoldIdentityEvidence(8462, "provider-operation-proof-9021-b"),
                 CancellationToken.None));
         CollectionAssert.AreEquivalent(
             new[] { "updated", "stale_version" },
@@ -5383,15 +6252,15 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@id", seeded.OperationId);
         await using var reader = await command.ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
-        var storedId = reader.GetString(0);
+        var storedId = reader.GetInt32(0);
         using var detail = JsonDocument.Parse(reader.GetString(1));
         var storedReference = detail.RootElement
             .GetProperty("identityCorrelation")
             .GetProperty("evidenceReference")
             .GetString();
         Assert.IsTrue(
-            storedId == "8461" && storedReference == "provider-operation-proof-9021-a" ||
-            storedId == "8462" && storedReference == "provider-operation-proof-9021-b");
+            storedId == 8461 && storedReference == "provider-operation-proof-9021-a" ||
+            storedId == 8462 && storedReference == "provider-operation-proof-9021-b");
     }
 
     [TestMethod]
@@ -5400,14 +6269,14 @@ public sealed partial class PatronJourneyTests
         var seeded = await SeedCompletedHoldIdentityAsync(
             "existing",
             "20000000002122",
-            "9022",
-            holdRequestId: "8463");
+            9022,
+            holdRequestId: 8463);
         var result = await factory!.Services.GetRequiredService<HoldPlacementService>()
             .RecordCompletedIdentityAsync(
                 seeded.OperationId,
                 seeded.RequestVersion,
                 seeded.OperationVersion,
-                new ProvenHoldIdentityEvidence("9999", "provider-operation-proof-9022"),
+                new ProvenHoldIdentityEvidence(9999, "provider-operation-proof-9022"),
                 CancellationToken.None);
         Assert.AreEqual("hold_identity_already_recorded", result.Code);
         Assert.AreEqual("8463", await ReadHoldIdentityAsync(seeded.OperationId));
@@ -5416,8 +6285,8 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task StaffCompletedHoldIdentityEnrichmentRequiresCurrentRequestAndOperationVersions()
     {
-        var staleRequest = await SeedCompletedHoldIdentityAsync("stale-request", "20000000002123", "9023");
-        var staleOperation = await SeedCompletedHoldIdentityAsync("stale-operation", "20000000002124", "9024");
+        var staleRequest = await SeedCompletedHoldIdentityAsync("stale-request", "20000000002123", 9023);
+        var staleOperation = await SeedCompletedHoldIdentityAsync("stale-operation", "20000000002124", 9024);
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
@@ -5437,13 +6306,13 @@ public sealed partial class PatronJourneyTests
             staleRequest.OperationId,
             staleRequest.RequestVersion,
             staleRequest.OperationVersion,
-            new ProvenHoldIdentityEvidence("8464", "provider-operation-proof-9023"),
+            new ProvenHoldIdentityEvidence(8464, "provider-operation-proof-9023"),
             CancellationToken.None);
         var operationResult = await service.RecordCompletedIdentityAsync(
             staleOperation.OperationId,
             staleOperation.RequestVersion,
             staleOperation.OperationVersion,
-            new ProvenHoldIdentityEvidence("8465", "provider-operation-proof-9024"),
+            new ProvenHoldIdentityEvidence(8465, "provider-operation-proof-9024"),
             CancellationToken.None);
         Assert.AreEqual("stale_version", requestResult.Code);
         Assert.AreEqual("stale_version", operationResult.Code);
@@ -5457,14 +6326,14 @@ public sealed partial class PatronJourneyTests
         var changedPatron = await SeedCompletedHoldIdentityAsync(
             "changed-patron",
             "20000000002125",
-            "9025",
+            9025,
             operationBarcode: "20000000009999");
         var changedBib = await SeedCompletedHoldIdentityAsync(
             "changed-bib",
             "20000000002126",
-            "9026",
-            operationBibId: "9999");
-        var superseded = await SeedCompletedHoldIdentityAsync("superseded", "20000000002127", "9027");
+            9026,
+            operationBibId: 9999);
+        var superseded = await SeedCompletedHoldIdentityAsync("superseded", "20000000002127", 9027);
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
@@ -5487,19 +6356,19 @@ public sealed partial class PatronJourneyTests
             changedPatron.OperationId,
             changedPatron.RequestVersion,
             changedPatron.OperationVersion,
-            new ProvenHoldIdentityEvidence("8467", "provider-operation-proof-9025"),
+            new ProvenHoldIdentityEvidence(8467, "provider-operation-proof-9025"),
             CancellationToken.None);
         var bibResult = await service.RecordCompletedIdentityAsync(
             changedBib.OperationId,
             changedBib.RequestVersion,
             changedBib.OperationVersion,
-            new ProvenHoldIdentityEvidence("8468", "provider-operation-proof-9026"),
+            new ProvenHoldIdentityEvidence(8468, "provider-operation-proof-9026"),
             CancellationToken.None);
         var supersededResult = await service.RecordCompletedIdentityAsync(
             superseded.OperationId,
             superseded.RequestVersion,
             superseded.OperationVersion,
-            new ProvenHoldIdentityEvidence("8469", "provider-operation-proof-9027"),
+            new ProvenHoldIdentityEvidence(8469, "provider-operation-proof-9027"),
             CancellationToken.None);
         Assert.AreEqual("hold_identity_association_changed", patronResult.Code);
         Assert.AreEqual("hold_identity_association_changed", bibResult.Code);
@@ -5525,9 +6394,9 @@ public sealed partial class PatronJourneyTests
         var inactive = await SeedCompletedHoldIdentityAsync(
             "inactive",
             "20000000002128",
-            "9028",
+            9028,
             organizationId: inactiveOrganizationId);
-        var leased = await SeedCompletedHoldIdentityAsync("leased", "20000000002129", "9029");
+        var leased = await SeedCompletedHoldIdentityAsync("leased", "20000000002129", 9029);
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
@@ -5548,13 +6417,13 @@ public sealed partial class PatronJourneyTests
             inactive.OperationId,
             inactive.RequestVersion,
             inactive.OperationVersion,
-            new ProvenHoldIdentityEvidence("8470", "provider-operation-proof-9028"),
+            new ProvenHoldIdentityEvidence(8470, "provider-operation-proof-9028"),
             CancellationToken.None);
         var leasedResult = await service.RecordCompletedIdentityAsync(
             leased.OperationId,
             leased.RequestVersion,
             leased.OperationVersion,
-            new ProvenHoldIdentityEvidence("8471", "provider-operation-proof-9029"),
+            new ProvenHoldIdentityEvidence(8471, "provider-operation-proof-9029"),
             CancellationToken.None);
         Assert.AreEqual("organization_inactive", inactiveResult.Code);
         Assert.AreEqual("hold_identity_not_enrichable", leasedResult.Code);
@@ -5564,7 +6433,7 @@ public sealed partial class PatronJourneyTests
     public async Task StaffHoldReplyExceptionPersistsMarkedAmbiguityAndNeverReplaysReply()
     {
         var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
-        holdProvider.ReplyException = new InvalidOperationException("synthetic reply disconnect");
+        holdProvider.ReplyException = new PolarisOperationalException("provider_transport_ambiguous", "synthetic reply disconnect");
         await using var holdFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
@@ -5591,9 +6460,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002114', N'Reply ambiguity title', 1, @formatId, N'pending_hold', N'9009',
+                VALUES (2, N'20000000002114', N'Reply ambiguity title', 1, @formatId, N'pending_hold', N'9009', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -5742,7 +6611,16 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task StaffHoldOperatorResolutionDoesNotTreatEvidenceReferenceAsHoldIdentity()
     {
-        using var client = factory!.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        var emailSender = new MutableReadinessEmailSender(isConfigured: true);
+        await using var dispatchFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IEmailSender>();
+                services.RemoveAll<IEmailOutboxDispatcher>();
+                services.AddSingleton<IEmailSender>(emailSender);
+                services.AddSingleton<IEmailOutboxDispatcher, CanceledOutboxDispatcher>();
+            }));
+        using var client = dispatchFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         using (var start = await client.GetAsync("/api/asap/staff/session"))
         {
             Assert.AreEqual(HttpStatusCode.OK, start.StatusCode);
@@ -5822,10 +6700,33 @@ public sealed partial class PatronJourneyTests
             executorExclusionReference = "incident-runbook-8456",
             executorExclusionExplanation = "The interactive host process was terminated at 2026-09-13T13:00:00Z and the provider response accounts for its in-flight request."
         };
+        emailSender.TimeoutReadiness = true;
+        using var timedOut = await client.PostAsJsonAsync(
+            $"/api/asap/staff/hold-operations/{operationId}/resolve", resolution);
+        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, timedOut.StatusCode,
+            await timedOut.Content.ReadAsStringAsync());
+        using (var timedOutBody = JsonDocument.Parse(await timedOut.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("hold_resolution_dependency_unavailable", timedOutBody.RootElement.GetProperty("code").GetString());
+        }
+        using (var unchanged = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}"))
+        using (var unchangedBody = JsonDocument.Parse(await unchanged.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("pending_hold", unchangedBody.RootElement.GetProperty("status").GetString());
+            Assert.AreEqual(operation.GetProperty("version").GetString(),
+                unchangedBody.RootElement.GetProperty("holdOperation").GetProperty("version").GetString());
+        }
+        emailSender.TimeoutReadiness = false;
         using var resolve = await client.PostAsJsonAsync(
             $"/api/asap/staff/hold-operations/{operationId}/resolve",
             resolution);
         Assert.AreEqual(HttpStatusCode.OK, resolve.StatusCode, await resolve.Content.ReadAsStringAsync());
+        using (var resolvedBody = JsonDocument.Parse(await resolve.Content.ReadAsStringAsync()))
+        {
+            Assert.IsTrue(resolvedBody.RootElement.GetProperty("committed").GetBoolean());
+            Assert.AreEqual("hold_placed", resolvedBody.RootElement.GetProperty("finalStatus").GetString());
+            Assert.AreEqual("dispatch_failed", resolvedBody.RootElement.GetProperty("notificationStatus").GetString());
+        }
         using var duplicate = await client.PostAsJsonAsync(
             $"/api/asap/staff/hold-operations/{operationId}/resolve",
             resolution);
@@ -5901,9 +6802,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002106', N'Ambiguous hold title', 1, @formatId, N'pending_hold', N'9001',
+                VALUES (2, N'20000000002106', N'Ambiguous hold title', 1, @formatId, N'pending_hold', N'9001', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -6211,7 +7112,7 @@ public sealed partial class PatronJourneyTests
         {
             AddTestingStaffHeaders(createClient, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
             createClient.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(createClient));
-            var requestId = await SeedPendingHoldRequestAsync("Create marker fence", "20000000003201", "93201");
+            var requestId = await SeedPendingHoldRequestAsync("Create marker fence", "20000000003201", 93201);
             await InstallMarkerFenceTriggerAsync("create_started");
             try
             {
@@ -6244,7 +7145,7 @@ public sealed partial class PatronJourneyTests
         {
             AddTestingStaffHeaders(replyClient, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
             replyClient.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(replyClient));
-            var requestId = await SeedPendingHoldRequestAsync("Reply marker fence", "20000000003202", "93202");
+            var requestId = await SeedPendingHoldRequestAsync("Reply marker fence", "20000000003202", 93202);
             await InstallMarkerFenceTriggerAsync("reply_started");
             try
             {
@@ -6277,21 +7178,952 @@ public sealed partial class PatronJourneyTests
         var handler = new StaticResponseHandler((HttpStatusCode)statusCode, "{}");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.LookupIdentifierAsync("9780000000099", CancellationToken.None);
+        var result = await provider.LookupIdentifierAsync("9780000000099", 2, CancellationToken.None);
 
         Assert.AreEqual(expected, result.Outcome);
         Assert.AreEqual(1, handler.RequestCount);
     }
 
     [TestMethod]
+    public async Task PolarisStaffSearchUsesSupportedQueriesAndMapsCatalogRows()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """
+            {"PAPIErrorCode":0,"TotalRecordsFound":4,"BibSearchRows":[
+              {"ControlNumber":9001,"Title":"  Catalog title  ","Author":"Catalog author",
+               "PublicationDate":"2026","ISBN":"9780000000001","TypeOfMaterial":"1"},
+              {"ControlNumber":9002,"Title":"Electronic title","PrimaryTypeOfMaterial":36},
+              {"ControlNumber":9003,"Title":"Alternate title","Author":"Second author",
+               "TypeOfMaterial":"Book","UPC":"012345678901"},
+              {"ControlNumber":9001,"Title":"Duplicate title"}]}
+            """);
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var byIdentifier = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", 2, CancellationToken.None);
+        Assert.AreEqual(2, byIdentifier.Results.Count);
+        Assert.AreEqual(4, byIdentifier.TotalMatches);
+        Assert.AreEqual(9001, byIdentifier.Results[0].BibId);
+        Assert.AreEqual("Catalog title", byIdentifier.Results[0].Title);
+        Assert.AreEqual("2026", byIdentifier.Results[0].Publication);
+        Assert.AreEqual(9003, byIdentifier.Results[1].BibId);
+        Assert.AreEqual("012345678901", byIdentifier.Results[1].Identifier);
+        CollectionAssert.AreEqual(
+            new[] { "ISBN", "boolean", "LCCN" },
+            handler.RequestUris.Select(uri => uri.AbsolutePath.Split('/').Last()).ToArray());
+        StringAssert.Contains(Uri.UnescapeDataString(handler.RequestUris[1].Query), "q=UPC=\"9780000000001\"");
+        Assert.IsTrue(handler.RequestUris.All(uri =>
+            Uri.UnescapeDataString(uri.Query).Contains("sortby=PDTI", StringComparison.Ordinal) &&
+            Uri.UnescapeDataString(uri.Query).Contains("notran=1", StringComparison.Ordinal) &&
+            !Uri.UnescapeDataString(uri.Query).Contains("sort=", StringComparison.Ordinal)));
+
+        handler.RequestUris.Clear();
+        await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+        await provider.SearchBibsAsync("author", "An author", "", "", 2, CancellationToken.None);
+        await provider.SearchBibsAsync("title_author", "", "A title", "An author", 2, CancellationToken.None);
+        CollectionAssert.AreEqual(new[] { "TI", "AU", "boolean", "TI" },
+            handler.RequestUris.Select(uri => uri.AbsolutePath.Split('/').Last()).ToArray());
+        StringAssert.Contains(Uri.UnescapeDataString(handler.RequestUris[2].Query),
+            "q=TI=\"A title\" AND AU=\"An author\"");
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffSearchAcceptsSparseRowsWithAValidBIBIdentity()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001}]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+
+        Assert.AreEqual(1, result.Results.Count);
+        Assert.AreEqual(9001, result.Results[0].BibId);
+        Assert.IsNull(result.Results[0].Title);
+        Assert.AreEqual(1, result.TotalMatches);
+    }
+
+    [TestMethod]
+    [DataRow("{\"BibID\":9001}")]
+    [DataRow("{\"BibliographicRecordID\":9001}")]
+    public async Task PolarisStaffSearchRejectsUndocumentedBIBIdentityAliases(string row)
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            $$"""{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{{row}}]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(() =>
+            provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffSearchAcceptsOnlyAWellFormedNonnegativeEmptyResponseAsNotFound()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[],"ErrorMessage":""}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+
+        Assert.AreEqual(0, result.Results.Count);
+        Assert.AreEqual(0, result.TotalMatches);
+        Assert.AreEqual(1, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffSearchTreatsCodeZeroEmptyInformationalMessageAsNotFound()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":0,"ErrorMessage":"Search terms normalized","TotalRecordsFound":0,"BibSearchRows":[]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+
+        Assert.AreEqual(0, result.Results.Count);
+        Assert.AreEqual(0, result.TotalMatches);
+        Assert.AreEqual(1, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffTitleSearchAcceptsTheCoherentMinusOneEmptyResponse()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+
+        Assert.AreEqual(0, result.Results.Count);
+        Assert.AreEqual(0, result.TotalMatches);
+        Assert.AreEqual(1, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffSearchAcceptsPapiRowCountAndInformationalMessage()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":1,"ErrorMessage":"Search terms normalized","TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001}]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+
+        Assert.AreEqual(9001, result.Results.Single().BibId);
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffSearchFiltersKnownMaterialTypesAfterValidatingTheirRows()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001,"PrimaryTypeOfMaterial":36}]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+
+        Assert.AreEqual(0, result.Results.Count);
+        Assert.AreEqual(1, result.TotalMatches);
+    }
+
+    [TestMethod]
+    [DataRow(503, "{}")]
+    [DataRow(200, "not-json")]
+    [DataRow(200, "{}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"General failure\",\"TotalRecordsFound\":0,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"SQL timeout\",\"TotalRecordsFound\":0,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-9,\"ErrorMessage\":\"SQL timeout\",\"TotalRecordsFound\":0,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-1,\"TotalRecordsFound\":1,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-1,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":9001}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-1,\"TotalRecordsFound\":0}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-1,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-1,\"TotalRecordsFound\":0,\"BibSearchRows\":[],\"papierrorcode\":0}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":0}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":-1}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":\"not-a-number\"}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":9001,\"BibID\":9002}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":9001,\"controlnumber\":9001}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"papierrorcode\":-9,\"TotalRecordsFound\":0,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":0,\"BibSearchRows\":[],\"bibsearchrows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":2,\"totalrecordsfound\":2,\"BibSearchRows\":[{\"ControlNumber\":9001}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":2,\"BibSearchRows\":[{\"ControlNumber\":9001},{}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":0,\"BibSearchRows\":[{\"ControlNumber\":9001}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":2,\"TotalRecordsFound\":2,\"BibSearchRows\":[{\"ControlNumber\":9001}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":0,\"PrimaryTypeOfMaterial\":36}]}")]
+    public async Task PolarisStaffSearchTreatsTransportAndMalformedResponsesAsUnavailable(
+        int statusCode,
+        string content)
+    {
+        var handler = new StaticResponseHandler((HttpStatusCode)statusCode, content);
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None));
+
+        Assert.AreEqual("polaris_bib_search_failed", failure.Code);
+        Assert.AreEqual(1, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisIdentifierSearchKeepsTrustworthyPartialResultsAndFailsWhenEveryAttemptFails()
+    {
+        var valid = """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001,"Title":"Catalog title"}]}""";
+        var first = new SequenceResponseHandler(
+            (HttpStatusCode.OK, valid),
+            (HttpStatusCode.ServiceUnavailable, "{}"),
+            (HttpStatusCode.InternalServerError, "{}"));
+        var firstProvider = await CreatePolarisProviderAsync(first);
+        var firstResult = await firstProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
+        Assert.AreEqual(9001, firstResult.Results.Single().BibId);
+        Assert.AreEqual(3, first.RequestCount);
+
+        var partial = new SequenceResponseHandler(
+            (HttpStatusCode.ServiceUnavailable, "{}"),
+            (HttpStatusCode.OK, valid),
+            (HttpStatusCode.ServiceUnavailable, "{}"));
+        var partialProvider = await CreatePolarisProviderAsync(partial);
+
+        var result = await partialProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
+
+        Assert.AreEqual(1, result.Results.Count);
+        Assert.AreEqual(9001, result.Results[0].BibId);
+        Assert.AreEqual(3, partial.RequestCount);
+
+        var last = new SequenceResponseHandler(
+            (HttpStatusCode.ServiceUnavailable, "{}"),
+            (HttpStatusCode.InternalServerError, "{}"),
+            (HttpStatusCode.OK, valid));
+        var lastProvider = await CreatePolarisProviderAsync(last);
+        var lastResult = await lastProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
+        Assert.AreEqual(9001, lastResult.Results.Single().BibId);
+        Assert.AreEqual(3, last.RequestCount);
+
+        var failed = new SequenceResponseHandler(
+            (HttpStatusCode.ServiceUnavailable, "{}"),
+            (HttpStatusCode.InternalServerError, "{}"),
+            (HttpStatusCode.BadGateway, "{}"));
+        var failedProvider = await CreatePolarisProviderAsync(failed);
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await failedProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None));
+        Assert.AreEqual(3, failed.RequestCount);
+
+        var empty = """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}""";
+        var allEmpty = new SequenceResponseHandler(
+            (HttpStatusCode.OK, """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}"""),
+            (HttpStatusCode.OK, empty),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
+        var emptyProvider = await CreatePolarisProviderAsync(allEmpty);
+        var noMatches = await emptyProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
+        Assert.AreEqual(0, noMatches.Results.Count);
+        Assert.AreEqual(3, allEmpty.RequestCount);
+
+        var emptyAndFailed = new SequenceResponseHandler(
+            (HttpStatusCode.OK, """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}"""),
+            (HttpStatusCode.ServiceUnavailable, "{}"),
+            (HttpStatusCode.OK, empty));
+        var emptyAndFailedProvider = await CreatePolarisProviderAsync(emptyAndFailed);
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await emptyAndFailedProvider.SearchBibsAsync(
+                "identifier", "9780000000001", "", "", 2, CancellationToken.None));
+        Assert.AreEqual(3, emptyAndFailed.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisIdentifierLookupAcceptsOnlyCoherentMinusOneAndZeroEmptyAttempts()
+    {
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.OK, """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}"""),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.LookupIdentifierAsync("9780000000001", 2, CancellationToken.None);
+
+        Assert.AreEqual(IdentifierLookupOutcome.NotFound, result.Outcome);
+        Assert.AreEqual(3, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisIdentifierLookupFindsOnlyRowsWithValidatedControlNumbers()
+    {
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":1,"TotalRecordsFound":2,"BibSearchRows":[{"ControlNumber":9001,"Title":"Catalog title"}]}"""),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":-1,"ErrorMessage":"Invalid BibID","BibGetRows":null}"""));
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.LookupIdentifierAsync("9780000000001", 2, CancellationToken.None);
+
+        Assert.AreEqual(IdentifierLookupOutcome.Found, result.Outcome);
+        Assert.AreEqual(9001, result.BibId);
+        Assert.IsTrue(result.MultipleMatches, "TotalRecordsFound may exceed the current page row count.");
+        Assert.AreEqual(4, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisIdentifierLookupPreservesCancellationDuringOptionalBibDetail()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001,"Title":"Catalog title"}]}"""),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
+        handler.OnRequest = (count, token) =>
+        {
+            if (count == 4)
+            {
+                cancellation.Cancel();
+                token.ThrowIfCancellationRequested();
+            }
+        };
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await provider.LookupIdentifierAsync("9780000000001", 2, cancellation.Token));
+
+        Assert.AreEqual(4, handler.RequestCount);
+        Assert.IsTrue(cancellation.IsCancellationRequested);
+    }
+
+    [TestMethod]
+    [DataRow("{\"PAPIErrorCode\":0,\"ErrorMessage\":\"Search terms normalized\",\"TotalRecordsFound\":0,\"BibSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":-1,\"TotalRecordsFound\":0,\"BibSearchRows\":[],\"ErrorMessage\":\"\"}")]
+    [DataRow("""{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[],"ErrorMessage":"  "}""")]
+    public async Task PolarisIdentifierLookupTreatsInformationalOrBlankEmptyMessagesAsDefinitiveEmpty(string content)
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK, content);
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.LookupIdentifierAsync("9780000000001", 2, CancellationToken.None);
+
+        Assert.AreEqual(IdentifierLookupOutcome.DefinitiveNotFound, result.Outcome);
+        Assert.AreEqual(3, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisTitleAuthorSearchCanUseAValidFallbackAfterPrimaryFailure()
+    {
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.ServiceUnavailable, "{}"),
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9002,"Title":"Fallback title","Author":"An author"}]}"""));
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title_author", "", "A title", "An author", 2, CancellationToken.None);
+
+        Assert.AreEqual(1, result.Results.Count);
+        Assert.AreEqual(9002, result.Results[0].BibId);
+        Assert.AreEqual(2, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffSearchPreservesCancellationBeforeTheProviderRequest()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var canceled = false;
+        try
+        {
+            await provider.SearchBibsAsync("title", "A title", "", "", 2, cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            canceled = true;
+        }
+
+        Assert.IsTrue(canceled);
+        Assert.IsTrue(cancellation.IsCancellationRequested);
+        Assert.AreEqual(0, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task StaffBibSearchEndpointReturnsUnavailableForProviderFailureAndNotFoundForDefinitiveEmpty()
+    {
+        using var bootstrapClient = factory!.CreateClient();
+        using var bootstrapResponse = await bootstrapClient.GetAsync("/api/asap/staff/session");
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        var seeded = await SeedStaffBibLookupStateAsync(Guid.Parse(identity.TenantId!));
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":-1,"ErrorMessage":"SQL timeout","TotalRecordsFound":0,"BibSearchRows":[]}"""),
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
+        var provider = await CreatePolarisProviderAsync(handler);
+        await using var searchFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IStaffPolarisProvider>(provider);
+            }));
+        using var client = searchFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", seeded.StaffId.ToString());
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Email", seeded.Email);
+
+        using var session = await client.GetAsync("/api/asap/staff/session");
+        Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+        client.DefaultRequestHeaders.Add(
+            "X-ASAP-Antiforgery",
+            sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
+
+        var input = new { requestId = seeded.RequestId.ToString(), mode = "title", query = "boundary" };
+        using var unavailable = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", input);
+        Assert.AreEqual(HttpStatusCode.BadGateway, unavailable.StatusCode);
+        using var unavailableBody = JsonDocument.Parse(await unavailable.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_validation_unavailable", unavailableBody.RootElement.GetProperty("code").GetString());
+
+        using var empty = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", input);
+        Assert.AreEqual(HttpStatusCode.OK, empty.StatusCode);
+        using var emptyBody = JsonDocument.Parse(await empty.Content.ReadAsStringAsync());
+        Assert.AreEqual("not_found", emptyBody.RootElement.GetProperty("status").GetString());
+        Assert.AreEqual(0, emptyBody.RootElement.GetProperty("results").GetArrayLength());
+        Assert.AreEqual(2, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task StaffBibLookupReturnsVerifiedDetailWhenHoldingsFailAndStillReadsPatronHolds()
+    {
+        using var bootstrapClient = factory!.CreateClient();
+        using var bootstrapResponse = await bootstrapClient.GetAsync("/api/asap/staff/session");
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        var seeded = await SeedStaffBibLookupStateAsync(Guid.Parse(identity.TenantId!));
+        var handler = new ProtectedSequenceResponseHandler(
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":0,"BibGetRows":[{"ElementID":35,"Label":"Title","Value":"Verified title"}],"Title":"Verified title"}"""),
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":-1,"ErrorMessage":"Invalid BibID","BibHoldingsGetRows":null}"""),
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[]}"""));
+        var provider = await CreatePolarisProviderAsync(handler);
+        await using var lookupFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IStaffPolarisProvider>(provider);
+            }));
+        using var client = lookupFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", seeded.StaffId.ToString());
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Email", seeded.Email);
+
+        async Task<(string Title, string Status, int? BibId, byte[] RowVersion, int EventCount)> ReadRequestStateAsync()
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT r.[Title], r.[Status], r.[BibId], r.[RowVersion],
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e WHERE e.[TitleRequestId] = r.[Id])
+                FROM [asap].[TitleRequest] r WHERE r.[Id] = @id;
+                """;
+            command.Parameters.AddWithValue("@id", seeded.RequestId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            return (
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetInt32(2),
+                (byte[])reader[3],
+                reader.GetInt32(4));
+        }
+
+        var before = await ReadRequestStateAsync();
+        using var session = await client.GetAsync("/api/asap/staff/session");
+        Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+        client.DefaultRequestHeaders.Add(
+            "X-ASAP-Antiforgery",
+            sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/asap/staff/bib-lookup",
+            new { requestId = seeded.RequestId.ToString(), mode = "bib", bibId = "9001" });
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual(9001, body.RootElement.GetProperty("bibId").GetInt32());
+        Assert.AreEqual("Verified title", body.RootElement.GetProperty("title").GetString());
+        Assert.IsTrue(body.RootElement.GetProperty("holdingsUnavailable").GetBoolean());
+        Assert.AreEqual(JsonValueKind.Null, body.RootElement.GetProperty("holdingsSummary").ValueKind);
+        Assert.IsFalse(body.RootElement.GetProperty("patronHasHold").GetBoolean());
+        Assert.AreEqual(4, handler.RequestCount);
+        Assert.IsTrue(handler.RequestUris.Any(uri => uri.AbsolutePath.Contains("/holdrequests/", StringComparison.Ordinal)));
+
+        var after = await ReadRequestStateAsync();
+        Assert.AreEqual(before.Title, after.Title);
+        Assert.AreEqual(before.Status, after.Status);
+        Assert.AreEqual(before.BibId, after.BibId);
+        CollectionAssert.AreEqual(before.RowVersion, after.RowVersion);
+        Assert.AreEqual(before.EventCount, after.EventCount);
+    }
+
+    [TestMethod]
+    public async Task StaffBibLookupReturnsVerifiedDetailWithUnknownPatronHoldWhenHoldResponseIsMalformed()
+    {
+        using var bootstrapClient = factory!.CreateClient();
+        using var bootstrapResponse = await bootstrapClient.GetAsync("/api/asap/staff/session");
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        var seeded = await SeedStaffBibLookupStateAsync(Guid.Parse(identity.TenantId!));
+        var handler = new ProtectedSequenceResponseHandler(
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":0,"BibGetRows":[{"ElementID":35,"Label":"Title","Value":"Verified title"}],"Title":"Verified title"}"""),
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":0,"BibHoldingsGetRows":[]}"""),
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":-9,"papierrorcode":0,"PatronHoldRequestsGetRows":[]}"""));
+        var provider = await CreatePolarisProviderAsync(handler);
+        await using var lookupFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IStaffPolarisProvider>(provider);
+            }));
+        using var client = lookupFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", seeded.StaffId.ToString());
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Email", seeded.Email);
+
+        async Task<(string Title, string Status, int? BibId, byte[] RowVersion, int EventCount, int OutboxCount, int HoldOperationCount)> ReadRequestStateAsync()
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT r.[Title], r.[Status], r.[BibId], r.[RowVersion],
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e WHERE e.[TitleRequestId] = r.[Id]),
+                       (SELECT COUNT(*) FROM [asap].[EmailOutbox] o WHERE o.[BusinessKey] LIKE N'%' + CONVERT(nvarchar(30), r.[Id]) + N'%'),
+                       (SELECT COUNT(*) FROM [asap].[HoldPlacementOperation] h WHERE h.[TitleRequestId] = r.[Id])
+                FROM [asap].[TitleRequest] r WHERE r.[Id] = @id;
+                """;
+            command.Parameters.AddWithValue("@id", seeded.RequestId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            return (
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetInt32(2),
+                (byte[])reader[3],
+                reader.GetInt32(4),
+                reader.GetInt32(5),
+                reader.GetInt32(6));
+        }
+
+        var before = await ReadRequestStateAsync();
+        using var session = await client.GetAsync("/api/asap/staff/session");
+        Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+        client.DefaultRequestHeaders.Add(
+            "X-ASAP-Antiforgery",
+            sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/asap/staff/bib-lookup",
+            new { requestId = seeded.RequestId.ToString(), mode = "bib", bibId = "9001" });
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual(9001, body.RootElement.GetProperty("bibId").GetInt32());
+        Assert.AreEqual("Verified title", body.RootElement.GetProperty("title").GetString());
+        Assert.IsFalse(body.RootElement.GetProperty("holdingsUnavailable").GetBoolean());
+        Assert.AreEqual(JsonValueKind.Null, body.RootElement.GetProperty("patronHasHold").ValueKind);
+        Assert.AreEqual(3, handler.RequestCount);
+
+        var after = await ReadRequestStateAsync();
+        Assert.AreEqual(before.Title, after.Title);
+        Assert.AreEqual(before.Status, after.Status);
+        Assert.AreEqual(before.BibId, after.BibId);
+        CollectionAssert.AreEqual(before.RowVersion, after.RowVersion);
+        Assert.AreEqual(before.EventCount, after.EventCount);
+        Assert.AreEqual(before.OutboxCount, after.OutboxCount);
+        Assert.AreEqual(before.HoldOperationCount, after.HoldOperationCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisPatronHoldsAcceptsValidEmptyAndPopulatedResponses()
+    {
+        var emptyProvider = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[]}""")));
+        var empty = await emptyProvider.GetPatronHoldsAsync("20000000000001", 2, CancellationToken.None);
+        Assert.AreEqual(0, empty.Count);
+
+        var populatedProvider = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[{"HoldRequestID":51,"BibID":9001,"StatusID":6,"StatusDescription":"Held","PickupBranchID":101}]}""")));
+        var populated = await populatedProvider.GetPatronHoldsAsync("20000000000001", 2, CancellationToken.None);
+        Assert.AreEqual(1, populated.Count);
+        Assert.AreEqual(51, populated[0].HoldRequestId);
+        Assert.AreEqual(9001, populated[0].BibId);
+        Assert.AreEqual(6, populated[0].StatusId);
+        Assert.AreEqual("Held", populated[0].StatusDescription);
+        Assert.IsFalse(HoldPlacementService.IsTerminal(populated[0].StatusId));
+        Assert.AreEqual(101, populated[0].PickupBranchId);
+        Assert.AreEqual("20000000000001", populated[0].PatronBarcode);
+    }
+
+    [TestMethod]
+    public async Task PolarisPatronHoldsPreservesKnownTerminalStatusEvidence()
+    {
+        var provider = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[{"HoldRequestID":51,"BibID":9001,"StatusID":8,"StatusDescription":"Unclaimed"}]}""")));
+
+        var holds = await provider.GetPatronHoldsAsync("20000000000001", 2, CancellationToken.None);
+
+        Assert.AreEqual(8, holds.Single().StatusId);
+        Assert.AreEqual("Unclaimed", holds.Single().StatusDescription);
+        Assert.IsTrue(HoldPlacementService.IsTerminal(holds.Single().StatusId));
+    }
+
+    [TestMethod]
+    public async Task PolarisPatronHoldsAcceptsCompatibleNumericStringIdentities()
+    {
+        var provider = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[{"HoldRequestID":"51","BibID":"9001","StatusID":"6","StatusDescription":" Held "}]}""")));
+
+        var holds = await provider.GetPatronHoldsAsync("20000000000001", 2, CancellationToken.None);
+
+        Assert.AreEqual(51, holds.Single().HoldRequestId);
+        Assert.AreEqual(9001, holds.Single().BibId);
+        Assert.AreEqual(6, holds.Single().StatusId);
+        Assert.AreEqual("Held", holds.Single().StatusDescription);
+    }
+
+    [TestMethod]
+    [DataRow("not-json")]
+    [DataRow("[]")]
+    [DataRow("{}")]
+    [DataRow("{\"PatronHoldRequestsGetRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":\"0\",\"PatronHoldRequestsGetRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"failure\",\"PatronHoldRequestsGetRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":-9,\"papierrorcode\":0,\"PatronHoldRequestsGetRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":0}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":null}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":{}}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":0,\"BibID\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":0}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":-1,\"BibID\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":-1}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":\"bad\",\"BibID\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":true}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51.5,\"BibID\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"holdrequestid\":51,\"BibID\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"holdrequestid\":52,\"BibID\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"bibid\":9002}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001},{ }]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusDescription\":\"Held\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusID\":0,\"StatusDescription\":\"Held\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusID\":2,\"StatusDescription\":\"Held\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusID\":\"bad\",\"StatusDescription\":\"Held\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusID\":6.5,\"StatusDescription\":\"Held\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusID\":6}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusID\":6,\"StatusDescription\":null}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusID\":6,\"StatusDescription\":\"  \"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusID\":6,\"statusid\":6,\"StatusDescription\":\"Held\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusID\":6,\"statusid\":8,\"StatusDescription\":\"Held\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusID\":6,\"StatusDescription\":\"Held\",\"statusdescription\":\"Held\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusID\":6,\"StatusDescription\":\"Held\",\"statusdescription\":\"Active\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{\"HoldRequestID\":51,\"BibID\":9001,\"StatusID\":6,\"StatusDescription\":\"Held\"},{\"HoldRequestID\":52,\"BibID\":9002,\"StatusID\":3}]}")]
+    public async Task PolarisPatronHoldsTreatsMalformedOrContradictoryResponsesAsUnavailable(string content)
+    {
+        var provider = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
+            (HttpStatusCode.OK, content)));
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.GetPatronHoldsAsync("20000000000001", 2, CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task PolarisExactBibCarriesCatalogDetailsWithoutChangingRequestOptionSemantics()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """
+            {"PAPIErrorCode":0,"BibGetRows":[{"ElementID":35,"Label":"Title","Value":"Catalog title"},
+              {"ElementID":18,"Label":"Author","Value":"Catalog author"},
+              {"ElementID":2,"Label":"Publisher","Value":"Catalog publisher"},
+              {"ElementID":6,"Label":"ISBN","Value":"9780000000001"},
+              {"ElementID":17,"Label":"Format","Value":"Book"},
+              {"ElementID":1,"Label":"Publication Date","Value":"2026"}],
+             "Title":"Catalog title","Author":["Catalog author"],"Publisher":["Catalog publisher"],
+             "Format":"Book","ISBN":"9780000000001"}
+            """);
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.ValidateBibAsync(9001, 2, CancellationToken.None);
+
+        Assert.IsTrue(result.IsValid);
+        Assert.AreEqual("Catalog title", result.Title);
+        Assert.AreEqual("Catalog author", result.Author);
+        Assert.AreEqual("2026", result.Publication);
+        Assert.AreEqual("Book", result.Format);
+        Assert.AreEqual("9780000000001", result.Identifier);
+        Assert.AreEqual("Catalog publisher", result.Publisher);
+        StringAssert.Contains(handler.RequestPaths[0], "/bib/9001");
+    }
+
+    [TestMethod]
+    public async Task PolarisExactBibAcceptsSparseRowWithoutOptionalMetadata()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """
+            {"PAPIErrorCode":0,"BibGetRows":[{"ElementID":13,"Value":"QA 76"}]}
+            """);
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.ValidateBibAsync(9001, 2, CancellationToken.None);
+
+        Assert.IsTrue(result.IsValid);
+        Assert.IsNull(result.Title);
+        Assert.IsNull(result.Author);
+        Assert.IsNull(result.Publication);
+        Assert.IsNull(result.Format);
+        Assert.IsNull(result.Identifier);
+        Assert.IsNull(result.Publisher);
+    }
+
+    [TestMethod]
+    public async Task PolarisExactBibClassifiesTheDocumentedInvalidBibResponseAsNotFound()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """
+            {"PAPIErrorCode":-1,"ErrorMessage":"Invalid BibID","BibGetRows":null}
+            """);
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.ValidateBibAsync(9001, 2, CancellationToken.None);
+
+        Assert.IsFalse(result.IsValid);
+        Assert.AreEqual(1, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisExactBibDoesNotClassifyAmbiguousInvalidResponseAsNotFound()
+    {
+        var provider = await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.OK,
+            """
+            {"PAPIErrorCode":-1,"ErrorMessage":"Invalid BibID","errormessage":"SQL timeout","BibGetRows":null}
+            """));
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task PolarisExactBibTreatsHttpFailureAsOperational()
+    {
+        var provider = await CreatePolarisProviderAsync(
+            new StaticResponseHandler(HttpStatusCode.ServiceUnavailable, "{}"));
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task PolarisExactBibPreservesCancellationBeforeLocalInputChecks()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK, "{}");
+        var provider = await CreatePolarisProviderAsync(handler);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
+            await provider.ValidateBibAsync(0, 2, cancellation.Token));
+        Assert.AreEqual(0, handler.RequestCount);
+    }
+
+    [TestMethod]
+    [DataRow(-9, "SQL timeout")]
+    [DataRow(-1, "FAILURE - General")]
+    public async Task PolarisExactBibTreatsOperationalPapiFailuresAsUnavailable(
+        int papiErrorCode,
+        string errorMessage)
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            $$"""
+            {"PAPIErrorCode":{{papiErrorCode}},"ErrorMessage":"{{errorMessage}}","BibGetRows":null}
+            """);
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
+    }
+
+    [TestMethod]
+    [DataRow("not-json")]
+    [DataRow("{}")]
+    [DataRow("{\"PAPIErrorCode\":0}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[]}")]
+    [DataRow("null")]
+    public async Task PolarisExactBibTreatsMalformedOrMissingProtocolDataAsUnavailable(string content)
+    {
+        var provider = await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.OK, content));
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
+    }
+
+    [TestMethod]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"Value\":\"Catalog title\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"ElementID\":35}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"ElementID\":0,\"Value\":\"Catalog title\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"ElementID\":\"35\",\"Value\":\"Catalog title\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"ElementID\":35.5,\"Value\":\"Catalog title\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"ElementID\":35,\"Value\":42}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"ElementID\":35,\"Value\":null}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"ElementID\":35,\"elementid\":0,\"Value\":\"Catalog title\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"ElementID\":35,\"Value\":\"Catalog title\"},{}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"ElementID\":35,\"Value\":\"Catalog title\"}],\"bibgetrows\":[{}]}")]
+    public async Task PolarisExactBibTreatsMalformedSuccessRowsAsUnavailable(string content)
+    {
+        var provider = await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.OK, content));
+
+        var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
+
+        Assert.AreEqual("polaris_bib_validation_protocol_failed", failure.Code);
+    }
+
+    [TestMethod]
+    public async Task PolarisExactBibRejectsInconsistentRawPapiCodesAsUnavailable()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """
+            {"PAPIErrorCode":0,"papierrorcode":-9,"BibGetRows":[{"Label":"Title","Value":"Catalog title"}]}
+            """);
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
+        Assert.AreEqual("polaris_bib_validation_protocol_failed", failure.Code);
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffHoldingsCountsOwningLibrariesAndReportsFailures()
+    {
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.OK,
+             """
+             {"PAPIErrorCode":0,"BibHoldingsGetRows":[
+               {"LocationID":"201","Holdable":"true"},
+               {"LocationID":"202","Holdable":"false"},
+               {"LocationID":"301","Holdable":"yes"}]}
+             """),
+            (HttpStatusCode.OK,
+             """
+             {"PAPIErrorCode":0,"OrganizationsGetRows":[
+               {"OrganizationID":2,"OrganizationCodeID":2,"DisplayName":"My Library"},
+               {"OrganizationID":201,"OrganizationCodeID":3,"ParentOrganizationID":2},
+               {"OrganizationID":202,"OrganizationCodeID":3,"ParentOrganizationID":2},
+               {"OrganizationID":3,"OrganizationCodeID":2,"DisplayName":"Other Library"},
+               {"OrganizationID":301,"OrganizationCodeID":3,"ParentOrganizationID":3}]}
+             """));
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.GetBibHoldingsAsync(9001, 2, CancellationToken.None);
+
+        Assert.AreEqual(2, result.MyLibraryCount);
+        Assert.AreEqual(1, result.OtherLibraryCount);
+        Assert.AreEqual(3, result.ConsortiumCount);
+        Assert.IsTrue(result.IsHoldable);
+        Assert.IsTrue(result.HasHoldableAtMyLibrary);
+        Assert.AreEqual(2, handler.RequestUris.Count);
+        StringAssert.Contains(handler.RequestUris[0].AbsolutePath, "/bib/9001/holdings");
+        StringAssert.Contains(handler.RequestUris[1].AbsolutePath, "/organizations/");
+
+        var failed = await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.ServiceUnavailable, "{}"));
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await failed.GetBibHoldingsAsync(9001, 2, CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffHoldingsTreatsOnlyAWellFormedSuccessWithNoRowsAsZero()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":0,"ErrorMessage":"","BibHoldingsGetRows":[]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.GetBibHoldingsAsync(9001, 2, CancellationToken.None);
+
+        Assert.AreEqual(0, result.MyLibraryCount);
+        Assert.AreEqual(0, result.OtherLibraryCount);
+        Assert.AreEqual(0, result.ConsortiumCount);
+        Assert.IsFalse(result.IsHoldable);
+        Assert.IsFalse(result.HasHoldableAtMyLibrary);
+        Assert.AreEqual(1, handler.RequestCount);
+    }
+
+    [TestMethod]
+    [DataRow("{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"SQL timeout\",\"BibHoldingsGetRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"Invalid BibID\",\"BibHoldingsGetRows\":null}")]
+    public async Task PolarisStaffHoldingsTreatsEveryNegativePapiCodeAsUnavailable(string content)
+    {
+        var provider = await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.OK, content));
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.GetBibHoldingsAsync(9001, 2, CancellationToken.None));
+    }
+
+    [TestMethod]
     [DataRow("{}")]
     [DataRow("not-json")]
+    [DataRow("{\"PAPIErrorCode\":0}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":null}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"papierrorcode\":-9,\"BibHoldingsGetRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":[],\"bibholdingsgetrows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":[{}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":[{\"LocationID\":\"bad\",\"Holdable\":\"true\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":[{\"LocationID\":\"201\",\"Holdable\":\"unknown\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":[{\"LocationID\":\"201\",\"locationid\":\"202\",\"Holdable\":\"true\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":[{\"LocationID\":\"201\",\"Holdable\":\"true\",\"holdable\":\"false\"}]}")]
+    public async Task PolarisStaffHoldingsRejectsMalformedSuccessAsUnavailable(string content)
+    {
+        var provider = await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.OK, content));
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.GetBibHoldingsAsync(9001, 2, CancellationToken.None));
+    }
+
+    [TestMethod]
+    [DataRow("{}")]
+    [DataRow("not-json")]
+    [DataRow("{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"SQL timeout\",\"TotalRecordsFound\":0,\"BibSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"General failure\",\"TotalRecordsFound\":0,\"BibSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":-1,\"TotalRecordsFound\":1,\"BibSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":-1,\"BibSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":-1,\"TotalRecordsFound\":0}")]
+    [DataRow("{\"PAPIErrorCode\":-1,\"TotalRecordsFound\":0,\"BibSearchRows\":[],\"papierrorcode\":0}")]
+    [DataRow("{\"PAPIErrorCode\":-1,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":-9,\"TotalRecordsFound\":0,\"BibSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibSearchRows\":[{\"ControlNumber\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":0,\"BibSearchRows\":[{\"ControlNumber\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":2,\"TotalRecordsFound\":2,\"BibSearchRows\":[{\"ControlNumber\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"totalrecordsfound\":1,\"BibSearchRows\":[{\"ControlNumber\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":2,\"TotalRecordsFound\":2,\"BibSearchRows\":[{\"ControlNumber\":9001},{\"ControlNumber\":9002},{\"ControlNumber\":9003}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":2,\"BibSearchRows\":[{\"ControlNumber\":9001},{}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":2,\"BibSearchRows\":[{\"ControlNumber\":9001},{\"ControlNumber\":\"bad\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":0}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":-1}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":1.5}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":\"bad\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"BibID\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":9001,\"controlnumber\":9001}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":9001,\"controlnumber\":9002}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":9001,\"BibID\":9002}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":9001,\"BibliographicRecordID\":9002}]}")]
     public async Task PolarisIdentifierLookupRejectsSuccessfulMalformedProtocol(string content)
     {
         var handler = new StaticResponseHandler(HttpStatusCode.OK, content);
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.LookupIdentifierAsync("9780000000098", CancellationToken.None);
+        var result = await provider.LookupIdentifierAsync("9780000000098", 2, CancellationToken.None);
 
         Assert.AreEqual(IdentifierLookupOutcome.OperationalFailure, result.Outcome);
         Assert.AreEqual(1, handler.RequestCount);
@@ -6308,7 +8140,7 @@ public sealed partial class PatronJourneyTests
         var handler = new StaticResponseHandler(HttpStatusCode.OK, content);
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.LookupIdentifierAsync("9780000000097", CancellationToken.None);
+        var result = await provider.LookupIdentifierAsync("9780000000097", 2, CancellationToken.None);
 
         Assert.AreEqual(IdentifierLookupOutcome.NotFound, result.Outcome);
         Assert.AreEqual(3, handler.RequestCount);
@@ -6376,61 +8208,66 @@ public sealed partial class PatronJourneyTests
             await missingCodeProvider.UpdatePreferredPickupBranchAsync(
                 "20000000000032",
                 101,
-                CancellationToken.None));
+                2, CancellationToken.None));
 
         var explicitSuccess = new ProtectedUpdateResponseHandler("{\"PAPIErrorCode\":0}");
         var successProvider = await CreatePolarisProviderAsync(explicitSuccess);
         await successProvider.UpdatePreferredPickupBranchAsync(
             "20000000000032",
             101,
-            CancellationToken.None);
+            2, CancellationToken.None);
 
         Assert.AreEqual(1, missingCode.UpdateRequestCount);
         Assert.AreEqual(1, explicitSuccess.UpdateRequestCount);
         StringAssert.Contains(
             explicitSuccess.UpdateRequestPath,
-            "/public/v1/1033/100/7/patron/20000000000032");
+            "/public/v1/1033/100/2/patron/20000000000032");
         using var body = JsonDocument.Parse(explicitSuccess.UpdateRequestBody);
-        Assert.AreEqual(7, body.RootElement.GetProperty("LogonBranchId").GetInt32());
+        Assert.AreEqual(2, body.RootElement.GetProperty("LogonBranchId").GetInt32());
         Assert.AreEqual(42, body.RootElement.GetProperty("LogonUserId").GetInt32());
         Assert.AreEqual(99, body.RootElement.GetProperty("LogonWorkstationId").GetInt32());
         Assert.AreEqual(101, body.RootElement.GetProperty("RequestPickupBranchID").GetInt32());
     }
 
     [TestMethod]
-    public async Task PolarisPickupBranchesNormalizeRawNestedAliasesAndSortLabels()
+    public async Task PolarisPickupBranchesMapTypedIdsAndOrganizationLabels()
     {
-        var handler = new StaticResponseHandler(
-            HttpStatusCode.OK,
-            """
-            {"PAPIErrorCode":0,"PickupBranchesRows":{"PickupBranchRow":[
-              {"OrganizationID":3,"DisplayName":"Zulu Branch"},
-              {"OrgID":4,"OrganizationName":"Alpha Branch"},
-              {"PickupBranchID":3,"BranchName":"Duplicate Branch"}
-            ]}}
-            """);
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":3},{"ID":4},{"ID":3}]}"""),
+            (HttpStatusCode.OK, """
+            {"PAPIErrorCode":2,"OrganizationsGetRows":[
+              {"OrganizationID":3,"OrganizationCodeID":3,"DisplayName":"Zulu Branch"},
+              {"OrganizationID":4,"OrganizationCodeID":3,"DisplayName":"Alpha Branch"}
+            ]}
+            """));
         var provider = await CreatePolarisProviderAsync(handler);
-
         var branches = await provider.GetPickupBranchesAsync(
-            new PatronSnapshot(
-                30,
-                "20000000000033",
-                "patron@example.org",
-                "Test",
-                "Patron",
-                "1",
-                null,
-                77,
-                88,
-                "Home Library",
-                4),
-            CancellationToken.None);
+            new PatronSnapshot(30, "20000000000033", "patron@example.org", "Test", "Patron",
+                1, null, 77, 88, "Home Library", 4), 2, CancellationToken.None);
+        CollectionAssert.AreEqual(new[] { 4, 3 }, branches.Select(item => item.Id).ToArray());
+        CollectionAssert.AreEqual(new[] { "Alpha Branch", "Zulu Branch" }, branches.Select(item => item.Label).ToArray());
+        Assert.AreEqual(2, handler.RequestCount);
+        StringAssert.Contains(handler.RequestUris[0].AbsolutePath, "/public/v1/1033/100/77/pickupbranches");
+        StringAssert.Contains(handler.RequestUris[1].AbsolutePath, "/organizations/");
+    }
 
-        CollectionAssert.AreEqual(
-            new[] { "4:Alpha Branch", "3:Zulu Branch" },
-            branches.Select(item => $"{item.Id}:{item.Label}").ToArray());
-        Assert.AreEqual(1, handler.RequestCount);
-        StringAssert.Contains(handler.RequestPaths[0], "/public/v1/1033/100/77/pickupbranches");
+    [TestMethod]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"OrgID":3}]}""")]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":0}]}""")]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":1}]}""")]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":-1}]}""")]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":2147483648}]}""")]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":[{"ID":3,"id":4}]}""")]
+    [DataRow("""{"PAPIErrorCode":0,"PickupBranchesRows":{"PickupBranchRow":[{"ID":3}]}}""")]
+    [DataRow("""{"PickupBranchesRows":[{"ID":3}]}""")]
+    public async Task PolarisPickupBranchesRejectUnmodeledOrAmbiguousIdentity(string json)
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK, json);
+        var provider = await CreatePolarisProviderAsync(handler);
+        await Assert.ThrowsAsync<PolarisOperationalException>(() => provider.GetPickupBranchesAsync(
+            new PatronSnapshot(30, "20000000000033", "patron@example.org", "Test", "Patron",
+                1, null, 77, 88, "Home Library", 4), 2, CancellationToken.None));
+        Assert.AreEqual(1, handler.RequestCount, "A malformed branch identity must not cause a context fallback.");
     }
 
     [TestMethod]
@@ -6440,7 +8277,8 @@ public sealed partial class PatronJourneyTests
         {
             (RequestField: "\"RequestPickupBranchID\":200,", Expected: (int?)200),
             (RequestField: string.Empty, Expected: (int?)300),
-            (RequestField: "\"RequestPickupBranchID\":0,", Expected: (int?)0)
+            (RequestField: "\"RequestPickupBranchID\":0,", Expected: (int?)null),
+            (RequestField: "\"RequestPickupBranchID\":1,", Expected: (int?)null)
         };
 
         foreach (var testCase in cases)
@@ -6526,7 +8364,7 @@ public sealed partial class PatronJourneyTests
             command.Parameters.AddWithValue("@tenantId", tenantId);
             command.Parameters.AddWithValue("@objectId", objectId);
             command.Parameters.AddWithValue("@businessKey", $"sensitive-inactive:{Guid.NewGuid():N}");
-            outboxId = Convert.ToInt64(await command.ExecuteScalarAsync());
+            outboxId = Convert.ToInt64(await WithFixtureClock(command).ExecuteScalarAsync());
             await using var deactivate = connection.CreateCommand();
             deactivate.CommandText = "UPDATE [asap].[Organization] SET [IsActive] = 0 WHERE [Id] = 2;";
             await deactivate.ExecuteNonQueryAsync();
@@ -6746,6 +8584,7 @@ public sealed partial class PatronJourneyTests
         var delivery = jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
         await WaitForOutboxStatusAsync(seeded.OutboxId, "sending", TimeSpan.FromSeconds(5));
         await Task.Delay(300);
+        timeProvider!.SetUtcNow(timeProvider.GetUtcNow().AddMilliseconds(300));
         await transaction.CommitAsync();
         await delivery;
 
@@ -6964,6 +8803,132 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(0, sender.SendCount);
         Assert.AreEqual("failed", outbox.Status);
         Assert.AreEqual("mail_not_configured", outbox.LastErrorCode);
+    }
+
+    [TestMethod]
+    public async Task ReadinessTimeoutReleasesClaimWithoutSpendingProviderAttemptsAndLaterSends()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("readiness-timeout");
+        var sender = new MutableReadinessEmailSender(isConfigured: true)
+        {
+            ReadinessException = new TaskCanceledException("Synthetic dependency timeout")
+        };
+        var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
+
+        for (var index = 0; index < EmailOutboxRuntimeOptions.Default.MaxAttempts + 1; index++)
+        {
+            await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+            var state = await ReadPreSendStateAsync(seeded.OutboxId);
+            Assert.AreEqual("pending", state.Status);
+            Assert.AreEqual("mail_readiness_unavailable", state.LastErrorCode);
+            Assert.AreEqual(0, state.AttemptCount);
+            Assert.IsNull(state.LeaseId);
+            Assert.IsNull(state.SendingStartedUtc);
+            Assert.IsNull(state.LeaseExpiresUtc);
+            Assert.IsTrue(state.NextAttemptUtc > DateTime.UtcNow.AddSeconds(30));
+            Assert.AreEqual(0, sender.SendCount);
+            await MakeOutboxDueAsync(seeded.OutboxId);
+        }
+
+        sender.ReadinessException = null;
+        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+        var sent = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("sent", sent.Status);
+        Assert.AreEqual(1, sent.AttemptCount);
+        Assert.AreEqual(1, sender.SendCount);
+    }
+
+    [TestMethod]
+    public async Task ReadinessDependencyExceptionAlsoReleasesClaim()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("readiness-unavailable");
+        var sender = new MutableReadinessEmailSender(isConfigured: true)
+        {
+            ReadinessException = new EmailOperationalException("Synthetic provider diagnostic")
+        };
+        await CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default)
+            .DeliverAsync(seeded.OutboxId, CancellationToken.None);
+
+        var state = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("pending", state.Status);
+        Assert.AreEqual("mail_readiness_unavailable", state.LastErrorCode);
+        Assert.AreEqual(0, state.AttemptCount);
+        Assert.AreEqual(0, sender.SendCount);
+        Assert.IsFalse(state.LastErrorDetail?.Contains("Synthetic", StringComparison.Ordinal) == true);
+    }
+
+    [TestMethod]
+    public async Task CallerCancellationDuringReadinessPropagatesAndReleasesClaim()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("readiness-caller-cancel");
+        using var caller = new CancellationTokenSource();
+        var sender = new ReadinessGateEmailSender();
+        var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
+        var delivery = jobs.DeliverAsync(seeded.OutboxId, caller.Token);
+        await sender.FirstCheckStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        caller.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () => await delivery);
+        var state = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("pending", state.Status);
+        Assert.AreEqual("pre_send_cancelled", state.LastErrorCode);
+        Assert.AreEqual(0, state.AttemptCount);
+        Assert.AreEqual(0, sender.SendCount);
+    }
+
+    [TestMethod]
+    public async Task StaleReadinessFailureCannotOverwriteNewLeaseCompletion()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("stale-readiness");
+        var sender = new ReadinessGateEmailSender();
+        var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
+        var firstDelivery = jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+        await sender.FirstCheckStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await SetLeaseExpiryAsync(seeded.OutboxId, expired: true);
+        await jobs.SweepAsync(CancellationToken.None);
+        var reclaimed = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("pending", reclaimed.Status);
+        Assert.AreEqual("mail_readiness_unavailable", reclaimed.LastErrorCode);
+        Assert.AreEqual(0, reclaimed.AttemptCount);
+        await MakeOutboxDueAsync(seeded.OutboxId);
+        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+
+        sender.FailFirstCheck();
+        await firstDelivery;
+        var state = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("sent", state.Status);
+        Assert.AreEqual(1, state.AttemptCount);
+        Assert.AreEqual(1, sender.SendCount);
+    }
+
+    [TestMethod]
+    public async Task ExpiredProviderLeaseAtAttemptLimitFailsWithoutRecordedError()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("expired-provider-limit");
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = new SqlCommand(
+                """
+                UPDATE [asap].[EmailOutbox]
+                SET [Status] = N'sending', [AttemptCount] = 5,
+                    [SendingStartedUtc] = DATEADD(minute, -3, SYSUTCDATETIME()),
+                    [LeaseId] = NEWID(), [LeaseExpiresUtc] = DATEADD(minute, -1, SYSUTCDATETIME()),
+                    [LastErrorCode] = NULL
+                WHERE [Id] = @id;
+                """,
+                connection);
+            command.Parameters.AddWithValue("@id", seeded.OutboxId);
+            Assert.AreEqual(1, await command.ExecuteNonQueryAsync());
+        }
+
+        await CreateEmailOutboxJobs(new MutableReadinessEmailSender(isConfigured: true),
+            EmailOutboxRuntimeOptions.Default).SweepAsync(CancellationToken.None);
+        var state = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("failed", state.Status);
+        Assert.AreEqual("ambiguous_expired_lease", state.LastErrorCode);
+        Assert.AreEqual(5, state.AttemptCount);
+        Assert.IsNull(state.NextAttemptUtc);
     }
 
     [TestMethod]
@@ -7289,7 +9254,7 @@ public sealed partial class PatronJourneyTests
         return body.RootElement.GetProperty("antiforgeryToken").GetString()!;
     }
 
-    private static async Task<OperatorResolutionSeed> SeedOperatorResolutionAsync(
+    private async Task<OperatorResolutionSeed> SeedOperatorResolutionAsync(
         string suffix,
         string phase,
         bool liveOwner = false)
@@ -7306,11 +9271,11 @@ public sealed partial class PatronJourneyTests
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
             VALUES (2, N'200000000031' + RIGHT(N'00' + CONVERT(nvarchar(2), ABS(CHECKSUM(NEWID())) % 100), 2),
                     N'Operator resolution ' + @suffix, 1, @formatId, N'pending_hold',
-                    CONVERT(nvarchar(20), 93100 + ABS(CHECKSUM(NEWID())) % 800),
+                    93100 + ABS(CHECKSUM(NEWID())) % 800,
                     101, N'Main Library', N'found', DATEADD(minute, -8, SYSUTCDATETIME()), DATEADD(minute, -8, SYSUTCDATETIME()));
             DECLARE @requestId bigint = SCOPE_IDENTITY();
             DECLARE @barcode nvarchar(100) = (SELECT [Barcode] FROM [asap].[TitleRequest] WHERE [Id] = @requestId);
-            DECLARE @bibId nvarchar(100) = (SELECT [BibId] FROM [asap].[TitleRequest] WHERE [Id] = @requestId);
+            DECLARE @bibId int = (SELECT [BibId] FROM [asap].[TitleRequest] WHERE [Id] = @requestId);
             INSERT INTO [asap].[HoldPlacementOperation]
                 ([TitleRequestId], [PatronBarcodeSnapshot], [PatronIdSnapshot], [BibIdSnapshot], [PickupBranchIdSnapshot],
                  [RequestingOrganizationIdSnapshot], [WorkstationIdSnapshot], [PolarisUserIdSnapshot],
@@ -7319,7 +9284,7 @@ public sealed partial class PatronJourneyTests
                  [TxnGroupQualifier], [TxnQualifier], [ReplyAnswer], [ReplyState], [ResultCode], [OutcomeEvidenceKind],
                  [RecoveryAttemptCount], [LastRecoveryUtc], [LastErrorCode], [DetailJson])
             VALUES
-                (@requestId, @barcode, N'7105', @bibId, 101, 1, 1, N'1',
+                (@requestId, @barcode, 7105, @bibId, 101, 2, 1, 1,
                  1, N'operator_required', @phase,
                  CASE WHEN @liveOwner = 1 THEN NEWID() ELSE NULL END, 2,
                  CASE WHEN @liveOwner = 1 THEN DATEADD(minute, 2, SYSUTCDATETIME()) ELSE NULL END,
@@ -7327,15 +9292,15 @@ public sealed partial class PatronJourneyTests
                  CASE WHEN @phase IN (N'create_started', N'reply_started') THEN DATEADD(minute, -6, SYSUTCDATETIME()) ELSE NULL END,
                  CASE WHEN @phase = N'reply_started' THEN DATEADD(minute, -5, SYSUTCDATETIME()) ELSE NULL END,
                  CASE WHEN @phase = N'reply_started' THEN DATEADD(minute, -4, SYSUTCDATETIME()) ELSE NULL END,
-                 CASE WHEN @phase = N'reply_started' THEN CONVERT(nvarchar(100), NEWID()) ELSE NULL END,
+                 CASE WHEN @phase = N'reply_started' THEN NEWID() ELSE NULL END,
                  CASE WHEN @phase = N'reply_started' THEN N'group-qualifier' ELSE NULL END,
                  CASE WHEN @phase = N'reply_started' THEN N'transaction-qualifier' ELSE NULL END,
-                 CASE WHEN @phase = N'reply_started' THEN N'Yes' ELSE NULL END,
-                 CASE WHEN @phase = N'reply_started' THEN N'3' ELSE NULL END,
+                 CASE WHEN @phase = N'reply_started' THEN 1 ELSE NULL END,
+                 CASE WHEN @phase = N'reply_started' THEN 3 ELSE NULL END,
                  N'ambiguous', N'provider_transport_ambiguous', 1, DATEADD(minute, -3, SYSUTCDATETIME()),
                  N'provider_timeout', N'{"providerObservation":{"result":"ambiguous","source":"CLC"}}');
             DECLARE @operationId bigint = SCOPE_IDENTITY();
-            SELECT @requestId, @operationId, request.[RowVersion], operation.[RowVersion]
+            SELECT @requestId, @operationId, request.[RowVersion], operation.[RowVersion], request.[Barcode]
             FROM [asap].[TitleRequest] request
             JOIN [asap].[HoldPlacementOperation] operation ON operation.[Id] = @operationId
             WHERE request.[Id] = @requestId;
@@ -7345,6 +9310,9 @@ public sealed partial class PatronJourneyTests
         seed.Parameters.AddWithValue("@liveOwner", liveOwner);
         await using var reader = await seed.ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
+        factory!.Services.GetRequiredService<DeterministicTestingPatronProvider>().AddPatron(
+            new PatronSnapshot(7105, reader.GetString(4), "operator@example.org", "Test", "Operator",
+                1, "Adult", 101, 2, "Test Library", 101), [new(101, "Main Library"), new(102, "North Branch")], 2);
         return new OperatorResolutionSeed(
             reader.GetInt64(0),
             reader.GetInt64(1),
@@ -7414,7 +9382,7 @@ public sealed partial class PatronJourneyTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private static async Task<long> SeedPendingHoldRequestAsync(string title, string barcode, string bibId)
+    private static async Task<long> SeedPendingHoldRequestAsync(string title, string barcode, int bibId)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -7423,9 +9391,9 @@ public sealed partial class PatronJourneyTests
             DECLARE @formatId bigint = (
                 SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
             INSERT INTO [asap].[TitleRequest]
-                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-            VALUES (2, @barcode, @title, 1, @formatId, N'pending_hold', @bibId,
+            VALUES (2, @barcode, @title, 1, @formatId, N'pending_hold', @bibId, 1,
                     101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
             SELECT CONVERT(bigint, SCOPE_IDENTITY());
             """,
@@ -7470,10 +9438,10 @@ public sealed partial class PatronJourneyTests
     private static async Task<CompletedHoldIdentitySeed> SeedCompletedHoldIdentityAsync(
         string titleSuffix,
         string requestBarcode,
-        string requestBibId,
+        int requestBibId,
         string? operationBarcode = null,
-        string? operationBibId = null,
-        string? holdRequestId = null,
+        int? operationBibId = null,
+        int? holdRequestId = null,
         int organizationId = 2)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
@@ -7634,7 +9602,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(expectedAuditCount, reader.GetInt32(1));
     }
 
-    private static async Task<LifecycleClaimRaceSeed> SeedLifecycleClaimRaceAsync(
+    private async Task<LifecycleClaimRaceSeed> SeedLifecycleClaimRaceAsync(
         string suffix,
         string barcode)
     {
@@ -7671,7 +9639,7 @@ public sealed partial class PatronJourneyTests
         seed.Parameters.AddWithValue("@objectId", objectId);
         seed.Parameters.AddWithValue("@suffix", suffix);
         seed.Parameters.AddWithValue("@barcode", barcode);
-        await using var reader = await seed.ExecuteReaderAsync();
+        await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
         return new LifecycleClaimRaceSeed(
             reader.GetInt64(0),
@@ -7712,7 +9680,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(expectedCleanupEvents, reader.GetInt32(4));
     }
 
-    private static async Task<LifecycleAutoClaimRaceSeed> SeedLifecycleAutoClaimRaceAsync(string suffix)
+    private async Task<LifecycleAutoClaimRaceSeed> SeedLifecycleAutoClaimRaceAsync(string suffix)
     {
         var tenantId = Guid.Parse(TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin.TenantId!);
         var objectId = Guid.NewGuid();
@@ -7740,7 +9708,7 @@ public sealed partial class PatronJourneyTests
         seed.Parameters.AddWithValue("@tenantId", tenantId);
         seed.Parameters.AddWithValue("@objectId", objectId);
         seed.Parameters.AddWithValue("@suffix", suffix);
-        await using var reader = await seed.ExecuteReaderAsync();
+        await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
         return new LifecycleAutoClaimRaceSeed(
             reader.GetInt64(0),
@@ -7868,7 +9836,7 @@ public sealed partial class PatronJourneyTests
             VALUES
                 (2, N'Frozen source library ' + @suffix, N'20000000003' + RIGHT(N'000' + CONVERT(nvarchar(3), ABS(CHECKSUM(@suffix)) % 1000), 3),
                  N'Legacy source ' + @suffix, N'Slice 3 Author', N'9780000000300', N'Source publication', 1,
-                 @formatId, N'pending_hold', N'slice3-bib-' + @suffix, N'Original source note ' + @suffix,
+                 @formatId, N'pending_hold', CASE WHEN @suffix = N'workflow' THEN 95001 ELSE 100000 + ABS(CHECKSUM(@suffix)) % 100000000 END, N'Original source note ' + @suffix,
                  @currentId, N'Current claimant snapshot ' + @suffix, DATEADD(hour, -2, SYSUTCDATETIME()),
                  N'legacy', @ruleId, N'found', DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(hour, -1, SYSUTCDATETIME()));
             DECLARE @sourceId bigint = SCOPE_IDENTITY();
@@ -8028,7 +9996,7 @@ public sealed partial class PatronJourneyTests
                  [Status], [Notes], [CreatedUtc], [UpdatedUtc], [ClaimedByStaffUserId], [ClaimedByDisplayName],
                  [ClaimedAtUtc], [ClaimType], [ClosedUtc])
             VALUES
-                (2, N'Test Library snapshot', N'race-bib-' + @suffix, N'Race task ' + @suffix, @formatId, N'book',
+                (2, N'Test Library snapshot', 97003, N'Race task ' + @suffix, @formatId, N'book',
                  @status, N'Race note ' + @suffix, DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(hour, -1, SYSUTCDATETIME()),
                  CASE WHEN @claimed=1 THEN @staffId END,
                  CASE WHEN @claimed=1 THEN N'Race claimant snapshot ' + @suffix END,
@@ -8086,7 +10054,7 @@ public sealed partial class PatronJourneyTests
                  [Status], [Notes], [CreatedUtc], [UpdatedUtc], [ClaimedByStaffUserId], [ClaimedByDisplayName],
                  [ClaimedAtUtc], [ClaimType], [ClosedUtc])
             VALUES
-                (2, N'Test Library snapshot', N'candidate-bib', N'Candidate-change task', @formatId, N'book',
+                (2, N'Test Library snapshot', 97002, N'Candidate-change task', @formatId, N'book',
                  N'closed', N'Candidate note', DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(hour, -1, SYSUTCDATETIME()),
                  @firstId, N'First candidate snapshot', DATEADD(hour, -3, SYSUTCDATETIME()), N'manual',
                  DATEADD(minute, -30, SYSUTCDATETIME()));
@@ -8154,7 +10122,47 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(expectLifecycleAudit ? 1 : 0, reader.GetInt32(7));
     }
 
-    private static async Task<SeededStaffBrowserState> SeedStaffBrowserStateAsync(
+    private static async Task<SeededStaffBibLookupState> SeedStaffBibLookupStateAsync(Guid tenantId)
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var email = $"bib.lookup.{suffix}@example.org";
+        var barcode = $"20000000{suffix[..8]}";
+        var objectId = Guid.NewGuid();
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var seed = connection.CreateCommand();
+        seed.CommandText =
+            """
+            DECLARE @formatId bigint = (
+                SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
+            INSERT INTO [asap].[StaffUser]
+                ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                 [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive],
+                 [WeeklyActionSummaryEnabled], [PurchaseReminderDefault], [AdditionalCopyReminderDefault],
+                 [DefaultMineUnclaimedFilter])
+            VALUES
+                (@tenantId, @objectId, @email, UPPER(@email), N'BIB Lookup Test Staff', @email, N'staff', 2, 1,
+                 0, 0, 0, 0);
+            DECLARE @staffId bigint = SCOPE_IDENTITY();
+
+            INSERT INTO [asap].[TitleRequest]
+                ([LibraryOrganizationId], [Barcode], [Title], [Identifier], [AutoHold], [MaterialFormatId],
+                 [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, @barcode, N'BIB lookup boundary test', N'9780000000091', 1, @formatId,
+                 N'suggestion', N'not_found', SYSUTCDATETIME(), SYSUTCDATETIME());
+            SELECT @staffId, CONVERT(bigint, SCOPE_IDENTITY());
+            """;
+        seed.Parameters.AddWithValue("@tenantId", tenantId);
+        seed.Parameters.AddWithValue("@objectId", objectId);
+        seed.Parameters.AddWithValue("@email", email);
+        seed.Parameters.AddWithValue("@barcode", barcode);
+        await using var reader = await seed.ExecuteReaderAsync();
+        Assert.IsTrue(await reader.ReadAsync());
+        return new SeededStaffBibLookupState(reader.GetInt64(0), reader.GetInt64(1), email);
+    }
+
+    private async Task<SeededStaffBrowserState> SeedStaffBrowserStateAsync(
         Guid tenantId,
         Guid superObjectId,
         Guid staffObjectId)
@@ -8174,6 +10182,22 @@ public sealed partial class PatronJourneyTests
                 INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
                 VALUES (82, N'Other Browser Library', N'OBR', 1);
             END;
+
+            UPDATE [asap].[SystemSettings]
+            SET [LeapBibUrlPattern] = N'https://leap.example.test/bib/{{bibid}}',
+                [LeapPatronUrlPattern] = N'https://leap.example.test/patron/{{patron-id}}'
+            WHERE [OrganizationId] = 1;
+            UPDATE [asap].[ExternalSearchProvider]
+            SET [Label] = N'Browser vendor', [UrlTemplate] = N'https://search.example.test/find?q={{title}}',
+                [IsEnabled] = 1
+            WHERE [ProviderKey] = N'external_search_1';
+            UPDATE [asap].[ExternalSearchProvider]
+            SET [UrlTemplate] = N'https://search.example.test/id?q={{identifier}}', [IsEnabled] = 1
+            WHERE [ProviderKey] = N'external_search_3';
+            INSERT INTO [asap].[ExternalSearchProviderOverride]
+                ([LibraryOrganizationId], [ExternalSearchProviderId], [IsEnabled])
+            SELECT 2, [Id], 0 FROM [asap].[ExternalSearchProvider]
+            WHERE [ProviderKey] = N'external_search_2';
 
             DECLARE @superId bigint = (
                 SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
@@ -8254,18 +10278,24 @@ public sealed partial class PatronJourneyTests
                 (2, @formatId, @audienceFieldId, N'optional'),
                 (2, @formatId, @bindingFieldId, N'required');
 
+            DECLARE @previousTitleIdentity bigint = CONVERT(bigint, IDENT_CURRENT(N'[asap].[TitleRequest]'));
+            DECLARE @primaryId bigint = CONVERT(bigint, '9007199254741993');
+            SET IDENTITY_INSERT [asap].[TitleRequest] ON;
             INSERT INTO [asap].[TitleRequest]
-                ([LegacyId], [LibraryOrganizationId], [Barcode], [Email], [NameFirst], [NameLast], [Title],
+                ([Id], [LegacyId], [LibraryOrganizationId], [Barcode], [Email], [NameFirst], [NameLast], [Title],
                  [Author], [Identifier], [Publication], [CustomFieldsJson], [AutoHold], [MaterialFormatId], [Status], [BibId],
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [ClaimedByStaffUserId],
                  [ClaimedByDisplayName], [ClaimedAtUtc], [ClaimType], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
             VALUES
-                (@legacyId, 2, N'20000000002901', N'browser.patron@example.org', N'Browser', N'Patron',
+                (@primaryId, @legacyId, 2, N'20000000002901', N'browser.patron@example.org', N'Browser', N'Patron',
                  N'Browser staff title', N'Browser Author', N'9780000002901', N'Historical browser publication',
                  N'{"audience_note":{"label":"Audience note","type":"text","value":"Historic audience"},"binding":{"label":"Binding","type":"select","value":"historic","displayValue":"Historic binding"},"retired":{"label":"Retired field","type":"text","value":"Keep me"}}', 1,
                  @formatId, N'suggestion', NULL, 101, N'Main Library', @superId, N'Initial Administrator',
                  SYSUTCDATETIME(), N'manual', N'not_found', SYSUTCDATETIME(), SYSUTCDATETIME());
-            DECLARE @primaryId bigint = SCOPE_IDENTITY();
+            SET IDENTITY_INSERT [asap].[TitleRequest] OFF;
+            DECLARE @reseedSql nvarchar(200) = N'DBCC CHECKIDENT (''[asap].[TitleRequest]'', RESEED, '
+                + CONVERT(nvarchar(30), @previousTitleIdentity) + N') WITH NO_INFOMSGS';
+            EXEC sp_executesql @reseedSql;
             INSERT INTO [asap].[LegacyPocketBaseMapping] ([EntityType], [PocketBaseId], [NewId])
             VALUES (N'title_request', @legacyId, @primaryId);
 
@@ -8407,7 +10437,7 @@ public sealed partial class PatronJourneyTests
         seed.Parameters.AddWithValue("@invalidTenantId", invalidTenantId);
         seed.Parameters.AddWithValue("@invalidTenantStaffObjectId", invalidTenantStaffObjectId);
         seed.Parameters.AddWithValue("@legacyId", legacyRequestId);
-        await using var result = await seed.ExecuteReaderAsync();
+        await using var result = await WithFixtureClock(seed).ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
         return new SeededStaffBrowserState(
             result.GetInt64(0),
@@ -8431,6 +10461,8 @@ public sealed partial class PatronJourneyTests
             result.GetInt64(17),
             result.GetInt64(18));
     }
+
+    private sealed record SeededStaffBibLookupState(long StaffId, long RequestId, string Email);
 
     private sealed record SeededStaffBrowserState(
         long SuperId,
@@ -8465,6 +10497,8 @@ public sealed partial class PatronJourneyTests
             VALUES (2, N'Test Library', N'TEST', 1);
             INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
             VALUES (101, N'Main Library Branch', N'MAIN', 0);
+            UPDATE [asap].[PolarisSettings]
+            SET [WorkstationId] = 99, [SystemPolarisUserId] = 42 WHERE [OrganizationId] = 1;
             UPDATE [asap].[EmailSettings]
             SET [FromAddress] = N'asap@example.org', [FromName] = N'ASAP Tests', [UpdatedUtc] = SYSUTCDATETIME()
             WHERE [OrganizationId] = 1;
@@ -8512,7 +10546,7 @@ public sealed partial class PatronJourneyTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private async Task<PolarisPatronProvider> CreatePolarisProviderAsync(HttpMessageHandler handler)
+    private async Task<PolarisPatronProvider> CreatePolarisProviderAsync(HttpMessageHandler handler, string accessId = "test-access")
     {
         var services = factory!.Services;
         var protector = services.GetRequiredService<IntegrationCredentialProtector>();
@@ -8524,18 +10558,17 @@ public sealed partial class PatronJourneyTests
                 """
                 UPDATE [asap].[PolarisSettings]
                 SET [Host] = N'https://polaris.invalid',
-                    [AccessId] = N'test-access',
+                    [AccessId] = @accessId,
                     [ProtectedApiKey] = @apiKey,
                     [StaffDomain] = N'TEST',
                     [AdminUser] = N'test-admin',
                     [ProtectedAdminPassword] = @password,
                     [WorkstationId] = 99,
                     [SystemPolarisUserId] = 42,
-                    [OrganizationIdForRequests] = 7,
-                    [PickupOrganizationId] = 101,
                     [UpdatedUtc] = SYSUTCDATETIME()
                 WHERE [OrganizationId] = 1;
                 """;
+            command.Parameters.AddWithValue("@accessId", accessId);
             command.Parameters.AddWithValue("@apiKey", protector.Protect("test-api-key"));
             command.Parameters.AddWithValue("@password", protector.Protect("test-password"));
             await command.ExecuteNonQueryAsync();
@@ -8544,7 +10577,7 @@ public sealed partial class PatronJourneyTests
         return new PolarisPatronProvider(
             services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
             protector,
-            new SingleClientFactory(new HttpClient(handler)));
+            new SingleClientFactory(new HttpClient(handler)), services.GetRequiredService<TimeProvider>());
     }
 
     private async Task<SeededSensitiveOutbox> SeedSensitiveOutboxAsync(
@@ -8603,7 +10636,7 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@weeklyEmail", (object?)weeklyEmail ?? DBNull.Value);
         command.Parameters.AddWithValue("@toAddress", toAddress);
         command.Parameters.AddWithValue("@businessKey", $"sensitive-{key}:{Guid.NewGuid():N}");
-        await using var reader = await command.ExecuteReaderAsync();
+        await using var reader = await WithFixtureClock(command).ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
         return new SeededSensitiveOutbox(reader.GetInt64(0), reader.GetInt64(1), toAddress);
     }
@@ -8623,7 +10656,7 @@ public sealed partial class PatronJourneyTests
             new RecipientDomainPolicy(configuration),
             dispatcher!,
             options,
-            NullLogger<EmailOutboxJobs>.Instance);
+            NullLogger<EmailOutboxJobs>.Instance, timeProvider!);
     }
 
     private PatronSuggestionService CreatePatronSuggestionService(
@@ -8637,11 +10670,11 @@ public sealed partial class PatronJourneyTests
         return new PatronSuggestionService(
             configuration,
             factory!.Services.GetRequiredService<PatronConfigurationService>(),
-            new DeterministicTestingPatronProvider(),
+            DeterministicJourneyScenario.Create(),
             outboxDispatcher,
             emailSender ?? new RecordingEmailSender(),
             new RecipientDomainPolicy(configuration),
-            TimeProvider.System,
+            timeProvider!,
             NullLogger<PatronSuggestionService>.Instance);
     }
 
@@ -8696,10 +10729,10 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(await reader.ReadAsync());
         var setCount = reader.GetInt32(0);
         Assert.IsTrue(await reader.NextResultAsync());
-        var values = new List<string>();
+        var values = new List<int>();
         while (await reader.ReadAsync())
         {
-            values.Add(reader.GetString(0));
+            values.Add(reader.GetInt32(0));
         }
 
         return new PatronCodeRows(setCount, values.ToArray());
@@ -8982,6 +11015,49 @@ public sealed partial class PatronJourneyTests
             reader.IsDBNull(3) ? null : reader.GetString(3));
     }
 
+    private static async Task<PreSendOutboxState> ReadPreSendStateAsync(long outboxId)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT [Status], [LastErrorCode], [LastErrorDetail], [AttemptCount], [NextAttemptUtc], " +
+            "[SendingStartedUtc], [LeaseId], [LeaseExpiresUtc] FROM [asap].[EmailOutbox] WHERE [Id] = @id;";
+        command.Parameters.AddWithValue("@id", outboxId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.IsTrue(await reader.ReadAsync());
+        return new PreSendOutboxState(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.GetInt32(3),
+            reader.IsDBNull(4) ? null : reader.GetDateTime(4),
+            reader.IsDBNull(5) ? null : reader.GetDateTime(5),
+            reader.IsDBNull(6) ? null : reader.GetGuid(6),
+            reader.IsDBNull(7) ? null : reader.GetDateTime(7));
+    }
+
+    private async Task MakeOutboxDueAsync(long outboxId)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "UPDATE [asap].[EmailOutbox] SET [NextAttemptUtc] = DATEADD(second, -1, SYSUTCDATETIME()) WHERE [Id] = @id;",
+            connection);
+        command.Parameters.AddWithValue("@id", outboxId);
+        Assert.AreEqual(1, await WithFixtureClock(command).ExecuteNonQueryAsync());
+    }
+
+    private sealed record PreSendOutboxState(
+        string Status,
+        string? LastErrorCode,
+        string? LastErrorDetail,
+        int AttemptCount,
+        DateTime? NextAttemptUtc,
+        DateTime? SendingStartedUtc,
+        Guid? LeaseId,
+        DateTime? LeaseExpiresUtc);
+
     private static async Task SetLeaseExpiryAsync(long outboxId, bool expired)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
@@ -9094,7 +11170,7 @@ public sealed partial class PatronJourneyTests
         string? ProviderMessageId,
         string? SuppressionReason);
 
-    private sealed record PatronCodeRows(int SetCount, string[] Values);
+    private sealed record PatronCodeRows(int SetCount, int[] Values);
 
     private sealed record ScalarSettingCase(string Section, string Name, object? SystemValue, object? LibraryValue);
 
@@ -9134,6 +11210,30 @@ public sealed partial class PatronJourneyTests
                 "Testing patron-code reference failure.");
     }
 
+    private sealed class LockProbePatronCodeReferenceProvider(string connectionString) : IPolarisReferenceProvider
+    {
+        public bool LockProbeSucceeded { get; private set; }
+
+        public Task<PolarisConnectionTestResult> TestConnectionAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new PolarisConnectionTestResult(true, 1));
+
+        public Task<IReadOnlyList<PolarisOrganizationSnapshot>> GetOrganizationsAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<PolarisOrganizationSnapshot>>([]);
+
+        public async Task<IReadOnlyList<PolarisPatronCodeSnapshot>> GetPatronCodesAsync(
+            CancellationToken cancellationToken)
+        {
+            await using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT [Id] FROM [asap].[Organization] WITH (UPDLOCK, NOWAIT) WHERE [Id] = 2;";
+            await command.ExecuteScalarAsync(cancellationToken);
+            LockProbeSucceeded = true;
+            return [new PolarisPatronCodeSnapshot(1, "Adult")];
+        }
+    }
+
     private sealed class DisallowedPreferredPickupPatronProvider : IPatronProvider
     {
         public Task<PatronSnapshot> AuthenticateAsync(
@@ -9146,54 +11246,69 @@ public sealed partial class PatronJourneyTests
                 "patron@example.org",
                 "Test",
                 "Patron",
-                "1",
+                1,
                 null,
                 300,
                 2,
                 "Test Library",
                 300));
 
-        public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken) =>
+        public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken) =>
             AuthenticateAsync(barcode, string.Empty, cancellationToken);
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
             PatronSnapshot patron,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PickupBranch>>([new PickupBranch(200, "Allowed Branch")]);
 
         public Task UpdatePreferredPickupBranchAsync(
             string barcode,
             int pickupBranchId,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(
             string identifier,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(new IdentifierLookupResult(IdentifierLookupOutcome.NotFound));
     }
 
     private sealed class ControllablePickupPatronProvider : IPatronProvider
     {
-        public int CurrentPickupBranchId { get; private set; } = 101;
+        public int? CurrentPickupBranchId { get; set; } = 101;
+        public bool IncludeEastBranch { get; set; }
+        public int RefreshCount { get; private set; }
         public int UpdateCount { get; private set; }
         public bool FailUpdate { get; set; }
+        public Exception? RefreshException { get; set; }
+        public Exception? PickupBranchesException { get; set; }
+        public Action<CancellationToken>? BeforeRefresh { get; set; }
+        public Action<CancellationToken>? BeforePickupBranches { get; set; }
+        public Action? AfterUpdate { get; set; }
+        public Action? BeforePickupBranchesReturn { get; set; }
+        public Action? BeforeIdentifierLookup { get; set; }
 
         public Task<PatronSnapshot> AuthenticateAsync(
             string barcode,
             string pin,
-            CancellationToken cancellationToken) => RefreshAsync(barcode, cancellationToken);
+            CancellationToken cancellationToken) => RefreshAsync(barcode, 2, cancellationToken);
 
-        public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+        public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken)
         {
+            RefreshCount++;
+            BeforeRefresh?.Invoke(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            if (RefreshException is not null)
+            {
+                throw RefreshException;
+            }
             return Task.FromResult(new PatronSnapshot(
                 7004,
                 barcode,
                 "pickup@example.org",
                 "Pickup",
                 "Patron",
-                "1",
+                1,
                 "Adult",
                 101,
                 2,
@@ -9203,17 +11318,25 @@ public sealed partial class PatronJourneyTests
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
             PatronSnapshot patron,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
+            BeforePickupBranches?.Invoke(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<PickupBranch>>(
-                [new PickupBranch(101, "Main Library"), new PickupBranch(102, "North Branch")]);
+            if (PickupBranchesException is not null)
+            {
+                throw PickupBranchesException;
+            }
+            BeforePickupBranchesReturn?.Invoke();
+            return Task.FromResult<IReadOnlyList<PickupBranch>>(IncludeEastBranch
+                ? [new PickupBranch(101, "Main Library"), new PickupBranch(102, "North Branch"),
+                   new PickupBranch(103, "East Branch")]
+                : [new PickupBranch(101, "Main Library"), new PickupBranch(102, "North Branch")]);
         }
 
         public Task UpdatePreferredPickupBranchAsync(
             string barcode,
             int pickupBranchId,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             UpdateCount++;
@@ -9222,13 +11345,18 @@ public sealed partial class PatronJourneyTests
                 throw new PolarisOperationalException("testing_pickup_failure", "Testing pickup failure.");
             }
             CurrentPickupBranchId = pickupBranchId;
+            AfterUpdate?.Invoke();
             return Task.CompletedTask;
         }
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(
             string identifier,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new IdentifierLookupResult(IdentifierLookupOutcome.NotFound));
+            int organizationId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            BeforeIdentifierLookup?.Invoke();
+            return Task.FromResult(new IdentifierLookupResult(IdentifierLookupOutcome.NotFound));
+        }
     }
 
     private sealed class ScriptedHoldProvider : IPatronProvider, IStaffPolarisProvider
@@ -9247,12 +11375,19 @@ public sealed partial class PatronJourneyTests
         public int ReplyCount { get; private set; }
         public int HoldReadCount { get; private set; }
         public IReadOnlyList<PolarisHoldSnapshot> Holds { get; set; } = [];
+        public Exception? HoldReadException { get; set; }
         public Exception? CreateException { get; set; }
         public Exception? ReplyException { get; set; }
         public PolarisHoldSnapshot? HoldAfterCreate { get; set; }
         public TaskCompletionSource CreateStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<HoldProviderResult>? PendingCreate { get; private set; }
+        public TaskCompletionSource HoldReadStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource? PendingHoldRead { get; private set; }
+        public TaskCompletionSource RefreshStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource? PendingRefresh { get; private set; }
         public TaskCompletionSource ReplyStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<HoldProviderResult>? PendingReply { get; private set; }
@@ -9272,14 +11407,14 @@ public sealed partial class PatronJourneyTests
                 new HoldProviderResult(
                     HoldProviderOutcome.FinalSuccess,
                     null,
-                    "8123",
+                    8123,
                     "group-qualifier",
                     "transaction-qualifier",
                     2,
-                    0,
+                    1,
                     "documented_reply_success"));
-            provider.createResult = provider.createResult with { RequestGuid = provider.RequestGuid.ToString() };
-            provider.replyResult = provider.replyResult with { RequestGuid = provider.RequestGuid.ToString() };
+            provider.createResult = provider.createResult with { RequestGuid = provider.RequestGuid };
+            provider.replyResult = provider.replyResult with { RequestGuid = provider.RequestGuid };
             return provider;
         }
 
@@ -9308,6 +11443,18 @@ public sealed partial class PatronJourneyTests
         public void BlockCreate() => PendingCreate = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public void BlockHoldRead() => PendingHoldRead = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void CompleteBlockedHoldRead() => PendingHoldRead!.TrySetResult();
+
+        public void BlockRefresh() => PendingRefresh = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void CompleteBlockedRefresh() => PendingRefresh!.TrySetResult();
+
+        public void CompleteBlockedCreateWithConfiguredResult() => PendingCreate!.TrySetResult(createResult);
+
         public void CompleteBlockedCreate(HoldProviderResult result) =>
             PendingCreate!.TrySetResult(result);
 
@@ -9320,50 +11467,64 @@ public sealed partial class PatronJourneyTests
         public Task<PatronSnapshot> AuthenticateAsync(
             string barcode,
             string pin,
-            CancellationToken cancellationToken) => RefreshAsync(barcode, cancellationToken);
+            CancellationToken cancellationToken) => RefreshAsync(barcode, 2, cancellationToken);
 
-        public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+        public async Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(new PatronSnapshot(
+            if (PendingRefresh is not null)
+            {
+                RefreshStarted.TrySetResult();
+                await PendingRefresh.Task.WaitAsync(cancellationToken);
+            }
+            return new PatronSnapshot(
                 7105,
                 barcode,
                 "hold-patron@example.org",
                 "Hold",
                 "Patron",
-                "1",
+                1,
                 "Adult",
                 101,
                 2,
                 "Test Library",
-                101));
+                101);
         }
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
             PatronSnapshot patron,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PickupBranch>>([new PickupBranch(101, "Main Library")]);
 
         public Task UpdatePreferredPickupBranchAsync(
             string barcode,
             int pickupBranchId,
-            CancellationToken cancellationToken) => Task.CompletedTask;
+            int organizationId, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(
             string identifier,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(new IdentifierLookupResult(IdentifierLookupOutcome.NotFound));
 
-        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken) =>
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(new BibValidationResult(true));
 
-        public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
+        public async Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
             string barcode,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             HoldReadCount++;
-            return Task.FromResult(Holds);
+            if (HoldReadException is not null)
+            {
+                throw HoldReadException;
+            }
+            if (PendingHoldRead is not null)
+            {
+                HoldReadStarted.TrySetResult();
+                await PendingHoldRead.Task.WaitAsync(cancellationToken);
+            }
+            return Holds;
         }
 
         public Task<HoldProviderResult> CreateHoldAsync(
@@ -9405,16 +11566,56 @@ public sealed partial class PatronJourneyTests
     {
         public int ValidationCount { get; private set; }
 
-        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
+        public bool OperationalFailure { get; set; }
+
+        public bool ValidBib { get; set; }
+
+        public Exception? ValidationException { get; set; }
+
+        public Exception? SearchException { get; set; }
+
+        public Action<CancellationToken>? BeforeValidation { get; set; }
+
+        public Action<CancellationToken>? BeforeSearch { get; set; }
+
+        public int SearchCount { get; private set; }
+
+        public Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(
+            string query,
+            int organizationId, CancellationToken cancellationToken)
         {
+            SearchCount++;
+            BeforeSearch?.Invoke(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            if (SearchException is not null)
+            {
+                throw SearchException;
+            }
+
+            throw new NotSupportedException();
+        }
+
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken)
+        {
             ValidationCount++;
-            return Task.FromResult(new BibValidationResult(false));
+            BeforeValidation?.Invoke(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ValidationException is not null)
+            {
+                throw ValidationException;
+            }
+
+            if (OperationalFailure)
+            {
+                throw new PolarisOperationalException("polaris_bib_validation_failed", "Polaris is unavailable.");
+            }
+
+            return Task.FromResult(new BibValidationResult(ValidBib));
         }
 
         public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
             string barcode,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
         public Task<HoldProviderResult> CreateHoldAsync(
@@ -9432,6 +11633,10 @@ public sealed partial class PatronJourneyTests
     {
         public bool IsConfigured { get; set; } = isConfigured;
 
+        public bool TimeoutReadiness { get; set; }
+
+        public Exception? ReadinessException { get; set; }
+
         public int SendCount { get; private set; }
 
         public bool ReturnNotConfiguredOnSend { get; init; }
@@ -9441,6 +11646,14 @@ public sealed partial class PatronJourneyTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (TimeoutReadiness)
+            {
+                throw new OperationCanceledException("Email readiness timed out without caller cancellation.");
+            }
+            if (ReadinessException is not null)
+            {
+                throw ReadinessException;
+            }
             return Task.FromResult(
                 IsConfigured
                     ? EmailTransportReadiness.Configured
@@ -9458,6 +11671,38 @@ public sealed partial class PatronJourneyTests
                     ? EmailSendResult.NotConfigured
                     : new EmailSendResult("test-message"));
         }
+    }
+
+    private sealed class ReadinessGateEmailSender : IEmailSender
+    {
+        private readonly TaskCompletionSource<EmailTransportReadiness> firstCheck =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int checkCount;
+
+        public TaskCompletionSource FirstCheckStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int SendCount { get; private set; }
+
+        public Task<EmailTransportReadiness> CheckReadinessAsync(
+            int organizationId,
+            CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref checkCount) == 1)
+            {
+                FirstCheckStarted.TrySetResult();
+                return firstCheck.Task.WaitAsync(cancellationToken);
+            }
+            return Task.FromResult(EmailTransportReadiness.Configured);
+        }
+
+        public Task<EmailSendResult> SendAsync(EmailEnvelope envelope, CancellationToken cancellationToken)
+        {
+            SendCount++;
+            return Task.FromResult(new EmailSendResult("new-owner-message"));
+        }
+
+        public void FailFirstCheck() => firstCheck.TrySetException(new TaskCanceledException("Synthetic stale timeout"));
     }
 
     private sealed class CancellationAwareTimeoutEmailSender : IEmailSender
@@ -9520,6 +11765,7 @@ public sealed partial class PatronJourneyTests
     {
         public int RequestCount { get; private set; }
         public List<string> RequestPaths { get; } = [];
+        public List<Uri> RequestUris { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -9528,6 +11774,7 @@ public sealed partial class PatronJourneyTests
             cancellationToken.ThrowIfCancellationRequested();
             RequestCount++;
             RequestPaths.Add(request.RequestUri!.AbsolutePath);
+            RequestUris.Add(request.RequestUri);
             return Task.FromResult(new HttpResponseMessage(statusCode)
             {
                 Content = new StringContent(content),
@@ -9542,6 +11789,8 @@ public sealed partial class PatronJourneyTests
         private readonly Queue<(HttpStatusCode StatusCode, string Content)> remaining = new(responses);
 
         public int RequestCount { get; private set; }
+        public List<Uri> RequestUris { get; } = [];
+        public Action<int, CancellationToken>? OnRequest { get; set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -9549,6 +11798,59 @@ public sealed partial class PatronJourneyTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             RequestCount++;
+            RequestUris.Add(request.RequestUri!);
+            OnRequest?.Invoke(RequestCount, cancellationToken);
+            if (!remaining.TryDequeue(out var response))
+            {
+                throw new InvalidOperationException("No fake Polaris response remains for this request.");
+            }
+
+            return Task.FromResult(new HttpResponseMessage(response.StatusCode)
+            {
+                Content = new StringContent(response.Content),
+                RequestMessage = request
+            });
+        }
+    }
+
+    private sealed class ProtectedSequenceResponseHandler(
+        params (HttpStatusCode StatusCode, string Content)[] responses) : HttpMessageHandler
+    {
+        private const string ProtectedTokenContent =
+            "{\"PAPIErrorCode\":0,\"AccessToken\":\"protected-token\",\"AccessSecret\":\"protected-secret\",\"AuthExpDate\":\"2030-01-01T00:00:00Z\"}";
+        private readonly Queue<(HttpStatusCode StatusCode, string Content)> remaining = new(responses);
+
+        public int RequestCount { get; private set; }
+        public List<Uri> RequestUris { get; } = [];
+        public Exception? ProtectedRequestException { get; set; }
+        public Action<CancellationToken>? BeforeProtectedRequest { get; set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RequestCount++;
+            RequestUris.Add(request.RequestUri!);
+            var isAuthentication = request.RequestUri!.AbsolutePath.Contains(
+                "/authenticator/staff",
+                StringComparison.OrdinalIgnoreCase);
+            if (isAuthentication)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(ProtectedTokenContent),
+                    RequestMessage = request
+                });
+            }
+
+            BeforeProtectedRequest?.Invoke(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ProtectedRequestException is not null)
+            {
+                throw ProtectedRequestException;
+            }
+
             if (!remaining.TryDequeue(out var response))
             {
                 throw new InvalidOperationException("No fake Polaris response remains for this request.");
@@ -9594,6 +11896,25 @@ public sealed partial class PatronJourneyTests
                 RequestMessage = request
             };
         }
+    }
+
+    // SQL fixture creation and application mutations share the same deterministic clock.
+    private SqlCommand WithFixtureClock(SqlCommand command)
+    {
+        if (command.CommandText.Contains("SYSUTCDATETIME()", StringComparison.OrdinalIgnoreCase))
+        {
+            command.CommandText = command.CommandText.Replace(
+                "SYSUTCDATETIME()", "@fixtureUtc", StringComparison.OrdinalIgnoreCase);
+            if (command.Parameters.Contains("@fixtureUtc"))
+            {
+                command.Parameters["@fixtureUtc"].Value = timeProvider!.GetUtcNow().UtcDateTime;
+            }
+            else
+            {
+                command.Parameters.Add("@fixtureUtc", System.Data.SqlDbType.DateTime2).Value = timeProvider!.GetUtcNow().UtcDateTime;
+            }
+        }
+        return command;
     }
 
     private sealed class MutableTimeProvider(DateTimeOffset initialUtc) : TimeProvider

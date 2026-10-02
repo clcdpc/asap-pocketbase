@@ -24,6 +24,10 @@ $functionNames = @(
     'Test-PublishedApplicationConfigPath',
     'Get-SqlConnectionDetails',
     'Get-SqlCmdArguments',
+    'Read-ExternalConfiguration',
+    'Assert-NonProductionConfiguration',
+    'Get-DatabaseRecoveryModel',
+    'Set-NonProductionDatabaseRecovery',
     'Wait-AppPoolState',
     'Stop-TestAppPool',
     'Start-TestAppPool'
@@ -133,6 +137,21 @@ $externalRoot = Join-Path $fixtureRoot 'External'
 try {
     New-Item -ItemType Directory -Force -Path $webRoot, $externalRoot | Out-Null
     $externalPath = Join-Path $externalRoot 'application.json'
+    $keysPath = Join-Path $externalRoot 'keys'
+    New-Item -ItemType Directory -Path $keysPath | Out-Null
+    foreach ($environment in @(@{}, @{ IsNonProduction = $false }, @{ IsNonProduction = 'true' }, @{ IsNonProduction = 1 })) {
+        $external = @{ Environment = $environment; Application = @{ DataProtectionKeysPath = $keysPath } }
+        [IO.File]::WriteAllText($externalPath, ($external | ConvertTo-Json -Depth 4))
+        Assert-ThrowsLike -Action {
+            Read-ExternalConfiguration -ApplicationConfigPath $externalPath -DeploymentPath $webRoot
+        } -Pattern '*Environment.IsNonProduction to be exactly true*'
+    }
+    $external = @{ Environment = @{ IsNonProduction = $true }; Application = @{ DataProtectionKeysPath = $keysPath } }
+    [IO.File]::WriteAllText($externalPath, ($external | ConvertTo-Json -Depth 4))
+    $validated = Read-ExternalConfiguration -ApplicationConfigPath $externalPath -DeploymentPath $webRoot
+    if ($validated.Environment.IsNonProduction -ne $true) {
+        throw 'Preflight must retain the validated external configuration.'
+    }
     $normalizedVariant = [IO.Path]::Combine($externalRoot, 'nested', '..', 'APPLICATION.json')
     $appsettings = @{
         Asap = @{
@@ -184,7 +203,7 @@ try {
         versionOrLabel = 'schema-contract-test'
         commitSha = '1111111111111111111111111111111111111111'
         buildUtc = '2026-09-17T00:00:00.000Z'
-        applicationSchemaVersion = 6
+        applicationSchemaVersion = 10
         hangfireSchemaVersion = 9
         dacpacSha256 = (Get-FileHash -LiteralPath (Join-Path $databaseRoot 'Asap.Database.dacpac') -Algorithm SHA256).Hash.ToLowerInvariant()
         webPayloadSha256 = $webIdentity.Hash
@@ -203,11 +222,11 @@ try {
         -ExpectedCommit $manifest.commitSha `
         -ExpectedLabel $manifest.versionOrLabel `
         -StagingPath (Join-Path $archiveFixtureRoot 'valid-staging')
-    if ([int] $accepted.Manifest.applicationSchemaVersion -ne 6) {
-        throw 'Schema 6 deployment manifest was not accepted.'
+    if ([int] $accepted.Manifest.applicationSchemaVersion -ne 10) {
+        throw 'Schema 9 deployment manifest was not accepted.'
     }
 
-    $manifest.applicationSchemaVersion = 5
+    $manifest.applicationSchemaVersion = 6
     [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     $invalidZip = Join-Path $archiveFixtureRoot 'invalid.zip'
     Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $invalidZip
@@ -226,4 +245,56 @@ finally {
     Remove-Item -LiteralPath $archiveFixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host 'Deployment application-configuration preflight tests passed.'
+$script:recoveryModel = 'FULL'
+$script:recoveryCalls = [Collections.Generic.List[object]]::new()
+$script:recoveryFailure = ''
+function Invoke-TestSqlCmd {
+    $script:recoveryCalls.Add(@($args))
+    $script:LASTEXITCODE = 0
+    if ($args -notcontains 'asap-fixture' -or $args -notcontains '-E' -or $args -contains 'hangfire-fixture') {
+        throw 'Recovery commands must use only the configured ASAP application database and integrated authentication.'
+    }
+    $isAlter = $args[-1] -eq 'ALTER DATABASE CURRENT SET RECOVERY SIMPLE;'
+    if (($script:recoveryFailure -eq 'query' -and -not $isAlter) -or ($script:recoveryFailure -eq 'alter' -and $isAlter)) {
+        $script:LASTEXITCODE = 1
+        return 'sqlcmd failed'
+    }
+    if ($isAlter) {
+        if ($script:recoveryFailure -ne 'verify') {
+            $script:recoveryModel = 'SIMPLE'
+        }
+    }
+    else {
+        return $script:recoveryModel
+    }
+}
+$recoveryParameters = @{
+    ExternalConfiguration = [pscustomobject]@{ Environment = [pscustomobject]@{ IsNonProduction = $true } }
+    SqlCmdPath = 'Invoke-TestSqlCmd'
+    ConnectionString = 'Server=fixture;Database=asap-fixture;Integrated Security=True;TrustServerCertificate=True'
+}
+Set-NonProductionDatabaseRecovery @recoveryParameters
+if ($script:recoveryCalls.Count -ne 3 -or $script:recoveryModel -ne 'SIMPLE') {
+    throw 'FULL recovery must be queried, changed once and verified as SIMPLE.'
+}
+$script:recoveryCalls.Clear()
+Set-NonProductionDatabaseRecovery @recoveryParameters
+if ($script:recoveryCalls.Count -ne 1) {
+    throw 'Already-SIMPLE recovery must require only a query.'
+}
+foreach ($failure in @('query', 'alter', 'verify')) {
+    $script:recoveryModel = 'FULL'
+    $script:recoveryFailure = $failure
+    Assert-ThrowsLike -Action { Set-NonProductionDatabaseRecovery @recoveryParameters } -Pattern '*recovery*'
+}
+$script:recoveryFailure = ''
+$script:recoveryModel = 'unusable'
+Assert-ThrowsLike -Action { Set-NonProductionDatabaseRecovery @recoveryParameters } -Pattern '*no unique usable model*'
+$script:recoveryCalls.Clear()
+$recoveryParameters.ExternalConfiguration = [pscustomobject]@{ Environment = [pscustomobject]@{ IsNonProduction = $false } }
+Assert-ThrowsLike -Action { Set-NonProductionDatabaseRecovery @recoveryParameters } -Pattern '*Environment.IsNonProduction to be exactly true*'
+if ($script:recoveryCalls.Count -ne 0) {
+    throw 'Production-marked configuration must fail before any recovery query or mutation.'
+}
+
+Write-Host 'Deployment application-configuration and recovery preflight tests passed.'

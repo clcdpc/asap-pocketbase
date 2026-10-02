@@ -1,3 +1,5 @@
+using Clc.Polaris.Api.Models;
+
 namespace Asap.Web.Infrastructure.Data;
 
 public sealed class Organization
@@ -64,8 +66,6 @@ public sealed class PolarisSettings
     public string? ProtectedAdminPassword { get; set; }
     public int? WorkstationId { get; set; }
     public int? SystemPolarisUserId { get; set; }
-    public int? OrganizationIdForRequests { get; set; }
-    public int? PickupOrganizationId { get; set; }
     public DateTime UpdatedUtc { get; set; }
     public byte[] RowVersion { get; set; } = [];
 }
@@ -160,7 +160,7 @@ public sealed class PatronCodeEligibilitySet
 public sealed class PatronCodeEligibilityMember
 {
     public int OrganizationId { get; set; }
-    public required string PatronCodeId { get; set; }
+    public int PatronCodeId { get; set; }
 }
 
 public sealed class PublicationOptionSet
@@ -340,7 +340,7 @@ public sealed class TitleRequest
     public string? Email { get; set; }
     public string? NameFirst { get; set; }
     public string? NameLast { get; set; }
-    public string? PatronCodeId { get; set; }
+    public int? PatronCodeId { get; set; }
     public string? PatronCodeDescription { get; set; }
     public int? PreferredPickupBranchId { get; set; }
     public string? PreferredPickupBranchName { get; set; }
@@ -355,7 +355,9 @@ public sealed class TitleRequest
     public long MaterialFormatId { get; set; }
     public required string Status { get; set; }
     public string? CloseReason { get; set; }
-    public string? BibId { get; set; }
+    public int? BibId { get; set; }
+    public bool BibIdStaffVerified { get; set; }
+    public bool LegacyHoldProtected { get; set; }
     public string? Notes { get; set; }
     public long? ClaimedByStaffUserId { get; set; }
     public string? ClaimedByDisplayName { get; set; }
@@ -380,7 +382,7 @@ public sealed class AdditionalCopyRequest
     public long? SourceTitleRequestId { get; set; }
     public int LibraryOrganizationId { get; set; }
     public string? LibraryNameSnapshot { get; set; }
-    public required string BibId { get; set; }
+    public int BibId { get; set; }
     public required string Title { get; set; }
     public string? Author { get; set; }
     public string? Identifier { get; set; }
@@ -501,7 +503,7 @@ public sealed class DeletedRequestAudit
     public string? Title { get; set; }
     public string? Author { get; set; }
     public string? Identifier { get; set; }
-    public string? BibId { get; set; }
+    public int? BibId { get; set; }
     public string? Status { get; set; }
     public string? CloseReason { get; set; }
     public string? MaskedBarcode { get; set; }
@@ -529,12 +531,12 @@ public sealed class HoldPlacementOperation
     public long Id { get; set; }
     public long TitleRequestId { get; set; }
     public required string PatronBarcodeSnapshot { get; set; }
-    public string? PatronIdSnapshot { get; set; }
-    public required string BibIdSnapshot { get; set; }
+    public int? PatronIdSnapshot { get; set; }
+    public int BibIdSnapshot { get; set; }
     public int? PickupBranchIdSnapshot { get; set; }
     public int? RequestingOrganizationIdSnapshot { get; set; }
     public int? WorkstationIdSnapshot { get; set; }
-    public string? PolarisUserIdSnapshot { get; set; }
+    public int? PolarisUserIdSnapshot { get; set; }
     public int AttemptNumber { get; set; }
     public required string State { get; set; }
     public required string Phase { get; set; }
@@ -547,14 +549,14 @@ public sealed class HoldPlacementOperation
     public DateTime? ReplyStartedUtc { get; set; }
     public DateTime? ReplyResponseObservedUtc { get; set; }
     public DateTime? CompletedUtc { get; set; }
-    public string? PolarisRequestGuid { get; set; }
-    public string? PolarisHoldId { get; set; }
+    public Guid? PolarisRequestGuid { get; set; }
+    public int? PolarisHoldId { get; set; }
     public string? TxnGroupQualifier { get; set; }
     public string? TxnQualifier { get; set; }
-    public string? ReplyAnswer { get; set; }
-    public string? ReplyState { get; set; }
-    public string? ProviderStatusType { get; set; }
-    public string? ProviderStatusValue { get; set; }
+    public HoldRequestReplyAnswer? ReplyAnswer { get; set; }
+    public HoldRequestReplyState? ReplyState { get; set; }
+    public int? ProviderStatusType { get; set; }
+    public int? ProviderStatusValue { get; set; }
     public string? ResultCode { get; set; }
     public string? OutcomeEvidenceKind { get; set; }
     public int RecoveryAttemptCount { get; set; }

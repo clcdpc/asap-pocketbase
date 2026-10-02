@@ -17,7 +17,11 @@ internal sealed class MigrationCredentialProtector
 
     public static MigrationCredentialProtector? Load(string? externalConfigurationPath)
     {
-        if (string.IsNullOrWhiteSpace(externalConfigurationPath)) return null;
+        if (string.IsNullOrWhiteSpace(externalConfigurationPath))
+        {
+            return null;
+        }
+
         if (!File.Exists(externalConfigurationPath))
         {
             throw new MigrationOperationException("external_configuration_missing", "The target external configuration file does not exist.");
@@ -85,7 +89,10 @@ internal sealed class MigrationCredentialProtector
                 .Find(X509FindType.FindByThumbprint, normalized, validOnly: false)
                 .OfType<X509Certificate2>()
                 .FirstOrDefault(candidate => candidate.HasPrivateKey);
-            if (certificate is not null) return certificate;
+            if (certificate is not null)
+            {
+                return certificate;
+            }
         }
         return null;
     }

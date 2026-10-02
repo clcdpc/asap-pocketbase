@@ -1,4 +1,6 @@
 using System.Data;
+using System.Globalization;
+using System.Net.Mail;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
@@ -7,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Asap.Web.Features.Email;
 
 public sealed record EmailOperationItem(
-    long Id,
+    string Id,
     int OrganizationId,
     string Status,
     string? BusinessKey,
@@ -28,14 +30,64 @@ public sealed class EmailOperationsService(
     IEmailSender emailSender,
     RecipientDomainPolicy recipientDomainPolicy,
     TimeProvider timeProvider,
-    StaffEligibilityService staffEligibility)
+    StaffEligibilityService staffEligibility,
+    ILogger<EmailOperationsService>? logger = null)
 {
-    public static bool CanOperate(CurrentStaff actor) => actor.Role is "admin" or "super_admin";
+    public static bool CanOperate(CurrentStaff actor) =>
+        StaffEligibilityService.RoleMeets(actor.Role, StaffRoleRequirement.Admin) &&
+        StaffEligibilityService.IsValidRoleOrganization(actor.Role, actor.OrganizationId);
+
+    public async Task<EmailOperationResult> GetReadinessAsync(
+        CurrentStaff actor,
+        CancellationToken cancellationToken,
+        int? requestedOrganizationId = null)
+    {
+        if (requestedOrganizationId <= 0 ||
+            actor.Role != StaffRole.SuperAdmin && requestedOrganizationId.HasValue &&
+            requestedOrganizationId != actor.OrganizationId)
+        {
+            return new EmailOperationResult("staff_scope_forbidden");
+        }
+        var organizationId = actor.Role == StaffRole.SuperAdmin
+            ? requestedOrganizationId ?? 1 : actor.OrganizationId;
+        try
+        {
+            await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+            var active = await context.Organizations.AsNoTracking()
+                .Where(item => item.Id == organizationId)
+                .Select(item => item.IsActive)
+                .SingleOrDefaultAsync(cancellationToken);
+            if (!active)
+            {
+                return new EmailOperationResult("organization_not_found");
+            }
+            var settings = await ReadEffectiveSettingsAsync(context, organizationId, cancellationToken);
+            if (!HasValidSender(settings.FromAddress))
+            {
+                return new EmailOperationResult("ok", new { state = "not_configured", organizationId });
+            }
+            var transport = await emailSender.CheckReadinessAsync(organizationId, cancellationToken);
+            var state = !transport.IsConfigured
+                ? "not_configured"
+                : transport.IsLiveDelivery ? "ready" : "non_delivery";
+            return new EmailOperationResult("ok", new { state, organizationId });
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new EmailOperationResult("ok", new { state = "unavailable", organizationId });
+        }
+        catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            return new EmailOperationResult("ok", new { state = "unavailable", organizationId });
+        }
+    }
 
     public async Task<EmailOperationResult> QueueTestAsync(
         CurrentStaff actor,
         int? organizationId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? operationId = null)
     {
         if (!TryResolveScope(actor, organizationId, out var scope))
         {
@@ -47,12 +99,24 @@ public sealed class EmailOperationsService(
         {
             var organization = await preflight.Organizations.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.Id == targetOrganizationId, cancellationToken);
-            if (organization?.IsActive != true) return new EmailOperationResult("organization_inactive");
+            if (organization?.IsActive != true)
+            {
+                return new EmailOperationResult("organization_inactive");
+            }
         }
 
         // Readiness may call the final transport/configuration boundary. Keep it outside
         // the short SQL transaction that commits the durable intent.
-        var readiness = await emailSender.CheckReadinessAsync(targetOrganizationId, cancellationToken);
+        EmailTransportReadiness readiness;
+        try
+        {
+            readiness = await emailSender.CheckReadinessAsync(targetOrganizationId, cancellationToken);
+        }
+        catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            return new EmailOperationResult("email_transport_unavailable");
+        }
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         if (!await LockOrganizationsAsync(context, actor, targetOrganizationId, cancellationToken))
@@ -74,19 +138,33 @@ public sealed class EmailOperationsService(
         }
 
         var currentActor = locked.Staff!;
+        var businessKey = operationId.HasValue
+            ? $"operational-test:{targetOrganizationId}:{currentActor.Id}:{operationId.Value:N}"
+            : null;
+        if (businessKey is not null)
+        {
+            var existing = await context.EmailOutbox.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.BusinessKey == businessKey, cancellationToken);
+            if (existing is not null)
+            {
+                return new EmailOperationResult(existing.Status == "suppressed" ? "suppressed" : "queued",
+                    new { id = existing.Id.ToString(CultureInfo.InvariantCulture), code = existing.SuppressionReason,
+                        version = StaffVersion.Encode(existing.RowVersion), replayed = true, status = existing.Status });
+            }
+        }
         var settings = await ReadEffectiveSettingsAsync(context, targetOrganizationId, cancellationToken);
         var address = StaffEmail.TryNormalize(currentActor.NotificationEmail, out var normalized)
             ? normalized
             : null;
         var suppression = address is null ? "recipient_missing_or_invalid" :
             !recipientDomainPolicy.IsAllowed(address) ? "recipient_domain_not_allowed" :
-            string.IsNullOrWhiteSpace(settings.FromAddress) ? "sender_missing" :
+            !HasValidSender(settings.FromAddress) ? "sender_missing" :
             !readiness.IsConfigured ? "mail_not_configured" : null;
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var outbox = new EmailOutbox
         {
             OrganizationId = targetOrganizationId,
-            BusinessKey = null,
+            BusinessKey = businessKey,
             DeliveryClass = "operational_test",
             ToAddress = address,
             FromAddress = settings.FromAddress,
@@ -102,10 +180,25 @@ public sealed class EmailOperationsService(
         context.EmailOutbox.Add(outbox);
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        if (suppression is null) dispatcher.Enqueue(outbox.Id);
+        var dispatchDelayed = false;
+        if (suppression is null)
+        {
+            try
+            {
+                dispatcher.Enqueue(outbox.Id);
+            }
+            // The durable outbox is committed; preserve acceptance and recover through the scheduled sweep.
+            catch (Exception exception)
+            {
+                dispatchDelayed = true;
+                logger?.LogWarning("Email outbox {OutboxId} awaits the scheduled sweep after dispatch failure ({FailureType}).",
+                    outbox.Id, exception.GetType().Name);
+            }
+        }
         return new EmailOperationResult(
             suppression is null ? "queued" : "suppressed",
-            new { id = outbox.Id, code = suppression, version = StaffVersion.Encode(outbox.RowVersion) });
+            new { id = outbox.Id.ToString(CultureInfo.InvariantCulture), code = suppression,
+                dispatchDelayed, version = StaffVersion.Encode(outbox.RowVersion) });
     }
 
     public async Task<IReadOnlyList<EmailOperationItem>> ListAsync(
@@ -114,10 +207,18 @@ public sealed class EmailOperationsService(
         string? status,
         CancellationToken cancellationToken)
     {
-        if (!TryResolveScope(actor, organizationId, out var scope)) return [];
+        if (!TryResolveScope(actor, organizationId, out var scope))
+        {
+            return [];
+        }
+
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var query = context.EmailOutbox.AsNoTracking();
-        if (scope.HasValue) query = query.Where(item => item.OrganizationId == scope.Value);
+        if (scope.HasValue)
+        {
+            query = query.Where(item => item.OrganizationId == scope.Value);
+        }
+
         if (string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase))
         {
             query = query.Where(item => item.Status == "failed");
@@ -127,7 +228,8 @@ public sealed class EmailOperationsService(
             .ThenByDescending(item => item.CreatedUtc)
             .Take(500)
             .Select(item => new EmailOperationItem(
-                item.Id, item.OrganizationId, item.Status, item.BusinessKey, item.DeliveryClass,
+                item.Id.ToString(CultureInfo.InvariantCulture), item.OrganizationId, item.Status,
+                item.BusinessKey, item.DeliveryClass,
                 item.RecipientAddressKind, item.AttemptCount, item.LastErrorCode, item.SuppressionReason,
                 item.CreatedUtc, item.SentUtc, StaffVersion.Encode(item.RowVersion)))
             .ToListAsync(cancellationToken);
@@ -139,7 +241,11 @@ public sealed class EmailOperationsService(
         string? encodedVersion,
         CancellationToken cancellationToken)
     {
-        if (!CanOperate(actor)) return new EmailOperationResult("staff_scope_forbidden");
+        if (!CanOperate(actor))
+        {
+            return new EmailOperationResult("staff_scope_forbidden");
+        }
+
         if (!StaffVersion.TryDecode(encodedVersion, out var expectedVersion))
         {
             return new EmailOperationResult("invalid_version");
@@ -150,9 +256,15 @@ public sealed class EmailOperationsService(
             .Where(item => item.Id == id)
             .Select(item => new { item.OrganizationId })
             .SingleOrDefaultAsync(cancellationToken);
-        if (snapshot is null) return new EmailOperationResult("not_found");
+        if (snapshot is null)
+        {
+            return new EmailOperationResult("not_found");
+        }
+
         if (!TryResolveScope(actor, snapshot.OrganizationId, out _))
+        {
             return new EmailOperationResult("staff_scope_forbidden");
+        }
 
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         if (!await LockOrganizationsAsync(context, actor, snapshot.OrganizationId, cancellationToken))
@@ -175,9 +287,20 @@ public sealed class EmailOperationsService(
         var row = await context.EmailOutbox.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[EmailOutbox] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {id}")
             .SingleOrDefaultAsync(cancellationToken);
-        if (row is null) return new EmailOperationResult("not_found");
-        if (!row.RowVersion.SequenceEqual(expectedVersion)) return new EmailOperationResult("stale_version");
-        if (row.Status != "failed") return new EmailOperationResult("email_not_retryable");
+        if (row is null)
+        {
+            return new EmailOperationResult("not_found");
+        }
+
+        if (!row.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new EmailOperationResult("stale_version");
+        }
+
+        if (row.Status != "failed")
+        {
+            return new EmailOperationResult("email_not_retryable");
+        }
 
         row.Status = "pending";
         row.NextAttemptUtc = timeProvider.GetUtcNow().UtcDateTime;
@@ -192,8 +315,24 @@ public sealed class EmailOperationsService(
         {
             return new EmailOperationResult("stale_version");
         }
-        dispatcher.Enqueue(row.Id);
-        return new EmailOperationResult("queued", new { id = row.Id, version = StaffVersion.Encode(row.RowVersion) });
+        var dispatchDelayed = false;
+        try
+        {
+            dispatcher.Enqueue(row.Id);
+        }
+        // Retry state is committed; report delayed dispatch and retain the pending row for the sweep.
+        catch (Exception exception)
+        {
+            dispatchDelayed = true;
+            logger?.LogWarning("Email outbox {OutboxId} awaits the scheduled sweep after dispatch failure ({FailureType}).",
+                row.Id, exception.GetType().Name);
+        }
+        return new EmailOperationResult("queued", new
+        {
+            id = row.Id.ToString(CultureInfo.InvariantCulture),
+            dispatchDelayed,
+            version = StaffVersion.Encode(row.RowVersion)
+        });
     }
 
     private async Task<bool> LockOrganizationsAsync(
@@ -207,7 +346,10 @@ public sealed class EmailOperationsService(
             var organization = await context.Organizations.FromSqlInterpolated(
                     $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {id}")
                 .SingleOrDefaultAsync(cancellationToken);
-            if (organization is null) return false;
+            if (organization is null)
+            {
+                return false;
+            }
         }
         return true;
     }
@@ -231,6 +373,22 @@ public sealed class EmailOperationsService(
 
     private sealed record EffectiveEmailSettings(string? FromAddress, string? FromName);
 
+    private static bool HasValidSender(string? address)
+    {
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            return false;
+        }
+        try
+        {
+            return string.Equals(new MailAddress(address).Address, address.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
     private static bool TryResolveScope(CurrentStaff actor, int? requested, out int? scope)
     {
         if (!CanOperate(actor))
@@ -238,7 +396,7 @@ public sealed class EmailOperationsService(
             scope = null;
             return false;
         }
-        if (actor.Role == "super_admin")
+        if (actor.Role == StaffRole.SuperAdmin)
         {
             scope = requested;
             return !requested.HasValue || requested.Value > 0;

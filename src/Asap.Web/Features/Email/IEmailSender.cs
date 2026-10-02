@@ -9,11 +9,19 @@ public interface IEmailSender
     Task<EmailSendResult> SendAsync(EmailEnvelope envelope, CancellationToken cancellationToken);
 }
 
-public sealed record EmailTransportReadiness(bool IsConfigured)
+// Expected transport/configuration failures are normalized at the email adapter boundary.
+public sealed class EmailOperationalException(string message, Exception? innerException = null)
+    : Exception(message, innerException);
+
+public sealed record EmailTransportReadiness(bool IsConfigured, bool IsLiveDelivery = true)
 {
     public static EmailTransportReadiness Configured { get; } = new(true);
 
     public static EmailTransportReadiness NotConfigured { get; } = new(false);
+
+    public static EmailTransportReadiness LocalCapture { get; } = new(true, false);
+
+    public static EmailTransportReadiness Sandbox { get; } = new(true, false);
 }
 
 public sealed record EmailEnvelope(

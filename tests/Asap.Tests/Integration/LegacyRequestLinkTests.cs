@@ -176,7 +176,7 @@ public sealed partial class PatronJourneyTests
         var missingCopyLegacyId = $"legacy-missing-copy-{suffix}";
         var deletedCopyLegacyId = $"legacy-deleted-copy-{suffix}";
         var outOfScopeCopyLegacyId = $"legacy-out-copy-{suffix}";
-        var now = DateTime.UtcNow;
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
 
         await using var context = await contextFactory.CreateDbContextAsync();
@@ -303,7 +303,7 @@ public sealed partial class PatronJourneyTests
             SourceTitleRequestId = sourceTitleRequestId,
             LibraryOrganizationId = organizationId,
             LibraryNameSnapshot = organizationId == 2 ? "Test Library" : "Out-of-scope library",
-            BibId = $"legacy-copy-{suffix}",
+            BibId = 9342,
             Title = title,
             MaterialFormatId = formatId,
             FormatSnapshot = "book",

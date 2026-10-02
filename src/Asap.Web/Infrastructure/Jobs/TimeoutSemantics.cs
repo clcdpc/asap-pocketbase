@@ -15,7 +15,11 @@ public static class TimeoutSemantics
         TimeZoneInfo businessTimeZone,
         int days)
     {
-        if (days < 1) throw new ArgumentOutOfRangeException(nameof(days));
+        if (days < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(days));
+        }
+
         var local = TimeZoneInfo.ConvertTime(now, businessTimeZone).DateTime;
         var localCutoff = DateTime.SpecifyKind(local.AddDays(-days), DateTimeKind.Unspecified);
         if (businessTimeZone.IsAmbiguousTime(localCutoff))

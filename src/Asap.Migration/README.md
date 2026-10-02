@@ -6,9 +6,18 @@ and its file storage directly; it does not start PocketBase or call the web
 application.
 
 The executable is pinned to PocketBase source
-`150b30b776565194260cc327eeeffdfb46475e81`, DACPAC schema `6`, migration
-contract `email-identity-v1`, and export format `1`. Use `describe-contract` for the
+`150b30b776565194260cc327eeeffdfb46475e81`, DACPAC schema `9`, migration
+contract `structured-policy-v4`, and export format `1`. Use `describe-contract` for the
 machine-readable contract.
+
+Reusable Polaris credentials and positive workstation/system-user IDs remain
+system integration settings. Legacy requesting/pickup aliases are recognized
+only for exact migration provenance; operations select their library/branch.
+Invalid supplied integration IDs fail import. The DACPAC seeds these IDs as
+unconfigured NULL; readiness requires valid local configuration, without a live
+Polaris call. Native schema-7/8/9 targets upgrade to 10 using the DACPAC's embedded
+pre-deployment script before publishing the guarded plan; pre-7 targets must be
+recreated and the stopped source re-exported with this contract.
 
 ## Commands
 

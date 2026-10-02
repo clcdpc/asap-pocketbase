@@ -39,7 +39,11 @@ internal static class MigrationPackageReader
         string collectionName)
     {
         var path = Path.Combine(package.RootPath, fileName);
-        if (!File.Exists(path)) return [];
+        if (!File.Exists(path))
+        {
+            return [];
+        }
+
         using var document = JsonDocument.Parse(File.ReadAllText(path));
         if (!document.RootElement.TryGetProperty("collections", out var collections) ||
             !collections.TryGetProperty(collectionName, out var rows))
@@ -58,7 +62,45 @@ internal static class MigrationPackageReader
 
 internal sealed class SourceRow(IReadOnlyDictionary<string, JsonElement> values)
 {
+    private readonly Dictionary<string, int?> positiveInt32Values = new(StringComparer.Ordinal);
+
     public IEnumerable<string> Names => values.Keys;
+
+    public int? PositiveInt32(string name, string errorCode = "source_polaris_id_invalid")
+    {
+        var key = name.ToUpperInvariant();
+        if (!positiveInt32Values.TryGetValue(key, out var parsed))
+        {
+            parsed = ParsePositiveInt32(String(name), $"{String("id")}/{name}", errorCode);
+            positiveInt32Values.Add(key, parsed);
+        }
+        return parsed;
+    }
+
+    public int? JsonPropertyPositiveInt32(string name, string propertyName, string errorCode)
+    {
+        var key = $"json:{name.ToUpperInvariant()}.{propertyName}";
+        if (!positiveInt32Values.TryGetValue(key, out var parsed))
+        {
+            parsed = ParsePositiveInt32(JsonPropertyString(name, propertyName), $"{String("id")}/{key}", errorCode);
+            positiveInt32Values.Add(key, parsed);
+        }
+        return parsed;
+    }
+
+    public static int? ParsePositiveInt32(string? source, string field, string errorCode)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return null;
+        }
+        if (!int.TryParse(source.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) || parsed <= 0)
+        {
+            throw new MigrationOperationException(errorCode,
+                $"Source field {field} must be a positive Int32 Polaris identity; received '{source}'.");
+        }
+        return parsed;
+    }
 
     public bool HasValue(string name) =>
         values.TryGetValue(name, out var value) &&
@@ -114,7 +156,11 @@ internal sealed class SourceRow(IReadOnlyDictionary<string, JsonElement> values)
             return value.GetRawText();
         }
         var text = value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText();
-        if (string.IsNullOrWhiteSpace(text)) return null;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
         try
         {
             using var document = JsonDocument.Parse(text);
@@ -126,24 +172,55 @@ internal sealed class SourceRow(IReadOnlyDictionary<string, JsonElement> values)
         }
     }
 
+    public IReadOnlyList<string> JsonPropertyNames(string name)
+    {
+        var json = JsonText(name);
+        if (json is null)
+        {
+            return [];
+        }
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.ValueKind == JsonValueKind.Object
+            ? document.RootElement.EnumerateObject().Select(property => property.Name).ToArray()
+            : [];
+    }
+
     public string? JsonPropertyString(string name, string propertyName)
     {
         var json = JsonText(name);
-        if (json is null) return null;
-        using var document = JsonDocument.Parse(json);
-        if (document.RootElement.ValueKind != JsonValueKind.Object ||
-            !document.RootElement.TryGetProperty(propertyName, out var value) ||
-            value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        if (json is null)
         {
             return null;
         }
+
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+        var properties = document.RootElement.EnumerateObject()
+            .Where(property => property.Name == propertyName).ToArray();
+        if (properties.Length > 1)
+        {
+            throw new MigrationOperationException("source_json_invalid",
+                $"Source field {name} contains duplicate property {propertyName}.");
+        }
+        if (properties.Length == 0 || properties[0].Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+        var value = properties[0].Value;
         return value.ValueKind == JsonValueKind.String ? Clean(value.GetString()) : Clean(value.GetRawText());
     }
 
     public int? Int32(string name)
     {
         var raw = String(name);
-        if (string.IsNullOrWhiteSpace(raw)) return null;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
         return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
             ? value
             : throw new MigrationOperationException("source_value_invalid", $"Source field {name} is not an integer.");
@@ -152,7 +229,11 @@ internal sealed class SourceRow(IReadOnlyDictionary<string, JsonElement> values)
     public bool Bool(string name, bool defaultValue = false)
     {
         var raw = String(name);
-        if (raw is null) return defaultValue;
+        if (raw is null)
+        {
+            return defaultValue;
+        }
+
         return raw.Trim().ToLowerInvariant() switch
         {
             "1" or "true" => true,
@@ -166,7 +247,11 @@ internal sealed class SourceRow(IReadOnlyDictionary<string, JsonElement> values)
     public DateTime? UtcDateTime(string name)
     {
         var raw = String(name);
-        if (raw is null) return null;
+        if (raw is null)
+        {
+            return null;
+        }
+
         if (!DateTimeOffset.TryParse(
                 raw,
                 CultureInfo.InvariantCulture,

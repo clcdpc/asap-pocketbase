@@ -53,7 +53,8 @@
   window.addEventListener('message', (event) => {
     const data = event.data || {};
     if (!data || data.type !== MESSAGE_TYPE) return;
-    const match = frames.find((frame) => frame.origin && frame.origin === event.origin);
+    const match = frames.find((frame) => frame.origin && frame.origin === event.origin &&
+      frame.iframe.contentWindow === event.source);
     if (!match) return;
     const height = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, parseInt(data.height, 10) || MIN_HEIGHT));
     match.iframe.style.height = height + 'px';

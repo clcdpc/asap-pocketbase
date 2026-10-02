@@ -10,6 +10,12 @@ on:
     tags:
       - 'v*.*.*-test.*'
   workflow_dispatch:
+    inputs:
+      deploy_test_iis:
+        description: Deploy the tested artifact to test IIS
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -88,7 +94,7 @@ jobs:
       - name: Run .NET and real SQL tests (non-browser partition)
         run: >-
           dotnet test --project tests/Asap.Tests/Asap.Tests.csproj
-          --configuration Release --no-build --minimum-expected-tests 319
+          --configuration Release --no-build --minimum-expected-tests 784
           --filter
           'FullyQualifiedName!~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport&FullyQualifiedName!~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers&FullyQualifiedName!~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures'
 
@@ -216,7 +222,7 @@ jobs:
             versionOrLabel = $env:DEPLOYMENT_LABEL
             commitSha = $env:GITHUB_SHA
             buildUtc = $buildUtc
-            applicationSchemaVersion = 6
+            applicationSchemaVersion = 10
             hangfireSchemaVersion = 9
             dacpacSha256 = $dacpacHash
             webPayloadSha256 = $webIdentityHash
@@ -273,7 +279,7 @@ jobs:
   deploy-test-iis:
     name: Deploy exact artifact to test IIS
     needs: build-test-package
-    if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}
+    if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && ((github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis) || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}
     runs-on: [self-hosted, windows, x64, asap-test-iis]
     environment: asap-test-iis
     timeout-minutes: 20

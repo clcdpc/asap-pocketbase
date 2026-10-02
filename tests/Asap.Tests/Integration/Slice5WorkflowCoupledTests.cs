@@ -110,7 +110,7 @@ public sealed partial class PatronJourneyTests
         }
     }
 
-    private static async Task<CoupledSeed> SeedCoupledRowsAsync(
+    private async Task<CoupledSeed> SeedCoupledRowsAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         int scope,
         int recoveryCount,
@@ -119,7 +119,7 @@ public sealed partial class PatronJourneyTests
     {
         await using var context = await contextFactory.CreateDbContextAsync();
         var format = await context.MaterialFormats.SingleAsync(item => item.Code == "book");
-        var baseUtc = DateTime.UtcNow.AddMinutes(-10);
+        var baseUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-10);
         var requestScope = requestLibraryOrganizationId ?? scope;
         var recoveryRequests = Enumerable.Range(0, recoveryCount).Select(index => new TitleRequest
         {
@@ -127,11 +127,13 @@ public sealed partial class PatronJourneyTests
             Barcode = $"s5-cr-{Guid.NewGuid():N}",
             Title = $"Slice 5 coupled recovery {index}",
             MaterialFormatId = format.Id,
-            Status = "suggestion",
-            BibId = (93000 + index).ToString(),
+            Status = "pending_hold",
+            BibId = (93000 + index),
+            BibIdStaffVerified = true,
+            AutoHold = true,
             IsbnCheckStatus = "found",
-            CreatedUtc = baseUtc.AddTicks(index),
-            UpdatedUtc = baseUtc.AddTicks(index)
+            CreatedUtc = baseUtc.AddTicks(200 + index),
+            UpdatedUtc = baseUtc.AddTicks(200 + index)
         }).ToList();
         var placementRequests = Enumerable.Range(0, placementCount).Select(index => new TitleRequest
         {
@@ -140,7 +142,8 @@ public sealed partial class PatronJourneyTests
             Title = $"Slice 5 coupled placement {index}",
             MaterialFormatId = format.Id,
             Status = "pending_hold",
-            BibId = (94000 + index).ToString(),
+            BibId = (94000 + index),
+            BibIdStaffVerified = true,
             AutoHold = true,
             IsbnCheckStatus = "found",
             CreatedUtc = baseUtc.AddTicks(100 + index),
@@ -153,7 +156,7 @@ public sealed partial class PatronJourneyTests
         {
             TitleRequestId = request.Id,
             PatronBarcodeSnapshot = request.Barcode,
-            BibIdSnapshot = request.BibId!,
+            BibIdSnapshot = request.BibId!.Value,
             PickupBranchIdSnapshot = 101,
             AttemptNumber = 1,
             State = "in_progress",
@@ -176,7 +179,7 @@ public sealed partial class PatronJourneyTests
             progress.LastOutcomeItemId = null;
             progress.LastOutcomeCode = null;
             progress.LastOutcomeUtc = null;
-            progress.UpdatedUtc = DateTime.UtcNow;
+            progress.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
         }
         await context.SaveChangesAsync();
         return new CoupledSeed(
@@ -185,7 +188,7 @@ public sealed partial class PatronJourneyTests
             recoveryRequests.Concat(placementRequests).Select(item => item.Id).ToArray());
     }
 
-    private static async Task<bool> SetOrganizationActiveAsync(
+    private async Task<bool> SetOrganizationActiveAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         int organizationId,
         bool? active = null)
@@ -201,7 +204,7 @@ public sealed partial class PatronJourneyTests
         return previous;
     }
 
-    private static async Task DeleteCoupledRowsAsync(
+    private async Task DeleteCoupledRowsAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         CoupledSeed seed,
         int scope)
@@ -223,7 +226,7 @@ public sealed partial class PatronJourneyTests
             progress.LastOutcomeItemId = null;
             progress.LastOutcomeCode = null;
             progress.LastOutcomeUtc = null;
-            progress.UpdatedUtc = DateTime.UtcNow;
+            progress.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
         }
         await context.SaveChangesAsync();
     }

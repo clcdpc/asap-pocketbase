@@ -215,7 +215,7 @@ function rawSnapshot(configuredSystem, libraryOverride, key, system) {
   return property(libraryOverride, key);
 }
 
-export function createSettingsDomainEditors({ root, onChange = () => {} }) {
+export function createSettingsDomainEditors({ root, onChange = () => {}, canRemoveTemplate = () => true }) {
   const dom = {
     publication: root.querySelector('#publication-options-editor'),
     publicationUseSystem: root.querySelector('#publication-options-use-system'),
@@ -224,6 +224,11 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
     creatorsUseSystem: root.querySelector('#common-creators-use-system'),
     creatorsInheritField: root.querySelector('#common-creators-inherit-field'),
     codes: root.querySelector('#patron-codes-editor'),
+    codeSearch: root.querySelector('#patron-code-search'),
+    codeSelectAll: root.querySelector('#patron-codes-select-all'),
+    codeClearAll: root.querySelector('#patron-codes-clear-all'),
+    codeWarning: root.querySelector('#patron-code-warning'),
+    codeEligibilityEnabled: root.querySelector('#patron-code-eligibility-enabled'),
     codesUseSystem: root.querySelector('#patron-codes-use-system'),
     codesInheritField: root.querySelector('#patron-codes-inherit-field'),
     providers: root.querySelector('#external-search-provider-editor'),
@@ -285,7 +290,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
     if (name === 'creators') {
       return values.map(item => clean(typeof item === 'string' ? item : property(item, 'value'))).filter(Boolean);
     }
-    return values.map(item => stringId(typeof item === 'string' ? item : property(item, 'id'))).filter(Boolean);
+    return values.map(item => stringId(typeof item === 'string' || typeof item === 'number' ? item : property(item, 'id'))).filter(Boolean);
   }
 
   function setOverrideUi(input, wrapper, overridden) {
@@ -320,6 +325,19 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
       ? addButtons.publication
       : type === 'creator' ? addButtons.creators : addButtons.codes;
     updateSetDisabled(container, input, addButton);
+    if (type === 'code') {
+      const disabled = !state.system && Boolean(input?.checked);
+      dom.codeSelectAll.disabled = disabled;
+      dom.codeClearAll.disabled = disabled;
+    }
+  }
+
+  function updateCodeWarning() {
+    const empty = readSetRows(dom.codes, 'code').length === 0;
+    dom.codeWarning.hidden = !dom.codeEligibilityEnabled.checked || !empty;
+    dom.codeWarning.textContent = empty && dom.codeEligibilityEnabled.checked
+      ? 'No patron codes are selected. The current server policy allows all patron codes until at least one ID is selected.'
+      : '';
   }
 
   function renderSetRows(container, values, type) {
@@ -327,25 +345,25 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
     container.replaceChildren();
     if (values.length === 0) {
       container.append(element('p', { className: 'settings-empty', text: 'No values configured.' }));
-      updateSetDisabled(
-        container,
-        type === 'code' ? dom.codesUseSystem : dom.creatorsUseSystem,
-        type === 'code' ? addButtons.codes : addButtons.creators
-      );
+      setEditorControls(type === 'code' ? 'code' : 'creator', container);
+      if (type === 'code') updateCodeWarning();
       return;
     }
-    const choices = type === 'code'
+    const allChoices = type === 'code'
       ? array(property(state.data, 'patronCodeChoices')).map((choice) => ({
         value: stringId(property(choice, 'id')),
         label: `${clean(property(choice, 'description')) || 'Patron code'} (${stringId(property(choice, 'id')) || '?'})`
       })).filter(choice => choice.value)
       : [];
+    const choices = allChoices.filter(choice => !dom.codeSearch.value.trim() ||
+      `${choice.label} ${choice.value}`.toLocaleLowerCase().includes(dom.codeSearch.value.trim().toLocaleLowerCase()));
     for (const [index, value] of values.entries()) {
       const currentValue = type === 'creator' ? value : property(value, 'id') ?? value;
       const currentId = stringId(currentValue);
       const options = [...choices];
       if (type === 'code' && currentId && !options.some(option => option.value === currentId)) {
-        options.unshift({ value: currentId, label: `Unavailable code (${currentId})` });
+        options.unshift(allChoices.find(option => option.value === currentId) ||
+          { value: currentId, label: `Unavailable code (${currentId})` });
       }
       const input = type === 'code'
         ? select([{ value: '', label: 'Select a Polaris patron code' }, ...options], currentId, { 'data-domain-editable': 'true' })
@@ -373,6 +391,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
       container.append(row);
     }
     setEditorControls(type === 'code' ? 'code' : 'creator', container);
+    if (type === 'code') updateCodeWarning();
   }
 
   function readSetRows(container, type) {
@@ -742,8 +761,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
         version: override?.version || system.version,
         sourceTemplateId: system.id,
         displayName: override?.displayName ?? system.displayName,
-        subject: clean(override?.subject) ?? system.subject,
-        body: clean(override?.body) ?? system.body,
+        subject: override?.subject?.trim() ? override.subject : system.subject,
+        body: override?.body?.trim() ? override.body : system.body,
         enabled: system.enabled && (!override || override.enabled),
         isCustom: false,
         overridden: Boolean(override),
@@ -817,7 +836,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
           'data-domain-editable': 'true'
         }), element('span', { text: 'Enabled' })]),
         override?.wrapper,
-        actions(index, values.length, (from, offset) => reorder('templates', from, offset), value.isCustom ? from => remove('templates', from) : null)
+        actions(index, values.length, (from, offset) => reorder('templates', from, offset), value.isCustom ? from => {
+          if (canRemoveTemplate(value)) remove('templates', from);
+        } : null)
       ]);
       if (override) {
         override.input.addEventListener('change', () => {
@@ -833,12 +854,12 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
   function readTemplates() {
     return [...(dom.templates?.querySelectorAll('[data-domain-row]') || [])].map(row => {
       const lineage = row.dataset.templateKind === 'lineage';
-      const currentSubject = clean(row.querySelector('.template-subject')?.value);
-      const currentBody = clean(row.querySelector('.template-body')?.value);
+      const currentSubject = row.querySelector('.template-subject')?.value ?? null;
+      const currentBody = row.querySelector('.template-body')?.value ?? null;
       const currentDisplayName = clean(row.querySelector('.template-display-name')?.value);
       const currentEnabled = Boolean(row.querySelector('.template-enabled')?.checked);
-      const baselineSubject = clean(row.dataset.templateBaselineSubject);
-      const baselineBody = clean(row.dataset.templateBaselineBody);
+      const baselineSubject = row.dataset.templateBaselineSubject;
+      const baselineBody = row.dataset.templateBaselineBody;
       const baselineDisplayName = clean(row.dataset.templateBaselineDisplayName);
       const baselineEnabled = row.dataset.templateBaselineEnabled === 'true';
       const override = row.querySelector('.settings-template-override');
@@ -942,6 +963,24 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
   bindAdd('publication', values => ({ id: `option_${values.length + 1}`, label: 'New option', enabled: true, sortOrder: (values.length + 1) * 10 }));
   bindAdd('creators', values => 'New creator');
   bindAdd('codes', values => stringId(property(array(property(state.data, 'patronCodeChoices'))[0], 'id')) || '');
+  dom.codeSearch.addEventListener('input', () => renderSetRows(dom.codes, readSetRows(dom.codes, 'code'), 'code'));
+  dom.codeSelectAll.addEventListener('click', () => {
+    const selected = readSetRows(dom.codes, 'code');
+    const term = dom.codeSearch.value.trim().toLocaleLowerCase();
+    for (const choice of array(property(state.data, 'patronCodeChoices'))) {
+      const id = stringId(property(choice, 'id'));
+      const label = `${clean(property(choice, 'description')) || ''} ${id || ''}`.toLocaleLowerCase();
+      if (id && (!term || label.includes(term)) && !selected.includes(id)) selected.push(id);
+    }
+    renderSetRows(dom.codes, selected, 'code');
+    onChange();
+  });
+  dom.codeClearAll.addEventListener('click', () => {
+    renderSetRows(dom.codes, [], 'code');
+    onChange();
+  });
+  dom.codeEligibilityEnabled.addEventListener('change', updateCodeWarning);
+  dom.codes.addEventListener('change', updateCodeWarning);
   bindAdd('providers', values => ({ id: null, key: `provider_${values.length + 1}`, label: 'New provider', urlTemplate: '', isEnabled: false, overridden: true }));
   bindAdd('formats', values => ({ id: null, code: `custom_${values.length + 1}`, ownerOrganizationId: currentOrganizationId(), label: 'New format', isEnabled: true, overridden: true }));
   bindAdd('fields', values => ({ id: null, key: `field_${values.length + 1}`, type: 'text', label: 'New field', enabled: true, options: [] }));
@@ -965,6 +1004,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
   function populate(data, system) {
     state.data = data || {};
     state.system = Boolean(system);
+    dom.codeSearch.value = '';
     const configured = systemConfig(data);
     const library = libraryConfig(data);
     const publication = useSet('publicationOptions', state.system).map(normalizeOption);
@@ -1069,6 +1109,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
     populate,
     collect,
     setBaseline: () => { state.baseline = readSnapshot(); },
-    snapshot: () => readSnapshot()
+    snapshot: () => readSnapshot(),
+    refreshCodeWarning: updateCodeWarning
   };
 }

@@ -9,7 +9,7 @@ CREATE TABLE [asap].[TitleRequest]
     [Email] nvarchar(320) NULL,
     [NameFirst] nvarchar(256) NULL,
     [NameLast] nvarchar(256) NULL,
-    [PatronCodeId] nvarchar(100) NULL,
+    [PatronCodeId] int NULL,
     [PatronCodeDescription] nvarchar(256) NULL,
     [PreferredPickupBranchId] int NULL,
     [PreferredPickupBranchName] nvarchar(256) NULL,
@@ -24,7 +24,9 @@ CREATE TABLE [asap].[TitleRequest]
     [MaterialFormatId] bigint NOT NULL,
     [Status] nvarchar(32) NOT NULL,
     [CloseReason] nvarchar(64) NULL,
-    [BibId] nvarchar(100) NULL,
+    [BibId] int NULL,
+    [BibIdStaffVerified] bit NOT NULL CONSTRAINT [DF_TitleRequest_BibIdStaffVerified] DEFAULT (0),
+    [LegacyHoldProtected] bit NOT NULL CONSTRAINT [DF_TitleRequest_LegacyHoldProtected] DEFAULT (0),
     [Notes] nvarchar(max) NULL,
     [ClaimedByStaffUserId] bigint NULL,
     [ClaimedByDisplayName] nvarchar(256) NULL,
@@ -59,7 +61,10 @@ CREATE TABLE [asap].[TitleRequest]
     CONSTRAINT [CK_TitleRequest_AutomaticClaimRule] CHECK ([ClaimType] <> N'automatic_format_rule' OR ([ClaimedByStaffUserId] IS NOT NULL AND [ClaimRuleId] IS NOT NULL)),
     CONSTRAINT [CK_TitleRequest_IsbnCheckStatus] CHECK ([IsbnCheckStatus] IS NULL OR [IsbnCheckStatus] IN (N'pending', N'found', N'not_found', N'skipped_no_isbn', N'error_max_retries')),
     CONSTRAINT [CK_TitleRequest_IsbnRetryCount] CHECK ([IsbnCheckRetryCount] >= 0),
-    CONSTRAINT [CK_TitleRequest_FoundHasBib] CHECK ([IsbnCheckStatus] <> N'found' OR NULLIF(LTRIM(RTRIM([BibId])), N'') IS NOT NULL),
+    CONSTRAINT [CK_TitleRequest_BibId] CHECK ([BibId] IS NULL OR [BibId] > 0),
+    CONSTRAINT [CK_TitleRequest_PatronCodeId] CHECK ([PatronCodeId] IS NULL OR [PatronCodeId] > 0),
+    CONSTRAINT [CK_TitleRequest_StaffVerifiedBib] CHECK ([BibIdStaffVerified] = 0 OR [BibId] IS NOT NULL),
+    CONSTRAINT [CK_TitleRequest_FoundHasBib] CHECK ([IsbnCheckStatus] <> N'found' OR [BibId] IS NOT NULL),
     CONSTRAINT [CK_TitleRequest_Timestamps] CHECK ([UpdatedUtc] >= [CreatedUtc])
 );
 GO

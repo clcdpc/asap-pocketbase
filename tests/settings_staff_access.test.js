@@ -92,7 +92,7 @@ async function waitFor(predicate) {
   assert.ok(predicate(), 'Timed out waiting for expected UI state');
 }
 
-async function setupController(settingsModule, frontendRoot, staff, fetchHandler) {
+async function setupController(settingsModule, frontendRoot, staff, fetchHandler, callbacks = {}) {
   const dom = new JSDOM(fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8'), {
     url: 'http://localhost/staff/'
   });
@@ -108,7 +108,8 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     root: document.getElementById('settings-view'),
     tab: document.getElementById('settings-view-tab'),
     announce: () => {},
-    getStaff: () => staff
+    getStaff: () => staff,
+    ...callbacks
   });
   controller.bind();
   controller.setStaff(staff);
@@ -140,6 +141,9 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       role: 'super_admin',
       organizationId: 1
     };
+    let revokeStaffRefresh = false;
+    const committedMessages = [];
+    let refreshedCount = 0;
     const { dom, controller } = await setupController(
       settingsModule,
       frontendRoot,
@@ -160,6 +164,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
         if (requestUrl === '/api/asap/staff/users' && (options.method || 'GET') === 'GET') {
+          if (revokeStaffRefresh) return response(401, { code: 'staff_session_invalid' });
           return response(200, { canAssignSuperAdmin: true, users });
         }
         if (requestUrl === '/api/asap/staff/audit?limit=50') {
@@ -217,6 +222,10 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
           });
         }
         throw new Error(`Unexpected request: ${requestUrl}`);
+      },
+      {
+        onCommitted: message => committedMessages.push(message),
+        onRefreshed: () => { refreshedCount += 1; }
       }
     );
 
@@ -269,6 +278,19 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     [...inactiveRow.querySelectorAll('button')].find(button => button.textContent === 'Reactivate').click();
     await waitFor(() => postBodies.length === 2);
     assert.strictEqual(postBodies[1].email, 'staff21@example.org');
+
+    const refreshedBeforeRevocation = refreshedCount;
+    revokeStaffRefresh = true;
+    const currentAdaRow = [...document.querySelectorAll('.settings-staff-row')]
+      .find(row => row.textContent.includes('Ada Admin'));
+    currentAdaRow.querySelector('select[aria-label^="Role"]').value = 'staff';
+    [...currentAdaRow.querySelectorAll('button')]
+      .find(button => button.textContent === 'Update access').click();
+    await waitFor(() => document.getElementById('staff-access-status').textContent
+      .includes('Staff access could not be refreshed'));
+    assert.match(committedMessages.at(-1), /Staff access updated.*auto-claim rules deactivated/);
+    assert.strictEqual(refreshedCount, refreshedBeforeRevocation,
+      'failed follow-up refresh must retain the committed result');
 
     dom.window.close();
 

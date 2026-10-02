@@ -209,13 +209,28 @@ public static class MigrationCli
             var option = args[index];
             if (flagOptions.Contains(option))
             {
-                if (!flags.Add(option)) throw new ArgumentException($"Duplicate option: {option}");
+                if (!flags.Add(option))
+                {
+                    throw new ArgumentException($"Duplicate option: {option}");
+                }
+
                 continue;
             }
 
-            if (!valueOptions.Contains(option)) throw new ArgumentException($"Unknown option: {option}");
-            if (++index >= args.Count) throw new ArgumentException($"Missing value for {option}");
-            if (!values.TryAdd(option, args[index])) throw new ArgumentException($"Duplicate option: {option}");
+            if (!valueOptions.Contains(option))
+            {
+                throw new ArgumentException($"Unknown option: {option}");
+            }
+
+            if (++index >= args.Count)
+            {
+                throw new ArgumentException($"Missing value for {option}");
+            }
+
+            if (!values.TryAdd(option, args[index]))
+            {
+                throw new ArgumentException($"Duplicate option: {option}");
+            }
         }
         return new ParsedOptions(values, flags);
     }

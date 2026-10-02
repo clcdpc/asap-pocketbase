@@ -713,7 +713,10 @@ public static class MigrationPackageValidator
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
-            foreach (var item in element.EnumerateArray()) ValidateMetadataSecrets(item);
+            foreach (var item in element.EnumerateArray())
+            {
+                ValidateMetadataSecrets(item);
+            }
         }
     }
 
@@ -734,7 +737,10 @@ public static class MigrationPackageValidator
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
-            foreach (var item in element.EnumerateArray()) ValidateManifestSecrets(item, propertyName);
+            foreach (var item in element.EnumerateArray())
+            {
+                ValidateManifestSecrets(item, propertyName);
+            }
         }
         else if (element.ValueKind == JsonValueKind.String &&
                  propertyName is not null &&
@@ -875,7 +881,10 @@ public static class MigrationPackageValidator
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
-            foreach (var item in element.EnumerateArray()) EnsureNoDuplicateProperties(item, code);
+            foreach (var item in element.EnumerateArray())
+            {
+                EnsureNoDuplicateProperties(item, code);
+            }
         }
     }
 
@@ -952,14 +961,26 @@ public static class MigrationPackageValidator
 
         var fullRoot = Path.GetFullPath(root);
         var fullPath = Path.GetFullPath(path);
-        if (!fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase)) return;
+        if (!fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         var relative = Path.GetRelativePath(fullRoot, fullPath);
-        if (relative is "." or "") return;
+        if (relative is "." or "")
+        {
+            return;
+        }
+
         var current = fullRoot;
         foreach (var segment in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
         {
             current = Path.Combine(current, segment);
-            if (!File.Exists(current) && !Directory.Exists(current)) continue;
+            if (!File.Exists(current) && !Directory.Exists(current))
+            {
+                continue;
+            }
+
             if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
             {
                 throw new MigrationOperationException(errorCode, "Package paths must not use symbolic links or reparse points.");

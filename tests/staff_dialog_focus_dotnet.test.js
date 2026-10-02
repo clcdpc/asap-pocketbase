@@ -38,6 +38,7 @@ async function runJourney(scenario) {
   fs.cpSync(path.join(source, 'staff'), path.join(temporary, 'staff'), { recursive: true });
   fs.cpSync(path.join(source, 'shared'), path.join(temporary, 'shared'), { recursive: true });
   fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}');
+  const grids = [];
   let dom;
   try {
     dom = new JSDOM(fs.readFileSync(path.join(source, 'staff', 'index.html'), 'utf8'), {
@@ -56,6 +57,13 @@ async function runJourney(scenario) {
     const gridModule = path.join(source, 'vendor/gridjs/6.2.0/gridjs.umd.js');
     delete require.cache[require.resolve(gridModule)];
     dom.window.gridjs = require(gridModule);
+    const Grid = dom.window.gridjs.Grid;
+    dom.window.gridjs.Grid = class extends Grid {
+      constructor(configuration) {
+        super(configuration);
+        grids.push(this);
+      }
+    };
 
     const staff = { id: '20', role: scenario === 'library-navigation' ? 'super_admin' : 'staff',
       organizationId: scenario === 'library-navigation' ? '1' : '2', displayName: 'Library staff' };
@@ -81,13 +89,13 @@ async function runJourney(scenario) {
       if (url.endsWith(`${apiPath}/91/claim`)) {
         task = { ...task, version: 'claimed-version', claimedByStaffUserId: staff.id,
           claimedByDisplayName: staff.displayName, capabilities: { canUnclaim: true } };
-        return response(task);
+        return response({ ...task, committed: true, finalStatus: task.status });
       }
       if (url.endsWith(`${apiPath}/91/unclaim`)) {
         assert.strictEqual(options.headers['X-ASAP-Antiforgery'], 'focus-af');
         task = { ...task, version: 'unclaimed-version', claimedByStaffUserId: null,
           claimedByDisplayName: null, capabilities: { canClaim: true } };
-        return response(task);
+        return response({ ...task, committed: true, finalStatus: task.status });
       }
       if (url.endsWith('/sign-out')) return response({ signedOut: true });
       throw new Error(`Unexpected request ${url}`);
@@ -114,7 +122,9 @@ async function runJourney(scenario) {
     await until(() => (replacesFocusedOpener
       ? opener() && opener() !== unclaimedOpener && claimLabel()?.textContent === staff.displayName && claimLabel().classList.contains('mine')
       : !opener()) && opener('92') && opener('92') !== unchangedTaskOpener &&
-      document.getElementById('app-status').textContent === (titleRequest ? 'Request updated.' : 'Task claimed.'), 'Claiming must update the filtered queue');
+      document.getElementById('app-status').textContent ===
+        (titleRequest ? 'Request claimed. Final state: Suggestion.' : 'Task claimed. Final state: Open.'),
+      'Claiming must update the filtered queue');
     await afterFocusFrame(dom.window);
 
     // Use Grid.js's asynchronous data source so its genuine render completes after dialog close.
@@ -125,22 +135,29 @@ async function runJourney(scenario) {
       dom.window.gridjs.Grid.prototype.updateConfig = updateConfig;
       assert.strictEqual(this.config.container.id, gridId, 'Only the owning grid unclaim render may be held');
       assert.ok(Array.isArray(configuration.data), 'The workflow must supply an array to the held update');
-      assert.deepStrictEqual(configuration.data.map(row => [row[6], row[4]]), [['91', 'Unclaimed'], ['92', 'Unclaimed']],
+      assert.deepStrictEqual(configuration.data.map(row =>
+        [row[titleRequest ? 11 : 10], row[titleRequest ? 9 : 6]]),
+      [['91', 'Unclaimed'], ['92', 'Unclaimed']],
         'The held update must be the completed unclaim refresh, not an earlier filter or claim render');
+      const rows = configuration.data;
       return updateConfig.call(this, { ...configuration, data: async () => {
         renderStarted = true;
         await renderReleased.promise;
-        return configuration.data;
+        return rows;
       } });
     };
     [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Unclaim').click();
     await until(() => renderStarted, 'The unclaim must start the real asynchronous Grid.js data source');
-    await until(() => document.getElementById('app-status').textContent === (titleRequest ? 'Request updated.' : 'Task unclaimed.'), 'The unclaim and queue refresh must finish');
+    await until(() => document.getElementById('app-status').textContent ===
+      (titleRequest ? 'Your claim was released. Final state: Suggestion.' : 'Task unclaimed. Final state: Open.'),
+    'The unclaim and queue refresh must finish');
     const previousOpener = opener();
     if (replacesFocusedOpener) assert.ok(previousOpener, 'The old row remains until Grid.js completes its data pipeline');
     else assert.strictEqual(previousOpener, null, 'The refreshed grid has not rendered the replacement opener');
     dialog.dispatchEvent(new dom.window.Event('cancel', { cancelable: true }));
     assert.strictEqual(dialog.open, false);
+    await until(() => !new URL(dom.window.location.href).searchParams.has('request'),
+      'Explicit close must complete its history traversal before another navigation');
     await afterFocusFrame(dom.window);
     let newerFocus;
     if (scenario === 'view-navigation') {
@@ -167,8 +184,14 @@ async function runJourney(scenario) {
       newerFocus = document.activeElement;
     }
     renderReleased.resolve();
-    await until(() => document.querySelector(`#${gridId} tbody`) &&
-      (scenario === 'library-navigation' || (opener() && opener() !== previousOpener)), 'The genuine asynchronous grid render must finish');
+    if (scenario === 'sign-out') {
+      await settleGridWork(dom.window);
+      assert.equal(document.querySelector(`#${gridId} tbody`), null,
+        'A late protected grid render must stay detached after sign-out');
+    } else {
+      await until(() => document.querySelector(`#${gridId} tbody`) &&
+        (scenario === 'library-navigation' || (opener() && opener() !== previousOpener)), 'The genuine asynchronous grid render must finish');
+    }
     await afterFocusFrame(dom.window);
     if (newerFocus) {
       assert.strictEqual(document.activeElement, newerFocus, `${scenario}: the old grid must not steal newer focus`);
@@ -180,6 +203,7 @@ async function runJourney(scenario) {
     if (scenario === 'library-navigation') assert.strictEqual(document.getElementById('additional-copy-library-scope').value, '3');
     console.log(`Staff delayed Grid.js dialog focus passed: ${scenario}`);
   } finally {
+    for (const grid of grids) grid.destroy();
     if (dom) await settleGridWork(dom.window);
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });

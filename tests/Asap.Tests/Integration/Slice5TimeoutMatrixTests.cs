@@ -55,11 +55,11 @@ public sealed partial class PatronJourneyTests
                 var recent = NewRequest(scope, $"s5-def-recent-{Guid.NewGuid():N}"[..28], "hold_placed",
                     now.AddDays(-3), now.AddHours(-1));
                 recent.MaterialFormatId = formatId;
-                recent.BibId = "99041";
+                recent.BibId = 99041;
                 var due = NewRequest(scope, $"s5-def-due-{Guid.NewGuid():N}"[..28], "hold_placed",
                     now.AddDays(-2), now.AddDays(-2));
                 due.MaterialFormatId = formatId;
-                due.BibId = "99042";
+                due.BibId = 99042;
                 seed.TitleRequests.AddRange(recent, due);
                 await seed.SaveChangesAsync();
                 requestIds.AddRange([recent.Id, due.Id]);
@@ -112,7 +112,9 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task TimeoutUsesSparseSystemSettingsButHonorsLibraryDisableOverride()
     {
+        const int scope = 99007;
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
         var now = timeProvider!.GetUtcNow().UtcDateTime;
         var requestIds = new List<long>();
         bool? originalSystemEnabled;
@@ -125,9 +127,9 @@ public sealed partial class PatronJourneyTests
             var system = await seed.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == 1)
                 ?? new WorkflowSettings { OrganizationId = 1 };
             if (system.RowVersion.Length == 0) seed.WorkflowSettings.Add(system);
-            var library = await seed.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
+            var library = await seed.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
             createdLibrarySettings = library is null;
-            library ??= new WorkflowSettings { OrganizationId = 2 };
+            library ??= new WorkflowSettings { OrganizationId = scope };
             if (createdLibrarySettings) seed.WorkflowSettings.Add(library);
             originalSystemEnabled = system.OutstandingTimeoutEnabled;
             originalSystemDays = system.OutstandingTimeoutDays;
@@ -139,7 +141,7 @@ public sealed partial class PatronJourneyTests
             library.OutstandingTimeoutDays = null;
             var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
                 .Select(item => item.Id).SingleAsync();
-            var inherited = NewRequest(2, $"s5-inh-{Guid.NewGuid():N}", "suggestion", now.AddDays(-2), now.AddDays(-2));
+            var inherited = NewRequest(scope, $"s5-inh-{Guid.NewGuid():N}", "suggestion", now.AddDays(-2), now.AddDays(-2));
             inherited.MaterialFormatId = formatId;
             seed.TitleRequests.Add(inherited);
             await seed.SaveChangesAsync();
@@ -148,24 +150,24 @@ public sealed partial class PatronJourneyTests
 
         try
         {
-            await PrepareTimeoutCycleAsync(contextFactory, QueueNames.OutstandingTimeout, requestIds[0]);
+            await PrepareTimeoutCycleAsync(contextFactory, QueueNames.OutstandingTimeout, requestIds[0], scope);
             var service = factory.Services.GetRequiredService<WorkflowProcessingService>();
-            await service.ProcessWorkflowAsync(2, CancellationToken.None);
+            await service.ProcessWorkflowAsync(scope, CancellationToken.None);
             Assert.AreEqual("closed", await ReadRequestStatusAsync(contextFactory, requestIds[0]));
 
             await using (var seed = await contextFactory.CreateDbContextAsync())
             {
-                var library = await seed.WorkflowSettings.SingleAsync(item => item.OrganizationId == 2);
+                var library = await seed.WorkflowSettings.SingleAsync(item => item.OrganizationId == scope);
                 library.OutstandingTimeoutEnabled = false;
-                var disabled = NewRequest(2, $"s5-dis-{Guid.NewGuid():N}", "suggestion", now.AddDays(-2), now.AddDays(-2));
+                var disabled = NewRequest(scope, $"s5-dis-{Guid.NewGuid():N}", "suggestion", now.AddDays(-2), now.AddDays(-2));
                 disabled.MaterialFormatId = await seed.MaterialFormats.Where(item => item.Code == "book")
                     .Select(item => item.Id).SingleAsync();
                 seed.TitleRequests.Add(disabled);
                 await seed.SaveChangesAsync();
                 requestIds.Add(disabled.Id);
             }
-            await PrepareTimeoutCycleAsync(contextFactory, QueueNames.OutstandingTimeout, requestIds[1]);
-            await service.ProcessWorkflowAsync(2, CancellationToken.None);
+            await PrepareTimeoutCycleAsync(contextFactory, QueueNames.OutstandingTimeout, requestIds[1], scope);
+            await service.ProcessWorkflowAsync(scope, CancellationToken.None);
             Assert.AreEqual("suggestion", await ReadRequestStatusAsync(contextFactory, requestIds[1]));
         }
         finally
@@ -178,7 +180,7 @@ public sealed partial class PatronJourneyTests
                 system.OutstandingTimeoutEnabled = originalSystemEnabled;
                 system.OutstandingTimeoutDays = originalSystemDays;
             }
-            var library = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
+            var library = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
             if (createdLibrarySettings)
             {
                 if (library is not null) restore.WorkflowSettings.Remove(library);
@@ -195,8 +197,10 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task TimeoutUsesStrictSqlCutoffEqualityWithInjectedClock()
     {
+        const int scope = 99008;
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var configuration = TestConfigurationFactory.Create();
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
         var now = timeProvider!.GetUtcNow();
         var zone = TimeZoneInfo.FindSystemTimeZoneById(configuration.Application.BusinessTimeZone!);
         var cutoff = TimeoutSemantics.CutoffUtc(now, zone, 1);
@@ -207,9 +211,9 @@ public sealed partial class PatronJourneyTests
         var createdLibrarySettings = false;
         await using (var seed = await contextFactory.CreateDbContextAsync())
         {
-            var settings = await seed.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
+            var settings = await seed.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
             createdLibrarySettings = settings is null;
-            settings ??= new WorkflowSettings { OrganizationId = 2 };
+            settings ??= new WorkflowSettings { OrganizationId = scope };
             if (createdLibrarySettings) seed.WorkflowSettings.Add(settings);
             originalEnabled = settings.OutstandingTimeoutEnabled;
             originalDays = settings.OutstandingTimeoutDays;
@@ -217,15 +221,15 @@ public sealed partial class PatronJourneyTests
             settings.OutstandingTimeoutEnabled = true;
             settings.OutstandingTimeoutDays = 1;
             settings.OutstandingTimeoutSendEmail = false;
-            var exact = NewRequest(2, $"s5-exact-{Guid.NewGuid():N}", "suggestion", cutoff, cutoff);
+            var exact = NewRequest(scope, $"s5-exact-{Guid.NewGuid():N}", "suggestion", cutoff, cutoff);
             exact.MaterialFormatId = await seed.MaterialFormats.Where(item => item.Code == "book")
                 .Select(item => item.Id).SingleAsync();
             seed.TitleRequests.Add(exact);
             await seed.SaveChangesAsync();
             requestIds.Add(exact.Id);
-            await PrepareTimeoutCycleAsync(contextFactory, QueueNames.OutstandingTimeout, exact.Id);
+            await PrepareTimeoutCycleAsync(contextFactory, QueueNames.OutstandingTimeout, exact.Id, scope);
             await factory.Services.GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
             Assert.AreEqual("suggestion", await ReadRequestStatusAsync(contextFactory, exact.Id));
         }
 
@@ -236,22 +240,22 @@ public sealed partial class PatronJourneyTests
                 var request = await mutate.TitleRequests.SingleAsync(item => item.Id == requestIds[0]);
                 request.CreatedUtc = cutoff.AddTicks(-1);
                 request.UpdatedUtc = cutoff.AddTicks(-1);
-                var settings = await mutate.WorkflowSettings.SingleAsync(item => item.OrganizationId == 2);
+                var settings = await mutate.WorkflowSettings.SingleAsync(item => item.OrganizationId == scope);
                 settings.OutstandingTimeoutEnabled = true;
                 settings.OutstandingTimeoutDays = 1;
                 settings.OutstandingTimeoutSendEmail = false;
                 await mutate.SaveChangesAsync();
             }
-            await PrepareTimeoutCycleAsync(contextFactory, QueueNames.OutstandingTimeout, requestIds[0]);
+            await PrepareTimeoutCycleAsync(contextFactory, QueueNames.OutstandingTimeout, requestIds[0], scope);
             await factory.Services.GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
             Assert.AreEqual("closed", await ReadRequestStatusAsync(contextFactory, requestIds[0]));
         }
         finally
         {
             await DeleteRequestIdsAsync(contextFactory, requestIds);
             await using var restore = await contextFactory.CreateDbContextAsync();
-            var settings = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
+            var settings = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
             if (createdLibrarySettings)
             {
                 if (settings is not null) restore.WorkflowSettings.Remove(settings);
@@ -349,7 +353,7 @@ public sealed partial class PatronJourneyTests
         }
     }
 
-    private static async Task PrepareTimeoutCycleAsync(
+    private async Task PrepareTimeoutCycleAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         string queueName,
         long requestId,
@@ -369,11 +373,11 @@ public sealed partial class PatronJourneyTests
         progress.LastOutcomeItemId = null;
         progress.LastOutcomeCode = "test_cycle_started";
         progress.LastOutcomeUtc = request.CreatedUtc;
-        progress.UpdatedUtc = DateTime.UtcNow;
+        progress.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
         await context.SaveChangesAsync();
     }
 
-    private static async Task<string?> ReadRequestStatusAsync(
+    private async Task<string?> ReadRequestStatusAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         long requestId)
     {
@@ -384,7 +388,7 @@ public sealed partial class PatronJourneyTests
             .SingleAsync();
     }
 
-    private static async Task DeleteRequestIdsAsync(
+    private async Task DeleteRequestIdsAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         IReadOnlyCollection<long> requestIds)
     {

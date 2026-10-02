@@ -35,7 +35,7 @@ public static class MigrationReconciler
         {
             using var report = JsonDocument.Parse(File.ReadAllText(options.ImportReportPath));
             var root = report.RootElement;
-            if (root.GetProperty("reportVersion").GetInt32() != 4 ||
+            if (root.GetProperty("reportVersion").GetInt32() != 5 ||
                 !root.GetProperty("reconciliationPassed").GetBoolean() ||
                 !string.Equals(
                     root.GetProperty("sourceGitSha").GetString(),
@@ -98,7 +98,10 @@ public static class MigrationReconciler
         foreach (var table in tables)
         {
             Append(hash, $"table:{table.Name}");
-            foreach (var column in table.Columns) Append(hash, $"column:{column}");
+            foreach (var column in table.Columns)
+            {
+                Append(hash, $"column:{column}");
+            }
 
             using var command = connection.CreateCommand();
             var selected = string.Join(", ", table.Columns.Select(QuoteIdentifier));
@@ -161,7 +164,10 @@ public static class MigrationReconciler
             var column = reader.GetString(1);
             builder.Columns.Add(column);
             var keyOrdinal = reader.GetInt32(3);
-            if (keyOrdinal > 0) builder.Keys.Add((keyOrdinal, column));
+            if (keyOrdinal > 0)
+            {
+                builder.Keys.Add((keyOrdinal, column));
+            }
         }
         return builders.Select(item => new TargetTable(
                 item.Key,

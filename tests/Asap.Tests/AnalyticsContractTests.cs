@@ -1,4 +1,5 @@
 using Asap.Web.Features.Analytics;
+using Asap.Web.Infrastructure.Data;
 using Asap.Web.Features.Staff;
 
 namespace Asap.Tests;
@@ -31,26 +32,26 @@ public sealed class AnalyticsContractTests
     {
         var organizations = new[]
         {
-            new AnalyticsLibrary("20", "Library twenty"),
-            new AnalyticsLibrary("21", "Library twenty-one")
+            new AnalyticsLibrary(20, "Library twenty"),
+            new AnalyticsLibrary(21, "Library twenty-one")
         };
         var ordinary = Staff("staff", 20);
-        var ordinaryResult = AnalyticsService.ResolveScope(ordinary, "21", organizations);
+        var ordinaryResult = AnalyticsService.ResolveScope(ordinary, LibraryScope.ForLibrary(21), organizations);
         Assert.IsTrue(ordinaryResult.IsValid);
         Assert.AreEqual(20, ordinaryResult.OrganizationId);
-        Assert.AreEqual("20", ordinaryResult.LibraryOrgId);
+        Assert.AreEqual(20, ordinaryResult.LibraryOrgId);
 
         var superAdmin = Staff("super_admin", 1);
-        var all = AnalyticsService.ResolveScope(superAdmin, "system", organizations);
+        var all = AnalyticsService.ResolveScope(superAdmin, LibraryScope.All, organizations);
         Assert.IsTrue(all.IsValid);
         Assert.IsNull(all.OrganizationId);
         Assert.AreEqual("all", all.Mode);
 
-        var selected = AnalyticsService.ResolveScope(superAdmin, "21", organizations);
+        var selected = AnalyticsService.ResolveScope(superAdmin, LibraryScope.ForLibrary(21), organizations);
         Assert.IsTrue(selected.IsValid);
         Assert.AreEqual(21, selected.OrganizationId);
         Assert.AreEqual("Library twenty-one", selected.Label);
-        Assert.IsFalse(AnalyticsService.ResolveScope(superAdmin, "999", organizations).IsValid);
+        Assert.IsFalse(AnalyticsService.ResolveScope(superAdmin, LibraryScope.ForLibrary(999), organizations).IsValid);
     }
 
     private static CurrentStaff Staff(string role, int organizationId) => new(

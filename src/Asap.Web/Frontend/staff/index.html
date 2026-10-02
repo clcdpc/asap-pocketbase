@@ -19,6 +19,10 @@
     </a>
     <div id="session-actions" class="session-actions" hidden>
       <span id="staff-identity"></span>
+      <details id="recent-work" class="recent-work">
+        <summary>Recent requests</summary>
+        <div id="recent-request-list" class="recent-request-list" aria-label="Recently opened title requests"></div>
+      </details>
       <button id="sign-out" class="icon-button" type="button" title="Sign out" aria-label="Sign out">
         <i class="fa fa-sign-out" aria-hidden="true"></i>
       </button>
@@ -39,6 +43,7 @@
     </section>
 
     <div id="workspace" hidden>
+      <p id="email-readiness-warning" class="email-readiness-warning" role="status" aria-live="polite" hidden></p>
       <nav class="view-tabs" aria-label="Staff views">
         <button class="view-tab active" type="button" data-view="queue" aria-current="page">
           <i class="fa fa-list" aria-hidden="true"></i> Requests
@@ -66,10 +71,16 @@
             <h1 id="queue-title" tabindex="-1">Title requests</h1>
             <p id="queue-summary">Loading authorized requests...</p>
           </div>
-          <label id="scope-field" class="compact-field" hidden>
-            <span>Library scope</span>
-            <select id="library-scope"></select>
-          </label>
+          <div class="section-heading-actions">
+            <button id="bulk-delete-closed" class="danger-button" type="button" hidden>Delete closed work...</button>
+            <label id="scope-field" class="compact-field" hidden>
+              <span>Library scope</span>
+              <select id="library-scope"></select>
+            </label>
+            <button id="new-suggestion" class="primary-button" type="button">
+              <i class="fa fa-plus" aria-hidden="true"></i> New suggestion
+            </button>
+          </div>
         </div>
 
         <div id="status-tabs" class="status-tabs" role="tablist" aria-label="Request status">
@@ -99,10 +110,20 @@
             <span>Tag</span>
             <select id="tag-filter"><option value="all">All tags</option></select>
           </label>
+          <label id="similar-filter-field" class="compact-field">
+            <span>Similarity</span>
+            <select id="similar-filter">
+              <option value="all">All</option>
+              <option value="similar">Similar</option>
+              <option value="unique">Unique</option>
+            </select>
+          </label>
           <button id="refresh-queue" class="icon-button" type="button" title="Refresh requests" aria-label="Refresh requests">
             <i class="fa fa-refresh" aria-hidden="true"></i>
           </button>
         </div>
+
+        <p id="queue-automation" class="queue-automation"></p>
 
         <div id="request-grid" class="request-grid"></div>
         <p id="queue-empty" class="empty-state" hidden>No requests match these filters.</p>
@@ -118,6 +139,7 @@
             <span>Library scope</span>
             <select id="additional-copy-library-scope"></select>
           </label>
+          <button id="bulk-delete-closed-copies" class="danger-button" type="button" hidden>Delete closed work...</button>
         </div>
 
         <div id="additional-copy-status-tabs" class="status-tabs" role="tablist" aria-label="Additional-copy status">
@@ -147,6 +169,10 @@
 
         <div id="additional-copy-grid" class="request-grid"></div>
         <p id="additional-copy-empty" class="empty-state" hidden>No additional-copy tasks match these filters.</p>
+        <div id="additional-copy-create-review" role="group" aria-label="Review unconfirmed additional-copy creation" hidden>
+          <p id="additional-copy-create-review-summary"></p>
+          <button id="additional-copy-create-review-done" class="secondary-button" type="button">I reviewed these tasks</button>
+        </div>
       </section>
 
       <section id="profile-view" aria-labelledby="profile-title" hidden>
@@ -170,7 +196,10 @@
           <label class="check-field"><input id="purchase-default" type="checkbox"> <span>Send purchase reminder by default</span></label>
           <label class="check-field"><input id="additional-copy-default" type="checkbox"> <span>Send additional-copy reminder by default</span></label>
           <label class="check-field"><input id="mine-default" type="checkbox"> <span>Show mine + unclaimed by default</span></label>
-          <div class="form-actions"><button class="primary-button" type="submit">Save profile</button></div>
+          <div class="form-actions">
+            <button class="primary-button" type="submit">Save profile</button>
+            <button id="profile-refresh" class="secondary-button" type="button" hidden>Reload Profile</button>
+          </div>
         </form>
       </section>
 
@@ -202,6 +231,7 @@
           <button id="send-test-email" class="secondary-button" type="button"><i class="fa fa-paper-plane" aria-hidden="true"></i> Send test email</button>
           <button id="refresh-operations" class="icon-button" type="button" title="Refresh operations" aria-label="Refresh operations"><i class="fa fa-refresh" aria-hidden="true"></i></button>
         </div>
+        <div id="operations-outcome" class="status-message warning" role="status" hidden></div>
         <div class="operations-columns">
           <section class="operations-panel" aria-labelledby="queue-progress-title">
             <h2 id="queue-progress-title">Queue progress</h2>
@@ -214,25 +244,48 @@
         </div>
       </section>
 
+      <dialog id="bulk-delete-dialog" aria-labelledby="bulk-delete-title" aria-describedby="bulk-delete-description">
+        <div class="dialog-shell compact-dialog-shell">
+          <div class="dialog-header"><h2 id="bulk-delete-title">Permanently delete closed work</h2><button id="bulk-delete-close" class="icon-button" type="button" aria-label="Close bulk deletion">Close</button></div>
+          <div class="dialog-body">
+            <p id="bulk-delete-description">This deletes closed title requests and closed additional-copy tasks in the library scope you choose. Deletion audits remain. Open work is never eligible.</p>
+            <label class="compact-field"><span>Library scope for deletion</span><select id="bulk-delete-scope"></select></label>
+            <button id="bulk-delete-preview" class="secondary-button" type="button">Preview closed records</button>
+            <p id="bulk-delete-summary" role="status" aria-live="polite"></p>
+            <ul id="bulk-delete-items" class="bulk-delete-items"></ul>
+            <label class="compact-field"><span>Type DELETE to permanently delete the previewed records</span><input id="bulk-delete-confirmation" type="text" autocomplete="off" spellcheck="false"></label>
+            <div class="form-actions"><button id="bulk-delete-execute" class="danger-button" type="button" disabled>Permanently delete previewed records</button></div>
+            <div id="bulk-delete-results" role="status" aria-live="polite" tabindex="-1"></div>
+          </div>
+        </div>
+      </dialog>
+
       <section id="settings-view" aria-labelledby="settings-title" hidden>
-        <div class="section-heading">
-          <div>
+        <div class="settings-header">
+          <div class="settings-heading">
             <h1 id="settings-title" tabindex="-1">Settings</h1>
             <p id="settings-context-summary">Administration and configuration.</p>
           </div>
-          <label id="settings-scope-field" class="compact-field" hidden>
-            <span>Settings scope</span>
-            <select id="settings-scope" aria-label="Settings scope"></select>
-          </label>
+          <div class="settings-toolbar">
+            <label id="settings-scope-field" class="compact-field" hidden>
+              <span>Settings scope</span>
+              <select id="settings-scope" aria-label="Settings scope"></select>
+            </label>
+            <button id="settings-refresh" class="secondary-button" type="button" title="Reload settings" aria-label="Reload settings"><i class="fa fa-refresh" aria-hidden="true"></i></button>
+          </div>
+          <p id="settings-message" class="settings-message" role="status" aria-live="polite"></p>
         </div>
 
-        <p id="settings-message" class="settings-message" role="status" aria-live="polite"></p>
+        <div id="settings-system-context" class="settings-callout" hidden>
+          System-only controls are available at System level. Library settings can override only the fields enabled below.
+          <button id="settings-switch-system" class="secondary-button" type="button" hidden>Switch to System level</button>
+        </div>
         <div class="settings-layout">
           <aside class="settings-sidebar" aria-label="Settings sections">
             <nav id="settings-nav" class="settings-nav" role="tablist" aria-label="Settings categories">
               <button id="settings-nav-start" type="button" role="tab" aria-selected="true" aria-controls="settings-start" data-settings-panel="start">Getting started</button>
               <button id="settings-nav-polaris" type="button" role="tab" aria-selected="false" aria-controls="settings-polaris" data-settings-panel="polaris">Polaris</button>
-              <button id="settings-nav-smtp" type="button" role="tab" aria-selected="false" aria-controls="settings-smtp" data-settings-panel="smtp">Email / SMTP</button>
+              <button id="settings-nav-smtp" type="button" role="tab" aria-selected="false" aria-controls="settings-smtp" data-settings-panel="smtp">Email / Postmark</button>
               <button id="settings-nav-staff" type="button" role="tab" aria-selected="false" aria-controls="settings-staff" data-settings-panel="staff">Staff access</button>
               <button id="settings-nav-workflow" type="button" role="tab" aria-selected="false" aria-controls="settings-workflow" data-settings-panel="workflow">Workflow</button>
               <button id="settings-nav-patron" type="button" role="tab" aria-selected="false" aria-controls="settings-patron" data-settings-panel="patron">Patron experience</button>
@@ -240,7 +293,7 @@
             </nav>
           </aside>
 
-          <form id="settings-form" class="settings-form">
+          <form id="settings-form" class="settings-form" hidden>
             <input id="settings-version" type="hidden">
 
             <section id="settings-start" class="settings-panel active" role="tabpanel" tabindex="-1" data-settings-panel-content="start" aria-labelledby="settings-nav-start">
@@ -251,7 +304,7 @@
               <fieldset id="settings-system-links" class="settings-fieldset" data-system-only="true">
                 <legend>System links</legend>
                 <div class="settings-grid">
-                  <label class="settings-field" data-setting-section="systemSettings" data-setting-key="staffUrl" data-system-only="true">
+                  <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="staffUrl" data-system-only="true">
                     <span>Staff URL</span><input id="system-staff-url" type="url" autocomplete="url">
                   </label>
                   <label class="settings-field" data-setting-section="systemSettings" data-setting-key="leapBibUrlPattern" data-system-only="true">
@@ -260,7 +313,7 @@
                   <label class="settings-field" data-setting-section="systemSettings" data-setting-key="leapPatronUrlPattern" data-system-only="true">
                     <span>Leap patron record URL pattern</span><input id="leap-patron-url-pattern" type="url">
                   </label>
-                  <label class="settings-field" data-setting-section="systemSettings" data-setting-key="formatIconUrlPattern" data-system-only="true">
+                  <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="formatIconUrlPattern" data-system-only="true">
                     <span>Format icon URL pattern</span><input id="format-icon-url-pattern" type="text">
                   </label>
                   <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="patronEmbedAllowedOrigins" data-system-only="true">
@@ -268,9 +321,11 @@
                   </label>
                   <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="systemNotEnabledMessage" data-system-only="true">
                     <span>Nonparticipating-library message</span><textarea id="ui-system-not-enabled-msg" rows="3"></textarea>
+                    <small class="field-help">Use {{library}} for the selected library name.</small>
                   </label>
                   <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="misconfiguredMessage" data-system-only="true">
                     <span>Misconfigured system message</span><textarea id="ui-misconfigured-msg" rows="3"></textarea>
+                    <small class="field-help">Use {{library}} for the selected library name.</small>
                   </label>
                 </div>
               </fieldset>
@@ -287,19 +342,30 @@
                 <p>System-only integration identity and reference synchronization.</p>
               </div>
               <fieldset class="settings-fieldset" data-system-only="true">
-                <legend>Polaris connection</legend>
+                <legend>Polaris API</legend>
                 <div class="settings-grid">
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="host" data-system-only="true"><span>Host</span><input id="polaris-host" type="text"></label>
+                  <label class="settings-field wide" data-setting-section="polaris" data-setting-key="host" data-system-only="true"><span>Host</span><input id="polaris-host" type="text"></label>
                   <label class="settings-field" data-setting-section="polaris" data-setting-key="accessId" data-system-only="true"><span>Access ID</span><input id="polaris-access-id" type="text"></label>
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="staffDomain" data-system-only="true"><span>Staff domain</span><input id="polaris-domain" type="text"></label>
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="adminUser" data-system-only="true"><span>System staff username</span><input id="polaris-admin-user" type="text"></label>
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="workstationId" data-system-only="true"><span>Polaris workstation ID</span><input id="polaris-workstation-id" type="number" min="1"></label>
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="systemPolarisUserId" data-system-only="true"><span>System Polaris user ID</span><input id="polaris-system-user-id" type="number" min="1"></label>
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="organizationIdForRequests" data-system-only="true"><span>Requesting organization ID</span><input id="polaris-requesting-org-id" type="number" min="1"></label>
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="pickupOrganizationId" data-system-only="true"><span>Pickup organization ID</span><input id="polaris-pickup-org-id" type="number" min="1"></label>
                   <label class="settings-field" data-setting-section="polaris" data-setting-key="apiKey" data-secret="true" data-system-only="true"><span>API key</span><input id="polaris-api-key" type="password" autocomplete="new-password"></label>
+                </div>
+              </fieldset>
+              <fieldset class="settings-fieldset" data-system-only="true">
+                <legend>System staff account</legend>
+                <div class="settings-grid">
+                  <label class="settings-field wide" data-setting-section="polaris" data-setting-key="staffDomain" data-system-only="true"><span>Staff domain</span><input id="polaris-domain" type="text"></label>
+                  <label class="settings-field" data-setting-section="polaris" data-setting-key="adminUser" data-system-only="true"><span>System staff username</span><input id="polaris-admin-user" type="text"></label>
                   <label class="settings-field" data-setting-section="polaris" data-setting-key="adminPassword" data-secret="true" data-system-only="true"><span>System staff password</span><input id="polaris-admin-pass" type="password" autocomplete="new-password"></label>
                 </div>
+              </fieldset>
+              <fieldset class="settings-fieldset" data-system-only="true">
+                <legend>System identity</legend>
+                <div class="settings-grid">
+                  <label class="settings-field" data-setting-section="polaris" data-setting-key="workstationId" data-system-only="true"><span>Polaris workstation ID</span><input id="polaris-workstation-id" type="number" min="1"></label>
+                  <label class="settings-field" data-setting-section="polaris" data-setting-key="systemPolarisUserId" data-system-only="true"><span>System Polaris user ID</span><input id="polaris-system-user-id" type="number" min="1"></label>
+                </div>
+              </fieldset>
+              <fieldset class="settings-fieldset" data-system-only="true">
+                <legend>Connection and synchronization</legend>
                 <div class="form-actions settings-inline-actions">
                   <button id="btn-test-polaris" class="secondary-button" type="button"><i class="fa fa-plug" aria-hidden="true"></i> Test connection</button>
                   <button id="btn-sync-organizations" class="secondary-button" type="button"><i class="fa fa-refresh" aria-hidden="true"></i> Sync organizations</button>
@@ -311,17 +377,23 @@
 
             <section id="settings-smtp" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="smtp" aria-labelledby="settings-nav-smtp" hidden>
               <div class="settings-panel-heading">
-                <h2>Email / SMTP</h2>
-                <p>Sender identity is inherited by library scope; transport credentials remain protected.</p>
+                <h2>Email / Postmark</h2>
+                <p>Libraries may override sender identity. The protected Postmark server token belongs to system settings.</p>
               </div>
               <fieldset class="settings-fieldset">
                 <legend>Sender identity</legend>
                 <div class="settings-grid">
                   <label class="settings-field" data-setting-section="email" data-setting-key="fromAddress"><span>From email address</span><input id="email-from-address" type="email" autocomplete="email"></label>
                   <label class="settings-field" data-setting-section="email" data-setting-key="fromName"><span>From name</span><input id="email-from-name" type="text"></label>
-                  <label class="settings-field" data-setting-section="email" data-setting-key="postmarkToken" data-secret="true"><span>Postmark server token</span><input id="email-postmark-token" type="password" autocomplete="new-password"></label>
-                  <label class="settings-field"><span>Clear stored Postmark token</span><input id="email-clear-postmark-token" type="checkbox"></label>
                 </div>
+              </fieldset>
+              <fieldset class="settings-fieldset" data-system-only="true">
+                <legend>Postmark connection</legend>
+                <div class="settings-grid">
+                  <label class="settings-field wide" data-setting-section="email" data-setting-key="postmarkToken" data-secret="true" data-system-only="true"><span>Postmark server token (system only)</span><input id="email-postmark-token" type="password" autocomplete="new-password"></label>
+                  <label class="settings-field wide check-field" data-system-only="true"><input id="email-clear-postmark-token" type="checkbox"><span>Clear stored Postmark token</span></label>
+                </div>
+                <p id="email-token-status" class="settings-result"></p>
               </fieldset>
             </section>
 
@@ -333,7 +405,7 @@
               <fieldset class="settings-fieldset" data-settings-ignore="true">
                 <legend>Add staff user</legend>
                 <div class="settings-grid staff-access-form">
-                  <label class="settings-field"><span>Email</span><input id="staff-add-email" type="email" autocomplete="username"></label>
+                  <label class="settings-field wide"><span>Email</span><input id="staff-add-email" type="email" autocomplete="username"></label>
                   <label class="settings-field"><span>Role</span><select id="staff-add-role"></select></label>
                   <label class="settings-field"><span>Library</span><select id="staff-add-organization"></select></label>
                 </div>
@@ -371,13 +443,16 @@
                   <label class="settings-field" data-setting-section="workflow" data-setting-key="suggestionLimit"><span>Weekly suggestion limit</span><input id="suggestion-limit" type="number" min="1" max="1000"></label>
                   <label class="settings-field wide" data-setting-section="workflow" data-setting-key="suggestionLimitMessage"><span>Suggestion limit message</span><textarea id="suggestion-limit-message" rows="3"></textarea></label>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="allowAnyRegisteredCardLogin"><input id="allow-any-registered-card-login" type="checkbox"><span>Allow any registered card login</span></label>
+                  <p class="settings-callout wide">When enabled, an eligible patron from another library can use this portal. Their suggestion follows this portal library's settings and workflow, not their home library's. <a id="cross-library-public-url" href="#" hidden>Open this library's patron portal</a></p>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="allowPatronAutoholdOptOut"><input id="allow-patron-autohold-opt-out" type="checkbox"><span>Allow patron auto-hold opt out</span></label>
-                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="patronCodeEligibilityEnabled"><input id="patron-code-eligibility-enabled" type="checkbox"><span>Require eligible patron code</span></label>
+                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="autoPromote"><input id="auto-promote" type="checkbox"><span>Automatically promote approved purchases</span></label>
+                  <label class="settings-field wide check-field" data-setting-section="workflow" data-setting-key="patronCodeEligibilityEnabled"><input id="patron-code-eligibility-enabled" type="checkbox"><span>Require eligible patron code</span></label>
                   <label class="settings-field wide" data-setting-section="workflow" data-setting-key="patronCodeEligibilityMessage"><span>Patron-code eligibility message</span><textarea id="patron-code-eligibility-message" rows="3"></textarea></label>
+                  <p class="settings-callout wide">The suggestion limit message supports <code>{{next_available_date}}</code>. The patron-code eligibility message is displayed as written.</p>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset">
-                <legend>Timeouts and promotion</legend>
+                <legend>Timeouts</legend>
                 <div class="settings-grid">
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="outstandingTimeoutEnabled"><input id="outstanding-timeout-enabled" type="checkbox"><span>Auto-reject unreviewed suggestions</span></label>
                   <label class="settings-field" data-setting-section="workflow" data-setting-key="outstandingTimeoutDays"><span>Unreviewed suggestion days</span><input id="outstanding-timeout-days" type="number" min="1" max="3650"></label>
@@ -389,7 +464,6 @@
                   <label class="settings-field" data-setting-section="workflow" data-setting-key="pendingHoldTimeoutDays"><span>Pending hold days</span><input id="pending-hold-timeout-days" type="number" min="1" max="3650"></label>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="additionalCopyTimeoutEnabled"><input id="additional-copy-timeout-enabled" type="checkbox"><span>Close open additional-copy tasks automatically</span></label>
                   <label class="settings-field" data-setting-section="workflow" data-setting-key="additionalCopyTimeoutDays"><span>Additional-copy days</span><input id="additional-copy-timeout-days" type="number" min="1" max="3650"></label>
-                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="autoPromote"><input id="auto-promote" type="checkbox"><span>Automatically promote approved purchases</span></label>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset">
@@ -407,6 +481,9 @@
                   <div class="settings-domain-block wide">
                     <div class="settings-domain-heading"><strong>Allowed patron-code IDs</strong><button id="add-patron-code" class="secondary-button" type="button"><i class="fa fa-plus" aria-hidden="true"></i> Add ID</button></div>
                     <label id="patron-codes-inherit-field" class="settings-inline-check"><input id="patron-codes-use-system" type="checkbox"><span>Use system IDs</span></label>
+                    <label class="settings-field" data-settings-ignore="true"><span>Search patron codes</span><input id="patron-code-search" type="search" autocomplete="off"></label>
+                    <div class="settings-inline-actions"><button id="patron-codes-select-all" class="secondary-button" type="button">Select all matches</button><button id="patron-codes-clear-all" class="secondary-button" type="button">Clear all</button></div>
+                    <p id="patron-code-warning" class="settings-callout" role="status" hidden></p>
                     <div id="patron-codes-editor" class="settings-row-editor" aria-live="polite"></div>
                   </div>
                 </div>
@@ -424,9 +501,24 @@
                 <p>Patron-facing text, publication choices, formats, custom fields, and branding.</p>
               </div>
               <fieldset class="settings-fieldset">
+                <legend>Public patron portal</legend>
+                <p id="patron-public-url-status" class="settings-callout" role="status"></p>
+                <div id="patron-public-links" data-settings-ignore="true" hidden>
+                  <label class="settings-field"><span>Direct URL</span><input id="patron-public-url" type="text" readonly></label>
+                  <button id="copy-patron-public-url" class="secondary-button" type="button">Copy URL</button>
+                  <label class="settings-field"><span>Iframe markup</span><textarea id="patron-iframe-markup" rows="3" readonly></textarea></label>
+                  <button id="copy-patron-iframe" class="secondary-button" type="button">Copy iframe</button>
+                  <label class="settings-field"><span>Auto-resizing loader markup</span><textarea id="patron-loader-markup" rows="4" readonly></textarea></label>
+                  <button id="copy-patron-loader" class="secondary-button" type="button">Copy loader</button>
+                  <p>External embedding works only when the embedding site's origin is in the system allowed-origin policy.</p>
+                  <p id="patron-copy-status" class="settings-result" role="status" aria-live="polite"></p>
+                </div>
+              </fieldset>
+              <fieldset class="settings-fieldset">
                 <legend>Patron text</legend>
+                <p>Rendered patron text supports <code>{{barcode_label}}</code> and <code>{{pin_label}}</code> for the configured labels. Examples include the page title, login and form notes, common-creator text, and success messages. The already-submitted message also supports <code>{{duplicate_date}}</code>, <code>{{duplicate_status}}</code>, <code>{{duplicate_title}}</code>, <code>{{duplicate_author}}</code>, <code>{{duplicate_format}}</code>, and <code>{{duplicate_match_type}}</code>; the legacy <code>{{title}}</code>, <code>{{author}}</code>, and <code>{{format}}</code> aliases also work there.</p>
                 <div class="settings-grid">
-                  <label class="settings-field" data-setting-section="patron" data-setting-key="pageTitle"><span>Page title</span><input id="patron-page-title" type="text"></label>
+                  <label class="settings-field wide" data-setting-section="patron" data-setting-key="pageTitle"><span>Page title</span><input id="patron-page-title" type="text"></label>
                   <label class="settings-field" data-setting-section="patron" data-setting-key="barcodeLabel"><span>Barcode label</span><input id="patron-barcode-label" type="text"></label>
                   <label class="settings-field" data-setting-section="patron" data-setting-key="pinLabel"><span>PIN label</span><input id="patron-pin-label" type="text"></label>
                   <label class="settings-field wide" data-setting-section="patron" data-setting-key="loginPrompt"><span>Login prompt</span><textarea id="patron-login-prompt" rows="2"></textarea></label>
@@ -478,13 +570,16 @@
               </fieldset>
               <fieldset class="settings-fieldset">
                 <legend>Branding</legend>
+                <p id="branding-preview-source" class="settings-callout"></p>
+                <img id="branding-preview" class="settings-branding-preview" alt="" hidden>
                 <div class="settings-grid">
                   <label class="settings-field wide" data-setting-section="branding" data-setting-key="altText"><span>Logo alternate text</span><input id="branding-alt" type="text"></label>
                   <label class="settings-field wide"><span>Logo image</span><input id="branding-logo" type="file" accept="image/png,image/jpeg,image/gif"></label>
                 </div>
                 <div class="form-actions settings-inline-actions">
                   <button id="save-branding-logo" class="secondary-button" type="button"><i class="fa fa-picture-o" aria-hidden="true"></i> Save logo</button>
-                  <button id="clear-branding-logo" class="secondary-button" type="button"><i class="fa fa-times" aria-hidden="true"></i> Clear image</button>
+                  <button id="discard-branding-draft" class="secondary-button" type="button" hidden>Remove unsaved image selection</button>
+                  <button id="clear-branding-logo" class="secondary-button" type="button"><i class="fa fa-times" aria-hidden="true"></i> Clear image (use inherited image)</button>
                 </div>
                 <p id="branding-status" class="settings-result" role="status"></p>
               </fieldset>
@@ -495,6 +590,12 @@
                 <h2>Email templates</h2>
                 <p>Subject and body content preserve system identity and library lineage.</p>
               </div>
+              <details id="template-placeholder-help" class="settings-fieldset" data-settings-ignore="true">
+                <summary>Template placeholders</summary>
+                <p>Place the cursor in a template Subject or Body, then choose a placeholder to insert it.</p>
+                <div id="template-placeholder-list" class="settings-inline-actions"></div>
+                <p id="template-placeholder-status" role="status" aria-live="polite"></p>
+              </details>
               <fieldset class="settings-fieldset">
                 <legend>Sender details</legend>
                 <div class="settings-grid">
@@ -543,7 +644,6 @@
               <div class="form-actions settings-inline-actions">
                 <button id="settings-discard" class="secondary-button" type="button" hidden>Discard changes</button>
                 <button id="settings-reset" class="danger-button" type="button" hidden><i class="fa fa-refresh" aria-hidden="true"></i> Reset inherited overrides</button>
-                <button id="settings-refresh" class="secondary-button" type="button" title="Reload settings" aria-label="Reload settings"><i class="fa fa-refresh" aria-hidden="true"></i></button>
                 <button id="settings-save" class="primary-button" type="submit"><i class="fa fa-save" aria-hidden="true"></i> Save settings</button>
               </div>
             </div>
@@ -566,7 +666,41 @@
       </header>
       <div id="request-dialog-body" class="dialog-body"></div>
     </div>
-  </dialog>
+    </dialog>
+
+    <dialog id="polaris-dialog" aria-labelledby="polaris-dialog-title">
+      <div class="dialog-shell compact-dialog-shell">
+        <header class="dialog-header">
+          <h2 id="polaris-dialog-title">Search Polaris catalog</h2>
+          <button id="close-polaris" class="icon-button" type="button" aria-label="Close Polaris search">
+            <i class="fa fa-times" aria-hidden="true"></i>
+          </button>
+        </header>
+        <div class="dialog-body">
+          <form id="polaris-form" class="polaris-form">
+            <label>Search by
+              <select id="polaris-mode">
+                <option value="bib">Exact BIB ID</option>
+                <option value="identifier">Identifier</option>
+                <option value="title">Title</option>
+                <option value="author">Author</option>
+                <option value="title_author">Title and author</option>
+              </select>
+            </label>
+            <label id="polaris-query-field"><span id="polaris-query-label">Catalog title</span>
+              <input id="polaris-query" maxlength="250" required>
+            </label>
+            <div id="polaris-pair-fields" hidden>
+              <label>Catalog title <input id="polaris-title" maxlength="250"></label>
+              <label>Catalog author <input id="polaris-author" maxlength="250"></label>
+            </div>
+            <button class="primary-button" type="submit">Search Polaris</button>
+          </form>
+          <p id="polaris-status" role="status" aria-live="polite"></p>
+          <ul id="polaris-results" class="polaris-results"></ul>
+        </div>
+      </div>
+    </dialog>
 
   <dialog id="additional-copy-create-dialog" aria-labelledby="additional-copy-create-title">
     <div class="dialog-shell compact-dialog-shell">
@@ -586,6 +720,26 @@
           <button id="cancel-additional-copy" class="secondary-button" type="button">Cancel</button>
           <button class="primary-button" type="submit"><i class="fa fa-clone" aria-hidden="true"></i>Create task</button>
         </div>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog id="staff-suggestion-dialog" aria-labelledby="staff-suggestion-title" aria-describedby="staff-suggestion-description">
+    <div class="dialog-shell">
+      <header class="dialog-header">
+        <div>
+          <p class="kicker">Staff-assisted request</p>
+          <h2 id="staff-suggestion-title">New suggestion</h2>
+          <p id="staff-suggestion-description">Resolve the patron before entering the suggestion details.</p>
+        </div>
+        <button id="close-staff-suggestion" class="icon-button" type="button" title="Close new suggestion" aria-label="Close new suggestion">
+          <i class="fa fa-times" aria-hidden="true"></i>
+        </button>
+      </header>
+      <form id="staff-suggestion-form" class="dialog-body">
+        <p id="staff-suggestion-status" class="dialog-status" role="status" aria-live="polite"></p>
+        <div id="staff-suggestion-body"></div>
+        <div id="staff-suggestion-actions" class="form-actions"></div>
       </form>
     </div>
   </dialog>

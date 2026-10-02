@@ -111,8 +111,8 @@ public static class PatronEndpoints
 
         if (effective.PatronCodeEligibilityEnabled &&
             effective.AllowedPatronCodeIds.Count > 0 &&
-            !string.IsNullOrWhiteSpace(patron.PatronCodeId) &&
-            !effective.AllowedPatronCodeIds.Contains(patron.PatronCodeId))
+            patron.PatronCodeId.HasValue &&
+            !effective.AllowedPatronCodeIds.Contains(patron.PatronCodeId.Value))
         {
             return Results.Json(
                 new { message = effective.PatronCodeEligibilityMessage },
@@ -123,9 +123,10 @@ public static class PatronEndpoints
         string warning = string.Empty;
         try
         {
-            branches = await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
+            branches = await patronProvider.GetPickupBranchesAsync(patron, effective.OrganizationId, cancellationToken);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception) when (exception is PolarisOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             branches = [];
             warning = "Pickup locations are temporarily unavailable. Please try again.";
@@ -187,8 +188,8 @@ public static class PatronEndpoints
 
         try
         {
-            var patron = await patronProvider.RefreshAsync(session.Barcode, cancellationToken);
-            var branches = await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
+            var patron = await patronProvider.RefreshAsync(session.Barcode, session.EffectiveOrganizationId, cancellationToken);
+            var branches = await patronProvider.GetPickupBranchesAsync(patron, session.EffectiveOrganizationId, cancellationToken);
             var selected = branches.Any(item => item.Id == patron.PreferredPickupBranchId)
                 ? patron.PreferredPickupBranchId
                 : null;
@@ -204,7 +205,8 @@ public static class PatronEndpoints
                 session.ExperienceOrganizationId.HasValue &&
                 session.ExperienceOrganizationId != session.HomeOrganizationId));
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception) when (exception is PolarisOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             return Results.Json(
                 new { message = "Current patron information could not be loaded. Please log in again." },

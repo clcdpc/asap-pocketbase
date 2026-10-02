@@ -255,7 +255,11 @@ internal static class MigrationEffectiveConfiguration
         string fallbackProvenance)
     {
         var raw = EnvironmentValue(name);
-        if (raw is null) return new(fallback, fallbackProvenance);
+        if (raw is null)
+        {
+            return new(fallback, fallbackProvenance);
+        }
+
         var parsed = ParseLegacyInteger(raw, fallback);
         return new(Math.Clamp(parsed, minimum, maximum), "environment_override");
     }
@@ -263,7 +267,11 @@ internal static class MigrationEffectiveConfiguration
     private static int? ResolveOptionalInteger(string name, int minimum, int maximum)
     {
         var raw = EnvironmentValue(name);
-        if (raw is null) return null;
+        if (raw is null)
+        {
+            return null;
+        }
+
         var parsed = ParseLegacyInteger(raw, 0);
         return Math.Clamp(parsed, minimum, maximum);
     }
@@ -283,15 +291,27 @@ internal static class MigrationEffectiveConfiguration
     private static string NormalizePersistedStaffUrl(string value)
     {
         value = StripHash(value);
-        if (!value.EndsWith('/')) value += "/";
-        if (!value.EndsWith("/staff/", StringComparison.Ordinal)) value += "staff/";
+        if (!value.EndsWith('/'))
+        {
+            value += "/";
+        }
+
+        if (!value.EndsWith("/staff/", StringComparison.Ordinal))
+        {
+            value += "staff/";
+        }
+
         return value;
     }
 
     private static string StaffUrlFromEnvironment(string value)
     {
         value = StripHash(value);
-        if (!value.EndsWith('/')) value += "/";
+        if (!value.EndsWith('/'))
+        {
+            value += "/";
+        }
+
         return value + "staff/";
     }
 
@@ -309,7 +329,11 @@ internal static class MigrationEffectiveConfiguration
 
     private static string? Value(IReadOnlyDictionary<string, object?>? row, string name)
     {
-        if (row is null || !row.TryGetValue(name, out var raw) || raw is null) return null;
+        if (row is null || !row.TryGetValue(name, out var raw) || raw is null)
+        {
+            return null;
+        }
+
         var value = raw is byte[] bytes
             ? System.Text.Encoding.UTF8.GetString(bytes)
             : Convert.ToString(raw, CultureInfo.InvariantCulture);

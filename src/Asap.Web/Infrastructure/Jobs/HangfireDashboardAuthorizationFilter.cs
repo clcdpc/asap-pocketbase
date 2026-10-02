@@ -1,3 +1,4 @@
+using Asap.Web.Infrastructure.Data;
 using Hangfire.Dashboard;
 using Asap.Web.Features.Staff;
 
@@ -9,6 +10,6 @@ public sealed class HangfireDashboardAuthorizationFilter : IDashboardAuthorizati
     {
         var http = context.GetHttpContext();
         return http.Items[StaffCurrentUserMiddleware.ItemKey] is CurrentStaff staff &&
-               staff.Role == "super_admin";
+               staff.Role == StaffRole.SuperAdmin;
     }
 }

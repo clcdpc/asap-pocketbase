@@ -25,7 +25,7 @@ public sealed class FileEmailSenderTests
     [TestMethod]
     public async Task ReadinessAcceptsConfiguredOutputPathWithoutCreatingIt()
     {
-        var sender = new FileEmailSender(temporaryDirectory);
+        var sender = new FileEmailSender(temporaryDirectory, TimeProvider.System);
 
         var readiness = await sender.CheckReadinessAsync(7, CancellationToken.None);
 
@@ -36,7 +36,7 @@ public sealed class FileEmailSenderTests
     [TestMethod]
     public async Task SendWritesOneUniqueInspectableHtmlFilePerInvocation()
     {
-        var sender = new FileEmailSender(temporaryDirectory);
+        var sender = new FileEmailSender(temporaryDirectory, TimeProvider.System);
         var envelope = new EmailEnvelope(
             42,
             7,
@@ -72,7 +72,7 @@ public sealed class FileEmailSenderTests
     [TestMethod]
     public async Task SendHonorsAlreadyCancelledTokenWithoutCreatingOutput()
     {
-        var sender = new FileEmailSender(temporaryDirectory);
+        var sender = new FileEmailSender(temporaryDirectory, TimeProvider.System);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 

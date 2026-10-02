@@ -7,11 +7,11 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Asap.Web.Features.Analytics;
 
-public sealed record AnalyticsLibrary(string OrgId, string Name);
+public sealed record AnalyticsLibrary(int OrgId, string Name);
 
 public sealed record AnalyticsScope(
     string Mode,
-    string LibraryOrgId,
+    int? LibraryOrgId,
     string Label,
     bool SuperAdmin);
 
@@ -64,7 +64,7 @@ public sealed record AnalyticsResolvedScope(
     bool IsValid,
     int? OrganizationId,
     string Mode,
-    string LibraryOrgId,
+    int? LibraryOrgId,
     string Label);
 
 public sealed class AnalyticsService(
@@ -74,20 +74,20 @@ public sealed class AnalyticsService(
 {
     private static readonly string[] StageOrder =
     [
-        "suggestion",
-        "outstanding_purchase",
-        "pending_hold",
-        "hold_placed",
-        "closed",
+        RequestStatus.Suggestion,
+        RequestStatus.OutstandingPurchase,
+        RequestStatus.PendingHold,
+        RequestStatus.HoldPlaced,
+        RequestStatus.Closed,
         "additional_copies"
     ];
 
     private static readonly string[] OpenStageOrder =
     [
-        "suggestion",
-        "outstanding_purchase",
-        "pending_hold",
-        "hold_placed",
+        RequestStatus.Suggestion,
+        RequestStatus.OutstandingPurchase,
+        RequestStatus.PendingHold,
+        RequestStatus.HoldPlaced,
         "additional_copies"
     ];
 
@@ -299,8 +299,7 @@ public sealed class AnalyticsService(
 
     public async Task<AnalyticsResult> GetAsync(
         CurrentStaff staff,
-        string? scope,
-        string? orgId,
+        LibraryScope scope,
         string? range,
         CancellationToken cancellationToken)
     {
@@ -309,11 +308,10 @@ public sealed class AnalyticsService(
             .Where(item => item.Id != 1 && item.IsActive)
             .OrderBy(item => item.DisplayName)
             .ThenBy(item => item.Id)
-            .Select(item => new AnalyticsLibrary(item.Id.ToString(), item.DisplayName))
+            .Select(item => new AnalyticsLibrary(item.Id, item.DisplayName))
             .ToListAsync(cancellationToken);
 
-        var selectedScope = string.IsNullOrWhiteSpace(scope) ? orgId : scope;
-        var resolvedScope = ResolveScope(staff, selectedScope, organizations);
+        var resolvedScope = ResolveScope(staff, scope, organizations);
         if (!resolvedScope.IsValid)
         {
             return AnalyticsResult.InvalidScope();
@@ -378,13 +376,13 @@ public sealed class AnalyticsService(
             identifierFailures = reader.GetInt64(1);
         }
 
-        var availableLibraries = staff.Role == "super_admin" ? organizations : [];
+        var availableLibraries = staff.Role == StaffRole.SuperAdmin ? organizations : [];
         var response = new AnalyticsResponse(
             new AnalyticsScope(
                 resolvedScope.Mode,
                 resolvedScope.LibraryOrgId,
                 resolvedScope.Label,
-                staff.Role == "super_admin"),
+                staff.Role == StaffRole.SuperAdmin),
             new AnalyticsDateRange(resolvedRange.Key, resolvedRange.Start, resolvedRange.End),
             availableLibraries,
             summary,
@@ -397,32 +395,29 @@ public sealed class AnalyticsService(
 
     public static AnalyticsResolvedScope ResolveScope(
         CurrentStaff staff,
-        string? selectedScope,
+        LibraryScope selectedScope,
         IReadOnlyCollection<AnalyticsLibrary> organizations)
     {
-        var cleanSelected = selectedScope?.Trim() ?? string.Empty;
-        if (staff.Role == "super_admin")
+        if (staff.Role == StaffRole.SuperAdmin)
         {
-            if (string.IsNullOrEmpty(cleanSelected) ||
-                cleanSelected.Equals("all", StringComparison.OrdinalIgnoreCase) ||
-                cleanSelected.Equals("system", StringComparison.OrdinalIgnoreCase))
+            if (selectedScope.Kind == LibraryScopeKind.All)
             {
-                return new AnalyticsResolvedScope(true, null, "all", string.Empty, "All libraries");
+                return new AnalyticsResolvedScope(true, null, "all", null, "All libraries");
             }
 
-            if (int.TryParse(cleanSelected, out var selectedId) &&
-                organizations.Any(item => item.OrgId == selectedId.ToString()))
+            if (selectedScope.Kind == LibraryScopeKind.Library &&
+                selectedScope.OrganizationId is { } selectedId && organizations.Any(item => item.OrgId == selectedId))
             {
-                var organization = organizations.Single(item => item.OrgId == selectedId.ToString());
+                var organization = organizations.Single(item => item.OrgId == selectedId);
                 return new AnalyticsResolvedScope(true, selectedId, "library", organization.OrgId, organization.Name);
             }
 
-            return new AnalyticsResolvedScope(false, null, "library", string.Empty, "");
+            return new AnalyticsResolvedScope(false, null, "library", null, "");
         }
 
-        var ownOrganization = organizations.FirstOrDefault(item => item.OrgId == staff.OrganizationId.ToString());
+        var ownOrganization = organizations.FirstOrDefault(item => item.OrgId == staff.OrganizationId);
         return ownOrganization is null
-            ? new AnalyticsResolvedScope(false, null, "library", string.Empty, "")
+            ? new AnalyticsResolvedScope(false, null, "library", null, "")
             : new AnalyticsResolvedScope(true, staff.OrganizationId, "library", ownOrganization.OrgId, ownOrganization.Name);
     }
 

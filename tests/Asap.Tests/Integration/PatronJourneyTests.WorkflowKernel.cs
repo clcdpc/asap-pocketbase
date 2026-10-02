@@ -1,12 +1,16 @@
 using System.Data;
+using System.Net;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Jobs;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
+using Asap.Web.Infrastructure.Data;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Asap.Web.Infrastructure.Security;
+using Asap.Web.Infrastructure.Testing;
 
 namespace Asap.Tests.Integration;
 
@@ -69,6 +73,164 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task MalformedPatronHoldReadFailsPrecheckWithoutAdoptionOrCreation()
+    {
+        var provider = ScriptedHoldProvider.AmbiguousCreate();
+        provider.HoldReadException = new PolarisOperationalException(
+            "polaris_hold_read_failed",
+            "The hold response did not contain trustworthy status evidence.");
+        await using var holdFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(provider);
+                services.AddSingleton<IStaffPolarisProvider>(provider);
+            }));
+        var (requestId, requestVersion) = await SeedPendingHoldRequestAsync("malformed-hold-precheck");
+
+        try
+        {
+            var placement = holdFactory.Services.GetRequiredService<HoldPlacementService>();
+            var result = await placement.PlaceBackgroundAsync(requestId, requestVersion, CancellationToken.None);
+
+            Assert.AreEqual("hold_provider_error", result.Code);
+            Assert.AreEqual(1, provider.HoldReadCount);
+            Assert.AreEqual(0, provider.CreateCount);
+            Assert.AreEqual(0, provider.ReplyCount);
+
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = new SqlCommand(
+                """
+                SELECT request.[Status], operation.[State], operation.[Phase], operation.[ResultCode],
+                       operation.[PolarisHoldId], operation.[CreateStartedUtc], operation.[ReplyStartedUtc],
+                       operation.[CompletedUtc],
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
+                        WHERE [TitleRequestId] = request.[Id] AND [EventType] = N'hold_placed'),
+                       (SELECT COUNT(*) FROM [asap].[EmailOutbox]
+                        WHERE [BusinessKey] LIKE N'title-hold-placed:' + CONVERT(nvarchar(30), request.[Id]) + N':%')
+                FROM [asap].[TitleRequest] request
+                JOIN [asap].[HoldPlacementOperation] operation ON operation.[TitleRequestId] = request.[Id]
+                WHERE request.[Id] = @requestId;
+                """,
+                connection);
+            command.Parameters.AddWithValue("@requestId", requestId);
+            await using var row = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await row.ReadAsync());
+            Assert.AreEqual("pending_hold", row.GetString(0));
+            Assert.AreEqual("failed", row.GetString(1));
+            Assert.AreEqual("acquired", row.GetString(2));
+            Assert.AreEqual("provider_precheck_failed", row.GetString(3));
+            Assert.IsTrue(row.IsDBNull(4));
+            Assert.IsTrue(row.IsDBNull(5));
+            Assert.IsTrue(row.IsDBNull(6));
+            Assert.IsFalse(row.IsDBNull(7));
+            Assert.AreEqual(0, row.GetInt32(8));
+            Assert.AreEqual(0, row.GetInt32(9));
+        }
+        finally
+        {
+            await DeleteRequestAsync(requestId);
+        }
+    }
+
+    [TestMethod]
+    public async Task MalformedIdentifierSearchCannotPersistCatalogMatchOrMetadata()
+    {
+        var identifier = $"978{Random.Shared.NextInt64(1000000000, 9999999999)}";
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":2,"TotalRecordsFound":2,"BibSearchRows":[{"ControlNumber":9001,"Title":"Wrong catalog title","Author":"Wrong catalog author"},{"ControlNumber":"bad"}]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+        var configuration = TestConfigurationFactory.Create(allowedDomains: ["example.org"]);
+        configuration.ConnectionStrings.AsapDatabase = databaseConnectionString;
+        configuration.ConnectionStrings.HangfireDatabase = databaseConnectionString;
+        var suggestionService = new PatronSuggestionService(
+            configuration,
+            factory!.Services.GetRequiredService<PatronConfigurationService>(),
+            provider,
+            dispatcher!,
+            new RecordingEmailSender(),
+            new RecipientDomainPolicy(configuration),
+            timeProvider!,
+            NullLogger<PatronSuggestionService>.Instance);
+
+        long requestId;
+        byte[] requestVersion;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
+                INSERT INTO [asap].[TitleRequest]
+                    ([LibraryOrganizationId], [Barcode], [Title], [Author], [Identifier], [AutoHold],
+                     [MaterialFormatId], [Status], [IsbnCheckStatus], [IsbnCheckRetryCount], [Notes],
+                     [CreatedUtc], [UpdatedUtc])
+                VALUES (2, @barcode, N'Original title', N'Original author', @identifier, 1, @formatId,
+                        N'suggestion', N'pending', 2, N'Original notes', SYSUTCDATETIME(), SYSUTCDATETIME());
+                SELECT CAST(SCOPE_IDENTITY() AS bigint), [RowVersion]
+                FROM [asap].[TitleRequest] WHERE [Id] = SCOPE_IDENTITY();
+                """;
+            command.Parameters.AddWithValue("@barcode", $"2000000000{Random.Shared.Next(100000, 999999)}");
+            command.Parameters.AddWithValue("@identifier", identifier);
+            await using var row = await WithFixtureClock(command).ExecuteReaderAsync();
+            Assert.IsTrue(await row.ReadAsync());
+            requestId = row.GetInt64(0);
+            requestVersion = (byte[])row[1];
+        }
+
+        try
+        {
+            var outcome = await suggestionService.ProcessIdentifierLookupAsync(
+                requestId,
+                identifier,
+                2,
+                requestVersion,
+                CancellationToken.None);
+
+            Assert.AreEqual(IdentifierLookupOutcome.OperationalFailure, outcome);
+            Assert.AreEqual(1, handler.RequestCount);
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = new SqlCommand(
+                """
+                SELECT request.[Title], request.[Author], request.[BibId], request.[IsbnCheckStatus],
+                       request.[IsbnCheckRetryCount], request.[IsbnCheckResult], request.[IsbnCheckLastErrorCode],
+                       request.[Notes],
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestWorkflowTag] WHERE [TitleRequestId] = request.[Id]),
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = request.[Id]),
+                       (SELECT COUNT(*) FROM [asap].[EmailOutbox]
+                        WHERE [BusinessKey] LIKE N'title-hold-placed:' + CONVERT(nvarchar(30), request.[Id]) + N':'),
+                       (SELECT COUNT(*) FROM [asap].[HoldPlacementOperation] WHERE [TitleRequestId] = request.[Id])
+                FROM [asap].[TitleRequest] request
+                WHERE request.[Id] = @requestId;
+                """,
+                connection);
+            command.Parameters.AddWithValue("@requestId", requestId);
+            await using var result = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await result.ReadAsync());
+            Assert.AreEqual("Original title", result.GetString(0));
+            Assert.AreEqual("Original author", result.GetString(1));
+            Assert.IsTrue(result.IsDBNull(2));
+            Assert.AreEqual("pending", result.GetString(3));
+            Assert.AreEqual(2, result.GetInt32(4));
+            Assert.IsTrue(result.IsDBNull(5));
+            Assert.AreEqual("polaris_search_operational_failure", result.GetString(6));
+            Assert.AreEqual("Original notes", result.GetString(7));
+            Assert.AreEqual(0, result.GetInt32(8));
+            Assert.AreEqual(0, result.GetInt32(9));
+            Assert.AreEqual(0, result.GetInt32(10));
+            Assert.AreEqual(0, result.GetInt32(11));
+        }
+        finally
+        {
+            await DeleteRequestAsync(requestId);
+        }
+    }
+
+    [TestMethod]
     public async Task ReopenedLegacyProtectedPendingIdentifierCannotApplyConflictingLookup()
     {
         var provider = new ConflictingIdentifierProvider();
@@ -108,6 +270,7 @@ public sealed partial class PatronJourneyTests
                         N'{"legacyBibProtection":true,"legacyBibId":null}', DATEADD(day, -1, SYSUTCDATETIME()));
                 UPDATE [asap].[TitleRequest]
                 SET [Status] = N'suggestion', [CloseReason] = NULL, [IsbnCheckStatus] = N'pending',
+                    [LegacyHoldProtected] = 1,
                     [UpdatedUtc] = SYSUTCDATETIME()
                 WHERE [Id] = @requestId;
                 SELECT @requestId, [RowVersion]
@@ -161,17 +324,18 @@ public sealed partial class PatronJourneyTests
     [DataRow(true)]
     public async Task FulfillmentClosesExactTerminalHoldDespiteHistoricalSameBibInEitherOrder(bool historicalFirst)
     {
+        var scope = await CreateFulfillmentLibraryAsync();
         var requestBarcode = $"2000000000{Random.Shared.Next(100000, 999999)}";
         var provider = new FulfillmentEvidenceProvider
         {
             Holds = historicalFirst
                 ? [
-                    new PolarisHoldSnapshot(100, 9902, 3, "Expired", 101),
-                    new PolarisHoldSnapshot(200, 9902, 3, "Expired", 101)
+                    new PolarisHoldSnapshot(100, 9902, 9, "Expired", 101),
+                    new PolarisHoldSnapshot(200, 9902, 9, "Expired", 101)
                 ]
                 : [
-                    new PolarisHoldSnapshot(200, 9902, 3, "Expired", 101),
-                    new PolarisHoldSnapshot(100, 9902, 3, "Expired", 101)
+                    new PolarisHoldSnapshot(200, 9902, 9, "Expired", 101),
+                    new PolarisHoldSnapshot(100, 9902, 9, "Expired", 101)
                 ]
         };
         await using var evidenceFactory = factory!.WithWebHostBuilder(builder =>
@@ -184,14 +348,14 @@ public sealed partial class PatronJourneyTests
         var seeded = await SeedCompletedHoldIdentityAsync(
             $"fulfillment-historical-{historicalFirst}",
             requestBarcode,
-            "9902",
-            holdRequestId: "200");
-        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
+            9902,
+            holdRequestId: 200, organizationId: scope);
+        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, scope, seeded.RequestId);
         try
         {
             var result = await evidenceFactory.Services
                 .GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
 
             Assert.AreEqual("completed", result.Code);
             Assert.AreEqual("closed", await ReadStringAsync(
@@ -203,18 +367,20 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await DeleteRequestAsync(seeded.RequestId);
+            await DeleteFulfillmentLibraryAsync(scope);
         }
     }
 
     [TestMethod]
     public async Task FulfillmentKeepsTrackedHoldOpenWhenHistoricalSameBibHoldIsTerminal()
     {
+        var scope = await CreateFulfillmentLibraryAsync();
         var requestBarcode = $"2000000000{Random.Shared.Next(100000, 999999)}";
         var provider = new FulfillmentEvidenceProvider
         {
             Holds = [
                 new PolarisHoldSnapshot(200, 9903, 1, "Active", 101),
-                new PolarisHoldSnapshot(100, 9903, 3, "Expired", 101)
+                new PolarisHoldSnapshot(100, 9903, 9, "Expired", 101)
             ]
         };
         await using var evidenceFactory = factory!.WithWebHostBuilder(builder =>
@@ -227,14 +393,14 @@ public sealed partial class PatronJourneyTests
         var seeded = await SeedCompletedHoldIdentityAsync(
             "fulfillment-active-tracked",
             requestBarcode,
-            "9903",
-            holdRequestId: "200");
-        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
+            9903,
+            holdRequestId: 200, organizationId: scope);
+        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, scope, seeded.RequestId);
         try
         {
             var result = await evidenceFactory.Services
                 .GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
 
             Assert.AreEqual("completed", result.Code);
             Assert.AreEqual("hold_placed", await ReadStringAsync(
@@ -250,17 +416,19 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await DeleteRequestAsync(seeded.RequestId);
+            await DeleteFulfillmentLibraryAsync(scope);
         }
     }
 
     [TestMethod]
     public async Task FulfillmentPreservesExactTrackedIdConflict()
     {
+        var scope = await CreateFulfillmentLibraryAsync();
         var requestBarcode = $"2000000000{Random.Shared.Next(100000, 999999)}";
         var provider = new FulfillmentEvidenceProvider
         {
             Holds = [
-                new PolarisHoldSnapshot(200, 9904, 3, "Expired", 101),
+                new PolarisHoldSnapshot(200, 9904, 9, "Expired", 101),
                 new PolarisHoldSnapshot(200, 9904, 1, "Active", 101)
             ]
         };
@@ -274,14 +442,14 @@ public sealed partial class PatronJourneyTests
         var seeded = await SeedCompletedHoldIdentityAsync(
             "fulfillment-exact-id-conflict",
             requestBarcode,
-            "9904",
-            holdRequestId: "200");
-        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
+            9904,
+            holdRequestId: 200, organizationId: scope);
+        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, scope, seeded.RequestId);
         try
         {
             var result = await evidenceFactory.Services
                 .GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
 
             Assert.AreEqual("completed", result.Code);
             Assert.AreEqual("hold_placed", await ReadStringAsync(
@@ -296,12 +464,14 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await DeleteRequestAsync(seeded.RequestId);
+            await DeleteFulfillmentLibraryAsync(scope);
         }
     }
 
     [TestMethod]
     public async Task WorkflowStopsAfterOperationalFailureBeforeLaterFulfillmentPhase()
     {
+        var scope = await CreateFulfillmentLibraryAsync();
         var provider = new FulfillmentEvidenceProvider
         {
             HoldReadException = new PolarisOperationalException(
@@ -315,19 +485,24 @@ public sealed partial class PatronJourneyTests
                 services.AddSingleton<IStaffPolarisProvider>(provider);
             }));
 
-        var pending = await SeedPendingHoldRequestAsync("workflow-phase-stop");
+        var pending = await SeedPendingHoldRequestAsync("workflow-phase-stop", scope);
+        var pendingBarcode = await ReadStringAsync(
+            "SELECT [Barcode] FROM [asap].[TitleRequest] WHERE [Id]=@id;", "@id", pending.RequestId);
+        workflowFactory.Services.GetRequiredService<DeterministicTestingPatronProvider>().AddPatron(
+            new PatronSnapshot(7001, pendingBarcode, "workflow@example.org", "Test", "Workflow",
+                1, "Adult", 101, scope, "Isolated fulfillment library", 101), [new(101, "Main Library")], scope);
         var placed = await SeedCompletedHoldIdentityAsync(
             "workflow-phase-stop-later",
             $"2000000000{Random.Shared.Next(100000, 999999)}",
-            "9910",
-            holdRequestId: "300");
-        await PrepareSingleItemCycleAsync(QueueNames.HoldPlacement, 2, pending.RequestId);
-        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, placed.RequestId);
+            9910,
+            holdRequestId: 300, organizationId: scope);
+        await PrepareSingleItemCycleAsync(QueueNames.HoldPlacement, scope, pending.RequestId);
+        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, scope, placed.RequestId);
         try
         {
             var result = await workflowFactory.Services
                 .GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
 
             Assert.AreEqual("operational_failure", result.Code);
             Assert.AreEqual("pending_hold", await ReadStringAsync(
@@ -346,10 +521,66 @@ public sealed partial class PatronJourneyTests
         {
             await DeleteRequestAsync(pending.RequestId);
             await DeleteRequestAsync(placed.RequestId);
+            await DeleteFulfillmentLibraryAsync(scope);
         }
     }
 
-    private static async Task PrepareSingleItemCycleAsync(string queueName, int scope, long requestId)
+    [TestMethod]
+    [DataRow(8, "Active", "closed", "hold_unclaimed")]
+    [DataRow(9, "ACTIVE", "closed", "hold_expired")]
+    [DataRow(16, "Unknown translation", "closed", "hold_cancelled")]
+    [DataRow(3, "Expired", "hold_placed", null)]
+    public async Task FulfillmentClassifiesTheTrackedHoldByStatusId(
+        int status, string description, string expectedState, string? expectedReason)
+    {
+        var scope = await CreateFulfillmentLibraryAsync();
+        var provider = new FulfillmentEvidenceProvider {
+            Holds = [new PolarisHoldSnapshot(8123, 9907, status, description, 101)] };
+        await using var scoped = factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services => {
+            services.RemoveAll<IStaffPolarisProvider>();
+            services.AddSingleton<IStaffPolarisProvider>(provider);
+        }));
+        var seeded = await SeedCompletedHoldIdentityAsync("fulfillment-native-terminal",
+            $"2000000000{Random.Shared.Next(100000, 999999)}", 9907, holdRequestId: 8123, organizationId: scope);
+        try
+        {
+            await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, scope, seeded.RequestId);
+            Assert.AreEqual("completed", (await scoped.Services.GetRequiredService<WorkflowProcessingService>()
+                .ProcessWorkflowAsync(scope, CancellationToken.None)).Code);
+            Assert.AreEqual(expectedState, await ReadStringAsync(
+                "SELECT [Status] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
+            Assert.AreEqual(expectedReason, await ReadNullableStringAsync(
+                "SELECT [CloseReason] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
+        }
+        finally
+        {
+            await DeleteRequestAsync(seeded.RequestId);
+            await DeleteFulfillmentLibraryAsync(scope);
+        }
+    }
+
+
+    private async Task<int> CreateFulfillmentLibraryAsync()
+    {
+        await using var context = await factory!.Services
+            .GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync();
+        context.Organizations.Add(new Organization
+        {
+            Id = 3494, DisplayName = "Isolated fulfillment library", IsActive = true
+        });
+        await context.SaveChangesAsync();
+        return 3494;
+    }
+
+    private async Task DeleteFulfillmentLibraryAsync(int scope)
+    {
+        await using var context = await factory!.Services
+            .GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync();
+        await context.QueueProgress.Where(item => item.ScopeOrganizationId == scope).ExecuteDeleteAsync();
+        await context.Organizations.Where(item => item.Id == scope).ExecuteDeleteAsync();
+    }
+
+    private async Task PrepareSingleItemCycleAsync(string queueName, int scope, long requestId)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -384,10 +615,10 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@queueName", queueName);
         command.Parameters.AddWithValue("@scope", scope);
         command.Parameters.AddWithValue("@requestId", requestId);
-        await command.ExecuteNonQueryAsync();
+        await WithFixtureClock(command).ExecuteNonQueryAsync();
     }
 
-    private static async Task<(long RequestId, byte[] RowVersion)> SeedPendingHoldRequestAsync(string key, int scope = 2)
+    private async Task<(long RequestId, byte[] RowVersion)> SeedPendingHoldRequestAsync(string key, int scope = 2)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -396,9 +627,9 @@ public sealed partial class PatronJourneyTests
             """
             DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
             INSERT INTO [asap].[TitleRequest]
-                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                  [CreatedUtc], [UpdatedUtc])
-            VALUES (@scope, @barcode, @title, 1, @formatId, N'pending_hold', N'99001',
+            VALUES (@scope, @barcode, @title, 1, @formatId, N'pending_hold', N'99001', 1,
                     DATEADD(day, -1, SYSUTCDATETIME()), SYSUTCDATETIME());
             SELECT CAST(SCOPE_IDENTITY() AS bigint), [RowVersion]
             FROM [asap].[TitleRequest]
@@ -412,7 +643,7 @@ public sealed partial class PatronJourneyTests
         return (reader.GetInt64(0), (byte[])reader[1]);
     }
 
-    private static async Task<byte[]> ResetAndReadQueueVersionAsync(string queueName, int scope)
+    private async Task<byte[]> ResetAndReadQueueVersionAsync(string queueName, int scope)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -443,7 +674,7 @@ public sealed partial class PatronJourneyTests
             ?? throw new AssertFailedException("Queue progress rowversion was not returned.");
     }
 
-    private static async Task<byte[]> AdvanceQueueVersionAsync(string queueName, int scope)
+    private async Task<byte[]> AdvanceQueueVersionAsync(string queueName, int scope)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -463,7 +694,7 @@ public sealed partial class PatronJourneyTests
             ?? throw new AssertFailedException("Queue progress rowversion was not returned.");
     }
 
-    private static async Task WaitForBlockedSessionAsync(int blockerSessionId)
+    private async Task WaitForBlockedSessionAsync(int blockerSessionId)
     {
         await using var observer = new SqlConnection(databaseConnectionString);
         await observer.OpenAsync();
@@ -481,7 +712,7 @@ public sealed partial class PatronJourneyTests
         Assert.Fail($"No SQL request became blocked by session {blockerSessionId}.");
     }
 
-    private static async Task<int> CountForRequestAsync(string table, string column, long requestId)
+    private async Task<int> CountForRequestAsync(string table, string column, long requestId)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -491,19 +722,19 @@ public sealed partial class PatronJourneyTests
         return Convert.ToInt32(await command.ExecuteScalarAsync());
     }
 
-    private static async Task<object?> ExecuteScalarAsync(SqlConnection connection, string commandText)
+    private async Task<object?> ExecuteScalarAsync(SqlConnection connection, string commandText)
     {
         await using var command = new SqlCommand(commandText, connection);
         return await command.ExecuteScalarAsync();
     }
 
-    private static async Task<string> ReadStringAsync(string commandText, string parameterName, long parameterValue)
+    private async Task<string> ReadStringAsync(string commandText, string parameterName, long parameterValue)
     {
         var value = await ReadNullableStringAsync(commandText, parameterName, parameterValue);
         return value ?? throw new AssertFailedException("Expected a non-null string value.");
     }
 
-    private static async Task<string?> ReadNullableStringAsync(
+    private async Task<string?> ReadNullableStringAsync(
         string commandText,
         string parameterName,
         long parameterValue)
@@ -517,7 +748,7 @@ public sealed partial class PatronJourneyTests
             : null;
     }
 
-    private static async Task DeleteRequestAsync(long requestId)
+    private async Task DeleteRequestAsync(long requestId)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -544,25 +775,25 @@ public sealed partial class PatronJourneyTests
 
         public Task<PatronSnapshot> RefreshAsync(
             string barcode,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
             PatronSnapshot patron,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task UpdatePreferredPickupBranchAsync(
             string barcode,
             int pickupBranchId,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(
             string identifier,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             LookupCount++;
             return Task.FromResult(new IdentifierLookupResult(
                 IdentifierLookupOutcome.Found,
-                BibId: "9999",
+                BibId: 9999,
                 CatalogTitle: "Conflicting catalog title"));
         }
     }
@@ -586,12 +817,12 @@ public sealed partial class PatronJourneyTests
         public void CompleteBlockedCheckout(IReadOnlyList<PolarisCheckoutSnapshot> checkouts) =>
             PendingCheckoutRead!.TrySetResult(checkouts);
 
-        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken) =>
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(new BibValidationResult(true));
 
         public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
             string barcode,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             HoldReadCount++;
@@ -602,7 +833,7 @@ public sealed partial class PatronJourneyTests
 
         public Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(
             string barcode,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             CheckoutReadCount++;

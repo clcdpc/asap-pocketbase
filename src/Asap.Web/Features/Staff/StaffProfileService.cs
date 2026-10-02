@@ -44,12 +44,24 @@ public sealed class StaffProfileService(
         var organization = await context.Organizations.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {organizationId.Value}")
             .SingleOrDefaultAsync(cancellationToken);
-        if (organization is null) return new StaffMutationResult("staff_session_invalid");
+        if (organization is null)
+        {
+            return new StaffMutationResult("staff_session_invalid");
+        }
+
         var locked = await eligibility.RevalidateLockedAsync(context, currentStaff, null, StaffRoleRequirement.Any,
             true, new HashSet<int> { organization.Id }, cancellationToken);
-        if (locked.Outcome != StaffEligibilityOutcome.Allowed) return new StaffMutationResult(locked.Code);
+        if (locked.Outcome != StaffEligibilityOutcome.Allowed)
+        {
+            return new StaffMutationResult(locked.Code);
+        }
+
         var row = context.StaffUsers.Local.Single(item => item.Id == currentStaff.Id);
-        if (!row.RowVersion.SequenceEqual(expectedVersion)) return new StaffMutationResult("stale_version");
+        if (!row.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new StaffMutationResult("stale_version");
+        }
+
         context.Entry(row).Property(item => item.RowVersion).OriginalValue = expectedVersion;
         row.WeeklyActionSummaryEnabled = input.WeeklyActionSummaryEnabled;
         row.WeeklyActionSummaryEmail = weeklyEmail;

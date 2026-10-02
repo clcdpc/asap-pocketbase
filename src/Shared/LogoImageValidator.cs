@@ -115,19 +115,50 @@ public static class LogoImageValidator
         var offset = 2;
         while (offset < data.Length)
         {
-            while (offset < data.Length && data[offset] == 0xff) offset++;
-            if (offset >= data.Length) return null;
+            while (offset < data.Length && data[offset] == 0xff)
+            {
+                offset++;
+            }
+
+            if (offset >= data.Length)
+            {
+                return null;
+            }
+
             var marker = data[offset++];
-            if (marker == 0x00) return null;
-            if (marker is 0xd8 or 0xd9) continue;
-            if (marker == 0xda) return null;
-            if (offset + 2 > data.Length) return null;
+            if (marker == 0x00)
+            {
+                return null;
+            }
+
+            if (marker is 0xd8 or 0xd9)
+            {
+                continue;
+            }
+
+            if (marker == 0xda)
+            {
+                return null;
+            }
+
+            if (offset + 2 > data.Length)
+            {
+                return null;
+            }
 
             var segmentLength = (data[offset] << 8) | data[offset + 1];
-            if (segmentLength < 2 || offset + segmentLength > data.Length) return null;
+            if (segmentLength < 2 || offset + segmentLength > data.Length)
+            {
+                return null;
+            }
+
             if (IsStartOfFrame(marker))
             {
-                if (segmentLength < 7) return null;
+                if (segmentLength < 7)
+                {
+                    return null;
+                }
+
                 var height = (data[offset + 3] << 8) | data[offset + 4];
                 var width = (data[offset + 5] << 8) | data[offset + 6];
                 return (width, height);
