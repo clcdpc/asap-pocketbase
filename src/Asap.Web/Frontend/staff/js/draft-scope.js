@@ -2,10 +2,14 @@
 export function createDraftScope() {
   const drafts = new Map();
   let disposed = false;
+  let revision = 0;
+  let stamp = Symbol('draft revision');
+
+  function changed() { revision += 1; stamp = Symbol('draft revision'); }
 
   function prune() {
     for (const [handle, draft] of drafts) {
-      if (!draft.root.isConnected) drafts.delete(handle);
+      if (!draft.root.isConnected) { drafts.delete(handle); changed(); }
     }
   }
 
@@ -16,9 +20,13 @@ export function createDraftScope() {
       }
       const handle = Symbol('draft');
       drafts.set(handle, { root, isDirty, kind });
+      changed();
       return handle;
     },
-    release(handle) { drafts.delete(handle); },
+    release(handle) { if (drafts.delete(handle)) changed(); },
+    touch() { if (!disposed) changed(); },
+    stamp: () => stamp,
+    revision: () => revision,
     isDirty() {
       prune();
       return !disposed && [...drafts.values()].some(draft => draft.isDirty());

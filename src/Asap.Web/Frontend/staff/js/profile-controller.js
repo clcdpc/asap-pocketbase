@@ -154,12 +154,13 @@ export function createProfileController({ root, sessionIdentity, announce,
       }
       const unconfirmed = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
       mutation.outcome = unconfirmed ? 'uncertain' : 'rejected';
+      const conflictMessage = 'Profile could not be saved. Sign in again to review your current profile.';
+      if (error.status === 409) onReceipt(conflictMessage, owner, mutation);
       if (!isPresentationCurrent(owner)) {
         if (unconfirmed) onReceipt('Profile save could not be confirmed. Sign in again to review current preferences.', owner, mutation);
         return;
       }
       if (error.status === 409) {
-        const conflictMessage = 'Profile could not be saved. Sign in again to review your current profile.';
         let session;
         try {
           session = await readSession();
@@ -177,6 +178,7 @@ export function createProfileController({ root, sessionIdentity, announce,
           return;
         }
         if (!onPreferences(session.staff, owner)) return;
+        clearReceipt(mutation);
         populateProfile(session.staff);
       }
       if (unconfirmed) {
@@ -204,6 +206,8 @@ export function createProfileController({ root, sessionIdentity, announce,
     hasPendingMutation: () => Boolean(state.profileMutation),
     inspectDeparture() {
       return { dirty: hasProfileDraft(), blocked: Boolean(state.profileMutation),
+        stamp: JSON.stringify(profileValues()),
+        confirmMessage: 'Discard unsaved Profile changes and navigate away?',
         message: state.profileMutation?.outcomeUnconfirmed
           ? 'Reload Profile to review the uncertain save before navigating away.'
           : 'Wait for the Profile save to finish before navigating away.' };

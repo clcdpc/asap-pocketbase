@@ -1408,6 +1408,25 @@ test('bulk access loss from a concurrent read retains the pending ledger until D
   }, { status: 'closed', copyItems: [{ id: '71', type: 'additional_copy', status: 'closed', version: 'copy-v1',
     libraryOrgId: 2, libraryOrgName: 'Library A', title: 'Not attempted copy' }] }));
 
+test('route validation retains its source and rechecks a draft created while target scope loads', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    await ui.open();
+    const accepted = ui.dom.window.location.href;
+    let validateScope;
+    ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
+      ? new Promise(done => { validateScope = done; }) : undefined);
+    ui.dom.window.history.back();
+    await until(() => validateScope, 'target validation pending');
+    assert.equal(ui.get('#request-dialog').open, true, 'source is mounted until validation and final admission');
+    ui.edit('.edit-form input', 'New draft during target validation');
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', active: true }] }));
+    await until(() => ui.dom.window.location.href === accepted, 'rejected target restores accepted history entry');
+    assert.equal(ui.get('#request-dialog').open, true);
+    assert.equal(ui.get('.edit-form input').value, 'New draft during target validation');
+    assert.equal(ui.confirms.length, 1);
+    assert.equal(requestMutations(ui).length, 0);
+  }));
+
 test('same-actor Profile revision preserves an Operations attempt started before preference refresh', () =>
   fixture('?stage=operations', async ui => {
     let completeOperation;

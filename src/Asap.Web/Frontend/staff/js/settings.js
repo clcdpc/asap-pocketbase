@@ -2081,6 +2081,13 @@ export function createSettingsController({
     isDirty,
     hasPendingMutation: () => Boolean(state.pendingMutation),
     hasUnconfirmedOutcome: () => state.outcomeUncertain,
+    inspectDeparture: () => ({ dirty: isDirty(), blocked: Boolean(state.pendingMutation || state.outcomeUncertain),
+      stamp: JSON.stringify([...dom.form.querySelectorAll('input, select, textarea')]
+        .map(control => [control.name || control.id, control.value, control.checked])),
+      message: state.outcomeUncertain
+        ? 'Reload current settings to verify the uncertain change before navigating away.'
+        : 'Wait for the settings change to finish before navigating away.',
+      confirmMessage: 'Discard unsaved settings changes and navigate away?' }),
     currentScope: () => state.scope,
     currentPanel: () => state.activePanel
   };

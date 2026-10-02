@@ -36,5 +36,35 @@ const event = { preventDefault() {} };
     assert.equal(replacement.isDirty(), false);
     replacement.dispose();
   });
-  console.log('Profile controller disposal, replacement, single flight and committed receipts passed');
+  for (const losesSession of [false, true]) {
+    await fixture(async ({ load, get }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createProfileController } = await load('profile-controller');
+      const session = createSessionIdentity(); session.accept(staff);
+      const receipts = [], cleared = [], notices = [];
+      const conflict = Object.assign(new Error('Profile has changed.'), { status: 409 });
+      const controller = createProfileController({ root: get('#profile-view'), sessionIdentity: session,
+        announce: message => notices.push(message), onReceipt: (...args) => receipts.push(args),
+        clearReceipt: attempt => cleared.push(attempt),
+        onPreferences: (value, owner) => session.updatePreferences(value, owner),
+        onSessionLost() {}, onAccessUnavailable() {}, request: async () => { throw conflict; },
+        loadSession: async () => {
+          assert.equal(receipts.length, 1, 'record definitive conflict before recovery can replace the session');
+          if (losesSession) {
+            session.clear(); controller.signedOut();
+            throw Object.assign(new Error('Session replaced'), { name: 'AbortError' });
+          }
+          return { authenticated: true, accessAllowed: true, staff: { ...staff, version: 'v2' } };
+        }
+      });
+      controller.setStaff(session.preferences());
+      await controller.save(event);
+      assert.equal(receipts[0][2].outcome, 'rejected');
+      assert.match(receipts[0][0], /Profile could not be saved.*Sign in again/);
+      assert.equal(cleared.length, losesSession ? 0 : 1, 'successful current review clears only its receipt');
+      assert.equal(notices.includes('Profile has changed.'), !losesSession);
+      controller.dispose();
+    });
+  }
+  console.log('Profile controller disposal, replacement, single flight and actor-bound outcome receipts passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

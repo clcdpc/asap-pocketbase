@@ -22,25 +22,9 @@ import {
 import { applyPolarisResultToControls, createPolarisLookup, renderResearchLinks, selectedStaffBibId, positivePolarisId } from './research.js';
 import { loadAnalytics, resetAnalytics } from './analytics.js';
 import { sanitizedHtmlFragment } from '../../shared/html.js';
-import {
-  requestedRequestIdFromUrl,
-  requestedSettingsPanelFromUrl,
-  requestedSettingsScopeFromUrl,
-  requestedStatusFromUrl,
-  requestedOperationalScopeFromUrl,
-  requestedCopyStatusFromUrl,
-  initializeStaffHistory,
-  staffHistorySnapshot,
-  restoreStaffHistory,
-  closeDetailHistory,
-  pushRequestParameter as writeRequestParameter,
-  pushSettingsPanelParameter as writeSettingsPanelParameter,
-  pushSettingsRouteParameter as writeSettingsRouteParameter,
-  pushSettingsScopeParameter as writeSettingsScopeParameter,
-  pushStageParameter as writeStageParameter,
-  replaceRequestParameter as writeReplacedRequestParameter,
-  replaceStageParameter as writeReplacedStageParameter
-} from './url-utils.js';
+import { requestedRequestIdFromUrl, requestedSettingsPanelFromUrl, requestedStatusFromUrl } from './url-utils.js';
+import { createRouter } from './router.js';
+import { createNavigationController } from './navigation.js';
 
 import { STATUS_LABELS, element, icon, commandButton, text, dateTime, statusLabel, closeReasonLabel } from './ui.js';
 
@@ -54,6 +38,7 @@ function currentStageParameter() {
 
 export function createWorkflowApp() {
   const sessionIdentity = createSessionIdentity();
+  const router = createRouter();
   const dom = {
     status: document.querySelector('#app-status'),
     emailReadinessWarning: document.querySelector('#email-readiness-warning'),
@@ -134,14 +119,10 @@ export function createWorkflowApp() {
     staff: null,
     requests: [],
     additionalCopies: [],
-    scope: 'all',
-    status: 'suggestion',
-    additionalCopyStatus: 'open',
     grid: null,
     gridStatus: null,
     queueLoadedScope: null,
     additionalCopyGrid: null,
-    activeView: 'queue',
     selectedRequestId: null,
     selectedRequestType: null,
     selectedRequestVersion: null,
@@ -171,14 +152,97 @@ export function createWorkflowApp() {
     dialogMutationInFlight: null,
     actionChoice: null,
     bulkDeleteState: null,
-    navigationGeneration: 0,
-    routeSnapshot: null,
-    restoringHistory: false,
-    closingDetailHistory: false,
     recentKey: null
   };
 
-  const queueRouteContext = () => ({ scope: state.scope, copyStatus: state.additionalCopyStatus });
+  const navigation = createNavigationController({ router, sessionIdentity, announce,
+    present: presentView, onInvalidate: invalidateFeatureReads,
+    closeTransient: () => {
+      if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
+      if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
+    },
+    onContextChanged: (next, previous) => {
+      dom.scope.value = next.scope;
+      dom.additionalCopyScope.value = next.scope;
+      if (next.status !== previous.status) { resetQueueFilters(); updateStatusTabs(); }
+      if (next.additionalCopyStatus !== previous.additionalCopyStatus) { resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); }
+      if (emailReadinessScopeKey(next) !== emailReadinessScopeKey(previous)) void refreshEmailReadiness();
+    },
+    getFeatures: () => [
+      { key: 'bulk', inspectDeparture: () => ({ blocked: Boolean(state.bulkDeleteState?.submitting),
+          message: 'Deletion is in progress. Wait for the complete ledger before navigating away.' }),
+        discardDeparture: () => closeBulkDelete({ navigation: true }) },
+      { key: 'profile', inspectDeparture: profileController.inspectDeparture,
+        discardDeparture: () => { if (profileController.isDirty()) profileController.discardDraft(); } },
+      { key: 'settings', inspectDeparture: settingsController.inspectDeparture,
+        discardDeparture: () => { if (settingsController.isDirty()) settingsController.discardDraft(); } },
+      { key: 'request', inspectDeparture: () => ({ dirty: hasRequestDraft(),
+          stamp: interactionScope.stamp(),
+          blocked: Boolean(state.dialogMutationInFlight || state.createCopyRequest?.submitting),
+          message: 'The workflow action is in progress. Wait for its authoritative result before navigating away.',
+          confirmMessage: 'Discard unsaved request changes and navigate away?' }) },
+      { key: 'suggestion', inspectDeparture: () => ({ dirty: hasSuggestionDraft(),
+          stamp: JSON.stringify([...dom.staffSuggestionForm.querySelectorAll('input, select, textarea')].map(node => [node.value, node.checked])),
+          blocked: Boolean(state.staffSuggestion?.submitting || state.staffSuggestion?.outcomeUnconfirmed),
+          message: 'Creation is in progress or unconfirmed. Review its authoritative result before leaving.',
+          confirmMessage: 'Discard the unsaved new suggestion and navigate away?' }),
+        reportBlocked: message => setStaffSuggestionStatus(message, 'error') }
+    ],
+    views: {
+      queue: {
+        activate: ({ previous }) => { if (previous !== 'queue') resetQueueFilters(); updateStatusTabs(); },
+        refresh: options => loadQueue(options),
+        refreshOnEntry: ({ context, previous }) => {
+          if (previous !== 'queue' && state.queueLoadedScope !== context.scope) return loadQueue({ skipDeepLink: true });
+        },
+        setLibraries: libraries => populateScopes(libraries, navigation.context().scope),
+        openDetail: id => openRequest(id, null, { align: true }),
+        closeOverlay: () => dom.dialog.open ? closeDialog() : dom.staffSuggestionDialog.open ? closeStaffSuggestion() : null
+      },
+      'additional-copies': {
+        activate: ({ previous }) => { if (previous !== 'additional-copies') resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); },
+        refresh: options => loadAdditionalCopies(options),
+        refreshOnEntry: () => { if (!state.additionalCopyLoaded) return loadAdditionalCopies({ skipDeepLink: true }); },
+        setLibraries: libraries => populateScopes(libraries, navigation.context().scope),
+        openDetail: id => openAdditionalCopy(id, null, { fromDeepLink: true }),
+        closeOverlay: () => dom.dialog.open ? closeDialog() : dom.staffSuggestionDialog.open ? closeStaffSuggestion() : null
+      },
+      settings: {
+        activate: () => { void settingsController.activate(requestedSettingsPanelFromUrl() || undefined); },
+        deactivate: () => settingsController.suspend(),
+        currentScope: () => settingsController.currentScope(), currentPanel: () => settingsController.currentPanel(),
+        setScopeFromUrl: scope => settingsController.setScopeFromUrl(scope)
+      },
+      operations: { activate: () => operationsController.activate(), deactivate: () => operationsController.deactivate(),
+        refresh: options => operationsController.refresh(options), refreshOnEntry: () => operationsController.refresh() },
+      profile: { activate: () => profileController.activate(), deactivate: () => profileController.deactivate() },
+      analytics: { deactivate: resetAnalytics, refresh: () => loadAnalytics(dom.analyticsContainer),
+        refreshOnEntry: () => loadAnalytics(dom.analyticsContainer) }
+    }
+  });
+
+  function presentView(name) {
+    dom.queueView.hidden = name !== 'queue';
+    dom.additionalCopyView.hidden = name !== 'additional-copies';
+    dom.analyticsView.hidden = name !== 'analytics';
+    dom.profileView.hidden = name !== 'profile';
+    dom.operationsView.hidden = name !== 'operations';
+    dom.settingsView.hidden = name !== 'settings';
+    for (const tab of dom.viewTabs) {
+      const active = tab.dataset.view === name;
+      tab.classList.toggle('active', active);
+      if (active) tab.setAttribute('aria-current', 'page');
+      else tab.removeAttribute('aria-current');
+    }
+    const heading = name === 'queue'
+      ? '#queue-title'
+      : name === 'additional-copies' ? '#additional-copy-title'
+      : name === 'analytics' ? '#analytics-title'
+      : name === 'profile' ? '#profile-title' : name === 'operations' ? '#operations-title' : '#settings-title';
+    document.querySelector(heading).focus({ preventScroll: true });
+  }
+
+  const queueRouteContext = () => ({ scope: navigation.context().scope, copyStatus: navigation.context().additionalCopyStatus });
   let interactionScope = createDraftScope();
   let dialogForms = new WeakMap();
   function resetDialogDrafts() {
@@ -186,14 +250,14 @@ export function createWorkflowApp() {
     interactionScope = createDraftScope();
     dialogForms = new WeakMap();
   }
-  function rememberRoute() { state.routeSnapshot = staffHistorySnapshot(); }
-  function pushRequestParameter(id, stage) { writeRequestParameter(id, stage, queueRouteContext()); rememberRoute(); }
-  function pushStageParameter(stage) { writeStageParameter(stage, queueRouteContext()); rememberRoute(); }
-  function replaceStageParameter(stage) { writeReplacedStageParameter(stage, queueRouteContext()); rememberRoute(); }
-  function replaceRequestParameter(id, copy = false) { writeReplacedRequestParameter(id, copy, queueRouteContext()); rememberRoute(); }
-  function pushSettingsPanelParameter(panel) { writeSettingsPanelParameter(panel); rememberRoute(); }
-  function pushSettingsScopeParameter(scope) { writeSettingsScopeParameter(scope); rememberRoute(); }
-  function pushSettingsRouteParameter(scope, panel) { writeSettingsRouteParameter(scope, panel); rememberRoute(); }
+  function rememberRoute() { router.remember(); }
+  function pushRequestParameter(id, stage) { router.pushRequest(id, stage, queueRouteContext()); rememberRoute(); }
+  function pushStageParameter(stage) { router.pushStage(stage, queueRouteContext()); rememberRoute(); }
+  function replaceStageParameter(stage) { router.replaceStage(stage, queueRouteContext()); rememberRoute(); }
+  function replaceRequestParameter(id, copy = false) { router.replaceRequest(id, copy, queueRouteContext(), copy ? 'additional_copies' : navigation.context().status); rememberRoute(); }
+  function pushSettingsPanelParameter(panel) { router.pushSettingsPanel(panel); rememberRoute(); }
+  function pushSettingsScopeParameter(scope) { router.pushSettingsScope(scope); rememberRoute(); }
+  function pushSettingsRouteParameter(scope, panel) { router.pushSettingsRoute(scope, panel); rememberRoute(); }
 
   function hasRequestDraft() {
     return dom.dialog.open && interactionScope.isDirty();
@@ -222,46 +286,6 @@ export function createWorkflowApp() {
       state.staffSuggestion?.controls?.queryInput?.value.trim());
   }
 
-  function allowNavigation({ settings = true, request = true, suggestion = true } = {}) {
-    if (state.closingDetailHistory || state.restoringHistory) return false;
-    if (state.bulkDeleteState?.submitting) {
-      announce('Deletion is in progress. Wait for the complete ledger before navigating away.', 'warning');
-      return false;
-    }
-    if (profileController.hasPendingMutation()) {
-      announce(profileController.inspectDeparture().message, 'warning');
-      return false;
-    }
-    if (settings && settingsController.hasPendingMutation()) {
-      announce('Wait for the settings change to finish before navigating away.', 'warning');
-      return false;
-    }
-    if (settings && settingsController.hasUnconfirmedOutcome()) {
-      announce('Reload current settings to verify the uncertain change before navigating away.', 'warning');
-      return false;
-    }
-    if (request && (state.dialogMutationInFlight || state.createCopyRequest?.submitting)) {
-      announce('The workflow action is in progress. Wait for its authoritative result before navigating away.', 'warning');
-      return false;
-    }
-    if (suggestion && (state.staffSuggestion?.submitting || state.staffSuggestion?.outcomeUnconfirmed)) {
-      setStaffSuggestionStatus('Creation is in progress or unconfirmed. Review its authoritative result before leaving.', 'error');
-      return false;
-    }
-    if (settings && settingsController.isDirty() &&
-        !window.confirm('Discard unsaved settings changes and navigate away?')) return false;
-    if (request && hasRequestDraft() &&
-        !window.confirm('Discard unsaved request changes and navigate away?')) return false;
-    if (suggestion && hasSuggestionDraft() &&
-        !window.confirm('Discard the unsaved new suggestion and navigate away?')) return false;
-    if (profileController.isDirty() &&
-        !window.confirm('Discard unsaved Profile changes and navigate away?')) return false;
-    if (settings && settingsController.isDirty()) settingsController.discardDraft();
-    if (profileController.isDirty()) profileController.setStaff(state.staff);
-    closeBulkDelete({ navigation: true });
-    return true;
-  }
-
   function allowRequestMutation(request, declaration, requestType = 'title_request') {
     if (!isCurrentDialogRequest(request, requestType) || state.dialogMutationInFlight) return false;
     const admission = interactionScope.admit(declaration);
@@ -285,41 +309,6 @@ export function createWorkflowApp() {
         if (item.control.isConnected) item.control.disabled = item.disabled;
       }
     };
-  }
-
-  function rejectTraversal() {
-    if (state.routeSnapshot) state.restoringHistory = restoreStaffHistory(state.routeSnapshot);
-  }
-
-  async function restoreOperationalScope(navigationGeneration) {
-    const raw = requestedOperationalScopeFromUrl();
-    const defaultScope = state.staff.role === 'super_admin' ? 'all' : String(state.staff.organizationId);
-    let scope = defaultScope;
-    if (state.staff.role === 'super_admin' && raw && raw !== 'all' && /^[1-9]\d{0,9}$/.test(raw) && Number(raw) > 1) {
-      const owner = state.staff;
-      const load = latestLoads.begin('operational-scope');
-      try {
-        const result = await authorizedJson('/api/asap/staff/organizations', { signal: load.signal });
-        const organizations = result?.data ?? result;
-        if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration || !sessionIdentity.isCurrent(owner)) return false;
-        const available = organizations.filter(item => Number(item.id) > 1 && item.active !== false);
-        if (available.some(item => String(item.id) === raw)) scope = raw;
-        populateScopes(available, scope);
-      } catch (error) {
-        if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration || !sessionIdentity.isCurrent(owner) || error.status === 401) return false;
-        // An unavailable scope is never applied without current authorization evidence.
-      } finally {
-        latestLoads.finish('operational-scope', load.token);
-      }
-    }
-    if (state.scope !== scope) {
-      clearTitleQueueForContextChange();
-      clearAdditionalCopyQueueForScopeChange();
-    }
-    state.scope = scope;
-    dom.scope.value = scope;
-    dom.additionalCopyScope.value = scope;
-    return true;
   }
 
   function copyCreationStorageKey(staff = state.staff) {
@@ -449,11 +438,11 @@ export function createWorkflowApp() {
     announce,
     getStaff: () => state.staff,
     onPanelChange: panel => {
-      state.navigationGeneration += 1;
+      navigation.invalidate();
       pushSettingsPanelParameter(panel);
     },
     onScopeChange: scope => {
-      state.navigationGeneration += 1;
+      navigation.invalidate();
       pushSettingsScopeParameter(scope);
       void refreshEmailReadiness();
     },
@@ -464,10 +453,10 @@ export function createWorkflowApp() {
     }
   });
 
-  function emailReadinessScopeKey() {
-    const selectedScope = state.activeView === 'settings'
+  function emailReadinessScopeKey(context = navigation.context()) {
+    const selectedScope = context.activeView === 'settings'
       ? settingsController.currentScope()
-      : state.activeView === 'operations' ? operationsController.currentScope() : state.scope;
+      : context.activeView === 'operations' ? operationsController.currentScope() : context.scope;
     return state.staff?.role === 'super_admin' && /^\d+$/.test(String(selectedScope))
       ? String(selectedScope) : 'default';
   }
@@ -531,7 +520,7 @@ export function createWorkflowApp() {
     }
   }
 
-  function titleDetailPath(id, scope = state.scope) {
+  function titleDetailPath(id, scope = navigation.context().scope) {
     const path = `/api/asap/staff/title-requests/${encodeURIComponent(id)}`;
     return state.staff?.role === 'super_admin'
       ? `${path}?scope=${encodeURIComponent(scope)}` : path;
@@ -582,23 +571,22 @@ export function createWorkflowApp() {
 
   function updateStatusTabs() {
     for (const tab of dom.statusTabs) {
-      const selected = tab.dataset.status === state.status;
+      const selected = tab.dataset.status === navigation.context().status;
       tab.setAttribute('aria-selected', String(selected));
       tab.tabIndex = selected ? 0 : -1;
     }
-    dom.similarField.hidden = state.status !== 'suggestion';
+    dom.similarField.hidden = navigation.context().status !== 'suggestion';
   }
 
   function updateAdditionalCopyStatusTabs() {
     for (const tab of dom.additionalCopyStatusTabs) {
-      const selected = tab.dataset.copyStatus === state.additionalCopyStatus;
+      const selected = tab.dataset.copyStatus === navigation.context().additionalCopyStatus;
       tab.setAttribute('aria-selected', String(selected));
       tab.tabIndex = selected ? 0 : -1;
     }
   }
 
-  function invalidateNavigation() {
-    state.navigationGeneration += 1;
+  function invalidateFeatureReads() {
     latestLoads.begin('detail').abort();
     latestLoads.begin('additional-copy-detail').abort();
     latestLoads.begin('queue').abort();
@@ -659,7 +647,7 @@ export function createWorkflowApp() {
       setStaffSuggestionStatus('Creation is in progress. Please wait for the authoritative result.', 'error');
       return false;
     }
-    if (!options.force && !options.guarded && !allowNavigation({ settings: false, request: false })) return false;
+    if (!options.force && !options.guarded && !navigation.allow({ settings: false, request: false })) return false;
     cancelStaffSuggestionLookup();
     cancelStaffSuggestionConfiguration();
     cancelStaffSuggestionMutation();
@@ -726,8 +714,8 @@ export function createWorkflowApp() {
 
   function updateBulkDeleteButtons() {
     const authorized = ['admin', 'super_admin'].includes(state.staff?.role);
-    dom.bulkDelete.hidden = !authorized || state.status !== 'closed';
-    dom.bulkDeleteCopies.hidden = !authorized || state.additionalCopyStatus !== 'closed';
+    dom.bulkDelete.hidden = !authorized || navigation.context().status !== 'closed';
+    dom.bulkDeleteCopies.hidden = !authorized || navigation.context().additionalCopyStatus !== 'closed';
   }
 
   function closeBulkDelete(options = {}) {
@@ -930,16 +918,16 @@ export function createWorkflowApp() {
     if (!batch?.snapshot || batch.submitting || dom.bulkDeleteConfirmation.value !== 'DELETE' ||
         dom.bulkDeleteScope.value !== batch.snapshot.scope || batch.snapshot.items.length === 0) return;
     const owner = state.staff;
-    const navigationGeneration = state.navigationGeneration;
-    const view = state.activeView;
-    let expectedScope = state.scope;
-    let expectedStatus = state.status;
-    let expectedCopyStatus = state.additionalCopyStatus;
-    let expectedRoute = state.routeSnapshot?.href;
+    const navigationGeneration = navigation.generation();
+    const view = navigation.context().activeView;
+    let expectedScope = navigation.context().scope;
+    let expectedStatus = navigation.context().status;
+    let expectedCopyStatus = navigation.context().additionalCopyStatus;
+    let expectedRoute = router.snapshot()?.href;
     const isCurrentContext = () => state.bulkDeleteState === batch && sessionIdentity.isCurrent(owner) &&
-      state.navigationGeneration === navigationGeneration && state.activeView === view &&
-      state.scope === expectedScope && state.status === expectedStatus &&
-      state.additionalCopyStatus === expectedCopyStatus && window.location.href === expectedRoute;
+      navigation.generation() === navigationGeneration && navigation.context().activeView === view &&
+      navigation.context().scope === expectedScope && navigation.context().status === expectedStatus &&
+      navigation.context().additionalCopyStatus === expectedCopyStatus && window.location.href === expectedRoute;
     batch.submitting = true;
     dom.bulkDeleteExecute.disabled = true;
     dom.bulkDeletePreview.disabled = true;
@@ -979,16 +967,16 @@ export function createWorkflowApp() {
     }
     dom.bulkDeleteSummary.textContent = 'Deletion finished. Review the ledger and refresh Closed work before retrying.';
     if (!isCurrentContext()) return;
-    state.scope = batch.snapshot.scope;
-    dom.scope.value = state.scope;
-    dom.additionalCopyScope.value = state.scope;
-    state.status = 'closed';
-    state.additionalCopyStatus = 'closed';
-    expectedScope = state.scope;
-    expectedStatus = state.status;
-    expectedCopyStatus = state.additionalCopyStatus;
+    navigation.align({ scope: batch.snapshot.scope });
+    dom.scope.value = navigation.context().scope;
+    dom.additionalCopyScope.value = navigation.context().scope;
+    navigation.align({ status: 'closed' });
+    navigation.align({ additionalCopyStatus: 'closed' });
+    expectedScope = navigation.context().scope;
+    expectedStatus = navigation.context().status;
+    expectedCopyStatus = navigation.context().additionalCopyStatus;
     replaceStageParameter(view === 'additional-copies' ? 'additional_copies' : 'closed');
-    expectedRoute = state.routeSnapshot.href;
+    expectedRoute = router.snapshot().href;
     for (const tab of dom.statusTabs) tab.setAttribute('aria-selected', String(tab.dataset.status === 'closed'));
     for (const tab of dom.additionalCopyStatusTabs) {
       tab.setAttribute('aria-selected', String(tab.dataset.copyStatus === 'closed'));
@@ -1017,7 +1005,7 @@ export function createWorkflowApp() {
   function showSignedOut(message) {
     const settingsMutationUnconfirmed = (settingsController.hasPendingMutation() ||
       settingsController.hasUnconfirmedOutcome()) && !state.settingsCommitPendingRefresh;
-    invalidateNavigation();
+    navigation.invalidate();
     const storage = recentStorage();
     if (storage && state.recentKey) {
       try { storage.removeItem(state.recentKey); } catch { /* Storage may be unavailable. */ }
@@ -1132,9 +1120,9 @@ export function createWorkflowApp() {
     operationsController.setStaff(staff);
     state.recentKey = recentStorageKey(staff);
     renderRecentRequests();
-    state.scope = staff.role === 'super_admin' ? 'all' : String(staff.organizationId);
+    navigation.align({ scope: staff.role === 'super_admin' ? 'all' : String(staff.organizationId) });
     for (const select of [dom.scope, dom.additionalCopyScope]) {
-      select.replaceChildren(element('option', { value: state.scope,
+      select.replaceChildren(element('option', { value: navigation.context().scope,
         text: staff.role === 'super_admin' ? 'All libraries' : 'My library' }));
     }
     dom.signedOut.hidden = true;
@@ -1176,135 +1164,11 @@ export function createWorkflowApp() {
       }
       showWorkspace(session.staff);
       announce('Staff session ready.');
-      await navigateFromUrl();
+      await navigation.navigateFromUrl();
     } catch (error) {
       if (!isAbortError(error)) showSignedOut('Staff access could not be loaded. Try signing in again.');
     } finally {
       latestLoads.finish('session', load.token);
-    }
-  }
-
-  async function navigateFromUrl() {
-    if (!state.staff) {
-      if (state.bulkDeleteState?.submitting) rejectTraversal();
-      return;
-    }
-    if (state.restoringHistory) {
-      state.restoringHistory = false;
-      return;
-    }
-    if (state.closingDetailHistory) {
-      state.closingDetailHistory = false;
-      rememberRoute();
-      return;
-    }
-    const requestedSettingsStage = currentStageParameter();
-    const requestedSettingsScope = requestedSettingsScopeFromUrl();
-    const defaultSettingsScope = state.staff.role === 'super_admin'
-      ? 'system' : String(state.staff.organizationId);
-    const nextSettingsScope = requestedSettingsScope || defaultSettingsScope;
-    const leavingSettingsContext = requestedSettingsStage !== 'settings' ||
-      nextSettingsScope !== settingsController.currentScope();
-    if (!allowNavigation({ settings: state.activeView === 'settings' && leavingSettingsContext })) {
-      rejectTraversal();
-      return;
-    }
-    invalidateNavigation();
-    const navigationGeneration = state.navigationGeneration;
-    const requestedStage = currentStageParameter();
-    const requestId = currentRequestParameter();
-    const previousStage = state.status;
-    const previousScope = state.scope;
-    const previousCopyStatus = state.additionalCopyStatus;
-    if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
-    if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
-    rememberRoute();
-    if (requestedStage === 'settings' || requestedStage === 'operations') {
-      if (state.staff.role === 'staff') {
-        switchView('queue', false);
-        replaceStageParameter(state.status);
-        announce('This view requires administrator access.', 'error');
-        await loadQueue({ skipDeepLink: true, silent: true });
-        return;
-      }
-      if (requestedStage === 'settings') {
-        const requestedScope = requestedSettingsScopeFromUrl();
-        if (requestedScope) {
-          const permittedShape = requestedScope === 'system' || /^[1-9]\d{0,9}$/.test(requestedScope);
-          const permittedActor = state.staff.role === 'super_admin' ||
-            requestedScope === String(state.staff.organizationId);
-          if (!permittedShape || !permittedActor) {
-            switchView('queue', false);
-            replaceStageParameter(state.status);
-            announce('That Settings scope is not available to this staff account.', 'error');
-            await loadQueue({ skipDeepLink: true, silent: true });
-            return;
-          }
-          const staff = state.staff;
-          const routeLoad = latestLoads.begin('settings-route');
-          try {
-            await authorizedJson(`/api/asap/staff/settings?orgId=${encodeURIComponent(requestedScope)}`,
-              { signal: routeLoad.signal });
-          } catch (error) {
-            if (routeLoad.isCurrent() && navigationGeneration === state.navigationGeneration &&
-                sessionIdentity.isCurrent(staff) && error.status !== 401 && !isAbortError(error)) {
-              switchView('queue', false);
-              replaceStageParameter(state.status);
-              announce('That Settings scope is not available.', 'error');
-              await loadQueue({ skipDeepLink: true, silent: true });
-            }
-            return;
-          }
-          if (!routeLoad.isCurrent() || navigationGeneration !== state.navigationGeneration ||
-              !sessionIdentity.isCurrent(staff)) return;
-          latestLoads.finish('settings-route', routeLoad.token);
-          settingsController.setScopeFromUrl(requestedScope);
-        }
-      }
-      switchView(requestedStage, false);
-      replaceStageParameter(requestedStage);
-      if (requestedStage === 'operations') await operationsController.refresh();
-      return;
-    }
-    if (requestedStage === 'additional_copies') {
-      if (!await restoreOperationalScope(navigationGeneration) || navigationGeneration !== state.navigationGeneration) return;
-      state.additionalCopyStatus = requestedCopyStatusFromUrl();
-      updateAdditionalCopyStatusTabs();
-      if (previousScope !== state.scope || previousCopyStatus !== state.additionalCopyStatus) resetAdditionalCopyFilters();
-      switchView('additional-copies', false);
-      replaceRequestParameter(requestId || null, true);
-      const loaded = await loadAdditionalCopies({ skipDeepLink: true });
-      if (loaded === true && navigationGeneration === state.navigationGeneration && requestId) {
-        await openAdditionalCopy(requestId, null, { fromDeepLink: true });
-      }
-      return;
-    }
-    if (requestedStage === 'analytics') {
-      switchView('analytics', false);
-      replaceStageParameter('analytics');
-      await loadAnalytics(dom.analyticsContainer);
-      return;
-    }
-    if (requestedStage === 'profile') {
-      switchView('profile', false);
-      replaceStageParameter('profile');
-      return;
-    }
-    if (!await restoreOperationalScope(navigationGeneration) || navigationGeneration !== state.navigationGeneration) return;
-    state.status = STATUS_LABELS[requestedStage] && requestedStage !== 'open'
-      ? requestedStage : 'suggestion';
-    updateStatusTabs();
-    if (previousStage !== state.status || previousScope !== state.scope) resetQueueFilters();
-    switchView('queue', false);
-    writeReplacedRequestParameter(requestId || null, false, queueRouteContext());
-    if (currentStageParameter() !== state.status) {
-      const pendingId = requestId;
-      replaceStageParameter(state.status);
-      if (pendingId) replaceRequestParameter(pendingId);
-    } else rememberRoute();
-    const loaded = await loadQueue({ skipDeepLink: true });
-    if (loaded === true && navigationGeneration === state.navigationGeneration && requestId) {
-      await openRequest(requestId, null, { align: true });
     }
   }
 
@@ -1332,20 +1196,20 @@ export function createWorkflowApp() {
   async function loadQueue(options = {}) {
     if (!state.staff) return;
     const owner = state.staff;
-    const requestedScope = state.scope;
+    const requestedScope = navigation.context().scope;
     const load = latestLoads.begin('queue');
     const queueSequence = ++state.queueLoadSequence;
     dom.refresh.disabled = true;
     if (!options.silent) announce('Loading authorized requests...');
     try {
-      const scope = state.staff.role === 'super_admin' ? state.scope : String(state.staff.organizationId);
+      const scope = state.staff.role === 'super_admin' ? navigation.context().scope : String(state.staff.organizationId);
       const result = await authorizedJson(`/api/asap/staff/title-requests?scope=${encodeURIComponent(scope)}`, {
         signal: load.signal
       });
-      if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== state.scope) return;
+      if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== navigation.context().scope) return;
       state.requests = Array.isArray(result.items) ? result.items : [];
       const previousEmailScope = emailReadinessScopeKey();
-      state.scope = result.scope;
+      navigation.align({ scope: result.scope });
       if (emailReadinessScopeKey() !== previousEmailScope) void refreshEmailReadiness();
       state.queueLoadedScope = result.scope;
       if (state.staff.role === 'super_admin') populateScopes(result.organizations, result.scope);
@@ -1385,8 +1249,8 @@ export function createWorkflowApp() {
     const tag = dom.tag.value;
     const similarity = dom.similar.value;
     return state.requests.filter(request => {
-      if (request.status !== state.status) return false;
-      if (state.status === 'suggestion' && similarity !== 'all') {
+      if (request.status !== navigation.context().status) return false;
+      if (navigation.context().status === 'suggestion' && similarity !== 'all') {
         const count = request.relatedRequests?.count;
         if (!Number.isInteger(count) || (similarity === 'similar' ? count < 1 : count !== 0)) return false;
       }
@@ -1416,10 +1280,10 @@ export function createWorkflowApp() {
   function workflowLabel(request) {
     const workflow = request.workflowContext;
     if (!workflow) return 'Unavailable';
-    if (state.status === 'suggestion') return timeoutLabel(workflow.outstandingTimeoutEnabled, workflow.outstandingTimeoutDays);
-    if (state.status === 'outstanding_purchase') return workflow.autoPromote ? 'On' : 'Off';
-    if (state.status === 'pending_hold') return timeoutLabel(workflow.pendingHoldTimeoutEnabled, workflow.pendingHoldTimeoutDays);
-    if (state.status === 'hold_placed') return timeoutLabel(workflow.holdPickupTimeoutEnabled, workflow.holdPickupTimeoutDays);
+    if (navigation.context().status === 'suggestion') return timeoutLabel(workflow.outstandingTimeoutEnabled, workflow.outstandingTimeoutDays);
+    if (navigation.context().status === 'outstanding_purchase') return workflow.autoPromote ? 'On' : 'Off';
+    if (navigation.context().status === 'pending_hold') return timeoutLabel(workflow.pendingHoldTimeoutEnabled, workflow.pendingHoldTimeoutDays);
+    if (navigation.context().status === 'hold_placed') return timeoutLabel(workflow.holdPickupTimeoutEnabled, workflow.holdPickupTimeoutDays);
     return '—';
   }
 
@@ -1437,7 +1301,7 @@ export function createWorkflowApp() {
     const open = field('Open', request => request.id, '85px');
     open.kind = 'open';
     const automation = label => field(label, workflowLabel, '145px');
-    switch (state.status) {
+    switch (navigation.context().status) {
       case 'suggestion':
         return [title, field('Identifier', request => request.identifier || '—'), format,
           field('Submitted', request => dateTime(request.created), '155px'), patron, library,
@@ -1463,22 +1327,22 @@ export function createWorkflowApp() {
   function renderGrid() {
     updateBulkDeleteButtons();
     const requests = filteredRequests();
-    dom.summary.textContent = `${requests.length} ${statusLabel(state.status).toLocaleLowerCase()} request${requests.length === 1 ? '' : 's'}`;
+    dom.summary.textContent = `${requests.length} ${statusLabel(navigation.context().status).toLocaleLowerCase()} request${requests.length === 1 ? '' : 's'}`;
     dom.empty.hidden = requests.length !== 0;
-    const stageRequests = state.requests.filter(request => request.status === state.status);
-    dom.queueAutomation.textContent = state.status === 'closed' ? ''
-      : state.scope === 'all' ? 'Workflow rules are shown for each request’s library.'
+    const stageRequests = state.requests.filter(request => request.status === navigation.context().status);
+    dom.queueAutomation.textContent = navigation.context().status === 'closed' ? ''
+      : navigation.context().scope === 'all' ? 'Workflow rules are shown for each request’s library.'
       : stageRequests.length ? `${queueColumns().find(column => column.label.includes('timeout') || column.label === 'Auto promotion')?.label || 'Automation'}: ${workflowLabel(stageRequests[0])}.`
         : 'Workflow rules will appear with requests in this stage.';
     const definitions = queueColumns();
     const rows = requests.map(request => definitions.map(column => column.value(request)));
-    if (state.grid && state.gridStatus !== state.status) {
+    if (state.grid && state.gridStatus !== navigation.context().status) {
       state.grid.destroy?.();
       dom.grid.replaceChildren();
       state.grid = null;
     }
     if (!state.grid) {
-      state.gridStatus = state.status;
+      state.gridStatus = navigation.context().status;
       state.grid = new window.gridjs.Grid({
         columns: definitions.map((column, index) => {
           if (column.kind === 'claim') return {
@@ -1512,8 +1376,8 @@ export function createWorkflowApp() {
   async function loadAdditionalCopies(options = {}) {
     if (!state.staff) return;
     const owner = state.staff;
-    const requestedScope = state.scope;
-    const requestedStatus = state.additionalCopyStatus;
+    const requestedScope = navigation.context().scope;
+    const requestedStatus = navigation.context().additionalCopyStatus;
     const uncertaintyAtStart = state.unconfirmedCopyCreationAwaitingRefresh;
     const load = latestLoads.begin('additional-copies');
     dom.additionalCopyRefresh.disabled = true;
@@ -1523,16 +1387,16 @@ export function createWorkflowApp() {
     }
     if (!options.silent) announce('Loading authorized additional-copy tasks...');
     try {
-      const scope = state.staff.role === 'super_admin' ? state.scope : String(state.staff.organizationId);
+      const scope = state.staff.role === 'super_admin' ? navigation.context().scope : String(state.staff.organizationId);
       const result = await authorizedJson(
-        `/api/asap/staff/additional-copies?scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(state.additionalCopyStatus)}`,
+        `/api/asap/staff/additional-copies?scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(navigation.context().additionalCopyStatus)}`,
         { signal: load.signal }
       );
-      if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== state.scope ||
-          requestedStatus !== state.additionalCopyStatus) return;
+      if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== navigation.context().scope ||
+          requestedStatus !== navigation.context().additionalCopyStatus) return;
       state.additionalCopies = Array.isArray(result.items) ? result.items : [];
       const previousEmailScope = emailReadinessScopeKey();
-      state.scope = result.scope;
+      navigation.align({ scope: result.scope });
       if (emailReadinessScopeKey() !== previousEmailScope) void refreshEmailReadiness();
       state.additionalCopyLoaded = true;
       if (state.staff.role === 'super_admin') populateScopes(result.availableLibraries, result.scope);
@@ -1556,8 +1420,8 @@ export function createWorkflowApp() {
       }
       return true;
     } catch (error) {
-      if (load.isCurrent() && sessionIdentity.isCurrent(owner) && requestedScope === state.scope &&
-          requestedStatus === state.additionalCopyStatus &&
+      if (load.isCurrent() && sessionIdentity.isCurrent(owner) && requestedScope === navigation.context().scope &&
+          requestedStatus === navigation.context().additionalCopyStatus &&
           !options.silent && !isAbortError(error) && error.status !== 401) {
         announce(error.message || 'Additional-copy tasks could not be loaded.', 'error');
       }
@@ -1589,8 +1453,8 @@ export function createWorkflowApp() {
     updateBulkDeleteButtons();
     const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
     const reviewReady = Boolean(uncertainCreation?.reviewReady) && !uncertainCreation.reviewed &&
-      state.additionalCopyStatus === 'open' &&
-      (state.scope === 'all' || String(state.scope) === String(uncertainCreation.libraryOrgId));
+      navigation.context().additionalCopyStatus === 'open' &&
+      (navigation.context().scope === 'all' || String(navigation.context().scope) === String(uncertainCreation.libraryOrgId));
     dom.additionalCopyCreateReview.hidden = !reviewReady;
     if (reviewReady) {
       const matching = state.additionalCopies.filter(item =>
@@ -1603,7 +1467,7 @@ export function createWorkflowApp() {
           : `Creation for BIB ${uncertainCreation.bibid} could not be confirmed. Review the ${matching.length} matching open task${matching.length === 1 ? '' : 's'} for this library before creating another: ${ids}.`;
     }
     const requests = filteredAdditionalCopies();
-    dom.additionalCopySummary.textContent = `${requests.length} ${state.additionalCopyStatus} task${requests.length === 1 ? '' : 's'}`;
+    dom.additionalCopySummary.textContent = `${requests.length} ${navigation.context().additionalCopyStatus} task${requests.length === 1 ? '' : 's'}`;
     dom.additionalCopyEmpty.hidden = requests.length !== 0;
     const rows = requests.map(request => [
       request.title,
@@ -1666,10 +1530,10 @@ export function createWorkflowApp() {
 
   async function openAdditionalCopy(id, returnFocus, options = {}) {
     if (!state.staff) return false;
-    if (state.closingDetailHistory || state.restoringHistory) return false;
-    if (!options.authoritativeRefresh && !allowNavigation({ suggestion: false })) return false;
+    if (router.busy()) return false;
+    if (!options.authoritativeRefresh && !navigation.allow({ suggestion: false })) return false;
     if (!closeAdditionalCopyCreateDialog({ navigation: true })) return false;
-    const navigationGeneration = ++state.navigationGeneration;
+    const navigationGeneration = navigation.invalidate();
     const staff = state.staff;
     polarisLookup.close();
     latestLoads.begin('research-configuration').abort();
@@ -1694,20 +1558,20 @@ export function createWorkflowApp() {
       const request = await authorizedJson(`/api/asap/staff/additional-copies/${encodeURIComponent(id)}`, {
         signal: load.signal
       });
-      if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration ||
+      if (!load.isCurrent() || navigationGeneration !== navigation.generation() ||
           !sessionIdentity.isCurrent(staff) || state.selectedRequestId !== String(id) ||
           state.selectedRequestType !== 'additional_copy') return false;
-      const statusChanged = options.fromDeepLink && request.status !== state.additionalCopyStatus &&
+      const statusChanged = options.fromDeepLink && request.status !== navigation.context().additionalCopyStatus &&
         ['open', 'closed'].includes(request.status);
       const alignedScope = scopeForLibraryOrAll(request.libraryOrgId);
       const scopeChanged = options.fromDeepLink && staff.role === 'super_admin' &&
-        state.scope !== 'all' && state.scope !== alignedScope;
+        navigation.context().scope !== 'all' && navigation.context().scope !== alignedScope;
       if (statusChanged || scopeChanged) {
-        if (statusChanged) state.additionalCopyStatus = request.status;
+        if (statusChanged) navigation.align({ additionalCopyStatus: request.status });
         if (scopeChanged) {
-          state.scope = alignedScope;
-          dom.scope.value = state.scope;
-          dom.additionalCopyScope.value = state.scope;
+          navigation.align({ scope: alignedScope });
+          dom.scope.value = navigation.context().scope;
+          dom.additionalCopyScope.value = navigation.context().scope;
           clearAdditionalCopyQueueForScopeChange();
           clearTitleQueueForContextChange();
         }
@@ -1715,7 +1579,7 @@ export function createWorkflowApp() {
         updateAdditionalCopyStatusTabs();
         if (!scopeChanged) renderAdditionalCopyGrid();
         const refreshed = await loadAdditionalCopies({ silent: true, skipDeepLink: true });
-        if (refreshed !== true || navigationGeneration !== state.navigationGeneration ||
+        if (refreshed !== true || navigationGeneration !== navigation.generation() ||
             !sessionIdentity.isCurrent(staff) || !load.isCurrent()) return false;
       }
       state.selectedRequestId = request.id;
@@ -1981,10 +1845,10 @@ export function createWorkflowApp() {
 
   async function openRequest(id, returnFocus, options = {}) {
     if (!state.staff) return;
-    if (state.closingDetailHistory || state.restoringHistory) return false;
-    if (!options.authoritativeRefresh && !allowNavigation({ suggestion: false })) return false;
+    if (router.busy()) return false;
+    if (!options.authoritativeRefresh && !navigation.allow({ suggestion: false })) return false;
     if (!closeAdditionalCopyCreateDialog({ navigation: true })) return false;
-    const navigationGeneration = ++state.navigationGeneration;
+    const navigationGeneration = navigation.invalidate();
     const staff = state.staff;
     polarisLookup.close();
     latestLoads.begin('research-configuration').abort();
@@ -2007,53 +1871,53 @@ export function createWorkflowApp() {
     announce('Loading request details...');
     try {
       const initialScope = staff.role === 'super_admin' && (options.align || options.fromRecent)
-        ? 'all' : state.scope;
+        ? 'all' : navigation.context().scope;
       let request = await authorizedJson(titleDetailPath(id, initialScope), {
         signal: load.signal
       });
-      if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration ||
+      if (!load.isCurrent() || navigationGeneration !== navigation.generation() ||
           !sessionIdentity.isCurrent(staff) || state.selectedRequestId !== String(id) ||
           state.selectedRequestType !== 'title_request') return false;
       const configuration = await loadRequestConfiguration(request.libraryOrgId, load.signal);
-      if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration ||
+      if (!load.isCurrent() || navigationGeneration !== navigation.generation() ||
           !sessionIdentity.isCurrent(staff) || state.selectedRequestId !== String(id) ||
           state.selectedRequestType !== 'title_request') return false;
       if (options.align || options.fromRecent) {
         const cachedStatus = state.requests.find(item => item.id === request.id)?.status;
-        const queueNeedsRefresh = state.status !== request.status || cachedStatus !== request.status;
+        const queueNeedsRefresh = navigation.context().status !== request.status || cachedStatus !== request.status;
         const alignedScope = scopeForLibraryOrAll(request.libraryOrgId);
-        const scopeChanged = staff.role === 'super_admin' && state.scope !== 'all' &&
-          state.scope !== alignedScope;
+        const scopeChanged = staff.role === 'super_admin' && navigation.context().scope !== 'all' &&
+          navigation.context().scope !== alignedScope;
         resetQueueFilters();
-        if (STATUS_LABELS[request.status] && request.status !== 'open') state.status = request.status;
+        if (STATUS_LABELS[request.status] && request.status !== 'open') navigation.align({ status: request.status });
         updateStatusTabs();
         if (scopeChanged) {
-          state.scope = alignedScope;
-          dom.scope.value = state.scope;
-          dom.additionalCopyScope.value = state.scope;
+          navigation.align({ scope: alignedScope });
+          dom.scope.value = navigation.context().scope;
+          dom.additionalCopyScope.value = navigation.context().scope;
           clearAdditionalCopyQueueForScopeChange();
         }
         if (scopeChanged || queueNeedsRefresh) {
           clearTitleQueueForContextChange();
           const refreshed = await loadQueue({ silent: true, skipDeepLink: true });
-          if (refreshed !== true || navigationGeneration !== state.navigationGeneration ||
+          if (refreshed !== true || navigationGeneration !== navigation.generation() ||
               !sessionIdentity.isCurrent(staff) || !load.isCurrent()) return false;
         } else {
           renderGrid();
         }
-        switchView('queue', false);
+        navigation.switchView('queue', false);
       }
-      if (staff.role === 'super_admin' && initialScope !== state.scope) {
+      if (staff.role === 'super_admin' && initialScope !== navigation.context().scope) {
         request = await authorizedJson(titleDetailPath(id), { signal: load.signal });
-        if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration ||
+        if (!load.isCurrent() || navigationGeneration !== navigation.generation() ||
             !sessionIdentity.isCurrent(staff) || state.selectedRequestId !== String(id) ||
             state.selectedRequestType !== 'title_request') return false;
-        if (request.status !== state.status) {
-          state.status = request.status;
+        if (request.status !== navigation.context().status) {
+          navigation.align({ status: request.status });
           updateStatusTabs();
           clearTitleQueueForContextChange();
           const refreshed = await loadQueue({ silent: true, skipDeepLink: true });
-          if (refreshed !== true || navigationGeneration !== state.navigationGeneration ||
+          if (refreshed !== true || navigationGeneration !== navigation.generation() ||
               !sessionIdentity.isCurrent(staff) || !load.isCurrent()) return false;
         }
       }
@@ -2061,11 +1925,6 @@ export function createWorkflowApp() {
       if (options.history === 'push' || options.fromRecent) {
         pushRequestParameter(request.id, request.status);
       } else {
-        if (currentStageParameter() !== request.status) {
-          const url = new URL(window.location.href);
-          url.searchParams.set('stage', request.status);
-          window.history.replaceState(window.history.state, '', url);
-        }
         replaceRequestParameter(request.id, false);
       }
       renderRequest(request, configuration);
@@ -2076,7 +1935,7 @@ export function createWorkflowApp() {
       loadResearchConfiguration(request);
       return true;
     } catch (error) {
-      const current = load.isCurrent() && navigationGeneration === state.navigationGeneration &&
+      const current = load.isCurrent() && navigationGeneration === navigation.generation() &&
           sessionIdentity.isCurrent(staff) && state.selectedRequestId === String(id) &&
           state.selectedRequestType === 'title_request';
       if (current &&
@@ -2445,7 +2304,7 @@ export function createWorkflowApp() {
       type: 'button',
       className: 'secondary-button',
       onclick: () => {
-        if (allowNavigation({ settings: false, request: false })) {
+        if (navigation.allow({ settings: false, request: false })) {
           renderStaffSuggestionSearch({ query: patron.barcode, scopeId: String(result.libraryOrgId) });
         }
       }
@@ -2529,7 +2388,7 @@ export function createWorkflowApp() {
       current.submitting = false;
       closeStaffSuggestion({ focusButton: false, force: true });
       if (state.staff?.role === 'super_admin') {
-        state.scope = targetLibraryId;
+        navigation.align({ scope: targetLibraryId });
         dom.scope.value = targetLibraryId;
       }
       let queueRefreshed = false;
@@ -2608,7 +2467,7 @@ export function createWorkflowApp() {
     if (!state.staff) return;
     if (dom.dialog.open) {
       if (!closeDialog({ navigation: true })) return;
-      replaceStageParameter(state.status);
+      replaceStageParameter(navigation.context().status);
     }
     if (!closeStaffSuggestion({ focusButton: false })) return;
     state.staffSuggestionReturnFocus = returnFocus || document.activeElement;
@@ -2695,7 +2554,7 @@ export function createWorkflowApp() {
     }
     if (request.relatedRequests && Number.isInteger(request.relatedRequests.count)) {
       const visibleCounts = (request.relatedRequests.statusAndLibraryCounts || [])
-        .filter(item => state.scope === 'all' || String(item.libraryOrgId) === state.scope);
+        .filter(item => navigation.context().scope === 'all' || String(item.libraryOrgId) === navigation.context().scope);
       const visibleCount = visibleCounts.reduce((total, item) => total + item.count, 0);
       const related = element('section', { className: 'related-requests', 'aria-label': 'Related title requests' });
       related.append(element('h3', { text: 'Related title requests' }));
@@ -3476,7 +3335,7 @@ export function createWorkflowApp() {
 
   async function mutateRequest(request, path, body, successMessage, draft = null) {
     if (!allowRequestMutation(request, { consumes: draft })) return;
-    const selectionGeneration = state.navigationGeneration;
+    const selectionGeneration = navigation.generation();
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = `title:${request.id}:${request.version}`;
     const restoreControls = disableDialogControls();
@@ -3601,19 +3460,19 @@ export function createWorkflowApp() {
 
   async function showDuplicateRecovery(request, mutation, selectionGeneration, duplicate) {
     if (!isCurrentDialogMutation(mutation, request, 'title_request') ||
-        state.navigationGeneration !== selectionGeneration) return;
+        navigation.generation() !== selectionGeneration) return;
     await loadQueue({ skipDeepLink: true, silent: true });
     if (!isCurrentDialogMutation(mutation, request, 'title_request') ||
-        state.navigationGeneration !== selectionGeneration) return;
+        navigation.generation() !== selectionGeneration) return;
     const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
     if (detailLoaded !== true) {
-      if (state.navigationGeneration === selectionGeneration + 1 &&
+      if (navigation.generation() === selectionGeneration + 1 &&
           isCurrentDialogSelection(request, 'title_request')) {
         announce('The attempted change was not saved because another open request has this BIB. Current details could not refresh; reload this request before deciding whether to close it.', 'error');
       }
       return;
     }
-    if (state.navigationGeneration !== selectionGeneration + 1 ||
+    if (navigation.generation() !== selectionGeneration + 1 ||
         !state.currentRequest || String(state.currentRequest.id) !== String(request.id) ||
         !isCurrentDialogRequest(state.currentRequest, 'title_request')) return;
     const current = state.currentRequest;
@@ -3629,14 +3488,14 @@ export function createWorkflowApp() {
       element('p', { text: 'Close this current request as a duplicate, or leave it open to edit or select another BIB.' })
     );
     const continueButton = element('button', { type: 'button', onclick: () => {
-      if (!panel.isConnected || state.navigationGeneration !== selectionGeneration + 1 ||
+      if (!panel.isConnected || navigation.generation() !== selectionGeneration + 1 ||
           !isCurrentDialogRequest(current, 'title_request')) return;
       panel.remove();
       dom.dialogBody.querySelector('.edit-form input[inputmode="numeric"]')?.focus();
       announce('The request remains open. Edit it or select another BIB.');
     } }, 'Continue editing');
     const closeButton = element('button', { type: 'button', className: 'secondary-button', onclick: async () => {
-      if (!panel.isConnected || state.navigationGeneration !== selectionGeneration + 1 ||
+      if (!panel.isConnected || navigation.generation() !== selectionGeneration + 1 ||
           !isCurrentDialogRequest(current, 'title_request')) return;
       await runAction(current, 'closeDuplicate');
     } }, 'Close current request as duplicate');
@@ -3983,75 +3842,6 @@ export function createWorkflowApp() {
     }
   }
 
-  function switchView(name, updateUrl = true) {
-    if ((name === 'settings' || name === 'operations') &&
-        !['admin', 'super_admin'].includes(state.staff?.role)) return;
-    const previousView = state.activeView;
-    if (updateUrl && previousView === name && dom.dialog.open) return closeDialog();
-    if (updateUrl && previousView === name && dom.staffSuggestionDialog.open) return closeStaffSuggestion();
-    if (updateUrl && previousView !== name) {
-      if (!allowNavigation()) return false;
-      if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
-      if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
-    }
-    if (previousView === 'settings' && name !== 'settings' &&
-        settingsController.hasPendingMutation()) {
-      announce('Wait for the settings change to finish before navigating away.', 'warning');
-      return;
-    }
-    if (previousView === 'settings' && name !== 'settings' &&
-        settingsController.hasUnconfirmedOutcome()) {
-      announce('Reload current settings to verify the uncertain change before navigating away.', 'warning');
-      return;
-    }
-    if (updateUrl && previousView !== name) invalidateNavigation();
-    cancelDialogFocusReturn();
-    if (previousView === 'settings' && name !== 'settings') settingsController.suspend();
-    if (previousView !== name && name === 'queue') resetQueueFilters();
-    if (previousView !== name && name === 'additional-copies') resetAdditionalCopyFilters();
-    const previousEmailScope = emailReadinessScopeKey();
-    state.activeView = name;
-    if (name === 'operations') operationsController.activate();
-    else operationsController.deactivate();
-    if (emailReadinessScopeKey() !== previousEmailScope) void refreshEmailReadiness();
-    dom.queueView.hidden = name !== 'queue';
-    dom.additionalCopyView.hidden = name !== 'additional-copies';
-    dom.analyticsView.hidden = name !== 'analytics';
-    dom.profileView.hidden = name !== 'profile';
-    dom.operationsView.hidden = name !== 'operations';
-    dom.settingsView.hidden = name !== 'settings';
-    for (const tab of dom.viewTabs) {
-      const active = tab.dataset.view === name;
-      tab.classList.toggle('active', active);
-      if (active) tab.setAttribute('aria-current', 'page');
-      else tab.removeAttribute('aria-current');
-    }
-    if (updateUrl && previousView !== name) {
-      if (name === 'settings') {
-        pushSettingsRouteParameter(settingsController.currentScope(), settingsController.currentPanel());
-      } else {
-        pushStageParameter(name === 'additional-copies' ? 'additional_copies'
-          : ['analytics', 'operations', 'profile'].includes(name) ? name : state.status);
-      }
-    }
-    const heading = name === 'queue'
-      ? '#queue-title'
-      : name === 'additional-copies' ? '#additional-copy-title'
-      : name === 'analytics' ? '#analytics-title'
-      : name === 'profile' ? '#profile-title' : name === 'operations' ? '#operations-title' : '#settings-title';
-    document.querySelector(heading).focus({ preventScroll: true });
-    if (updateUrl && name === 'additional-copies' && !state.additionalCopyLoaded) {
-      loadAdditionalCopies({ skipDeepLink: true });
-    }
-    if (updateUrl && name === 'queue' && previousView !== 'queue' &&
-        state.queueLoadedScope !== state.scope) {
-      loadQueue({ skipDeepLink: true });
-    }
-    if (updateUrl && name === 'operations') operationsController.refresh();
-    if (updateUrl && name === 'analytics') loadAnalytics(dom.analyticsContainer);
-    if (name === 'settings') settingsController.activate(requestedSettingsPanelFromUrl() || undefined);
-  }
-
   function closeDialog(options = {}) {
     if (state.dialogMutationInFlight && options.preserveMutation !== true && !options.force) {
       announce('The workflow action is in progress. Wait for its authoritative result before closing.', 'warning');
@@ -4059,7 +3849,7 @@ export function createWorkflowApp() {
       return false;
     }
     if (!options.force && !options.guarded && !options.preserveMutation &&
-        !allowNavigation({ settings: false, suggestion: false })) return false;
+        !navigation.allow({ settings: false, suggestion: false })) return false;
     if (!closeAdditionalCopyCreateDialog({ navigation: true, force: options.force })) return false;
     polarisLookup.close();
     latestLoads.begin('research-configuration').abort();
@@ -4083,17 +3873,17 @@ export function createWorkflowApp() {
     const wasAdditionalCopy = state.selectedRequestType === 'additional_copy';
     const returnFocus = state.returnFocus;
     const staff = state.staff;
-    const view = state.activeView;
-    const scope = state.scope;
-    const status = wasAdditionalCopy ? state.additionalCopyStatus : state.status;
+    const view = navigation.context().activeView;
+    const scope = navigation.context().scope;
+    const status = wasAdditionalCopy ? navigation.context().additionalCopyStatus : navigation.context().status;
     state.selectedRequestId = null;
     state.selectedRequestType = null;
     state.selectedRequestVersion = null;
     state.returnFocus = null;
     if (!options.navigation) {
-      state.closingDetailHistory = closeDetailHistory(wasAdditionalCopy || state.activeView === 'additional-copies'
-        ? 'additional_copies' : state.status, queueRouteContext());
-      if (!state.closingDetailHistory) rememberRoute();
+      router.closeDetail(wasAdditionalCopy || navigation.context().activeView === 'additional-copies'
+        ? 'additional_copies' : navigation.context().status, queueRouteContext());
+      if (!router.busy()) rememberRoute();
     }
     if (options.preserveMutation === true) state.dialogMutationInFlight = null;
     if (options.navigation) return true;
@@ -4104,8 +3894,8 @@ export function createWorkflowApp() {
     let frame;
     let focusedReturnTarget;
     const focusReturnButton = () => {
-      if (!sessionIdentity.isCurrent(staff) || !staff || state.activeView !== view || state.scope !== scope ||
-          (wasAdditionalCopy ? state.additionalCopyStatus : state.status) !== status ||
+      if (!sessionIdentity.isCurrent(staff) || !staff || navigation.context().activeView !== view || navigation.context().scope !== scope ||
+          (wasAdditionalCopy ? navigation.context().additionalCopyStatus : navigation.context().status) !== status ||
           dom.dialog.open || state.selectedRequestId !== null) {
         cancelDialogFocusReturn();
         return;
@@ -4157,6 +3947,7 @@ export function createWorkflowApp() {
       showAccessUnavailable();
     });
     settingsController.bind();
+    for (const name of ['input', 'change']) dom.dialog.addEventListener(name, () => interactionScope.touch());
     dom.newSuggestion.addEventListener('click', event => openStaffSuggestion(event.currentTarget));
     dom.bulkDelete.addEventListener('click', event => openBulkDelete(event.currentTarget));
     dom.bulkDeleteCopies.addEventListener('click', event => openBulkDelete(event.currentTarget));
@@ -4175,7 +3966,7 @@ export function createWorkflowApp() {
     });
     dom.bulkDeleteExecute.addEventListener('click', executeBulkDelete);
     dom.signOut.addEventListener('click', async () => {
-      if (!allowNavigation()) return;
+      if (!navigation.allow()) return;
       try {
         await authorizedJson('/api/asap/staff/sign-out', { method: 'POST' });
         showSignedOut('You are signed out.');
@@ -4188,24 +3979,24 @@ export function createWorkflowApp() {
     });
     dom.refresh.addEventListener('click', () => loadQueue({ skipDeepLink: true }));
     dom.scope.addEventListener('change', () => {
-      if (!allowNavigation()) { dom.scope.value = state.scope; return; }
+      if (!navigation.allow()) { dom.scope.value = navigation.context().scope; return; }
       if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
       if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
-      invalidateNavigation();
-      state.scope = dom.scope.value;
+      navigation.invalidate();
+      navigation.align({ scope: dom.scope.value });
       void refreshEmailReadiness();
-      dom.additionalCopyScope.value = state.scope;
+      dom.additionalCopyScope.value = navigation.context().scope;
       resetQueueFilters();
       clearTitleQueueForContextChange();
       clearAdditionalCopyQueueForScopeChange();
-      pushStageParameter(state.status);
+      pushStageParameter(navigation.context().status);
       loadQueue({ skipDeepLink: true });
     });
     dom.additionalCopyRefresh.addEventListener('click', () => loadAdditionalCopies({ skipDeepLink: true }));
     dom.additionalCopyCreateReviewDone.addEventListener('click', () => {
       if (!state.unconfirmedCopyCreationAwaitingRefresh?.reviewReady ||
-          state.additionalCopyStatus !== 'open' ||
-          (state.scope !== 'all' && String(state.scope) !== String(state.unconfirmedCopyCreationAwaitingRefresh.libraryOrgId))) return;
+          navigation.context().additionalCopyStatus !== 'open' ||
+          (navigation.context().scope !== 'all' && String(navigation.context().scope) !== String(state.unconfirmedCopyCreationAwaitingRefresh.libraryOrgId))) return;
       state.unconfirmedCopyCreationAwaitingRefresh.reviewed = true;
       clearCommittedSessionFallback(state.partialSessionFailureOwner);
       renderAdditionalCopyGrid();
@@ -4213,13 +4004,13 @@ export function createWorkflowApp() {
       announce('Additional-copy task list reviewed. You can open the request again if another task is needed.', 'success');
     });
     dom.additionalCopyScope.addEventListener('change', () => {
-      if (!allowNavigation()) { dom.additionalCopyScope.value = state.scope; return; }
+      if (!navigation.allow()) { dom.additionalCopyScope.value = navigation.context().scope; return; }
       if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
       if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
-      invalidateNavigation();
-      state.scope = dom.additionalCopyScope.value;
+      navigation.invalidate();
+      navigation.align({ scope: dom.additionalCopyScope.value });
       void refreshEmailReadiness();
-      dom.scope.value = state.scope;
+      dom.scope.value = navigation.context().scope;
       resetAdditionalCopyFilters();
       clearAdditionalCopyQueueForScopeChange();
       clearTitleQueueForContextChange();
@@ -4228,15 +4019,15 @@ export function createWorkflowApp() {
     });
     for (const tab of dom.statusTabs) {
       tab.addEventListener('click', () => {
-        if (state.status === tab.dataset.status) return;
-        if (!allowNavigation()) return;
+        if (navigation.context().status === tab.dataset.status) return;
+        if (!navigation.allow()) return;
         if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
         if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
-        invalidateNavigation();
-        state.status = tab.dataset.status;
+        navigation.invalidate();
+        navigation.align({ status: tab.dataset.status });
         resetQueueFilters();
         updateStatusTabs();
-        pushStageParameter(state.status);
+        pushStageParameter(navigation.context().status);
         renderGrid();
         loadQueue({ skipDeepLink: true, silent: true });
       });
@@ -4258,12 +4049,12 @@ export function createWorkflowApp() {
     dom.similar.addEventListener('change', renderGrid);
     for (const tab of dom.additionalCopyStatusTabs) {
       tab.addEventListener('click', () => {
-        if (state.additionalCopyStatus === tab.dataset.copyStatus) return;
-        if (!allowNavigation()) return;
+        if (navigation.context().additionalCopyStatus === tab.dataset.copyStatus) return;
+        if (!navigation.allow()) return;
         if (dom.dialog.open) closeDialog({ navigation: true, guarded: true });
         if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
-        invalidateNavigation();
-        state.additionalCopyStatus = tab.dataset.copyStatus;
+        navigation.invalidate();
+        navigation.align({ additionalCopyStatus: tab.dataset.copyStatus });
         resetAdditionalCopyFilters();
         updateAdditionalCopyStatusTabs();
         pushStageParameter('additional_copies');
@@ -4284,7 +4075,7 @@ export function createWorkflowApp() {
     dom.additionalCopySearch.addEventListener('input', renderAdditionalCopyGrid);
     dom.additionalCopyClaim.addEventListener('change', renderAdditionalCopyGrid);
     for (const tab of dom.viewTabs) tab.addEventListener('click', () => {
-      switchView(tab.dataset.view);
+      navigation.switchView(tab.dataset.view);
     });
     dom.closeDialog.addEventListener('click', () => closeDialog());
     dom.dialog.addEventListener('cancel', event => {
@@ -4325,17 +4116,12 @@ export function createWorkflowApp() {
       event.preventDefault();
       event.returnValue = '';
     });
-    window.addEventListener('popstate', () => { void navigateFromUrl(); });
-    window.addEventListener('hashchange', () => {
-      if (currentStageParameter() === 'settings' && !state.restoringHistory &&
-          state.routeSnapshot?.href !== window.location.href) void navigateFromUrl();
-    });
+
   }
 
   return {
     async start() {
-      initializeStaffHistory();
-      rememberRoute();
+      navigation.start();
       bindEvents();
       await startSession();
     }
