@@ -7,6 +7,7 @@ import {
   onAccessUnavailable
 } from './http.js';
 import { createSettingsController } from './settings.js';
+import { createDraftScope } from './draft-scope.js';
 import {
   forgetRecentRequest,
   readRecentRequests,
@@ -244,7 +245,6 @@ export function createWorkflowApp() {
     editControls: null,
     editorDirty: false,
     editorDraft: null,
-    dialogDraftChecks: [],
     verifiedBib: null,
     dialogMutationInFlight: null,
     actionChoice: null,
@@ -259,6 +259,13 @@ export function createWorkflowApp() {
   };
 
   const queueRouteContext = () => ({ scope: state.scope, copyStatus: state.additionalCopyStatus });
+  let interactionScope = createDraftScope();
+  let dialogForms = new WeakMap();
+  function resetDialogDrafts() {
+    interactionScope.dispose();
+    interactionScope = createDraftScope();
+    dialogForms = new WeakMap();
+  }
   function rememberRoute() { state.routeSnapshot = staffHistorySnapshot(); }
   function pushRequestParameter(id, stage) { writeRequestParameter(id, stage, queueRouteContext()); rememberRoute(); }
   function pushStageParameter(stage) { writeStageParameter(stage, queueRouteContext()); rememberRoute(); }
@@ -269,24 +276,22 @@ export function createWorkflowApp() {
   function pushSettingsRouteParameter(scope, panel) { writeSettingsRouteParameter(scope, panel); rememberRoute(); }
 
   function hasRequestDraft() {
-    return dom.dialog.open && ((state.selectedRequestType === 'title_request' && state.editorDirty) ||
-      state.dialogDraftChecks.some(draft => draft.changed()));
+    return dom.dialog.open && interactionScope.isDirty();
   }
 
   function trackDialogFormDraft(form) {
     const value = control => control.type === 'checkbox' ? control.checked : control.value;
     const baseline = [...form.querySelectorAll('input, select, textarea')]
       .map(control => ({ control, value: value(control) }));
-    const draft = { form, changed: () => form.isConnected &&
-      baseline.some(item => value(item.control) !== item.value) };
-    state.dialogDraftChecks = state.dialogDraftChecks.filter(item => item.form.isConnected);
-    state.dialogDraftChecks.push(draft);
+    const draft = interactionScope.register({ root: form,
+      isDirty: () => baseline.some(item => value(item.control) !== item.value) });
+    dialogForms.set(form, draft);
     return draft;
   }
 
   function cancelDialogFormDraft(form, returnFocus) {
     if (!form.isConnected || state.dialogMutationInFlight) return;
-    state.dialogDraftChecks = state.dialogDraftChecks.filter(draft => draft.form !== form);
+    interactionScope.release(dialogForms.get(form));
     form.remove();
     if (returnFocus?.isConnected) returnFocus.focus();
     announce('Unsaved request changes discarded.');
@@ -356,15 +361,15 @@ export function createWorkflowApp() {
     return true;
   }
 
-  function allowRequestMutation(request, draft = null, requestType = 'title_request') {
+  function allowRequestMutation(request, declaration, requestType = 'title_request') {
     if (!isCurrentDialogRequest(request, requestType) || state.dialogMutationInFlight) return false;
-    // A submission consumes only its own draft; every other dirty form still blocks it.
-    if (requestType === 'title_request' && state.editorDirty && state.editorDraft !== draft) {
-      announce('Save or revert the current request edits before performing a workflow action.', 'warning');
-      return false;
-    }
-    if (state.dialogDraftChecks.some(item => item !== draft && item.changed())) {
-      announce('Finish or cancel the current request changes before performing another action.', 'warning');
+    const admission = interactionScope.admit(declaration);
+    if (!admission.allowed) {
+      announce(admission.kind === 'editor'
+        ? 'Save or revert the current request edits before performing a workflow action.'
+        : admission.reason === 'competing_draft'
+          ? 'Finish or cancel the current request changes before performing another action.'
+          : 'This draft no longer belongs to the current request.', 'warning');
       return false;
     }
     return true;
@@ -788,7 +793,7 @@ export function createWorkflowApp() {
   }
 
   function confirmCurrent(request, requestType, message, draft = null) {
-    return allowRequestMutation(request, draft, requestType) &&
+    return allowRequestMutation(request, { consumes: draft }, requestType) &&
       window.confirm(message) && isCurrentDialogRequest(request, requestType);
   }
 
@@ -1127,7 +1132,7 @@ export function createWorkflowApp() {
     state.editControls = null;
     state.editorDirty = false;
     state.editorDraft = null;
-    state.dialogDraftChecks = [];
+    resetDialogDrafts();
     state.selectedRequestId = null;
     state.selectedRequestType = null;
     state.selectedRequestVersion = null;
@@ -2034,7 +2039,7 @@ export function createWorkflowApp() {
 
   function renderAdditionalCopy(request, { preserveDialogMutation = false } = {}) {
     state.editorDraft = null;
-    state.dialogDraftChecks = [];
+    resetDialogDrafts();
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();
     cancelAdditionalCopyPreviewLoad();
@@ -2132,7 +2137,7 @@ export function createWorkflowApp() {
   }
 
   async function mutateAdditionalCopy(request, operation, successMessage, extra = {}, draft = null) {
-    if (!allowRequestMutation(request, draft, 'additional_copy')) return;
+    if (!allowRequestMutation(request, { consumes: draft }, 'additional_copy')) return;
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = `copy:${request.id}:${request.version}`;
     const restoreControls = disableDialogControls();
@@ -2927,7 +2932,7 @@ export function createWorkflowApp() {
   }
 
   function renderRequest(request, configuration, { preserveDialogMutation = false } = {}) {
-    state.dialogDraftChecks = [];
+    resetDialogDrafts();
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();
     cancelAdditionalCopyPreviewLoad();
@@ -3224,7 +3229,7 @@ export function createWorkflowApp() {
 
   function buildEditForm(request, configuration) {
     const form = element('form', { className: 'edit-form' });
-    const draft = Symbol('request editor');
+    const draft = interactionScope.register({ root: form, kind: 'editor', isDirty: () => state.editorDirty });
     state.editorDraft = draft;
     state.editorDirty = false;
     const title = element('input', { value: request.title, required: 'required', maxlength: '500' });
@@ -3321,10 +3326,12 @@ export function createWorkflowApp() {
     const pendingPreview = element('p', { className: 'pending-audit-preview wide', role: 'status' });
     const save = element('button', { type: 'submit', className: 'primary-button' }, [icon('save'), 'Save changes']);
     const revert = commandButton('Revert changes', 'undo', () => {
-      if (!allowNavigation({ settings: false, suggestion: false })) return;
+      if (!form.isConnected || state.dialogMutationInFlight) return;
+      if (state.editorDirty && !window.confirm('Discard unsaved request changes and revert this editor?')) return;
       state.verifiedBib = null;
       polarisLookup.invalidate();
-      renderRequest(request, configuration);
+      interactionScope.release(draft);
+      form.replaceWith(buildEditForm(request, configuration));
       dom.dialogBody.querySelector('.edit-form input')?.focus();
       announce('Unsaved request changes discarded.');
     });
@@ -3382,7 +3389,7 @@ export function createWorkflowApp() {
     updatePreview();
     form.addEventListener('submit', async event => {
       event.preventDefault();
-      if (save.disabled || !form.isConnected || !allowRequestMutation(request, draft)) return;
+      if (save.disabled || !form.isConnected || !allowRequestMutation(request, { consumes: draft })) return;
       if (!bib.disabled && bib.value.trim() && positivePolarisId(bib.value) === null) {
         announce('Enter a positive Polaris BIB ID up to 2147483647.', 'error');
         bib.focus();
@@ -3451,7 +3458,7 @@ export function createWorkflowApp() {
   }
 
   function showActionChoice(request, action, returnFocus) {
-    if (!allowRequestMutation(request)) return;
+    if (!allowRequestMutation(request, { consumes: null })) return;
     cancelActionChoiceLoad();
     dom.dialogBody.querySelector('.action-choice')?.remove();
     const panel = element('form', { className: 'action-choice', 'aria-label': `${action} options` });
@@ -3518,7 +3525,7 @@ export function createWorkflowApp() {
   async function runAction(request, action, targetStatus, choices = {}, draft = null) {
     const entersPendingHold = action === 'catalogFound' || action === 'alreadyOwn' ||
       targetStatus === 'pending_hold' || action === 'purchase' && Boolean(request.bibid);
-    if (!allowRequestMutation(request, draft)) {
+    if (!allowRequestMutation(request, { consumes: draft })) {
       if (entersPendingHold && state.editorDirty && state.editorDraft !== draft && !state.dialogMutationInFlight) {
         announce(isVerifiedDraft(request)
           ? 'Save the current request edits before moving to Pending hold.'
@@ -3554,7 +3561,7 @@ export function createWorkflowApp() {
   }
 
   async function showAdditionalCopyPreview(request, returnFocus) {
-    if (!allowRequestMutation(request)) return;
+    if (!allowRequestMutation(request, { consumes: null })) return;
     const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
     if (uncertainCreation && (!uncertainCreation.reviewed || uncertainCreation.sourceId !== String(request.id))) {
       announce('Additional-copy creation is unconfirmed. Refresh the open additional-copy task list for this library and review matching tasks before trying again.', 'warning');
@@ -3568,7 +3575,7 @@ export function createWorkflowApp() {
         signal: load.signal
       });
       if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request')) return;
-      if (!allowRequestMutation(request)) return;
+      if (!allowRequestMutation(request, { consumes: null })) return;
       state.createCopyRequest = { request, version: preview.version };
       state.createCopyReturnFocus = returnFocus || document.activeElement;
       const holdState = request.status === 'hold_placed' ? 'placed' : 'queued';
@@ -3614,7 +3621,7 @@ export function createWorkflowApp() {
     if (!pending || pending.submitting || pending.outcomeUnconfirmed ||
         (uncertainCreation && (!uncertainCreation.reviewed || uncertainCreation.sourceId !== String(pending.request.id))) ||
         !isCurrentDialogRequest(pending.request, 'title_request')) return;
-    if (!allowRequestMutation(pending.request)) return;
+    if (!allowRequestMutation(pending.request, { consumes: null })) return;
     pending.submitting = true;
     const mutation = latestLoads.begin('additional-copy-create-mutation');
     const submit = dom.createCopyForm.querySelector('button[type="submit"]');
@@ -3719,7 +3726,7 @@ export function createWorkflowApp() {
   }
 
   async function deleteTitleRequest(request) {
-    if (!allowRequestMutation(request)) return;
+    if (!allowRequestMutation(request, { consumes: null })) return;
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = 'title:' + request.id + ':' + request.version;
     const restoreControls = disableDialogControls();
@@ -3767,7 +3774,7 @@ export function createWorkflowApp() {
   }
 
   async function mutateRequest(request, path, body, successMessage, draft = null) {
-    if (!allowRequestMutation(request, draft)) return;
+    if (!allowRequestMutation(request, { consumes: draft })) return;
     const selectionGeneration = state.navigationGeneration;
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = `title:${request.id}:${request.version}`;
@@ -4175,7 +4182,7 @@ export function createWorkflowApp() {
     const draft = trackDialogFormDraft(form);
     form.addEventListener('submit', async event => {
       event.preventDefault();
-      if (!form.isConnected || !allowRequestMutation(request, draft)) return;
+      if (!form.isConnected || !allowRequestMutation(request, { consumes: draft })) return;
       const provenFinalHoldId = finalHoldId.disabled ? null : positivePolarisId(finalHoldId.value);
       if (!finalHoldId.disabled && provenFinalHoldId === null) {
         announce('Enter a positive Polaris hold ID no larger than 2147483647.');
@@ -4205,7 +4212,7 @@ export function createWorkflowApp() {
   }
 
   async function mutateOperation(request, operation, action, body, draft = null) {
-    if (!allowRequestMutation(request, draft)) return;
+    if (!allowRequestMutation(request, { consumes: draft })) return;
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = `hold:${operation.id}:${operation.version}`;
     const restoreControls = disableDialogControls();
@@ -4486,7 +4493,7 @@ export function createWorkflowApp() {
     state.editControls = null;
     state.editorDirty = false;
     state.editorDraft = null;
-    state.dialogDraftChecks = [];
+    resetDialogDrafts();
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();

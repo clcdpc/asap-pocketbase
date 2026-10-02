@@ -1422,17 +1422,20 @@ test('characterization: declined editor Revert preserves both editor and inline 
     assert.equal(protectedUnload(ui), true);
   }));
 
-test('characterization: current accepted editor Revert replaces competing inline UI', () =>
+test('editor Revert preserves competing inline UI and its draft registration', () =>
   fixture(`?request=${id}`, async ui => {
     const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
     ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
     ui.edit('.edit-form input', 'Editor draft');
     ui.allowDiscard(); actionButton('Revert changes', ui.get('.edit-form')).click();
-    assert.equal(assignment.isConnected, false);
+    assert.equal(assignment.isConnected, true);
     assert.equal(ui.get('.edit-form input').value, 'Saved title');
-    assert.equal(protectedUnload(ui), false);
-    submitForm(ui, assignment); await settle();
+    assert.equal(protectedUnload(ui), true);
+    actionButton('Claim').click(); await settle();
     assert.equal(requestMutations(ui).length, 0);
+    assert.equal(assignment.querySelector('select').value, '21');
+    submitForm(ui, assignment); await until(() => !assignment.isConnected, 'retained inline draft submits');
+    assert.equal(requestMutations(ui).length, 1);
   }));
 
 test('characterization: current Additional Copy reminder has transient cancel lifetime', () =>
