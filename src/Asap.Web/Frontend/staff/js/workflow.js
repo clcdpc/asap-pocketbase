@@ -8,6 +8,7 @@ import {
 } from './http.js';
 import { createSettingsController } from './settings.js';
 import { createDraftScope } from './draft-scope.js';
+import { createSessionIdentity } from './session-identity.js';
 import {
   forgetRecentRequest,
   readRecentRequests,
@@ -112,6 +113,7 @@ function currentStageParameter() {
 }
 
 export function createWorkflowApp() {
+  const sessionIdentity = createSessionIdentity();
   const dom = {
     status: document.querySelector('#app-status'),
     emailReadinessWarning: document.querySelector('#email-readiness-warning'),
@@ -400,12 +402,12 @@ export function createWorkflowApp() {
       try {
         const result = await authorizedJson('/api/asap/staff/organizations', { signal: load.signal });
         const organizations = result?.data ?? result;
-        if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration || owner !== state.staff) return false;
+        if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration || !sessionIdentity.isCurrent(owner)) return false;
         const available = organizations.filter(item => Number(item.id) > 1 && item.active !== false);
         if (available.some(item => String(item.id) === raw)) scope = raw;
         populateScopes(available, scope);
       } catch (error) {
-        if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration || owner !== state.staff || error.status === 401) return false;
+        if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration || !sessionIdentity.isCurrent(owner) || error.status === 401) return false;
         // An unavailable scope is never applied without current authorization evidence.
       } finally {
         latestLoads.finish('operational-scope', load.token);
@@ -549,7 +551,7 @@ export function createWorkflowApp() {
     const query = scopeKey === 'default' ? '' : `?organizationId=${encodeURIComponent(scopeKey)}`;
     try {
       const result = await authorizedJson(`/api/asap/staff/email-readiness${query}`, { signal: load.signal });
-      if (!load.isCurrent() || state.staff !== owner) return;
+      if (!load.isCurrent() || !sessionIdentity.isCurrent(owner)) return;
       const stateCode = result?.state;
       const warning = stateCode === 'not_configured'
         ? 'Email delivery is not configured for this scope. Requests and staff workflows remain available.'
@@ -561,7 +563,7 @@ export function createWorkflowApp() {
       dom.emailReadinessWarning.textContent = warning;
       dom.emailReadinessWarning.hidden = !warning;
     } catch (error) {
-      if (load.isCurrent() && state.staff === owner && !isAbortError(error) && error.status !== 401) {
+      if (load.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
         dom.emailReadinessWarning.textContent = 'Email delivery status is unavailable. Requests and staff workflows remain available.';
         dom.emailReadinessWarning.hidden = false;
       }
@@ -1009,7 +1011,7 @@ export function createWorkflowApp() {
     let expectedStatus = state.status;
     let expectedCopyStatus = state.additionalCopyStatus;
     let expectedRoute = state.routeSnapshot?.href;
-    const isCurrentContext = () => state.bulkDeleteState === batch && state.staff === owner &&
+    const isCurrentContext = () => state.bulkDeleteState === batch && sessionIdentity.isCurrent(owner) &&
       state.navigationGeneration === navigationGeneration && state.activeView === view &&
       state.scope === expectedScope && state.status === expectedStatus &&
       state.additionalCopyStatus === expectedCopyStatus && window.location.href === expectedRoute;
@@ -1020,7 +1022,7 @@ export function createWorkflowApp() {
     dom.bulkDeleteConfirmation.disabled = true;
     let stop = false;
     for (const item of batch.snapshot.items) {
-      if (stop || state.bulkDeleteState !== batch || state.staff !== owner) {
+      if (stop || state.bulkDeleteState !== batch || !sessionIdentity.isCurrent(owner)) {
         batch.ledger.push({ ...item, outcome: 'not_attempted' });
         continue;
       }
@@ -1118,6 +1120,7 @@ export function createWorkflowApp() {
     closeStaffSuggestion({ focusButton: false, force: true });
     if (dom.dialog.open) dom.dialog.close();
     if (dom.createCopyDialog.open) dom.createCopyDialog.close();
+    sessionIdentity.clear();
     state.staff = null;
     state.requests = [];
     state.additionalCopies = [];
@@ -1180,12 +1183,22 @@ export function createWorkflowApp() {
     state.partialSessionFailureAfterQueueSequence = null;
   }
 
+  function updateStaffPreferences(staff, owner) {
+    const preferences = sessionIdentity.updatePreferences(staff, owner);
+    if (!preferences) {
+      showSignedOut('The staff account or access changed. Reload this page to continue.');
+      return false;
+    }
+    state.staff = preferences;
+    return true;
+  }
+
   function showWorkspace(staff) {
     state.partialSessionFailureMessage = null;
     state.partialSessionFailureOwner = null;
     state.partialSessionFailureDetailAvailable = false;
     state.partialSessionFailureAfterQueueSequence = null;
-    state.staff = staff;
+    state.staff = sessionIdentity.accept(staff);
     state.unconfirmedCopyCreationAwaitingRefresh = readUnconfirmedCopyCreation(staff);
     dom.additionalCopyCreateReview.hidden = true;
     if (state.unconfirmedCopyCreationAwaitingRefresh) {
@@ -1331,7 +1344,7 @@ export function createWorkflowApp() {
               { signal: routeLoad.signal });
           } catch (error) {
             if (routeLoad.isCurrent() && navigationGeneration === state.navigationGeneration &&
-                staff === state.staff && error.status !== 401 && !isAbortError(error)) {
+                sessionIdentity.isCurrent(staff) && error.status !== 401 && !isAbortError(error)) {
               switchView('queue', false);
               replaceStageParameter(state.status);
               announce('That Settings scope is not available.', 'error');
@@ -1340,7 +1353,7 @@ export function createWorkflowApp() {
             return;
           }
           if (!routeLoad.isCurrent() || navigationGeneration !== state.navigationGeneration ||
-              staff !== state.staff) return;
+              !sessionIdentity.isCurrent(staff)) return;
           latestLoads.finish('settings-route', routeLoad.token);
           settingsController.setScopeFromUrl(requestedScope);
         }
@@ -1441,7 +1454,7 @@ export function createWorkflowApp() {
       const result = await authorizedJson(`/api/asap/staff/title-requests?scope=${encodeURIComponent(scope)}`, {
         signal: load.signal
       });
-      if (!load.isCurrent() || owner !== state.staff || requestedScope !== state.scope) return;
+      if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== state.scope) return;
       state.requests = Array.isArray(result.items) ? result.items : [];
       const previousEmailScope = emailReadinessScopeKey();
       state.scope = result.scope;
@@ -1641,7 +1654,7 @@ export function createWorkflowApp() {
       storeOperation(null);
       state.operationMutation = null;
       updateOperationControls();
-      if (state.staff !== owner) {
+      if (!sessionIdentity.isCurrent(owner)) {
         if (!state.staff) dom.signedOutMessage.textContent = state.partialSessionFailureMessage;
         return;
       }
@@ -1666,7 +1679,7 @@ export function createWorkflowApp() {
         state.operationMutation = null;
       }
       updateOperationControls();
-      if (state.staff === owner && state.activeView === 'operations' && error.status !== 401) {
+      if (sessionIdentity.isCurrent(owner) && state.activeView === 'operations' && error.status !== 401) {
         announce(uncertain ? `${message} outcome is unconfirmed. Refresh Operations to review it before retrying.`
           : error.message || 'The operation was not queued.', uncertain ? 'warning' : 'error');
       }
@@ -1827,7 +1840,7 @@ export function createWorkflowApp() {
         `/api/asap/staff/additional-copies?scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(state.additionalCopyStatus)}`,
         { signal: load.signal }
       );
-      if (!load.isCurrent() || owner !== state.staff || requestedScope !== state.scope ||
+      if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== state.scope ||
           requestedStatus !== state.additionalCopyStatus) return;
       state.additionalCopies = Array.isArray(result.items) ? result.items : [];
       const previousEmailScope = emailReadinessScopeKey();
@@ -1855,7 +1868,7 @@ export function createWorkflowApp() {
       }
       return true;
     } catch (error) {
-      if (load.isCurrent() && owner === state.staff && requestedScope === state.scope &&
+      if (load.isCurrent() && sessionIdentity.isCurrent(owner) && requestedScope === state.scope &&
           requestedStatus === state.additionalCopyStatus &&
           !options.silent && !isAbortError(error) && error.status !== 401) {
         announce(error.message || 'Additional-copy tasks could not be loaded.', 'error');
@@ -1994,7 +2007,7 @@ export function createWorkflowApp() {
         signal: load.signal
       });
       if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration ||
-          staff !== state.staff || state.selectedRequestId !== String(id) ||
+          !sessionIdentity.isCurrent(staff) || state.selectedRequestId !== String(id) ||
           state.selectedRequestType !== 'additional_copy') return false;
       const statusChanged = options.fromDeepLink && request.status !== state.additionalCopyStatus &&
         ['open', 'closed'].includes(request.status);
@@ -2015,7 +2028,7 @@ export function createWorkflowApp() {
         if (!scopeChanged) renderAdditionalCopyGrid();
         const refreshed = await loadAdditionalCopies({ silent: true, skipDeepLink: true });
         if (refreshed !== true || navigationGeneration !== state.navigationGeneration ||
-            staff !== state.staff || !load.isCurrent()) return false;
+            !sessionIdentity.isCurrent(staff) || !load.isCurrent()) return false;
       }
       state.selectedRequestId = request.id;
       if (options.history === 'push') pushRequestParameter(request.id, 'additional_copies');
@@ -2311,11 +2324,11 @@ export function createWorkflowApp() {
         signal: load.signal
       });
       if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration ||
-          staff !== state.staff || state.selectedRequestId !== String(id) ||
+          !sessionIdentity.isCurrent(staff) || state.selectedRequestId !== String(id) ||
           state.selectedRequestType !== 'title_request') return false;
       const configuration = await loadRequestConfiguration(request.libraryOrgId, load.signal);
       if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration ||
-          staff !== state.staff || state.selectedRequestId !== String(id) ||
+          !sessionIdentity.isCurrent(staff) || state.selectedRequestId !== String(id) ||
           state.selectedRequestType !== 'title_request') return false;
       if (options.align || options.fromRecent) {
         const cachedStatus = state.requests.find(item => item.id === request.id)?.status;
@@ -2336,7 +2349,7 @@ export function createWorkflowApp() {
           clearTitleQueueForContextChange();
           const refreshed = await loadQueue({ silent: true, skipDeepLink: true });
           if (refreshed !== true || navigationGeneration !== state.navigationGeneration ||
-              staff !== state.staff || !load.isCurrent()) return false;
+              !sessionIdentity.isCurrent(staff) || !load.isCurrent()) return false;
         } else {
           renderGrid();
         }
@@ -2345,7 +2358,7 @@ export function createWorkflowApp() {
       if (staff.role === 'super_admin' && initialScope !== state.scope) {
         request = await authorizedJson(titleDetailPath(id), { signal: load.signal });
         if (!load.isCurrent() || navigationGeneration !== state.navigationGeneration ||
-            staff !== state.staff || state.selectedRequestId !== String(id) ||
+            !sessionIdentity.isCurrent(staff) || state.selectedRequestId !== String(id) ||
             state.selectedRequestType !== 'title_request') return false;
         if (request.status !== state.status) {
           state.status = request.status;
@@ -2353,7 +2366,7 @@ export function createWorkflowApp() {
           clearTitleQueueForContextChange();
           const refreshed = await loadQueue({ silent: true, skipDeepLink: true });
           if (refreshed !== true || navigationGeneration !== state.navigationGeneration ||
-              staff !== state.staff || !load.isCurrent()) return false;
+              !sessionIdentity.isCurrent(staff) || !load.isCurrent()) return false;
         }
       }
       state.selectedRequestId = request.id;
@@ -2376,7 +2389,7 @@ export function createWorkflowApp() {
       return true;
     } catch (error) {
       const current = load.isCurrent() && navigationGeneration === state.navigationGeneration &&
-          staff === state.staff && state.selectedRequestId === String(id) &&
+          sessionIdentity.isCurrent(staff) && state.selectedRequestId === String(id) &&
           state.selectedRequestType === 'title_request';
       if (current &&
           !(isAbortError(error) && load.signal.aborted) && error.status !== 401) {
@@ -4294,16 +4307,16 @@ export function createWorkflowApp() {
 
   async function refreshUnconfirmedProfile() {
     const mutation = state.profileMutation;
-    if (!mutation?.outcomeUnconfirmed || mutation.pending || state.staff !== mutation.owner) return;
+    if (!mutation?.outcomeUnconfirmed || mutation.pending || !sessionIdentity.isCurrent(mutation.owner)) return;
     if (hasProfileDraft() && !window.confirm('Discard the Profile draft and reload current saved preferences to review the uncertain save?')) return;
     mutation.pending = true;
     updateProfileControls();
     try {
       const session = await loadStaffSession();
-      if (state.profileMutation !== mutation || state.staff !== mutation.owner) return;
+      if (state.profileMutation !== mutation || !sessionIdentity.isCurrent(mutation.owner)) return;
       if (!session.authenticated) { showSignedOut(); return; }
       if (session.accessAllowed === false) { showAccessUnavailable(); return; }
-      state.staff = session.staff;
+      if (!updateStaffPreferences(session.staff, mutation.owner)) return;
       state.profileMutation = null;
       populateProfile(session.staff);
       announce('Current Profile loaded. Review the saved preferences before making another change.', 'warning');
@@ -4342,7 +4355,7 @@ export function createWorkflowApp() {
         throw unconfirmedResponseError();
       }
       const committedMessage = 'Profile saved. Sign in again to review the saved profile.';
-      if (state.staff !== owner) {
+      if (!sessionIdentity.isCurrent(owner)) {
         state.partialSessionFailureMessage = committedMessage;
         if (dom.workspace.hidden) dom.signedOutMessage.textContent = committedMessage;
         return;
@@ -4352,17 +4365,17 @@ export function createWorkflowApp() {
       try {
         session = await loadStaffSession();
       } catch {
-        if (state.staff === owner) showSignedOut(committedMessage);
+        if (sessionIdentity.isCurrent(owner)) showSignedOut(committedMessage);
         return;
       }
-      if (state.staff !== owner) return;
+      if (!sessionIdentity.isCurrent(owner)) return;
       if (!session.authenticated || session.accessAllowed === false) {
         showSignedOut(committedMessage);
         return;
       }
       state.partialSessionFailureMessage = null;
       // The session read supplies the latest rowversion and preferences, including concurrent changes.
-      state.staff = session.staff;
+      if (!updateStaffPreferences(session.staff, owner)) return;
       populateProfile(state.staff);
       dom.claim.value = state.staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
       dom.additionalCopyClaim.value = state.staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
@@ -4370,18 +4383,18 @@ export function createWorkflowApp() {
       if (state.additionalCopyLoaded) renderAdditionalCopyGrid();
       announce('Profile saved.', 'success');
     } catch (error) {
-      if (state.staff !== owner) return;
+      if (!sessionIdentity.isCurrent(owner)) return;
       if (error.status === 409) {
         const conflictMessage = 'Profile could not be saved. Sign in again to review your current profile.';
         let session;
         try {
           session = await loadStaffSession();
         } catch {
-          if (state.staff === owner) showSignedOut(conflictMessage);
+          if (sessionIdentity.isCurrent(owner)) showSignedOut(conflictMessage);
           else if (dom.workspace.hidden) dom.signedOutMessage.textContent = conflictMessage;
           return;
         }
-        if (state.staff !== owner) return;
+        if (!sessionIdentity.isCurrent(owner)) return;
         if (session.accessAllowed === false) {
           showAccessUnavailable();
           return;
@@ -4390,7 +4403,7 @@ export function createWorkflowApp() {
           showSignedOut(conflictMessage);
           return;
         }
-        state.staff = session.staff;
+        if (!updateStaffPreferences(session.staff, owner)) return;
         populateProfile(session.staff);
       }
       const unconfirmed = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
@@ -4528,7 +4541,7 @@ export function createWorkflowApp() {
     let frame;
     let focusedReturnTarget;
     const focusReturnButton = () => {
-      if (state.staff !== staff || !staff || state.activeView !== view || state.scope !== scope ||
+      if (!sessionIdentity.isCurrent(staff) || !staff || state.activeView !== view || state.scope !== scope ||
           (wasAdditionalCopy ? state.additionalCopyStatus : state.status) !== status ||
           dom.dialog.open || state.selectedRequestId !== null) {
         cancelDialogFocusReturn();

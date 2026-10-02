@@ -1408,6 +1408,28 @@ test('bulk access loss from a concurrent read retains the pending ledger until D
   }, { status: 'closed', copyItems: [{ id: '71', type: 'additional_copy', status: 'closed', version: 'copy-v1',
     libraryOrgId: 2, libraryOrgName: 'Library A', title: 'Not attempted copy' }] }));
 
+test('same-actor Profile revision preserves an Operations attempt started before preference refresh', () =>
+  fixture('?stage=operations', async ui => {
+    let completeOperation;
+    ui.setApi(({ pathname, init }) => {
+      if (pathname.endsWith('/workflow/run-now')) return new Promise(done => { completeOperation = done; });
+      if (pathname.endsWith('/profile')) {
+        ui.setStaff({ version: 'actor-v2', weeklyActionSummaryEmail: 'updated@example.org' });
+        return response(200, { staff: ui.readStaff() });
+      }
+    });
+    ui.get('#run-workflow-now').click(); await until(() => completeOperation, 'operation pending');
+    ui.get('[data-view="profile"]').click(); await settle();
+    ui.edit('#weekly-email', 'updated@example.org'); submitProfile(ui);
+    await until(() => /Profile saved\./.test(ui.get('#app-status').textContent), 'preferences refreshed');
+    completeOperation(response(202, { code: 'queued' })); await settle();
+    assert.equal(ui.params().get('stage'), 'profile');
+    assert.equal(ui.get('#weekly-email').value, 'updated@example.org');
+    ui.get('[data-view="operations"]').click(); await settle();
+    assert.equal(ui.get('#run-workflow-now').disabled, false);
+    assert.equal(ui.dom.window.sessionStorage.getItem('asap.staff.operation..20'), null);
+  }, { staff: profileStaff }));
+
 // #353 pins current behavior before extraction. The two explicitly labelled
 // limitations below are improved by the owning draft/controller phases.
 test('characterization: declined editor Revert preserves both editor and inline draft', () =>
