@@ -1408,12 +1408,96 @@ test('bulk access loss from a concurrent read retains the pending ledger until D
   }, { status: 'closed', copyItems: [{ id: '71', type: 'additional_copy', status: 'closed', version: 'copy-v1',
     libraryOrgId: 2, libraryOrgName: 'Library A', title: 'Not attempted copy' }] }));
 
+// #353 pins current behavior before extraction. The two explicitly labelled
+// limitations below are improved by the owning draft/controller phases.
+test('characterization: declined editor Revert preserves both editor and inline draft', () =>
+  fixture(`?request=${id}`, async ui => {
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    ui.edit('.edit-form input', 'Editor draft');
+    actionButton('Revert changes', ui.get('.edit-form')).click();
+    assert.equal(ui.get('.edit-form input').value, 'Editor draft');
+    assert.equal(assignment.querySelector('select').value, '21');
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(protectedUnload(ui), true);
+  }));
+
+test('characterization: current accepted editor Revert replaces competing inline UI', () =>
+  fixture(`?request=${id}`, async ui => {
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    ui.edit('.edit-form input', 'Editor draft');
+    ui.allowDiscard(); actionButton('Revert changes', ui.get('.edit-form')).click();
+    assert.equal(assignment.isConnected, false);
+    assert.equal(ui.get('.edit-form input').value, 'Saved title');
+    assert.equal(protectedUnload(ui), false);
+    submitForm(ui, assignment); await settle();
+    assert.equal(requestMutations(ui).length, 0);
+  }));
+
+test('characterization: current Additional Copy reminder has transient cancel lifetime', () =>
+  fixture(`?stage=pending_hold&request=${id}`, async ui => {
+    const opener = actionButton('Additional copy'); opener.click();
+    await until(() => ui.get('#additional-copy-create-dialog').open, 'copy preview');
+    ui.get('#additional-copy-reminder').checked = true;
+    ui.get('#additional-copy-reminder').dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+    assert.equal(protectedUnload(ui), false, 'current reminder is not registered as a dirty draft');
+    ui.get('#cancel-additional-copy').click();
+    assert.equal(ui.get('#additional-copy-create-dialog').open, false);
+    assert.equal(ui.get('#additional-copy-reminder').checked, false);
+    assert.equal(document.activeElement, opener);
+    assert.equal(requestMutations(ui).length, 0);
+  }, { status: 'pending_hold' }));
+
+test('characterization: definitive inline failure preserves values and competing registration', () =>
+  fixture(`?request=${id}`, async ui => {
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    ui.setOperation(() => response(400, { message: 'Assignment rejected' }));
+    submitForm(ui, assignment);
+    await until(() => /Assignment rejected/.test(ui.get('#app-status').textContent), 'definite failure');
+    assert.equal(assignment.querySelector('select').value, '21');
+    assert.equal(assignment.querySelector('select').disabled, false);
+    assert.equal(protectedUnload(ui), true);
+    actionButton('Claim').click(); await settle();
+    assert.equal(requestMutations(ui).length, 1);
+    assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+  }));
+
+test('characterization: clean open assignment is disposed on departure and cannot submit', () =>
+  fixture(`?request=${id}`, async ui => {
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.get('[data-view="profile"]').click(); await settle();
+    assert.equal(ui.confirms.length, 0);
+    assert.equal(assignment.isConnected, false);
+    submitForm(ui, assignment); await settle();
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(ui.get('#profile-view').hidden, false);
+  }));
+
+for (const view of ['additional-copies', 'settings']) {
+  test(`characterization: Recent Requests from ${view} converges on title route`, () =>
+    fixture('?stage=suggestion&scope=2', async ui => {
+      await ui.open(); ui.get('#close-request').click(); await settle();
+      ui.get(`[data-view="${view}"]`).click(); await settle();
+      ui.get('#recent-request-list button').click();
+      await until(() => ui.get('#request-dialog').open, 'recent detail');
+      assert.equal(ui.params().get('request'), id);
+      assert.equal(ui.params().get('stage'), 'suggestion');
+      assert.equal(ui.get('#queue-view').hidden, false);
+      assert.equal(ui.get('#additional-copy-view').hidden, true);
+      assert.equal(ui.get('#settings-view').hidden, true);
+    }, { staff: { ...actorA, authenticationEmail: 'staff@example.org' } }));
+}
+
 (async () => {
   let failed = 0;
-  for (const item of cases) {
+  const selected = cases.filter(item => !process.argv[2] || item.name.includes(process.argv[2]));
+  assert.ok(selected.length, 'the requested journey filter must discover tests');
+  for (const item of selected) {
     try { await item.body(); console.log(`PASS ${item.name}`); }
     catch (error) { failed += 1; console.error(`FAIL ${item.name}: ${error.message}`); }
   }
-  assert.equal(failed, 0, `${failed}/${cases.length} navigation/draft journeys failed`);
-  console.log(`${cases.length} staff navigation/draft journeys passed.`);
+  assert.equal(failed, 0, `${failed}/${selected.length} navigation/draft journeys failed`);
+  console.log(`${selected.length} staff navigation/draft journeys passed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
