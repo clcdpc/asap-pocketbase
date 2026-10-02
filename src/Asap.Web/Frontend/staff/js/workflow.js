@@ -1,3 +1,4 @@
+import { createSuggestionController } from './suggestion-controller.js';
 import { renderCustomFieldEditor } from './custom-fields.js';
 import { unconfirmedResponseError, notificationOutcome, isCommittedRequestResponse } from './mutation-outcome.js';
 import {
@@ -89,8 +90,6 @@ export function createWorkflowApp() {
 
   const state = {
     staff: null,
-    staffSuggestion: null,
-    staffSuggestionReturnFocus: null,
     partialSessionFailureMessage: null,
     settingsCommitPendingRefresh: null,
     partialSessionFailureOwner: null,
@@ -104,7 +103,7 @@ export function createWorkflowApp() {
     present: presentView, onInvalidate: invalidateFeatureReads,
     closeTransient: () => {
       if (detailHost.isOpen()) detailHost.requestClose({ navigation: true, guarded: true });
-      if (dom.staffSuggestionDialog.open) closeStaffSuggestion({ guarded: true, focusButton: false });
+      if (suggestionController.isOpen()) suggestionController.close({ guarded: true, navigation: true, focusButton: false });
     },
     onContextChanged: (next, previous) => {
       titleQueue.contextChanged(next, previous);
@@ -122,12 +121,8 @@ export function createWorkflowApp() {
         discardDeparture: () => { if (settingsController.isDirty()) settingsController.discardDraft(); } },
       { key: 'request', inspectDeparture: () => titleDetail.inspectDeparture() },
       { key: 'copy', inspectDeparture: () => copyDetail.inspectDeparture() },
-      { key: 'suggestion', inspectDeparture: () => ({ dirty: hasSuggestionDraft(),
-          stamp: JSON.stringify([...dom.staffSuggestionForm.querySelectorAll('input, select, textarea')].map(node => [node.value, node.checked])),
-          blocked: Boolean(state.staffSuggestion?.submitting || state.staffSuggestion?.outcomeUnconfirmed),
-          message: 'Creation is in progress or unconfirmed. Review its authoritative result before leaving.',
-          confirmMessage: 'Discard the unsaved new suggestion and navigate away?' }),
-        reportBlocked: message => setStaffSuggestionStatus(message, 'error') }
+      { key: 'suggestion', inspectDeparture: () => suggestionController.inspectDeparture(),
+        reportBlocked: message => suggestionController.reportBlocked(message) }
     ],
     views: {
       queue: {
@@ -135,8 +130,8 @@ export function createWorkflowApp() {
         refresh: options => titleQueue.refresh(options), render: () => titleQueue.render(),
         refreshOnEntry: options => titleQueue.refreshOnEntry(options),
         setLibraries: libraries => populateScopes(libraries),
-        openDetail: id => titleDetail.open(id, null, { align: true }),
-        closeOverlay: () => detailHost.isOpen() ? detailHost.requestClose() : dom.staffSuggestionDialog.open ? closeStaffSuggestion() : null
+        openDetail: (id, opener, options = { align: true }) => titleDetail.open(id, opener, options),
+        closeOverlay: () => detailHost.isOpen() ? detailHost.requestClose() : suggestionController.isOpen() ? suggestionController.close() : null
       },
       'additional-copies': {
         activate: options => copyQueue.activate(options), deactivate: () => copyQueue.deactivate(),
@@ -144,7 +139,7 @@ export function createWorkflowApp() {
         refreshOnEntry: options => copyQueue.refreshOnEntry(options),
         setLibraries: libraries => populateScopes(libraries),
         openDetail: id => copyDetail.open(id, null, { fromDeepLink: true }),
-        closeOverlay: () => detailHost.isOpen() ? detailHost.requestClose() : dom.staffSuggestionDialog.open ? closeStaffSuggestion() : null
+        closeOverlay: () => detailHost.isOpen() ? detailHost.requestClose() : suggestionController.isOpen() ? suggestionController.close() : null
       },
       settings: {
         activate: () => { void settingsController.activate(requestedSettingsPanelFromUrl() || undefined); },
@@ -267,11 +262,6 @@ export function createWorkflowApp() {
   function pushSettingsScopeParameter(scope) { router.pushSettingsScope(scope); rememberRoute(); }
   function pushSettingsRouteParameter(scope, panel) { router.pushSettingsRoute(scope, panel); rememberRoute(); }
 
-  function hasSuggestionDraft() {
-    return dom.staffSuggestionDialog.open && Boolean(state.staffSuggestion?.dirty ||
-      state.staffSuggestion?.controls?.queryInput?.value.trim());
-  }
-
   function announce(message, kind = '') {
     dom.status.textContent = message || '';
     dom.status.className = `status-message${kind ? ` ${kind}` : ''}`;
@@ -327,6 +317,21 @@ export function createWorkflowApp() {
     onReceipt: recordFeatureReceipt, clearReceipt: clearCommittedSessionFallback
   });
 
+
+  const suggestionController = createSuggestionController({ root: document.querySelector('#staff-suggestion-dialog'),
+    trigger: dom.newSuggestion, sessionIdentity, polarisLookup, announce,
+    getLibraries: () => titleQueue.libraries(),
+    beforeOpen: () => {
+      if (detailHost.isOpen()) {
+        if (!detailHost.requestClose({ navigation: true })) return false;
+        replaceStageParameter(navigation.context().status);
+      }
+      return true;
+    },
+    beforeClose: () => navigation.allow({ settings: false, request: false }),
+    openCreatedTitle: intent => navigation.openCreatedTitle(intent), openExistingTitle: intent => navigation.openExistingTitle(intent),
+    onReceipt: recordFeatureReceipt, clearReceipt: clearCommittedSessionFallback
+  });
 
   const operationsController = createOperationsController({ root: dom.operationsView, sessionIdentity, announce,
     onScopeChange: () => { void refreshEmailReadiness(); },
@@ -457,43 +462,8 @@ export function createWorkflowApp() {
     copyQueue.invalidate();
     latestLoads.begin('settings-route').abort();
     latestLoads.begin('operational-scope').abort();
+    suggestionController.invalidate();
     operationsController.deactivate();
-  }
-
-  function cancelStaffSuggestionLookup() {
-    latestLoads.begin('staff-suggestion-lookup').abort();
-  }
-
-  function cancelStaffSuggestionConfiguration() {
-    latestLoads.begin('staff-suggestion-configuration').abort();
-  }
-
-  function cancelStaffSuggestionMutation() {
-    latestLoads.begin('staff-suggestion-mutation').abort();
-  }
-
-  function closeStaffSuggestion(options = {}) {
-    if (state.staffSuggestion?.submitting && !options.force) {
-      setStaffSuggestionStatus('Creation is in progress. Please wait for the authoritative result.', 'error');
-      return false;
-    }
-    if (!options.force && !options.guarded && !navigation.allow({ settings: false, request: false })) return false;
-    cancelStaffSuggestionLookup();
-    cancelStaffSuggestionConfiguration();
-    cancelStaffSuggestionMutation();
-    polarisLookup.close();
-    if (dom.staffSuggestionDialog.open) dom.staffSuggestionDialog.close();
-    dom.staffSuggestionForm.inert = false;
-    const returnFocus = state.staffSuggestionReturnFocus;
-    state.staffSuggestion = null;
-    state.staffSuggestionReturnFocus = null;
-    if (returnFocus?.isConnected) returnFocus.focus();
-    else if (dom.newSuggestion?.isConnected && options.focusButton !== false) dom.newSuggestion.focus();
-    return true;
-  }
-
-  function isUnconfirmedMutationError(error, signal) {
-    return !signal.aborted && (isAbortError(error) || error?.status === 0);
   }
 
   function updateBulkDeleteButtons() {
@@ -791,7 +761,7 @@ export function createWorkflowApp() {
     latestLoads.begin('email-readiness').abort();
     dom.emailReadinessWarning.hidden = true;
     detailHost.cancelFocusReturn();
-    closeStaffSuggestion({ focusButton: false, force: true });
+    suggestionController.signedOut();
     titleDetail.signedOut();
     detailHost.reset();
     copyCreation.signedOut(); copyDetail.signedOut();
@@ -800,8 +770,6 @@ export function createWorkflowApp() {
     operationsController.signedOut();
     titleQueue.signedOut(); copyQueue.signedOut();
     profileController.signedOut();
-    state.staffSuggestion = null;
-    state.staffSuggestionReturnFocus = null;
     titleQueue.invalidate();
     copyQueue.invalidate();
     operationsController.deactivate();
@@ -908,538 +876,9 @@ export function createWorkflowApp() {
     titleQueue.setLibraries(organizations); copyQueue.setLibraries(organizations);
   }
 
-  function staffSuggestionScopeOptions() {
-    if (state.staff?.role !== 'super_admin') {
-      return [{
-        value: String(state.staff?.organizationId || ''),
-        text: state.staff?.organizationName || 'My library'
-      }];
-    }
-    return titleQueue.libraries().map(library => ({ value: library.id, text: library.name }));
-  }
-
-  function setStaffSuggestionStatus(message, kind = '') {
-    dom.staffSuggestionStatus.textContent = message || '';
-    dom.staffSuggestionStatus.className = `dialog-status${kind ? ` ${kind}` : ''}`;
-  }
-
-  function renderStaffSuggestionSearch({ query = '', message = '', kind = '', scopeId = null } = {}) {
-    const current = state.staffSuggestion || {};
-    const options = staffSuggestionScopeOptions();
-    const scope = element('select', {
-      required: 'required',
-      'aria-label': 'Servicing library',
-      disabled: state.staff?.role !== 'super_admin'
-    });
-    if (state.staff?.role === 'super_admin') {
-      scope.append(element('option', { value: '', text: 'Choose a servicing library' }));
-    }
-    for (const option of options) {
-      scope.append(element('option', { value: option.value, text: option.text }));
-    }
-    const selectedScope = scopeId || current.scopeId ||
-      (state.staff?.role === 'super_admin' ? '' : String(state.staff?.organizationId || ''));
-    if (selectedScope && options.some(option => String(option.value) === String(selectedScope))) {
-      scope.value = String(selectedScope);
-    }
-    const queryInput = element('input', {
-      type: 'search',
-      autocomplete: 'off',
-      spellcheck: 'false',
-      maxlength: '200',
-      value: query,
-      placeholder: 'Barcode or patron name',
-      'aria-label': 'Patron barcode or name'
-    });
-    const help = element('small', {
-      text: state.staff?.role === 'super_admin'
-        ? 'Select the library that will own this request. Queue scope is not used as a default.'
-        : 'Search by barcode or name. Name matches are refreshed against current Polaris data before selection.'
-    });
-    const fields = element('div', { className: 'staff-suggestion-search-fields' }, [
-      labeledInput('Servicing library', scope),
-      labeledInput('Patron barcode or name', queryInput),
-      help
-    ]);
-    dom.staffSuggestionBody.replaceChildren(fields);
-    dom.staffSuggestionActions.replaceChildren(
-      element('button', { type: 'button', className: 'secondary-button', onclick: () => closeStaffSuggestion() }, 'Cancel'),
-      element('button', { type: 'submit', className: 'primary-button' }, [icon('search'), 'Look up patron'])
-    );
-    state.staffSuggestion = {
-      ...current,
-      stage: 'lookup',
-      scopeId: scope.value || selectedScope || null,
-      submitting: false,
-      controls: { scope, queryInput }
-    };
-    scope.addEventListener('change', () => {
-      cancelStaffSuggestionLookup();
-      cancelStaffSuggestionConfiguration();
-      state.staffSuggestion = {
-        ...state.staffSuggestion,
-        stage: 'lookup',
-        scopeId: scope.value || null,
-        verifiedBibId: null
-      };
-      setStaffSuggestionStatus(scope.value ? 'Library selected. Look up the patron to continue.' : 'Choose a servicing library.', '');
-    });
-    queryInput.addEventListener('input', () => {
-      cancelStaffSuggestionLookup();
-      cancelStaffSuggestionConfiguration();
-    });
-    setStaffSuggestionStatus(message, kind);
-  }
-
-  function renderStaffSuggestionMatches(result, query, scopeId) {
-    renderStaffSuggestionSearch({
-      query,
-      scopeId,
-      message: 'More than one patron matched. Choose a candidate to refresh authoritative details.',
-      kind: ''
-    });
-    const list = element('div', { className: 'staff-suggestion-matches' });
-    list.append(element('h3', { text: 'Choose a patron' }));
-    const candidates = element('div', { className: 'staff-suggestion-candidate-list' });
-    for (const match of result.matches || []) {
-      candidates.append(element('button', {
-        type: 'button',
-        className: 'staff-suggestion-candidate',
-        onclick: () => lookupStaffPatron(null, match.barcode)
-      }, [
-        element('strong', { text: match.name || 'Patron' }),
-        element('span', { text: `${match.barcode} · Home library ${match.homeLibraryOrganizationName || match.homeLibraryOrganizationId}` })
-      ]));
-    }
-    list.append(candidates);
-    dom.staffSuggestionBody.append(list);
-  }
-
-  async function lookupStaffPatron(queryOverride = null, barcodeOverride = null) {
-    if (!state.staff || !state.staffSuggestion) return;
-    const current = state.staffSuggestion;
-    const controls = current.controls;
-    const scopeValue = controls?.scope?.value || current.scopeId;
-    const scopeId = Number(scopeValue);
-    const query = queryOverride === null
-      ? controls?.queryInput?.value.trim() || ''
-      : String(queryOverride).trim();
-    const barcode = barcodeOverride === null ? null : String(barcodeOverride).trim();
-    if (!Number.isInteger(scopeId) || scopeId <= 1) {
-      setStaffSuggestionStatus('Choose a participating servicing library first.', 'error');
-      controls?.scope?.focus();
-      return;
-    }
-    if (!barcode && !query) {
-      setStaffSuggestionStatus('Enter a patron barcode or name.', 'error');
-      controls?.queryInput?.focus();
-      return;
-    }
-
-    const load = latestLoads.begin('staff-suggestion-lookup');
-    state.staffSuggestion = { ...current, scopeId: String(scopeId), stage: 'lookup', submitting: false };
-    setStaffSuggestionStatus(barcode ? 'Refreshing the selected patron...' : 'Looking up the patron...');
-    const submit = dom.staffSuggestionActions.querySelector('button[type="submit"]');
-    if (submit) submit.disabled = true;
-    let configurationLoad = null;
-    try {
-      const result = await authorizedJson('/api/asap/staff/patron-lookup', {
-        method: 'POST',
-        body: { query: barcode ? null : query, barcode, libraryOrgId: scopeId },
-        signal: load.signal
-      });
-      if (!load.isCurrent() || state.staffSuggestion?.scopeId !== String(scopeId)) return;
-      if (result.status === 'multiple_matches') {
-        renderStaffSuggestionMatches(result, query, String(scopeId));
-        return;
-      }
-      if (result.status === 'ineligible') {
-        renderStaffSuggestionSearch({
-          query,
-          scopeId: String(scopeId),
-          message: result.message || 'The matching patron is not eligible for this servicing library.',
-          kind: 'error'
-        });
-        return;
-      }
-      if (result.status !== 'verified' || !result.patron) {
-        renderStaffSuggestionSearch({
-          query,
-          scopeId: String(scopeId),
-          message: result.message || 'No patron matched that search.',
-          kind: 'error'
-        });
-        return;
-      }
-      configurationLoad = latestLoads.begin('staff-suggestion-configuration');
-      const configured = await authorizedJson(
-        `/api/asap/staff/suggestion-configuration?libraryOrgId=${encodeURIComponent(scopeId)}`,
-        { signal: configurationLoad.signal });
-      if (!load.isCurrent() || !configurationLoad.isCurrent() ||
-          state.staffSuggestion?.scopeId !== String(scopeId)) return;
-      if (configured.libraryOrgId !== scopeId) return;
-      renderStaffSuggestionForm(result, configured.configuration);
-    } catch (error) {
-      if (!load.isCurrent() || isAbortError(error) || error.status === 401) return;
-      const message = error.response?.message || error.message || 'Patron lookup could not be completed.';
-      renderStaffSuggestionSearch({ query, scopeId: String(scopeId), message, kind: 'error' });
-    } finally {
-      if (configurationLoad) {
-        latestLoads.finish('staff-suggestion-configuration', configurationLoad.token);
-      }
-      latestLoads.finish('staff-suggestion-lookup', load.token);
-    }
-  }
-
-  function collectStaffCustomFields(controls) {
-    const result = {};
-    for (const [key, value] of controls || []) {
-      if (value.mode === 'hidden') continue;
-      const normalized = value.input.value.trim();
-      if (normalized) result[key] = normalized;
-    }
-    return result;
-  }
-
-  function renderStaffSuggestionForm(result, configuration) {
-    const context = result.patron;
-    const patron = context.patron;
-    const fakeRequest = { customFields: {} };
-    const availableFormats = Array.isArray(configuration.availableFormats)
-      ? configuration.availableFormats : [];
-    const format = selectWithHistorical(availableFormats, availableFormats[0] || null, configuration.formatLabels || {});
-    format.setAttribute('aria-label', 'Material format');
-    format.required = true;
-    const title = element('input', { maxlength: '500', autocomplete: 'off' });
-    const author = element('input', { maxlength: '500', autocomplete: 'off' });
-    const identifier = element('input', { maxlength: '100', autocomplete: 'off' });
-    const publication = selectWithHistorical(configuration.publicationOptions, null);
-    publication.options[0].textContent = 'Not specified';
-    publication.value = '';
-    const exactDate = element('input', { type: 'date' });
-    const notes = element('textarea', { maxlength: '10000' });
-    const autohold = element('input', { type: 'checkbox', checked: true });
-    const emailConfirmation = element('input', { type: 'checkbox' });
-    const pickup = element('select', { required: 'required', 'aria-label': 'Preferred pickup location' });
-    const branches = Array.isArray(context.pickupBranches) ? context.pickupBranches : [];
-    for (const branch of branches) pickup.append(element('option', { value: branch.id, text: branch.label }));
-    if (context.currentPreferredPickupBranchId &&
-        branches.some(branch => branch.id === context.currentPreferredPickupBranchId)) {
-      pickup.value = String(context.currentPreferredPickupBranchId);
-    } else {
-      pickup.value = '';
-      pickup.prepend(element('option', { value: '', text: 'Choose a pickup location' }));
-    }
-    const customFields = element('div', { className: 'custom-fields wide' });
-    const formatNotice = element('div', { className: 'staff-format-notice field-help wide', hidden: true });
-    const titleField = labeledInput('Title', title);
-    const authorField = labeledInput('Author', author);
-    const identifierField = labeledInput('Identifier / ISBN', identifier);
-    const publicationField = labeledInput('Publication timing', publication);
-    const exactDateField = labeledInput('Exact publication date', exactDate);
-    const pickupField = labeledInput('Preferred pickup location', pickup);
-    const pickupHelp = element('small', {
-      className: 'field-help',
-      text: "Changing this updates the patron's preferred pickup location in Polaris."
-    });
-    pickupField.append(pickupHelp);
-
-    const bib = element('input', { type: 'hidden' });
-    const catalogStatus = element('p', { className: 'field-help', role: 'status', 'aria-live': 'polite' });
-    const catalogButton = element('button', {
-      type: 'button',
-      className: 'secondary-button',
-      onclick: () => polarisLookup.open({
-        requestId: null,
-        libraryOrgId: Number(state.staffSuggestion?.scopeId),
-        mode: 'title',
-        query: title.value,
-        title: title.value,
-        author: author.value,
-        canApply: true,
-        isCurrent: () => dom.staffSuggestionDialog.open &&
-          state.staffSuggestion?.stage === 'create',
-        apply: selected => {
-          applyPolarisResultToControls(selected, { bib, title, author, identifier });
-          state.staffSuggestion.verifiedBibId = selected.bibId;
-          state.staffSuggestion.dirty = true;
-          catalogStatus.textContent = `Verified Polaris BIB ${selected.bibId} selected.`;
-        },
-        editorFocus: title
-      })
-    }, [icon('search'), 'Search Polaris catalog']);
-    const catalogPanel = element('section', {
-      className: 'staff-suggestion-catalog wide',
-      'aria-label': 'Polaris catalog lookup'
-    }, [
-      element('p', { text: 'Use the integrated Polaris search to verify a catalog record and fill the suggestion fields. Manual text is not treated as a verified BIB.' }),
-      catalogButton,
-      catalogStatus
-    ]);
-
-    const controls = {
-      format, title, author, identifier, publication, exactDate, notes,
-      autohold, emailConfirmation, pickup, bib,
-      customFieldControls: new Map(),
-      titleField, authorField, identifierField, publicationField, exactDateField,
-      catalogStatus
-    };
-    const applyFieldRule = (field, input, key, fallbackLabel, forceRequired = false) => {
-      const rule = configuration.formatRules?.[format.value]?.fields?.[key] || {};
-      const hidden = !forceRequired && rule.mode === 'hidden';
-      field.hidden = hidden;
-      input.disabled = hidden;
-      input.required = forceRequired || rule.mode === 'required';
-      input.setAttribute('aria-required', String(input.required));
-      const label = rule.label || fallbackLabel;
-      field.firstElementChild.textContent = `${label}${input.required ? ' *' : ''}`;
-    };
-    let submitButton;
-    const updateFormat = () => {
-      applyFieldRule(titleField, title, 'title', 'Title', true);
-      applyFieldRule(authorField, author, 'author', 'Author');
-      applyFieldRule(identifierField, identifier, 'identifier', 'Identifier / ISBN');
-      applyFieldRule(publicationField, publication, 'publication', 'Publication timing');
-      exactDateField.hidden = publicationField.hidden;
-      exactDate.disabled = publicationField.hidden;
-      controls.customFieldControls = renderCustomFieldEditor(customFields, fakeRequest, configuration, format.value);
-      const formatRule = configuration.formatRules?.[format.value];
-      const behavior = formatRule?.messageBehavior;
-      const message = behavior === 'ebookMessage'
-        ? configuration.ebookMessage
-        : behavior === 'eaudiobookMessage' ? configuration.eaudiobookMessage : formatRule?.message;
-      formatNotice.replaceChildren();
-      if (message) formatNotice.append(sanitizedHtmlFragment(message));
-      formatNotice.hidden = !message;
-      if (submitButton) submitButton.disabled = branches.length === 0;
-    };
-    format.addEventListener('change', updateFormat);
-
-    const patronCard = element('section', { className: 'staff-patron-card', 'aria-labelledby': 'staff-patron-card-title' }, [
-      element('h3', { id: 'staff-patron-card-title', text: patron.name || 'Verified patron' }),
-      element('p', { text: `${patron.barcode} · Home library: ${patron.homeLibraryOrganizationName}` }),
-      element('p', { text: context.email || 'No patron email is recorded.' })
-    ]);
-    const scopeNote = result.searchLibraryLimited
-      ? element('p', { className: 'field-help wide', text: `Patron is being serviced by ${result.libraryOrgName}.` })
-      : null;
-    const fields = element('div', { className: 'edit-form staff-suggestion-fields' }, [
-      patronCard,
-      scopeNote,
-      labeledInput('Material format', format),
-      formatNotice,
-      catalogPanel,
-      titleField,
-      authorField,
-      identifierField,
-      publicationField,
-      exactDateField,
-      pickupField,
-      customFields,
-      element('label', { className: 'check-field' }, [autohold, element('span', { text: 'Automatically place hold' })]),
-      element('label', { className: 'check-field' }, [emailConfirmation, element('span', { text: 'Email patron confirmation (optional)' })]),
-      labeledInput('Staff notes', notes, 'wide'),
-      bib
-    ]);
-    dom.staffSuggestionBody.replaceChildren(fields);
-    const changeButton = element('button', {
-      type: 'button',
-      className: 'secondary-button',
-      onclick: () => {
-        if (navigation.allow({ settings: false, request: false })) {
-          renderStaffSuggestionSearch({ query: patron.barcode, scopeId: String(result.libraryOrgId) });
-        }
-      }
-    }, 'Change patron');
-    submitButton = element('button', { type: 'submit', className: 'primary-button' }, [icon('send'), 'Create suggestion']);
-    dom.staffSuggestionActions.replaceChildren(changeButton, submitButton);
-    controls.changeButton = changeButton;
-    state.staffSuggestion = {
-      ...state.staffSuggestion,
-      stage: 'create',
-      result,
-      configuration,
-      controls,
-      verifiedBibId: null,
-      submitting: false
-    };
-    updateFormat();
-    setStaffSuggestionStatus(
-      branches.length ? 'Patron verified. Complete the configured fields, then create the suggestion.'
-        : 'Pickup locations are unavailable; the suggestion cannot be created.',
-      branches.length ? '' : 'error');
-    if (availableFormats.length === 0) {
-      setStaffSuggestionStatus('No enabled material formats are available for this library.', 'error');
-      submitButton.disabled = true;
-    }
-    title.focus();
-  }
-
-  async function createStaffSuggestion() {
-    const current = state.staffSuggestion;
-    if (!current || current.stage !== 'create' || current.submitting || current.outcomeUnconfirmed) return;
-    if (!dom.staffSuggestionForm.reportValidity()) return;
-    current.submitting = true;
-    dom.staffSuggestionForm.inert = true;
-    const controls = current.controls;
-    const result = current.result;
-    const mutation = latestLoads.begin('staff-suggestion-mutation');
-    const submit = dom.staffSuggestionActions.querySelector('button[type="submit"]');
-    if (submit) submit.disabled = true;
-    if (controls.changeButton) controls.changeButton.disabled = true;
-    setStaffSuggestionStatus('Creating the suggestion...');
-    try {
-      const created = await authorizedJson('/api/asap/staff/suggestions', {
-        method: 'POST',
-        body: {
-          libraryOrgId: Number(current.scopeId),
-          barcode: result.patron.patron.barcode,
-          format: controls.format.value || null,
-          title: controls.title.disabled ? '' : controls.title.value,
-          author: controls.author.disabled ? '' : controls.author.value,
-          identifier: controls.identifier.disabled ? '' : controls.identifier.value,
-          publication: controls.publication.disabled ? null : controls.publication.value || null,
-          exactPublicationDate: controls.exactDate.disabled ? null : controls.exactDate.value || null,
-          notes: controls.notes.value,
-          preferredPickupBranchId: Number(controls.pickup.value) || null,
-          currentPreferredPickupBranchIdAtLoad: result.patron.currentPreferredPickupBranchId,
-          currentPreferredPickupBranchObservedAtLoad: true,
-          autohold: controls.autohold.checked,
-          emailPatronConfirmation: controls.emailConfirmation.checked,
-          customFields: collectStaffCustomFields(controls.customFieldControls),
-          verifiedBibId: current.verifiedBibId || null
-        },
-        signal: mutation.signal
-      });
-      if (!mutation.isCurrent() || state.staffSuggestion !== current) return;
-      if (typeof created?.id !== 'string' || !/^[1-9]\d*$/.test(created.id)) {
-        throw unconfirmedResponseError();
-      }
-      const id = created.id;
-      const targetLibraryId = String(created.libraryOrgId || current.scopeId);
-      const notification = created.notificationStatus === 'queued'
-        ? 'Confirmation email queued.'
-        : created.notificationStatus === 'suppressed'
-          ? 'No confirmation email was sent because delivery is suppressed.'
-          : 'No confirmation email was requested.';
-      const committedMessage = `Suggestion ${id} created on behalf of the patron. ${notification}`;
-      state.partialSessionFailureMessage = `${committedMessage} Sign in again to review the committed request.`;
-      state.partialSessionFailureOwner = mutation.token;
-      state.partialSessionFailureDetailAvailable = false;
-      state.partialSessionFailureAfterQueueSequence = null;
-      current.submitting = false;
-      closeStaffSuggestion({ focusButton: false, force: true });
-      if (state.staff?.role === 'super_admin') {
-        navigation.align({ scope: targetLibraryId });
-      }
-      let queueRefreshed = false;
-      try {
-        queueRefreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true }) === true;
-      } catch {
-        // Queue refresh is follow-up presentation work. The create response is already
-        // authoritative and must remain a visible success even if the refresh races.
-      }
-      let detailLoaded = false;
-      if (state.staff) {
-        try {
-          detailLoaded = await titleDetail.open(id, dom.newSuggestion, { align: true, history: 'push' }) === true;
-        } catch {
-          // The authoritative create response remains the success path if the detail refresh races.
-        }
-      }
-      if (queueRefreshed && detailLoaded) clearCommittedSessionFallback(mutation.token);
-      if (state.staff) announce(committedMessage +
-        (queueRefreshed && detailLoaded ? '' : ' Current details could not be refreshed.'),
-      queueRefreshed && detailLoaded ? 'success' : 'warning');
-    } catch (error) {
-      if (!mutation.isCurrent() || error.status === 401) return;
-      if (!error.status || error.status === 408 || error.status >= 500 || isAbortError(error)) {
-        current.outcomeUnconfirmed = true;
-        setStaffSuggestionStatus('Suggestion creation is unconfirmed. Reload and review the servicing library queue before attempting another submission.', 'error');
-        return;
-      }
-      dom.staffSuggestionBody.querySelector('.staff-suggestion-conflict')?.remove();
-      const duplicateId = error.response?.duplicate?.id;
-      const partialPickupChange = error.response?.code === 'request_not_created_pickup_changed' &&
-        error.response?.pickupPreferenceChanged === true;
-      if (error.status === 409 && typeof duplicateId === 'string' && /^\d+$/.test(duplicateId)) {
-        const matchDescription = {
-          bibid: 'catalog BIB',
-          identifier: 'identifier',
-          title_format: 'title and format'
-        }[error.response?.duplicate?.matchType] || 'request details';
-        dom.staffSuggestionBody.append(element('div', { className: 'staff-suggestion-conflict' }, [
-          element('strong', { text: partialPickupChange ? 'Pickup changed; existing suggestion found' : 'Existing suggestion found' }),
-          element('span', { text: `Request ${duplicateId} already matches this patron by ${matchDescription}.` }),
-          element('button', {
-            type: 'button',
-            className: 'secondary-button',
-            onclick: async () => {
-              if (!closeStaffSuggestion({ focusButton: false })) return;
-              await titleDetail.open(duplicateId, dom.newSuggestion, { align: true, history: 'push' });
-            }
-          }, 'Open existing request')
-        ]));
-        setStaffSuggestionStatus(error.response?.message || error.message || 'This patron already has this suggestion.', 'error');
-      } else {
-        setStaffSuggestionStatus(error.response?.message || error.message || 'The suggestion could not be created.', 'error');
-      }
-    } finally {
-      if (mutation.isCurrent() && state.staffSuggestion === current) {
-        current.submitting = false;
-        dom.staffSuggestionForm.inert = current.outcomeUnconfirmed === true;
-        if (submit && submit.isConnected) submit.disabled = current.outcomeUnconfirmed === true;
-        if (controls.changeButton?.isConnected) controls.changeButton.disabled = current.outcomeUnconfirmed === true;
-      }
-      latestLoads.finish('staff-suggestion-mutation', mutation.token);
-    }
-  }
-
-  async function submitStaffSuggestion(event) {
-    event.preventDefault();
-    if (state.staffSuggestion?.stage === 'create') {
-      await createStaffSuggestion();
-    } else {
-      await lookupStaffPatron();
-    }
-  }
-
-  function openStaffSuggestion(returnFocus = null) {
-    if (!state.staff) return;
-    if (detailHost.isOpen()) {
-      if (!detailHost.requestClose({ navigation: true })) return;
-      replaceStageParameter(navigation.context().status);
-    }
-    if (!closeStaffSuggestion({ focusButton: false })) return;
-    state.staffSuggestionReturnFocus = returnFocus || document.activeElement;
-    state.staffSuggestion = {
-      scopeId: state.staff.role === 'super_admin' ? null : String(state.staff.organizationId),
-      stage: 'lookup'
-    };
-    renderStaffSuggestionSearch();
-    if (!dom.staffSuggestionDialog.open) dom.staffSuggestionDialog.showModal();
-    window.requestAnimationFrame(() => {
-      if (!dom.staffSuggestionDialog.open) return;
-      const control = state.staffSuggestion?.controls;
-      (state.staff.role === 'super_admin' && !control?.scope?.value ? control?.scope : control?.queryInput)?.focus();
-    });
-    announce('Look up a patron to start a new suggestion.');
-  }
-
   function bindEvents() {
     onSessionInvalid(error => {
       retainInterruptedBulkLedger();
-      const pickupChanged = error.response?.code === 'request_not_created_pickup_changed' &&
-        error.response?.pickupPreferenceChanged === true;
-      if (pickupChanged) {
-        const detail = typeof error.response.message === 'string' && error.response.message.trim()
-          ? error.response.message
-          : "The suggestion was not created, but the patron's preferred pickup location was changed successfully.";
-        state.partialSessionFailureMessage = `${detail} Sign in again to restore staff access before continuing.`;
-        state.partialSessionFailureOwner = null;
-        state.partialSessionFailureDetailAvailable = false;
-        state.partialSessionFailureAfterQueueSequence = null;
-      }
       showSignedOut(state.partialSessionFailureMessage ||
         'Your staff session ended or no longer has access. Sign in again.');
     });
@@ -1448,7 +887,6 @@ export function createWorkflowApp() {
       showAccessUnavailable();
     });
     settingsController.bind();
-    dom.newSuggestion.addEventListener('click', event => openStaffSuggestion(event.currentTarget));
     dom.bulkDelete.addEventListener('click', event => openBulkDelete(event.currentTarget));
     dom.bulkDeleteCopies.addEventListener('click', event => openBulkDelete(event.currentTarget));
     dom.bulkDeleteClose.addEventListener('click', () => closeBulkDelete());
@@ -1480,28 +918,8 @@ export function createWorkflowApp() {
     for (const tab of dom.viewTabs) tab.addEventListener('click', () => {
       navigation.switchView(tab.dataset.view);
     });
-    dom.staffSuggestionForm.addEventListener('submit', submitStaffSuggestion);
-    for (const name of ['input', 'change']) {
-      dom.staffSuggestionForm.addEventListener(name, event => {
-        if (state.staffSuggestion && (event.target.value?.trim() || event.target.type === 'checkbox')) {
-          state.staffSuggestion.dirty = true;
-        }
-      });
-    }
-    dom.closeStaffSuggestion.addEventListener('click', () => closeStaffSuggestion());
-    dom.staffSuggestionDialog.addEventListener('keydown', event => {
-      if (event.key !== 'Escape') return;
-      // Search inputs consume Escape to clear text before the dialog's native cancel.
-      // Route the key through the same draft decision before any field is cleared.
-      event.preventDefault();
-      closeStaffSuggestion();
-    });
-    dom.staffSuggestionDialog.addEventListener('cancel', event => {
-      event.preventDefault();
-      closeStaffSuggestion();
-    });
     window.addEventListener('beforeunload', event => {
-      if (!titleDetail.isDirty() && !titleDetail.hasPendingMutation() && !copyDetail.isDirty() && !copyDetail.inspectDeparture().blocked && !copyCreation.hasPendingMutation() && !hasSuggestionDraft() && !profileController.isDirty() &&
+      if (!titleDetail.isDirty() && !titleDetail.hasPendingMutation() && !copyDetail.isDirty() && !copyDetail.inspectDeparture().blocked && !copyCreation.hasPendingMutation() && !suggestionController.isDirty() && !suggestionController.inspectDeparture().blocked && !profileController.isDirty() &&
           !profileController.hasPendingMutation() && !state.bulkDeleteState?.submitting) return;
       event.preventDefault();
       event.returnValue = '';

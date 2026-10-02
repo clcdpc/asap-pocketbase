@@ -9,7 +9,8 @@ const service = fs.readFileSync(path.join(web, 'Features', 'Staff', 'StaffSugges
 const creation = fs.readFileSync(path.join(web, 'Features', 'Patron', 'PatronSuggestionService.cs'), 'utf8');
 const persistence = fs.readFileSync(path.join(web, 'Features', 'Patron', 'PatronSuggestionService.Persistence.cs'), 'utf8');
 const provider = fs.readFileSync(path.join(web, 'Features', 'Staff', 'IStaffPolarisProvider.cs'), 'utf8');
-const workflow = fs.readFileSync(path.join(web, 'Frontend', 'staff', 'js', 'workflow.js'), 'utf8');
+const suggestion = fs.readFileSync(path.join(web, 'Frontend', 'staff', 'js', 'suggestion-controller.js'), 'utf8');
+const workflow = fs.readFileSync(path.join(web, 'Frontend', 'staff', 'js', 'workflow.js'), 'utf8') + suggestion;
 const index = fs.readFileSync(path.join(web, 'Frontend', 'staff', 'index.html'), 'utf8');
 
 assert.match(endpoints, /suggestion-configuration/);
@@ -30,10 +31,13 @@ assert.match(creation, /notificationStatus/);
 assert.match(creation, /PatronSuggestionDuplicateConflict/);
 assert.match(provider, /SearchPatronsAsync/);
 assert.match(workflow, /staff-suggestion-configuration/);
-assert.match(workflow, /staff-suggestion-mutation/);
+assert.doesNotMatch(suggestion, /begin\('staff-suggestion-mutation'\)|signal: mutation\.signal/);
 assert.match(workflow, /verifiedBibId/);
-assert.match(workflow, /typeof created\?\.id !== 'string'/);
-assert.match(workflow, /const id = created\.id/);
+assert.match(suggestion, /validRequestId\(created\?\.id\)/);
+assert.match(suggestion, /id: created\.id/);
+assert.match(suggestion, /openCreatedTitle/);
+assert.match(suggestion, /openExistingTitle/);
+assert.doesNotMatch(suggestion, /titleQueue|titleDetail|navigation\.align/);
 assert.doesNotMatch(workflow, /api\/asap\/staff\/catalog-search/);
 assert.match(index, /id="new-suggestion"/);
 assert.match(index, /id="staff-suggestion-dialog"/);

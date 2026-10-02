@@ -198,7 +198,29 @@ export function createNavigationController({ router, sessionIdentity, getFeature
     }
   }
 
-  return { context: () => context, generation: () => generation, align, allow, invalidate,
+  async function openCreatedTitle(intent) {
+    if (disposed || !sessionIdentity.isCurrent(intent.owner)) return null;
+    const ticket = invalidate();
+    if (intent.owner.role === 'super_admin') align({ scope: String(intent.libraryOrgId) });
+    let queueRefreshed = false;
+    try { queueRefreshed = await views.queue.refresh({ skipDeepLink: true, silent: true }) === true; }
+    catch { /* The command already committed; a failed presentation read remains unavailable. */ }
+    if (generation !== ticket || !sessionIdentity.isCurrent(intent.owner)) return null;
+    let detailLoaded = false;
+    try { detailLoaded = await views.queue.openDetail(intent.id, intent.opener, { align: true, history: 'push' }) === true; }
+    catch { /* Preserve the captured command receipt if detail presentation cannot complete. */ }
+    if (![ticket, ticket + 1].includes(generation) || !sessionIdentity.isCurrent(intent.owner)) return null;
+    const completion = generation;
+    return { queueRefreshed, detailLoaded,
+      isCurrent: () => generation === completion && sessionIdentity.isCurrent(intent.owner) };
+  }
+
+  async function openExistingTitle(intent) {
+    if (disposed || !sessionIdentity.isCurrent(intent.owner)) return false;
+    return views.queue.openDetail(intent.id, intent.opener, { align: true, history: 'push' });
+  }
+
+  return { context: () => context, generation: () => generation, align, allow, invalidate, openCreatedTitle, openExistingTitle,
     switchView, changeQueueContext, navigateFromUrl,
     start() { router.start(navigateFromUrl); },
     dispose() { disposed = true; reads.begin('route').abort(); router.dispose(); }

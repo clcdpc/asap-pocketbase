@@ -1570,6 +1570,18 @@ for (const view of ['additional-copies', 'settings']) {
     }, { staff: { ...actorA, authenticationEmail: 'staff@example.org' } }));
 }
 
+test('Suggestion lookup returning exactly to baseline releases its draft guard', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    ui.get('#new-suggestion').click();
+    ui.edit('input[aria-label="Patron barcode or name"]', 'Unsaved patron');
+    assert.equal(protectedUnload(ui), true);
+    ui.edit('input[aria-label="Patron barcode or name"]', '');
+    assert.equal(protectedUnload(ui), false);
+    ui.get('#close-staff-suggestion').click(); await settle();
+    assert.equal(ui.get('#staff-suggestion-dialog').open, false);
+    assert.equal(ui.confirms.length, 0);
+  }));
+
 for (const [parameter, value] of [['stage', 'new'], ['status', 'submitted']]) {
   test(`legacy Title detail preserves the supported ${parameter}=${value} alias and unrelated URL context`, () =>
     fixture(`?${parameter}=${value}&request=${id}&marker=legacy#details`, async ui => {
