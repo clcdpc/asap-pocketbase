@@ -851,7 +851,10 @@ test('Additional Copy submission blocks departure; unresolved creation safely cl
     assert.equal(ui.get('#additional-copy-create-review').hidden, false);
     assert.match(ui.get('#additional-copy-create-review-summary').textContent, /BIB 9001/);
     const saved = JSON.parse(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)));
-    assert.deepEqual(saved, { libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' });
+    const { recordId, emailPurchaseReminder, ...source } = saved;
+    assert.deepEqual(source, { libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' });
+    assert.equal(emailPurchaseReminder, false);
+    assert.match(recordId, /^[0-9a-f-]{36}$/i);
   }, { staff: actorA, storage });
 });
 
@@ -1479,19 +1482,52 @@ test('editor Revert preserves competing inline UI and its draft registration', (
     assert.equal(requestMutations(ui).length, 1);
   }));
 
-test('characterization: current Additional Copy reminder has transient cancel lifetime', () =>
+test('Additional Copy reminder owns a guarded draft and explicit Cancel lifetime', () =>
   fixture(`?stage=pending_hold&request=${id}`, async ui => {
     const opener = actionButton('Additional copy'); opener.click();
     await until(() => ui.get('#additional-copy-create-dialog').open, 'copy preview');
     ui.get('#additional-copy-reminder').checked = true;
     ui.get('#additional-copy-reminder').dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
-    assert.equal(protectedUnload(ui), false, 'current reminder is not registered as a dirty draft');
+    assert.equal(protectedUnload(ui), true, 'changed reminder is an owned draft');
     ui.get('#cancel-additional-copy').click();
     assert.equal(ui.get('#additional-copy-create-dialog').open, false);
     assert.equal(ui.get('#additional-copy-reminder').checked, false);
+    assert.equal(protectedUnload(ui), false, 'Cancel releases only the reminder registration');
     assert.equal(document.activeElement, opener);
     assert.equal(requestMutations(ui).length, 0);
   }, { status: 'pending_hold' }));
+
+test('Cancel Additional Copy reminder preserves a competing parent editor draft', () =>
+  fixture(`?stage=pending_hold&request=${id}`, async ui => {
+    await openCopyPreview(ui);
+    ui.edit('.edit-form input', 'Parent draft');
+    ui.get('#additional-copy-reminder').checked = true;
+    ui.get('#cancel-additional-copy').click();
+    assert.equal(ui.get('.edit-form input').value, 'Parent draft');
+    assert.equal(protectedUnload(ui), true);
+    assert.equal(requestMutations(ui).length, 0);
+  }, { status: 'pending_hold' }));
+
+test('Additional Copy preview cannot attach a newer source version to a stale parent', () =>
+  fixture(`?stage=pending_hold&request=${id}`, async ui => {
+    ui.setApi(({ pathname, init }) => pathname.endsWith('/additional-copy') && init.method === 'GET'
+      ? response(200, { version: 'v2', bibid: 9001, openCount: 0 }) : undefined);
+    actionButton('Additional copy').click();
+    await until(() => /request changed.*Reload/i.test(ui.get('#app-status').textContent), 'preview detects invalidated parent');
+    assert.equal(ui.get('#additional-copy-create-dialog').open, false);
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), null);
+  }, { status: 'pending_hold', staff: actorA }));
+
+test('authoritative parent replacement disposes clean Copy child and its stale submit', () =>
+  fixture(`?stage=pending_hold&request=${id}`, async ui => {
+    await openCopyPreview(ui);
+    actionButton('Claim').click();
+    await until(() => !ui.get('#additional-copy-create-dialog').open, 'parent replacement disposes child');
+    assert.equal(protectedUnload(ui), false);
+    submitCopy(ui); await settle();
+    assert.equal(ui.calls.filter(call => call.init.method === 'POST' && call.url.endsWith('/additional-copy')).length, 0);
+  }, { status: 'pending_hold', staff: actorA }));
 
 test('characterization: definitive inline failure preserves values and competing registration', () =>
   fixture(`?request=${id}`, async ui => {

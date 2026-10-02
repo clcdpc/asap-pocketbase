@@ -55,6 +55,7 @@ export function createDetailHost({ root }) {
   }, { signal: events.signal });
   return {
     isOpen: () => root.open,
+    requestClose: options => mounted?.onClose?.(options) ?? true,
     contains: node => root.contains(node),
     focusClose: () => { if (!disposed) close.focus(); },
     cancelFocusReturn,

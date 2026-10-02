@@ -66,3 +66,13 @@ export function closeReasonLabel(value) {
   return Object.hasOwn(labels, value) ? labels[value]
     : value ? String(value).replaceAll('_', ' ') : 'No reason recorded';
 }
+
+export function addDetail(list, label, value) {
+  const wrapper = element('div');
+  wrapper.append(element('dt', { text: label }), element('dd', { text: text(value) }));
+  list.append(wrapper);
+}
+
+export function labeledInput(label, input, className = '') {
+  return element('label', { className }, [element('span', { text: label }), input]);
+}

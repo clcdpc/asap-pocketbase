@@ -57,7 +57,8 @@ assert.match(index, /id="additional-copy-create-dialog"/);
 assert.match(index, /id="additional-copy-reminder"/);
 assert.match(urlUtils, /searchParams\.set\('stage', 'additional_copies'\)/);
 assert.match(workflow, /\/api\/asap\/staff\/additional-copies\?scope=/);
-assert.match(workflow, /title-requests\/\$\{request\.id\}\/additional-copy/);
+assert.match(workflow, /title-requests\/\$\{parent\.request\.id\}\/additional-copy/);
+assert.match(workflow, /title-requests\/\$\{record\.sourceId\}\/additional-copy/);
 for (const operation of ['claim', 'unclaim', 'assign', 'close', 'reopen', 'delete']) {
   assert.ok(workflow.includes(`operation === '${operation}'`) || workflow.includes(`'${operation}'`),
     `${operation} should be wired through the AdditionalCopy UI`);
