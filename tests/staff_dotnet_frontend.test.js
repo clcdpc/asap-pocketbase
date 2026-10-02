@@ -20,7 +20,8 @@ for (const file of requiredFiles) {
 const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const http = fs.readFileSync(path.join(root, 'js', 'http.js'), 'utf8');
-const workflow = fs.readFileSync(path.join(root, 'js', 'workflow.js'), 'utf8');
+const workflow = fs.readdirSync(path.join(root, 'js')).filter(name => name.endsWith('.js'))
+  .map(name => fs.readFileSync(path.join(root, 'js', name), 'utf8')).join('\n');
 const urlUtils = fs.readFileSync(path.join(root, 'js', 'url-utils.js'), 'utf8');
 const analytics = fs.readFileSync(path.join(root, 'js', 'analytics.js'), 'utf8');
 const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');

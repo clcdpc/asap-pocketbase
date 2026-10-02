@@ -1,3 +1,4 @@
+import { unconfirmedResponseError } from './mutation-outcome.js';
 import {
   authorizedJson,
   isAbortError,
@@ -8,6 +9,7 @@ import {
 } from './http.js';
 import { createSettingsController } from './settings.js';
 import { createDraftScope } from './draft-scope.js';
+import { createProfileController } from './profile-controller.js';
 import { createSessionIdentity } from './session-identity.js';
 import {
   forgetRecentRequest,
@@ -181,14 +183,6 @@ export function createWorkflowApp() {
     additionalCopyCreateReview: document.querySelector('#additional-copy-create-review'),
     additionalCopyCreateReviewSummary: document.querySelector('#additional-copy-create-review-summary'),
     additionalCopyCreateReviewDone: document.querySelector('#additional-copy-create-review-done'),
-    profile: document.querySelector('#profile-form'),
-    profileRefresh: document.querySelector('#profile-refresh'),
-    notificationEmail: document.querySelector('#notification-email'),
-    weeklyEmail: document.querySelector('#weekly-email'),
-    weeklyEnabled: document.querySelector('#weekly-enabled'),
-    purchaseDefault: document.querySelector('#purchase-default'),
-    additionalCopyDefault: document.querySelector('#additional-copy-default'),
-    mineDefault: document.querySelector('#mine-default'),
     dialog: document.querySelector('#request-dialog'),
     dialogTitle: document.querySelector('#request-dialog-title'),
     dialogKicker: document.querySelector('#request-dialog-kicker'),
@@ -251,8 +245,6 @@ export function createWorkflowApp() {
     dialogMutationInFlight: null,
     actionChoice: null,
     bulkDeleteState: null,
-    profileBaseline: null,
-    profileMutation: null,
     navigationGeneration: 0,
     routeSnapshot: null,
     restoringHistory: false,
@@ -304,33 +296,14 @@ export function createWorkflowApp() {
       state.staffSuggestion?.controls?.queryInput?.value.trim());
   }
 
-  function profileValues() {
-    return {
-      notificationEmail: dom.notificationEmail.value,
-      weeklyActionSummaryEmail: dom.weeklyEmail.value,
-      weeklyActionSummaryEnabled: dom.weeklyEnabled.checked,
-      purchaseReminderDefault: dom.purchaseDefault.checked,
-      additionalCopyReminderDefault: dom.additionalCopyDefault.checked,
-      defaultMineUnclaimedFilter: dom.mineDefault.checked
-    };
-  }
-
-  function hasProfileDraft() {
-    if (!state.staff || !state.profileBaseline) return false;
-    const current = profileValues();
-    return Object.keys(current).some(key => current[key] !== state.profileBaseline[key]);
-  }
-
   function allowNavigation({ settings = true, request = true, suggestion = true } = {}) {
     if (state.closingDetailHistory || state.restoringHistory) return false;
     if (state.bulkDeleteState?.submitting) {
       announce('Deletion is in progress. Wait for the complete ledger before navigating away.', 'warning');
       return false;
     }
-    if (state.profileMutation) {
-      announce(state.profileMutation.outcomeUnconfirmed
-        ? 'Reload Profile to review the uncertain save before navigating away.'
-        : 'Wait for the Profile save to finish before navigating away.', 'warning');
+    if (profileController.hasPendingMutation()) {
+      announce(profileController.inspectDeparture().message, 'warning');
       return false;
     }
     if (settings && settingsController.hasPendingMutation()) {
@@ -355,10 +328,10 @@ export function createWorkflowApp() {
         !window.confirm('Discard unsaved request changes and navigate away?')) return false;
     if (suggestion && hasSuggestionDraft() &&
         !window.confirm('Discard the unsaved new suggestion and navigate away?')) return false;
-    if (hasProfileDraft() &&
+    if (profileController.isDirty() &&
         !window.confirm('Discard unsaved Profile changes and navigate away?')) return false;
     if (settings && settingsController.isDirty()) settingsController.discardDraft();
-    if (hasProfileDraft()) populateProfile(state.staff);
+    if (profileController.isDirty()) profileController.setStaff(state.staff);
     closeBulkDelete({ navigation: true });
     return true;
   }
@@ -513,6 +486,25 @@ export function createWorkflowApp() {
       latestLoads.finish('research-configuration', load.token);
     }
   }
+
+  const profileController = createProfileController({ root: dom.profileView, sessionIdentity, announce,
+    onPreferences: (staff, owner) => {
+      if (!updateStaffPreferences(staff, owner)) return false;
+      dom.claim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
+      dom.additionalCopyClaim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
+      renderGrid();
+      if (state.additionalCopyLoaded) renderAdditionalCopyGrid();
+      return true;
+    },
+    onSessionLost: showSignedOut, onAccessUnavailable: showAccessUnavailable,
+    onReceipt: (message, owner, attempt) => {
+      if (state.staff && !sessionIdentity.isCurrent(owner)) return;
+      state.partialSessionFailureMessage = message;
+      state.partialSessionFailureOwner = attempt;
+      if (dom.workspace.hidden) dom.signedOutMessage.textContent = message;
+    },
+    clearReceipt: clearCommittedSessionFallback
+  });
 
   const settingsController = createSettingsController({
     root: dom.settingsView,
@@ -777,10 +769,6 @@ export function createWorkflowApp() {
 
   function isUnconfirmedMutationError(error, signal) {
     return !signal.aborted && (isAbortError(error) || error?.status === 0);
-  }
-
-  function unconfirmedResponseError() {
-    return Object.assign(new Error('The server response did not confirm the workflow result.'), { status: 0 });
   }
 
   function isCommittedRequestResponse(result, requestId) {
@@ -1144,8 +1132,7 @@ export function createWorkflowApp() {
     state.createCopyReturnFocus = null;
     state.unconfirmedCopyCreationAwaitingRefresh = false;
     dom.additionalCopyCreateReview.hidden = true;
-    state.profileMutation = null;
-    populateProfile(null);
+    profileController.signedOut();
     state.staffSuggestion = null;
     state.staffSuggestionReturnFocus = null;
     latestLoads.begin('queue').abort();
@@ -1236,7 +1223,7 @@ export function createWorkflowApp() {
     dom.claim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
     dom.similar.value = 'all';
     dom.additionalCopyClaim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
-    populateProfile(staff);
+    profileController.setStaff(staff);
     void refreshEmailReadiness();
   }
 
@@ -1245,17 +1232,6 @@ export function createWorkflowApp() {
     dom.sessionActions.hidden = false;
     dom.staffIdentity.textContent = 'Access unavailable';
     dom.staffIdentity.title = '';
-  }
-
-  function populateProfile(staff) {
-    dom.notificationEmail.value = staff?.notificationEmail || '';
-    dom.weeklyEmail.value = staff?.weeklyActionSummaryEmail || '';
-    dom.weeklyEnabled.checked = Boolean(staff?.weeklyActionSummaryEnabled);
-    dom.purchaseDefault.checked = Boolean(staff?.purchaseReminderDefault);
-    dom.additionalCopyDefault.checked = Boolean(staff?.additionalCopyReminderDefault);
-    dom.mineDefault.checked = Boolean(staff?.defaultMineUnclaimedFilter);
-    state.profileBaseline = staff ? profileValues() : null;
-    updateProfileControls();
   }
 
   async function startSession() {
@@ -4295,133 +4271,6 @@ export function createWorkflowApp() {
     }
   }
 
-  function updateProfileControls() {
-    const mutation = state.profileMutation;
-    for (const control of dom.profile.querySelectorAll('input, button')) {
-      control.disabled = Boolean(mutation);
-    }
-    dom.profile.setAttribute('aria-busy', String(Boolean(mutation?.pending)));
-    dom.profileRefresh.hidden = !mutation?.outcomeUnconfirmed;
-    dom.profileRefresh.disabled = Boolean(mutation?.pending);
-  }
-
-  async function refreshUnconfirmedProfile() {
-    const mutation = state.profileMutation;
-    if (!mutation?.outcomeUnconfirmed || mutation.pending || !sessionIdentity.isCurrent(mutation.owner)) return;
-    if (hasProfileDraft() && !window.confirm('Discard the Profile draft and reload current saved preferences to review the uncertain save?')) return;
-    mutation.pending = true;
-    updateProfileControls();
-    try {
-      const session = await loadStaffSession();
-      if (state.profileMutation !== mutation || !sessionIdentity.isCurrent(mutation.owner)) return;
-      if (!session.authenticated) { showSignedOut(); return; }
-      if (session.accessAllowed === false) { showAccessUnavailable(); return; }
-      if (!updateStaffPreferences(session.staff, mutation.owner)) return;
-      state.profileMutation = null;
-      populateProfile(session.staff);
-      announce('Current Profile loaded. Review the saved preferences before making another change.', 'warning');
-    } catch (error) {
-      if (state.profileMutation === mutation && error.status !== 401) {
-        announce('Profile could not refresh. Review current saved preferences before retrying.', 'error');
-      }
-    } finally {
-      if (state.profileMutation === mutation) mutation.pending = false;
-      updateProfileControls();
-    }
-  }
-
-  async function saveProfile(event) {
-    event.preventDefault();
-    const owner = state.staff;
-    if (!owner || state.profileMutation) return;
-    const mutation = { owner, pending: true, outcomeUnconfirmed: false };
-    state.profileMutation = mutation;
-    updateProfileControls();
-    announce('Saving profile...');
-    try {
-      const result = await authorizedJson('/api/asap/staff/profile', {
-        method: 'POST',
-        body: {
-          version: owner.version,
-          weeklyActionSummaryEnabled: dom.weeklyEnabled.checked,
-          weeklyActionSummaryEmail: dom.weeklyEmail.value.trim() || null,
-          purchaseReminderDefault: dom.purchaseDefault.checked,
-          additionalCopyReminderDefault: dom.additionalCopyDefault.checked,
-          defaultMineUnclaimedFilter: dom.mineDefault.checked
-        }
-      });
-      if (!result?.staff || String(result.staff.id) !== String(owner.id) ||
-          result.staff.tenantId !== owner.tenantId || !result.staff.version) {
-        throw unconfirmedResponseError();
-      }
-      const committedMessage = 'Profile saved. Sign in again to review the saved profile.';
-      if (!sessionIdentity.isCurrent(owner)) {
-        state.partialSessionFailureMessage = committedMessage;
-        if (dom.workspace.hidden) dom.signedOutMessage.textContent = committedMessage;
-        return;
-      }
-      state.partialSessionFailureMessage = committedMessage;
-      let session;
-      try {
-        session = await loadStaffSession();
-      } catch {
-        if (sessionIdentity.isCurrent(owner)) showSignedOut(committedMessage);
-        return;
-      }
-      if (!sessionIdentity.isCurrent(owner)) return;
-      if (!session.authenticated || session.accessAllowed === false) {
-        showSignedOut(committedMessage);
-        return;
-      }
-      state.partialSessionFailureMessage = null;
-      // The session read supplies the latest rowversion and preferences, including concurrent changes.
-      if (!updateStaffPreferences(session.staff, owner)) return;
-      populateProfile(state.staff);
-      dom.claim.value = state.staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
-      dom.additionalCopyClaim.value = state.staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
-      renderGrid();
-      if (state.additionalCopyLoaded) renderAdditionalCopyGrid();
-      announce('Profile saved.', 'success');
-    } catch (error) {
-      if (!sessionIdentity.isCurrent(owner)) return;
-      if (error.status === 409) {
-        const conflictMessage = 'Profile could not be saved. Sign in again to review your current profile.';
-        let session;
-        try {
-          session = await loadStaffSession();
-        } catch {
-          if (sessionIdentity.isCurrent(owner)) showSignedOut(conflictMessage);
-          else if (dom.workspace.hidden) dom.signedOutMessage.textContent = conflictMessage;
-          return;
-        }
-        if (!sessionIdentity.isCurrent(owner)) return;
-        if (session.accessAllowed === false) {
-          showAccessUnavailable();
-          return;
-        }
-        if (!session.authenticated) {
-          showSignedOut(conflictMessage);
-          return;
-        }
-        if (!updateStaffPreferences(session.staff, owner)) return;
-        populateProfile(session.staff);
-      }
-      const unconfirmed = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
-      if (unconfirmed) {
-        mutation.outcomeUnconfirmed = true;
-        announce('Profile save could not be confirmed. Reload Profile to review current saved preferences before retrying.', 'warning');
-      } else if (error.status !== 401) {
-        announce(error.message || 'Profile could not be saved.', 'error');
-      }
-    } finally {
-      if (state.profileMutation === mutation) {
-        mutation.pending = false;
-        if (!mutation.outcomeUnconfirmed) state.profileMutation = null;
-      }
-      updateProfileControls();
-    }
-  }
-
   function switchView(name, updateUrl = true) {
     if ((name === 'settings' || name === 'operations') &&
         !['admin', 'super_admin'].includes(state.staff?.role)) return;
@@ -4735,8 +4584,6 @@ export function createWorkflowApp() {
     }
     dom.additionalCopySearch.addEventListener('input', renderAdditionalCopyGrid);
     dom.additionalCopyClaim.addEventListener('change', renderAdditionalCopyGrid);
-    dom.profile.addEventListener('submit', saveProfile);
-    dom.profileRefresh.addEventListener('click', refreshUnconfirmedProfile);
     for (const tab of dom.viewTabs) tab.addEventListener('click', () => {
       switchView(tab.dataset.view);
     });
@@ -4774,8 +4621,8 @@ export function createWorkflowApp() {
       closeStaffSuggestion();
     });
     window.addEventListener('beforeunload', event => {
-      if (!hasRequestDraft() && !hasSuggestionDraft() && !hasProfileDraft() &&
-          !state.profileMutation && !state.bulkDeleteState?.submitting) return;
+      if (!hasRequestDraft() && !hasSuggestionDraft() && !profileController.isDirty() &&
+          !profileController.hasPendingMutation() && !state.bulkDeleteState?.submitting) return;
       event.preventDefault();
       event.returnValue = '';
     });
