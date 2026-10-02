@@ -49,7 +49,12 @@ async function fixture(route, journey, options = {}) {
       holdOperation: options.holdOperation || null,
       claimedByStaffUserId: null, workflowTags: [], capabilities: {
         canEditIdentifier: true, canChangeBib: true, canChangeWorkflowState: true, canClaim: true,
-        allowedActions: ['edit', 'purchase', 'alreadyOwn', 'catalogFound', 'reject', 'silentClose'] } };
+        allowedActions: ['edit', 'purchase', 'alreadyOwn', 'catalogFound', 'reject', 'silentClose'] },
+      ...options.request };
+    let copyRequest = { id: '71', type: 'additional_copy', version: 'copy-v1', status: 'open',
+      libraryOrgId: 2, libraryOrgName: 'Library A', title: 'Additional copy', bibid: 9001,
+      claimedByStaffUserId: null, capabilities: { canClaim: true, canAssign: true, canClose: true },
+      ...options.copyRequest };
     const calls = [];
     const confirms = [];
     let discard = false;
@@ -77,13 +82,15 @@ async function fixture(route, journey, options = {}) {
         const scope = parsed.searchParams.get('scope') || 'all';
         return response(200, { scope, status: parsed.searchParams.get('status') || 'open',
           organizations, availableLibraries: organizations,
-          items: pathname.endsWith('/title-requests') ? options.titleItems || [request] : options.copyItems || [] });
+          items: pathname.endsWith('/title-requests') ? options.titleItems || [request]
+            : options.copyItems || (options.copyRequest ? [copyRequest] : []) });
       }
       if (pathname.endsWith(`/title-requests/${id}`)) {
         const scope = parsed.searchParams.get('scope');
         if (scope && scope !== 'all' && scope !== String(request.libraryOrgId)) return response(404, {});
         return response(200, request);
       }
+      if (pathname.endsWith(`/additional-copies/${copyRequest.id}`)) return response(200, copyRequest);
       if (pathname.endsWith('/config') || pathname.endsWith('/suggestion-configuration')) {
         const configuration = { availableFormats: ['book'], formatLabels: { book: 'Book' },
           publicationOptions: ['published'], additionalFieldDefinitions: [], formatRules: {} };
@@ -112,6 +119,10 @@ async function fixture(route, journey, options = {}) {
       if (init.method === 'DELETE') return operationResponse ? operationResponse() : response(200, { deleted: true });
       if (init.method === 'POST') {
         if (operationResponse) return operationResponse();
+        if (pathname.startsWith('/api/asap/staff/additional-copies/')) {
+          copyRequest = { ...copyRequest, version: 'copy-v2' };
+          return response(200, { committed: true, request: copyRequest, finalStatus: copyRequest.status });
+        }
         request = { ...request, version: 'v2', title: JSON.parse(init.body || '{}').title || request.title };
         return response(200, { committed: true, request, finalStatus: request.status });
       }
@@ -129,6 +140,7 @@ async function fixture(route, journey, options = {}) {
     await journey({ dom, get, edit, back, forward, calls, confirms,
       allowDiscard: () => { discard = true; },
       readRequest: () => request,
+      readCopyRequest: () => copyRequest,
       setOperation: fn => { operationResponse = fn; },
       setApi: fn => { apiResponse = fn; },
       readStaff: () => staff,
@@ -935,6 +947,424 @@ for (const kind of ['action-choice', 'assignment', 'pickup', 'hold-resolution'])
     }, { status: kind === 'pickup' ? 'pending_hold' : 'suggestion', holdOperation: kind === 'hold-resolution'
       ? { id: '71', version: 'op-v1', state: 'outcome_unknown', phase: 'acquired', canResolveNotPerformed: true }
       : null }));
+}
+
+const actionButton = (label, root = document.querySelector('.action-bar')) => {
+  const button = [...root.querySelectorAll('button')].find(item => item.textContent.trim() === label);
+  assert.ok(button, `${label} is available`);
+  return button;
+};
+const requestMutations = ui => ui.calls.filter(call => ['POST', 'DELETE'].includes(call.init.method) &&
+  !call.url.endsWith('/pickup-options'));
+const submitForm = (ui, form) => form.dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+async function openInlineDraft(ui, action, label) {
+  actionButton(action).click();
+  await until(() => ui.get(`select[aria-label="${label}"]`), `${action} form loaded`);
+  return ui.get(`select[aria-label="${label}"]`).closest('form');
+}
+const assignmentLabel = 'Assign to staff member';
+const pickupLabel = 'Preferred pickup branch';
+const copyAssignmentLabel = 'Assign additional-copy task';
+const blockedDraftMessage = /finish or cancel the current request changes/i;
+
+for (const action of ['Claim', 'Unclaim', 'Clear claim']) {
+  test(`dirty title assignment blocks ${action} without a confirmation`, () =>
+    fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+      const form = await openInlineDraft(ui, 'Assign', assignmentLabel);
+      ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+      ui.allowDiscard(); actionButton(action).click(); await settle();
+      assert.equal(requestMutations(ui).length, 0);
+      assert.equal(form.isConnected, true);
+      assert.equal(form.querySelector('select').value, '21');
+      assert.equal(ui.confirms.length, 0);
+      assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+    }, { request: { claimedByStaffUserId: action === 'Claim' ? null : action === 'Unclaim' ? '20' : '22' } }));
+}
+
+test('dirty title assignment submits only its own draft and the authoritative render starts clean', () =>
+  fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+    const form = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    submitForm(ui, form);
+    await until(() => !form.isConnected, 'authoritative assignment render');
+    assert.deepEqual(JSON.parse(requestMutations(ui)[0].init.body), { version: 'v1', assigneeId: '21' });
+    assert.equal(requestMutations(ui).length, 1);
+    assert.equal(protectedUnload(ui), false);
+    const reopened = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    assert.equal(reopened.querySelector('select').value, '20');
+    assert.equal(protectedUnload(ui), false);
+    submitForm(ui, form); await settle();
+    assert.equal(requestMutations(ui).length, 1, 'the consumed form cannot submit again');
+  }));
+
+test('editor Save and assignment submission each preserve the competing dirty draft', () =>
+  fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+    const form = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    ui.edit('.edit-form input', 'Unsaved title');
+    submitForm(ui, ui.get('.edit-form')); await settle();
+    assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+    submitForm(ui, form); await settle();
+    assert.match(ui.get('#app-status').textContent, /save or revert/i);
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(form.querySelector('select').value, '21');
+    assert.equal(ui.get('.edit-form input').value, 'Unsaved title');
+    ui.edit('.edit-form input', 'Saved title');
+    submitForm(ui, form);
+    await until(() => !form.isConnected, 'assignment consumes its draft after editor returns to baseline');
+    assert.equal(requestMutations(ui).length, 1);
+  }));
+
+for (const finish of ['baseline', 'cancel', 'clean']) {
+  test(`${finish} title assignment permits Claim`, () =>
+    fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+      const opener = actionButton('Assign');
+      const form = await openInlineDraft(ui, 'Assign', assignmentLabel);
+      if (finish !== 'clean') ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+      if (finish === 'baseline') ui.edit(`select[aria-label="${assignmentLabel}"]`, '20');
+      if (finish === 'cancel') {
+        actionButton('Cancel', form).click();
+        assert.equal(form.isConnected, false);
+        assert.equal(document.activeElement, opener);
+      }
+      assert.equal(protectedUnload(ui), false);
+      actionButton('Claim').click();
+      await until(() => requestMutations(ui).length === 1, 'clean assignment permits Claim');
+      assert.ok(requestMutations(ui)[0].url.endsWith('/claim'));
+      assert.equal(ui.confirms.length, 0);
+    }));
+}
+
+test('assignment submission cannot consume a second dirty assignment form', () =>
+  fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+    const first = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    first.querySelector('select').value = '21';
+    actionButton('Assign').click();
+    await until(() => document.querySelectorAll('.inline-form').length === 2, 'second assignment loaded');
+    const second = ui.get('.inline-form');
+    second.querySelector('select').value = '21';
+    submitForm(ui, first); await settle();
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(first.isConnected, true);
+    assert.equal(second.isConnected, true);
+    assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+    actionButton('Cancel', second).click();
+    assert.equal(protectedUnload(ui), true, 'cancelling one form preserves the other draft');
+    submitForm(ui, first);
+    await until(() => !first.isConnected, 'only remaining draft is consumed');
+    assert.equal(requestMutations(ui).length, 1);
+  }));
+
+test('dirty pickup blocks Claim, Place hold and Additional Copy preview', () =>
+  fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    const form = await openInlineDraft(ui, 'Pickup', pickupLabel);
+    ui.edit(`select[aria-label="${pickupLabel}"]`, '102');
+    ui.allowDiscard();
+    for (const action of ['Claim', 'Place hold', 'Additional copy']) {
+      actionButton(action).click(); await settle();
+      assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+    }
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(ui.confirms.length, 0);
+    assert.equal(form.querySelector('select').value, '102');
+    assert.equal(ui.get('#additional-copy-create-dialog').open, false);
+  }, { status: 'pending_hold', request: { capabilities: { canChangeWorkflowState: true, canPlaceHold: true } } }));
+
+test('dirty pickup submits its own branch choice with the observed preference and version', () =>
+  fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    const form = await openInlineDraft(ui, 'Pickup', pickupLabel);
+    ui.edit(`select[aria-label="${pickupLabel}"]`, '102');
+    submitForm(ui, form);
+    await until(() => !form.isConnected, 'pickup authoritative result');
+    assert.deepEqual(JSON.parse(requestMutations(ui)[0].init.body), { version: 'v1', preferredPickupBranchId: 102,
+      currentPreferredPickupBranchIdAtLoad: 101, currentPreferredPickupBranchObservedAtLoad: true });
+    assert.equal(protectedUnload(ui), false);
+  }, { status: 'pending_hold' }));
+
+test('Cancel pickup discards only pickup and returns focus without another confirmation', () =>
+  fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    const opener = actionButton('Pickup');
+    const form = await openInlineDraft(ui, 'Pickup', pickupLabel);
+    ui.edit(`select[aria-label="${pickupLabel}"]`, '102');
+    ui.edit('.edit-form input', 'Retained title');
+    actionButton('Cancel', form).click();
+    assert.equal(form.isConnected, false);
+    assert.equal(document.activeElement, opener);
+    assert.equal(ui.confirms.length, 0);
+    assert.equal(ui.get('.edit-form input').value, 'Retained title');
+    assert.equal(protectedUnload(ui), true);
+    submitForm(ui, ui.get('.edit-form'));
+    await until(() => requestMutations(ui).length === 1, 'editor Save after explicit pickup Cancel');
+  }, { status: 'pending_hold' }));
+
+for (const action of ['Purchase', 'Reject']) {
+  test(`dirty rejection choice blocks replacement by ${action}, Claim and Close silently`, () =>
+    fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+      const form = await openInlineDraft(ui, 'Reject', 'Rejection template');
+      await until(() => form.querySelector('select').options.length === 3, 'rejection templates loaded');
+      ui.edit('.action-choice select', '2'); ui.allowDiscard();
+      for (const competing of [action, 'Claim', 'Close silently']) {
+        actionButton(competing).click(); await settle();
+        assert.equal(ui.get('.action-choice'), form);
+        assert.equal(form.querySelector('select').value, '2');
+        assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+      }
+      assert.equal(requestMutations(ui).length, 0);
+      assert.equal(ui.confirms.length, 0);
+    }));
+}
+
+test('dirty rejection choice submits its selected template and clears only after confirmed success', () =>
+  fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+    const form = await openInlineDraft(ui, 'Reject', 'Rejection template');
+    await until(() => form.querySelector('select').options.length === 3, 'rejection templates loaded');
+    ui.edit('.action-choice select', '2');
+    submitForm(ui, form); await settle();
+    assert.equal(requestMutations(ui).length, 0, 'declined confirmation preserves the choice');
+    assert.equal(form.querySelector('select').value, '2');
+    ui.allowDiscard(); submitForm(ui, form);
+    await until(() => !form.isConnected, 'rejection authoritative result');
+    assert.deepEqual(JSON.parse(requestMutations(ui)[0].init.body), { version: 'v1', action: 'reject', rejectionTemplateId: '2' });
+    assert.equal(protectedUnload(ui), false);
+  }));
+
+test('returning a rejection choice to baseline permits another action-choice', () =>
+  fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+    const form = await openInlineDraft(ui, 'Reject', 'Rejection template');
+    await until(() => form.querySelector('select').options.length === 3, 'rejection templates loaded');
+    ui.edit('.action-choice select', '2'); ui.edit('.action-choice select', '1');
+    assert.equal(protectedUnload(ui), false);
+    actionButton('Purchase').click();
+    assert.equal(form.isConnected, false);
+    assert.equal(ui.get('.action-choice').getAttribute('aria-label'), 'purchase options');
+    assert.equal(ui.confirms.length, 0);
+  }));
+
+test('dirty purchase reminder choice blocks competing actions and submits its own decision', () =>
+  fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+    actionButton('Purchase').click();
+    const form = ui.get('.action-choice');
+    form.querySelector('input').checked = true;
+    for (const action of ['Reject', 'Claim']) {
+      actionButton(action).click(); await settle();
+      assert.equal(ui.get('.action-choice'), form);
+      assert.equal(form.querySelector('input').checked, true);
+    }
+    assert.equal(requestMutations(ui).length, 0);
+    ui.allowDiscard(); submitForm(ui, form);
+    await until(() => !form.isConnected, 'purchase authoritative result');
+    assert.deepEqual(JSON.parse(requestMutations(ui)[0].init.body), { version: 'v1', action: 'purchase', emailPurchaseReminder: true });
+    assert.equal(protectedUnload(ui), false);
+  }, { request: { bibid: null } }));
+
+const resolutionOperation = { id: '71', version: 'op-v1', state: 'outcome_unknown', phase: 'create_started',
+  attemptNumber: 2, executionEpoch: 3, patronBarcodeSnapshotMasked: '***0001', bibIdSnapshot: 9001,
+  canReconcile: true, canResolveNotPerformed: true };
+function fillResolution(ui) {
+  const form = ui.get('.resolution-form');
+  for (const label of form.querySelectorAll('label')) {
+    const control = label.querySelector('input, textarea');
+    if (!control || control.disabled) continue;
+    if (control.type === 'checkbox') control.checked = true;
+    else control.value = `Evidence for ${label.querySelector('span').textContent}`;
+    control.dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
+  }
+  return form;
+}
+
+test('dirty hold-resolution evidence blocks Claim and reconciliation without losing attestations', () =>
+  fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    const form = fillResolution(ui);
+    const values = [...form.querySelectorAll('input, textarea')].map(control => [control.value, control.checked]);
+    ui.allowDiscard(); actionButton('Claim').click();
+    actionButton('Reconcile provider state', ui.get('.hold-operation')).click(); await settle();
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(ui.confirms.length, 0);
+    assert.deepEqual([...form.querySelectorAll('input, textarea')].map(control => [control.value, control.checked]), values);
+    assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+  }, { status: 'pending_hold', holdOperation: resolutionOperation }));
+
+test('dirty hold-resolution submits its own evidence and refreshes the authoritative request', () =>
+  fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    const form = fillResolution(ui);
+    let resolved = false;
+    ui.setApi(({ pathname, init, request }) => {
+      if (pathname.endsWith('/hold-operations/71/resolve') && init.method === 'POST') {
+        resolved = true;
+        return response(200, { committed: true, code: 'resolved', operationId: '71', finalStatus: 'pending_hold' });
+      }
+      if (resolved && pathname.endsWith(`/title-requests/${id}`)) return response(200,
+        { ...request, version: 'v2', holdOperation: null });
+    });
+    ui.allowDiscard(); submitForm(ui, form);
+    await until(() => !form.isConnected, 'resolution authoritative refresh');
+    assert.equal(requestMutations(ui).length, 1);
+    const body = JSON.parse(requestMutations(ui)[0].init.body);
+    assert.equal(body.version, 'op-v1');
+    assert.equal(body.requestVersion, 'v1');
+    assert.equal(body.outcome, 'not_performed');
+    assert.equal(body.reason, 'Evidence for Reason');
+    assert.equal(body.evidenceReference, 'Evidence for Evidence reference');
+    assert.equal(body.proofSource, 'Evidence for Evidence provenance');
+    assert.equal(body.causalConnection, 'Evidence for Connection to this exact attempt');
+    assert.equal(body.operationSpecificProofAttested, true);
+    assert.equal(body.originalExecutorExcluded, true);
+    assert.equal(body.executorExclusionAttested, true);
+    assert.equal(protectedUnload(ui), false);
+    assert.match(ui.get('#app-status').textContent, /resolved as confirmed|resolved as not performed/);
+  }, { status: 'pending_hold', holdOperation: resolutionOperation }));
+
+test('hold-resolution Revert restores its baseline without discarding a competing assignment', () =>
+  fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    const form = fillResolution(ui);
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    ui.allowDiscard(); submitForm(ui, form); await settle();
+    assert.equal(requestMutations(ui).length, 0, 'resolution cannot consume assignment');
+    assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+    actionButton('Revert resolution changes', form).click();
+    assert.ok([...form.querySelectorAll('input, textarea')].every(control => control.type === 'checkbox' ? !control.checked : !control.value));
+    assert.equal(document.activeElement, form.querySelector('select'));
+    assert.equal(assignment.querySelector('select').value, '21');
+    assert.equal(ui.confirms.length, 0);
+    actionButton('Cancel', assignment).click();
+    assert.equal(protectedUnload(ui), false);
+    actionButton('Claim').click();
+    await until(() => requestMutations(ui).length === 1, 'clean recovery permits Claim');
+  }, { status: 'pending_hold', holdOperation: resolutionOperation }));
+
+for (const action of ['Claim', 'Unclaim', 'Clear claim', 'Close task']) {
+  test(`dirty Additional Copy assignment blocks ${action}`, () =>
+    fixture('?stage=additional_copies&scope=2&request=71', async ui => {
+      const form = await openInlineDraft(ui, 'Assign', copyAssignmentLabel);
+      ui.edit(`select[aria-label="${copyAssignmentLabel}"]`, '21'); ui.allowDiscard();
+      actionButton(action).click(); await settle();
+      assert.equal(requestMutations(ui).length, 0);
+      assert.equal(form.querySelector('select').value, '21');
+      assert.equal(ui.confirms.length, 0);
+      assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+    }, { copyRequest: { claimedByStaffUserId: action === 'Unclaim' ? '20' : action === 'Clear claim' ? '22' : null,
+      capabilities: { canClaim: true, canUnclaim: true, canClearClaim: true, canAssign: true, canClose: true } } }));
+}
+
+test('dirty Additional Copy assignment submits its own draft and protects its fields while pending', () =>
+  fixture('?stage=additional_copies&scope=2&request=71', async ui => {
+    const form = await openInlineDraft(ui, 'Assign', copyAssignmentLabel);
+    ui.edit(`select[aria-label="${copyAssignmentLabel}"]`, '21');
+    let resolve;
+    ui.setOperation(() => new Promise(done => { resolve = done; }));
+    submitForm(ui, form); await until(() => resolve, 'copy assignment dispatched');
+    assert.equal(form.querySelector('select').disabled, true);
+    actionButton('Claim').click(); ui.get('[data-view="profile"]').click();
+    assert.equal(requestMutations(ui).length, 1);
+    assert.equal(ui.get('#request-dialog').open, true);
+    assert.deepEqual(JSON.parse(requestMutations(ui)[0].init.body), { version: 'copy-v1', assigneeId: '21' });
+    resolve(response(200, { committed: true, request: { ...ui.readCopyRequest(), version: 'copy-v2' }, finalStatus: 'open' }));
+    await until(() => !form.isConnected, 'copy assignment authoritative render');
+    assert.equal(protectedUnload(ui), false);
+    ui.setOperation(null);
+    const reopened = await openInlineDraft(ui, 'Assign', copyAssignmentLabel);
+    assert.equal(reopened.querySelector('select').value, '20');
+    assert.equal(protectedUnload(ui), false);
+  }, { copyRequest: {} }));
+
+test('clean Additional Copy assignment permits Claim; Cancel clears only a dirty assignment', () =>
+  fixture('?stage=additional_copies&scope=2&request=71', async ui => {
+    const form = await openInlineDraft(ui, 'Assign', copyAssignmentLabel);
+    assert.equal(protectedUnload(ui), false);
+    actionButton('Claim').click(); await until(() => !form.isConnected, 'clean form does not block Claim');
+    const opener = actionButton('Assign');
+    const next = await openInlineDraft(ui, 'Assign', copyAssignmentLabel);
+    ui.edit(`select[aria-label="${copyAssignmentLabel}"]`, '21');
+    actionButton('Cancel', next).click();
+    assert.equal(document.activeElement, opener);
+    assert.equal(protectedUnload(ui), false);
+    actionButton('Close task').click(); await settle();
+    assert.equal(ui.confirms.length, 1, 'the task close keeps its existing confirmation');
+  }, { copyRequest: {} }));
+
+for (const exit of ['back', 'forward', 'close', 'sign-out']) {
+  test(`Additional Copy assignment protects ${exit} and beforeunload`, () =>
+    fixture('?stage=additional_copies&scope=2&request=71', async ui => {
+      if (exit === 'forward') {
+        ui.dom.window.history.pushState({ marker: 'next' }, '', '?stage=profile');
+        await ui.back();
+      }
+      if (exit === 'back') ui.dom.window.history.pushState({ marker: 'detail' }, '', ui.dom.window.location.href);
+      const form = await openInlineDraft(ui, 'Assign', copyAssignmentLabel);
+      ui.edit(`select[aria-label="${copyAssignmentLabel}"]`, '21');
+      const url = ui.dom.window.location.href;
+      if (exit === 'back') await ui.back();
+      if (exit === 'forward') await ui.forward();
+      if (exit === 'close') ui.get('#close-request').click();
+      if (exit === 'sign-out') ui.get('#sign-out').click();
+      await settle();
+      assert.equal(ui.dom.window.location.href, url);
+      assert.equal(form.isConnected, true);
+      assert.equal(form.querySelector('select').value, '21');
+      assert.equal(protectedUnload(ui), true);
+      assert.equal(requestMutations(ui).length, 0);
+      assert.equal(ui.confirms.length, 1);
+      ui.allowDiscard(); ui.get('[data-view="profile"]').click(); await settle();
+      assert.equal(form.isConnected, false);
+      submitForm(ui, form); await settle();
+      assert.equal(requestMutations(ui).length, 0);
+      assert.equal(protectedUnload(ui), false);
+    }, { copyRequest: {} }));
+}
+
+test('Additional Copy preview rechecks inline drafts after its asynchronous load', () =>
+  fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    const form = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    let resolvePreview;
+    ui.setApi(({ pathname, init }) => pathname.endsWith('/additional-copy') && init.method === 'GET'
+      ? new Promise(done => { resolvePreview = done; }) : undefined);
+    actionButton('Additional copy').click(); await until(() => resolvePreview, 'preview load pending');
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    resolvePreview(response(200, { version: 'v1', bibid: 9001, openCount: 0 })); await settle();
+    assert.equal(ui.get('#additional-copy-create-dialog').open, false);
+    assert.equal(form.querySelector('select').value, '21');
+    assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+    assert.equal(requestMutations(ui).length, 0);
+  }, { status: 'pending_hold' }));
+
+test('Additional Copy creation rechecks competing parent drafts before recording an attempt', () =>
+  fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    const form = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    await openCopyPreview(ui);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    submitCopy(ui); await settle();
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), null);
+    assert.equal(form.querySelector('select').value, '21');
+    assert.equal(ui.get('#additional-copy-create-dialog').open, true);
+    assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+  }, { status: 'pending_hold', staff: actorA }));
+
+for (const kind of ['assignment', 'pickup', 'rejection', 'copy-assignment']) {
+  test(`stale ${kind} load cannot register against an authoritative replacement version`, () =>
+    fixture(kind === 'copy-assignment' ? '?stage=additional_copies&scope=2&request=71'
+      : `?stage=${kind === 'pickup' ? 'pending_hold' : 'suggestion'}&scope=2&request=${id}`, async ui => {
+      let resolveLoad;
+      ui.setApi(({ pathname }) => pathname.endsWith(kind === 'pickup' ? '/pickup-options'
+        : kind === 'rejection' ? '/rejection-templates' : '/assignment-candidates')
+        ? new Promise(done => { resolveLoad = done; }) : undefined);
+      actionButton(kind === 'pickup' ? 'Pickup' : kind === 'rejection' ? 'Reject' : 'Assign').click();
+      await until(() => resolveLoad, 'inline load pending');
+      const titleReads = ui.calls.filter(call => call.url.includes(`/title-requests/${id}?`)).length;
+      actionButton('Claim').click();
+      await until(() => /claimed/i.test(ui.get('#app-status').textContent), 'authoritative Claim rendered');
+      resolveLoad(response(200, kind === 'pickup' ? { version: 'v1', selectedPickupBranchId: 101,
+        pickupBranches: [{ id: 101, label: 'Main' }, { id: 102, label: 'Branch' }] }
+        : kind === 'rejection' ? { items: [{ id: '1', name: 'Default' }], defaultTemplateId: '1' }
+          : { candidates: [{ id: '20', displayName: 'Staff A' }, { id: '21', displayName: 'Staff B' }] }));
+      await settle();
+      assert.equal(ui.get('.inline-form'), null);
+      assert.equal(ui.get('.action-choice'), null);
+      assert.equal(protectedUnload(ui), false);
+      assert.equal(requestMutations(ui).length, 1);
+      if (kind !== 'copy-assignment') assert.equal(ui.calls.filter(call => call.url.includes(`/title-requests/${id}?`)).length, titleReads);
+    }, { status: kind === 'pickup' ? 'pending_hold' : 'suggestion', copyRequest: kind === 'copy-assignment' ? {} : undefined }));
 }
 
 test('Recent Requests honors the dirty Profile discard boundary', () =>

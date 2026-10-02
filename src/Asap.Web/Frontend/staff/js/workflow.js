@@ -243,6 +243,7 @@ export function createWorkflowApp() {
     currentRequest: null,
     editControls: null,
     editorDirty: false,
+    editorDraft: null,
     dialogDraftChecks: [],
     verifiedBib: null,
     dialogMutationInFlight: null,
@@ -269,15 +270,26 @@ export function createWorkflowApp() {
 
   function hasRequestDraft() {
     return dom.dialog.open && ((state.selectedRequestType === 'title_request' && state.editorDirty) ||
-      state.dialogDraftChecks.some(changed => changed()));
+      state.dialogDraftChecks.some(draft => draft.changed()));
   }
 
   function trackDialogFormDraft(form) {
     const value = control => control.type === 'checkbox' ? control.checked : control.value;
     const baseline = [...form.querySelectorAll('input, select, textarea')]
       .map(control => ({ control, value: value(control) }));
-    state.dialogDraftChecks.push(() => form.isConnected &&
-      baseline.some(item => value(item.control) !== item.value));
+    const draft = { form, changed: () => form.isConnected &&
+      baseline.some(item => value(item.control) !== item.value) };
+    state.dialogDraftChecks = state.dialogDraftChecks.filter(item => item.form.isConnected);
+    state.dialogDraftChecks.push(draft);
+    return draft;
+  }
+
+  function cancelDialogFormDraft(form, returnFocus) {
+    if (!form.isConnected || state.dialogMutationInFlight) return;
+    state.dialogDraftChecks = state.dialogDraftChecks.filter(draft => draft.form !== form);
+    form.remove();
+    if (returnFocus?.isConnected) returnFocus.focus();
+    announce('Unsaved request changes discarded.');
   }
 
   function hasSuggestionDraft() {
@@ -344,11 +356,15 @@ export function createWorkflowApp() {
     return true;
   }
 
-  function allowRequestMutation(request, saveDraft = false) {
-    if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return false;
-    // These mutations submit their own choice form; only unrelated request-editor edits block them.
-    if (!saveDraft && dom.dialog.open && state.editorDirty) {
+  function allowRequestMutation(request, draft = null, requestType = 'title_request') {
+    if (!isCurrentDialogRequest(request, requestType) || state.dialogMutationInFlight) return false;
+    // A submission consumes only its own draft; every other dirty form still blocks it.
+    if (requestType === 'title_request' && state.editorDirty && state.editorDraft !== draft) {
       announce('Save or revert the current request edits before performing a workflow action.', 'warning');
+      return false;
+    }
+    if (state.dialogDraftChecks.some(item => item !== draft && item.changed())) {
+      announce('Finish or cancel the current request changes before performing another action.', 'warning');
       return false;
     }
     return true;
@@ -771,8 +787,9 @@ export function createWorkflowApp() {
     return false;
   }
 
-  function confirmCurrent(request, requestType, message) {
-    return window.confirm(message) && isCurrentDialogRequest(request, requestType);
+  function confirmCurrent(request, requestType, message, draft = null) {
+    return allowRequestMutation(request, draft, requestType) &&
+      window.confirm(message) && isCurrentDialogRequest(request, requestType);
   }
 
   function updateBulkDeleteButtons() {
@@ -1109,6 +1126,7 @@ export function createWorkflowApp() {
     state.currentRequest = null;
     state.editControls = null;
     state.editorDirty = false;
+    state.editorDraft = null;
     state.dialogDraftChecks = [];
     state.selectedRequestId = null;
     state.selectedRequestType = null;
@@ -2015,6 +2033,7 @@ export function createWorkflowApp() {
   }
 
   function renderAdditionalCopy(request, { preserveDialogMutation = false } = {}) {
+    state.editorDraft = null;
     state.dialogDraftChecks = [];
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();
@@ -2083,7 +2102,7 @@ export function createWorkflowApp() {
       bar.append(commandButton('Claim', 'user-plus', () => mutateAdditionalCopy(request, 'claim', 'Task claimed.'), 'primary-button'));
     }
     if (request.capabilities?.canAssign) {
-      bar.append(commandButton('Assign', 'users', () => showAdditionalCopyAssignment(request)));
+      bar.append(commandButton('Assign', 'users', event => showAdditionalCopyAssignment(request, event.currentTarget)));
     }
     if (request.capabilities?.canClose) {
       bar.append(commandButton('Close task', 'check', () => {
@@ -2112,11 +2131,11 @@ export function createWorkflowApp() {
     return bar;
   }
 
-  async function mutateAdditionalCopy(request, operation, successMessage, extra = {}) {
-    if (!isCurrentDialogRequest(request, 'additional_copy') ||
-        state.dialogMutationInFlight === `copy:${request.id}:${request.version}`) return;
+  async function mutateAdditionalCopy(request, operation, successMessage, extra = {}, draft = null) {
+    if (!allowRequestMutation(request, draft, 'additional_copy')) return;
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = `copy:${request.id}:${request.version}`;
+    const restoreControls = disableDialogControls();
     announce('Saving additional-copy task...');
     try {
       const result = await authorizedJson(`/api/asap/staff/additional-copies/${request.id}${operation === 'delete' ? '' : `/${operation}`}`, {
@@ -2206,18 +2225,20 @@ export function createWorkflowApp() {
       }
     } finally {
       if (state.dialogMutationInFlight === `copy:${request.id}:${request.version}`) state.dialogMutationInFlight = null;
+      restoreControls();
       latestLoads.finish('dialog-mutation', mutation.token);
     }
   }
 
-  async function showAdditionalCopyAssignment(request) {
+  async function showAdditionalCopyAssignment(request, returnFocus) {
+    if (!isCurrentDialogRequest(request, 'additional_copy') || state.dialogMutationInFlight) return;
     const load = latestLoads.begin('assignment-candidates');
     announce('Loading eligible staff...');
     try {
       const result = await authorizedJson(`/api/asap/staff/assignment-candidates?libraryOrgId=${request.libraryOrgId}`, {
         signal: load.signal
       });
-      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'additional_copy')) return;
+      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'additional_copy') || state.dialogMutationInFlight) return;
       const select = element('select', { 'aria-label': 'Assign additional-copy task' });
       const candidates = result.candidates || [];
       for (const candidate of candidates) {
@@ -2230,14 +2251,15 @@ export function createWorkflowApp() {
         labeledInput('Assign task', select),
         element('button', { type: 'submit', className: 'primary-button', disabled: candidates.length === 0 }, [icon('user-plus'), 'Assign'])
       ]);
+      form.append(commandButton('Cancel', 'times', () => cancelDialogFormDraft(form, returnFocus)));
+      const draft = trackDialogFormDraft(form);
       form.addEventListener('submit', async event => {
         event.preventDefault();
         if (!form.isConnected || !isCurrentDialogRequest(request, 'additional_copy')) return;
         await mutateAdditionalCopy(request, 'assign', 'Additional-copy task assigned.', {
           assigneeId: select.value
-        });
+        }, draft);
       });
-      trackDialogFormDraft(form);
       dom.dialogBody.prepend(form);
       select.focus();
       announce(candidates.length ? 'Choose an assignee.' : 'No eligible staff are available.');
@@ -3040,7 +3062,7 @@ export function createWorkflowApp() {
           }
         }));
       }
-      bar.append(commandButton('Assign', 'users', () => showAssignment(request)));
+      bar.append(commandButton('Assign', 'users', event => showAssignment(request, event.currentTarget)));
     }
     if (request.status === 'suggestion') {
       bar.append(
@@ -3054,7 +3076,7 @@ export function createWorkflowApp() {
         'primary-button', !allowedActions.has('catalogFound')));
     } else if (request.status === 'pending_hold') {
       bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
-      bar.append(commandButton('Pickup', 'map-marker', () => showPickup(request), 'secondary-button',
+      bar.append(commandButton('Pickup', 'map-marker', event => showPickup(request, event.currentTarget), 'secondary-button',
         workflowBlocked && request.capabilities?.blockingReason !== 'pickup_reconciliation_required'));
       if (request.capabilities?.canPlaceHold === true) {
         bar.append(commandButton('Place hold', 'bookmark', () => {
@@ -3202,6 +3224,8 @@ export function createWorkflowApp() {
 
   function buildEditForm(request, configuration) {
     const form = element('form', { className: 'edit-form' });
+    const draft = Symbol('request editor');
+    state.editorDraft = draft;
     state.editorDirty = false;
     const title = element('input', { value: request.title, required: 'required', maxlength: '500' });
     const author = element('input', { value: request.author || '', maxlength: '500' });
@@ -3358,7 +3382,7 @@ export function createWorkflowApp() {
     updatePreview();
     form.addEventListener('submit', async event => {
       event.preventDefault();
-      if (save.disabled || !isCurrentDialogRequest(request, 'title_request')) return;
+      if (save.disabled || !form.isConnected || !allowRequestMutation(request, draft)) return;
       if (!bib.disabled && bib.value.trim() && positivePolarisId(bib.value) === null) {
         announce('Enter a positive Polaris BIB ID up to 2147483647.', 'error');
         bib.focus();
@@ -3374,7 +3398,7 @@ export function createWorkflowApp() {
         ? 'Save with automatic hold off? This request will close without placing a hold.'
         : 'Save with automatic hold off? Advancing this request with a verified BIB will close it without placing a hold.';
       if ((bibWillChange || bibSelected || turnsOffHoldForBib || closesExistingNoHold) && !autohold.checked &&
-          !confirmCurrent(request, 'title_request', noAutoHoldConsequence)) return;
+          !confirmCurrent(request, 'title_request', noAutoHoldConsequence, draft)) return;
       if (request.claimType === 'automatic_format_rule') {
         const claimantId = request.claimedByStaffUserId == null ? null : String(request.claimedByStaffUserId);
         const transfersClaim = claimantId && claimantId !== String(state.staff?.id);
@@ -3386,7 +3410,7 @@ export function createWorkflowApp() {
           : format.value !== request.format
             ? 'The new format rule may reassign or clear the automatic claim.'
             : 'Your automatic claim will remain.';
-        if (!confirmCurrent(request, 'title_request', `${formatConsequence} ${claimConsequence}`)) return;
+        if (!confirmCurrent(request, 'title_request', `${formatConsequence} ${claimConsequence}`, draft)) return;
       }
       if (!isCurrentDialogRequest(request, 'title_request') || !form.isConnected) return;
       await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
@@ -3405,7 +3429,7 @@ export function createWorkflowApp() {
         autohold: autohold.checked,
         notes: notes.value,
         customFields: collectCustomFields(request, customFieldControls)
-      }, 'Request changes saved.');
+      }, 'Request changes saved.', draft);
     });
     return form;
   }
@@ -3453,7 +3477,7 @@ export function createWorkflowApp() {
     const choice = { request, action, panel, returnFocus };
     state.actionChoice = choice;
     panel.append(element('div', { className: 'form-actions' }, [submit, cancel]));
-    if (action !== 'reject') trackDialogFormDraft(panel);
+    let draft = action === 'reject' ? null : trackDialogFormDraft(panel);
     panel.addEventListener('submit', async event => {
       event.preventDefault();
       if (state.actionChoice !== choice || !isCurrentDialogRequest(request, 'title_request')) return;
@@ -3461,7 +3485,7 @@ export function createWorkflowApp() {
       try {
         await runAction(request, action, undefined, action === 'purchase'
           ? { emailPurchaseReminder: input?.checked === true }
-          : { rejectionTemplateId: input.value || null });
+          : { rejectionTemplateId: input.value || null }, draft);
       } finally {
         if (state.actionChoice === choice && panel.isConnected) submit.disabled = false;
       }
@@ -3479,7 +3503,7 @@ export function createWorkflowApp() {
           input.append(element('option', { value: String(item.id), text: item.name }));
         }
         input.value = data.defaultTemplateId || '';
-        trackDialogFormDraft(panel);
+        draft = trackDialogFormDraft(panel);
         submit.disabled = false;
       })
       .catch(error => {
@@ -3491,11 +3515,11 @@ export function createWorkflowApp() {
       .finally(() => latestLoads.finish('action-choice', load.token));
   }
 
-  async function runAction(request, action, targetStatus, choices = {}) {
+  async function runAction(request, action, targetStatus, choices = {}, draft = null) {
     const entersPendingHold = action === 'catalogFound' || action === 'alreadyOwn' ||
       targetStatus === 'pending_hold' || action === 'purchase' && Boolean(request.bibid);
-    if (!allowRequestMutation(request)) {
-      if (entersPendingHold && hasRequestDraft() && !state.dialogMutationInFlight) {
+    if (!allowRequestMutation(request, draft)) {
+      if (entersPendingHold && state.editorDirty && state.editorDraft !== draft && !state.dialogMutationInFlight) {
         announce(isVerifiedDraft(request)
           ? 'Save the current request edits before moving to Pending hold.'
           : 'Search Polaris, select the matching BIB, and save it before moving to Pending hold.', 'error');
@@ -3520,13 +3544,13 @@ export function createWorkflowApp() {
       close: 'Close this hold-placed request? Its placed-hold history will remain.',
       reopen: 'Reopen this closed request as a suggestion? The action will assign a manual claim to you.'
     };
-    if (confirmations[action] && !confirmCurrent(request, 'title_request', confirmations[action])) return;
+    if (confirmations[action] && !confirmCurrent(request, 'title_request', confirmations[action], draft)) return;
     await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
       version: request.version,
       action,
       status: targetStatus,
       ...choices
-    }, 'Workflow action completed.');
+    }, 'Workflow action completed.', draft);
   }
 
   async function showAdditionalCopyPreview(request, returnFocus) {
@@ -3544,6 +3568,7 @@ export function createWorkflowApp() {
         signal: load.signal
       });
       if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request')) return;
+      if (!allowRequestMutation(request)) return;
       state.createCopyRequest = { request, version: preview.version };
       state.createCopyReturnFocus = returnFocus || document.activeElement;
       const holdState = request.status === 'hold_placed' ? 'placed' : 'queued';
@@ -3589,6 +3614,7 @@ export function createWorkflowApp() {
     if (!pending || pending.submitting || pending.outcomeUnconfirmed ||
         (uncertainCreation && (!uncertainCreation.reviewed || uncertainCreation.sourceId !== String(pending.request.id))) ||
         !isCurrentDialogRequest(pending.request, 'title_request')) return;
+    if (!allowRequestMutation(pending.request)) return;
     pending.submitting = true;
     const mutation = latestLoads.begin('additional-copy-create-mutation');
     const submit = dom.createCopyForm.querySelector('button[type="submit"]');
@@ -3740,8 +3766,8 @@ export function createWorkflowApp() {
     }
   }
 
-  async function mutateRequest(request, path, body, successMessage) {
-    if (!allowRequestMutation(request, body?.action === 'edit')) return;
+  async function mutateRequest(request, path, body, successMessage, draft = null) {
+    if (!allowRequestMutation(request, draft)) return;
     const selectionGeneration = state.navigationGeneration;
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = `title:${request.id}:${request.version}`;
@@ -3918,14 +3944,15 @@ export function createWorkflowApp() {
     announce('The attempted change was not saved. Review the duplicate request and choose whether to close this request.', 'error');
   }
 
-  async function showAssignment(request) {
+  async function showAssignment(request, returnFocus) {
+    if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return;
     const load = latestLoads.begin('assignment-candidates');
     announce('Loading eligible staff...');
     try {
       const result = await authorizedJson(`/api/asap/staff/assignment-candidates?libraryOrgId=${request.libraryOrgId}`, {
         signal: load.signal
       });
-      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request')) return;
+      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return;
       const select = element('select', { 'aria-label': 'Assign to staff member' });
       const candidates = result.candidates || [];
       for (const candidate of candidates) {
@@ -3938,15 +3965,16 @@ export function createWorkflowApp() {
         labeledInput('Assign request', select),
         element('button', { type: 'submit', className: 'primary-button', disabled: candidates.length === 0 }, [icon('user-plus'), 'Assign'])
       ]);
+      form.append(commandButton('Cancel', 'times', () => cancelDialogFormDraft(form, returnFocus)));
+      const draft = trackDialogFormDraft(form);
       form.addEventListener('submit', async event => {
         event.preventDefault();
         if (!form.isConnected || !isCurrentDialogRequest(request, 'title_request')) return;
         await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/assign`, {
           version: request.version,
           assigneeId: select.value
-        }, 'Request assigned.');
+        }, 'Request assigned.', draft);
       });
-      trackDialogFormDraft(form);
       dom.dialogBody.prepend(form);
       select.focus();
       announce(candidates.length ? 'Choose an assignee.' : 'No eligible staff are available.');
@@ -3960,7 +3988,8 @@ export function createWorkflowApp() {
     }
   }
 
-  async function showPickup(request) {
+  async function showPickup(request, returnFocus) {
+    if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return;
     const load = latestLoads.begin('pickup-options');
     announce('Loading current pickup preference...');
     try {
@@ -3969,7 +3998,7 @@ export function createWorkflowApp() {
         body: {},
         signal: load.signal
       });
-      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request')) return;
+      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return;
       const select = element('select', { 'aria-label': 'Preferred pickup branch' });
       for (const branch of options.pickupBranches || []) {
         select.append(element('option', { value: branch.id, text: branch.label }));
@@ -3988,7 +4017,7 @@ export function createWorkflowApp() {
           preferredPickupBranchId: Number(select.value),
           currentPreferredPickupBranchIdAtLoad: options.currentPreferredPickupBranchId,
           currentPreferredPickupBranchObservedAtLoad: true
-        }, 'Pickup preference updated.');
+        }, 'Pickup preference updated.', draft);
       });
       if (request.pickupOperation && state.staff?.role === 'super_admin') {
         const acknowledged = element('input', { type: 'checkbox' });
@@ -4003,10 +4032,11 @@ export function createWorkflowApp() {
             currentPreferredPickupBranchIdAtLoad: options.currentPreferredPickupBranchId,
             currentPreferredPickupBranchObservedAtLoad: true,
             confirmOriginalDispatchEnded: true
-          }, 'Observed pickup preference reconciled.');
+          }, 'Observed pickup preference reconciled.', draft);
         }, 'secondary-button'));
       }
-      trackDialogFormDraft(form);
+      form.append(commandButton('Cancel', 'times', () => cancelDialogFormDraft(form, returnFocus)));
+      const draft = trackDialogFormDraft(form);
       dom.dialogBody.prepend(form);
       select.focus();
       announce('Current pickup preference loaded.');
@@ -4131,13 +4161,21 @@ export function createWorkflowApp() {
       exclusionAttestationField,
       labeledInput('Reason', reason, 'wide'),
       element('div', { className: 'form-actions wide' }, [
-        element('button', { type: 'submit', className: 'danger-button' }, [icon('check-circle'), 'Resolve operation'])
+        element('button', { type: 'submit', className: 'danger-button' }, [icon('check-circle'), 'Resolve operation']),
+        commandButton('Revert resolution changes', 'undo', () => {
+          if (!form.isConnected || state.dialogMutationInFlight) return;
+          form.reset();
+          updateEvidence();
+          outcome.focus();
+          announce('Unsaved resolution changes discarded.');
+        })
       ])
     );
     updateEvidence();
-    trackDialogFormDraft(form);
+    const draft = trackDialogFormDraft(form);
     form.addEventListener('submit', async event => {
       event.preventDefault();
+      if (!form.isConnected || !allowRequestMutation(request, draft)) return;
       const provenFinalHoldId = finalHoldId.disabled ? null : positivePolarisId(finalHoldId.value);
       if (!finalHoldId.disabled && provenFinalHoldId === null) {
         announce('Enter a positive Polaris hold ID no larger than 2147483647.');
@@ -4145,7 +4183,7 @@ export function createWorkflowApp() {
         return;
       }
       if (!confirmCurrent(request, 'title_request',
-        `Resolve hold operation ${operation.id}, attempt ${operation.attemptNumber}, as ${outcome.value.replaceAll('_', ' ')} using ${evidence.selectedOptions[0]?.textContent || evidence.value}? The recorded evidence will determine whether this request has a placed hold or may be retried.`)) return;
+        `Resolve hold operation ${operation.id}, attempt ${operation.attemptNumber}, as ${outcome.value.replaceAll('_', ' ')} using ${evidence.selectedOptions[0]?.textContent || evidence.value}? The recorded evidence will determine whether this request has a placed hold or may be retried.`, draft)) return;
       await mutateOperation(request, operation, 'resolve', {
         version: operation.version,
         requestVersion: request.version,
@@ -4161,13 +4199,13 @@ export function createWorkflowApp() {
         executorExclusionAttested: !exclusionAttested.disabled && exclusionAttested.checked,
         executorExclusionReference: exclusionReference.disabled ? null : exclusionReference.value,
         executorExclusionExplanation: exclusionExplanation.disabled ? null : exclusionExplanation.value
-      });
+      }, draft);
     });
     return form;
   }
 
-  async function mutateOperation(request, operation, action, body) {
-    if (!allowRequestMutation(request)) return;
+  async function mutateOperation(request, operation, action, body, draft = null) {
+    if (!allowRequestMutation(request, draft)) return;
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = `hold:${operation.id}:${operation.version}`;
     const restoreControls = disableDialogControls();
@@ -4447,6 +4485,7 @@ export function createWorkflowApp() {
     state.currentRequest = null;
     state.editControls = null;
     state.editorDirty = false;
+    state.editorDraft = null;
     state.dialogDraftChecks = [];
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
