@@ -9,6 +9,7 @@ import {
 } from './http.js';
 import { createSettingsController } from './settings.js';
 import { createDraftScope } from './draft-scope.js';
+import { createOperationsController } from './operations-controller.js';
 import { createProfileController } from './profile-controller.js';
 import { createSessionIdentity } from './session-identity.js';
 import {
@@ -41,70 +42,7 @@ import {
   replaceStageParameter as writeReplacedStageParameter
 } from './url-utils.js';
 
-const STATUS_LABELS = {
-  open: 'Open',
-  suggestion: 'Suggestion',
-  outstanding_purchase: 'Outstanding purchase',
-  pending_hold: 'Pending hold',
-  hold_placed: 'Hold placed',
-  closed: 'Closed'
-};
-
-function element(tag, attributes = {}, children = []) {
-  const node = document.createElement(tag);
-  for (const [name, value] of Object.entries(attributes)) {
-    if (value === null || value === undefined) continue;
-    if (name === 'className') node.className = value;
-    else if (name === 'text') node.textContent = value;
-    else if (name === 'checked') node.checked = Boolean(value);
-    else if (name === 'disabled') node.disabled = Boolean(value);
-    else if (name === 'value') node.value = value;
-    else if (name.startsWith('on') && typeof value === 'function') node.addEventListener(name.slice(2), value);
-    else node.setAttribute(name, String(value));
-  }
-  for (const child of Array.isArray(children) ? children : [children]) {
-    if (child === null || child === undefined) continue;
-    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
-  }
-  return node;
-}
-
-function icon(name) {
-  return element('i', { className: `fa fa-${name}`, 'aria-hidden': 'true' });
-}
-
-function commandButton(label, iconName, handler, className = 'secondary-button', disabled = false) {
-  return element('button', { type: 'button', className, onclick: handler, disabled }, [icon(iconName), label]);
-}
-
-function text(value, fallback = 'Not recorded') {
-  const normalized = value === null || value === undefined ? '' : String(value).trim();
-  return normalized || fallback;
-}
-
-function dateTime(value) {
-  if (!value) return 'Not recorded';
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
-}
-
-function statusLabel(value) {
-  return STATUS_LABELS[value] || text(value, 'Unknown');
-}
-
-function closeReasonLabel(value) {
-  const labels = {
-    rejected: 'Rejected',
-    manual: 'Closed by staff',
-    duplicate_hold: 'Duplicate patron hold',
-    purchased_no_hold: 'Purchased, no hold',
-    hold_cancelled: 'Hold cancelled',
-    silent: 'Closed silently',
-    'Silently Closed': 'Closed silently'
-  };
-  return Object.hasOwn(labels, value) ? labels[value]
-    : value ? String(value).replaceAll('_', ' ') : 'No reason recorded';
-}
+import { STATUS_LABELS, element, icon, commandButton, text, dateTime, statusLabel, closeReasonLabel } from './ui.js';
 
 function currentRequestParameter() {
   return requestedRequestIdFromUrl();
@@ -134,15 +72,6 @@ export function createWorkflowApp() {
     profileView: document.querySelector('#profile-view'),
     operationsView: document.querySelector('#operations-view'),
     operationsTab: document.querySelector('#operations-view-tab'),
-    operationsScopeField: document.querySelector('#operations-scope-field'),
-    operationsScope: document.querySelector('#operations-scope'),
-    runWorkflowNow: document.querySelector('#run-workflow-now'),
-    runWeeklyNow: document.querySelector('#run-weekly-now'),
-    forceWeeklyNow: document.querySelector('#force-weekly-now'),
-    sendTestEmail: document.querySelector('#send-test-email'),
-    refreshOperations: document.querySelector('#refresh-operations'),
-    queueProgressTable: document.querySelector('#queue-progress-table'),
-    emailOperationsTable: document.querySelector('#email-operations-table'),
     settingsView: document.querySelector('#settings-view'),
     settingsTab: document.querySelector('#settings-view-tab'),
     viewTabs: [...document.querySelectorAll('.view-tab')],
@@ -221,9 +150,6 @@ export function createWorkflowApp() {
     deepLinkHandled: false,
     additionalCopyDeepLinkHandled: false,
     additionalCopyLoaded: false,
-    operationsScope: 'all',
-    operationsLoaded: false,
-    operationMutation: null,
     createCopyRequest: null,
     createCopyReturnFocus: null,
     staffSuggestion: null,
@@ -487,6 +413,17 @@ export function createWorkflowApp() {
     }
   }
 
+  const operationsController = createOperationsController({ root: dom.operationsView, sessionIdentity, announce,
+    onScopeChange: () => { void refreshEmailReadiness(); },
+    onReceipt: (message, owner, attempt) => {
+      if (state.staff && !sessionIdentity.isCurrent(owner)) return;
+      state.partialSessionFailureMessage = message;
+      state.partialSessionFailureOwner = attempt;
+      if (dom.workspace.hidden) dom.signedOutMessage.textContent = message;
+    },
+    clearReceipt: clearCommittedSessionFallback
+  });
+
   const profileController = createProfileController({ root: dom.profileView, sessionIdentity, announce,
     onPreferences: (staff, owner) => {
       if (!updateStaffPreferences(staff, owner)) return false;
@@ -530,7 +467,7 @@ export function createWorkflowApp() {
   function emailReadinessScopeKey() {
     const selectedScope = state.activeView === 'settings'
       ? settingsController.currentScope()
-      : state.activeView === 'operations' ? state.operationsScope : state.scope;
+      : state.activeView === 'operations' ? operationsController.currentScope() : state.scope;
     return state.staff?.role === 'super_admin' && /^\d+$/.test(String(selectedScope))
       ? String(selectedScope) : 'default';
   }
@@ -668,7 +605,7 @@ export function createWorkflowApp() {
     latestLoads.begin('additional-copies').abort();
     latestLoads.begin('settings-route').abort();
     latestLoads.begin('operational-scope').abort();
-    latestLoads.begin('operations').abort();
+    operationsController.deactivate();
   }
 
   function cancelAssignmentCandidateLoad() {
@@ -1110,6 +1047,7 @@ export function createWorkflowApp() {
     if (dom.createCopyDialog.open) dom.createCopyDialog.close();
     sessionIdentity.clear();
     state.staff = null;
+    operationsController.signedOut();
     state.requests = [];
     state.additionalCopies = [];
     state.queueLoadedScope = null;
@@ -1137,7 +1075,7 @@ export function createWorkflowApp() {
     state.staffSuggestionReturnFocus = null;
     latestLoads.begin('queue').abort();
     latestLoads.begin('additional-copies').abort();
-    latestLoads.begin('operations').abort();
+    operationsController.deactivate();
     latestLoads.begin('detail').abort();
     latestLoads.begin('additional-copy-detail').abort();
     latestLoads.begin('additional-copy-preview').abort();
@@ -1191,18 +1129,14 @@ export function createWorkflowApp() {
     if (state.unconfirmedCopyCreationAwaitingRefresh) {
       state.additionalCopyLoaded = false;
     }
-    state.operationMutation = null;
-    try {
-      const retained = JSON.parse(window.sessionStorage.getItem(operationStorageKey(staff)) || 'null');
-      if (retained?.operationId && typeof retained.path === 'string' &&
-          /^\/api\/asap\/staff\/(workflow\/(run-now|weekly-summary\/run-now\?force=(true|false))|email-operations\/(test|[1-9]\d*\/retry))$/.test(retained.path)) {
-        state.operationMutation = { ...retained, storageKey: operationStorageKey(staff), uncertain: true, reviewed: false };
-      }
-    } catch { /* Malformed browser recovery data cannot dispatch an operation. */ }
-    updateOperationControls();
+    operationsController.setStaff(staff);
     state.recentKey = recentStorageKey(staff);
     renderRecentRequests();
     state.scope = staff.role === 'super_admin' ? 'all' : String(staff.organizationId);
+    for (const select of [dom.scope, dom.additionalCopyScope]) {
+      select.replaceChildren(element('option', { value: state.scope,
+        text: staff.role === 'super_admin' ? 'All libraries' : 'My library' }));
+    }
     dom.signedOut.hidden = true;
     dom.workspace.hidden = false;
     dom.sessionActions.hidden = false;
@@ -1212,13 +1146,6 @@ export function createWorkflowApp() {
     dom.additionalCopyScopeField.hidden = staff.role !== 'super_admin';
     dom.operationsTab.hidden = staff.role !== 'admin' && staff.role !== 'super_admin';
     updateBulkDeleteButtons();
-    dom.operationsScopeField.hidden = staff.role !== 'super_admin';
-    state.operationsScope = staff.role === 'super_admin' ? 'all' : String(staff.organizationId);
-    dom.operationsScope.replaceChildren(element('option', {
-      value: state.operationsScope,
-      text: staff.role === 'super_admin' ? 'All libraries' : 'My library'
-    }));
-    dom.operationsScope.value = state.operationsScope;
     settingsController.setStaff(staff);
     dom.claim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
     dom.similar.value = 'all';
@@ -1336,7 +1263,7 @@ export function createWorkflowApp() {
       }
       switchView(requestedStage, false);
       replaceStageParameter(requestedStage);
-      if (requestedStage === 'operations') await loadOperations();
+      if (requestedStage === 'operations') await operationsController.refresh();
       return;
     }
     if (requestedStage === 'additional_copies') {
@@ -1382,6 +1309,7 @@ export function createWorkflowApp() {
   }
 
   function populateScopes(organizations, selectedScope) {
+    operationsController.setLibraries(organizations);
     for (const select of [dom.scope, dom.additionalCopyScope]) {
       if (!select) continue;
       select.replaceChildren(element('option', { value: 'all', text: 'All libraries' }));
@@ -1389,22 +1317,6 @@ export function createWorkflowApp() {
         select.append(element('option', { value: organization.id, text: organization.name }));
       }
       select.value = selectedScope;
-    }
-    if (dom.operationsScope) {
-      const operationScope = state.staff?.role === 'super_admin'
-        ? state.operationsScope
-        : String(state.staff?.organizationId || selectedScope);
-      const knownScopes = new Set(['all', ...(organizations || []).map(item => String(item.id))]);
-      const reconciledScope = knownScopes.has(String(operationScope)) ? String(operationScope) : String(selectedScope);
-      dom.operationsScope.replaceChildren(element('option', { value: 'all', text: 'All libraries' }));
-      for (const organization of organizations || []) {
-        dom.operationsScope.append(element('option', {
-          value: organization.id,
-          text: organization.name || organization.displayName || String(organization.id)
-        }));
-      }
-      dom.operationsScope.value = reconciledScope;
-      state.operationsScope = reconciledScope;
     }
   }
 
@@ -1465,206 +1377,6 @@ export function createWorkflowApp() {
       if (load.isCurrent()) dom.refresh.disabled = false;
       latestLoads.finish('queue', load.token);
     }
-  }
-
-  function operationsQuery(scope = state.operationsScope) {
-    return scope && scope !== 'all' ? `?organizationId=${encodeURIComponent(scope)}` : '';
-  }
-
-  function operationStorageKey(staff = state.staff) {
-    return `asap.staff.operation.${staff?.tenantId || ''}.${staff?.id || ''}`;
-  }
-
-  function storeOperation(operation) {
-    try {
-      if (operation) window.sessionStorage.setItem(operation.storageKey, JSON.stringify(operation));
-      else if (state.operationMutation) window.sessionStorage.removeItem(state.operationMutation.storageKey);
-      return true;
-    } catch { return false; }
-  }
-
-  function updateOperationControls() {
-    const operation = state.operationMutation;
-    const locked = Boolean(operation);
-    for (const control of [dom.runWorkflowNow, dom.runWeeklyNow, dom.forceWeeklyNow, dom.sendTestEmail,
-      dom.operationsScope, ...dom.emailOperationsTable.querySelectorAll('button')]) control.disabled = locked;
-    const notice = document.querySelector('#operations-outcome');
-    notice.hidden = !operation?.uncertain;
-    notice.replaceChildren();
-    if (!operation?.uncertain) return;
-    notice.append(element('p', { text: `${operation.message} outcome is unconfirmed. Refresh Operations to review current work before retrying this same operation. A new operation remains blocked.` }));
-    if (operation.reviewed) {
-      notice.append(commandButton('Retry same operation', 'refresh', () =>
-        runOperation(operation.path, operation.message, operation)));
-    }
-  }
-
-  function renderOperationsTable(container, columns, rows, emptyText) {
-    if (!rows.length) {
-      container.replaceChildren(element('p', { className: 'operations-empty', text: emptyText }));
-      return;
-    }
-    const table = element('table');
-    const head = element('thead');
-    const headerRow = element('tr');
-    for (const column of columns) headerRow.append(element('th', { scope: 'col', text: column.label }));
-    head.append(headerRow);
-    const body = element('tbody');
-    for (const row of rows) {
-      const tr = element('tr');
-      for (const column of columns) {
-        const value = column.render ? column.render(row) : element('span', { text: text(row[column.key]) });
-        tr.append(element('td', {}, value));
-      }
-      body.append(tr);
-    }
-    table.append(head, body);
-    container.replaceChildren(table);
-  }
-
-  function renderOperations(data) {
-    renderOperationsTable(
-      dom.queueProgressTable,
-      [
-        { label: 'Queue', key: 'queueName' },
-        { label: 'Cycle watermark', render: row => element('span', { text: row.cycleMaxId === null ? 'None' : String(row.cycleMaxId) }) },
-        { label: 'State', render: row => element('span', {
-          text: row.cycleMaxId === 0 ? 'Empty' : row.cycleMaxId === null
-            ? row.lastOutcomeCode === 'cycle_complete' ? 'Completed' : 'Idle'
-            : 'Active'
-        }) },
-        { label: 'Cursor', render: row => element('span', {
-          text: row.lastCreatedUtc ? `${dateTime(row.lastCreatedUtc)} / ${text(row.lastItemId)}` : 'None'
-        }) },
-        { label: 'Last outcome', render: row => element('span', { text: text(row.lastOutcomeCode, 'Not recorded') }) },
-        { label: 'Updated', render: row => element('time', { text: dateTime(row.updatedUtc), datetime: row.updatedUtc }) }
-      ],
-      data.queue?.items || [],
-      'No queue progress has been recorded for this scope.'
-    );
-    renderOperationsTable(
-      dom.emailOperationsTable,
-      [
-        { label: 'Reference', render: row => element('span', { text: String(row.id) }) },
-        { label: 'Created', render: row => element('time', { text: dateTime(row.createdUtc), datetime: row.createdUtc }) },
-        { label: 'Status', key: 'status' },
-        { label: 'Type', key: 'deliveryClass' },
-        { label: 'Error', render: row => element('span', { text: row.lastErrorCode || row.suppressionReason || 'None' }) },
-        { label: 'Action', render: row => {
-          if (row.status !== 'failed') return element('span', { text: 'No action' });
-          return commandButton('Retry', 'refresh', () => retryEmail(row), 'secondary-button');
-        } }
-      ],
-      data.email?.items || [],
-      'No email operations have been recorded for this scope.'
-    );
-  }
-
-  async function loadOperations(options = {}) {
-    if (!state.staff || (state.staff.role !== 'admin' && state.staff.role !== 'super_admin')) return false;
-    const load = latestLoads.begin('operations');
-    const requestedScope = state.operationsScope;
-    dom.refreshOperations.disabled = true;
-    if (!options.silent) announce('Loading workflow operations...');
-    try {
-      const query = operationsQuery(requestedScope);
-      const [queue, email, organizationResult] = await Promise.all([
-        authorizedJson(`/api/asap/staff/workflow/queues${query}`, { signal: load.signal }),
-        authorizedJson(`/api/asap/staff/email-operations${query}`, { signal: load.signal }),
-        state.staff.role === 'super_admin'
-          ? authorizedJson('/api/asap/staff/organizations', { signal: load.signal })
-          : Promise.resolve(null)
-      ]);
-      if (!load.isCurrent() || requestedScope !== state.operationsScope) return false;
-      const organizations = organizationResult?.data ?? organizationResult;
-      if (state.staff.role === 'super_admin' && Array.isArray(organizations)) {
-        populateScopes(organizations.filter(item => Number(item.id) > 1 && item.active !== false), state.scope);
-      }
-      renderOperations({ queue, email });
-      if (state.operationMutation?.uncertain) state.operationMutation.reviewed = true;
-      updateOperationControls();
-      state.operationsLoaded = true;
-      if (!options.silent) announce('Workflow operations loaded.');
-      return true;
-    } catch (error) {
-      if (load.isCurrent() && requestedScope === state.operationsScope &&
-          !options.silent && !isAbortError(error) && error.status !== 401) {
-        announce(error.message || 'Workflow operations could not be loaded.', 'error');
-      }
-      return false;
-    } finally {
-      if (load.isCurrent()) dom.refreshOperations.disabled = false;
-      latestLoads.finish('operations', load.token);
-    }
-  }
-
-  async function runOperation(path, message, retry = null, body = undefined) {
-    if (!state.staff || state.operationMutation &&
-        (retry !== state.operationMutation || !retry.uncertain || !retry.reviewed)) return;
-    const owner = state.staff;
-    const operation = retry || { path, message, scope: state.operationsScope,
-      operationId: window.crypto.randomUUID(), storageKey: operationStorageKey(), body };
-    operation.uncertain = false;
-    operation.reviewed = false;
-    state.operationMutation = operation;
-    // Persist before dispatch: reload/session loss is never evidence that a POST rolled back.
-    if (!storeOperation(operation)) {
-      state.operationMutation = null;
-      announce('Operation recovery could not be saved. Enable session storage before running manual operations.', 'error');
-      return;
-    }
-    updateOperationControls();
-    const scopeQuery = path.endsWith('/retry') ? '' : operationsQuery(operation.scope);
-    const query = scopeQuery ? `${path.includes('?') ? '&' : '?'}${scopeQuery.slice(1)}` : '';
-    const identityQuery = path.includes('force=true') || path.endsWith('/email-operations/test')
-      ? `${path.includes('?') || query ? '&' : '?'}operationId=${encodeURIComponent(operation.operationId)}` : '';
-    let committedMessage = '';
-    try {
-      const result = await authorizedJson(`${path}${query}${identityQuery}`, { method: 'POST', body: operation.body });
-      if (!['queued', 'suppressed'].includes(result?.code)) throw unconfirmedResponseError();
-      committedMessage = result.data?.replayed ? `${message} was already recorded as ${result.data.status}. Review email operation ${result.data.id}.`
-        : result.code === 'suppressed' ? `${message} was suppressed; no email was sent.`
-        : result.manualRunId && !path.endsWith('/retry') ? `${message} Run ${result.manualRunId} queued.` : `${message} queued.`;
-      state.partialSessionFailureMessage = `${committedMessage} Sign in again to review workflow operations.`;
-      state.partialSessionFailureOwner = operation;
-      storeOperation(null);
-      state.operationMutation = null;
-      updateOperationControls();
-      if (!sessionIdentity.isCurrent(owner)) {
-        if (!state.staff) dom.signedOutMessage.textContent = state.partialSessionFailureMessage;
-        return;
-      }
-      const refreshed = await loadOperations({ silent: true });
-      if (refreshed === true) clearCommittedSessionFallback(operation);
-      if (operation.scope === state.operationsScope && state.staff && state.activeView === 'operations') {
-        announce(refreshed ? committedMessage : `${committedMessage} Operations could not be refreshed.`,
-          refreshed ? 'success' : 'warning');
-      }
-    } catch (error) {
-      if (committedMessage) {
-        if (state.staff) announce(`${committedMessage} Operations could not be refreshed.`, 'warning');
-        return;
-      }
-      const uncertain = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
-      if (uncertain) {
-        operation.uncertain = true;
-        storeOperation(operation);
-        retainUnconfirmedOutcome(`${message} outcome is unconfirmed. Review Operations before retrying.`, operation);
-      } else {
-        storeOperation(null);
-        state.operationMutation = null;
-      }
-      updateOperationControls();
-      if (sessionIdentity.isCurrent(owner) && state.activeView === 'operations' && error.status !== 401) {
-        announce(uncertain ? `${message} outcome is unconfirmed. Refresh Operations to review it before retrying.`
-          : error.message || 'The operation was not queued.', uncertain ? 'warning' : 'error');
-      }
-    }
-  }
-
-  async function retryEmail(row) {
-    await runOperation(`/api/asap/staff/email-operations/${encodeURIComponent(row.id)}/retry`,
-      `Email retry ${row.id}`, null, { version: row.version });
   }
 
   function filteredRequests() {
@@ -4299,6 +4011,8 @@ export function createWorkflowApp() {
     if (previousView !== name && name === 'additional-copies') resetAdditionalCopyFilters();
     const previousEmailScope = emailReadinessScopeKey();
     state.activeView = name;
+    if (name === 'operations') operationsController.activate();
+    else operationsController.deactivate();
     if (emailReadinessScopeKey() !== previousEmailScope) void refreshEmailReadiness();
     dom.queueView.hidden = name !== 'queue';
     dom.additionalCopyView.hidden = name !== 'additional-copies';
@@ -4333,7 +4047,7 @@ export function createWorkflowApp() {
         state.queueLoadedScope !== state.scope) {
       loadQueue({ skipDeepLink: true });
     }
-    if (updateUrl && name === 'operations') loadOperations();
+    if (updateUrl && name === 'operations') operationsController.refresh();
     if (updateUrl && name === 'analytics') loadAnalytics(dom.analyticsContainer);
     if (name === 'settings') settingsController.activate(requestedSettingsPanelFromUrl() || undefined);
   }
@@ -4512,21 +4226,6 @@ export function createWorkflowApp() {
       pushStageParameter('additional_copies');
       loadAdditionalCopies({ skipDeepLink: true });
     });
-    dom.operationsScope.addEventListener('change', () => {
-      if (state.operationMutation) { dom.operationsScope.value = state.operationsScope; return; }
-      state.operationsScope = dom.operationsScope.value;
-      void refreshEmailReadiness();
-      loadOperations();
-    });
-    dom.runWorkflowNow.addEventListener('click', () =>
-      runOperation('/api/asap/staff/workflow/run-now', 'Workflow run'));
-    dom.runWeeklyNow.addEventListener('click', () =>
-      runOperation('/api/asap/staff/workflow/weekly-summary/run-now?force=false', 'Weekly summary'));
-    dom.forceWeeklyNow.addEventListener('click', () =>
-      runOperation('/api/asap/staff/workflow/weekly-summary/run-now?force=true', 'Forced weekly summary'));
-    dom.sendTestEmail.addEventListener('click', () =>
-      runOperation('/api/asap/staff/email-operations/test', 'Test email'));
-    dom.refreshOperations.addEventListener('click', () => loadOperations());
     for (const tab of dom.statusTabs) {
       tab.addEventListener('click', () => {
         if (state.status === tab.dataset.status) return;
