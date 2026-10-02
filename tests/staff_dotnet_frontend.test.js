@@ -39,7 +39,9 @@ assert.match(workflow, /requestId: String\(request\.id\)/,
 assert.doesNotMatch(workflow, /requestId:\s*Number\(request\.id\)/,
   'Polaris lookup must not coerce a title-request identity to Number');
 assert.match(http, /X-ASAP-Antiforgery/);
-assert.match(http, /createLatestLoad/);
+assert.doesNotMatch(workflow, /\blatestLoads\b/, 'reads belong to disposable controllers');
+assert.match(workflow, /createSessionCoordinator/);
+assert.match(workflow, /createStaffShell/);
 assert.match(workflow, /requestedRequestIdFromUrl/);
 assert.match(workflow, /requestedStatusFromUrl/);
 assert.match(urlUtils, /searchParams\.get\('request'\)/);
@@ -51,7 +53,7 @@ assert.match(index, /id="analytics-container"/);
 assert.match(workflow, /loadAnalytics/);
 assert.match(workflow, /resetAnalytics/);
 assert.match(analytics, /\/api\/asap\/staff\/analytics\?/);
-assert.match(analytics, /latestLoads\.begin\('analytics'\)/);
+assert.match(analytics, /reads\.begin\('analytics'\)/);
 assert.match(analytics, /analyticsRange = 'lastMonth'/);
 assert.match(index, /id="additional-copy-create-dialog"/);
 assert.match(index, /id="additional-copy-reminder"/);

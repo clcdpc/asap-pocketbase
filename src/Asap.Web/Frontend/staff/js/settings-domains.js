@@ -74,27 +74,6 @@ function field(label, control, className = 'settings-domain-field') {
   return element('label', { className }, [element('span', { text: label }), control]);
 }
 
-function command(iconName, label, handler, disabled = false) {
-  const button = element('button', {
-    type: 'button',
-    className: 'settings-icon-button',
-    title: label,
-    'aria-label': label,
-    disabled
-  }, [element('i', { className: `fa fa-${iconName}`, 'aria-hidden': 'true' })]);
-  button.addEventListener('click', handler);
-  return button;
-}
-
-function actions(index, total, move, remove) {
-  const buttons = [
-    command('chevron-up', 'Move up', () => move(index, -1), index === 0),
-    command('chevron-down', 'Move down', () => move(index, 1), index === total - 1)
-  ];
-  if (remove) buttons.push(command('trash-o', 'Delete', () => remove(index)));
-  return element('div', { className: 'settings-row-actions' }, buttons);
-}
-
 function normalizeOption(value, index) {
   if (typeof value === 'string') {
     const label = clean(value) || `Option ${index + 1}`;
@@ -216,6 +195,32 @@ function rawSnapshot(configuredSystem, libraryOverride, key, system) {
 }
 
 export function createSettingsDomainEditors({ root, onChange = () => {}, canRemoveTemplate = () => true }) {
+  const events = new window.AbortController();
+  let disposed = false;
+  function listen(target, name, handler) {
+    target?.addEventListener(name, event => { if (!disposed && target.isConnected !== false) return handler(event); }, { signal: events.signal });
+  }
+  function command(iconName, label, handler, disabled = false) {
+    const button = element('button', {
+      type: 'button',
+      className: 'settings-icon-button',
+      title: label,
+      'aria-label': label,
+      disabled
+    }, [element('i', { className: `fa fa-${iconName}`, 'aria-hidden': 'true' })]);
+    listen(button, 'click', handler);
+    return button;
+  }
+
+  function actions(index, total, move, remove) {
+    const buttons = [
+      command('chevron-up', 'Move up', () => move(index, -1), index === 0),
+      command('chevron-down', 'Move down', () => move(index, 1), index === total - 1)
+    ];
+    if (remove) buttons.push(command('trash-o', 'Delete', () => remove(index)));
+    return element('div', { className: 'settings-row-actions' }, buttons);
+  }
+
   const dom = {
     publication: root.querySelector('#publication-options-editor'),
     publicationUseSystem: root.querySelector('#publication-options-use-system'),
@@ -333,6 +338,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   }
 
   function updateCodeWarning() {
+    if (disposed) return;
     const empty = readSetRows(dom.codes, 'code').length === 0;
     dom.codeWarning.hidden = !dom.codeEligibilityEnabled.checked || !empty;
     dom.codeWarning.textContent = empty && dom.codeEligibilityEnabled.checked
@@ -451,7 +457,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         state.system ? null : override.wrapper,
         actions(index, values.length, (from, offset) => reorder('providers', from, offset), from => remove('providers', from))
       ]);
-      override.input.addEventListener('change', () => {
+      listen(override.input, 'change', () => {
         updateRowDisabled(row, !state.system && !override.input.checked);
         onChange();
       });
@@ -529,7 +535,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         )
       ]);
       if (!state.system && !custom) {
-        override.input.addEventListener('change', () => {
+        listen(override.input, 'change', () => {
           updateRowDisabled(row, !override.input.checked);
           onChange();
         });
@@ -594,7 +600,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
       ]);
       const optionsEditor = row.querySelector('[data-options-editor]');
       renderFieldOptions(optionsEditor, value.options, value.type === 'select');
-      row.querySelector('select')?.addEventListener('change', event => {
+      listen(row.querySelector('select'), 'change', event => {
         optionsEditor.hidden = event.target.value !== 'select';
         onChange();
       });
@@ -624,7 +630,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
       container.append(row);
     }
     const add = element('button', { type: 'button', className: 'secondary-button' }, [element('i', { className: 'fa fa-plus', 'aria-hidden': 'true' }), ' Add option']);
-    add.addEventListener('click', () => {
+    listen(add, 'click', () => {
       const current = readFields();
       const parent = container.closest('[data-domain-row]');
       const fieldIndex = [...dom.fields.querySelectorAll('[data-domain-row]')].indexOf(parent);
@@ -841,7 +847,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         } : null)
       ]);
       if (override) {
-        override.input.addEventListener('change', () => {
+        listen(override.input, 'change', () => {
           updateRowDisabled(row, !override.input.checked);
           onChange();
         });
@@ -942,14 +948,14 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
 
   function bindSetToggle(input, name, render) {
     if (!input) return;
-    input.addEventListener('change', () => {
+    listen(input, 'change', () => {
       render(setValues(name, state.system || input.checked));
       onChange();
     });
   }
 
   function bindAdd(name, factory) {
-    addButtons[name]?.addEventListener('click', () => {
+    listen(addButtons[name], 'click', () => {
       const values = readDomain(name);
       values.push(factory(values));
       renderDomain(name, values);
@@ -963,8 +969,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   bindAdd('publication', values => ({ id: `option_${values.length + 1}`, label: 'New option', enabled: true, sortOrder: (values.length + 1) * 10 }));
   bindAdd('creators', values => 'New creator');
   bindAdd('codes', values => stringId(property(array(property(state.data, 'patronCodeChoices'))[0], 'id')) || '');
-  dom.codeSearch.addEventListener('input', () => renderSetRows(dom.codes, readSetRows(dom.codes, 'code'), 'code'));
-  dom.codeSelectAll.addEventListener('click', () => {
+  listen(dom.codeSearch, 'input', () => renderSetRows(dom.codes, readSetRows(dom.codes, 'code'), 'code'));
+  listen(dom.codeSelectAll, 'click', () => {
     const selected = readSetRows(dom.codes, 'code');
     const term = dom.codeSearch.value.trim().toLocaleLowerCase();
     for (const choice of array(property(state.data, 'patronCodeChoices'))) {
@@ -975,12 +981,12 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     renderSetRows(dom.codes, selected, 'code');
     onChange();
   });
-  dom.codeClearAll.addEventListener('click', () => {
+  listen(dom.codeClearAll, 'click', () => {
     renderSetRows(dom.codes, [], 'code');
     onChange();
   });
-  dom.codeEligibilityEnabled.addEventListener('change', updateCodeWarning);
-  dom.codes.addEventListener('change', updateCodeWarning);
+  listen(dom.codeEligibilityEnabled, 'change', updateCodeWarning);
+  listen(dom.codes, 'change', updateCodeWarning);
   bindAdd('providers', values => ({ id: null, key: `provider_${values.length + 1}`, label: 'New provider', urlTemplate: '', isEnabled: false, overridden: true }));
   bindAdd('formats', values => ({ id: null, code: `custom_${values.length + 1}`, ownerOrganizationId: currentOrganizationId(), label: 'New format', isEnabled: true, overridden: true }));
   bindAdd('fields', values => ({ id: null, key: `field_${values.length + 1}`, type: 'text', label: 'New field', enabled: true, options: [] }));
@@ -1002,6 +1008,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   }));
 
   function populate(data, system) {
+    if (disposed) return;
     state.data = data || {};
     state.system = Boolean(system);
     dom.codeSearch.value = '';
@@ -1106,6 +1113,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   }
 
   return {
+    dispose() { if (disposed) return; disposed = true; events.abort(); },
     populate,
     collect,
     setBaseline: () => { state.baseline = readSnapshot(); },

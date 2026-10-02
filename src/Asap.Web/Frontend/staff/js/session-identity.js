@@ -32,6 +32,7 @@ export function createSessionIdentity() {
   return {
     accept,
     isCurrent,
+    sameSession(left, right) { return Boolean(left && right && snapshots.has(left) && snapshots.get(left) === snapshots.get(right)); },
     actor: () => actor,
     preferences: () => preferences,
     revision: () => revision,

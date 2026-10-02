@@ -64,7 +64,11 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
         sessionIdentity: session, getContext: () => context, announce() {}, onScopeAccepted() {}, onLibraries() {}, onRefreshed() {}, onRendered() {},
         onOpen() {}, onScopeIntent() {}, onStatusIntent() {}, recovery: { current: () => null, begin() {}, loaded() {}, acknowledge() {} },
         request: async () => ({ items: [], scope: '3', status: 'open' }) });
-      replacement.setStaff(staff); await replacement.refresh(); replacement.dispose();
+      replacement.setStaff(staff); await replacement.refresh();
+      const liveGrid = get(copy ? '#additional-copy-grid' : '#request-grid');
+      owner.dispose(); owner.signedOut(); owner.contextChanged({ ...context, scope: '2' }, context);
+      assert.equal(get(copy ? '#additional-copy-grid' : '#request-grid'), liveGrid, 'retired lifecycle cannot detach the replacement grid');
+      replacement.dispose();
     });
   }
   console.log('Exclusive detail lease and locally owned queue read/disposal/recreation contracts passed');

@@ -253,19 +253,27 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     });
     await waitFor(() => document.getElementById('staff-access-status').textContent.includes('2 auto-claim rules deactivated'));
 
-    const activeRow = [...document.querySelectorAll('.settings-staff-row')]
+    let activeRow = [...document.querySelectorAll('.settings-staff-row')]
       .find(row => row.textContent.includes('Ada Admin'));
     activeRow.querySelector('input[type="email"]').value = 'ada.updated@example.org';
     [...activeRow.querySelectorAll('button')].find(button => button.textContent === 'Save profile').click();
     await waitFor(() => Boolean(patchBody));
     assert.strictEqual(patchBody.version, 'user-version-20');
     assert.strictEqual(patchBody.email, 'ada.updated@example.org');
+    await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff profile saved.'));
 
+    const retiredRow = activeRow;
+    [...retiredRow.querySelectorAll('button')].find(button => button.textContent === 'Update access').click();
+    await flush();
+    assert.equal(roleBody, undefined, 'retired roster controls cannot submit their old version');
+    activeRow = [...document.querySelectorAll('.settings-staff-row')].find(row => row.textContent.includes('Ada Admin'));
     activeRow.querySelector('select[aria-label^="Role"]').value = 'staff';
     [...activeRow.querySelectorAll('button')].find(button => button.textContent === 'Update access').click();
     await waitFor(() => Boolean(roleBody));
     assert.deepStrictEqual(roleBody, { version: 'user-version-20', role: 'staff', organizationId: 2 });
+    await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff access updated.'));
 
+    activeRow = [...document.querySelectorAll('.settings-staff-row')].find(row => row.textContent.includes('Ada Admin'));
     [...activeRow.querySelectorAll('button')].find(button => button.textContent === 'Deactivate').click();
     await waitFor(() => Boolean(deleteBody));
     assert.strictEqual(deleteBody.version, 'user-version-20');
@@ -278,6 +286,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     [...inactiveRow.querySelectorAll('button')].find(button => button.textContent === 'Reactivate').click();
     await waitFor(() => postBodies.length === 2);
     assert.strictEqual(postBodies[1].email, 'staff21@example.org');
+    await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff user reactivated.'));
 
     const refreshedBeforeRevocation = refreshedCount;
     revokeStaffRefresh = true;

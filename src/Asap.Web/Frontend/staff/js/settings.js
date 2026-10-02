@@ -1,4 +1,6 @@
-import { authorizedJson, isAbortError, latestLoads } from './http.js';
+import { authorizedJson, isAbortError } from './http.js';
+import { createLatestLoad } from '../../shared/latest-load.js';
+import { createDraftScope } from './draft-scope.js';
 import { createSettingsDomainEditors } from './settings-domains.js';
 
 const WORKFLOW_FIELDS = [
@@ -73,17 +75,7 @@ const POLARIS_FIELDS = [
   ['systemPolarisUserId', 'polaris-system-user-id']
 ];
 
-const SETTINGS_OPERATION_SLOTS = [
-  'administration-settings',
-  'administration-settings-save',
-  'administration-settings-reset',
-  'administration-settings-logo',
-  'administration-settings-polaris-test',
-  'administration-settings-organization-sync',
-  'administration-settings-participation',
-  'administration-staff-access',
-  'administration-staff-mutation'
-];
+const SETTINGS_OPERATION_SLOTS = ['administration-settings', 'administration-staff-access'];
 
 const TEMPLATE_FIELDS = [
   ['suggestion_submitted', 'submit', 'email-submit-subject', 'email-submit-body'],
@@ -103,7 +95,7 @@ function node(tag, attributes = {}, children = []) {
     else if (name === 'disabled') value.disabled = Boolean(attribute);
     else if (name === 'value') value.value = attribute;
     else if (name.startsWith('on') && typeof attribute === 'function') {
-      value.addEventListener(name.slice(2), attribute);
+      listen(value, name.slice(2), attribute);
     } else {
       value.setAttribute(name, String(attribute));
     }
@@ -245,11 +237,11 @@ export function createSettingsController({
   root,
   tab,
   announce,
-  getStaff,
   onPanelChange,
   onScopeChange,
   onCommitted = () => {},
-  onRefreshed = () => {}
+  onRefreshed = () => {},
+  onUnconfirmed = () => {}
 }) {
   const dom = {
     contextSummary: root.querySelector('#settings-context-summary'),
@@ -326,6 +318,12 @@ export function createSettingsController({
     visible: false,
     bound: false
   };
+  const reads = createLatestLoad(), events = new window.AbortController();
+  let disposed = false, contextGeneration = 0, drafts = createDraftScope();
+  let settingsDraft = drafts.register({ root: dom.form, isDirty: () => isDirty() });
+  function listen(target, name, handler) {
+    target?.addEventListener(name, event => { if (!disposed && target.isConnected !== false) return handler(event); }, { signal: events.signal });
+  }
   let logoDraftUrl = null;
   let logoPreviewGeneration = 0;
   let copyGeneration = 0;
@@ -469,7 +467,7 @@ export function createSettingsController({
     for (const key of Array.isArray(data.templatePlaceholders) ? data.templatePlaceholders : []) {
       if (typeof key !== 'string' || !/^\w+$/.test(key)) continue;
       const button = node('button', { type: 'button', className: 'secondary-button', text: `{{${key}}}` });
-      button.addEventListener('click', () => insertPlaceholder(key));
+      listen(button, 'click', () => insertPlaceholder(key));
       list.append(button);
     }
     state.templateSelection = null;
@@ -484,22 +482,23 @@ export function createSettingsController({
     if (!staff) return '';
     return [
       property(staff, 'id'),
-      property(staff, 'userPrincipalName'),
+      property(staff, 'tenantId'),
+      property(staff, 'authenticationEmail') || property(staff, 'userPrincipalName'),
       property(staff, 'role'),
       property(staff, 'organizationId')
     ].map(value => value === null || value === undefined ? '' : String(value)).join('|');
   }
 
   function captureSettingsContext() {
-    return { scope: String(state.scope), staff: staffContextKey(state.staff) };
+    return { scope: String(state.scope), staff: staffContextKey(state.staff), generation: contextGeneration, owner: state.staff };
   }
 
   function isSettingsContextCurrent(context) {
-    return context && context.scope === String(state.scope) && context.staff === staffContextKey(state.staff);
+    return !disposed && context && context.generation === contextGeneration && context.scope === String(state.scope) && context.staff === staffContextKey(state.staff);
   }
 
   function beginSettingsOperation(slot) {
-    const operation = latestLoads.begin(slot);
+    const operation = reads.begin(slot);
     const context = captureSettingsContext();
     return { ...operation, context };
   }
@@ -508,8 +507,33 @@ export function createSettingsController({
     return operation?.isCurrent() && isSettingsContextCurrent(operation.context);
   }
 
-  function isUnconfirmedMutationFailure(error, operation) {
-    return !operation.signal.aborted && (error?.status === 0 || isAbortError(error));
+  function beginSettingsMutation(slot, consumes) {
+    if (disposed || !state.staff || !state.visible || !root.isConnected || state.pendingMutation || state.outcomeUncertain) return null;
+    if (!drafts.admit({ consumes }).allowed) {
+      notify('Save or discard the competing Settings draft before this action.', 'warning'); return null;
+    }
+    const context = captureSettingsContext();
+    const operation = { slot, context, owner: context.owner, outcome: 'pending',
+      isCurrent: () => isSettingsContextCurrent(context) };
+    holdSettingsMutation(operation);
+    return operation;
+  }
+
+  function recordCommitted(operation, message) {
+    operation.outcome = 'committed';
+    onCommitted(message, operation.owner, operation);
+  }
+
+  function recordFailure(operation, error, message) {
+    if (operation.outcome === 'committed') return;
+    operation.outcome = isUnconfirmedMutationFailure(error) ? 'uncertain' : 'rejected';
+    if (operation.outcome !== 'uncertain') return;
+    onUnconfirmed(message, operation.owner, operation);
+    if (isSettingsOperationCurrent(operation)) markUnconfirmedMutation(message);
+  }
+
+  function isUnconfirmedMutationFailure(error) {
+    return !error?.status || error.status === 408 || error.status >= 500 || isAbortError(error);
   }
 
   function markUnconfirmedMutation(message) {
@@ -519,7 +543,7 @@ export function createSettingsController({
   }
 
   function holdSettingsMutation(operation) {
-    latestLoads.begin('administration-settings').abort();
+    reads.begin('administration-settings').abort();
     state.pendingMutation = operation;
     dom.form.inert = true;
     dom.form.setAttribute('aria-busy', 'true');
@@ -529,13 +553,16 @@ export function createSettingsController({
   function finishSettingsMutation(operation) {
     if (state.pendingMutation !== operation) return;
     state.pendingMutation = null;
+    if (!isSettingsContextCurrent(operation.context)) return;
     dom.form.inert = false;
     dom.form.removeAttribute('aria-busy');
     dom.refresh.disabled = false;
   }
 
   function cancelSettingsOperations() {
-    for (const slot of SETTINGS_OPERATION_SLOTS) latestLoads.begin(slot).abort();
+    contextGeneration += 1; drafts.dispose(); drafts = createDraftScope();
+    settingsDraft = drafts.register({ root: dom.form, isDirty: () => isDirty() });
+    for (const slot of SETTINGS_OPERATION_SLOTS) reads.begin(slot).abort();
   }
 
   function organizationId() {
@@ -681,7 +708,7 @@ export function createSettingsController({
         input,
         node('span', { text: 'Override' })
       ]);
-      input.addEventListener('change', () => {
+      listen(input, 'change', () => {
         syncOverrideToggles(section, key, input.checked);
         updateDirtyState();
       });
@@ -786,7 +813,7 @@ export function createSettingsController({
           node('span', { text: 'Override' })
         ]);
         fieldset.querySelector('legend').append(wrapper);
-        input.addEventListener('change', () => {
+        listen(input, 'change', () => {
           document.getElementById(subjectId).disabled = !input.checked;
           document.getElementById(bodyId).disabled = !input.checked;
           updateDirtyState();
@@ -887,7 +914,7 @@ export function createSettingsController({
           title: active ? `Deactivate ${organization.name}` : `Activate ${organization.name}`,
           'aria-label': active ? `Deactivate ${organization.name}` : `Activate ${organization.name}`
         }, [node('i', { className: `fa fa-${active ? 'ban' : 'check'}`, 'aria-hidden': 'true' })]);
-        action.addEventListener('click', () => setOrganizationActive(organization, !active));
+        listen(action, 'click', () => setOrganizationActive(organization, !active));
         item.append(action);
       }
       dom.organizations.append(item);
@@ -962,7 +989,7 @@ export function createSettingsController({
       const organization = node('select', { 'aria-label': `Library for ${staffUserDisplay(user)}` });
       replaceSelectOptions(organization, organizationChoices(role.value), property(user, 'organizationId'));
       organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
-      role.addEventListener('change', () => {
+      listen(role, 'change', () => {
         replaceSelectOptions(organization, organizationChoices(role.value), organization.value);
         organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
       });
@@ -972,7 +999,7 @@ export function createSettingsController({
         className: 'secondary-button',
         text: 'Save profile'
       });
-      saveMetadata.addEventListener('click', () => updateStaffMetadata(id, version, {
+      listen(saveMetadata, 'click', () => updateStaffMetadata(id, version, {
         email: clean(upn.value),
         displayName: clean(displayName.value),
         notificationEmail: clean(notificationEmail.value)
@@ -983,7 +1010,7 @@ export function createSettingsController({
         className: 'secondary-button',
         text: 'Update access'
       });
-      saveRole.addEventListener('click', () => changeStaffRole(id, version, {
+      listen(saveRole, 'click', () => changeStaffRole(id, version, {
         role: role.value,
         organizationId: role.value === 'super_admin' ? 1 : Number(organization.value)
       }));
@@ -993,7 +1020,7 @@ export function createSettingsController({
         className: active ? 'danger-button' : 'secondary-button',
         text: active ? 'Deactivate' : 'Reactivate'
       });
-      lifecycle.addEventListener('click', () => {
+      listen(lifecycle, 'click', () => {
         if (active) deactivateStaffUser(id, version, staffUserDisplay(user));
         else reactivateStaffUser(user, role.value, organization.value);
       });
@@ -1134,10 +1161,10 @@ export function createSettingsController({
   }
 
   async function load(options = {}) {
-    if (!state.staff || state.staff.role === 'staff') return;
+    if (disposed || !state.staff || state.staff.role === 'staff') return;
     if (state.pendingMutation && state.pendingMutation !== options.owner) return false;
     const context = captureSettingsContext();
-    const loadState = latestLoads.begin('administration-settings');
+    const loadState = reads.begin('administration-settings');
     dom.refresh.disabled = true;
     if (!options.silent) notify('Loading settings...');
     try {
@@ -1164,7 +1191,7 @@ export function createSettingsController({
       state.awaitingReload = false;
       state.outcomeUncertain = false;
       populate(data || {});
-      onRefreshed();
+      onRefreshed(context.owner);
       dom.form.hidden = false;
       if (wasHidden) dom.panels.find(item => item.dataset.settingsPanelContent === state.activePanel)?.focus({ preventScroll: true });
       if (state.activePanel === 'staff') void loadStaffAccess({ silent: true });
@@ -1179,7 +1206,7 @@ export function createSettingsController({
       return false;
     } finally {
       if (loadState.isCurrent() && isSettingsContextCurrent(context)) dom.refresh.disabled = false;
-      latestLoads.finish('administration-settings', loadState.token);
+      reads.finish('administration-settings', loadState.token);
     }
   }
 
@@ -1196,7 +1223,7 @@ export function createSettingsController({
   }
 
   async function loadStaffAccess(options = {}) {
-    if (!state.staff || state.staff.role === 'staff') return false;
+    if (disposed || !state.staff || state.staff.role === 'staff') return false;
     const loadState = beginSettingsOperation('administration-staff-access');
     if (!options.silent) setStaffStatus(`Loading staff access for ${scopedStaffLabel()}...`);
     if (dom.staffRefresh) dom.staffRefresh.disabled = true;
@@ -1230,27 +1257,29 @@ export function createSettingsController({
         if (dom.staffRefresh) dom.staffRefresh.disabled = false;
         if (dom.staffAuditRefresh) dom.staffAuditRefresh.disabled = false;
       }
-      latestLoads.finish('administration-staff-access', loadState.token);
+      reads.finish('administration-staff-access', loadState.token);
     }
   }
 
   async function mutateStaffUser(path, options, successMessage, staffId = null) {
-    const mutation = beginSettingsOperation('administration-staff-mutation');
+    const mutation = beginSettingsMutation('administration-staff-mutation', null);
+    if (!mutation) return;
     setStaffStatus(successMessage.replace(/\.$/, '') + '...');
     try {
-      const response = await authorizedJson(path, { ...options, signal: mutation.signal });
-      if (!isSettingsOperationCurrent(mutation)) return null;
+      const response = await authorizedJson(path, options);
       const cleanup = response?.cleanup ?? response?.data?.cleanup ?? {};
-      state.lastStaffCleanup = { staffId: stringValue(property(response?.user ?? response?.data?.user, 'id') || staffId), cleanup };
       const committedMessage = `${successMessage} ${cleanupSummary(cleanup)}`;
-      onCommitted(committedMessage);
+      recordCommitted(mutation, committedMessage);
+      if (!isSettingsOperationCurrent(mutation)) return null;
+      state.lastStaffCleanup = { staffId: stringValue(property(response?.user ?? response?.data?.user, 'id') || staffId), cleanup };
       const refreshed = await loadStaffAccess({ silent: true });
-      if (refreshed) onRefreshed();
+      if (refreshed) onRefreshed(mutation.owner);
       if (isSettingsOperationCurrent(mutation)) setStaffStatus(refreshed
         ? committedMessage : `${committedMessage} Staff access could not be refreshed.`,
       refreshed ? 'success' : 'error');
-      return response;
+      return isSettingsOperationCurrent(mutation) ? response : null;
     } catch (error) {
+      recordFailure(mutation, error, 'Settings change outcome is uncertain. Reload current values before retrying.');
       if (!isSettingsOperationCurrent(mutation)) return null;
       if (error.status === 409) {
         await loadStaffAccess({ silent: true });
@@ -1261,7 +1290,7 @@ export function createSettingsController({
       }
       return null;
     } finally {
-      latestLoads.finish('administration-staff-mutation', mutation.token);
+      finishSettingsMutation(mutation);
     }
   }
 
@@ -1509,9 +1538,9 @@ export function createSettingsController({
       dom.saveLogo.focus();
       return;
     }
+    const mutation = beginSettingsMutation('administration-settings-save', settingsDraft);
+    if (!mutation) return;
     state.saving = true;
-    const mutation = beginSettingsOperation('administration-settings-save');
-    holdSettingsMutation(mutation);
     dom.save.disabled = true;
     notify('Saving settings...');
     let committed = false;
@@ -1526,27 +1555,25 @@ export function createSettingsController({
       totalFormatDeletes = deletedFormats.length;
       const response = await authorizedJson('/api/asap/staff/settings', {
         method: 'POST',
-        body: payload,
-        signal: mutation.signal
+        body: payload
       });
-      if (!isSettingsOperationCurrent(mutation)) return;
       committed = true;
+      recordCommitted(mutation, committedMessage());
+      if (!isSettingsOperationCurrent(mutation)) return;
       state.data.version = response?.data?.version || state.data.version;
       state.baselineSnapshot = snapshotForm(dom.form);
       domainEditors.setBaseline();
       state.awaitingReload = true;
-      onCommitted(committedMessage());
       notify('Settings saved. Refreshing current values...', 'success');
       for (const format of deletedFormats) {
         if (!isSettingsOperationCurrent(mutation)) return;
         const id = encodeURIComponent(String(format.id));
         const version = encodeURIComponent(String(format.version || ''));
         await authorizedJson(`/api/asap/staff/settings/formats/${id}?version=${version}`, {
-          method: 'DELETE',
-          signal: mutation.signal
+          method: 'DELETE'
         });
         deletedFormatCount += 1;
-        onCommitted(committedMessage());
+        recordCommitted(mutation, committedMessage());
       }
       if (!isSettingsOperationCurrent(mutation)) return;
       const refreshed = await load({ silent: true, owner: mutation });
@@ -1556,6 +1583,7 @@ export function createSettingsController({
         refreshed ? 'success' : 'error');
       }
     } catch (error) {
+      recordFailure(mutation, error, 'Settings change outcome is uncertain. Reload current values before retrying.');
       if (!isSettingsOperationCurrent(mutation)) return;
       if (committed) {
         notify(totalFormatDeletes > 0
@@ -1583,9 +1611,8 @@ export function createSettingsController({
         notify(error.message || 'The settings could not be saved.', 'error');
       }
     } finally {
-      state.saving = false;
+      if (isSettingsContextCurrent(mutation.context)) state.saving = false;
       finishSettingsMutation(mutation);
-      latestLoads.finish('administration-settings-save', mutation.token);
       if (isSettingsContextCurrent(mutation.context)) updateDirtyState();
     }
   }
@@ -1594,26 +1621,26 @@ export function createSettingsController({
     if (isSystem() || !state.data || state.awaitingReload || state.pendingMutation) return;
     if (isDirty() && !window.confirm('Discard unsaved changes before resetting inherited overrides?')) return;
     if (!window.confirm('Reset this library\'s inherited overrides to the current system values?')) return;
-    const mutation = beginSettingsOperation('administration-settings-reset');
-    holdSettingsMutation(mutation);
+    const mutation = beginSettingsMutation('administration-settings-reset', settingsDraft);
+    if (!mutation) return;
     let committed = false;
     try {
       const response = await authorizedJson(`/api/asap/staff/settings/reset?organizationId=${encodeURIComponent(organizationId())}`, {
         method: 'POST',
-        body: { version: state.data.version },
-        signal: mutation.signal
+        body: { version: state.data.version }
       });
-      if (!isSettingsOperationCurrent(mutation)) return;
       committed = true;
+      recordCommitted(mutation, 'Inherited overrides reset.');
+      if (!isSettingsOperationCurrent(mutation)) return;
       state.data.version = response?.data?.version || state.data.version;
       state.awaitingReload = true;
-      onCommitted('Inherited overrides reset.');
       notify('Inherited overrides reset. Refreshing current values...', 'success');
       const refreshed = await load({ silent: true, owner: mutation });
       if (isSettingsOperationCurrent(mutation)) notify(refreshed ? 'Inherited overrides reset.' :
         'Inherited overrides reset, but current values could not be refreshed. Reload before editing.',
       refreshed ? 'success' : 'error');
     } catch (error) {
+      recordFailure(mutation, error, 'Settings change outcome is uncertain. Reload current values before retrying.');
       if (!isSettingsOperationCurrent(mutation)) return;
       if (committed) {
         notify('Inherited overrides reset, but current values could not be refreshed. Reload before editing.', 'error');
@@ -1631,7 +1658,6 @@ export function createSettingsController({
       } else if (error.status !== 401) notify(error.message || 'The inherited overrides could not be reset.', 'error');
     } finally {
       finishSettingsMutation(mutation);
-      latestLoads.finish('administration-settings-reset', mutation.token);
       if (isSettingsContextCurrent(mutation.context)) updateDirtyState();
     }
   }
@@ -1653,18 +1679,18 @@ export function createSettingsController({
     else body.append('logo', file);
     dom.saveLogo.disabled = true;
     dom.clearLogo.disabled = true;
-    const mutation = beginSettingsOperation('administration-settings-logo');
-    holdSettingsMutation(mutation);
+    const mutation = beginSettingsMutation('administration-settings-logo', settingsDraft);
+    if (!mutation) return;
     let committed = false;
     try {
       const scope = encodeURIComponent(String(state.scope));
       const response = await authorizedJson(`/api/asap/staff/settings/logo?orgId=${scope}`, {
         method: 'POST',
-        body,
-        signal: mutation.signal
+        body
       });
-      if (!isSettingsOperationCurrent(mutation)) return;
       committed = true;
+      recordCommitted(mutation, clear ? 'Logo cleared.' : 'Logo saved.');
+      if (!isSettingsOperationCurrent(mutation)) return;
       state.data.version = response?.data?.version || state.data.version;
       state.awaitingReload = true;
       releaseLogoDraft();
@@ -1673,7 +1699,6 @@ export function createSettingsController({
       dom.brandingPreviewSource.textContent = 'Image change saved. Reloading the effective preview.';
       dom.brandingStatus.textContent = clear ? 'Image cleared; refreshing the effective logo.' : 'Logo saved; refreshing the effective logo.';
       notify(dom.brandingStatus.textContent, 'success');
-      onCommitted(clear ? 'Logo cleared.' : 'Logo saved.');
       const refreshed = await load({ silent: true, owner: mutation });
       if (!isSettingsOperationCurrent(mutation)) return;
       dom.brandingStatus.textContent = refreshed
@@ -1681,6 +1706,7 @@ export function createSettingsController({
         : 'Image change saved, but effective branding could not be refreshed. Reload before editing.';
       notify(dom.brandingStatus.textContent, refreshed ? 'success' : 'error');
     } catch (error) {
+      recordFailure(mutation, error, 'Settings change outcome is uncertain. Reload current values before retrying.');
       if (!isSettingsOperationCurrent(mutation)) return;
       if (committed) {
         dom.brandingStatus.textContent = 'Image change saved, but effective branding could not be refreshed. Reload before editing.';
@@ -1698,7 +1724,6 @@ export function createSettingsController({
       }
     } finally {
       finishSettingsMutation(mutation);
-      latestLoads.finish('administration-settings-logo', mutation.token);
       if (isSettingsContextCurrent(mutation.context)) {
         dom.saveLogo.disabled = false;
         dom.clearLogo.disabled = false;
@@ -1714,14 +1739,15 @@ export function createSettingsController({
       await load({ silent: true });
       if (!isSettingsContextCurrent(initialContext)) return;
     }
-    const mutation = beginSettingsOperation('administration-settings-polaris-test');
+    const mutation = beginSettingsMutation('administration-settings-polaris-test', null);
+    if (!mutation) return;
     dom.testPolaris.disabled = true;
     try {
       const response = await authorizedJson('/api/asap/staff/polaris/test', {
         method: 'POST',
-        body: {},
-        signal: mutation.signal
+        body: {}
       });
+      mutation.outcome = 'completed';
       if (!isSettingsOperationCurrent(mutation)) return;
       const data = response.data || {};
       dom.polarisResult.textContent = data.connected
@@ -1729,68 +1755,71 @@ export function createSettingsController({
         : `Polaris is unavailable${data.errorCode ? ` (${data.errorCode})` : ''}.`;
       notify(data.connected ? 'Polaris connection succeeded.' : 'Polaris connection is unavailable.', data.connected ? 'success' : 'error');
     } catch (error) {
+      recordFailure(mutation, error, 'Settings change outcome is uncertain. Reload current values before retrying.');
       if (isSettingsOperationCurrent(mutation) && error.status !== 401 && !isAbortError(error)) {
         notify(error.message || 'Polaris connection test failed.', 'error');
       }
     } finally {
-      latestLoads.finish('administration-settings-polaris-test', mutation.token);
-      dom.testPolaris.disabled = false;
+      finishSettingsMutation(mutation);
+      if (isSettingsContextCurrent(mutation.context)) dom.testPolaris.disabled = false;
     }
   }
 
   async function syncOrganizations() {
-    const mutation = beginSettingsOperation('administration-settings-organization-sync');
+    const mutation = beginSettingsMutation('administration-settings-organization-sync', null);
+    if (!mutation) return;
     dom.syncOrganizations.disabled = true;
     try {
       const response = await authorizedJson('/api/asap/staff/organizations/sync', {
         method: 'POST',
-        body: {},
-        signal: mutation.signal
+        body: {}
       });
+      recordCommitted(mutation, 'Polaris organizations synchronized.');
       if (!isSettingsOperationCurrent(mutation)) return;
       dom.syncResult.textContent = `Synchronized ${response.data?.received || 0} organizations.`;
-      onCommitted('Polaris organizations synchronized.');
-      const refreshed = await load({ silent: true });
+      const refreshed = await load({ silent: true, owner: mutation });
       if (isSettingsOperationCurrent(mutation)) notify(refreshed
         ? 'Polaris organizations synchronized.'
         : 'Polaris organizations synchronized, but current values could not be refreshed.',
       refreshed ? 'success' : 'error');
     } catch (error) {
+      recordFailure(mutation, error, 'Settings change outcome is uncertain. Reload current values before retrying.');
       if (isSettingsOperationCurrent(mutation) && error.status !== 401 && !isAbortError(error)) {
         notify(error.message || 'Organizations could not be synchronized.', 'error');
       }
     } finally {
-      latestLoads.finish('administration-settings-organization-sync', mutation.token);
-      dom.syncOrganizations.disabled = false;
+      finishSettingsMutation(mutation);
+      if (isSettingsContextCurrent(mutation.context)) dom.syncOrganizations.disabled = false;
     }
   }
 
   async function setOrganizationActive(organization, active) {
     if (!window.confirm(`${active ? 'Activate' : 'Deactivate'} ${organization.name}?`)) return;
-    const mutation = beginSettingsOperation('administration-settings-participation');
+    const mutation = beginSettingsMutation('administration-settings-participation', null);
+    if (!mutation) return;
     try {
       await authorizedJson(`/api/asap/staff/organizations/${encodeURIComponent(organization.id)}/${active ? 'activate' : 'deactivate'}`, {
         method: 'POST',
-        body: { version: organization.version },
-        signal: mutation.signal
+        body: { version: organization.version }
       });
-      if (!isSettingsOperationCurrent(mutation)) return;
       const committedMessage = `${organization.name} ${active ? 'activated' : 'deactivated'}.`;
-      onCommitted(committedMessage);
-      const refreshed = await load({ silent: true });
+      recordCommitted(mutation, committedMessage);
+      if (!isSettingsOperationCurrent(mutation)) return;
+      const refreshed = await load({ silent: true, owner: mutation });
       if (isSettingsOperationCurrent(mutation)) notify(refreshed
         ? committedMessage
         : `${committedMessage} Current values could not be refreshed.`,
       refreshed ? 'success' : 'error');
     } catch (error) {
+      recordFailure(mutation, error, 'Settings change outcome is uncertain. Reload current values before retrying.');
       if (!isSettingsOperationCurrent(mutation)) return;
       if (error.status === 409) {
-        await load({ silent: true });
+        await load({ silent: true, owner: mutation });
         if (!isSettingsOperationCurrent(mutation)) return;
       }
       if (error.status !== 401 && !isAbortError(error)) notify(error.message || 'Organization participation could not be changed.', 'error');
     } finally {
-      latestLoads.finish('administration-settings-participation', mutation.token);
+      finishSettingsMutation(mutation);
     }
   }
 
@@ -1874,8 +1903,11 @@ export function createSettingsController({
   }
 
   function setStaff(staff) {
+    if (disposed) return;
     if (staffContextKey(state.staff) !== staffContextKey(staff)) {
       cancelSettingsOperations();
+      state.pendingMutation = null; state.saving = false; state.outcomeUncertain = false; state.awaitingReload = false;
+      dom.form.inert = false; dom.form.removeAttribute('aria-busy');
       releaseLogoDraft();
       copyGeneration += 1;
       state.data = null;
@@ -1899,11 +1931,13 @@ export function createSettingsController({
   }
 
   function signedOut() {
+    if (disposed) return;
+    const message = state.pendingMutation && state.pendingMutation.outcome !== 'committed' || state.outcomeUncertain
+      ? 'Settings change outcome is uncertain. Sign in again and check saved values before retrying.' : null;
     cancelSettingsOperations();
     releaseLogoDraft();
     copyGeneration += 1;
     state.visible = false;
-    root.hidden = true;
     dom.form.hidden = true;
     state.staff = null;
     state.data = null;
@@ -1916,20 +1950,21 @@ export function createSettingsController({
     renderStaffUsers();
     renderStaffAudit();
     updateDirtyState();
+    return message;
   }
 
   function bind() {
-    if (state.bound) return;
+    if (disposed || state.bound) return;
     state.bound = true;
-    dom.form.addEventListener('submit', saveSettings);
-    dom.form.addEventListener('input', updateDirtyState);
-    dom.form.addEventListener('change', updateDirtyState);
+    listen(dom.form, 'submit', saveSettings);
+    listen(dom.form, 'input', updateDirtyState);
+    listen(dom.form, 'change', updateDirtyState);
     const templatesPanel = document.getElementById('settings-templates');
     for (const eventName of ['focusin', 'select', 'keyup', 'mouseup']) {
-      templatesPanel.addEventListener(eventName, event => rememberTemplateSelection(event.target));
+      listen(templatesPanel, eventName, event => rememberTemplateSelection(event.target));
     }
-    dom.scope.addEventListener('change', changeScope);
-    dom.switchSystem.addEventListener('click', async () => {
+    listen(dom.scope, 'change', changeScope);
+    listen(dom.switchSystem, 'click', async () => {
       if (state.staff?.role !== 'super_admin') return;
       dom.scope.value = 'system';
       await changeScope();
@@ -1940,10 +1975,10 @@ export function createSettingsController({
       ['copy-patron-iframe', dom.iframeMarkup, 'Iframe markup'],
       ['copy-patron-loader', dom.loaderMarkup, 'Auto-resizing loader markup']
     ]) {
-      root.querySelector(`#${buttonId}`).addEventListener('click', () => copyPublicValue(value.value, label));
+      listen(root.querySelector(`#${buttonId}`), 'click', () => copyPublicValue(value.value, label));
     }
-    dom.logo.addEventListener('change', previewLogoFile);
-    dom.discardLogoDraft.addEventListener('click', () => {
+    listen(dom.logo, 'change', previewLogoFile);
+    listen(dom.discardLogoDraft, 'click', () => {
       releaseLogoDraft();
       dom.logo.value = '';
       dom.discardLogoDraft.hidden = true;
@@ -1951,11 +1986,11 @@ export function createSettingsController({
       renderBrandingPreview();
       updateDirtyState();
     });
-    document.getElementById('branding-alt').addEventListener('input', () => renderBrandingPreview(Boolean(logoDraftUrl)));
+    listen(document.getElementById('branding-alt'), 'input', () => renderBrandingPreview(Boolean(logoDraftUrl)));
     for (const button of dom.nav) {
       button.tabIndex = button.dataset.settingsPanel === state.activePanel ? 0 : -1;
-      button.addEventListener('click', () => activatePanel(button.dataset.settingsPanel, true));
-      button.addEventListener('keydown', event => {
+      listen(button, 'click', () => activatePanel(button.dataset.settingsPanel, true));
+      listen(button, 'keydown', event => {
         if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault();
         const index = dom.nav.indexOf(button);
@@ -1967,7 +2002,7 @@ export function createSettingsController({
         target.focus();
       });
     }
-    dom.refresh.addEventListener('click', async () => {
+    listen(dom.refresh, 'click', async () => {
       if (state.pendingMutation) {
         notify('Wait for the settings change to finish before reloading.', 'warning');
         return;
@@ -1975,7 +2010,7 @@ export function createSettingsController({
       if (isDirty() && !window.confirm('Discard unsaved settings changes and reload?')) return;
       await load();
     });
-    dom.discard.addEventListener('click', async () => {
+    listen(dom.discard, 'click', async () => {
       if (state.pendingMutation) {
         notify('Wait for the settings change to finish before discarding changes.', 'warning');
         return;
@@ -1983,19 +2018,19 @@ export function createSettingsController({
       if (!window.confirm('Discard unsaved settings changes?')) return;
       await load({ silent: true });
     });
-    dom.reset.addEventListener('click', resetSettings);
-    dom.testPolaris.addEventListener('click', testPolaris);
-    dom.syncOrganizations.addEventListener('click', syncOrganizations);
-    dom.staffRole.addEventListener('change', populateStaffCreateControls);
-    dom.staffCreate.addEventListener('click', createStaffUser);
-    dom.staffRefresh.addEventListener('click', () => loadStaffAccess());
-    dom.staffAuditRefresh.addEventListener('click', () => loadStaffAccess());
-    dom.saveLogo.addEventListener('click', () => saveLogo(false));
-    dom.clearLogo.addEventListener('click', () => saveLogo(true));
-    document.getElementById('email-postmark-token').addEventListener('input', event => {
+    listen(dom.reset, 'click', resetSettings);
+    listen(dom.testPolaris, 'click', testPolaris);
+    listen(dom.syncOrganizations, 'click', syncOrganizations);
+    listen(dom.staffRole, 'change', populateStaffCreateControls);
+    listen(dom.staffCreate, 'click', createStaffUser);
+    listen(dom.staffRefresh, 'click', () => loadStaffAccess());
+    listen(dom.staffAuditRefresh, 'click', () => loadStaffAccess());
+    listen(dom.saveLogo, 'click', () => saveLogo(false));
+    listen(dom.clearLogo, 'click', () => saveLogo(true));
+    listen(document.getElementById('email-postmark-token'), 'input', event => {
       if (event.target.value) document.getElementById('email-clear-postmark-token').checked = false;
     });
-    document.getElementById('email-clear-postmark-token').addEventListener('change', event => {
+    listen(document.getElementById('email-clear-postmark-token'), 'change', event => {
       if (event.target.checked) document.getElementById('email-postmark-token').value = '';
     });
     for (const [sourceId, targetId] of [
@@ -2005,32 +2040,27 @@ export function createSettingsController({
       const source = document.getElementById(sourceId);
       const target = document.getElementById(targetId);
       const key = sourceId === 'email-from-address' ? 'fromAddress' : 'fromName';
-      source.addEventListener('input', () => {
+      listen(source, 'input', () => {
         target.value = source.value;
         updateDirtyState();
       });
-      target.addEventListener('input', () => {
+      listen(target, 'input', () => {
         source.value = target.value;
         updateDirtyState();
       });
-      source.addEventListener('change', () => {
+      listen(source, 'change', () => {
         const toggle = source.closest('[data-setting-section]')?.querySelector('.settings-override-toggle');
         if (toggle) syncOverrideToggles('email', key, toggle.checked);
       });
-      target.addEventListener('change', () => {
+      listen(target, 'change', () => {
         const toggle = target.closest('[data-setting-section]')?.querySelector('.settings-override-toggle');
         if (toggle) syncOverrideToggles('email', key, toggle.checked);
       });
     }
-    window.addEventListener('beforeunload', event => {
-      if (!isDirty() && !state.pendingMutation && !state.outcomeUncertain) return;
-      event.preventDefault();
-      event.returnValue = '';
-    });
   }
 
   async function activate(panel = state.activePanel) {
-    if (!state.staff || state.staff.role === 'staff') return;
+    if (disposed || !state.staff || state.staff.role === 'staff') return;
     state.visible = true;
     activatePanel(panel);
     populateScopeOptions();
@@ -2047,8 +2077,8 @@ export function createSettingsController({
     renderBrandingPreview();
     updateDirtyState();
     copyGeneration += 1;
-    latestLoads.begin('administration-settings').abort();
-    latestLoads.begin('administration-staff-access').abort();
+    reads.begin('administration-settings').abort();
+    reads.begin('administration-staff-access').abort();
     return true;
   }
 
@@ -2069,6 +2099,7 @@ export function createSettingsController({
   }
 
   return {
+    dispose() { if (disposed) return; cancelSettingsOperations(); releaseLogoDraft(); disposed = true; events.abort(); drafts.dispose(); domainEditors.dispose(); },
     bind,
     setStaff,
     signedOut,

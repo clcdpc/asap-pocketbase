@@ -1,4 +1,5 @@
-import { authorizedJson, isAbortError, latestLoads } from './http.js';
+import { authorizedJson, isAbortError } from './http.js';
+import { createLatestLoad } from '../../shared/latest-load.js';
 
 const dateRangeLabels = {
   last30: 'Last 30 days',
@@ -27,9 +28,6 @@ const reasonLabels = {
   unrecorded: 'No reason recorded'
 };
 
-let analyticsScope = '';
-let analyticsRange = 'lastMonth';
-
 function formatDate(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -49,14 +47,6 @@ function formatDays(value) {
   return number.toFixed(number >= 10 ? 0 : 1);
 }
 
-function analyticsUrl() {
-  const params = new URLSearchParams();
-  params.set('range', analyticsRange);
-  if (analyticsScope) params.set('scope', analyticsScope);
-  params.set('_', String(Date.now()));
-  return `/api/asap/staff/analytics?${params.toString()}`;
-}
-
 function renderStatus(container, className, message) {
   const node = document.createElement('p');
   node.className = className;
@@ -68,63 +58,6 @@ function renderStatus(container, className, message) {
 function restoreAnalyticsFocus(container, focusedControlId) {
   if (!['analytics-scope', 'analytics-date-range'].includes(focusedControlId)) return;
   container.querySelector(`#${focusedControlId}`)?.focus();
-}
-
-export async function loadAnalytics(
-  container,
-  allowScopeRecovery = true,
-  focusedControlId = document.activeElement?.id || '') {
-  if (!container) return;
-  const load = latestLoads.begin('analytics');
-  renderStatus(container, 'analytics-status', 'Loading analytics...');
-  try {
-    const data = await authorizedJson(analyticsUrl(), { signal: load.signal });
-    if (!load.isCurrent()) return;
-    analyticsScope = data.scope?.mode === 'all'
-      ? 'all'
-      : data.scope?.libraryOrgId || analyticsScope;
-    analyticsRange = data.dateRange?.key || analyticsRange;
-    renderAnalytics(container, data);
-    restoreAnalyticsFocus(container, focusedControlId);
-  } catch (error) {
-    if (isAbortError(error) || !load.isCurrent()) return;
-    if (allowScopeRecovery &&
-        error?.status === 400 &&
-        error.response?.code === 'invalid_scope' &&
-        analyticsScope &&
-        analyticsScope !== 'all' &&
-        analyticsScope !== 'system') {
-      analyticsScope = 'all';
-      await loadAnalytics(container, false, focusedControlId);
-      return;
-    }
-    renderStatus(container, 'analytics-status error', error.message || 'Analytics could not be loaded.');
-  } finally {
-    latestLoads.finish('analytics', load.token);
-  }
-}
-
-export function refreshAnalyticsView(container) {
-  return loadAnalytics(container);
-}
-
-export function resetAnalytics() {
-  latestLoads.begin('analytics').abort();
-  analyticsScope = '';
-  analyticsRange = 'lastMonth';
-}
-
-function renderAnalytics(container, data) {
-  const shell = document.createElement('section');
-  shell.className = 'analytics-shell';
-  shell.setAttribute('aria-label', 'Analytics results');
-  shell.append(
-    renderAnalyticsHeader(data),
-    renderSummaryCards(data.summary),
-    renderAnalyticsGrid(data)
-  );
-  container.replaceChildren(shell);
-  bindAnalyticsControls(container);
 }
 
 function renderAnalyticsHeader(data) {
@@ -311,15 +244,90 @@ function renderRows(rows) {
   return table;
 }
 
-function bindAnalyticsControls(container) {
-  const scope = container.querySelector('#analytics-scope');
-  if (scope) scope.addEventListener('change', () => {
-    analyticsScope = scope.value || 'all';
-    loadAnalytics(container);
-  });
-  const range = container.querySelector('#analytics-date-range');
-  if (range) range.addEventListener('change', () => {
-    analyticsRange = range.value || 'lastMonth';
-    loadAnalytics(container);
-  });
+export function createAnalyticsController({ root: container, sessionIdentity }) {
+  const reads = createLatestLoad();
+  let analyticsScope = '', analyticsRange = 'lastMonth', active = false, disposed = false;
+  function current(load, owner) { return !disposed && active && container.isConnected && load.isCurrent() && sessionIdentity.isCurrent(owner); }
+  function analyticsUrl() {
+    const params = new URLSearchParams();
+    params.set('range', analyticsRange);
+    if (analyticsScope) params.set('scope', analyticsScope);
+    params.set('_', String(Date.now()));
+    return `/api/asap/staff/analytics?${params.toString()}`;
+  }
+
+  async function loadAnalytics(
+    allowScopeRecovery = true,
+    focusedControlId = document.activeElement?.id || '') {
+    if (disposed || !active || !container.isConnected || !sessionIdentity.preferences()) return false;
+    const owner = sessionIdentity.preferences();
+    const load = reads.begin('analytics');
+    renderStatus(container, 'analytics-status', 'Loading analytics...');
+    try {
+      const data = await authorizedJson(analyticsUrl(), { signal: load.signal });
+      if (!current(load, owner)) return false;
+      analyticsScope = data.scope?.mode === 'all'
+        ? 'all'
+        : data.scope?.libraryOrgId || analyticsScope;
+      analyticsRange = data.dateRange?.key || analyticsRange;
+      renderAnalytics(container, data);
+      restoreAnalyticsFocus(container, focusedControlId);
+    } catch (error) {
+      if (isAbortError(error) || !current(load, owner)) return;
+      if (allowScopeRecovery &&
+          error?.status === 400 &&
+          error.response?.code === 'invalid_scope' &&
+          analyticsScope &&
+          analyticsScope !== 'all' &&
+          analyticsScope !== 'system') {
+        analyticsScope = 'all';
+        await loadAnalytics(false, focusedControlId);
+        return;
+      }
+      renderStatus(container, 'analytics-status error', error.message || 'Analytics could not be loaded.');
+    } finally {
+      reads.finish('analytics', load.token);
+    }
+  }
+
+  function resetAnalytics() {
+    reads.begin('analytics').abort();
+    analyticsScope = '';
+    analyticsRange = 'lastMonth';
+  }
+
+  function renderAnalytics(container, data) {
+    const shell = document.createElement('section');
+    shell.className = 'analytics-shell';
+    shell.setAttribute('aria-label', 'Analytics results');
+    shell.append(
+      renderAnalyticsHeader(data),
+      renderSummaryCards(data.summary),
+      renderAnalyticsGrid(data)
+    );
+    container.replaceChildren(shell);
+    bindAnalyticsControls(container);
+  }
+
+  function bindAnalyticsControls(container) {
+    const scope = container.querySelector('#analytics-scope');
+    if (scope) scope.addEventListener('change', () => {
+      if (disposed || !active || !scope.isConnected) return;
+      analyticsScope = scope.value || 'all';
+      void loadAnalytics();
+    });
+    const range = container.querySelector('#analytics-date-range');
+    if (range) range.addEventListener('change', () => {
+      if (disposed || !active || !range.isConnected) return;
+      analyticsRange = range.value || 'lastMonth';
+      void loadAnalytics();
+    });
+  }
+  return {
+    activate() { if (!disposed) active = true; },
+    refresh: () => loadAnalytics(),
+    deactivate() { active = false; resetAnalytics(); },
+    signedOut() { active = false; resetAnalytics(); },
+    dispose() { if (disposed) return; active = false; resetAnalytics(); disposed = true; }
+  };
 }

@@ -1,5 +1,4 @@
 import { HttpError, isAbortError, requestJson } from '../../shared/http.js';
-import { createLatestLoad } from '../../shared/latest-load.js';
 
 let antiforgeryToken = null;
 let sessionInvalidHandler = null;
@@ -7,15 +6,16 @@ let accessUnavailableHandler = null;
 let sessionContext = null;
 let sessionInvalidated = false;
 
-export const latestLoads = createLatestLoad();
 export { HttpError, isAbortError };
 
 export function onSessionInvalid(handler) {
   sessionInvalidHandler = handler;
+  return () => { if (sessionInvalidHandler === handler) sessionInvalidHandler = null; };
 }
 
 export function onAccessUnavailable(handler) {
   accessUnavailableHandler = handler;
+  return () => { if (accessUnavailableHandler === handler) accessUnavailableHandler = null; };
 }
 
 export async function loadStaffSession(options = {}) {

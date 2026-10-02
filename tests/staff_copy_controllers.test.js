@@ -40,7 +40,7 @@ const requestA = { id: '9223372036854775807', version: 'v1', title: 'A', library
     const { createCopyDetailController } = await load('copy-detail');
     const session = createSessionIdentity(); session.accept(actorA);
     const host = createDetailHost({ root: get('#request-dialog') });
-    let generation = 1, finishRefresh;
+    let generation = 1, finishRefresh, deleteOptions;
     const notices = [], receipts = [];
     const controller = createCopyDetailController({ host, sessionIdentity: session,
       announce: message => notices.push(message), beforeOpen: () => generation,
@@ -48,9 +48,11 @@ const requestA = { id: '9223372036854775807', version: 'v1', title: 'A', library
       onAlign: async () => true, onOpened() {}, beforeClose: () => true, onClosed() {}, getFocusReturn: () => null,
       refreshQueue: () => new Promise(resolve => { finishRefresh = resolve; }),
       onReceipt: (...args) => receipts.push(args), clearReceipt() {},
-      request: async (path, init = {}) => init.method ? { deleted: true } : requestA });
+      request: async (path, init = {}) => { if (init.method) { deleteOptions = init; return { deleted: true }; } return requestA; } });
     await controller.open(requestA.id);
+    session.updatePreferences({ ...actorA, version: 'actor-v2' }, session.preferences());
     const deleting = controller.mutate(requestA, 'delete', 'Task deleted.');
+    assert.equal(deleteOptions.body.actorVersion, 'actor-v2', 'delete captures the current same-actor rowversion at dispatch');
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(receipts[0][2].outcome, 'committed');
     generation++;

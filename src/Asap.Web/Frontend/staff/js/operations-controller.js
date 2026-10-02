@@ -249,7 +249,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       if (disposed || !sessionIdentity.isCurrent(owner)) return;
       const refreshed = active ? await loadOperations({ silent: true }) : false;
       if (refreshed === true) clearReceipt(operation);
-      if (operation.scope === state.operationsScope && sessionIdentity.preferences() && active) {
+      if (!disposed && sessionIdentity.isCurrent(owner) && operation.scope === state.operationsScope && active) {
         announce(refreshed ? committedMessage : `${committedMessage} Operations could not be refreshed.`,
           refreshed ? 'success' : 'warning');
       }

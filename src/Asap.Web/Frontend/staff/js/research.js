@@ -122,9 +122,11 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce }) 
   let context = null;
   let controller = null;
   let generation = 0;
+  let disposed = false;
+  const events = new window.AbortController();
 
   function active(current, token) {
-    return context === current && current?.isCurrent() && generation === token && dialog.open;
+    return !disposed && context === current && current?.isCurrent() && generation === token && dialog.open;
   }
 
   function abort() {
@@ -134,7 +136,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce }) 
   }
 
   function close(owner = null) {
-    if (owner !== null && owner !== context) return;
+    if (disposed || !context || owner !== null && owner !== context) return;
     abort();
     const old = context;
     context = null;
@@ -263,21 +265,23 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce }) 
     }
   }
 
-  searchForm.addEventListener('submit', search);
-  mode.addEventListener('change', modeChanged);
+  searchForm.addEventListener('submit', search, { signal: events.signal });
+  mode.addEventListener('change', modeChanged, { signal: events.signal });
   for (const input of [query, title, author]) input.addEventListener('input', () => {
     abort();
     results.replaceChildren();
     status.textContent = '';
-  });
-  closeButton.addEventListener('click', () => close());
-  dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
+  }, { signal: events.signal });
+  closeButton.addEventListener('click', () => close(), { signal: events.signal });
+  dialog.addEventListener('cancel', event => { event.preventDefault(); close(); }, { signal: events.signal });
 
   return {
     close,
+    signedOut() { close(); },
+    dispose() { if (disposed) return; close(); disposed = true; abort(); events.abort(); },
     invalidate(owner = null) { if (owner === null || owner === context) abort(); },
     open(next) {
-      if (!next.isCurrent()) return;
+      if (disposed || !next.isCurrent()) return;
       if (dialog.open) close();
       context = next;
       mode.value = next.mode || 'title';

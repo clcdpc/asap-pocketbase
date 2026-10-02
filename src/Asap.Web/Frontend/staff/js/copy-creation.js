@@ -43,6 +43,7 @@ export function createCopyCreationController({ root, sessionIdentity, announce, 
     return !disposed && ui === owner && root.open && sessionIdentity.isCurrent(owner.actor) && owner.parent.isCurrent();
   }
   function loadRecovery() {
+    if (disposed) return;
     retained = null;
     try {
       // The obsolete marker has no actor evidence and cannot be adopted.
@@ -52,6 +53,7 @@ export function createCopyCreationController({ root, sessionIdentity, announce, 
       const value = decodeCopyCreation(storage().getItem(key), key);
       if (value) retained = { ...value, owner: sessionIdentity.preferences() };
     } catch { /* A submitted command verifies storage availability before dispatch. */ }
+    if (retained) onRecoveryChanged({ owner: retained.owner, restored: true });
   }
   function writeAttempt(value, owner) {
     const storageKey = copyCreationStorageKey(owner);
@@ -106,6 +108,7 @@ export function createCopyCreationController({ root, sessionIdentity, announce, 
   }
 
   function close(options = {}, parent = null) {
+    if (disposed || !ui && !previewParent) return true;
     if (parent !== null && ui?.parent !== parent && previewParent !== parent) return true;
     const owner = ui;
     if (owner?.submitting && !options.preserveMutation && !options.force) {
@@ -206,7 +209,7 @@ export function createCopyCreationController({ root, sessionIdentity, announce, 
     },
     hasPendingMutation: (parent = null) => Boolean(ui?.submitting && (parent === null || ui.parent === parent) && sessionIdentity.isCurrent(ui.actor)),
     setStaff: loadRecovery,
-    signedOut() { close({ navigation: true, force: true }); retained = null; },
+    signedOut() { if (!disposed) { close({ navigation: true, force: true }); retained = null; } },
     review: {
       current: currentRecovery,
       begin() { if (!currentRecovery()) return null; retained.reviewReady = false; return retained; },
@@ -222,6 +225,6 @@ export function createCopyCreationController({ root, sessionIdentity, announce, 
         retained.reviewed = true; clearReceipt(retained.receiptAttempt); return true;
       }
     },
-    dispose() { close({ navigation: true, force: true }); disposed = true; events.abort(); reads.begin('preview').abort(); retained = null; }
+    dispose() { if (disposed) return; close({ navigation: true, force: true }); disposed = true; events.abort(); reads.begin('preview').abort(); retained = null; }
   };
 }

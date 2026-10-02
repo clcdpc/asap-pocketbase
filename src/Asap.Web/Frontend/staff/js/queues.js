@@ -64,7 +64,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   const events = new window.AbortController();
   let disposed = false, acceptingScope = false;
 
-  function invalidate() { reads.begin('queue').abort(); dom.refresh.disabled = false; }
+  function invalidate() { reads.begin('queue').abort(); if (!disposed) dom.refresh.disabled = false; }
 
   async function refresh(options = {}) {
     const owner = sessionIdentity.preferences();
@@ -106,6 +106,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   }
 
   function resetQueueFilters() {
+    if (disposed) return;
     dom.search.value = '';
     dom.tag.value = 'all';
     dom.similar.value = 'all';
@@ -113,6 +114,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   }
 
   function clearTitleQueueForContextChange() {
+    if (disposed) return;
     state.requests = [];
     state.loadedContext = null;
     if (!acceptingScope) invalidate();
@@ -287,10 +289,11 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     libraries: () => [...dom.scope.options].filter(option => option.value !== 'all')
       .map(option => Object.freeze({ id: option.value, name: option.textContent })),
     focusReturn: (id, fallback) => focusPort({ grid: () => dom.grid, label: `Open request ${id}`, fallback, sessionIdentity, getContext }),
-    activate({ previous }) { if (previous !== 'queue') resetQueueFilters(); updateStatusTabs(); },
+    activate({ previous }) { if (disposed) return; if (previous !== 'queue') resetQueueFilters(); updateStatusTabs(); },
     deactivate: invalidate,
     refreshOnEntry({ context, previous }) { if (previous !== 'queue' && state.loadedContext?.scope !== context.scope) return refresh(); },
     contextChanged(next, previous) {
+      if (disposed) return;
       dom.scope.value = next.scope;
       if (next.status !== previous.status) {
         invalidate(); resetQueueFilters(); updateStatusTabs();
@@ -298,10 +301,10 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       }
       if (next.scope !== previous.scope) { resetQueueFilters(); clearTitleQueueForContextChange(); }
     },
-    preferencesChanged() { dom.claim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all'; renderGrid(); },
+    preferencesChanged() { if (disposed) return; dom.claim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all'; renderGrid(); },
     clear: clearTitleQueueForContextChange,
-    signedOut() { invalidate(); state.requests = []; state.loadedContext = null; state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); },
-    dispose() { disposed = true; events.abort(); invalidate(); state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); state.requests = []; }
+    signedOut() { if (disposed) return; invalidate(); state.requests = []; state.loadedContext = null; state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); },
+    dispose() { if (disposed) return; disposed = true; events.abort(); invalidate(); state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); state.requests = []; }
   };
 }
 
@@ -327,7 +330,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
   const events = new window.AbortController();
   let disposed = false, acceptingScope = false;
 
-  function invalidate() { reads.begin('queue').abort(); dom.additionalCopyRefresh.disabled = false; }
+  function invalidate() { reads.begin('queue').abort(); if (!disposed) dom.additionalCopyRefresh.disabled = false; }
 
   async function refresh(options = {}) {
     const owner = sessionIdentity.preferences();
@@ -373,11 +376,13 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
   }
 
   function resetAdditionalCopyFilters() {
+    if (disposed) return;
     dom.additionalCopySearch.value = '';
     dom.additionalCopyClaim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
   }
 
   function clearAdditionalCopyQueueForScopeChange() {
+    if (disposed) return;
     state.additionalCopies = [];
     state.loadedContext = null;
     if (!acceptingScope) invalidate();
@@ -515,17 +520,18 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
     find: id => state.additionalCopies.find(item => item.id === id),
     markStale() { state.loadedContext = null; },
     focusReturn: (id, fallback) => focusPort({ grid: () => dom.additionalCopyGrid, label: `Open additional-copy task ${id}`, fallback, sessionIdentity, getContext, copy: true }),
-    activate({ previous }) { if (previous !== 'additional-copies') resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); },
+    activate({ previous }) { if (disposed) return; if (previous !== 'additional-copies') resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); },
     deactivate: invalidate,
     refreshOnEntry() { if (state.loadedContext?.scope !== getContext().scope || state.loadedContext?.status !== getContext().additionalCopyStatus) return refresh(); },
     contextChanged(next, previous) {
+      if (disposed) return;
       dom.additionalCopyScope.value = next.scope;
       if (next.additionalCopyStatus !== previous.additionalCopyStatus) { resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); clearAdditionalCopyQueueForScopeChange(); }
       if (next.scope !== previous.scope) { resetAdditionalCopyFilters(); clearAdditionalCopyQueueForScopeChange(); }
     },
-    preferencesChanged() { dom.additionalCopyClaim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all'; if (state.loadedContext) renderAdditionalCopyGrid(); },
+    preferencesChanged() { if (disposed) return; dom.additionalCopyClaim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all'; if (state.loadedContext) renderAdditionalCopyGrid(); },
     clear: clearAdditionalCopyQueueForScopeChange,
-    signedOut() { invalidate(); state.additionalCopies = []; state.loadedContext = null; state.additionalCopyGrid?.destroy?.(); state.additionalCopyGrid = null; dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid); dom.additionalCopyCreateReview.hidden = true; },
-    dispose() { disposed = true; events.abort(); invalidate(); state.additionalCopyGrid?.destroy?.(); state.additionalCopyGrid = null; dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid); state.additionalCopies = []; }
+    signedOut() { if (disposed) return; invalidate(); state.additionalCopies = []; state.loadedContext = null; state.additionalCopyGrid?.destroy?.(); state.additionalCopyGrid = null; dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid); dom.additionalCopyCreateReview.hidden = true; },
+    dispose() { if (disposed) return; disposed = true; events.abort(); invalidate(); state.additionalCopyGrid?.destroy?.(); state.additionalCopyGrid = null; dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid); state.additionalCopies = []; }
   };
 }

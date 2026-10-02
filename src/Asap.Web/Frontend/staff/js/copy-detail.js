@@ -86,7 +86,7 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
 
   async function mutateAdditionalCopy(snapshot, operation, successMessage, extra = {}, draft = null) {
     if (!allowRequestMutation(snapshot, { consumes: draft })) return;
-    const mounted = lease, owner = actor;
+    const mounted = lease, owner = sessionIdentity.preferences();
     const generation = getNavigationGeneration();
     const attempt = { owner, snapshot, operation, outcome: 'pending', pending: true };
     activeAttempt = attempt;

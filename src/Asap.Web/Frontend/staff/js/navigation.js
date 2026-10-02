@@ -4,7 +4,7 @@ import { createLatestLoad } from '../../shared/latest-load.js';
 const titleStages = ['suggestion', 'outstanding_purchase', 'pending_hold', 'hold_placed', 'closed'];
 
 // Ports describe owner policies and lifecycle. Navigation never inspects forms.
-export function createNavigationController({ router, sessionIdentity, getFeatures, views,
+export function createNavigationController({ router, sessionIdentity, detailHost, getFeatures, views,
   announce, present, closeTransient, onInvalidate, onContextChanged, request = authorizedJson }) {
   let context = Object.freeze({ scope: 'all', status: 'suggestion', additionalCopyStatus: 'open', activeView: 'queue' });
   let generation = 0;
@@ -59,7 +59,7 @@ export function createNavigationController({ router, sessionIdentity, getFeature
     if (previous !== name) views[previous]?.deactivate?.();
     align({ activeView: name });
     present(name);
-    views[name]?.activate?.({ context, previous });
+    views[name]?.activate?.({ context, previous, panel: name === 'settings' ? router.requested().panel || undefined : undefined });
   }
 
   function writeStage(name, replace = false) {
@@ -242,8 +242,68 @@ export function createNavigationController({ router, sessionIdentity, getFeature
     return { refreshed: titles && copies, isCurrent: completion.isCurrent };
   }
 
+  function beforeDetailOpen(options) {
+    if (disposed || !sessionIdentity.actor() || router.busy() || !options.authoritativeRefresh && !allow({ suggestion: false })) return false;
+    return invalidate();
+  }
+  async function alignTitle(request, options, owner, ticket) {
+    if (options.reloaded) {
+      if (request.status !== context.status) {
+        align({ status: request.status }); views.queue.clear();
+        if (await views.queue.refresh({ silent: true, skipDeepLink: true }) !== true) return false;
+      }
+    } else if (options.align || options.fromRecent) {
+      const needsRefresh = context.status !== request.status || views.queue.find(request.id)?.status !== request.status;
+      const scope = views.queue.libraryScope(request.libraryOrgId);
+      const scopeChanged = owner.role === 'super_admin' && context.scope !== 'all' && context.scope !== scope;
+      views.queue.resetFilters();
+      if (titleStages.includes(request.status)) align({ status: request.status });
+      if (scopeChanged) { align({ scope }); views['additional-copies'].clear(); }
+      if (scopeChanged || needsRefresh) {
+        views.queue.clear();
+        if (await views.queue.refresh({ silent: true, skipDeepLink: true }) !== true) return false;
+      } else views.queue.render();
+      if (generation !== ticket || !sessionIdentity.isCurrent(owner)) return false;
+      switchView('queue', false);
+    }
+    return generation === ticket && sessionIdentity.isCurrent(owner);
+  }
+  async function alignCopy(request, options, owner, ticket) {
+    const statusChanged = options.fromDeepLink && request.status !== context.additionalCopyStatus && ['open', 'closed'].includes(request.status);
+    const scope = views.queue.libraryScope(request.libraryOrgId);
+    const scopeChanged = options.fromDeepLink && owner.role === 'super_admin' && context.scope !== 'all' && context.scope !== scope;
+    if (statusChanged || scopeChanged) {
+      align({ ...(statusChanged ? { additionalCopyStatus: request.status } : {}), ...(scopeChanged ? { scope } : {}) });
+      views['additional-copies'].resetFilters();
+      if (await views['additional-copies'].refresh({ silent: true }) !== true || generation !== ticket || !sessionIdentity.isCurrent(owner)) return false;
+    }
+    return true;
+  }
+  function detailOpened(request, copy, options) {
+    if (options.history === 'push' || options.fromRecent) router.pushRequest(request.id, copy ? 'additional_copies' : request.status,
+      { scope: context.scope, copyStatus: context.additionalCopyStatus });
+    else router.replaceRequest(request.id, copy, { scope: context.scope, copyStatus: context.additionalCopyStatus }, copy ? 'additional_copies' : context.status);
+    router.remember();
+  }
+  function detailClosed(copy, options) {
+    if (options.navigation) return;
+    router.closeDetail(copy ? 'additional_copies' : context.status, { scope: context.scope, copyStatus: context.additionalCopyStatus });
+    if (!router.busy()) router.remember();
+  }
+  function prepareSuggestion() {
+    if (!detailHost.isOpen()) return true;
+    if (!detailHost.requestClose({ navigation: true })) return false;
+    writeStage('queue', true); return true;
+  }
+  async function openRecentTitle(intent) {
+    if (disposed || !sessionIdentity.isCurrent(intent.owner)) return false;
+    return views.queue.openDetail(intent.id, intent.opener, { fromRecent: true });
+  }
+
   return { context: () => context, generation: () => generation, align, allow, invalidate, openCreatedTitle, openExistingTitle,
-    captureClosedReview, reviewClosed,
+    captureClosedReview, reviewClosed, beforeDetailOpen, alignTitle, alignCopy, detailOpened, detailClosed, prepareSuggestion, openRecentTitle,
+    settingsPanelChanged(panel) { invalidate(); router.pushSettingsPanel(panel); router.remember(); },
+    settingsScopeChanged(scope) { invalidate(); router.pushSettingsScope(scope); router.remember(); },
     switchView, changeQueueContext, navigateFromUrl,
     start() { router.start(navigateFromUrl); },
     dispose() { disposed = true; reads.begin('route').abort(); router.dispose(); }

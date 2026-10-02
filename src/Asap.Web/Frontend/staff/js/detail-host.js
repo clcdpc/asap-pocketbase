@@ -75,6 +75,7 @@ export function createDetailHost({ root }) {
       });
     },
     reset() { if (mounted) release(mounted); cancelFocusReturn(); },
+    signedOut() { if (disposed) return; if (mounted) release(mounted); cancelFocusReturn(); },
     dispose() { if (mounted) release(mounted); disposed = true; events.abort(); cancelFocusReturn(); }
   };
 }

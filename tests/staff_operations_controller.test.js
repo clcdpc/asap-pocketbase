@@ -40,5 +40,25 @@ const actor = id => ({ id, tenantId: `tenant-${id}`, authenticationEmail: `${id}
     assert.equal(get('#send-test-email').disabled, false, 'malformed records cannot acquire a command guard');
     third.dispose();
   });
+  await fixture(async ({ load, get }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createOperationsController } = await load('operations-controller');
+    const session = createSessionIdentity(); session.accept(actor('a'));
+    const reads = [], notices = [], receipts = [];
+    const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: session,
+      announce: message => notices.push(message), onScopeChange() {}, clearReceipt() {}, onReceipt: (...args) => receipts.push(args),
+      request: async (path, init = {}) => init.method === 'POST' ? { code: 'queued' }
+        : new Promise(resolve => reads.push(resolve)) });
+    controller.setStaff(session.preferences()); controller.activate();
+    const running = controller.run('/api/asap/staff/email-operations/test', 'A email');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(reads.length, 'committed attempt begins its disposable review reads');
+    session.clear(); controller.signedOut(); session.accept(actor('b')); controller.setStaff(session.preferences()); controller.activate();
+    const before = notices.length;
+    for (const resolve of reads) resolve({ items: [] }); await running;
+    assert.equal(receipts[0][2].outcome, 'committed');
+    assert.equal(notices.length, before, 'retired post-commit review cannot announce over a replacement actor');
+    controller.dispose();
+  });
   console.log('Operations retained lifetime, captured actor cleanup and supported recovery contracts passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

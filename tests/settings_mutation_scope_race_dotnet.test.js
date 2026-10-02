@@ -452,6 +452,44 @@ async function flush() {
       dom.window.close();
     }
 
+    for (const outcome of ['committed', 'uncertain']) {
+      const dom = new JSDOM(fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8'), { url: 'http://localhost/staff/' });
+      Object.assign(global, { window: dom.window, document: dom.window.document, FormData: dom.window.FormData, Node: dom.window.Node });
+      const receipts = [], posts = [];
+      let complete, fail;
+      global.fetch = async (url, options = {}) => {
+        const requestUrl = String(url);
+        if (requestUrl.endsWith('/session')) return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
+        if (requestUrl.endsWith('/settings') && options.method === 'POST') {
+          posts.push(options); return new Promise((resolve, reject) => { complete = resolve; fail = reject; });
+        }
+        if (requestUrl.includes('/settings?')) return response(200, settingsData(1, 'replacement-version', 'Replacement'));
+        if (requestUrl.endsWith('/organizations')) return response(200, []);
+        if (requestUrl.includes('/patron-codes?')) return response(200, { data: [] });
+        throw new Error(`Unexpected request: ${requestUrl}`);
+      };
+      const options = { root: document.getElementById('settings-view'), tab: document.getElementById('settings-view-tab'), announce() {},
+        onCommitted: (...args) => receipts.push(args), onUnconfirmed: (...args) => receipts.push(args) };
+      const first = settingsModule.createSettingsController(options); first.bind();
+      first.setStaff({ id: '1', tenantId: 'tenant-a', authenticationEmail: 'a@example.org', role: 'super_admin', organizationId: 1 });
+      await first.activate();
+      const input = document.getElementById('patron-login-note'); input.value = 'Submitted draft';
+      input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+      await flush(); assert.ok(complete); assert.equal(posts[0].signal, undefined, 'committing Settings request has no read cancellation signal');
+      first.dispose();
+      const replacement = settingsModule.createSettingsController(options); replacement.bind();
+      replacement.setStaff({ id: '2', tenantId: 'tenant-b', authenticationEmail: 'b@example.org', role: 'super_admin', organizationId: 1 });
+      await replacement.activate(); first.dispose();
+      if (outcome === 'committed') complete(response(200, { data: { version: 'old-commit-version' } }));
+      else fail(new Error('Lost response'));
+      await flush(); await flush();
+      assert.equal(receipts.at(-1)[1].id, '1'); assert.equal(receipts.at(-1)[2].outcome, outcome, 'record old attempt truth before presentation checks');
+      assert.equal(document.getElementById('settings-version').value, 'replacement-version');
+      assert.equal(document.getElementById('patron-login-note').value, '');
+      assert.equal(document.getElementById('settings-form').inert, false, 'retired finally cannot change replacement interactivity');
+      assert.equal(replacement.hasPendingMutation(), false); replacement.dispose(); dom.window.close();
+    }
     console.log('Settings mutation scope race regression checks passed');
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
