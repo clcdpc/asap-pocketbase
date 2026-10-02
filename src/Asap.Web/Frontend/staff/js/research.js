@@ -133,7 +133,8 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce }) 
     controller = null;
   }
 
-  function close() {
+  function close(owner = null) {
+    if (owner !== null && owner !== context) return;
     abort();
     const old = context;
     context = null;
@@ -269,13 +270,14 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce }) 
     results.replaceChildren();
     status.textContent = '';
   });
-  closeButton.addEventListener('click', close);
+  closeButton.addEventListener('click', () => close());
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
 
   return {
     close,
-    invalidate: abort,
+    invalidate(owner = null) { if (owner === null || owner === context) abort(); },
     open(next) {
+      if (!next.isCurrent()) return;
       if (dialog.open) close();
       context = next;
       mode.value = next.mode || 'title';

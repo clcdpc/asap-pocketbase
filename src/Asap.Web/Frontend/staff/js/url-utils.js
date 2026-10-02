@@ -110,7 +110,3 @@ export function requestUrl(href, id, stage, context = {}) {
   url.hash = '';
   return historyPath(url);
 }
-
-export function replaceStageParameter(stage, context = {}) {
-  writeHistory(replaceStageUrl(window.location.href, stage, context), true);
-}

@@ -98,7 +98,8 @@ export function createRouter() {
 
   function replaceRequestParameter(id, additionalCopy = false, context = {}, stage = null) {
     const url = new URL(replaceRequestUrl(window.location.href, id, additionalCopy), window.location.href);
-    if (stage) url.searchParams.set('stage', stage);
+    if (stage && requestedStatusFromUrl(url.href) !== stage) url.searchParams.set('stage', stage);
+    url.searchParams.delete('settingsScope');
     applyQueueContext(url, requestedStatusFromUrl(url.href), context);
     writeHistory(historyPath(url), true, window.history.state?.asapStaff?.detailOrigin);
   }

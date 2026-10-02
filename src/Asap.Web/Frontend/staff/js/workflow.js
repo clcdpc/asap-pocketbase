@@ -1,3 +1,4 @@
+import { renderCustomFieldEditor } from './custom-fields.js';
 import { unconfirmedResponseError, notificationOutcome, isCommittedRequestResponse } from './mutation-outcome.js';
 import {
   authorizedJson,
@@ -8,7 +9,7 @@ import {
   onAccessUnavailable
 } from './http.js';
 import { createSettingsController } from './settings.js';
-import { createDraftScope } from './draft-scope.js';
+import { createTitleDetailController } from './title-detail.js';
 import { createOperationsController } from './operations-controller.js';
 import { createProfileController } from './profile-controller.js';
 import { createSessionIdentity } from './session-identity.js';
@@ -30,7 +31,7 @@ import { createTitleQueue, createCopyQueue } from './queues.js';
 import { createRouter } from './router.js';
 import { createNavigationController } from './navigation.js';
 
-import { STATUS_LABELS, element, icon, commandButton, text, dateTime, statusLabel, closeReasonLabel, timeoutLabel, addDetail, labeledInput } from './ui.js';
+import { STATUS_LABELS, element, icon, commandButton, text, dateTime, statusLabel, closeReasonLabel, timeoutLabel, addDetail, labeledInput, selectWithHistorical } from './ui.js';
 
 function currentRequestParameter() {
   return requestedRequestIdFromUrl();
@@ -88,9 +89,6 @@ export function createWorkflowApp() {
 
   const state = {
     staff: null,
-    selectedRequestId: null,
-    selectedRequestType: null,
-    selectedRequestVersion: null,
     staffSuggestion: null,
     staffSuggestionReturnFocus: null,
     partialSessionFailureMessage: null,
@@ -98,15 +96,6 @@ export function createWorkflowApp() {
     partialSessionFailureOwner: null,
     partialSessionFailureDetailAvailable: false,
     partialSessionFailureAfterQueueSequence: null,
-    configurations: new Map(),
-    research: null,
-    currentRequest: null,
-    editControls: null,
-    editorDirty: false,
-    editorDraft: null,
-    verifiedBib: null,
-    dialogMutationInFlight: null,
-    actionChoice: null,
     bulkDeleteState: null,
     recentKey: null
   };
@@ -131,11 +120,7 @@ export function createWorkflowApp() {
         discardDeparture: () => { if (profileController.isDirty()) profileController.discardDraft(); } },
       { key: 'settings', inspectDeparture: settingsController.inspectDeparture,
         discardDeparture: () => { if (settingsController.isDirty()) settingsController.discardDraft(); } },
-      { key: 'request', inspectDeparture: () => ({ dirty: hasRequestDraft(),
-          stamp: interactionScope.stamp(),
-          blocked: Boolean(state.dialogMutationInFlight || copyCreation.hasPendingMutation()),
-          message: 'The workflow action is in progress. Wait for its authoritative result before navigating away.',
-          confirmMessage: 'Discard unsaved request changes and navigate away?' }) },
+      { key: 'request', inspectDeparture: () => titleDetail.inspectDeparture() },
       { key: 'copy', inspectDeparture: () => copyDetail.inspectDeparture() },
       { key: 'suggestion', inspectDeparture: () => ({ dirty: hasSuggestionDraft(),
           stamp: JSON.stringify([...dom.staffSuggestionForm.querySelectorAll('input, select, textarea')].map(node => [node.value, node.checked])),
@@ -150,7 +135,7 @@ export function createWorkflowApp() {
         refresh: options => titleQueue.refresh(options), render: () => titleQueue.render(),
         refreshOnEntry: options => titleQueue.refreshOnEntry(options),
         setLibraries: libraries => populateScopes(libraries),
-        openDetail: id => openRequest(id, null, { align: true }),
+        openDetail: id => titleDetail.open(id, null, { align: true }),
         closeOverlay: () => detailHost.isOpen() ? detailHost.requestClose() : dom.staffSuggestionDialog.open ? closeStaffSuggestion() : null
       },
       'additional-copies': {
@@ -176,11 +161,9 @@ export function createWorkflowApp() {
   });
 
   const detailHost = createDetailHost({ root: document.querySelector('#request-dialog') });
-  let detailLease = null;
-  let detailReturnFocus = null;
   const titleQueue = createTitleQueue({ root: dom.queueView, sessionIdentity,
     getContext: () => navigation.context(), announce,
-    onOpen: (id, opener) => openRequest(id, opener, { history: 'push' }),
+    onOpen: (id, opener) => titleDetail.open(id, opener, { history: 'push' }),
     onScopeIntent: scope => navigation.changeQueueContext('queue', { scope }),
     onStatusIntent: status => navigation.changeQueueContext('queue', { status }),
     onScopeAccepted: scope => navigation.align({ scope }), onLibraries: populateScopes,
@@ -201,15 +184,7 @@ export function createWorkflowApp() {
       if (change.committed) copyQueue.markStale();
       if (change.uncertain) { copyQueue.invalidate(); copyQueue.render(); }
     },
-    onParentChanged: async (parent, opener) => {
-      if (!parent.isCurrent()) return null;
-      const generation = navigation.generation();
-      const queueRefreshed = await titleQueue.refresh({ silent: true });
-      if (!parent.isCurrent() || navigation.generation() !== generation) return null;
-      const detailLoaded = await openRequest(parent.request.id, opener, { authoritativeRefresh: true });
-      return { queueRefreshed, detailLoaded,
-        isCurrent: () => navigation.generation() === generation + 1 && parent.isSelectionCurrent() };
-    }
+    onParentChanged: (parent, opener) => parent.refresh(opener)
   });
   const copyDetail = createCopyDetailController({ host: detailHost, sessionIdentity, announce,
     beforeOpen: options => {
@@ -239,21 +214,12 @@ export function createWorkflowApp() {
     refreshQueue: options => copyQueue.refresh(options), onReceipt: recordFeatureReceipt, clearReceipt: clearCommittedSessionFallback
   });
 
-  function recordFeatureReceipt(message, owner, attempt) {
+  function recordFeatureReceipt(message, owner, attempt, evidence = {}) {
     if (state.staff && !sessionIdentity.isCurrent(owner)) return;
     state.partialSessionFailureMessage = message; state.partialSessionFailureOwner = attempt;
-    state.partialSessionFailureDetailAvailable = false; state.partialSessionFailureAfterQueueSequence = null;
+    state.partialSessionFailureDetailAvailable = evidence.detailAvailable === true;
+    state.partialSessionFailureAfterQueueSequence = evidence.detailAvailable === true ? evidence.queueSequence : null;
     if (dom.workspace.hidden) dom.signedOutMessage.textContent = message;
-  }
-
-  function showAdditionalCopyPreview(request, opener) {
-    const mounted = detailLease, scope = interactionScope, actor = state.staff;
-    const isCurrent = () => mounted?.isCurrent() && sessionIdentity.isCurrent(actor) && isCurrentDialogRequest(request, 'title_request');
-    return copyCreation.preview(Object.freeze({ request: Object.freeze({ ...request }), actor, isCurrent,
-      isSelectionCurrent: () => sessionIdentity.isCurrent(actor) && isCurrentDialogSelection(request, 'title_request'),
-      admit: declaration => isCurrent() && allowRequestMutation(request, declaration),
-      registerDraft: definition => scope.register(definition), releaseDraft: handle => scope.release(handle), touchDraft: () => scope.touch()
-    }), opener);
   }
 
   const copyQueue = createCopyQueue({ root: dom.additionalCopyView, sessionIdentity,
@@ -292,13 +258,6 @@ export function createWorkflowApp() {
   }
 
   const queueRouteContext = () => ({ scope: navigation.context().scope, copyStatus: navigation.context().additionalCopyStatus });
-  let interactionScope = createDraftScope();
-  let dialogForms = new WeakMap();
-  function resetDialogDrafts() {
-    interactionScope.dispose();
-    interactionScope = createDraftScope();
-    dialogForms = new WeakMap();
-  }
   function rememberRoute() { router.remember(); }
   function pushRequestParameter(id, stage) { router.pushRequest(id, stage, queueRouteContext()); rememberRoute(); }
   function pushStageParameter(stage) { router.pushStage(stage, queueRouteContext()); rememberRoute(); }
@@ -308,56 +267,9 @@ export function createWorkflowApp() {
   function pushSettingsScopeParameter(scope) { router.pushSettingsScope(scope); rememberRoute(); }
   function pushSettingsRouteParameter(scope, panel) { router.pushSettingsRoute(scope, panel); rememberRoute(); }
 
-  function hasRequestDraft() {
-    return detailHost.isOpen() && interactionScope.isDirty();
-  }
-
-  function trackDialogFormDraft(form) {
-    const value = control => control.type === 'checkbox' ? control.checked : control.value;
-    const baseline = [...form.querySelectorAll('input, select, textarea')]
-      .map(control => ({ control, value: value(control) }));
-    const draft = interactionScope.register({ root: form,
-      isDirty: () => baseline.some(item => value(item.control) !== item.value) });
-    dialogForms.set(form, draft);
-    return draft;
-  }
-
-  function cancelDialogFormDraft(form, returnFocus) {
-    if (!form.isConnected || state.dialogMutationInFlight) return;
-    interactionScope.release(dialogForms.get(form));
-    form.remove();
-    if (returnFocus?.isConnected) returnFocus.focus();
-    announce('Unsaved request changes discarded.');
-  }
-
   function hasSuggestionDraft() {
     return dom.staffSuggestionDialog.open && Boolean(state.staffSuggestion?.dirty ||
       state.staffSuggestion?.controls?.queryInput?.value.trim());
-  }
-
-  function allowRequestMutation(request, declaration, requestType = 'title_request') {
-    if (!isCurrentDialogRequest(request, requestType) || state.dialogMutationInFlight || copyCreation.hasPendingMutation()) return false;
-    const admission = interactionScope.admit(declaration);
-    if (!admission.allowed) {
-      announce(admission.kind === 'editor'
-        ? 'Save or revert the current request edits before performing a workflow action.'
-        : admission.reason === 'competing_draft'
-          ? 'Finish or cancel the current request changes before performing another action.'
-          : 'This draft no longer belongs to the current request.', 'warning');
-      return false;
-    }
-    return true;
-  }
-
-  function disableDialogControls() {
-    const controls = [...dom.dialogBody.querySelectorAll('input, select, textarea, button')]
-      .map(control => ({ control, disabled: control.disabled }));
-    for (const item of controls) item.control.disabled = true;
-    return () => {
-      for (const item of controls) {
-        if (item.control.isConnected) item.control.disabled = item.disabled;
-      }
-    };
   }
 
   function announce(message, kind = '') {
@@ -367,45 +279,54 @@ export function createWorkflowApp() {
 
   const polarisLookup = createPolarisLookup({ authorizedJson, isAbortError, announce });
 
-  function isVerifiedDraft(request) {
-    return state.verifiedBib?.requestId === String(request.id) &&
-      state.verifiedBib.version === request.version &&
-      state.verifiedBib.identifier === String(state.editControls?.identifier.value || '').trim() &&
-      positivePolarisId(state.editControls?.bib.value) === state.verifiedBib.bibId;
-  }
+  const titleDetail = createTitleDetailController({ host: detailHost, sessionIdentity, polarisLookup, copyCreation, announce,
+    beforeOpen: options => {
+      if (!sessionIdentity.actor() || router.busy() || !options.authoritativeRefresh && !navigation.allow({ suggestion: false })) return false;
+      return navigation.invalidate();
+    },
+    isNavigationCurrent: ticket => navigation.generation() === ticket,
+    getNavigationGeneration: () => navigation.generation(), getScope: () => navigation.context().scope,
+    onAlign: async (request, options, owner, ticket) => {
+      if (options.reloaded) {
+        if (request.status !== navigation.context().status) {
+          navigation.align({ status: request.status }); titleQueue.clear();
+          if (await titleQueue.refresh({ silent: true, skipDeepLink: true }) !== true) return false;
+        }
+      } else if (options.align || options.fromRecent) {
+        const needsRefresh = navigation.context().status !== request.status || titleQueue.find(request.id)?.status !== request.status;
+        const scope = titleQueue.libraryScope(request.libraryOrgId);
+        const scopeChanged = owner.role === 'super_admin' && navigation.context().scope !== 'all' && navigation.context().scope !== scope;
+        titleQueue.resetFilters();
+        if (STATUS_LABELS[request.status] && request.status !== 'open') navigation.align({ status: request.status });
+        if (scopeChanged) { navigation.align({ scope }); copyQueue.clear(); }
+        if (scopeChanged || needsRefresh) {
+          titleQueue.clear();
+          if (await titleQueue.refresh({ silent: true, skipDeepLink: true }) !== true) return false;
+        } else titleQueue.render();
+        navigation.switchView('queue', false);
+      }
+      return navigation.generation() === ticket && sessionIdentity.isCurrent(owner);
+    },
+    onOpened: (request, options) => {
+      if (options.history === 'push' || options.fromRecent) pushRequestParameter(request.id, request.status);
+      else replaceRequestParameter(request.id, false);
+    },
+    beforeClose: () => navigation.allow({ settings: false, suggestion: false }),
+    onClosed: options => {
+      if (!options.navigation) {
+        router.closeDetail(navigation.context().status, queueRouteContext());
+        if (!router.busy()) rememberRoute();
+      }
+    },
+    getFocusReturn: (id, opener) => titleQueue.focusReturn(id, opener),
+    refreshQueue: options => titleQueue.refresh(options), queueSequence: () => titleQueue.sequence(),
+    rememberOpened: rememberOpenedRequest,
+    forgetUnavailable: id => {
+      const storage = recentStorage(); if (storage) forgetRecentRequest(storage, state.recentKey, id); renderRecentRequests();
+    },
+    onReceipt: recordFeatureReceipt, clearReceipt: clearCommittedSessionFallback
+  });
 
-  function hasAuthoritativeBib(request) {
-    return request.bibidStaffVerified === true && positivePolarisId(request.bibid) !== null &&
-      isCurrentDialogRequest(request, 'title_request') &&
-      positivePolarisId(state.editControls?.bib.value) === request.bibid &&
-      String(state.editControls?.identifier.value || '').trim() === String(request.identifier || '').trim();
-  }
-
-  function updateResearchLinks() {
-    const container = dom.dialogBody.querySelector('.research-section');
-    if (!container || !state.currentRequest) return;
-    renderResearchLinks(container, state.currentRequest, state.research, {
-      title: state.editControls?.title.value,
-      identifier: state.editControls?.identifier.value,
-      bibId: state.editControls?.bib.value
-    });
-  }
-
-  async function loadResearchConfiguration(request) {
-    const load = latestLoads.begin('research-configuration');
-    try {
-      const data = await authorizedJson(
-        `/api/asap/staff/research-configuration?requestId=${encodeURIComponent(request.id)}`,
-        { signal: load.signal });
-      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request')) return;
-      state.research = data;
-      updateResearchLinks();
-    } catch (error) {
-      if (isAbortError(error) || error.status === 401) return;
-    } finally {
-      latestLoads.finish('research-configuration', load.token);
-    }
-  }
 
   const operationsController = createOperationsController({ root: dom.operationsView, sessionIdentity, announce,
     onScopeChange: () => { void refreshEmailReadiness(); },
@@ -516,16 +437,10 @@ export function createWorkflowApp() {
         text: label,
         onclick: async () => {
           dom.recentWork.open = false;
-          await openRequest(item.id, dom.recentWork, { fromRecent: true });
+          await titleDetail.open(item.id, dom.recentWork, { fromRecent: true });
         }
       }));
     }
-  }
-
-  function titleDetailPath(id, scope = navigation.context().scope) {
-    const path = `/api/asap/staff/title-requests/${encodeURIComponent(id)}`;
-    return state.staff?.role === 'super_admin'
-      ? `${path}?scope=${encodeURIComponent(scope)}` : path;
   }
 
   function rememberOpenedRequest(id) {
@@ -536,39 +451,13 @@ export function createWorkflowApp() {
   }
 
   function invalidateFeatureReads() {
-    latestLoads.begin('detail').abort();
+    titleDetail.invalidate();
     copyDetail.invalidate();
     titleQueue.invalidate();
     copyQueue.invalidate();
     latestLoads.begin('settings-route').abort();
     latestLoads.begin('operational-scope').abort();
     operationsController.deactivate();
-  }
-
-  function cancelAssignmentCandidateLoad() {
-    latestLoads.begin('assignment-candidates').abort();
-  }
-
-  function cancelPickupOptionsLoad() {
-    latestLoads.begin('pickup-options').abort();
-  }
-
-  function cancelDialogMutationCompletion() {
-    latestLoads.begin('dialog-mutation').abort();
-    state.dialogMutationInFlight = null;
-  }
-
-  function cancelActionChoiceLoad() {
-    latestLoads.begin('action-choice').abort();
-    state.actionChoice = null;
-  }
-
-  function dismissActionChoice() {
-    const choice = state.actionChoice;
-    if (!choice) return;
-    cancelActionChoiceLoad();
-    choice.panel.remove();
-    if (choice.returnFocus?.isConnected) choice.returnFocus.focus();
   }
 
   function cancelStaffSuggestionLookup() {
@@ -603,29 +492,8 @@ export function createWorkflowApp() {
     return true;
   }
 
-  function isCurrentDialogSelection(request, requestType) {
-    return !!state.staff &&
-      detailHost.isOpen() &&
-      state.selectedRequestType === requestType &&
-      String(state.selectedRequestId) === String(request.id);
-  }
-
-  function isCurrentDialogRequest(request, requestType) {
-    return isCurrentDialogSelection(request, requestType) &&
-      state.selectedRequestVersion === request.version;
-  }
-
-  function isCurrentDialogMutation(mutation, request, requestType) {
-    return mutation.isCurrent() && isCurrentDialogRequest(request, requestType);
-  }
-
   function isUnconfirmedMutationError(error, signal) {
     return !signal.aborted && (isAbortError(error) || error?.status === 0);
-  }
-
-  function confirmCurrent(request, requestType, message, draft = null) {
-    return allowRequestMutation(request, { consumes: draft }, requestType) &&
-      window.confirm(message) && isCurrentDialogRequest(request, requestType);
   }
 
   function updateBulkDeleteButtons() {
@@ -920,40 +788,24 @@ export function createWorkflowApp() {
     }
     if (dom.bulkDeleteDialog.open) dom.bulkDeleteDialog.close();
     polarisLookup.close();
-    latestLoads.begin('research-configuration').abort();
     latestLoads.begin('email-readiness').abort();
     dom.emailReadinessWarning.hidden = true;
-    state.verifiedBib = null;
-    state.research = null;
     detailHost.cancelFocusReturn();
-    cancelAssignmentCandidateLoad();
-    cancelPickupOptionsLoad();
-    cancelDialogMutationCompletion();
-    cancelActionChoiceLoad();
     closeStaffSuggestion({ focusButton: false, force: true });
+    titleDetail.signedOut();
     detailHost.reset();
     copyCreation.signedOut(); copyDetail.signedOut();
     sessionIdentity.clear();
     state.staff = null;
     operationsController.signedOut();
     titleQueue.signedOut(); copyQueue.signedOut();
-    dom.dialogBody.replaceChildren();
-    state.currentRequest = null;
-    state.editControls = null;
-    state.editorDirty = false;
-    state.editorDraft = null;
-    resetDialogDrafts();
-    state.selectedRequestId = null;
-    state.selectedRequestType = null;
-    state.selectedRequestVersion = null;
-    detailReturnFocus = null;
     profileController.signedOut();
     state.staffSuggestion = null;
     state.staffSuggestionReturnFocus = null;
     titleQueue.invalidate();
     copyQueue.invalidate();
     operationsController.deactivate();
-    latestLoads.begin('detail').abort();
+    titleDetail.invalidate();
     copyDetail.invalidate();
     copyCreation.invalidate();
     resetAnalytics();
@@ -1001,6 +853,7 @@ export function createWorkflowApp() {
     state.partialSessionFailureDetailAvailable = false;
     state.partialSessionFailureAfterQueueSequence = null;
     state.staff = sessionIdentity.accept(staff);
+    titleDetail.setStaff(staff);
     copyCreation.setStaff(staff);
     if (copyCreation.review.current()) copyQueue.markStale();
     operationsController.setStaff(staff);
@@ -1053,130 +906,6 @@ export function createWorkflowApp() {
   function populateScopes(organizations) {
     operationsController.setLibraries(organizations);
     titleQueue.setLibraries(organizations); copyQueue.setLibraries(organizations);
-  }
-
-  async function openRequest(id, returnFocus, options = {}) {
-    if (!state.staff) return;
-    if (router.busy()) return false;
-    if (!options.authoritativeRefresh && !navigation.allow({ suggestion: false })) return false;
-    if (!copyCreation.close({ navigation: true })) return false;
-    const navigationGeneration = navigation.invalidate();
-    const staff = state.staff;
-    const priorTitle = state.currentRequest?.title || `Request ${id}`;
-    polarisLookup.close();
-    latestLoads.begin('research-configuration').abort();
-    state.research = null;
-    if (String(state.selectedRequestId) !== String(id) || state.selectedRequestType !== 'title_request') {
-      state.verifiedBib = null;
-    }
-    detailHost.cancelFocusReturn();
-    cancelAssignmentCandidateLoad();
-    cancelPickupOptionsLoad();
-    cancelDialogMutationCompletion();
-    cancelActionChoiceLoad();
-    copyCreation.invalidate();
-    detailLease = detailHost.acquire({ dispose: disposeMountedDetail, onClose: closeDialog,
-      onEscape: () => { if (state.dialogMutationInFlight) closeDialog(); else if (state.actionChoice) dismissActionChoice(); else closeDialog(); } });
-    dom.dialogBody = detailLease.content;
-    state.selectedRequestId = String(id);
-    state.selectedRequestType = 'title_request';
-    state.selectedRequestVersion = null;
-    detailReturnFocus = returnFocus || document.activeElement;
-    const load = latestLoads.begin('detail');
-    announce('Loading request details...');
-    try {
-      const initialScope = staff.role === 'super_admin' && (options.align || options.fromRecent)
-        ? 'all' : navigation.context().scope;
-      let request = await authorizedJson(titleDetailPath(id, initialScope), {
-        signal: load.signal
-      });
-      if (!load.isCurrent() || navigationGeneration !== navigation.generation() ||
-          !sessionIdentity.isCurrent(staff) || state.selectedRequestId !== String(id) ||
-          state.selectedRequestType !== 'title_request') return false;
-      const configuration = await loadRequestConfiguration(request.libraryOrgId, load.signal);
-      if (!load.isCurrent() || navigationGeneration !== navigation.generation() ||
-          !sessionIdentity.isCurrent(staff) || state.selectedRequestId !== String(id) ||
-          state.selectedRequestType !== 'title_request') return false;
-      if (options.align || options.fromRecent) {
-        const cachedStatus = titleQueue.find(request.id)?.status;
-        const queueNeedsRefresh = navigation.context().status !== request.status || cachedStatus !== request.status;
-        const alignedScope = titleQueue.libraryScope(request.libraryOrgId);
-        const scopeChanged = staff.role === 'super_admin' && navigation.context().scope !== 'all' &&
-          navigation.context().scope !== alignedScope;
-        titleQueue.resetFilters();
-        if (STATUS_LABELS[request.status] && request.status !== 'open') navigation.align({ status: request.status });
-        if (scopeChanged) {
-          navigation.align({ scope: alignedScope });
-          copyQueue.clear();
-        }
-        if (scopeChanged || queueNeedsRefresh) {
-          titleQueue.clear();
-          const refreshed = await titleQueue.refresh({ silent: true, skipDeepLink: true });
-          if (refreshed !== true || navigationGeneration !== navigation.generation() ||
-              !sessionIdentity.isCurrent(staff) || !load.isCurrent()) return false;
-        } else {
-          titleQueue.render();
-        }
-        navigation.switchView('queue', false);
-      }
-      if (staff.role === 'super_admin' && initialScope !== navigation.context().scope) {
-        request = await authorizedJson(titleDetailPath(id), { signal: load.signal });
-        if (!load.isCurrent() || navigationGeneration !== navigation.generation() ||
-            !sessionIdentity.isCurrent(staff) || state.selectedRequestId !== String(id) ||
-            state.selectedRequestType !== 'title_request') return false;
-        if (request.status !== navigation.context().status) {
-          navigation.align({ status: request.status });
-          titleQueue.clear();
-          const refreshed = await titleQueue.refresh({ silent: true, skipDeepLink: true });
-          if (refreshed !== true || navigationGeneration !== navigation.generation() ||
-              !sessionIdentity.isCurrent(staff) || !load.isCurrent()) return false;
-        }
-      }
-      state.selectedRequestId = request.id;
-      if (options.history === 'push' || options.fromRecent) {
-        pushRequestParameter(request.id, request.status);
-      } else {
-        replaceRequestParameter(request.id, false);
-      }
-      renderRequest(request, configuration);
-      detailLease?.show();
-      announce(`Opened ${request.title}.`);
-      rememberOpenedRequest(request.id);
-      loadResearchConfiguration(request);
-      return true;
-    } catch (error) {
-      const current = load.isCurrent() && navigationGeneration === navigation.generation() &&
-          sessionIdentity.isCurrent(staff) && state.selectedRequestId === String(id) &&
-          state.selectedRequestType === 'title_request';
-      if (current &&
-          !(isAbortError(error) && load.signal.aborted) && error.status !== 401) {
-        if (options.authoritativeRefresh && detailLease?.isCurrent()) {
-          detailLease.heading(priorTitle, `Request ${id}`);
-          dom.dialogBody.replaceChildren(element('p', { text: 'Current details could not refresh. Reload this request before performing another action.' }));
-          detailLease.show();
-        }
-        announce(error.status === 404 ? 'That request is no longer available.' : error.message, 'error');
-      }
-      if (current && options.fromRecent && error.status === 404) {
-        const storage = recentStorage();
-        if (storage) forgetRecentRequest(storage, state.recentKey, String(id));
-        renderRecentRequests();
-      }
-      return false;
-    } finally {
-      latestLoads.finish('detail', load.token);
-    }
-  }
-
-  async function loadRequestConfiguration(organizationId, signal) {
-    const key = String(organizationId);
-    if (state.configurations.has(key)) return state.configurations.get(key);
-    const configuration = await authorizedJson(
-      `/api/asap/config?libraryOrgId=${encodeURIComponent(key)}`,
-      { signal }
-    );
-    state.configurations.set(key, configuration);
-    return configuration;
   }
 
   function staffSuggestionScopeOptions() {
@@ -1613,7 +1342,7 @@ export function createWorkflowApp() {
       let detailLoaded = false;
       if (state.staff) {
         try {
-          detailLoaded = await openRequest(id, dom.newSuggestion, { align: true, history: 'push' }) === true;
+          detailLoaded = await titleDetail.open(id, dom.newSuggestion, { align: true, history: 'push' }) === true;
         } catch {
           // The authoritative create response remains the success path if the detail refresh races.
         }
@@ -1647,7 +1376,7 @@ export function createWorkflowApp() {
             className: 'secondary-button',
             onclick: async () => {
               if (!closeStaffSuggestion({ focusButton: false })) return;
-              await openRequest(duplicateId, dom.newSuggestion, { align: true, history: 'push' });
+              await titleDetail.open(duplicateId, dom.newSuggestion, { align: true, history: 'push' });
             }
           }, 'Open existing request')
         ]));
@@ -1697,1221 +1426,6 @@ export function createWorkflowApp() {
     announce('Look up a patron to start a new suggestion.');
   }
 
-  function renderRequest(request, configuration, { preserveDialogMutation = false } = {}) {
-    copyCreation.close({ navigation: true, force: true });
-    resetDialogDrafts();
-    cancelAssignmentCandidateLoad();
-    cancelPickupOptionsLoad();
-    copyCreation.invalidate();
-    if (!preserveDialogMutation) cancelDialogMutationCompletion();
-    cancelActionChoiceLoad();
-    if (state.selectedRequestType === 'title_request' && String(state.selectedRequestId) === String(request.id)) {
-      state.selectedRequestVersion = request.version;
-    }
-    state.currentRequest = request;
-    state.editorDirty = false;
-    state.editControls = null;
-    if (state.verifiedBib && (state.verifiedBib.requestId !== String(request.id) ||
-        state.verifiedBib.version !== request.version ||
-        state.verifiedBib.identifier !== String(request.identifier || '').trim() ||
-        state.verifiedBib.bibId !== request.bibid)) {
-      state.verifiedBib = null;
-    }
-    detailLease?.heading(request.title, `${request.libraryOrgName} · Request ${request.id}`);
-    const body = document.createDocumentFragment();
-    const meta = element('div', { className: 'detail-meta' }, [
-      element('span', { className: `status-badge${request.status === 'closed' ? ' closed' : ''}`, text: statusLabel(request.status) }),
-      element('span', { text: `Phase entered ${dateTime(request.phaseEnteredAt)}` }),
-      element('span', { text: request.claimedByDisplayName ? `Claimed by ${request.claimedByDisplayName}` : 'Unclaimed' })
-    ]);
-    body.append(meta, buildActionBar(request));
-
-    if (request.capabilities && request.capabilities.blockingReason) {
-      body.append(element('p', {
-        className: 'blocked-callout',
-        text: request.capabilities.blockingReason === 'pickup_reconciliation_required'
-          ? 'Pickup preference needs reconciliation. Review the live preference before continuing; an uncertain provider write will not be repeated.'
-          : request.capabilities.blockingReason === 'hold_operation_incomplete'
-          ? 'Workflow-changing edits are blocked while hold placement needs recovery.'
-          : request.capabilities.blockingReason === 'hold_history_retained'
-          ? 'Reopen is unavailable because placed-hold history has no confirmed external reversal.'
-          : 'Identifier and BIB changes are locked by this request’s placement history.'
-      }));
-    }
-
-    const details = element('dl', { className: 'detail-grid' });
-    addDetail(details, 'Patron', [request.nameFirst, request.nameLast].filter(Boolean).join(' '));
-    addDetail(details, 'Barcode', request.barcode);
-    addDetail(details, 'Email', request.email);
-    addDetail(details, 'Format', request.formatLabel || request.format);
-    addDetail(details, 'Identifier', request.identifier);
-    addDetail(details, 'BIB ID', request.bibid);
-    addDetail(details, 'Publication', request.publication);
-    addDetail(details, 'Pickup', request.preferredPickupBranchName || request.preferredPickupBranchId);
-    addDetail(details, 'Identifier check', request.isbnCheckStatus);
-    if (request.status === 'closed') addDetail(details, 'Close reason', closeReasonLabel(request.closeReason));
-    body.append(details);
-
-    if (request.workflowTags && request.workflowTags.length) {
-      const tags = element('div', { className: 'tags', 'aria-label': 'Workflow tags' });
-      for (const tag of request.workflowTags) tags.append(element('span', { className: 'tag', text: tag }));
-      body.append(tags);
-    }
-    if (request.relatedRequests && Number.isInteger(request.relatedRequests.count)) {
-      const visibleCounts = (request.relatedRequests.statusAndLibraryCounts || [])
-        .filter(item => navigation.context().scope === 'all' || String(item.libraryOrgId) === navigation.context().scope);
-      const visibleCount = visibleCounts.reduce((total, item) => total + item.count, 0);
-      const related = element('section', { className: 'related-requests', 'aria-label': 'Related title requests' });
-      related.append(element('h3', { text: 'Related title requests' }));
-      related.append(element('p', { text: visibleCount === 0
-        ? 'No related title requests are visible in your authorized scope.'
-        : `${visibleCount} related title request${visibleCount === 1 ? '' : 's'} in your authorized scope.` }));
-      if (visibleCount > 0) {
-        const counts = element('ul');
-        for (const item of visibleCounts) {
-          counts.append(element('li', { text: `${item.libraryOrgName || `Library ${item.libraryOrgId}`} · ${statusLabel(item.status)}: ${item.count}` }));
-        }
-        related.append(counts);
-      }
-      body.append(related);
-    }
-    if (request.workflowContext && request.status !== 'closed') {
-      body.append(element('p', { className: 'workflow-context',
-        text: request.status === 'suggestion'
-          ? `Suggestion timeout: ${timeoutLabel(request.workflowContext.outstandingTimeoutEnabled, request.workflowContext.outstandingTimeoutDays)}`
-          : request.status === 'outstanding_purchase'
-            ? `Auto promotion when a BIB is available: ${request.workflowContext.autoPromote ? 'On' : 'Off'}`
-            : request.status === 'pending_hold'
-              ? `Pending hold timeout: ${timeoutLabel(request.workflowContext.pendingHoldTimeoutEnabled, request.workflowContext.pendingHoldTimeoutDays)}`
-              : `Hold pickup timeout: ${timeoutLabel(request.workflowContext.holdPickupTimeoutEnabled, request.workflowContext.holdPickupTimeoutDays)}`
-      }));
-    }
-    body.append(buildEditForm(request, configuration));
-    body.append(renderActivity(request.activity));
-    body.append(element('section', { className: 'research-section', hidden: 'hidden' }));
-    if (request.holdOperation) body.append(buildHoldOperation(request, request.holdOperation));
-    dom.dialogBody.replaceChildren(body);
-    updateResearchLinks();
-  }
-
-  function renderActivity(activity) {
-    const section = element('section', { className: 'request-activity', 'aria-label': 'Request activity' });
-    section.append(element('h3', { text: 'Activity' }));
-    if (!Array.isArray(activity) || activity.length === 0) {
-      section.append(element('p', { text: 'No recorded activity.' }));
-      return section;
-    }
-    const list = element('ol');
-    for (const item of activity) {
-      const type = text(item.eventType, 'Event').replaceAll('_', ' ');
-      const actor = item.actorName || (item.actorType === 'system' ? 'System' : 'Actor not recorded');
-      list.append(element('li', { 'data-event-id': String(item.id) }, [
-        element('strong', { text: type }),
-        element('span', { text: item.message ? ` ${item.message}` : '' }),
-        element('small', { text: `${actor} · ${dateTime(item.created)}` })
-      ]));
-    }
-    section.append(list);
-    return section;
-  }
-
-  function buildActionBar(request) {
-    const bar = element('div', { className: 'action-bar', 'aria-label': 'Request actions' });
-    const workflowBlocked = request.capabilities?.canChangeWorkflowState !== true;
-    const allowedActions = new Set(request.capabilities?.allowedActions || []);
-    if (request.status !== 'closed') {
-      if (request.claimedByStaffUserId === state.staff?.id) {
-        bar.append(commandButton('Unclaim', 'user-times', () => mutateSimple(request, 'unclaim')));
-      } else if (!request.claimedByStaffUserId) {
-        bar.append(commandButton('Claim', 'user-plus', () => mutateSimple(request, 'claim'), 'primary-button'));
-      } else if (['admin', 'super_admin'].includes(state.staff?.role)) {
-        bar.append(commandButton('Clear claim', 'user-times', () => {
-          if (confirmCurrent(request, 'title_request',
-            `Clear ${request.claimedByDisplayName || 'another staff member'}'s claim? The request will remain in ${statusLabel(request.status)} and become unclaimed.`)) {
-            mutateSimple(request, 'clear-claim');
-          }
-        }));
-      }
-      bar.append(commandButton('Assign', 'users', event => showAssignment(request, event.currentTarget)));
-    }
-    if (request.status === 'suggestion') {
-      bar.append(
-        commandButton('Purchase', 'shopping-cart', event => showActionChoice(request, 'purchase', event.currentTarget), 'primary-button', !allowedActions.has('purchase')),
-        commandButton('Already own', 'book', () => runAction(request, 'alreadyOwn'), 'secondary-button', !allowedActions.has('alreadyOwn')),
-        commandButton('Reject', 'ban', event => showActionChoice(request, 'reject', event.currentTarget), 'danger-button', !allowedActions.has('reject')),
-        commandButton('Close silently', 'archive', () => runAction(request, 'silentClose'), 'secondary-button', !allowedActions.has('silentClose'))
-      );
-    } else if (request.status === 'outstanding_purchase') {
-      bar.append(commandButton(request.autohold ? 'Ready for hold' : 'Close without hold', 'arrow-right', () => runAction(request, 'catalogFound'),
-        'primary-button', !allowedActions.has('catalogFound')));
-    } else if (request.status === 'pending_hold') {
-      bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
-      bar.append(commandButton('Pickup', 'map-marker', event => showPickup(request, event.currentTarget), 'secondary-button',
-        workflowBlocked && request.capabilities?.blockingReason !== 'pickup_reconciliation_required'));
-      if (request.capabilities?.canPlaceHold === true) {
-        bar.append(commandButton('Place hold', 'bookmark', () => {
-          if (confirmCurrent(request, 'title_request',
-            `Place a Polaris hold for BIB ${request.bibid} and this patron? If the provider outcome is uncertain, recovery will be required before another attempt.`)) {
-            mutateSimple(request, 'place-hold');
-          }
-        }, 'primary-button', workflowBlocked));
-      }
-      if ((request.workflowTags || []).includes('Hold exists (same patron)')) {
-        bar.append(commandButton('Close duplicate', 'clone', () => runAction(request, 'closeDuplicate'), 'secondary-button', !allowedActions.has('closeDuplicate')));
-      }
-    } else if (request.status === 'hold_placed') {
-      bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
-      bar.append(commandButton('Close request', 'check', () => runAction(request, 'close'), 'primary-button', !allowedActions.has('close')));
-    } else if (request.status === 'closed') {
-      if (allowedActions.has('reopen')) {
-        bar.append(commandButton('Reopen', 'undo', () => runAction(request, 'reopen'), 'primary-button'));
-      }
-      if (['admin', 'super_admin'].includes(state.staff?.role)) {
-        bar.append(commandButton('Permanently delete request', 'trash', () => {
-          if (confirmCurrent(request, 'title_request',
-            `Permanently delete closed title request ${request.id}? This cannot be undone. Its deletion audit will remain.`)) {
-            deleteTitleRequest(request);
-          }
-        }, 'danger-button'));
-      }
-    }
-    if (request.capabilities && request.capabilities.canRetryIdentifierCheck) {
-      bar.append(commandButton('Retry identifier check', 'refresh', () => mutateSimple(request, 'retry-identifier-check')));
-    }
-    return bar;
-  }
-
-  function selectWithHistorical(options, selectedValue, labels = {}) {
-    const select = element('select');
-    const values = [];
-    for (const option of options || []) {
-      const value = String(option);
-      if (!value || values.includes(value)) continue;
-      values.push(value);
-      select.append(element('option', { value, text: labels[value] || value }));
-    }
-    const historical = selectedValue === null || selectedValue === undefined ? '' : String(selectedValue);
-    if (historical && !values.includes(historical)) {
-      select.append(element('option', { value: historical, text: labels[historical] || historical }));
-    }
-    if (!historical) select.prepend(element('option', { value: '', text: 'Not recorded' }));
-    select.value = historical;
-    return select;
-  }
-
-  function customFieldValue(value) {
-    if (value === null || value === undefined) return '';
-    if (typeof value === 'object' && !Array.isArray(value)) return String(value.value ?? '');
-    return String(value);
-  }
-
-  function renderCustomFieldEditor(container, request, configuration, formatCode) {
-    const controls = new Map();
-    const definitions = Array.isArray(configuration.additionalFieldDefinitions)
-      ? configuration.additionalFieldDefinitions
-      : [];
-    const existing = request.customFields && typeof request.customFields === 'object'
-      ? request.customFields
-      : {};
-    const customRules = configuration.formatRules?.[formatCode]?.customFields || {};
-    const fields = [];
-
-    for (const definition of definitions) {
-      const key = String(definition.key || definition.id || '');
-      if (!key) continue;
-      const rule = customRules[key] || { mode: 'hidden' };
-      const hasHistorical = Object.prototype.hasOwnProperty.call(existing, key);
-      if (rule.mode === 'hidden' && !hasHistorical) continue;
-      const currentValue = customFieldValue(existing[key]);
-      let input;
-      if (definition.type === 'textarea') {
-        input = element('textarea', { maxlength: '2000' });
-        input.value = currentValue;
-      } else if (definition.type === 'select') {
-        input = element('select');
-        input.append(element('option', { value: '', text: '' }));
-        const knownValues = [];
-        for (const option of definition.options || []) {
-          if (option.enabled === false) continue;
-          const value = String(option.id || option.key || '');
-          if (!value || knownValues.includes(value)) continue;
-          knownValues.push(value);
-          input.append(element('option', { value, text: option.label || value }));
-        }
-        if (currentValue && !knownValues.includes(currentValue)) {
-          const historicalLabel = existing[key] && typeof existing[key] === 'object'
-            ? existing[key].displayValue
-            : null;
-          input.append(element('option', { value: currentValue, text: historicalLabel || currentValue }));
-        }
-        input.value = currentValue;
-      } else {
-        input = element('input', { type: 'text', maxlength: '250', value: currentValue });
-      }
-      const required = rule.mode === 'required';
-      const configuredLabel = rule.label || definition.label || key;
-      const label = `${configuredLabel}${required ? ' *' : ''}`;
-      input.required = required;
-      input.setAttribute('aria-required', String(required));
-      input.setAttribute('aria-label', label);
-      controls.set(key, { definition, input, mode: rule.mode, label: configuredLabel });
-      const field = labeledInput(label, input);
-      if (definition.helpText) field.append(element('small', { text: definition.helpText }));
-      fields.push(field);
-    }
-    container.replaceChildren(...fields);
-    container.hidden = fields.length === 0;
-    return controls;
-  }
-
-  function collectCustomFields(request, controls) {
-    const existing = request.customFields && typeof request.customFields === 'object'
-      ? request.customFields
-      : {};
-    const result = { ...existing };
-    for (const [key, value] of controls) {
-      if (value.mode === 'hidden') continue;
-      const normalized = value.input.value.trim();
-      if (!normalized) {
-        delete result[key];
-        continue;
-      }
-      result[key] = {
-        label: value.label || value.definition.label || key,
-        type: value.definition.type || 'text',
-        value: normalized
-      };
-      if (value.definition.type === 'select') {
-        result[key].displayValue = value.input.selectedOptions[0]?.textContent || normalized;
-      }
-    }
-    return result;
-  }
-
-  function buildEditForm(request, configuration) {
-    const form = element('form', { className: 'edit-form' });
-    const draft = interactionScope.register({ root: form, kind: 'editor', isDirty: () => state.editorDirty });
-    state.editorDraft = draft;
-    state.editorDirty = false;
-    const title = element('input', { value: request.title, required: 'required', maxlength: '500' });
-    const author = element('input', { value: request.author || '', maxlength: '500' });
-    const identifier = element('input', {
-      value: request.identifier || '',
-      maxlength: '100',
-      disabled: !request.capabilities.canEditIdentifier
-    });
-    const bib = element('input', {
-      value: request.bibid || '',
-      inputmode: 'numeric',
-      pattern: '[0-9]*',
-      maxlength: '100',
-      disabled: !request.capabilities.canChangeBib
-    });
-    state.editControls = { title, author, identifier, bib };
-    const selectedContext = element('p', { className: 'polaris-selection-context wide', role: 'status' });
-    const searchButton = commandButton('Search Polaris catalog', 'search', () => {
-      polarisLookup.open({
-        requestId: String(request.id),
-        libraryOrgId: request.libraryOrgId,
-        isCurrent: () => isCurrentDialogRequest(request, 'title_request') && form.isConnected,
-        returnFocus: searchButton,
-        editorFocus: bib,
-        canApply: row => !bib.disabled || row.bibId === positivePolarisId(bib.value),
-        mode: bib.value.trim() ? 'bib' : identifier.value.trim() ? 'identifier' : 'title',
-        query: bib.value.trim() || identifier.value.trim() || title.value.trim(),
-        title: title.value.trim(),
-        author: author.value.trim(),
-        apply: (selected, verifiedDetail) => {
-          applyPolarisResultToControls(selected, { bib, title, author, identifier });
-          state.verifiedBib = {
-            requestId: String(request.id),
-            version: request.version,
-            identifier: String(identifier.value).trim(),
-            bibId: selected.bibId,
-            detail: verifiedDetail
-          };
-          state.editorDirty = true;
-          updateResearchLinks();
-          showSelectedContext();
-          updatePreview();
-        }
-      });
-    });
-    function showSelectedContext() {
-      const detail = state.verifiedBib?.detail;
-      if (!detail || state.verifiedBib.requestId !== String(request.id)) {
-        selectedContext.textContent = '';
-        return;
-      }
-      const holdings = detail.holdingsSummary;
-      selectedContext.textContent = [
-        `Polaris BIB ${detail.bibId} verified for this request.`,
-        detail.publication ? `Polaris publication: ${detail.publication}.` : '',
-        detail.format ? `Polaris format: ${detail.format}.` : '',
-        holdings ? `${holdings.myLibraryCount} item(s) at this library, ${holdings.otherLibraryCount} elsewhere; ${holdings.isHoldable ? 'holdable' : 'not holdable'}.` :
-          detail.holdingsUnavailable ? 'Holdings are temporarily unavailable.' : '',
-        detail.patronHasHold === true ? 'This patron already has a hold for this BIB.' :
-          detail.patronHasHold === false ? 'No existing patron hold was found for this BIB.' : ''
-      ].filter(Boolean).join(' ');
-    }
-    showSelectedContext();
-    bib.addEventListener('input', () => {
-      state.verifiedBib = null;
-      polarisLookup.invalidate();
-      showSelectedContext();
-      updateResearchLinks();
-    });
-    identifier.addEventListener('input', () => {
-      state.verifiedBib = null;
-      polarisLookup.invalidate();
-      showSelectedContext();
-      updateResearchLinks();
-    });
-    title.addEventListener('input', updateResearchLinks);
-    form.addEventListener('input', () => { state.editorDirty = true; });
-    form.addEventListener('change', () => { state.editorDirty = true; });
-    const publication = selectWithHistorical(configuration.publicationOptions, request.publication);
-    publication.setAttribute('aria-label', 'Publication timing');
-    const exactDate = element('input', { type: 'date', value: request.exactPublicationDate || '' });
-    const format = selectWithHistorical(configuration.availableFormats, request.format, configuration.formatLabels || {});
-    format.setAttribute('aria-label', 'Format');
-    const notes = element('textarea', { maxlength: '10000' });
-    notes.value = request.notes || '';
-    const autohold = element('input', {
-      type: 'checkbox',
-      checked: request.autohold,
-      disabled: request.capabilities?.canChangeWorkflowState !== true
-    });
-    const customFields = element('div', { className: 'custom-fields wide' });
-    let customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value);
-    const pendingPreview = element('p', { className: 'pending-audit-preview wide', role: 'status' });
-    const save = element('button', { type: 'submit', className: 'primary-button' }, [icon('save'), 'Save changes']);
-    const revert = commandButton('Revert changes', 'undo', () => {
-      if (!form.isConnected || state.dialogMutationInFlight) return;
-      if (state.editorDirty && !window.confirm('Discard unsaved request changes and revert this editor?')) return;
-      state.verifiedBib = null;
-      polarisLookup.invalidate();
-      interactionScope.release(draft);
-      form.replaceWith(buildEditForm(request, configuration));
-      dom.dialogBody.querySelector('.edit-form input')?.focus();
-      announce('Unsaved request changes discarded.');
-    });
-    function updatePreview() {
-      const changed = [];
-      const identifierChanged = !identifier.disabled && identifier.value.trim() !== (request.identifier || '').trim();
-      const bibChanged = !bib.disabled && positivePolarisId(bib.value) !== positivePolarisId(request.bibid);
-      const selectedBib = isVerifiedDraft(request) ? selectedStaffBibId(state.verifiedBib, request.id, bib.value) : null;
-      let bibVerified = request.bibidStaffVerified === true;
-      if (identifierChanged || bibChanged) bibVerified = false;
-      if (selectedBib) bibVerified = true;
-      if (title.value.trim() !== request.title) changed.push('title');
-      if ((author.value.trim() || null) !== (request.author || null)) changed.push('author');
-      if (identifierChanged) changed.push('identifier');
-      if (bibChanged) changed.push('BIB ID');
-      if (bibVerified !== (request.bibidStaffVerified === true)) changed.push('BIB verification');
-      if ((publication.value.trim() || null) !== (request.publication || null)) changed.push('publication timing');
-      if (exactDate.value !== (request.exactPublicationDate || '')) changed.push('exact publication date');
-      if (format.value !== (request.format || '')) changed.push('format');
-      if (autohold.checked !== Boolean(request.autohold)) changed.push('automatic hold');
-      if (notes.value !== (request.notes || '')) changed.push('notes');
-      if ([...customFieldControls].some(([key, control]) => control.mode !== 'hidden' &&
-          control.input.value.trim() !== customFieldValue(request.customFields?.[key]).trim())) changed.push('custom fields');
-      const claimantId = request.claimedByStaffUserId == null ? null : String(request.claimedByStaffUserId);
-      const actorId = state.staff?.id == null ? null : String(state.staff.id);
-      if (actorId && claimantId !== actorId) changed.push(claimantId ? 'claim transfer' : 'staff claim');
-      state.editorDirty = changed.some(item => item !== 'claim transfer' && item !== 'staff claim');
-      pendingPreview.textContent = changed.length
-        ? `Pending changes (not saved): ${changed.join(', ')}.`
-        : 'No pending changes.';
-      save.disabled = changed.length === 0;
-      revert.disabled = !state.editorDirty;
-    }
-    format.addEventListener('change', () => {
-      customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value);
-      updatePreview();
-    });
-    form.addEventListener('input', updatePreview);
-    form.addEventListener('change', updatePreview);
-    form.append(
-      labeledInput('Title', title),
-      labeledInput('Author', author),
-      labeledInput('Identifier', identifier),
-      labeledInput('BIB ID', bib),
-      element('div', { className: 'wide polaris-edit-tools' }, [searchButton, selectedContext]),
-      labeledInput('Publication timing', publication),
-      labeledInput('Exact publication date', exactDate),
-      labeledInput('Format', format),
-      customFields,
-      element('label', { className: 'check-field' }, [autohold, element('span', { text: 'Automatically place hold' })]),
-      labeledInput('Notes', notes, 'wide'),
-      pendingPreview,
-      element('div', { className: 'form-actions wide' }, [save, revert])
-    );
-    updatePreview();
-    form.addEventListener('submit', async event => {
-      event.preventDefault();
-      if (save.disabled || !form.isConnected || !allowRequestMutation(request, { consumes: draft })) return;
-      if (!bib.disabled && bib.value.trim() && positivePolarisId(bib.value) === null) {
-        announce('Enter a positive Polaris BIB ID up to 2147483647.', 'error');
-        bib.focus();
-        return;
-      }
-      const bibWillChange = !bib.disabled && positivePolarisId(bib.value) !== request.bibid;
-      const selectedBibId = isVerifiedDraft(request) ? selectedStaffBibId(state.verifiedBib, request.id, bib.value) : null;
-      const bibSelected = Boolean(selectedBibId);
-      const turnsOffHoldForBib = request.autohold && !autohold.checked && Boolean(request.bibid);
-      const closesExistingNoHold = Boolean(request.bibid) && !autohold.checked &&
-        (request.status === 'outstanding_purchase' || request.status === 'pending_hold');
-      const noAutoHoldConsequence = request.status === 'outstanding_purchase' || request.status === 'pending_hold'
-        ? 'Save with automatic hold off? This request will close without placing a hold.'
-        : 'Save with automatic hold off? Advancing this request with a verified BIB will close it without placing a hold.';
-      if ((bibWillChange || bibSelected || turnsOffHoldForBib || closesExistingNoHold) && !autohold.checked &&
-          !confirmCurrent(request, 'title_request', noAutoHoldConsequence, draft)) return;
-      if (request.claimType === 'automatic_format_rule') {
-        const claimantId = request.claimedByStaffUserId == null ? null : String(request.claimedByStaffUserId);
-        const transfersClaim = claimantId && claimantId !== String(state.staff?.id);
-        const formatConsequence = format.value !== request.format
-          ? `Change the format from ${request.formatLabel || request.format} to ${format.selectedOptions[0]?.textContent || format.value}?`
-          : 'Save these request edits?';
-        const claimConsequence = transfersClaim
-          ? 'This transfers the automatic format claim from the current claimant to your manual claim.'
-          : format.value !== request.format
-            ? 'The new format rule may reassign or clear the automatic claim.'
-            : 'Your automatic claim will remain.';
-        if (!confirmCurrent(request, 'title_request', `${formatConsequence} ${claimConsequence}`, draft)) return;
-      }
-      if (!isCurrentDialogRequest(request, 'title_request') || !form.isConnected) return;
-      await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
-        version: request.version,
-        action: 'edit',
-        title: title.value,
-        author: author.value,
-        identifier: identifier.disabled ? request.identifier : identifier.value.trim() || null,
-        bibid: bib.disabled ? request.bibid : positivePolarisId(bib.value),
-        ...(selectedBibId
-          ? { staffSelectedBibId: selectedBibId }
-          : {}),
-        publication: publication.value,
-        exactPublicationDate: exactDate.value || null,
-        format: format.value,
-        autohold: autohold.checked,
-        notes: notes.value,
-        customFields: collectCustomFields(request, customFieldControls)
-      }, 'Request changes saved.', draft);
-    });
-    return form;
-  }
-
-  async function mutateSimple(request, operation) {
-    const path = operation === 'claim' || operation === 'unclaim' || operation === 'clear-claim' ||
-      operation === 'retry-identifier-check' || operation === 'place-hold'
-      ? `/api/asap/staff/title-requests/${request.id}/${operation}`
-      : null;
-    if (!path) return;
-    const messages = {
-      claim: 'Request claimed.',
-      unclaim: 'Your claim was released.',
-      'clear-claim': 'Another staff member’s claim was cleared.',
-      'retry-identifier-check': 'Identifier retry requested.',
-      'place-hold': 'Hold placement completed.'
-    };
-    await mutateRequest(request, path, { version: request.version }, messages[operation]);
-  }
-
-  function showActionChoice(request, action, returnFocus) {
-    if (!allowRequestMutation(request, { consumes: null })) return;
-    cancelActionChoiceLoad();
-    dom.dialogBody.querySelector('.action-choice')?.remove();
-    const panel = element('form', { className: 'action-choice', 'aria-label': `${action} options` });
-    const heading = element('h3', { text: action === 'reject' ? 'Reject suggestion' : 'Purchase suggestion' });
-    const submit = element('button', { type: 'submit', className: action === 'reject' ? 'danger-button' : 'primary-button',
-      disabled: action === 'reject' }, action === 'reject' ? 'Reject' : 'Purchase');
-    const cancel = commandButton('Cancel', 'times', dismissActionChoice);
-    let input;
-    if (action === 'purchase') {
-      const entersPendingHold = Boolean(request.bibid);
-      input = entersPendingHold ? null : element('input', { type: 'checkbox', checked: state.staff.purchaseReminderDefault });
-      panel.append(heading, element('p', { text: request.bibid
-        ? 'Purchase moves this BIB to Pending hold after server verification. A purchase reminder does not apply. The final state comes from the server.'
-        : 'Purchase moves this request to Outstanding purchase. A reminder is optional.' }));
-      if (input) panel.append(element('label', { className: 'check-field' },
-        [input, element('span', { text: 'Send purchase reminder' })]));
-    } else {
-      input = element('select', { 'aria-label': 'Rejection template' });
-      input.append(element('option', { value: '', text: 'Default rejection email' }));
-      panel.append(heading, element('p', { text: 'Reject closes this request. A patron rejection email is queued only when a template and delivery are available.' }),
-        labeledInput('Rejection template', input));
-    }
-    const choice = { request, action, panel, returnFocus };
-    state.actionChoice = choice;
-    panel.append(element('div', { className: 'form-actions' }, [submit, cancel]));
-    let draft = action === 'reject' ? null : trackDialogFormDraft(panel);
-    panel.addEventListener('submit', async event => {
-      event.preventDefault();
-      if (state.actionChoice !== choice || !isCurrentDialogRequest(request, 'title_request')) return;
-      submit.disabled = true;
-      try {
-        await runAction(request, action, undefined, action === 'purchase'
-          ? { emailPurchaseReminder: input?.checked === true }
-          : { rejectionTemplateId: input.value || null }, draft);
-      } finally {
-        if (state.actionChoice === choice && panel.isConnected) submit.disabled = false;
-      }
-    });
-    dom.dialogBody.querySelector('.action-bar')?.after(panel);
-    (input || submit).focus();
-    if (action !== 'reject') return;
-    const load = latestLoads.begin('action-choice');
-    authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(request.id)}/rejection-templates`,
-      { signal: load.signal })
-      .then(data => {
-        if (!load.isCurrent() || state.actionChoice !== choice ||
-            !isCurrentDialogRequest(request, 'title_request')) return;
-        for (const item of data.items || []) {
-          input.append(element('option', { value: String(item.id), text: item.name }));
-        }
-        input.value = data.defaultTemplateId || '';
-        draft = trackDialogFormDraft(panel);
-        submit.disabled = false;
-      })
-      .catch(error => {
-        if (load.isCurrent() && state.actionChoice === choice &&
-            !(isAbortError(error) && load.signal.aborted) && error.status !== 401) {
-          announce(error.message || 'Rejection templates could not be loaded.', 'error');
-        }
-      })
-      .finally(() => latestLoads.finish('action-choice', load.token));
-  }
-
-  async function runAction(request, action, targetStatus, choices = {}, draft = null) {
-    const entersPendingHold = action === 'catalogFound' || action === 'alreadyOwn' ||
-      targetStatus === 'pending_hold' || action === 'purchase' && Boolean(request.bibid);
-    if (!allowRequestMutation(request, { consumes: draft })) {
-      if (entersPendingHold && state.editorDirty && state.editorDraft !== draft && !state.dialogMutationInFlight) {
-        announce(isVerifiedDraft(request)
-          ? 'Save the current request edits before moving to Pending hold.'
-          : 'Search Polaris, select the matching BIB, and save it before moving to Pending hold.', 'error');
-      }
-      return;
-    }
-    if (entersPendingHold) {
-      if (!hasAuthoritativeBib(request)) {
-        announce('Search Polaris, select the matching BIB, and save it before moving to Pending hold.', 'error');
-        return;
-      }
-    }
-    const confirmations = {
-      purchase: request.bibid
-        ? `${request.autohold ? 'Move this request to Pending hold' : 'Close this request without a hold'} using its verified BIB? The server will determine the final state.`
-        : 'Record this purchase decision and move the request to Outstanding purchase?',
-      alreadyOwn: `Record that the library already owns this title and ${request.autohold ? 'move the verified BIB to Pending hold' : 'close it without a hold'}?`,
-      catalogFound: `${request.autohold ? 'Move this verified catalog title to Pending hold' : 'Close this verified catalog title without a hold'}?`,
-      reject: 'Reject and close this request? A patron rejection email is queued only when a template and delivery are available.',
-      silentClose: 'Close this suggestion without a rejection email? It will leave the active queue.',
-      closeDuplicate: 'Close this request as a duplicate of an existing patron hold? No new hold will be placed.',
-      close: 'Close this hold-placed request? Its placed-hold history will remain.',
-      reopen: 'Reopen this closed request as a suggestion? The action will assign a manual claim to you.'
-    };
-    if (confirmations[action] && !confirmCurrent(request, 'title_request', confirmations[action], draft)) return;
-    await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
-      version: request.version,
-      action,
-      status: targetStatus,
-      ...choices
-    }, 'Workflow action completed.', draft);
-  }
-
-  async function deleteTitleRequest(request) {
-    if (!allowRequestMutation(request, { consumes: null })) return;
-    const mutation = latestLoads.begin('dialog-mutation');
-    state.dialogMutationInFlight = 'title:' + request.id + ':' + request.version;
-    const restoreControls = disableDialogControls();
-    announce('Permanently deleting title request...');
-    try {
-      const result = await authorizedJson('/api/asap/staff/requests/' + encodeURIComponent(request.id), {
-        method: 'DELETE', body: { version: request.version, actorVersion: state.staff?.version },
-        signal: mutation.signal
-      });
-      if (result?.deleted !== true) throw unconfirmedResponseError();
-      const message = 'Title request ' + request.id + ' permanently deleted. Its deletion audit remains.';
-      state.partialSessionFailureMessage = message + ' Sign in again to review Closed work.';
-      state.partialSessionFailureOwner = mutation.token;
-      state.partialSessionFailureDetailAvailable = false;
-      state.partialSessionFailureAfterQueueSequence = null;
-      if (!isCurrentDialogMutation(mutation, request, 'title_request')) {
-        if (!state.staff) dom.signedOutMessage.textContent = state.partialSessionFailureMessage;
-        return;
-      }
-      closeDialog({ preserveMutation: true });
-      announce(message, 'success');
-      const refreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
-      if (refreshed === true) clearCommittedSessionFallback(mutation.token);
-      if (refreshed === false && state.staff && mutation.isCurrent()) announce(message + ' The Closed view could not refresh.', 'warning');
-    } catch (error) {
-      const uncertain = isUnconfirmedMutationError(error, mutation.signal) ||
-        error.status === 408 || error.status >= 500;
-      if (uncertain && isCurrentDialogMutation(mutation, request, 'title_request')) {
-        retainUnconfirmedOutcome(
-          'Title-request deletion could not be confirmed. Refresh Closed work before retrying.',
-          mutation.token);
-        await titleQueue.refresh({ skipDeepLink: true, silent: true });
-        announce('Title-request deletion could not be confirmed. Review Closed work before retrying.', 'warning');
-      } else if (isCurrentDialogMutation(mutation, request, 'title_request') && error.status !== 401) {
-        announce(error.message || 'The title request was not deleted. Review its current state.', 'error');
-        await titleQueue.refresh({ skipDeepLink: true, silent: true });
-      }
-    } finally {
-      if (state.dialogMutationInFlight === 'title:' + request.id + ':' + request.version) {
-        state.dialogMutationInFlight = null;
-      }
-      restoreControls();
-      latestLoads.finish('dialog-mutation', mutation.token);
-    }
-  }
-
-  async function mutateRequest(request, path, body, successMessage, draft = null) {
-    if (!allowRequestMutation(request, { consumes: draft })) return;
-    const selectionGeneration = navigation.generation();
-    const mutation = latestLoads.begin('dialog-mutation');
-    state.dialogMutationInFlight = `title:${request.id}:${request.version}`;
-    const restoreControls = disableDialogControls();
-    announce('Saving request...');
-    try {
-      const result = await authorizedJson(path, { method: 'POST', body, signal: mutation.signal });
-      if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
-      if (!isCommittedRequestResponse(result, request.id)) {
-        throw unconfirmedResponseError();
-      }
-      const committed = result?.committed === true;
-      let current = result?.request || (committed ? (result.id ? result : null) : result);
-      const resultStatus = current?.status || result.finalStatus;
-      const status = committed && resultStatus ? ` Final state: ${statusLabel(resultStatus)}.` : '';
-      const notificationLabel = body?.action === 'reject' ? 'Rejection email'
-        : path.endsWith('/assign') ? 'Assignment notification'
-          : body?.action === 'purchase' ? 'Purchase reminder' : 'Notification';
-      const notification = notificationOutcome(result?.notificationStatus, result?.notificationReason,
-        notificationLabel);
-      const patronNotification = notificationOutcome(result?.patronNotificationStatus,
-        result?.patronNotificationReason, 'Purchase approval email');
-      let message = `${successMessage}${status}${notification.text}${patronNotification.text}`;
-      let messageKind = notification.partial || patronNotification.partial ? 'warning' : 'success';
-      const sessionFailureMessage = committed
-        ? `${message} Sign in again to review the committed request.`
-        : null;
-      state.partialSessionFailureMessage = sessionFailureMessage;
-      state.partialSessionFailureOwner = committed ? mutation.token : null;
-      state.partialSessionFailureDetailAvailable = committed && Boolean(current);
-      state.partialSessionFailureAfterQueueSequence = committed ? titleQueue.sequence() : null;
-      if (!current && committed) {
-        try {
-          current = await authorizedJson(titleDetailPath(request.id),
-            { signal: mutation.signal });
-        } catch (error) {
-          if (!isAbortError(error) && error.status !== 401) {
-            message += ' Details and activity could not refresh.';
-          }
-        }
-      }
-      if (current?.status && current.status !== resultStatus) {
-        message = `${successMessage} Final state: ${statusLabel(current.status)}.${notification.text}${patronNotification.text}`;
-        if (state.partialSessionFailureOwner === mutation.token) {
-          state.partialSessionFailureMessage = `${message} Sign in again to review the committed request.`;
-        }
-      }
-      if (state.partialSessionFailureOwner === mutation.token) {
-        state.partialSessionFailureDetailAvailable = Boolean(current);
-      }
-      if (!mutation.isCurrent() || !isCurrentDialogSelection(request, 'title_request')) return;
-      if (current) {
-        if (body?.action === 'edit' && current.bibidStaffVerified === true && state.verifiedBib &&
-            state.verifiedBib.requestId === String(current.id) &&
-            state.verifiedBib.bibId === current.bibid &&
-            state.verifiedBib.identifier === String(current.identifier || '').trim()) {
-          state.verifiedBib.version = current.version;
-        }
-        renderRequest(current, state.configurations.get(String(current.libraryOrgId)) || {},
-          { preserveDialogMutation: true });
-      } else {
-        state.selectedRequestVersion = null;
-        dom.dialogBody.replaceChildren(element('p', { text: 'The action committed. Reload this request to review current details.' }));
-      }
-      detailHost.focusClose();
-      announce(message, messageKind);
-      if (state.dialogMutationInFlight === `title:${request.id}:${request.version}`) {
-        state.dialogMutationInFlight = null;
-      }
-      const refreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
-      if (mutation.isCurrent() && isCurrentDialogSelection(request, 'title_request')) {
-        if (refreshed === false) messageKind = 'warning';
-        announce(refreshed === false ? `${message} The queue could not refresh.` : message, messageKind);
-      }
-    } catch (error) {
-      if ((path.endsWith('/action') || path.endsWith('/place-hold')) && error.status === 409 &&
-          error.response?.code === 'duplicate_open_request') {
-        await showDuplicateRecovery(request, mutation, selectionGeneration, error.response.duplicate);
-        return;
-      }
-      const recordedProviderOutcome = error.response?.providerOutcomeRecorded === true;
-      const definiteNoCommit = ['bib_validation_unavailable', 'notification_dependency_unavailable']
-        .includes(error.response?.code);
-      const unconfirmedOutcome = !definiteNoCommit &&
-        (isUnconfirmedMutationError(error, mutation.signal) || error.status === 408 || error.status >= 500);
-      const outcomeUnknown = unconfirmedOutcome ||
-        ['request_outcome_unconfirmed', 'hold_outcome_unconfirmed', 'hold_provider_error']
-          .includes(error.response?.code);
-      const holdReviewRequired = path.endsWith('/place-hold') && error.status === 409;
-      const pickupReviewRequired = path.endsWith('/pickup-preference') && Boolean(error.response?.operationId);
-      if (error.status === 409 || outcomeUnknown || recordedProviderOutcome) {
-        const message = pickupReviewRequired
-          ? error.message || 'Pickup reconciliation is required. Review the live preference before retrying.'
-          : recordedProviderOutcome
-          ? 'Polaris returned a hold result, but request finalization was deferred after staff access changed. Review the hold operation with an authorized account.'
-          : outcomeUnknown
-          ? path.endsWith('/place-hold')
-            ? 'The hold outcome could not be confirmed. Reload the operation before trying again.'
-            : 'The request outcome could not be confirmed. Reload before trying again.'
-          : error.message || 'The request changed. Review the refreshed version before trying again.';
-        if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired || pickupReviewRequired) &&
-            isCurrentDialogMutation(mutation, request, 'title_request')) {
-          retainUnconfirmedOutcome(message, mutation.token);
-        }
-        const refreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
-        if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
-        const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
-        if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired || pickupReviewRequired) &&
-            refreshed === true && detailLoaded === true) {
-          clearCommittedSessionFallback(mutation.token);
-        }
-        if (isCurrentDialogSelection(request, 'title_request')) announce(message, 'error');
-      } else if (isCurrentDialogMutation(mutation, request, 'title_request') &&
-                 error.status !== 401 && !isAbortError(error)) {
-        announce(error.message || 'The request could not be updated.', 'error');
-      }
-    } finally {
-      if (state.dialogMutationInFlight === `title:${request.id}:${request.version}`) state.dialogMutationInFlight = null;
-      restoreControls();
-      latestLoads.finish('dialog-mutation', mutation.token);
-    }
-  }
-
-  async function showDuplicateRecovery(request, mutation, selectionGeneration, duplicate) {
-    if (!isCurrentDialogMutation(mutation, request, 'title_request') ||
-        navigation.generation() !== selectionGeneration) return;
-    await titleQueue.refresh({ skipDeepLink: true, silent: true });
-    if (!isCurrentDialogMutation(mutation, request, 'title_request') ||
-        navigation.generation() !== selectionGeneration) return;
-    const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
-    if (detailLoaded !== true) {
-      if (navigation.generation() === selectionGeneration + 1 &&
-          isCurrentDialogSelection(request, 'title_request')) {
-        announce('The attempted change was not saved because another open request has this BIB. Current details could not refresh; reload this request before deciding whether to close it.', 'error');
-      }
-      return;
-    }
-    if (navigation.generation() !== selectionGeneration + 1 ||
-        !state.currentRequest || String(state.currentRequest.id) !== String(request.id) ||
-        !isCurrentDialogRequest(state.currentRequest, 'title_request')) return;
-    const current = state.currentRequest;
-    const duplicateLabel = duplicate && typeof duplicate.id === 'string' && /^\d+$/.test(duplicate.id)
-      ? `Request ${duplicate.id}: ${duplicate.title || 'Untitled'} (${statusLabel(duplicate.status)}), BIB ${duplicate.bibid || 'unknown'}`
-      : 'another open request for this patron and BIB';
-    const panel = element('section', {
-      className: 'action-choice duplicate-recovery', 'aria-labelledby': 'duplicate-recovery-title'
-    });
-    panel.append(
-      element('h3', { id: 'duplicate-recovery-title', text: 'Duplicate BIB request' }),
-      element('p', { text: `The attempted change was not saved. This patron already has ${duplicateLabel}.` }),
-      element('p', { text: 'Close this current request as a duplicate, or leave it open to edit or select another BIB.' })
-    );
-    const continueButton = element('button', { type: 'button', onclick: () => {
-      if (!panel.isConnected || navigation.generation() !== selectionGeneration + 1 ||
-          !isCurrentDialogRequest(current, 'title_request')) return;
-      panel.remove();
-      dom.dialogBody.querySelector('.edit-form input[inputmode="numeric"]')?.focus();
-      announce('The request remains open. Edit it or select another BIB.');
-    } }, 'Continue editing');
-    const closeButton = element('button', { type: 'button', className: 'secondary-button', onclick: async () => {
-      if (!panel.isConnected || navigation.generation() !== selectionGeneration + 1 ||
-          !isCurrentDialogRequest(current, 'title_request')) return;
-      await runAction(current, 'closeDuplicate');
-    } }, 'Close current request as duplicate');
-    if (current.status !== 'closed') {
-      panel.append(element('div', { className: 'form-actions' }, [closeButton, continueButton]));
-      dom.dialogBody.querySelector('.action-bar')?.after(panel);
-      closeButton.focus();
-    } else {
-      panel.append(element('div', { className: 'form-actions' }, [continueButton]));
-      dom.dialogBody.querySelector('.action-bar')?.after(panel);
-      continueButton.focus();
-    }
-    announce('The attempted change was not saved. Review the duplicate request and choose whether to close this request.', 'error');
-  }
-
-  async function showAssignment(request, returnFocus) {
-    if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return;
-    const load = latestLoads.begin('assignment-candidates');
-    announce('Loading eligible staff...');
-    try {
-      const result = await authorizedJson(`/api/asap/staff/assignment-candidates?libraryOrgId=${request.libraryOrgId}`, {
-        signal: load.signal
-      });
-      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return;
-      const select = element('select', { 'aria-label': 'Assign to staff member' });
-      const candidates = result.candidates || [];
-      for (const candidate of candidates) {
-        select.append(element('option', {
-          value: candidate.id,
-          text: candidate.displayName
-        }));
-      }
-      const form = element('form', { className: 'inline-form' }, [
-        labeledInput('Assign request', select),
-        element('button', { type: 'submit', className: 'primary-button', disabled: candidates.length === 0 }, [icon('user-plus'), 'Assign'])
-      ]);
-      form.append(commandButton('Cancel', 'times', () => cancelDialogFormDraft(form, returnFocus)));
-      const draft = trackDialogFormDraft(form);
-      form.addEventListener('submit', async event => {
-        event.preventDefault();
-        if (!form.isConnected || !isCurrentDialogRequest(request, 'title_request')) return;
-        await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/assign`, {
-          version: request.version,
-          assigneeId: select.value
-        }, 'Request assigned.', draft);
-      });
-      dom.dialogBody.prepend(form);
-      select.focus();
-      announce(candidates.length ? 'Choose an assignee.' : 'No eligible staff are available.');
-    } catch (error) {
-      if (load.isCurrent() && isCurrentDialogRequest(request, 'title_request') &&
-          error.status !== 401 && !(isAbortError(error) && load.signal.aborted)) {
-        announce(error.message || 'Assignable staff could not be loaded.', 'error');
-      }
-    } finally {
-      latestLoads.finish('assignment-candidates', load.token);
-    }
-  }
-
-  async function showPickup(request, returnFocus) {
-    if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return;
-    const load = latestLoads.begin('pickup-options');
-    announce('Loading current pickup preference...');
-    try {
-      const options = await authorizedJson(`/api/asap/staff/title-requests/${request.id}/pickup-options`, {
-        method: 'POST',
-        body: {},
-        signal: load.signal
-      });
-      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return;
-      const select = element('select', { 'aria-label': 'Preferred pickup branch' });
-      for (const branch of options.pickupBranches || []) {
-        select.append(element('option', { value: branch.id, text: branch.label }));
-      }
-      if (options.selectedPickupBranchId) select.value = String(options.selectedPickupBranchId);
-      const form = element('form', { className: 'inline-form' }, [
-        labeledInput('Preferred pickup branch', select),
-        element('button', { type: 'submit', className: 'primary-button', disabled: options.readOnly }, [icon('map-marker'), 'Update pickup'])
-      ]);
-      if (options.pickupBranchWarning) form.append(element('p', { className: 'wide', text: options.pickupBranchWarning }));
-      form.addEventListener('submit', async event => {
-        event.preventDefault();
-        if (!form.isConnected || !isCurrentDialogRequest(request, 'title_request')) return;
-        await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/pickup-preference`, {
-          version: options.version,
-          preferredPickupBranchId: Number(select.value),
-          currentPreferredPickupBranchIdAtLoad: options.currentPreferredPickupBranchId,
-          currentPreferredPickupBranchObservedAtLoad: true
-        }, 'Pickup preference updated.', draft);
-      });
-      if (request.pickupOperation && state.staff?.role === 'super_admin') {
-        const acknowledged = element('input', { type: 'checkbox' });
-        form.append(labeledInput('I inspected the original invocation and confirmed it has ended', acknowledged));
-        form.append(commandButton('Accept observed live preference', 'check', async () => {
-          if (!acknowledged.checked || !form.isConnected || !isCurrentDialogRequest(request, 'title_request')) {
-            announce('Confirm the original invocation has ended before resolving its operation.', 'error');
-            return;
-          }
-          await mutateRequest(request, `/api/asap/staff/pickup-operations/${request.pickupOperation.id}/reconcile`, {
-            version: options.version,
-            currentPreferredPickupBranchIdAtLoad: options.currentPreferredPickupBranchId,
-            currentPreferredPickupBranchObservedAtLoad: true,
-            confirmOriginalDispatchEnded: true
-          }, 'Observed pickup preference reconciled.', draft);
-        }, 'secondary-button'));
-      }
-      form.append(commandButton('Cancel', 'times', () => cancelDialogFormDraft(form, returnFocus)));
-      const draft = trackDialogFormDraft(form);
-      dom.dialogBody.prepend(form);
-      select.focus();
-      announce('Current pickup preference loaded.');
-    } catch (error) {
-      if (load.isCurrent() && isCurrentDialogRequest(request, 'title_request') &&
-          error.status !== 401 && !(isAbortError(error) && load.signal.aborted)) {
-        announce(error.message || 'Pickup choices could not be loaded.', 'error');
-      }
-    } finally {
-      latestLoads.finish('pickup-options', load.token);
-    }
-  }
-
-  function buildHoldOperation(request, operation) {
-    const section = element('section', { className: 'hold-operation' });
-    section.append(
-      element('h3', { text: operation.state === 'succeeded' ? 'Hold tracking' : 'Hold placement recovery' }),
-      element('p', { text: `State: ${operation.state}; phase: ${operation.phase}; attempt: ${operation.attemptNumber}.` })
-    );
-    if (operation.lastErrorCode) section.append(element('p', { text: `Last diagnostic: ${operation.lastErrorCode}` }));
-    if (operation.canReconcile) {
-      section.append(commandButton('Reconcile provider state', 'search', async () => {
-        if (!confirmCurrent(request, 'title_request',
-          `Reconcile hold operation ${operation.id}, attempt ${operation.attemptNumber}? This may inspect Polaris or retry only when the server confirms the operation is safe to resume.`)) return;
-        await mutateOperation(request, operation, 'reconcile', { version: operation.version });
-      }));
-    }
-    if (operation.canResolveSucceeded || operation.canResolveNotPerformed) {
-      section.append(buildResolutionForm(request, operation));
-    }
-    return section;
-  }
-
-  function buildResolutionForm(request, operation) {
-    const markedMutation = operation.phase === 'create_started' || operation.phase === 'reply_started';
-    const outcome = element('select', { 'aria-label': 'Resolution' });
-    if (operation.canResolveSucceeded) outcome.append(element('option', { value: 'succeeded', text: 'Confirmed succeeded' }));
-    if (operation.canResolveNotPerformed) outcome.append(element('option', { value: 'not_performed', text: 'Confirmed not performed' }));
-    const evidence = element('select', { 'aria-label': 'Evidence type' });
-    const reference = element('input', { maxlength: '1000' });
-    const proofSource = element('input', { maxlength: '500' });
-    const causalConnection = element('textarea', { maxlength: '2000' });
-    const finalHoldId = element('input', { maxlength: '100', inputmode: 'numeric', pattern: '[1-9][0-9]*' });
-    const reason = element('textarea', { required: 'required', maxlength: '2000' });
-    const excluded = element('input', { type: 'checkbox' });
-    const proofAttested = element('input', { type: 'checkbox' });
-    const exclusionAttested = element('input', { type: 'checkbox' });
-    const exclusionReference = element('input', { maxlength: '1000' });
-    const exclusionExplanation = element('textarea', { maxlength: '2000' });
-    const form = element('form', { className: 'resolution-form' });
-    const referenceField = labeledInput('Evidence reference', reference, 'wide');
-    const proofSourceField = labeledInput('Evidence provenance', proofSource, 'wide');
-    const causalConnectionField = labeledInput('Connection to this exact attempt', causalConnection, 'wide');
-    const finalHoldIdField = labeledInput('Proven final hold ID', finalHoldId, 'wide');
-    const proofAttestationField = element('label', { className: 'check-field wide' }, [
-      proofAttested,
-      element('span', { text: 'I attest that this evidence proves the definitive outcome for this exact operation, attempt, frozen patron, and BIB.' })
-    ]);
-    const excludedField = element('label', { className: 'check-field wide' }, [
-      excluded,
-      element('span', { text: 'I confirm every responsible or superseded worker, interactive host, and overlapping process has actually ended or been terminated.' })
-    ]);
-    const exclusionReferenceField = labeledInput('Executor exclusion reference', exclusionReference, 'wide');
-    const exclusionExplanationField = labeledInput('Executor exclusion and in-flight work account', exclusionExplanation, 'wide');
-    const exclusionAttestationField = element('label', { className: 'check-field wide' }, [
-      exclusionAttested,
-      element('span', { text: 'I attest that the exclusion record identifies the affected executions, when and how they ended, and accounts for provider work already sent.' })
-    ]);
-
-    function configureField(wrapper, control, visible, required = false) {
-      wrapper.hidden = !visible;
-      control.disabled = !visible;
-      control.required = visible && required;
-    }
-
-    function updateEvidence() {
-      evidence.replaceChildren();
-      if (outcome.value === 'succeeded') {
-        evidence.append(
-          element('option', { value: 'authoritative_correlated_hold', text: 'Correlated final hold ID' }),
-          element('option', { value: 'provider_final_success', text: 'Provider final success' })
-        );
-      } else {
-        if (operation.phase === 'acquired') {
-          evidence.append(element('option', { value: 'fenced_never_dispatched', text: 'Server-fenced, never dispatched' }));
-        } else {
-          evidence.append(element('option', { value: 'provider_final_no_effect', text: 'Provider final no-effect result' }));
-        }
-      }
-      updateEvidenceFields();
-    }
-    function updateEvidenceFields() {
-      const serverFenced = evidence.value === 'fenced_never_dispatched';
-      const correlated = evidence.value === 'authoritative_correlated_hold';
-      configureField(referenceField, reference, !serverFenced, true);
-      configureField(proofSourceField, proofSource, !serverFenced, true);
-      configureField(causalConnectionField, causalConnection, !serverFenced, true);
-      configureField(proofAttestationField, proofAttested, !serverFenced, true);
-      configureField(finalHoldIdField, finalHoldId, correlated, correlated);
-      configureField(excludedField, excluded, markedMutation && !serverFenced, true);
-      configureField(exclusionReferenceField, exclusionReference, markedMutation && !serverFenced, true);
-      configureField(exclusionExplanationField, exclusionExplanation, markedMutation && !serverFenced, true);
-      configureField(exclusionAttestationField, exclusionAttested, markedMutation && !serverFenced, true);
-    }
-    outcome.addEventListener('change', updateEvidence);
-    evidence.addEventListener('change', updateEvidenceFields);
-    form.append(
-      element('p', {
-        className: 'resolution-context wide',
-        text: `Operation ${operation.id}; attempt ${operation.attemptNumber}; epoch ${operation.executionEpoch}; frozen patron ${operation.patronBarcodeSnapshotMasked}; frozen BIB ${operation.bibIdSnapshot}.`
-      }),
-      labeledInput('Resolution', outcome),
-      labeledInput('Evidence type', evidence),
-      referenceField,
-      proofSourceField,
-      causalConnectionField,
-      finalHoldIdField,
-      proofAttestationField,
-      excludedField,
-      exclusionReferenceField,
-      exclusionExplanationField,
-      exclusionAttestationField,
-      labeledInput('Reason', reason, 'wide'),
-      element('div', { className: 'form-actions wide' }, [
-        element('button', { type: 'submit', className: 'danger-button' }, [icon('check-circle'), 'Resolve operation']),
-        commandButton('Revert resolution changes', 'undo', () => {
-          if (!form.isConnected || state.dialogMutationInFlight) return;
-          form.reset();
-          updateEvidence();
-          outcome.focus();
-          announce('Unsaved resolution changes discarded.');
-        })
-      ])
-    );
-    updateEvidence();
-    const draft = trackDialogFormDraft(form);
-    form.addEventListener('submit', async event => {
-      event.preventDefault();
-      if (!form.isConnected || !allowRequestMutation(request, { consumes: draft })) return;
-      const provenFinalHoldId = finalHoldId.disabled ? null : positivePolarisId(finalHoldId.value);
-      if (!finalHoldId.disabled && provenFinalHoldId === null) {
-        announce('Enter a positive Polaris hold ID no larger than 2147483647.');
-        finalHoldId.focus();
-        return;
-      }
-      if (!confirmCurrent(request, 'title_request',
-        `Resolve hold operation ${operation.id}, attempt ${operation.attemptNumber}, as ${outcome.value.replaceAll('_', ' ')} using ${evidence.selectedOptions[0]?.textContent || evidence.value}? The recorded evidence will determine whether this request has a placed hold or may be retried.`, draft)) return;
-      await mutateOperation(request, operation, 'resolve', {
-        version: operation.version,
-        requestVersion: request.version,
-        outcome: outcome.value,
-        reason: reason.value,
-        evidenceKind: evidence.value,
-        evidenceReference: reference.disabled ? null : reference.value,
-        operationSpecificProofAttested: !proofAttested.disabled && proofAttested.checked,
-        proofSource: proofSource.disabled ? null : proofSource.value,
-        causalConnection: causalConnection.disabled ? null : causalConnection.value,
-        provenFinalHoldId,
-        originalExecutorExcluded: !excluded.disabled && excluded.checked,
-        executorExclusionAttested: !exclusionAttested.disabled && exclusionAttested.checked,
-        executorExclusionReference: exclusionReference.disabled ? null : exclusionReference.value,
-        executorExclusionExplanation: exclusionExplanation.disabled ? null : exclusionExplanation.value
-      }, draft);
-    });
-    return form;
-  }
-
-  async function mutateOperation(request, operation, action, body, draft = null) {
-    if (!allowRequestMutation(request, { consumes: draft })) return;
-    const mutation = latestLoads.begin('dialog-mutation');
-    state.dialogMutationInFlight = `hold:${operation.id}:${operation.version}`;
-    const restoreControls = disableDialogControls();
-    announce(`${action === 'resolve' ? 'Resolving' : 'Reconciling'} hold operation...`);
-    try {
-      const result = await authorizedJson(`/api/asap/staff/hold-operations/${operation.id}/${action}`,
-        { method: 'POST', body, signal: mutation.signal });
-      if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
-      if (result?.committed !== true || !['updated', 'resolved'].includes(result.code) ||
-          String(result.operationId) !== String(operation.id)) {
-        throw unconfirmedResponseError();
-      }
-      const notification = notificationOutcome(result.notificationStatus, result.notificationReason, 'Hold notification');
-      const finalState = result.finalStatus ? ` Final state: ${statusLabel(result.finalStatus)}.` :
-        ' Review the refreshed request for final state.';
-      const message = action === 'resolve'
-        ? `Hold operation ${result.operationId || operation.id} resolved as ${body.outcome.replaceAll('_', ' ')}.${finalState}${notification.text}`
-        : `Hold operation ${result.operationId || operation.id} reconciliation recorded.${finalState}${notification.text}`;
-      state.partialSessionFailureMessage = `${message} Sign in again to review the committed recovery result.`;
-      state.partialSessionFailureOwner = mutation.token;
-      state.partialSessionFailureDetailAvailable = false;
-      state.partialSessionFailureAfterQueueSequence = titleQueue.sequence();
-      announce(message, notification.partial ? 'warning' : 'success');
-      const refreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
-      if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
-      const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
-      if (refreshed === true && detailLoaded === true) clearCommittedSessionFallback(mutation.token);
-      if (isCurrentDialogSelection(request, 'title_request')) {
-        state.partialSessionFailureDetailAvailable = Boolean(detailLoaded);
-        const followup = `${refreshed === false ? ' The queue could not refresh.' : ''}${detailLoaded ? '' : ' Details could not refresh.'}`;
-        announce(`${message}${followup}`, notification.partial || followup ? 'warning' : 'success');
-      }
-    } catch (error) {
-      const recordedProviderOutcome = error.response?.providerOutcomeRecorded === true;
-      const definiteNoCommit = error.response?.code === 'hold_resolution_dependency_unavailable';
-      const unconfirmedOutcome = !definiteNoCommit &&
-        (isUnconfirmedMutationError(error, mutation.signal) || error.status === 408 || error.status >= 500);
-      const outcomeUnknown = unconfirmedOutcome ||
-        ['hold_outcome_unconfirmed', 'hold_provider_error'].includes(error.response?.code);
-      const holdReviewRequired = error.status === 409;
-      if (error.status === 409 || outcomeUnknown || recordedProviderOutcome) {
-        const message = recordedProviderOutcome
-          ? 'Polaris returned a hold result, but request finalization was deferred after staff access changed. Review the hold operation with an authorized account.'
-          : outcomeUnknown
-          ? 'The hold recovery outcome could not be confirmed. Reload before trying again.'
-          : error.message || 'The hold recovery changed. Review the refreshed request before trying again.';
-        if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired) &&
-            isCurrentDialogMutation(mutation, request, 'title_request')) {
-          retainUnconfirmedOutcome(message, mutation.token);
-        }
-        const refreshed = await titleQueue.refresh({ skipDeepLink: true, silent: true });
-        if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
-        const detailLoaded = await openRequest(request.id, null, { authoritativeRefresh: true });
-        if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired) &&
-            refreshed === true && detailLoaded === true) {
-          clearCommittedSessionFallback(mutation.token);
-        }
-        if (isCurrentDialogSelection(request, 'title_request')) announce(message, 'error');
-      } else if (isCurrentDialogMutation(mutation, request, 'title_request') &&
-                 error.status !== 401 && !isAbortError(error)) {
-        announce(error.message || 'Hold recovery could not be updated.', 'error');
-      }
-    } finally {
-      if (state.dialogMutationInFlight === `hold:${operation.id}:${operation.version}`) state.dialogMutationInFlight = null;
-      restoreControls();
-      latestLoads.finish('dialog-mutation', mutation.token);
-    }
-  }
-
-  function disposeMountedDetail(options = {}) {
-    copyCreation.close({ navigation: true, force: true });
-    polarisLookup.close(); latestLoads.begin('research-configuration').abort();
-    state.verifiedBib = null; state.research = null; state.currentRequest = null;
-    state.editControls = null; state.editorDirty = false; state.editorDraft = null;
-    resetDialogDrafts();
-    cancelAssignmentCandidateLoad(); cancelPickupOptionsLoad();
-    if (options.preserveMutation !== true) cancelDialogMutationCompletion();
-    cancelActionChoiceLoad(); copyCreation.invalidate();
-    state.selectedRequestId = null; state.selectedRequestType = null; state.selectedRequestVersion = null;
-    detailReturnFocus = null; detailLease = null;
-  }
-
-  function closeDialog(options = {}) {
-    if (state.dialogMutationInFlight && options.preserveMutation !== true && !options.force) {
-      announce('The workflow action is in progress. Wait for its authoritative result before closing.', 'warning');
-      detailHost.focusClose(); return false;
-    }
-    if (!options.force && !options.guarded && !options.preserveMutation &&
-        !navigation.allow({ settings: false, suggestion: false })) return false;
-    if (!copyCreation.close({ navigation: true, force: options.force })) return false;
-    const selectedId = state.selectedRequestId;
-    const wasAdditionalCopy = state.selectedRequestType === 'additional_copy';
-    const focusReturn = options.navigation ? null : (wasAdditionalCopy ? copyQueue : titleQueue).focusReturn(selectedId, detailReturnFocus);
-    detailLease?.release({ ...options, focusReturn });
-    if (!options.navigation) {
-      router.closeDetail(wasAdditionalCopy || navigation.context().activeView === 'additional-copies'
-        ? 'additional_copies' : navigation.context().status, queueRouteContext());
-      if (!router.busy()) rememberRoute();
-    }
-    if (options.preserveMutation === true) state.dialogMutationInFlight = null;
-    return true;
-  }
-
   function bindEvents() {
     onSessionInvalid(error => {
       retainInterruptedBulkLedger();
@@ -2934,7 +1448,6 @@ export function createWorkflowApp() {
       showAccessUnavailable();
     });
     settingsController.bind();
-    for (const name of ['input', 'change']) dom.dialog.addEventListener(name, () => interactionScope.touch());
     dom.newSuggestion.addEventListener('click', event => openStaffSuggestion(event.currentTarget));
     dom.bulkDelete.addEventListener('click', event => openBulkDelete(event.currentTarget));
     dom.bulkDeleteCopies.addEventListener('click', event => openBulkDelete(event.currentTarget));
@@ -2988,7 +1501,7 @@ export function createWorkflowApp() {
       closeStaffSuggestion();
     });
     window.addEventListener('beforeunload', event => {
-      if (!hasRequestDraft() && !copyDetail.isDirty() && !copyDetail.inspectDeparture().blocked && !copyCreation.hasPendingMutation() && !hasSuggestionDraft() && !profileController.isDirty() &&
+      if (!titleDetail.isDirty() && !titleDetail.hasPendingMutation() && !copyDetail.isDirty() && !copyDetail.inspectDeparture().blocked && !copyCreation.hasPendingMutation() && !hasSuggestionDraft() && !profileController.isDirty() &&
           !profileController.hasPendingMutation() && !state.bulkDeleteState?.submitting) return;
       event.preventDefault();
       event.returnValue = '';

@@ -76,3 +76,21 @@ export function addDetail(list, label, value) {
 export function labeledInput(label, input, className = '') {
   return element('label', { className }, [element('span', { text: label }), input]);
 }
+
+export function selectWithHistorical(options, selectedValue, labels = {}) {
+  const select = element('select');
+  const values = [];
+  for (const option of options || []) {
+    const value = String(option);
+    if (!value || values.includes(value)) continue;
+    values.push(value);
+    select.append(element('option', { value, text: labels[value] || value }));
+  }
+  const historical = selectedValue === null || selectedValue === undefined ? '' : String(selectedValue);
+  if (historical && !values.includes(historical)) {
+    select.append(element('option', { value: historical, text: labels[historical] || historical }));
+  }
+  if (!historical) select.prepend(element('option', { value: '', text: 'Not recorded' }));
+  select.value = historical;
+  return select;
+}

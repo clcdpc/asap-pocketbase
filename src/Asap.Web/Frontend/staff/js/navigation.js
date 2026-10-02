@@ -175,13 +175,12 @@ export function createNavigationController({ router, sessionIdentity, getFeature
         views['additional-copies'].setLibraries(target.organizations);
       }
       activate(target.name);
-      writeStage(target.name, true);
       if (target.requestId) {
         router.replaceRequest(target.requestId, target.name === 'additional-copies',
           { scope: context.scope, copyStatus: context.additionalCopyStatus },
           target.name === 'additional-copies' ? 'additional_copies' : context.status);
         router.remember();
-      }
+      } else writeStage(target.name, true);
       if (target.warning) announce(target.warning, 'error');
       const loaded = await views[target.name]?.refresh?.({ skipDeepLink: true });
       if (generation === ticket && sessionIdentity.isCurrent(owner) && loaded === true && target.requestId) {

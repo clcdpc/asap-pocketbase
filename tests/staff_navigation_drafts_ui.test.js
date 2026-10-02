@@ -1570,6 +1570,17 @@ for (const view of ['additional-copies', 'settings']) {
     }, { staff: { ...actorA, authenticationEmail: 'staff@example.org' } }));
 }
 
+for (const [parameter, value] of [['stage', 'new'], ['status', 'submitted']]) {
+  test(`legacy Title detail preserves the supported ${parameter}=${value} alias and unrelated URL context`, () =>
+    fixture(`?${parameter}=${value}&request=${id}&marker=legacy#details`, async ui => {
+      assert.equal(ui.params().get(parameter), value);
+      assert.equal(ui.params().get('marker'), 'legacy');
+      assert.equal(ui.dom.window.location.hash, '#details');
+      assert.equal(ui.get('#request-dialog').open, true);
+      assert.equal(ui.get('#queue-view').hidden, false);
+    }));
+}
+
 (async () => {
   let failed = 0;
   const selected = cases.filter(item => !process.argv[2] || item.name.includes(process.argv[2]));

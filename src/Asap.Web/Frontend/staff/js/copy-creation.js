@@ -32,7 +32,7 @@ export function createCopyCreationController({ root, sessionIdentity, announce, 
   const submit = form.querySelector('button[type="submit"]');
   const events = new window.AbortController();
   const reads = createLatestLoad();
-  let ui = null, retained = null, disposed = false;
+  let ui = null, retained = null, previewParent = null, disposed = false;
 
   function currentRecovery() {
     if (!retained || !sessionIdentity.isCurrent(retained.owner)) return null;
@@ -79,6 +79,7 @@ export function createCopyCreationController({ root, sessionIdentity, announce, 
       announce('Additional-copy creation is unconfirmed. Refresh the open additional-copy task list for this library and review matching tasks before trying again.', 'warning'); return false;
     }
     const load = reads.begin('preview');
+    previewParent = parent;
     announce('Loading additional-copy preview...');
     try {
       const result = await send(`/api/asap/staff/title-requests/${parent.request.id}/additional-copy`, { signal: load.signal });
@@ -104,12 +105,14 @@ export function createCopyCreationController({ root, sessionIdentity, announce, 
     } finally { reads.finish('preview', load.token); }
   }
 
-  function close(options = {}) {
+  function close(options = {}, parent = null) {
+    if (parent !== null && ui?.parent !== parent && previewParent !== parent) return true;
     const owner = ui;
     if (owner?.submitting && !options.preserveMutation && !options.force) {
       announce('Task creation is in progress. Wait for the authoritative result before closing.', 'warning'); cancel.focus(); return false;
     }
     reads.begin('preview').abort();
+    previewParent = null;
     owner?.parent.releaseDraft(owner.draft);
     ui = null;
     if (root.open) root.close(); summary.textContent = ''; reminder.checked = false; submit.disabled = true;
@@ -196,8 +199,12 @@ export function createCopyCreationController({ root, sessionIdentity, announce, 
   root.addEventListener('cancel', event => { event.preventDefault(); close(); }, { signal: events.signal });
 
   return { preview, create, close,
-    invalidate() { reads.begin('preview').abort(); },
-    hasPendingMutation: () => Boolean(ui?.submitting && sessionIdentity.isCurrent(ui.actor)),
+    invalidate(parent = null) {
+      if (parent === null || ui?.parent === parent || previewParent === parent) {
+        reads.begin('preview').abort(); previewParent = null;
+      }
+    },
+    hasPendingMutation: (parent = null) => Boolean(ui?.submitting && (parent === null || ui.parent === parent) && sessionIdentity.isCurrent(ui.actor)),
     setStaff: loadRecovery,
     signedOut() { close({ navigation: true, force: true }); retained = null; },
     review: {
