@@ -183,6 +183,9 @@ The browser fixture also waits for the old Title editor controls to retire
 after committed Copy creation before opening another child. The commit receipt
 is authoritative before the asynchronous parent refresh completes; clicking a
 retired control is correctly rejected by the application.
+The delayed Grid focus fixture drains its released render and disposes the
+owning application before closing its DOM. It retains all nine focus cases and
+the guard that rejects late Grid render errors.
 
 Final completion SHA, local gate results, exact package identity/digests and
 the final PR CI run are recorded on reopened #365 and parent #351 only after
