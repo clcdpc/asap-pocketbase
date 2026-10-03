@@ -179,6 +179,11 @@ instead of claiming rollback. No additional substantive instance remained in
 the fresh source review. Controller decomposition and backend/provider policy
 are unchanged.
 
+The browser fixture also waits for the old Title editor controls to retire
+after committed Copy creation before opening another child. The commit receipt
+is authoritative before the asynchronous parent refresh completes; clicking a
+retired control is correctly rejected by the application.
+
 Final completion SHA, local gate results, exact package identity/digests and
 the final PR CI run are recorded on reopened #365 and parent #351 only after
 the complete gate and final re-review pass.

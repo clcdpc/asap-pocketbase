@@ -1216,6 +1216,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.getByRole('button', { name: 'Create task' }).click();
     const acceptedCreate = await delayedMutation.accepted;
     assert.equal(acceptedCreate.status, 200);
+    const sourceDetail = await page.locator('#request-dialog .edit-form').elementHandle();
     const pendingAttempt = await page.evaluate(key =>
       JSON.parse(window.sessionStorage.getItem(key)), copyRecoveryKey);
     assert.equal(pendingAttempt.sourceId, String(args.staleCreateSourceId),
@@ -1238,6 +1239,10 @@ async function runStaleMutationCompletions(browser, args, report) {
     );
     assert.equal(createdResponse.status(), 200, await createdResponse.text());
 
+    // The commit receipt precedes the authoritative parent refresh. Wait for
+    // its old controls to retire before opening another child workflow.
+    await page.waitForFunction(form => !form.isConnected, sourceDetail);
+    await sourceDetail.dispose();
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     const uncertainPreview = await context.request.get(
