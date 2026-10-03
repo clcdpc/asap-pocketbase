@@ -462,6 +462,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
           if (!form.isConnected || isPending()) return;
           form.reset();
           updateEvidence();
+          interactionScope.touch();
           outcome.focus();
           announce('Unsaved resolution changes discarded.');
         })

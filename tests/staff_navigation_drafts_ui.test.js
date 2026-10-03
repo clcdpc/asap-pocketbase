@@ -1586,6 +1586,28 @@ test('Analytics view round trip preserves scope/range and rejects the prior acti
     assert.equal(document.activeElement, focused);
   }));
 
+test('programmatic hold-resolution Revert invalidates consent while a competing editor draft remains', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    await ui.open();
+    ui.edit('.edit-form input', 'Competing editor draft');
+    ui.edit('.resolution-form textarea[required]', 'Unsaved resolution reason');
+    const accepted = ui.dom.window.location.href;
+    let validateScope;
+    ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
+      ? new Promise(resolve => { validateScope = resolve; }) : undefined);
+    ui.dom.window.confirm = message => { ui.confirms.push(message); return ui.confirms.length === 1; };
+    ui.dom.window.history.back();
+    await until(() => validateScope, 'route validation after initial request consent');
+    [...ui.get('.resolution-form').querySelectorAll('button')].find(button => button.textContent === 'Revert resolution changes').click();
+    assert.equal(ui.get('.resolution-form textarea[required]').value, '');
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', active: true }] }));
+    await until(() => ui.dom.window.location.href === accepted, 'fresh consent rejects discarding competing editor');
+    assert.equal(ui.confirms.length, 2);
+    assert.equal(ui.get('.edit-form input').value, 'Competing editor draft');
+    assert.equal(protectedUnload(ui), true);
+  }, { holdOperation: { id: '81', version: 'hold-v1', state: 'unknown', phase: 'acquired',
+    attemptNumber: 1, canResolveNotPerformed: true } }));
+
 for (const settingsScope of ['2', 'system']) {
   test(`authoritative ${settingsScope} Settings configuration refresh invalidates cached Title form configuration`, () =>
     fixture('?stage=suggestion&scope=2', async ui => {

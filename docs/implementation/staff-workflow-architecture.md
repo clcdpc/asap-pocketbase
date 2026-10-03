@@ -165,7 +165,9 @@ deactivation paths, cached configuration/reference data and committing error
 paths. Settings domain add/delete/reorder callbacks and logo-draft removal now
 advance the local draft scope; navigation uses that revision instead of a
 reusable value snapshot. Normal input/change events also advance it. Rendering
-and authoritative baseline population remain clean. Profile population,
+and authoritative baseline population remain clean. Hold-resolution Revert also
+touches after its programmatic reset; deferred navigation with a competing dirty
+editor proves prior consent cannot survive that reset. Profile population,
 Copy reminder defaults and inline picker initialization establish baselines;
 their other programmatic updates are already part of stamped input/change or
 registration/release lifetimes. Queue filters, Settings scope/panel and
@@ -183,7 +185,7 @@ the complete gate and final re-review pass.
 ## Closure validation contract
 
 Issue #365's execution-state evidence records actual final-SHA results and CI.
-Closure requires all 46 current frontend files (including 146 navigation/draft
+Closure requires all 46 current frontend files (including 147 navigation/draft
 journeys and nine genuine Grid focus cases), a zero-warning Release build,
 the unchanged 784-test non-browser minimum and all three real-SQL Kestrel
 browser journeys with zero skips. The .NET gates include migration import,
