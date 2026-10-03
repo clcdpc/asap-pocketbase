@@ -103,13 +103,13 @@ that fixture-lifetime correction.
 | 2. URL/visible synchronization | Pure route tests, navigation journeys, legacy-link browser cases and new authoritative status/scope/validation-race regressions. |
 | 3. Exclusive state/DOM ownership | Owner factories, scoped roots, immutable child contexts and injected intent ports reviewed across callers. |
 | 4. No global mega-store | Composition structure guard; each feature closes over its own state. Shell retains presentation receipts only. |
-| 5. Explicit draft lifetime | Local opaque scopes in mounted Title/Copy, Suggestion, Profile and Settings; baseline, release and replacement tests. |
+| 5. Explicit draft lifetime | Local opaque scopes in mounted Title/Copy, Suggestion, Profile and Settings; baseline, release and replacement tests. Polaris application and Settings domain commands advance draft revisions without dirtying authoritative population. |
 | 6. Explicit consumption | Admission rejects missing/foreign/disposed handles; commands supply their handle or explicit null. Staff metadata/access/create tested separately. |
 | 7. Competing drafts | Editor/inline, reminder/parent, Suggestion and Settings sibling regressions prove no dispatch/storage write after rejection. |
 | 8. Disposed owners cannot submit | Direct controller recreation/retired-control tests and disconnected-handle pruning. |
 | 9. Parent/child disposal | Title render disposes editor/workflows/Copy child before replacing DOM; stale Polaris, assignment, pickup and reminder tests. |
 | 10. Commands independent of read cancellation | All write paths inspected; captured command tests assert no signal. Read slots and DOM listener aborts remain local. |
-| 11. Authoritative outcome survives presentation changes | Direct late actor/disposal tests plus committed/uncertain, failed refresh and postcommit 401/403 application journeys. Outcome precedes presentation gate. |
+| 11. Authoritative outcome survives presentation changes | Direct late actor/disposal tests plus committed/uncertain, failed refresh and postcommit 401/403 application journeys. Outcome precedes presentation gate. Lost Sign Out responses receive authoritative session review; unavailable review revokes the workspace and retains outcome receipts. |
 | 12. Actor/tenant recovery isolation | Actor-key serialization, accepted epoch guards, cross-user/tenant storage and exact-record cleanup regressions. |
 | 13. Same-user recovery | Copy and Operations reload/review/retry journeys preserve captured evidence and supported identity. |
 | 14. Pickup fencing | Request/operation/version evidence unchanged; pickup partial/reconciliation journeys and real-SQL provider/journal gates. |
@@ -118,22 +118,72 @@ that fixture-lifetime correction.
 | 17. Operations retention | Captured supported identity/path/body/scope, single-flight and same-actor preference revision tests. |
 | 18. Bulk ledger | Frozen exact-string snapshot, sequential dispatch, attempted/unresolved/not-attempted outcomes, access loss and no replay tests. |
 | 19. Independent Settings | Own local reads/drafts/commands, scoped overrides/domain editors and dedicated Settings suites. |
-| 20. Independent Analytics | Local factory and scope/range/route replacement tests. |
+| 20. Independent Analytics | Local factory and scope/range/route replacement tests. Ordinary view deactivation cancels reads while preserving session selections; loss/replacement resets them. |
 | 21. Epoch versus revision | Session identity WeakMap snapshots, Profile updates, Copy actor-version and retained Operations tests. |
-| 22. Stale completion isolation | Per-controller current-read/actor/context gates; old startup/read/command/recreation and Settings edit-during-read tests. |
+| 22. Stale completion isolation | Per-controller current-read/actor/context gates; old startup/read/command/recreation and Settings edit-during-read tests. Deferred Polaris navigation consent, invalidated in-flight Title configuration, reactivated Analytics and late Sign Out review are covered. |
 | 23. Live focus targets | Host lease/current/connected checks, owned child return focus and nine genuine delayed Grid.js focus cases. |
 | 24. Accessibility | Browser journeys enforce axe severity, keyboard/dialog behavior, overflow, missing images, page errors and external request restrictions. |
 | 25. Exact bigint strings | Maximum and above-safe-integer controller, route, activity, bulk, recent and browser fixtures; numeric conversions limited to native Int32 library/Polaris values. |
 | 26. No import cycles | Frontend entry-point dependency walk checks all relative ES module imports. |
 | 27. No peer state writes | Feature import guard, repository imports/DOM searches and injected lifecycle contracts reviewed. Research helper imports are stateless. |
-| 28. Narrow coordination | Named detail, scope, created/existing/recent, Closed-review, preference and receipt ports at composition. |
+| 28. Narrow coordination | Named detail, scope, created/existing/recent, Closed-review, preference and receipt ports at composition. Settings configuration review calls Title's scoped `invalidateConfiguration` port; staff roster review does not. |
 | 29. No global read singleton | Repository search plus structure guard; `createLatestLoad()` exists only inside disposable owners. |
 | 30. Actual composition root | Structure guard rejects endpoints, history, serialization, draft machinery and shared feature state in `workflow.js`. |
+
+## Reopened closure remediation (2026-10-03)
+
+An additional closure review of `a06d80b39857155d637998a69725f155bc5c8b4a`
+found four substantive gaps. #365 and #351 were reopened on the same branch
+and draft PR #366. This audit supersedes the prior closure conclusion.
+
+- Request Editor and Staff Suggestion Polaris application now touch their
+  owning draft scopes after applying fields and verification. Deferred Back
+  validation tests approve the first discard, select a new BIB through the
+  actual Polaris dialog, and reject the required second consent. The newer
+  values, source entry and unload protection remain. The original clean-to-dirty
+  during-validation regression remains.
+- Analytics deactivation supersedes reads while keeping the selected library
+  and range. A view round trip first requests `scope=2&range=last90`, renders
+  those selections and rejects the prior activation's response/focus. Session
+  loss and actor replacement reset defaults; same-actor preference revision
+  preserves selections. Disposal clears the owned results.
+- Authoritative Settings configuration review calls Title Detail's named cache
+  invalidation port at composition. Library review invalidates that library;
+  system review invalidates all libraries. Roster/access review preserves the
+  cache. Invalidated in-flight configuration cannot render or repopulate old
+  values, and unrelated libraries retain their cache entries.
+- Uncertain Sign Out, including response loss, timeout and server failure,
+  receives a fresh cancellable session read. Unauthenticated/access-denied
+  state revokes the workspace; the same authorized actor permits explicit
+  retry. Unavailable or malformed review hides the workspace and explicitly
+  reports uncertainty while retaining other outcome receipts. Late command
+  and review results cannot affect a replacement actor. Definite errors still
+  follow the existing session/error boundary.
+
+The same-root-cause source/caller audit covered every draft owner, all feature
+deactivation paths, cached configuration/reference data and committing error
+paths. Settings domain add/delete/reorder callbacks and logo-draft removal now
+advance the local draft scope; navigation uses that revision instead of a
+reusable value snapshot. Normal input/change events also advance it. Rendering
+and authoritative baseline population remain clean. Profile population,
+Copy reminder defaults and inline picker initialization establish baselines;
+their other programmatic updates are already part of stamped input/change or
+registration/release lifetimes. Queue filters, Settings scope/panel and
+Operations scope/retained attempts preserve their established session lifetimes.
+Other configuration reads are mounted/staged or refreshed by their owning
+mutation/review paths; other committing owners already retain uncertainty
+instead of claiming rollback. No additional substantive instance remained in
+the fresh source review. Controller decomposition and backend/provider policy
+are unchanged.
+
+Final completion SHA, local gate results, exact package identity/digests and
+the final PR CI run are recorded on reopened #365 and parent #351 only after
+the complete gate and final re-review pass.
 
 ## Closure validation contract
 
 Issue #365's execution-state evidence records actual final-SHA results and CI.
-Closure requires all 46 current frontend files (including 136 navigation/draft
+Closure requires all 46 current frontend files (including 146 navigation/draft
 journeys and nine genuine Grid focus cases), a zero-warning Release build,
 the unchanged 784-test non-browser minimum and all three real-SQL Kestrel
 browser journeys with zero skips. The .NET gates include migration import,

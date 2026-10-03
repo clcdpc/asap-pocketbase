@@ -246,7 +246,7 @@ function renderRows(rows) {
 
 export function createAnalyticsController({ root: container, sessionIdentity }) {
   const reads = createLatestLoad();
-  let analyticsScope = '', analyticsRange = 'lastMonth', active = false, disposed = false;
+  let analyticsScope = '', analyticsRange = 'lastMonth', active = false, disposed = false, preferenceOwner = null;
   function current(load, owner) { return !disposed && active && container.isConnected && load.isCurrent() && sessionIdentity.isCurrent(owner); }
   function analyticsUrl() {
     const params = new URLSearchParams();
@@ -326,8 +326,13 @@ export function createAnalyticsController({ root: container, sessionIdentity }) 
   return {
     activate() { if (!disposed) active = true; },
     refresh: () => loadAnalytics(),
-    deactivate() { active = false; resetAnalytics(); },
-    signedOut() { active = false; resetAnalytics(); },
-    dispose() { if (disposed) return; active = false; resetAnalytics(); disposed = true; }
+    deactivate() { active = false; reads.begin('analytics').abort(); },
+    setStaff(staff) {
+      if (disposed) return;
+      if (!sessionIdentity.sameSession(preferenceOwner, staff)) resetAnalytics();
+      preferenceOwner = staff;
+    },
+    signedOut() { active = false; preferenceOwner = null; resetAnalytics(); },
+    dispose() { if (disposed) return; active = false; preferenceOwner = null; resetAnalytics(); container.replaceChildren(); disposed = true; }
   };
 }

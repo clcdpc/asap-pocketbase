@@ -339,6 +339,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
           apply: selected => {
             applyPolarisResultToControls(selected, { bib, title, author, identifier });
             suggestion.verifiedBibId = selected.bibId;
+            drafts.touch();
             catalogStatus.textContent = `Verified Polaris BIB ${selected.bibId} selected.`;
           },
           editorFocus: title

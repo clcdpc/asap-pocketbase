@@ -35,10 +35,21 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   }
   async function configurationFor(library, signal, owner) {
     const key = String(library);
-    if (configurations.has(key)) return configurations.get(key);
+    let entry = configurations.get(key);
+    if (!entry) { entry = {}; configurations.set(key, entry); }
+    if (entry.value) return entry.value;
     const value = await send(`/api/asap/config?libraryOrgId=${encodeURIComponent(key)}`, { signal });
-    if (!signal.aborted && sessionIdentity.isCurrent(owner)) configurations.set(key, value);
+    if (!signal.aborted && sessionIdentity.isCurrent(owner)) {
+      // A Settings refresh also invalidates an in-flight cache population.
+      if (configurations.get(key) !== entry) return configurationFor(library, signal, owner);
+      entry.value = value;
+    }
     return value;
+  }
+  function invalidateConfiguration(scope) {
+    if (disposed) return;
+    if (scope === 'system') configurations.clear();
+    else configurations.delete(String(scope));
   }
   function invalidate() { reads.begin('detail').abort(); editor?.invalidate(); workflows?.invalidate(); if (copyParent) copyCreation.invalidate(copyParent); }
   function closeCopy(options) { return !copyParent || copyCreation.close(options, copyParent); }
@@ -195,7 +206,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       recordReceipt(attempt, `${message} Sign in again to review the committed request.`, Boolean(detail));
       if (detail) {
         onUpdated(detail);
-        renderRequest(detail, configurations.get(String(detail.libraryOrgId)) || {}, editor?.acceptedVerification(detail, body));
+        renderRequest(detail, configurations.get(String(detail.libraryOrgId))?.value || {}, editor?.acceptedVerification(detail, body));
       }
       else { disposeChildren(); current = Object.freeze({ id: snapshot.id, version: null }); attempt.mounted.content.replaceChildren(element('p', { text: 'The action committed. Reload this request to review current details.' })); }
       host.focusClose(); announce(message, notification.partial || patronNotification.partial ? 'warning' : 'success');
@@ -415,7 +426,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     return section;
   }
 
-  return { open, close, invalidate,
+  return { open, close, invalidate, invalidateConfiguration,
     isDirty: () => Boolean(lease?.isCurrent() && drafts.isDirty()), hasPendingMutation,
     inspectDeparture: () => ({ dirty: Boolean(lease?.isCurrent() && drafts.isDirty()), stamp: drafts.stamp(), blocked: hasPendingMutation(),
       message: 'The workflow action is in progress. Wait for its authoritative result before navigating away.',

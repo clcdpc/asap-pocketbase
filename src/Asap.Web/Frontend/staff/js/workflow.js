@@ -142,7 +142,10 @@ export function createWorkflowApp() {
     onScopeChange: scope => { navigation.settingsScopeChanged(scope); void shell.refreshReadiness(); },
     onCommitted: (message, owner, attempt) => shell.recordReceipt(`${message} Sign in again to review the current values.`, owner, attempt, { feature: 'settings' }),
     onUnconfirmed: (message, owner, attempt) => shell.recordReceipt(`${message} Sign in again and check saved values before retrying.`, owner, attempt, { feature: 'settings' }),
-    onRefreshed: shell.settingsRefreshed
+    onRefreshed: (owner, review) => {
+      shell.settingsRefreshed(owner, review);
+      if (sessionIdentity.isCurrent(owner) && review.kind === 'settings') titleDetail.invalidateConfiguration(review.scope);
+    }
   });
   const features = [bulk, suggestion, titleDetail, copyCreation, copyDetail, detailHost, polarisLookup,
     operations, titleQueue, copyQueue, profile, settings, analytics];

@@ -75,5 +75,60 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
     assert.equal(mutations, 0); assert.equal(lookups, 0);
     live = false; editor.dispose(); drafts.dispose();
   });
-  console.log('Title command outcomes, actor replacement and editor Revert/disposal ownership checks passed');
+  for (const pendingRefresh of [false, true]) {
+    await fixture(async ({ load, get }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createDetailHost } = await load('detail-host');
+      const { createTitleDetailController } = await load('title-detail');
+      const session = createSessionIdentity(); session.accept(actorA);
+      const host = createDetailHost({ root: get('#request-dialog') });
+      let generation = 0, revision = 'A', releaseConfiguration;
+      const configurationReads = new Map();
+      const controller = createTitleDetailController({ host, sessionIdentity: session,
+        polarisLookup: { close() {}, invalidate() {} }, copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
+        announce() {}, beforeOpen: () => ++generation, isNavigationCurrent: ticket => ticket === generation,
+        getNavigationGeneration: () => generation, getScope: () => 'all', onAlign: async () => true, onOpened() {},
+        beforeClose: () => true, onClosed() {}, getFocusReturn: () => null, refreshQueue: async () => true,
+        queueSequence: () => 1, rememberOpened() {}, forgetUnavailable() {}, onReceipt() {}, clearReceipt() {},
+        request: async path => {
+          if (path.startsWith('/api/asap/config?')) {
+            const key = new URL(path, 'https://localhost').searchParams.get('libraryOrgId');
+            const count = (configurationReads.get(key) || 0) + 1; configurationReads.set(key, count);
+            if (pendingRefresh && count === 1) return new Promise(resolve => { releaseConfiguration = resolve; });
+            return { availableFormats: ['book'], formatLabels: { book: `Configuration ${revision}` } };
+          }
+          if (path.includes('/title-requests/')) return { ...snapshot, id: path.includes('/71?') ? '71' : snapshot.id,
+            libraryOrgId: path.includes('/71?') ? 3 : 2 };
+          return {};
+        } });
+      try {
+        if (pendingRefresh) {
+          const opening = controller.open(snapshot.id);
+          await new Promise(resolve => setImmediate(resolve));
+          assert.ok(releaseConfiguration);
+          revision = 'B'; controller.invalidateConfiguration('system');
+          releaseConfiguration({ availableFormats: ['book'], formatLabels: { book: 'Stale configuration A' } });
+          await opening;
+          assert.equal(configurationReads.get('2'), 2, 'invalidated in-flight configuration must be refetched');
+          assert.match(get('[aria-label="Format"]').textContent, /Configuration B/);
+          await controller.open(snapshot.id);
+          assert.equal(configurationReads.get('2'), 2, 'stale completion cannot repopulate the cache');
+        } else {
+          await controller.open(snapshot.id); await controller.open('71');
+          revision = 'B'; controller.invalidateConfiguration('2');
+          await controller.open('71');
+          assert.equal(configurationReads.get('3'), 1, 'library invalidation preserves unrelated cached configuration');
+          assert.match(get('[aria-label="Format"]').textContent, /Configuration A/);
+          await controller.open(snapshot.id);
+          assert.equal(configurationReads.get('2'), 2);
+          assert.match(get('[aria-label="Format"]').textContent, /Configuration B/);
+          controller.invalidateConfiguration('system');
+          await controller.open('71'); await controller.open(snapshot.id);
+          assert.equal(configurationReads.get('3'), 2);
+          assert.equal(configurationReads.get('2'), 3);
+        }
+      } finally { controller.dispose(); host.dispose(); }
+    });
+  }
+  console.log('Title command outcomes, actor replacement, scoped configuration invalidation and editor Revert/disposal checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

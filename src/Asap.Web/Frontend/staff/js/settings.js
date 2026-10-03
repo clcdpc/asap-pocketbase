@@ -418,7 +418,7 @@ export function createSettingsController({
 
   const domainEditors = createSettingsDomainEditors({
     root,
-    onChange: updateDirtyState,
+    onChange: draftChanged,
     canRemoveTemplate: template => {
       const id = stringValue(template.id);
       const savedReference = state.savedRejectionTemplateId;
@@ -695,6 +695,8 @@ export function createSettingsController({
     dom.reset.hidden = isSystem();
     dom.reset.disabled = state.awaitingReload || Boolean(state.pendingMutation);
   }
+
+  function draftChanged() { drafts.touch(); updateDirtyState(); }
 
   function rawSection(section) {
     const library = state.data?.stored?.libraryOverride;
@@ -2020,8 +2022,8 @@ export function createSettingsController({
     if (disposed || state.bound) return;
     state.bound = true;
     listen(dom.form, 'submit', saveSettings);
-    listen(dom.form, 'input', updateDirtyState);
-    listen(dom.form, 'change', updateDirtyState);
+    listen(dom.form, 'input', draftChanged);
+    listen(dom.form, 'change', draftChanged);
     const templatesPanel = document.getElementById('settings-templates');
     for (const eventName of ['focusin', 'select', 'keyup', 'mouseup']) {
       listen(templatesPanel, eventName, event => rememberTemplateSelection(event.target));
@@ -2047,7 +2049,7 @@ export function createSettingsController({
       dom.discardLogoDraft.hidden = true;
       dom.brandingStatus.textContent = 'Unsaved image selection removed.';
       renderBrandingPreview();
-      updateDirtyState();
+      draftChanged();
     });
     listen(document.getElementById('branding-alt'), 'input', () => renderBrandingPreview(Boolean(logoDraftUrl)));
     for (const button of dom.nav) {
@@ -2186,8 +2188,7 @@ export function createSettingsController({
     hasPendingMutation: () => Boolean(state.pendingMutation),
     hasUnconfirmedOutcome: () => state.outcomeUncertain,
     inspectDeparture: () => ({ dirty: isDirty(), blocked: Boolean(state.pendingMutation || state.outcomeUncertain),
-      stamp: JSON.stringify([...dom.form.querySelectorAll('input, select, textarea')]
-        .map(control => [control.name || control.id, control.value, control.checked])),
+      stamp: drafts.stamp(),
       message: state.outcomeUncertain
         ? 'Reload current settings to verify the uncertain change before navigating away.'
         : 'Wait for the settings change to finish before navigating away.',

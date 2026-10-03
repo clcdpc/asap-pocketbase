@@ -146,10 +146,11 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
   return { announce, presentView, showWorkspace, showSignedOut, recordReceipt, clearReceipt, settingsRefreshed, queueRefreshed,
     rememberOpened, forgetUnavailable, renderRecent, refreshReadiness,
     isPresentationOwner,
-    signOutFailed(owner) {
+    signOutFailed(owner, message = 'Sign out did not complete. Please try again.') {
       if (disposed || !isPresentationOwner(owner)) return;
-      dom.message.textContent = 'Sign out did not complete. Please try again.';
-      announce(dom.message.textContent, 'error');
+      const retained = dom.workspace.hidden && dom.message.textContent !== message ? dom.message.textContent : '';
+      dom.message.textContent = [message, retained].filter(Boolean).join(' ');
+      announce(message, 'error');
     },
     contextChanged(next, previous) { if (readinessScope(next) !== readinessScope(previous)) void refreshReadiness(); },
     dispose() { if (disposed) return; disposed = true; events.abort(); reads.begin('readiness').abort(); }

@@ -219,6 +219,37 @@ async function flush() {
     assert.ok(!container.textContent.includes('Stale auth response'));
     assert.ok(requests.some(item => new URL(item.url, dom.window.location.href).searchParams.get('scope') === '2'));
     assert.ok(requests.some(item => new URL(item.url, dom.window.location.href).searchParams.get('range') === 'last90'));
+    analytics.signedOut(); analytics.activate();
+    const afterSignOut = analytics.refresh();
+    assert.equal(new URL(requests[requests.length - 1].url, dom.window.location.href).searchParams.get('scope'), null);
+    assert.equal(new URL(requests[requests.length - 1].url, dom.window.location.href).searchParams.get('range'), 'lastMonth');
+    pending[pending.length - 1].resolve(response(200, payload('all', 'lastMonth', 'New session defaults')));
+    await afterSignOut; analytics.dispose();
+
+    const { createSessionIdentity } = await import(pathToFileURL(path.join(temporary, 'staff/js/session-identity.js')).href);
+    const identity = createSessionIdentity();
+    const staff = { id: '20', tenantId: 'tenant', authenticationEmail: 'a@example.org', role: 'super_admin', organizationId: 1 };
+    const preferences = identity.accept(staff);
+    const replacement = createAnalyticsController({ root: container, sessionIdentity: identity });
+    replacement.setStaff(preferences); replacement.activate();
+    const selectedSession = replacement.refresh();
+    pending[pending.length - 1].resolve(response(200, payload('2', 'last90', 'Actor A selections')));
+    await selectedSession;
+    replacement.setStaff(identity.updatePreferences({ ...staff, version: 'v2' }, preferences));
+    const sameActor = replacement.refresh();
+    assert.equal(new URL(requests[requests.length - 1].url, dom.window.location.href).searchParams.get('range'), 'last90');
+    assert.equal(new URL(requests[requests.length - 1].url, dom.window.location.href).searchParams.get('scope'), '2');
+    replacement.setStaff(identity.accept({ ...staff, id: '21', authenticationEmail: 'b@example.org' }));
+    const newActor = replacement.refresh();
+    assert.equal(new URL(requests[requests.length - 1].url, dom.window.location.href).searchParams.get('range'), 'lastMonth');
+    assert.equal(new URL(requests[requests.length - 1].url, dom.window.location.href).searchParams.get('scope'), null);
+    pending[pending.length - 1].resolve(response(200, payload('all', 'lastMonth', 'Actor B defaults')));
+    await newActor;
+    pending[pending.length - 2].resolve(response(200, payload('2', 'last90', 'Stale actor A')));
+    await sameActor;
+    assert.match(container.textContent, /Actor B defaults/);
+    assert.doesNotMatch(container.textContent, /Stale actor A/);
+    replacement.dispose();
     console.log('Staff Analytics stale scope/range/auth reset regression checks passed');
   } finally {
     dom?.window.close();

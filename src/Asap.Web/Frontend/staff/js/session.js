@@ -43,9 +43,32 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
       attempt.outcome = 'committed';
       if (!disposed && shell.isPresentationOwner(attempt.owner)) lose('You are signed out.');
     } catch (error) {
-      attempt.outcome = !error.status || isAbortError(error) ? 'uncertain' : 'rejected';
-      if (!disposed && error.status !== 401) shell.signOutFailed(attempt.owner);
+      attempt.outcome = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error) ? 'uncertain' : 'rejected';
+      if (attempt.outcome === 'uncertain') await reviewSignOut(attempt);
+      else if (!disposed && error.status !== 401) shell.signOutFailed(attempt.owner);
     } finally { attempt.pending = false; }
+  }
+  async function reviewSignOut(attempt) {
+    const owns = () => !disposed && signOutAttempt === attempt &&
+      (attempt.owner ? identity.isCurrent(attempt.owner) : shell.isPresentationOwner(null));
+    if (!owns()) return;
+    const load = reads.begin('session');
+    const unconfirmed = 'The Sign out result could not be confirmed. Sign in again to establish your staff session.';
+    const revoke = () => { lose(unconfirmed); shell.signOutFailed(attempt.owner, unconfirmed); };
+    try {
+      const session = await sessionRequest({ signal: load.signal });
+      if (!load.isCurrent() || !owns()) return;
+      if (session.authenticated === false) { attempt.outcome = 'committed'; lose('You are signed out.'); return; }
+      if (session.authenticated === true && session.accessAllowed === false) { accessUnavailable(); return; }
+      if (session.authenticated === true && session.accessAllowed === true && session.staff) {
+        if (!updatePreferences(session.staff, attempt.owner)) return;
+        shell.signOutFailed(attempt.owner, 'Sign out was not confirmed. Your staff session is still active. Please try again.');
+        return;
+      }
+      revoke();
+    } catch (error) {
+      if (load.isCurrent() && owns()) revoke();
+    } finally { reads.finish('session', load.token); }
   }
   function updatePreferences(staff, owner) {
     if (disposed) return false;

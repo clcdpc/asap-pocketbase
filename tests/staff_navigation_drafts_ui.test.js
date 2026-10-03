@@ -1496,6 +1496,186 @@ test('route validation retains its source and rechecks a draft created while tar
     assert.equal(requestMutations(ui).length, 0);
   }));
 
+for (const owner of ['request editor', 'Staff Suggestion']) {
+  test(`programmatic Polaris changes to an already-dirty ${owner} require fresh navigation consent`, () =>
+    fixture('?stage=suggestion&scope=2', async ui => {
+      const isRequest = owner === 'request editor';
+      if (isRequest) await ui.open();
+      else {
+        const scope = ui.get('#library-scope');
+        scope.value = '3'; scope.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+        await until(() => ui.params().get('scope') === '3', 'source library selected');
+        ui.get('#new-suggestion').click();
+        const servicing = ui.get('[aria-label="Servicing library"]');
+        servicing.value = '3'; servicing.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+        ui.edit('[aria-label="Patron barcode or name"]', '20000000000001');
+        ui.get('#staff-suggestion-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+        await until(() => ui.get('.staff-suggestion-fields'), 'suggestion form ready');
+      }
+      const titleSelector = isRequest ? '.edit-form input' : '.staff-suggestion-fields input[maxlength="500"]';
+      ui.edit(titleSelector, 'Already dirty');
+      const accepted = ui.dom.window.location.href;
+      let validateScope;
+      const selected = { bibId: 9002, title: 'New Polaris title', author: 'New author', identifier: '9780000000002' };
+      ui.setApi(({ pathname, init }) => {
+        if (pathname.endsWith('/organizations')) return new Promise(done => { validateScope = done; });
+        if (pathname.endsWith('/bib-lookup')) return response(200,
+          JSON.parse(init.body).mode === 'bib' ? selected : { results: [selected], totalMatches: 1 });
+      });
+      ui.dom.window.confirm = message => { ui.confirms.push(message); return ui.confirms.length === 1; };
+      ui.dom.window.history.back();
+      await until(() => validateScope, 'route validation pending after first consent');
+      assert.equal(ui.confirms.length, 1);
+      const form = ui.get(isRequest ? '.edit-form' : '.staff-suggestion-fields');
+      [...form.querySelectorAll('button')].find(button => button.textContent.trim() === 'Search Polaris catalog').click();
+      ui.get('#polaris-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+      await until(() => ui.get('#polaris-results button'), 'real Polaris search result');
+      ui.get('#polaris-results button').click();
+      await until(() => !ui.get('#polaris-dialog').open, 'programmatic Polaris selection applied');
+      const newerTitle = ui.get(titleSelector).value;
+      assert.match(newerTitle, /New Polaris title/);
+      validateScope(response(200, { data: [{ id: 2, name: 'Library A', active: true }] }));
+      await until(() => ui.dom.window.location.href === accepted, 'declined fresh consent restores source history');
+      assert.equal(ui.confirms.length, 2, 'first consent cannot authorize discarding newer programmatic values');
+      assert.equal(ui.get(isRequest ? '#request-dialog' : '#staff-suggestion-dialog').open, true);
+      assert.equal(ui.get(titleSelector).value, newerTitle);
+      assert.equal(protectedUnload(ui), true);
+      assert.ok(!ui.calls.some(call => /\/(action|assign|sign-out)$/.test(call.url)));
+      assert.ok(!ui.calls.some(call => call.url.endsWith('/suggestions')));
+    }));
+}
+
+test('Analytics view round trip preserves scope/range and rejects the prior activation response', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    const pending = [];
+    const analyticsData = (scope, range, label) => ({
+      scope: { mode: scope === 'all' ? 'all' : 'library', libraryOrgId: scope === 'all' ? null : Number(scope), label, superAdmin: true },
+      dateRange: { key: range, start: '2026-09-01', end: '2026-09-30' },
+      availableLibraries: [{ orgId: 2, name: 'Library A' }], summary: {}, stageCounts: {},
+      aging: {}, exceptions: {}, closedReasons: []
+    });
+    ui.setApi(({ pathname, parsed, init }) => pathname.endsWith('/analytics')
+      ? new Promise(resolve => pending.push({ parsed, init, resolve })) : undefined);
+    ui.get('[data-view="analytics"]').click();
+    await until(() => pending.length === 1, 'initial Analytics request');
+    pending[0].resolve(response(200, analyticsData('all', 'lastMonth', 'All libraries')));
+    await until(() => ui.get('#analytics-scope'), 'Analytics controls');
+    ui.get('#analytics-scope').value = '2';
+    ui.get('#analytics-scope').dispatchEvent(new ui.dom.window.Event('change'));
+    await until(() => pending.length === 2, 'library-scoped request');
+    pending[1].resolve(response(200, analyticsData('2', 'lastMonth', 'Library A')));
+    await until(() => ui.get('#analytics-date-range'), 'scoped controls');
+    ui.get('#analytics-date-range').value = 'last90';
+    ui.get('#analytics-date-range').dispatchEvent(new ui.dom.window.Event('change'));
+    await until(() => pending.length === 3, 'selected range request');
+    ui.get('[data-view="profile"]').click();
+    assert.equal(pending[2].init.signal.aborted, true, 'leaving aborts visible reads');
+    ui.get('[data-view="analytics"]').click();
+    await until(() => pending.length === 4, 'first reactivated request');
+    assert.equal(pending[3].parsed.searchParams.get('scope'), '2');
+    assert.equal(pending[3].parsed.searchParams.get('range'), 'last90');
+    pending[3].resolve(response(200, analyticsData('2', 'last90', 'Current activation')));
+    await until(() => ui.get('#analytics-scope'), 'reactivated controls');
+    assert.equal(ui.get('#analytics-scope').value, '2');
+    assert.equal(ui.get('#analytics-date-range').value, 'last90');
+    const focused = document.activeElement;
+    pending[2].resolve(response(200, analyticsData('all', 'lastMonth', 'Stale activation')));
+    await settle();
+    assert.match(ui.get('#analytics-container').textContent, /Current activation/);
+    assert.doesNotMatch(ui.get('#analytics-container').textContent, /Stale activation/);
+    assert.equal(document.activeElement, focused);
+  }));
+
+for (const settingsScope of ['2', 'system']) {
+  test(`authoritative ${settingsScope} Settings configuration refresh invalidates cached Title form configuration`, () =>
+    fixture('?stage=suggestion&scope=2', async ui => {
+      let configurationReads = 0;
+      ui.setApi(({ pathname }) => {
+        if (pathname === '/api/asap/config') {
+          configurationReads++;
+          return response(200, { availableFormats: ['book'], formatLabels: { book: configurationReads === 1 ? 'Configuration A' : 'Configuration B' } });
+        }
+      });
+      await ui.open();
+      assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration A/);
+      ui.get('#close-request').click();
+      ui.dom.window.history.pushState({}, '', `?stage=settings&settingsScope=${settingsScope}`);
+      ui.dom.window.dispatchEvent(new ui.dom.window.PopStateEvent('popstate'));
+      await until(() => !ui.get('#settings-view').hidden && !ui.get('#settings-form').hidden, 'authoritative configuration refresh');
+      ui.get('[data-view="queue"]').click();
+      await ui.open();
+      assert.equal(configurationReads, 2, 'reopen fetches fresh public form configuration');
+      assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration B/);
+    }));
+}
+
+test('staff roster review preserves the cached Title configuration', () =>
+  fixture('?stage=settings&settingsScope=2', async ui => {
+    let configurationReads = 0, rosterReads = 0;
+    ui.setApi(({ pathname }) => {
+      if (pathname === '/api/asap/config') {
+        configurationReads++;
+        return response(200, { availableFormats: ['book'], formatLabels: { book: 'Cached configuration' } });
+      }
+      if (pathname.endsWith('/users')) { rosterReads++; return response(200, { data: [] }); }
+      if (pathname.endsWith('/audit')) return response(200, { data: [] });
+    });
+    ui.get('[data-view="queue"]').click(); await settle(); await ui.open();
+    ui.get('#close-request').click(); await settle();
+    ui.get('[data-view="settings"]').click(); await settle();
+    ui.get('[data-settings-panel="staff"]').click();
+    await until(() => rosterReads === 1 && /Staff access loaded/.test(ui.get('#staff-access-status').textContent), 'authoritative roster reviewed');
+    ui.get('[data-view="queue"]').click(); await settle();
+    await ui.open();
+    assert.equal(configurationReads, 1, 'staff access review does not invalidate public form configuration');
+    assert.match(ui.get('[aria-label="Format"]').textContent, /Cached configuration/);
+  }));
+
+test('programmatic Settings domain changes advance navigation consent without dirtying baseline population', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    ui.get('[data-view="settings"]').click();
+    await until(() => !ui.get('#settings-form').hidden, 'clean Settings baseline');
+    ui.get('[data-settings-panel="patron"]').click();
+    assert.equal(protectedUnload(ui), false);
+    ui.edit('#patron-login-note', 'Already dirty Settings');
+    const accepted = ui.dom.window.location.href;
+    let validateScope;
+    ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
+      ? new Promise(resolve => { validateScope = resolve; }) : undefined);
+    ui.dom.window.confirm = message => { ui.confirms.push(message); return ui.confirms.length === 1; };
+    ui.dom.window.history.go(-2);
+    await until(() => validateScope, 'route validation pending after Settings consent');
+    ui.get('#add-publication-option').click();
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', active: true }] }));
+    await until(() => ui.dom.window.location.href === accepted, 'new domain value retains the Settings source');
+    assert.equal(ui.confirms.length, 2);
+    assert.equal(ui.get('#patron-login-note').value, 'Already dirty Settings');
+    assert.equal(protectedUnload(ui), true);
+  }));
+
+for (const review of ['unauthenticated', 'active', 'unavailable']) {
+  test(`lost Sign Out response uses the HTTP session boundary when review is ${review}`, () =>
+    fixture('?stage=suggestion&scope=2', async ui => {
+      let reviewing = false, reviewReads = 0;
+      ui.setApi(({ pathname }) => {
+        if (pathname.endsWith('/sign-out')) { reviewing = true; throw new Error('Response lost after cookie clear'); }
+        if (reviewing && pathname.endsWith('/session')) {
+          reviewReads++;
+          if (review === 'unavailable') throw new Error('Session unavailable');
+          return response(200, review === 'unauthenticated' ? { authenticated: false, accessAllowed: false }
+            : { authenticated: true, accessAllowed: true, staff: ui.readStaff(), antiforgeryToken: 'fresh-token' });
+        }
+      });
+      ui.get('#sign-out').click();
+      await until(() => reviewReads && (review === 'active' ? /session is still active/.test(ui.get('#app-status').textContent)
+        : ui.get('#workspace').hidden), 'authoritative Sign Out review completed');
+      assert.equal(ui.get('#workspace').hidden, review !== 'active');
+      if (review === 'unavailable') assert.match(ui.get('#signed-out-message').textContent, /Sign out result could not be confirmed/i);
+      if (review === 'unauthenticated') assert.match(ui.get('#signed-out-message').textContent, /session ended|signed out/i);
+      assert.doesNotMatch(ui.get('#signed-out-message').textContent, /did not complete/);
+    }, { staff: { tenantId: 'audit-tenant', authenticationEmail: 'staff@example.org' } }));
+}
+
 test('same-actor Profile revision preserves an Operations attempt started before preference refresh', () =>
   fixture('?stage=operations', async ui => {
     let completeOperation;

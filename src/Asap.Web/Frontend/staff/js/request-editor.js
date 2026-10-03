@@ -99,6 +99,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
             detail: verifiedDetail
           };
           editorDirty = true;
+          interactionScope.touch();
           updateResearchLinks();
           showSelectedContext();
           updatePreview();
