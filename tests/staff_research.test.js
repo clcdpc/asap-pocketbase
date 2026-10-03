@@ -13,6 +13,7 @@ const { JSDOM } = require('jsdom');
       path.join(temporary, 'research.js'));
     fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}');
     global.document = dom.window.document;
+    global.window = dom.window;
     const { applyPolarisResultToControls, createPolarisLookup, mergeCatalogValue, selectedStaffBibId, positivePolarisId,
       researchUrl, renderResearchLinks } = await import(pathToFileURL(path.join(temporary, 'research.js')).href);
     assert.equal(positivePolarisId('09001'), 9001);
@@ -306,6 +307,7 @@ const { JSDOM } = require('jsdom');
   } finally {
     dom.window.close();
     delete global.document;
+    delete global.window;
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

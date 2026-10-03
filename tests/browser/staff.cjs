@@ -323,7 +323,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#request-dialog[open]').waitFor();
     assert.deepEqual(errors, [], `Request detail raised a browser error: ${errors.join('; ')}`);
     assert.equal(await page.evaluate(() => document.activeElement.id), 'close-request');
-    assert.match(page.url(), new RegExp(`[?&]request=${args.primaryRequestId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
+    assert.equal(new URL(page.url()).searchParams.get('request'), args.primaryRequestId);
     assert.equal(await page.locator('#library-scope').inputValue(), 'all');
     const format = page.getByLabel('Format', { exact: true });
     const publication = page.getByLabel('Publication timing', { exact: true });
@@ -2554,7 +2554,7 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     assert.equal(suggestionPosts, 1, 'Double submit must issue one staff suggestion request');
     await desktopPage.locator('#staff-suggestion-dialog').waitFor({ state: 'hidden' });
     await desktopPage.locator('#request-dialog[open]').waitFor();
-    assert.match(desktopPage.url(), /[?&]request=[0-9]+$/);
+    assert.match(new URL(desktopPage.url()).searchParams.get('request') || '', /^[1-9]\d*$/);
     assert.match(await desktopPage.locator('#request-dialog-title').textContent(), /Catalog title 9001/i);
     await scan(desktopPage, axeSource, args.artifactRoot, report, 'desktop', 'staff-suggestion-created');
     assert.deepEqual(desktopErrors, [], `Staff suggestion browser flow raised an error: ${desktopErrors.join('; ')}`);

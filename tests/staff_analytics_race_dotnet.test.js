@@ -64,9 +64,12 @@ async function flush() {
       throw new Error(`Unexpected request ${request.url}`);
     };
 
-    const analytics = await import(pathToFileURL(path.join(temporary, 'staff/js/analytics.js')).href);
+    const { createAnalyticsController } = await import(pathToFileURL(path.join(temporary, 'staff/js/analytics.js')).href);
     const container = document.getElementById('analytics-container');
-    const initial = analytics.loadAnalytics(container);
+    const owner = {};
+    const analytics = createAnalyticsController({ root: container, sessionIdentity: { preferences: () => owner, isCurrent: captured => captured === owner } });
+    analytics.activate();
+    const initial = analytics.refresh();
     assert.strictEqual(pending.length, 1);
     pending[0].resolve(response(200, payload('all', 'lastMonth', 'All libraries')));
     await initial;
@@ -77,7 +80,7 @@ async function flush() {
     scope.dispatchEvent(new dom.window.Event('change'));
     await flush();
     assert.strictEqual(pending.length, 2);
-    const scopeRace = analytics.loadAnalytics(container);
+    const scopeRace = analytics.refresh();
     await flush();
     assert.strictEqual(pending.length, 3);
     pending[1].resolve(response(200, payload('all', 'lastMonth', 'Stale all-libraries scope response')));
@@ -94,7 +97,7 @@ async function flush() {
     range.dispatchEvent(new dom.window.Event('change'));
     await flush();
     assert.strictEqual(pending.length, 4);
-    const rangeRace = analytics.loadAnalytics(container);
+    const rangeRace = analytics.refresh();
     await flush();
     assert.strictEqual(pending.length, 5);
     pending[3].resolve(response(200, payload('2', 'lastMonth', 'Stale last-month range response')));
@@ -106,7 +109,7 @@ async function flush() {
 
     const recoveryStart = requests.length;
     const recoveryPendingStart = pending.length;
-    const recovery = analytics.loadAnalytics(container);
+    const recovery = analytics.refresh();
     await flush();
     assert.strictEqual(pending.length, recoveryPendingStart + 1);
     pending[recoveryPendingStart].resolve(response(400, {
@@ -129,7 +132,7 @@ async function flush() {
     assert.ok(container.querySelector('#analytics-scope').options.length >= 3);
     assert.match(container.textContent, /All libraries after recovery/);
 
-    const restore = analytics.loadAnalytics(container);
+    const restore = analytics.refresh();
     await flush();
     const restoreIndex = pending.length - 1;
     pending[restoreIndex].resolve(response(200, payload('2', 'last90', 'Library Two restored')));
@@ -139,7 +142,7 @@ async function flush() {
 
     const noLoopStart = requests.length;
     const noLoopPendingStart = pending.length;
-    const retryFailure = analytics.loadAnalytics(container);
+    const retryFailure = analytics.refresh();
     await flush();
     assert.strictEqual(pending.length, noLoopPendingStart + 1);
     pending[noLoopPendingStart].resolve(response(400, {
@@ -160,7 +163,7 @@ async function flush() {
 
     const arbitrary400Start = requests.length;
     const arbitrary400PendingStart = pending.length;
-    const arbitrary400 = analytics.loadAnalytics(container);
+    const arbitrary400 = analytics.refresh();
     await flush();
     pending[arbitrary400PendingStart].resolve(response(400, {
       code: 'analytics_unavailable',
@@ -171,7 +174,7 @@ async function flush() {
     assert.strictEqual(requests.length - arbitrary400Start, 1, 'other 400 responses must not recover');
     assert.match(container.textContent, /Analytics is unavailable/);
 
-    const restoreForRace = analytics.loadAnalytics(container);
+    const restoreForRace = analytics.refresh();
     await flush();
     pending[pending.length - 1].resolve(response(200, payload('2', 'last90', 'Library Two restored for race')));
     await restoreForRace;
@@ -180,7 +183,7 @@ async function flush() {
 
     const staleRecoveryStart = requests.length;
     const staleRecoveryPendingStart = pending.length;
-    const staleRecovery = analytics.loadAnalytics(container);
+    const staleRecovery = analytics.refresh();
     await flush();
     pending[staleRecoveryPendingStart].resolve(response(400, {
       code: 'invalid_scope',
@@ -188,7 +191,7 @@ async function flush() {
     }));
     await flush();
     const recoveryIndex = pending.length - 1;
-    const newerLoad = analytics.loadAnalytics(container);
+    const newerLoad = analytics.refresh();
     await flush();
     const newerPendingIndex = pending.length - 1;
     assert.deepStrictEqual(
@@ -205,10 +208,10 @@ async function flush() {
 
     const staleIndex = requests.length;
     const stalePendingIndex = pending.length;
-    const stale = analytics.loadAnalytics(container);
+    const stale = analytics.refresh();
     await flush();
     assert.strictEqual(pending.length, stalePendingIndex + 1);
-    analytics.resetAnalytics();
+    analytics.deactivate();
     pending[stalePendingIndex].resolve(response(200, payload('all', 'lastMonth', 'Stale auth response')));
     await stale;
     await flush();

@@ -18,7 +18,7 @@ async function until(predicate, message) {
 
 async function fixture(route, journey, options = {}) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-navigation-drafts-'));
-  let dom;
+  let dom, app;
   try {
     fs.cpSync(path.join(frontend, 'staff'), path.join(temporary, 'staff'), { recursive: true });
     fs.cpSync(path.join(frontend, 'shared'), path.join(temporary, 'shared'), { recursive: true });
@@ -130,7 +130,8 @@ async function fixture(route, journey, options = {}) {
     };
     dom.window.confirm = message => { confirms.push(message); return discard; };
     const module = await import(pathToFileURL(path.join(temporary, 'staff/js/workflow.js')).href);
-    await module.createWorkflowApp().start();
+    app = module.createWorkflowApp();
+    await app.start();
     await settle();
     const get = selector => document.querySelector(selector);
     const edit = (selector, value) => { const control = get(selector); control.value = value;
@@ -149,6 +150,7 @@ async function fixture(route, journey, options = {}) {
       open: async () => { await until(() => get('.grid-open'), 'queue opener'); get('.grid-open').click();
         await until(() => get('#request-dialog').open, 'detail opened'); } });
   } finally {
+    app?.dispose();
     if (dom && options.storage) {
       options.storage.clear();
       for (let index = 0; index < dom.window.sessionStorage.length; index += 1) {
@@ -163,6 +165,70 @@ async function fixture(route, journey, options = {}) {
 
 const cases = [];
 const test = (name, body) => cases.push({ name, body });
+test('committed title status synchronizes detail queue and accepted URL', () => fixture(`?stage=suggestion&scope=2&request=${id}&marker=keep#anchor`, async ui => {
+  await until(() => ui.get('#request-dialog').open, 'detail open');
+  ui.setOperation(() => response(200, { committed: true,
+    request: { ...ui.readRequest(), version: 'v2', status: 'pending_hold' }, finalStatus: 'pending_hold' }));
+  ui.allowDiscard();
+  [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own').click();
+  await until(() => ui.get('.detail-meta .status-badge').textContent.toLowerCase() === 'pending hold', 'committed detail status');
+  assert.equal(ui.params().get('stage'), 'pending_hold');
+  assert.equal(ui.get('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
+  assert.equal(ui.params().get('request'), id);
+  assert.equal(ui.params().get('marker'), 'keep');
+  assert.equal(ui.dom.window.location.hash, '#anchor');
+}));
+test('committed status during target validation retains the accepted detail entry', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    await ui.open();
+    let validateScope;
+    ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
+      ? new Promise(done => { validateScope = done; }) : undefined);
+    ui.dom.window.history.back();
+    await until(() => validateScope, 'target validation pending');
+    ui.setOperation(() => response(200, { committed: true,
+      request: { ...ui.readRequest(), version: 'v2', status: 'pending_hold' }, finalStatus: 'pending_hold' }));
+    ui.allowDiscard();
+    [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own').click();
+    await until(() => ui.get('.detail-meta .status-badge').textContent === 'Pending hold', 'committed source detail');
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', active: true }] }));
+    await until(() => ui.params().get('request') === id && ui.params().get('stage') === 'pending_hold', 'updated accepted source restored');
+    assert.equal(ui.get('#request-dialog').open, true);
+    assert.equal(ui.get('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
+  }));
+test('authoritative deep-link title stage follows current server detail', () =>
+  fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+    await until(() => ui.get('#request-dialog').open, 'authoritative detail opened');
+    assert.equal(ui.params().get('stage'), 'pending_hold');
+    assert.equal(ui.get('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
+  }, { status: 'pending_hold' }));
+test('committed copy status synchronizes detail tab and accepted URL', () =>
+  fixture('?stage=additional_copies&scope=2&request=71', async ui => {
+    await until(() => ui.get('#request-dialog').open, 'copy detail open');
+    ui.setOperation(() => response(200, { committed: true,
+      request: { ...ui.readCopyRequest(), version: 'copy-v2', status: 'closed' }, finalStatus: 'closed' }));
+    ui.allowDiscard();
+    [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Close task').click();
+    await until(() => ui.get('.detail-meta .status-badge').textContent === 'Closed', 'committed copy status');
+    assert.equal(ui.params().get('copyStatus'), 'closed');
+    assert.equal(ui.params().get('request'), '71');
+    assert.equal(ui.get('[data-copy-status="closed"]').getAttribute('aria-selected'), 'true');
+  }, { copyRequest: { id: '71' } }));
+for (const [stage, view, refresh, endpoint, scopeControl] of [
+  ['suggestion', 'queue', '#refresh-queue', '/title-requests', '#library-scope'],
+  ['additional_copies', 'additional-copies', '#refresh-additional-copies', '/additional-copies', '#additional-copy-library-scope']
+]) {
+  test(`authoritative ${view} scope synchronizes accepted URL without losing request identity`, () =>
+    fixture(`?stage=${stage}&scope=2&marker=keep#anchor`, async ui => {
+      ui.setApi(({ pathname }) => pathname.endsWith(endpoint) ? response(200, { scope: 'all', status: 'open',
+        organizations: [{ id: 2, name: 'Library A', active: true }], availableLibraries: [{ id: 2, name: 'Library A', active: true }], items: [] }) : undefined);
+      ui.get(refresh).click();
+      await until(() => ui.get(scopeControl).value === 'all', 'accepted authoritative scope');
+      assert.equal(ui.params().get('scope'), 'all');
+      assert.equal(ui.params().get('marker'), 'keep');
+      assert.equal(ui.dom.window.location.hash, '#anchor');
+    }));
+}
 for (const exit of ['close', 'escape', 'top-level', 'back', 'sign-out']) {
   test(`dirty request blocks ${exit}`, () => fixture('?stage=suggestion&scope=2', async ui => {
     await ui.open();
@@ -851,7 +917,10 @@ test('Additional Copy submission blocks departure; unresolved creation safely cl
     assert.equal(ui.get('#additional-copy-create-review').hidden, false);
     assert.match(ui.get('#additional-copy-create-review-summary').textContent, /BIB 9001/);
     const saved = JSON.parse(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)));
-    assert.deepEqual(saved, { libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' });
+    const { recordId, emailPurchaseReminder, ...source } = saved;
+    assert.deepEqual(source, { libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' });
+    assert.equal(emailPurchaseReminder, false);
+    assert.match(recordId, /^[0-9a-f-]{36}$/i);
   }, { staff: actorA, storage });
 });
 
@@ -1408,12 +1477,196 @@ test('bulk access loss from a concurrent read retains the pending ledger until D
   }, { status: 'closed', copyItems: [{ id: '71', type: 'additional_copy', status: 'closed', version: 'copy-v1',
     libraryOrgId: 2, libraryOrgName: 'Library A', title: 'Not attempted copy' }] }));
 
+test('route validation retains its source and rechecks a draft created while target scope loads', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    await ui.open();
+    const accepted = ui.dom.window.location.href;
+    let validateScope;
+    ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
+      ? new Promise(done => { validateScope = done; }) : undefined);
+    ui.dom.window.history.back();
+    await until(() => validateScope, 'target validation pending');
+    assert.equal(ui.get('#request-dialog').open, true, 'source is mounted until validation and final admission');
+    ui.edit('.edit-form input', 'New draft during target validation');
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', active: true }] }));
+    await until(() => ui.dom.window.location.href === accepted, 'rejected target restores accepted history entry');
+    assert.equal(ui.get('#request-dialog').open, true);
+    assert.equal(ui.get('.edit-form input').value, 'New draft during target validation');
+    assert.equal(ui.confirms.length, 1);
+    assert.equal(requestMutations(ui).length, 0);
+  }));
+
+test('same-actor Profile revision preserves an Operations attempt started before preference refresh', () =>
+  fixture('?stage=operations', async ui => {
+    let completeOperation;
+    ui.setApi(({ pathname, init }) => {
+      if (pathname.endsWith('/workflow/run-now')) return new Promise(done => { completeOperation = done; });
+      if (pathname.endsWith('/profile')) {
+        ui.setStaff({ version: 'actor-v2', weeklyActionSummaryEmail: 'updated@example.org' });
+        return response(200, { staff: ui.readStaff() });
+      }
+    });
+    ui.get('#run-workflow-now').click(); await until(() => completeOperation, 'operation pending');
+    ui.get('[data-view="profile"]').click(); await settle();
+    ui.edit('#weekly-email', 'updated@example.org'); submitProfile(ui);
+    await until(() => /Profile saved\./.test(ui.get('#app-status').textContent), 'preferences refreshed');
+    completeOperation(response(202, { code: 'queued' })); await settle();
+    assert.equal(ui.params().get('stage'), 'profile');
+    assert.equal(ui.get('#weekly-email').value, 'updated@example.org');
+    ui.get('[data-view="operations"]').click(); await settle();
+    assert.equal(ui.get('#run-workflow-now').disabled, false);
+    assert.equal(ui.dom.window.sessionStorage.getItem('asap.staff.operation..20'), null);
+  }, { staff: profileStaff }));
+
+// #353 pins current behavior before extraction. The two explicitly labelled
+// limitations below are improved by the owning draft/controller phases.
+test('characterization: declined editor Revert preserves both editor and inline draft', () =>
+  fixture(`?request=${id}`, async ui => {
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    ui.edit('.edit-form input', 'Editor draft');
+    actionButton('Revert changes', ui.get('.edit-form')).click();
+    assert.equal(ui.get('.edit-form input').value, 'Editor draft');
+    assert.equal(assignment.querySelector('select').value, '21');
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(protectedUnload(ui), true);
+  }));
+
+test('editor Revert preserves competing inline UI and its draft registration', () =>
+  fixture(`?request=${id}`, async ui => {
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    ui.edit('.edit-form input', 'Editor draft');
+    ui.allowDiscard(); actionButton('Revert changes', ui.get('.edit-form')).click();
+    assert.equal(assignment.isConnected, true);
+    assert.equal(ui.get('.edit-form input').value, 'Saved title');
+    assert.equal(protectedUnload(ui), true);
+    actionButton('Claim').click(); await settle();
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(assignment.querySelector('select').value, '21');
+    submitForm(ui, assignment); await until(() => !assignment.isConnected, 'retained inline draft submits');
+    assert.equal(requestMutations(ui).length, 1);
+  }));
+
+test('Additional Copy reminder owns a guarded draft and explicit Cancel lifetime', () =>
+  fixture(`?stage=pending_hold&request=${id}`, async ui => {
+    const opener = actionButton('Additional copy'); opener.click();
+    await until(() => ui.get('#additional-copy-create-dialog').open, 'copy preview');
+    ui.get('#additional-copy-reminder').checked = true;
+    ui.get('#additional-copy-reminder').dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+    assert.equal(protectedUnload(ui), true, 'changed reminder is an owned draft');
+    ui.get('#cancel-additional-copy').click();
+    assert.equal(ui.get('#additional-copy-create-dialog').open, false);
+    assert.equal(ui.get('#additional-copy-reminder').checked, false);
+    assert.equal(protectedUnload(ui), false, 'Cancel releases only the reminder registration');
+    assert.equal(document.activeElement, opener);
+    assert.equal(requestMutations(ui).length, 0);
+  }, { status: 'pending_hold' }));
+
+test('Cancel Additional Copy reminder preserves a competing parent editor draft', () =>
+  fixture(`?stage=pending_hold&request=${id}`, async ui => {
+    await openCopyPreview(ui);
+    ui.edit('.edit-form input', 'Parent draft');
+    ui.get('#additional-copy-reminder').checked = true;
+    ui.get('#cancel-additional-copy').click();
+    assert.equal(ui.get('.edit-form input').value, 'Parent draft');
+    assert.equal(protectedUnload(ui), true);
+    assert.equal(requestMutations(ui).length, 0);
+  }, { status: 'pending_hold' }));
+
+test('Additional Copy preview cannot attach a newer source version to a stale parent', () =>
+  fixture(`?stage=pending_hold&request=${id}`, async ui => {
+    ui.setApi(({ pathname, init }) => pathname.endsWith('/additional-copy') && init.method === 'GET'
+      ? response(200, { version: 'v2', bibid: 9001, openCount: 0 }) : undefined);
+    actionButton('Additional copy').click();
+    await until(() => /request changed.*Reload/i.test(ui.get('#app-status').textContent), 'preview detects invalidated parent');
+    assert.equal(ui.get('#additional-copy-create-dialog').open, false);
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), null);
+  }, { status: 'pending_hold', staff: actorA }));
+
+test('authoritative parent replacement disposes clean Copy child and its stale submit', () =>
+  fixture(`?stage=pending_hold&request=${id}`, async ui => {
+    await openCopyPreview(ui);
+    actionButton('Claim').click();
+    await until(() => !ui.get('#additional-copy-create-dialog').open, 'parent replacement disposes child');
+    assert.equal(protectedUnload(ui), false);
+    submitCopy(ui); await settle();
+    assert.equal(ui.calls.filter(call => call.init.method === 'POST' && call.url.endsWith('/additional-copy')).length, 0);
+  }, { status: 'pending_hold', staff: actorA }));
+
+test('characterization: definitive inline failure preserves values and competing registration', () =>
+  fixture(`?request=${id}`, async ui => {
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    ui.setOperation(() => response(400, { message: 'Assignment rejected' }));
+    submitForm(ui, assignment);
+    await until(() => /Assignment rejected/.test(ui.get('#app-status').textContent), 'definite failure');
+    assert.equal(assignment.querySelector('select').value, '21');
+    assert.equal(assignment.querySelector('select').disabled, false);
+    assert.equal(protectedUnload(ui), true);
+    actionButton('Claim').click(); await settle();
+    assert.equal(requestMutations(ui).length, 1);
+    assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+  }));
+
+test('characterization: clean open assignment is disposed on departure and cannot submit', () =>
+  fixture(`?request=${id}`, async ui => {
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.get('[data-view="profile"]').click(); await settle();
+    assert.equal(ui.confirms.length, 0);
+    assert.equal(assignment.isConnected, false);
+    submitForm(ui, assignment); await settle();
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(ui.get('#profile-view').hidden, false);
+  }));
+
+for (const view of ['additional-copies', 'settings']) {
+  test(`characterization: Recent Requests from ${view} converges on title route`, () =>
+    fixture('?stage=suggestion&scope=2', async ui => {
+      await ui.open(); ui.get('#close-request').click(); await settle();
+      ui.get(`[data-view="${view}"]`).click(); await settle();
+      ui.get('#recent-request-list button').click();
+      await until(() => ui.get('#request-dialog').open, 'recent detail');
+      assert.equal(ui.params().get('request'), id);
+      assert.equal(ui.params().get('stage'), 'suggestion');
+      assert.equal(ui.get('#queue-view').hidden, false);
+      assert.equal(ui.get('#additional-copy-view').hidden, true);
+      assert.equal(ui.get('#settings-view').hidden, true);
+    }, { staff: { ...actorA, authenticationEmail: 'staff@example.org' } }));
+}
+
+test('Suggestion lookup returning exactly to baseline releases its draft guard', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    ui.get('#new-suggestion').click();
+    ui.edit('input[aria-label="Patron barcode or name"]', 'Unsaved patron');
+    assert.equal(protectedUnload(ui), true);
+    ui.edit('input[aria-label="Patron barcode or name"]', '');
+    assert.equal(protectedUnload(ui), false);
+    ui.get('#close-staff-suggestion').click(); await settle();
+    assert.equal(ui.get('#staff-suggestion-dialog').open, false);
+    assert.equal(ui.confirms.length, 0);
+  }));
+
+for (const [parameter, value] of [['stage', 'new'], ['status', 'submitted']]) {
+  test(`legacy Title detail preserves the supported ${parameter}=${value} alias and unrelated URL context`, () =>
+    fixture(`?${parameter}=${value}&request=${id}&marker=legacy#details`, async ui => {
+      assert.equal(ui.params().get(parameter), value);
+      assert.equal(ui.params().get('marker'), 'legacy');
+      assert.equal(ui.dom.window.location.hash, '#details');
+      assert.equal(ui.get('#request-dialog').open, true);
+      assert.equal(ui.get('#queue-view').hidden, false);
+    }));
+}
+
 (async () => {
   let failed = 0;
-  for (const item of cases) {
+  const selected = cases.filter(item => !process.argv[2] || item.name.includes(process.argv[2]));
+  assert.ok(selected.length, 'the requested journey filter must discover tests');
+  for (const item of selected) {
     try { await item.body(); console.log(`PASS ${item.name}`); }
     catch (error) { failed += 1; console.error(`FAIL ${item.name}: ${error.message}`); }
   }
-  assert.equal(failed, 0, `${failed}/${cases.length} navigation/draft journeys failed`);
-  console.log(`${cases.length} staff navigation/draft journeys passed.`);
+  assert.equal(failed, 0, `${failed}/${selected.length} navigation/draft journeys failed`);
+  console.log(`${selected.length} staff navigation/draft journeys passed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
