@@ -92,7 +92,7 @@ Regression cases failed against the previous behavior, then passed with the
 fixes. Existing action journeys retain pending-command protection; reaching a
 different request after a committed stage change now explicitly selects that
 request's stage instead of assuming the old queue remains visible.
-The action fixture now disposes its application in `finally`; abandoned reads
+The action and navigation fixtures now dispose their applications in `finally`; abandoned reads
 and grids cannot survive into the next fixture's replacement browser globals.
 The focused run then completed without the late Grid.js errors observed before
 that fixture-lifetime correction.

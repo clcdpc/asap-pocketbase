@@ -18,7 +18,7 @@ async function until(predicate, message) {
 
 async function fixture(route, journey, options = {}) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-navigation-drafts-'));
-  let dom;
+  let dom, app;
   try {
     fs.cpSync(path.join(frontend, 'staff'), path.join(temporary, 'staff'), { recursive: true });
     fs.cpSync(path.join(frontend, 'shared'), path.join(temporary, 'shared'), { recursive: true });
@@ -130,7 +130,8 @@ async function fixture(route, journey, options = {}) {
     };
     dom.window.confirm = message => { confirms.push(message); return discard; };
     const module = await import(pathToFileURL(path.join(temporary, 'staff/js/workflow.js')).href);
-    await module.createWorkflowApp().start();
+    app = module.createWorkflowApp();
+    await app.start();
     await settle();
     const get = selector => document.querySelector(selector);
     const edit = (selector, value) => { const control = get(selector); control.value = value;
@@ -149,6 +150,7 @@ async function fixture(route, journey, options = {}) {
       open: async () => { await until(() => get('.grid-open'), 'queue opener'); get('.grid-open').click();
         await until(() => get('#request-dialog').open, 'detail opened'); } });
   } finally {
+    app?.dispose();
     if (dom && options.storage) {
       options.storage.clear();
       for (let index = 0; index < dom.window.sessionStorage.length; index += 1) {
