@@ -109,10 +109,28 @@ export function createRouter() {
   }
 
   function remember() { accepted = Object.freeze(staffHistorySnapshot()); }
+  function replaceAcceptedQueue(stage, context) {
+    const source = accepted || staffHistorySnapshot();
+    const route = parseStaffRoute(source.href);
+    const url = new URL(route.requestId
+      ? replaceRequestUrl(source.href, route.requestId, stage === 'additional_copies')
+      : replaceStageUrl(source.href, stage, context), source.href);
+    url.searchParams.set('stage', stage);
+    applyQueueContext(url, stage, context);
+    const current = window.history.state?.asapStaff, prior = source.state?.asapStaff;
+    if (current?.session === prior?.session && current?.index === prior?.index) {
+      writeHistory(historyPath(url), true, prior?.detailOrigin); remember();
+    } else {
+      // A traversal is still validating against this source. Update its accepted
+      // entry, then let rejection restore that entry without rewriting the target.
+      accepted = Object.freeze({ ...source, href: url.href });
+    }
+  }
   return {
     requested: () => parseStaffRoute(window.location.href),
     snapshot: () => accepted,
     remember,
+    replaceAcceptedQueue,
     busy: () => restoring || closing,
     reject() { if (accepted) restoring = restoreStaffHistory(accepted); },
     closeDetail(stage, context) {

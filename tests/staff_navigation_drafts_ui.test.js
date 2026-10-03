@@ -163,6 +163,70 @@ async function fixture(route, journey, options = {}) {
 
 const cases = [];
 const test = (name, body) => cases.push({ name, body });
+test('committed title status synchronizes detail queue and accepted URL', () => fixture(`?stage=suggestion&scope=2&request=${id}&marker=keep#anchor`, async ui => {
+  await until(() => ui.get('#request-dialog').open, 'detail open');
+  ui.setOperation(() => response(200, { committed: true,
+    request: { ...ui.readRequest(), version: 'v2', status: 'pending_hold' }, finalStatus: 'pending_hold' }));
+  ui.allowDiscard();
+  [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own').click();
+  await until(() => ui.get('.detail-meta .status-badge').textContent.toLowerCase() === 'pending hold', 'committed detail status');
+  assert.equal(ui.params().get('stage'), 'pending_hold');
+  assert.equal(ui.get('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
+  assert.equal(ui.params().get('request'), id);
+  assert.equal(ui.params().get('marker'), 'keep');
+  assert.equal(ui.dom.window.location.hash, '#anchor');
+}));
+test('committed status during target validation retains the accepted detail entry', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    await ui.open();
+    let validateScope;
+    ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
+      ? new Promise(done => { validateScope = done; }) : undefined);
+    ui.dom.window.history.back();
+    await until(() => validateScope, 'target validation pending');
+    ui.setOperation(() => response(200, { committed: true,
+      request: { ...ui.readRequest(), version: 'v2', status: 'pending_hold' }, finalStatus: 'pending_hold' }));
+    ui.allowDiscard();
+    [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own').click();
+    await until(() => ui.get('.detail-meta .status-badge').textContent === 'Pending hold', 'committed source detail');
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', active: true }] }));
+    await until(() => ui.params().get('request') === id && ui.params().get('stage') === 'pending_hold', 'updated accepted source restored');
+    assert.equal(ui.get('#request-dialog').open, true);
+    assert.equal(ui.get('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
+  }));
+test('authoritative deep-link title stage follows current server detail', () =>
+  fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+    await until(() => ui.get('#request-dialog').open, 'authoritative detail opened');
+    assert.equal(ui.params().get('stage'), 'pending_hold');
+    assert.equal(ui.get('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
+  }, { status: 'pending_hold' }));
+test('committed copy status synchronizes detail tab and accepted URL', () =>
+  fixture('?stage=additional_copies&scope=2&request=71', async ui => {
+    await until(() => ui.get('#request-dialog').open, 'copy detail open');
+    ui.setOperation(() => response(200, { committed: true,
+      request: { ...ui.readCopyRequest(), version: 'copy-v2', status: 'closed' }, finalStatus: 'closed' }));
+    ui.allowDiscard();
+    [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Close task').click();
+    await until(() => ui.get('.detail-meta .status-badge').textContent === 'Closed', 'committed copy status');
+    assert.equal(ui.params().get('copyStatus'), 'closed');
+    assert.equal(ui.params().get('request'), '71');
+    assert.equal(ui.get('[data-copy-status="closed"]').getAttribute('aria-selected'), 'true');
+  }, { copyRequest: { id: '71' } }));
+for (const [stage, view, refresh, endpoint, scopeControl] of [
+  ['suggestion', 'queue', '#refresh-queue', '/title-requests', '#library-scope'],
+  ['additional_copies', 'additional-copies', '#refresh-additional-copies', '/additional-copies', '#additional-copy-library-scope']
+]) {
+  test(`authoritative ${view} scope synchronizes accepted URL without losing request identity`, () =>
+    fixture(`?stage=${stage}&scope=2&marker=keep#anchor`, async ui => {
+      ui.setApi(({ pathname }) => pathname.endsWith(endpoint) ? response(200, { scope: 'all', status: 'open',
+        organizations: [{ id: 2, name: 'Library A', active: true }], availableLibraries: [{ id: 2, name: 'Library A', active: true }], items: [] }) : undefined);
+      ui.get(refresh).click();
+      await until(() => ui.get(scopeControl).value === 'all', 'accepted authoritative scope');
+      assert.equal(ui.params().get('scope'), 'all');
+      assert.equal(ui.params().get('marker'), 'keep');
+      assert.equal(ui.dom.window.location.hash, '#anchor');
+    }));
+}
 for (const exit of ['close', 'escape', 'top-level', 'back', 'sign-out']) {
   test(`dirty request blocks ${exit}`, () => fixture('?stage=suggestion&scope=2', async ui => {
     await ui.open();

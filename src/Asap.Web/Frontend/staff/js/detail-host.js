@@ -57,7 +57,7 @@ export function createDetailHost({ root }) {
     isOpen: () => root.open,
     requestClose: options => mounted?.onClose?.(options) ?? true,
     contains: node => root.contains(node),
-    focusClose: () => { if (!disposed) close.focus(); },
+    focusClose: () => { if (!disposed && mounted && root.open && close.isConnected) close.focus(); },
     cancelFocusReturn,
     acquire(owner) {
       if (disposed) throw new Error('The detail host is disposed.');
@@ -67,7 +67,7 @@ export function createDetailHost({ root }) {
       const content = document.createElement('div');
       content.className = 'detail-content';
       body.replaceChildren(content);
-      const isCurrent = () => !disposed && mounted === owner;
+      const isCurrent = () => !disposed && root.isConnected && mounted === owner;
       return Object.freeze({ content, isCurrent,
         heading(value, subtitle) { if (isCurrent()) { title.textContent = value; kicker.textContent = subtitle; } },
         show() { if (isCurrent()) { if (!root.open) root.showModal(); close.focus(); } },

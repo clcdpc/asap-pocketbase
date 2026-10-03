@@ -94,9 +94,7 @@ function node(tag, attributes = {}, children = []) {
     else if (name === 'checked') value.checked = Boolean(attribute);
     else if (name === 'disabled') value.disabled = Boolean(attribute);
     else if (name === 'value') value.value = attribute;
-    else if (name.startsWith('on') && typeof attribute === 'function') {
-      listen(value, name.slice(2), attribute);
-    } else {
+    else {
       value.setAttribute(name, String(attribute));
     }
   }
@@ -313,6 +311,7 @@ export function createSettingsController({
     savedRejectionTemplateId: '',
     awaitingReload: false,
     outcomeUncertain: false,
+    unconfirmedMutation: null,
     saving: false,
     pendingMutation: null,
     visible: false,
@@ -320,7 +319,9 @@ export function createSettingsController({
   };
   const reads = createLatestLoad(), events = new window.AbortController();
   let disposed = false, contextGeneration = 0, drafts = createDraftScope();
-  let settingsDraft = drafts.register({ root: dom.form, isDirty: () => isDirty() });
+  let settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
+  let staffCreateDraft = null;
+  const staffDrafts = new Map(), rosterDrafts = new Set();
   function listen(target, name, handler) {
     target?.addEventListener(name, event => { if (!disposed && target.isConnected !== false) return handler(event); }, { signal: events.signal });
   }
@@ -529,7 +530,7 @@ export function createSettingsController({
     operation.outcome = isUnconfirmedMutationFailure(error) ? 'uncertain' : 'rejected';
     if (operation.outcome !== 'uncertain') return;
     onUnconfirmed(message, operation.owner, operation);
-    if (isSettingsOperationCurrent(operation)) markUnconfirmedMutation(message);
+    if (isSettingsOperationCurrent(operation)) { state.unconfirmedMutation = operation; markUnconfirmedMutation(message); }
   }
 
   function isUnconfirmedMutationFailure(error) {
@@ -544,6 +545,7 @@ export function createSettingsController({
 
   function holdSettingsMutation(operation) {
     reads.begin('administration-settings').abort();
+    reads.begin('administration-staff-access').abort();
     state.pendingMutation = operation;
     dom.form.inert = true;
     dom.form.setAttribute('aria-busy', 'true');
@@ -561,7 +563,8 @@ export function createSettingsController({
 
   function cancelSettingsOperations() {
     contextGeneration += 1; drafts.dispose(); drafts = createDraftScope();
-    settingsDraft = drafts.register({ root: dom.form, isDirty: () => isDirty() });
+    settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
+    staffDrafts.clear(); rosterDrafts.clear(); staffCreateDraft = null;
     for (const slot of SETTINGS_OPERATION_SLOTS) reads.begin(slot).abort();
   }
 
@@ -642,15 +645,41 @@ export function createSettingsController({
     announce(message || '', kind);
   }
 
-  function isDirty() {
+  function hasSettingsDraft() {
     return state.data !== null && !sameSnapshot(state.baselineSnapshot, snapshotForm(dom.form));
+  }
+
+  function isDirty() { return !disposed && drafts.isDirty(); }
+
+  function hasStaffDraft() { return [...staffDrafts.values()].some(isDirty => isDirty()); }
+
+  function registerStaffDraft(ownerRoot, controls, kind) {
+    const baseline = controls.map(control => control.value);
+    const dirty = () => ownerRoot.isConnected && state.staff !== null && controls.some((control, index) => control.value !== baseline[index]);
+    const handle = drafts.register({ root: ownerRoot, kind, isDirty: dirty });
+    staffDrafts.set(handle, dirty);
+    return handle;
+  }
+
+  function resetStaffCreateDraft() {
+    drafts.release(staffCreateDraft); staffDrafts.delete(staffCreateDraft);
+    dom.staffEmail.value = '';
+    populateStaffCreateControls();
+    staffCreateDraft = registerStaffDraft(dom.staffEmail.closest('fieldset'),
+      [dom.staffEmail, dom.staffRole, dom.staffOrganization], 'new staff user');
+  }
+
+  function snapshotDrafts() {
+    return JSON.stringify([...dom.form.querySelectorAll('input, select, textarea')]
+      .map(control => [control.value, control.checked]));
   }
 
   function updateDirtyState() {
     const dirty = isDirty();
+    const settingsDirty = hasSettingsDraft();
     const needsAttention = dirty || state.awaitingReload || state.outcomeUncertain || state.saving;
     dom.saveBar.classList.toggle('attention', needsAttention);
-    dom.save.disabled = !dirty || state.awaitingReload || state.saving;
+    dom.save.disabled = !settingsDirty || state.awaitingReload || state.saving;
     dom.saveLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
     dom.clearLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
     dom.discard.hidden = !dirty;
@@ -661,7 +690,7 @@ export function createSettingsController({
       : state.awaitingReload
       ? 'The save committed. Reload current settings before editing again.'
       : dirty
-      ? 'Changes are local until you save this settings context.'
+      ? settingsDirty ? 'Changes are local until you save this settings context.' : 'Save each staff profile or access change, or discard the edits.'
       : 'Everything in this settings context is saved.';
     dom.reset.hidden = isSystem();
     dom.reset.disabled = state.awaitingReload || Boolean(state.pendingMutation);
@@ -954,8 +983,11 @@ export function createSettingsController({
 
   function renderStaffUsers() {
     if (!dom.staffUsers) return;
+    for (const handle of rosterDrafts) { drafts.release(handle); staffDrafts.delete(handle); }
+    rosterDrafts.clear();
     dom.staffUsers.replaceChildren();
     populateStaffCreateControls();
+    if (!staffCreateDraft) resetStaffCreateDraft();
     if (state.staffUsers.length === 0) {
       const message = state.staffAccessLoaded
         ? `No staff users found for ${scopedStaffLabel()}.`
@@ -989,6 +1021,9 @@ export function createSettingsController({
       const organization = node('select', { 'aria-label': `Library for ${staffUserDisplay(user)}` });
       replaceSelectOptions(organization, organizationChoices(role.value), property(user, 'organizationId'));
       organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
+      const metadataDraft = registerStaffDraft(row, [upn, displayName, notificationEmail], 'staff profile');
+      const accessDraft = registerStaffDraft(row, [role, organization], 'staff access');
+      rosterDrafts.add(metadataDraft); rosterDrafts.add(accessDraft);
       listen(role, 'change', () => {
         replaceSelectOptions(organization, organizationChoices(role.value), organization.value);
         organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
@@ -1003,7 +1038,7 @@ export function createSettingsController({
         email: clean(upn.value),
         displayName: clean(displayName.value),
         notificationEmail: clean(notificationEmail.value)
-      }));
+      }, metadataDraft));
 
       const saveRole = node('button', {
         type: 'button',
@@ -1013,7 +1048,7 @@ export function createSettingsController({
       listen(saveRole, 'click', () => changeStaffRole(id, version, {
         role: role.value,
         organizationId: role.value === 'super_admin' ? 1 : Number(organization.value)
-      }));
+      }, accessDraft));
 
       const lifecycle = node('button', {
         type: 'button',
@@ -1022,7 +1057,7 @@ export function createSettingsController({
       });
       listen(lifecycle, 'click', () => {
         if (active) deactivateStaffUser(id, version, staffUserDisplay(user));
-        else reactivateStaffUser(user, role.value, organization.value);
+        else reactivateStaffUser(user, role.value, organization.value, accessDraft);
       });
 
       const actions = [saveMetadata, saveRole, lifecycle];
@@ -1149,6 +1184,7 @@ export function createSettingsController({
     renderBrandingPreview();
     populateParticipation();
     renderOrganizations();
+    resetStaffCreateDraft();
     renderStaffUsers();
     renderStaffAudit();
     dom.scope.value = state.scope;
@@ -1164,6 +1200,7 @@ export function createSettingsController({
     if (disposed || !state.staff || state.staff.role === 'staff') return;
     if (state.pendingMutation && state.pendingMutation !== options.owner) return false;
     const context = captureSettingsContext();
+    const snapshot = snapshotDrafts();
     const loadState = reads.begin('administration-settings');
     dom.refresh.disabled = true;
     if (!options.silent) notify('Loading settings...');
@@ -1179,6 +1216,10 @@ export function createSettingsController({
       ]);
       if (!loadState.isCurrent() || !isSettingsContextCurrent(context) || !state.visible ||
           state.pendingMutation && state.pendingMutation !== options.owner) return false;
+      if (snapshot !== snapshotDrafts()) {
+        notify('Settings edits changed during reload. Save or discard the edits before reloading again.', 'warning');
+        return false;
+      }
       const data = settingsResponse?.data && settingsResponse?.version === undefined
         ? settingsResponse.data
         : settingsResponse;
@@ -1188,13 +1229,22 @@ export function createSettingsController({
       const patronCodeChoices = patronCodesResponse?.data ?? patronCodesResponse;
       data.patronCodeChoices = Array.isArray(patronCodeChoices) ? patronCodeChoices : [];
       const wasHidden = dom.form.hidden;
-      state.awaitingReload = false;
-      state.outcomeUncertain = false;
+      const staffReview = state.unconfirmedMutation?.slot === 'administration-staff-mutation';
+      if (!staffReview) {
+        state.awaitingReload = false; state.outcomeUncertain = false; state.unconfirmedMutation = null;
+      }
       populate(data || {});
-      onRefreshed(context.owner);
+      onRefreshed(context.owner, { kind: 'settings', scope: context.scope });
       dom.form.hidden = false;
       if (wasHidden) dom.panels.find(item => item.dataset.settingsPanelContent === state.activePanel)?.focus({ preventScroll: true });
-      if (state.activePanel === 'staff') void loadStaffAccess({ silent: true });
+      if (staffReview) {
+        const reviewed = await loadStaffAccess({ silent: true, discard: true, owner: options.owner });
+        if (!loadState.isCurrent() || !isSettingsContextCurrent(context)) return false;
+        if (!reviewed) {
+          notify('The staff change is still uncertain. Reload the roster to review saved staff access before retrying.', 'warning');
+          return false;
+        }
+      } else if (state.activePanel === 'staff') void loadStaffAccess({ silent: true });
       if (!options.silent && loadState.isCurrent() && isSettingsContextCurrent(context)) notify('Settings loaded.');
       return true;
     } catch (error) {
@@ -1224,6 +1274,9 @@ export function createSettingsController({
 
   async function loadStaffAccess(options = {}) {
     if (disposed || !state.staff || state.staff.role === 'staff') return false;
+    if (state.pendingMutation && state.pendingMutation !== options.owner) return false;
+    if (hasStaffDraft() && !options.discard) return false;
+    const snapshot = snapshotDrafts();
     const loadState = beginSettingsOperation('administration-staff-access');
     if (!options.silent) setStaffStatus(`Loading staff access for ${scopedStaffLabel()}...`);
     if (dom.staffRefresh) dom.staffRefresh.disabled = true;
@@ -1237,14 +1290,23 @@ export function createSettingsController({
         })
       ]);
       if (!isSettingsOperationCurrent(loadState)) return false;
+      if (snapshot !== snapshotDrafts()) {
+        setStaffStatus('Edits changed during roster reload. Save or discard the edits before reloading again.', 'warning');
+        return false;
+      }
       const users = usersResponse?.data ?? usersResponse ?? {};
       state.staffUsers = Array.isArray(users.users) ? users.users : [];
       state.staffCanAssignSuperAdmin = Boolean(users.canAssignSuperAdmin);
       const audit = auditResponse?.data ?? auditResponse;
       state.staffAudit = Array.isArray(audit) ? audit : [];
       state.staffAccessLoaded = true;
+      if (state.unconfirmedMutation?.slot === 'administration-staff-mutation') {
+        state.unconfirmedMutation = null; state.outcomeUncertain = false; state.awaitingReload = false;
+      }
       renderStaffUsers();
       renderStaffAudit();
+      updateDirtyState();
+      onRefreshed(loadState.context.owner, { kind: 'staff', scope: loadState.context.scope });
       if (!options.silent) setStaffStatus(`Staff access loaded for ${scopedStaffLabel()}.`, 'success');
       return true;
     } catch (error) {
@@ -1261,8 +1323,8 @@ export function createSettingsController({
     }
   }
 
-  async function mutateStaffUser(path, options, successMessage, staffId = null) {
-    const mutation = beginSettingsMutation('administration-staff-mutation', null);
+  async function mutateStaffUser(path, options, successMessage, staffId, consumes) {
+    const mutation = beginSettingsMutation('administration-staff-mutation', consumes);
     if (!mutation) return;
     setStaffStatus(successMessage.replace(/\.$/, '') + '...');
     try {
@@ -1271,9 +1333,9 @@ export function createSettingsController({
       const committedMessage = `${successMessage} ${cleanupSummary(cleanup)}`;
       recordCommitted(mutation, committedMessage);
       if (!isSettingsOperationCurrent(mutation)) return null;
+      if (consumes === staffCreateDraft) resetStaffCreateDraft();
       state.lastStaffCleanup = { staffId: stringValue(property(response?.user ?? response?.data?.user, 'id') || staffId), cleanup };
-      const refreshed = await loadStaffAccess({ silent: true });
-      if (refreshed) onRefreshed(mutation.owner);
+      const refreshed = await loadStaffAccess({ silent: true, owner: mutation, discard: true });
       if (isSettingsOperationCurrent(mutation)) setStaffStatus(refreshed
         ? committedMessage : `${committedMessage} Staff access could not be refreshed.`,
       refreshed ? 'success' : 'error');
@@ -1282,7 +1344,7 @@ export function createSettingsController({
       recordFailure(mutation, error, 'Settings change outcome is uncertain. Reload current values before retrying.');
       if (!isSettingsOperationCurrent(mutation)) return null;
       if (error.status === 409) {
-        await loadStaffAccess({ silent: true });
+        await loadStaffAccess({ silent: true, owner: mutation, discard: true });
         if (!isSettingsOperationCurrent(mutation)) return null;
         setStaffStatus(error.message || 'Staff access changed elsewhere. Review the refreshed roster.', 'error');
       } else if (error.status !== 401 && !isAbortError(error)) {
@@ -1291,6 +1353,7 @@ export function createSettingsController({
       return null;
     } finally {
       finishSettingsMutation(mutation);
+      if (isSettingsOperationCurrent(mutation)) updateDirtyState();
     }
   }
 
@@ -1301,16 +1364,13 @@ export function createSettingsController({
       role,
       organizationId: role === 'super_admin' ? 1 : Number(dom.staffOrganization.value)
     };
-    const response = await mutateStaffUser('/api/asap/staff/users', {
+    await mutateStaffUser('/api/asap/staff/users', {
       method: 'POST',
       body
-    }, 'Staff user saved.');
-    if (response) {
-      dom.staffEmail.value = '';
-    }
+    }, 'Staff user saved.', null, staffCreateDraft);
   }
 
-  async function updateStaffMetadata(id, version, values) {
+  async function updateStaffMetadata(id, version, values, draft) {
     await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: {
@@ -1319,10 +1379,10 @@ export function createSettingsController({
         displayName: values.displayName,
         notificationEmail: values.notificationEmail
       }
-    }, 'Staff profile saved.', id);
+    }, 'Staff profile saved.', id, draft);
   }
 
-  async function changeStaffRole(id, version, values) {
+  async function changeStaffRole(id, version, values, draft) {
     await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}/role`, {
       method: 'POST',
       body: {
@@ -1330,7 +1390,7 @@ export function createSettingsController({
         role: values.role,
         organizationId: values.organizationId
       }
-    }, 'Staff access updated.', id);
+    }, 'Staff access updated.', id, draft);
   }
 
   async function deactivateStaffUser(id, version, displayName) {
@@ -1338,10 +1398,10 @@ export function createSettingsController({
     await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       body: { version: stringValue(version) }
-    }, 'Staff user deactivated.', id);
+    }, 'Staff user deactivated.', id, null);
   }
 
-  async function reactivateStaffUser(user, role, organizationId) {
+  async function reactivateStaffUser(user, role, organizationId, draft) {
     await mutateStaffUser('/api/asap/staff/users', {
       method: 'POST',
       body: {
@@ -1349,7 +1409,7 @@ export function createSettingsController({
         role,
         organizationId: role === 'super_admin' ? 1 : Number(organizationId)
       }
-    }, 'Staff user reactivated.', property(user, 'id'));
+    }, 'Staff user reactivated.', property(user, 'id'), draft);
   }
 
   function collectScoped(section, fields) {
@@ -1857,7 +1917,7 @@ export function createSettingsController({
   }
 
   function activatePanel(name, updateUrl = false) {
-    if (!dom.nav.some(button => button.dataset.settingsPanel === name) ||
+    if (disposed || !dom.nav.some(button => button.dataset.settingsPanel === name) ||
         !state.staff || state.staff.role === 'staff') return false;
     state.activePanel = name;
     for (const button of dom.nav) {
@@ -1904,17 +1964,20 @@ export function createSettingsController({
 
   function setStaff(staff) {
     if (disposed) return;
-    if (staffContextKey(state.staff) !== staffContextKey(staff)) {
+    const replaced = staffContextKey(state.staff) !== staffContextKey(staff);
+    if (replaced) {
       cancelSettingsOperations();
-      state.pendingMutation = null; state.saving = false; state.outcomeUncertain = false; state.awaitingReload = false;
+      state.pendingMutation = null; state.saving = false; state.outcomeUncertain = false; state.awaitingReload = false; state.unconfirmedMutation = null;
       dom.form.inert = false; dom.form.removeAttribute('aria-busy');
       releaseLogoDraft();
       copyGeneration += 1;
       state.data = null;
       dom.form.hidden = true;
+      dom.staffRole.value = 'staff'; dom.staffOrganization.value = '';
     }
     state.staff = staff;
     tab.hidden = !staff || staff.role === 'staff';
+    if (!replaced) return;
     if (staff?.role === 'super_admin') {
       if (!state.data) state.scope = 'system';
     } else if (staff) {
@@ -1968,7 +2031,7 @@ export function createSettingsController({
       if (state.staff?.role !== 'super_admin') return;
       dom.scope.value = 'system';
       await changeScope();
-      dom.scope.focus();
+      if (!disposed && state.visible && dom.scope.isConnected) dom.scope.focus();
     });
     for (const [buttonId, value, label] of [
       ['copy-patron-public-url', dom.publicUrl, 'Patron URL'],
@@ -2023,8 +2086,13 @@ export function createSettingsController({
     listen(dom.syncOrganizations, 'click', syncOrganizations);
     listen(dom.staffRole, 'change', populateStaffCreateControls);
     listen(dom.staffCreate, 'click', createStaffUser);
-    listen(dom.staffRefresh, 'click', () => loadStaffAccess());
-    listen(dom.staffAuditRefresh, 'click', () => loadStaffAccess());
+    const refreshStaff = () => {
+      if (state.pendingMutation) return;
+      if (hasStaffDraft() && !window.confirm('Discard unsaved staff edits and refresh the roster?')) return;
+      return loadStaffAccess({ discard: true });
+    };
+    listen(dom.staffRefresh, 'click', refreshStaff);
+    listen(dom.staffAuditRefresh, 'click', refreshStaff);
     listen(dom.saveLogo, 'click', () => saveLogo(false));
     listen(dom.clearLogo, 'click', () => saveLogo(true));
     listen(document.getElementById('email-postmark-token'), 'input', event => {
@@ -2069,6 +2137,7 @@ export function createSettingsController({
   }
 
   function suspend() {
+    if (disposed) return false;
     if (state.pendingMutation || state.outcomeUncertain) return false;
     state.visible = false;
     releaseLogoDraft();
@@ -2083,16 +2152,20 @@ export function createSettingsController({
   }
 
   function setScopeFromUrl(scope) {
+    if (disposed) return false;
     if (state.pendingMutation || state.outcomeUncertain) return false;
     if (state.scope !== scope) {
+      cancelSettingsOperations();
       state.data = null;
       dom.form.hidden = true;
+      dom.staffOrganization.value = '';
     }
     state.scope = scope;
     return true;
   }
 
   function discardDraft() {
+    if (disposed) return false;
     if (state.pendingMutation || state.outcomeUncertain) return false;
     if (state.data) populate(state.data);
     return true;

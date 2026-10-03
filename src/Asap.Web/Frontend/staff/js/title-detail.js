@@ -7,7 +7,7 @@ import { unconfirmedResponseError, notificationOutcome, isCommittedRequestRespon
 import { element, icon, statusLabel, dateTime, text, closeReasonLabel, timeoutLabel, addDetail } from './ui.js';
 
 export function createTitleDetailController({ host, sessionIdentity, polarisLookup, copyCreation, announce,
-  beforeOpen, isNavigationCurrent, getNavigationGeneration, getScope, onAlign, onOpened, beforeClose, onClosed,
+  beforeOpen, isNavigationCurrent, getNavigationGeneration, getScope, onAlign, onOpened, onUpdated = () => {}, beforeClose, onClosed,
   getFocusReturn, refreshQueue, queueSequence, rememberOpened, forgetUnavailable, onReceipt, clearReceipt,
   request: send = authorizedJson }) {
   const reads = createLatestLoad(), configurations = new Map();
@@ -193,7 +193,10 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       if (!attempt.isCurrent()) return;
       if (detail?.status && detail.status !== status) message = `${successMessage} Final state: ${statusLabel(detail.status)}.${notification.text}${patronNotification.text}`;
       recordReceipt(attempt, `${message} Sign in again to review the committed request.`, Boolean(detail));
-      if (detail) renderRequest(detail, configurations.get(String(detail.libraryOrgId)) || {}, editor?.acceptedVerification(detail, body));
+      if (detail) {
+        onUpdated(detail);
+        renderRequest(detail, configurations.get(String(detail.libraryOrgId)) || {}, editor?.acceptedVerification(detail, body));
+      }
       else { disposeChildren(); current = Object.freeze({ id: snapshot.id, version: null }); attempt.mounted.content.replaceChildren(element('p', { text: 'The action committed. Reload this request to review current details.' })); }
       host.focusClose(); announce(message, notification.partial || patronNotification.partial ? 'warning' : 'success');
       releaseAttempt(attempt);

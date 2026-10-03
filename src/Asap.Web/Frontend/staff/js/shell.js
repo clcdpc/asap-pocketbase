@@ -41,10 +41,12 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
     const receipt = receipts.get(attempt);
     if (receipt && sessionIdentity.isCurrent(receipt.owner)) receipts.delete(attempt);
   }
-  function settingsRefreshed(owner) {
-    if (!sessionIdentity.isCurrent(owner)) return;
+  function settingsRefreshed(owner, review) {
+    if (disposed || !sessionIdentity.isCurrent(owner) || !review) return;
     for (const [attempt, receipt] of receipts) {
-      if (receipt.feature === 'settings' && sessionIdentity.sameSession(receipt.owner, owner)) receipts.delete(attempt);
+      const kind = attempt.slot === 'administration-staff-mutation' ? 'staff' : 'settings';
+      if (receipt.feature === 'settings' && sessionIdentity.sameSession(receipt.owner, owner) &&
+          kind === review.kind && attempt.context?.scope === review.scope) receipts.delete(attempt);
     }
     void refreshReadiness();
   }

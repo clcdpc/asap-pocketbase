@@ -5,7 +5,7 @@ import { unconfirmedResponseError, notificationOutcome, isCommittedRequestRespon
 import { element, icon, commandButton, statusLabel, dateTime, timeoutLabel, addDetail, labeledInput } from './ui.js';
 
 export function createCopyDetailController({ host, sessionIdentity, announce, beforeOpen, isNavigationCurrent,
-  onAlign, onOpened, beforeClose, onClosed, getFocusReturn, refreshQueue, onReceipt, clearReceipt,
+  onAlign, onOpened, onUpdated = () => {}, beforeClose, onClosed, getFocusReturn, refreshQueue, onReceipt, clearReceipt,
   getNavigationGeneration = () => 0, request: send = authorizedJson }) {
   const reads = createLatestLoad();
   let lease = null, current = null, actor = null, returnFocus = null, activeAttempt = null;
@@ -128,7 +128,7 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
       if (detail?.status && detail.status !== resultStatus) message = `${successMessage} Final state: ${statusLabel(detail.status)}.${notification.text}`;
       if (result.claimClearedReason) message += ` The retained claim was cleared (${String(result.claimClearedReason).replaceAll('_', ' ')}).`;
       onReceipt(`${message} Sign in again to review the committed task.`, owner, attempt);
-      if (detail) renderAdditionalCopy(detail);
+      if (detail) { onUpdated(detail); renderAdditionalCopy(detail); }
       else { current = Object.freeze({ id: snapshot.id, version: null }); mounted.content.replaceChildren(element('p', { text: 'The action committed. Reload this task to review current details.' })); }
       host.focusClose(); announce(message, notification.partial ? 'warning' : 'success');
       if (activeAttempt === attempt) activeAttempt = null;

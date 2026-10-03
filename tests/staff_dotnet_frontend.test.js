@@ -110,4 +110,38 @@ for (const preference of [
 assert.ok(!/pocketbase/i.test(all), 'The .NET staff shell must not use PocketBase browser state');
 assert.ok(!/\.innerHTML\s*=/.test(all), 'Runtime staff UI must use DOM APIs rather than innerHTML assignment');
 
+const composition = fs.readFileSync(path.join(root, 'js', 'workflow.js'), 'utf8');
+assert.doesNotMatch(composition, /\/api\/|history\.|JSON\.stringify|createDraftScope|\bstate\s*=/,
+  'composition only constructs, wires and starts/disposes owners');
+const owners = new Set(['analytics', 'bulk-delete', 'copy-creation', 'copy-detail', 'detail-host',
+  'navigation', 'operations-controller', 'profile-controller', 'session', 'settings', 'shell',
+  'suggestion-controller', 'title-detail', 'queues', 'research'].map(name => `${name}.js`));
+const visited = new Set(), visiting = new Set();
+function inspectImports(file) {
+  assert.ok(!visiting.has(file), `ES module import cycle at ${file}`);
+  if (visited.has(file)) return;
+  visiting.add(file);
+  const source = fs.readFileSync(file, 'utf8');
+  for (const match of source.matchAll(/(?:import|export)\s+[^;]*?\sfrom\s*['"]([^'"]+)['"]/g)) {
+    if (!match[1].startsWith('.')) continue;
+    const dependency = path.resolve(path.dirname(file), match[1]);
+    // Research exports stateless formatting/verification helpers alongside the
+    // injected dialog service. Importing those helpers grants no peer lifetime.
+    const sharedResearchHelpers = path.basename(dependency) === 'research.js' &&
+      /^import\s*\{\s*(?:positivePolarisId|applyPolarisResultToControls)\s*\}\s*from/.test(match[0]);
+    if (owners.has(path.basename(file)) && !sharedResearchHelpers) {
+      assert.ok(!owners.has(path.basename(dependency)), `${file} must use injected ports instead of importing a peer owner`);
+    }
+    inspectImports(dependency);
+  }
+  visiting.delete(file); visited.add(file);
+}
+inspectImports(path.join(root, 'app.js'));
+for (const name of fs.readdirSync(path.join(root, 'js')).filter(name => name.endsWith('.js'))) {
+  if (name !== 'router.js') {
+    assert.doesNotMatch(fs.readFileSync(path.join(root, 'js', name), 'utf8'), /\bhistory\s*(?:\.\s*(?:pushState|replaceState|go|back|forward|state)\b|\[)/,
+      `${name} cannot manipulate browser history`);
+  }
+}
+
 console.log('Staff .NET frontend structure regression checks passed');

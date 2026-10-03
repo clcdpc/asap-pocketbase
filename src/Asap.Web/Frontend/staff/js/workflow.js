@@ -57,7 +57,7 @@ export function createWorkflowApp() {
         refresh: options => titleQueue.refresh(options), render: () => titleQueue.render(),
         refreshOnEntry: options => titleQueue.refreshOnEntry(options), setLibraries: libraries => populateScopes(libraries),
         find: id => titleQueue.find(id), libraryScope: id => titleQueue.libraryScope(id),
-        clear: () => titleQueue.clear(), resetFilters: () => titleQueue.resetFilters(),
+        resetFilters: () => titleQueue.resetFilters(),
         openDetail: (id, opener, options = { align: true }) => titleDetail.open(id, opener, options),
         closeOverlay: () => detailHost.isOpen() ? detailHost.requestClose() : suggestion.isOpen() ? suggestion.close() : null
       },
@@ -65,7 +65,7 @@ export function createWorkflowApp() {
         activate: options => copyQueue.activate(options), deactivate: () => copyQueue.deactivate(),
         refresh: options => copyQueue.refresh(options), render: () => copyQueue.render(),
         refreshOnEntry: options => copyQueue.refreshOnEntry(options), setLibraries: libraries => populateScopes(libraries),
-        clear: () => copyQueue.clear(), resetFilters: () => copyQueue.resetFilters(),
+        resetFilters: () => copyQueue.resetFilters(),
         openDetail: id => copyDetail.open(id, null, { fromDeepLink: true }),
         closeOverlay: () => detailHost.isOpen() ? detailHost.requestClose() : suggestion.isOpen() ? suggestion.close() : null
       },
@@ -83,7 +83,7 @@ export function createWorkflowApp() {
     getContext: navigation.context, onOpen: (id, opener) => titleDetail.open(id, opener, { history: 'push' }),
     onScopeIntent: scope => navigation.changeQueueContext('queue', { scope }),
     onStatusIntent: status => navigation.changeQueueContext('queue', { status }),
-    onScopeAccepted: scope => navigation.align({ scope }), onLibraries: populateScopes,
+    onScopeAccepted: navigation.queueScopeAccepted, onLibraries: populateScopes,
     onRendered: () => bulk.contextChanged(navigation.context()), onRefreshed: shell.queueRefreshed
   });
   const copyCreation = createCopyCreationController({ root: get('#additional-copy-create-dialog'), sessionIdentity, announce, onReceipt, clearReceipt,
@@ -98,6 +98,7 @@ export function createWorkflowApp() {
     beforeOpen: navigation.beforeDetailOpen, isNavigationCurrent: ticket => navigation.generation() === ticket,
     getNavigationGeneration: navigation.generation, onAlign: navigation.alignCopy,
     onOpened: (request, options) => navigation.detailOpened(request, true, options),
+    onUpdated: request => navigation.detailUpdated(request, true),
     beforeClose: () => navigation.allow({ settings: false, suggestion: false }),
     onClosed: options => navigation.detailClosed(true, options),
     getFocusReturn: (id, opener) => copyQueue.focusReturn(id, opener), refreshQueue: options => copyQueue.refresh(options)
@@ -106,7 +107,7 @@ export function createWorkflowApp() {
     getContext: navigation.context, onOpen: (id, opener) => copyDetail.open(id, opener, { history: 'push' }),
     onScopeIntent: scope => navigation.changeQueueContext('additional-copies', { scope }),
     onStatusIntent: additionalCopyStatus => navigation.changeQueueContext('additional-copies', { additionalCopyStatus }),
-    onScopeAccepted: scope => navigation.align({ scope }), onLibraries: populateScopes,
+    onScopeAccepted: navigation.queueScopeAccepted, onLibraries: populateScopes,
     onRendered: () => bulk.contextChanged(navigation.context()), onRefreshed() {},
     recovery: { current: copyCreation.review.current, begin: copyCreation.review.begin, loaded: copyCreation.review.loaded,
       acknowledge: () => copyCreation.review.acknowledge(navigation.context()) }
@@ -115,6 +116,7 @@ export function createWorkflowApp() {
     beforeOpen: navigation.beforeDetailOpen, isNavigationCurrent: ticket => navigation.generation() === ticket,
     getNavigationGeneration: navigation.generation, getScope: () => navigation.context().scope, onAlign: navigation.alignTitle,
     onOpened: (request, options) => navigation.detailOpened(request, false, options),
+    onUpdated: navigation.detailUpdated,
     beforeClose: () => navigation.allow({ settings: false, suggestion: false }), onClosed: options => navigation.detailClosed(false, options),
     getFocusReturn: (id, opener) => titleQueue.focusReturn(id, opener), refreshQueue: options => titleQueue.refresh(options), queueSequence: titleQueue.sequence,
     rememberOpened: shell.rememberOpened, forgetUnavailable: shell.forgetUnavailable

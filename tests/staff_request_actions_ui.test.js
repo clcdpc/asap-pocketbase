@@ -21,7 +21,7 @@ async function until(predicate, message) {
 async function scenario(action, profileDefault, explicitChoice, options = {}) {
   const scenarioOptions = options;
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-request-actions-'));
-  let dom;
+  let dom, app;
   try {
     fs.cpSync(path.join(frontend, 'staff'), path.join(temporary, 'staff'), { recursive: true });
     fs.cpSync(path.join(frontend, 'shared'), path.join(temporary, 'shared'), { recursive: true });
@@ -329,7 +329,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       throw new Error(`Unexpected request ${url}`);
     };
     const workflow = await import(pathToFileURL(path.join(temporary, 'staff/js/workflow.js')).href);
-    await workflow.createWorkflowApp().start();
+    app = workflow.createWorkflowApp();
+    await app.start();
     await until(() => document.querySelector('#request-dialog').open, 'request detail opens');
     if (scenarioOptions.serverDeniesActions) {
       const buttons = [...document.querySelectorAll('.action-bar button')];
@@ -657,6 +658,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       releaseMutation();
       await until(() => /Workflow action completed/.test(document.querySelector('#app-status').textContent),
         'the authoritative workflow result must finish before navigation');
+      document.querySelector(`[data-status="${otherRequest.status}"]`).click();
+      await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+        'the other request is reachable in its authoritative queue stage');
       document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
       await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
         'forced newer request takes ownership of the dialog');
@@ -850,6 +854,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.equal(document.querySelector('.request-activity [data-event-id="9007199254740999"]') !== null, true);
     }
   } finally {
+    app?.dispose();
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });
   }
