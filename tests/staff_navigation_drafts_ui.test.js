@@ -72,7 +72,7 @@ async function fixture(route, journey, options = {}) {
       if (pathname.endsWith('/email-readiness')) return response(200, {});
       if (pathname.endsWith('/organizations')) return response(200, { code: 'ok', data: organizations });
       if (pathname.endsWith('/settings') && init.method !== 'POST') return response(200, {
-        orgId: parsed.searchParams.get('orgId'), version: 'settings-v1',
+        orgId: parsed.searchParams.get('orgId') === '1' ? 'system' : parsed.searchParams.get('orgId'), version: 'settings-v1',
         stored: { configuredSystem: { patron: { loginNote: 'Saved login note' } },
           systemSettings: {}, workflow: {}, patron: {}, email: {}, formats: [], templates: [] },
         effective: {}, ui_text: { loginNote: 'Saved login note' }, workflow: {}, emails: {}
@@ -1608,7 +1608,7 @@ test('programmatic hold-resolution Revert invalidates consent while a competing 
   }, { holdOperation: { id: '81', version: 'hold-v1', state: 'unknown', phase: 'acquired',
     attemptNumber: 1, canResolveNotPerformed: true } }));
 
-for (const settingsScope of ['2', 'system']) {
+for (const settingsScope of ['2', 'system', '1']) {
   test(`authoritative ${settingsScope} Settings configuration refresh invalidates cached Title form configuration`, () =>
     fixture('?stage=suggestion&scope=2', async ui => {
       let configurationReads = 0;

@@ -48,8 +48,9 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   }
   function invalidateConfiguration(scope) {
     if (disposed) return;
-    if (scope === 'system') configurations.clear();
-    else configurations.delete(String(scope));
+    const key = String(scope);
+    if (key === 'system' || key === '1') configurations.clear();
+    else configurations.delete(key);
   }
   function invalidate() { reads.begin('detail').abort(); editor?.invalidate(); workflows?.invalidate(); if (copyParent) copyCreation.invalidate(copyParent); }
   function closeCopy(options) { return !copyParent || copyCreation.close(options, copyParent); }

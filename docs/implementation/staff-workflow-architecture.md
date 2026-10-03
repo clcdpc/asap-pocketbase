@@ -149,7 +149,8 @@ and draft PR #366. This audit supersedes the prior closure conclusion.
   preserves selections. Disposal clears the owned results.
 - Authoritative Settings configuration review calls Title Detail's named cache
   invalidation port at composition. Library review invalidates that library;
-  system review invalidates all libraries. Roster/access review preserves the
+  system review (including the API's system organization ID `1`) invalidates all
+  libraries. Roster/access review preserves the
   cache. Invalidated in-flight configuration cannot render or repopulate old
   values, and unrelated libraries retain their cache entries.
 - Uncertain Sign Out, including response loss, timeout and server failure,
@@ -185,7 +186,7 @@ the complete gate and final re-review pass.
 ## Closure validation contract
 
 Issue #365's execution-state evidence records actual final-SHA results and CI.
-Closure requires all 46 current frontend files (including 147 navigation/draft
+Closure requires all 46 current frontend files (including 148 navigation/draft
 journeys and nine genuine Grid focus cases), a zero-warning Release build,
 the unchanged 784-test non-browser minimum and all three real-SQL Kestrel
 browser journeys with zero skips. The .NET gates include migration import,
