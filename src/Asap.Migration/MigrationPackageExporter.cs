@@ -441,7 +441,11 @@ public static class MigrationPackageExporter
             }
 
             var parent = Directory.GetParent(current)?.FullName;
-            if (parent is null || string.Equals(parent, current, StringComparison.OrdinalIgnoreCase)) return false;
+            if (parent is null || string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
             current = parent;
         }
     }

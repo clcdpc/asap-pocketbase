@@ -6,8 +6,10 @@ Testing Kestrel fixtures used by the .NET test suite:
 
 - `patron.cjs`: 10 desktop/mobile patron states and 3 authentication/session
   race scenarios.
-- `staff.cjs`: 20 desktop/mobile staff states covering scope, recovery,
-  queue, analytics, assignment, stale mutations, and keyboard workflows.
+- `staff.cjs`: 54 desktop/mobile staff states covering scope, recovery,
+  queue, analytics, assignment, stale mutations, draft guards, route/history
+  round trips, repeated Operations actions, keyboard workflows, current-actor
+  revisions and operational catalog retirement/reactivation after Settings commits.
 - `legacy-links.cjs`: 18 desktop/mobile success and failure states covering
   shared, numeric, and type-qualified request links.
 

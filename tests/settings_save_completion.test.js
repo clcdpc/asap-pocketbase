@@ -14,7 +14,7 @@ function response(status, body) {
   };
 }
 
-function settingsData(note, version) {
+function settingsData(note, version, formats = []) {
   const emptySet = { exists: false, values: [] };
   const systemNote = 'System login note';
   const libraryOverride = note === systemNote ? null : {
@@ -25,7 +25,7 @@ function settingsData(note, version) {
     commonCreators: emptySet,
     allowedPatronCodeIds: emptySet,
     providers: [],
-    formats: [],
+    formats,
     templates: [],
     branding: { hasLogo: false, altText: null }
   };
@@ -37,7 +37,7 @@ function settingsData(note, version) {
     commonCreators: emptySet,
     allowedPatronCodeIds: emptySet,
     providers: [],
-    formats: [],
+    formats,
     templates: [],
     branding: { hasLogo: false, altText: 'System alt' }
   };
@@ -58,7 +58,7 @@ function settingsData(note, version) {
       commonCreators: [],
       allowedPatronCodeIds: [],
       providers: [],
-      formats: [],
+      formats,
       customFields: [],
       templates: [],
       autoClaimRules: [],
@@ -69,7 +69,7 @@ function settingsData(note, version) {
       publicationOptions: [],
       commonCreators: [],
       externalSearchProviders: [],
-      formats: [],
+      formats,
       customFields: [],
       email: { fromAddress: 'system@example.org', fromName: 'System' },
       logoAltText: 'System alt',
@@ -106,7 +106,16 @@ async function flush() {
     global.Event = dom.window.Event;
 
     let saved = false;
+    let savedNote = 'Saved library note';
+    let refreshFailureStatus = 0;
+    let saveCount = 0;
+    let committedCount = 0;
+    const savingRefreshes = [];
+    const committedMessages = [];
+    const configurationCommits = [];
     let settingsRequests = 0;
+    let formatRows = [];
+    let formatDeleteCount = 0;
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
       if (requestUrl.endsWith('/api/asap/staff/session')) {
@@ -114,8 +123,10 @@ async function flush() {
       }
       if (requestUrl.includes('/api/asap/staff/settings?orgId=2')) {
         settingsRequests += 1;
+        if (refreshFailureStatus) return response(refreshFailureStatus,
+          { code: 'settings_unavailable', message: 'Refresh unavailable' });
         return response(200, saved
-          ? settingsData('Saved library note', 'after-save')
+          ? settingsData(savedNote, saveCount === 1 ? 'after-save' : `after-save-${saveCount}`, formatRows)
           : settingsData('System login note', 'before-save'));
       }
       if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, []);
@@ -123,9 +134,22 @@ async function flush() {
         return response(200, { code: 'ok', data: [] });
       }
       if (requestUrl.endsWith('/api/asap/staff/settings')) {
-        assert.strictEqual(JSON.parse(options.body).patron.loginNote, 'Saved library note');
+        const submittedNote = JSON.parse(options.body).patron.loginNote;
+        if (saveCount < 3) {
+          assert.strictEqual(submittedNote,
+            ['Saved library note', 'Saved again', 'Saved after 401'][saveCount]);
+        }
+        saveCount += 1;
         saved = true;
-        return response(200, { code: 'saved', data: { version: 'after-save' } });
+        if (submittedNote) savedNote = submittedNote;
+        return response(200, { code: 'saved', data: { version: saveCount === 1 ? 'after-save' : `after-save-${saveCount}` } });
+      }
+      if (requestUrl.includes('/api/asap/staff/settings/formats/')) {
+        assert.strictEqual(options.method, 'DELETE');
+        formatDeleteCount += 1;
+        return formatDeleteCount === 1
+          ? response(200, { code: 'deleted' })
+          : response(401, { code: 'unauthorized' });
       }
       throw new Error(`Unexpected request: ${requestUrl}`);
     };
@@ -134,7 +158,23 @@ async function flush() {
       root: document.getElementById('settings-view'),
       tab: document.getElementById('settings-view-tab'),
       announce: () => {},
-      getStaff: () => ({ role: 'admin', organizationId: 2 })
+      getStaff: () => ({ role: 'admin', organizationId: 2 }),
+      onCommitted: message => {
+        committedCount += 1;
+        committedMessages.push(message);
+      },
+      onConfigurationCommitted: (owner, scope) => configurationCommits.push(scope),
+      onRefreshed: () => {
+        if (!document.getElementById('settings-form').inert) return;
+        savingRefreshes.push({
+          dirty: controller.isDirty(),
+          title: document.getElementById('settings-save-title').textContent,
+          attention: document.querySelector('.settings-save-bar').classList.contains('attention'),
+          saveDisabled: document.getElementById('settings-save').disabled,
+          discardHidden: document.getElementById('settings-discard').hidden,
+          resetDisabled: document.getElementById('settings-reset').disabled
+        });
+      }
     });
     controller.bind();
     controller.setStaff({
@@ -146,12 +186,26 @@ async function flush() {
     });
     await controller.activate();
 
+    const saveBar = document.querySelector('.settings-save-bar');
+    const save = document.getElementById('settings-save');
+    const discard = document.getElementById('settings-discard');
+    const reset = document.getElementById('settings-reset');
+    assert.strictEqual(saveBar.classList.contains('attention'), false);
+    assert.strictEqual(save.disabled, true);
+    assert.strictEqual(discard.hidden, true);
+    assert.strictEqual(reset.hidden, false);
+    assert.strictEqual(reset.disabled, false);
     const override = document.querySelector('[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle');
     override.checked = true;
     override.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     const note = document.getElementById('patron-login-note');
     note.value = 'Saved library note';
     note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    assert.strictEqual(saveBar.classList.contains('attention'), true);
+    assert.strictEqual(save.disabled, false);
+    assert.strictEqual(discard.hidden, false);
+    assert.strictEqual(reset.hidden, false);
+    assert.strictEqual(reset.disabled, false);
     document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
       bubbles: true,
       cancelable: true
@@ -165,6 +219,84 @@ async function flush() {
     assert.strictEqual(document.getElementById('settings-save').disabled, true);
     assert.strictEqual(document.getElementById('settings-save-title').textContent, 'No changes');
     assert.strictEqual(controller.isDirty(), false);
+    assert.deepStrictEqual(savingRefreshes, [{
+      dirty: false, title: 'No changes', attention: true,
+      saveDisabled: true, discardHidden: true, resetDisabled: true
+    }], 'an active save must retain attention after reload clears dirty and awaiting-reload state');
+    assert.strictEqual(saveBar.classList.contains('attention'), false);
+    assert.strictEqual(discard.hidden, true);
+    assert.strictEqual(reset.hidden, false);
+    assert.strictEqual(reset.disabled, false);
+
+    note.value = 'Saved again';
+    note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    refreshFailureStatus = 503;
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
+      bubbles: true, cancelable: true
+    }));
+    for (let attempt = 0; attempt < 20 && saveCount < 2; attempt++) await flush();
+    for (let attempt = 0; attempt < 20; attempt++) await flush();
+    assert.strictEqual(committedCount, 2);
+    assert.deepStrictEqual(configurationCommits, ['2', '2'], 'source commit invalidates configuration even when presentation refresh fails');
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Saved; reload needed');
+    assert.strictEqual(document.getElementById('settings-save').disabled, true);
+    assert.match(document.getElementById('settings-message').textContent, /Settings saved, but/);
+    assert.strictEqual(controller.isDirty(), false);
+    assert.strictEqual(saveBar.classList.contains('attention'), true,
+      'awaiting reload must retain attention even after the committed save clears dirty state');
+    assert.strictEqual(discard.hidden, true);
+    assert.strictEqual(reset.hidden, false);
+    assert.strictEqual(reset.disabled, true);
+
+    refreshFailureStatus = 0;
+    document.getElementById('settings-refresh').click();
+    for (let attempt = 0; attempt < 20 &&
+      document.getElementById('settings-save-title').textContent !== 'No changes'; attempt++) await flush();
+    assert.strictEqual(document.getElementById('settings-version').value, 'after-save-2');
+    assert.strictEqual(saveBar.classList.contains('attention'), false);
+    assert.strictEqual(save.disabled, true);
+    assert.strictEqual(discard.hidden, true);
+    assert.strictEqual(reset.disabled, false);
+    note.value = 'Saved after 401';
+    note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    refreshFailureStatus = 401;
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
+      bubbles: true, cancelable: true
+    }));
+    for (let attempt = 0; attempt < 20 && saveCount < 3; attempt++) await flush();
+    for (let attempt = 0; attempt < 20; attempt++) await flush();
+    assert.strictEqual(committedCount, 3);
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Saved; reload needed');
+    assert.strictEqual(document.getElementById('settings-save').disabled, true);
+    assert.match(document.getElementById('settings-message').textContent, /Settings saved, but/);
+    assert.strictEqual(saveBar.classList.contains('attention'), true);
+
+    formatRows = [
+      { id: '101', version: 'format-v1', code: 'local_one', label: 'Local one', ownerOrganizationId: 2, isEnabled: true },
+      { id: '102', version: 'format-v2', code: 'local_two', label: 'Local two', ownerOrganizationId: 2, isEnabled: true }
+    ];
+    refreshFailureStatus = 0;
+    document.getElementById('settings-refresh').click();
+    for (let attempt = 0; attempt < 20 &&
+      document.querySelectorAll('.settings-format-row button[aria-label="Delete"]').length < 2; attempt++) await flush();
+    assert.strictEqual(document.querySelectorAll('.settings-format-row button[aria-label="Delete"]').length, 2);
+    document.querySelector('.settings-format-row button[aria-label="Delete"]').click();
+    document.querySelector('.settings-format-row button[aria-label="Delete"]').click();
+    assert.strictEqual(document.getElementById('settings-save').disabled, false);
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
+      bubbles: true,
+      cancelable: true
+    }));
+    for (let attempt = 0; attempt < 20 && formatDeleteCount < 2; attempt++) await flush();
+    for (let attempt = 0; attempt < 20; attempt++) await flush();
+    assert.strictEqual(formatDeleteCount, 2);
+    assert.match(committedMessages.at(-2), /Format deletions confirmed: 0 of 2/);
+    assert.match(committedMessages.at(-1), /Format deletions confirmed: 1 of 2/);
+    assert.equal(configurationCommits.length, 5, 'Settings and each confirmed format deletion invalidate before a partial follow-up failure');
+    assert.match(document.getElementById('settings-message').textContent,
+      /Settings saved\. Format deletions confirmed: 1 of 2\. A follow-up action failed/);
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Saved; reload needed');
+    assert.strictEqual(saveBar.classList.contains('attention'), true);
     dom.window.close();
     console.log('Settings save completion refreshes the baseline and leaves the form clean');
   } finally {

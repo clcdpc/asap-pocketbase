@@ -3,6 +3,8 @@ using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Development;
 using Microsoft.EntityFrameworkCore;
 using Asap.Web.Infrastructure.Jobs;
+using Asap.Web.Features.Patron;
+using Asap.Web.Infrastructure.Security;
 
 namespace Asap.Web.Infrastructure.Health;
 
@@ -12,7 +14,7 @@ public sealed class ReadinessService(
     IServiceProvider services,
     ILogger<ReadinessService> logger) : IReadinessService
 {
-    public async Task<ReadinessResult> CheckAsync(CancellationToken cancellationToken)
+    public async Task<ReadinessResult> CheckAsync(CancellationToken cancellationToken, bool requirePolarisConfiguration = true)
     {
         if (!configurationResult.IsValid)
         {
@@ -50,6 +52,21 @@ public sealed class ReadinessService(
                 HangfireStorageConfiguration.ExpectedSchemaVersion)
             {
                 return ReadinessResult.NotReady("hangfire_schema_version_mismatch");
+            }
+
+            if (!requirePolarisConfiguration)
+            {
+                return ReadinessResult.Ready;
+            }
+
+            var polaris = await context.PolarisSettings.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.OrganizationId == PolarisConfigurationValidation.SystemOrganizationId,
+                    cancellationToken);
+            var protector = services.GetService<IntegrationCredentialProtector>();
+            if (polaris is null || protector is null ||
+                !PolarisConfigurationValidation.TryReadCredentials(polaris, protector, out _, out _))
+            {
+                return ReadinessResult.NotReady("polaris_configuration_invalid");
             }
 
             return ReadinessResult.Ready;

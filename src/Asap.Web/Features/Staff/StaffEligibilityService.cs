@@ -51,10 +51,43 @@ public sealed class StaffEligibilityService(
         .Select(Guid.Parse)
         .ToHashSet();
 
-    public bool IsAssignmentEligible(StaffUser row, int organizationId) =>
-        row.IsActive && HasValidAuthenticationEmail(row) &&
-        (row.Role == "super_admin" && row.OrganizationId == 1 ||
-         row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
+    public static bool IsAssignmentEligible(StaffUser row, int organizationId) =>
+        row.IsActive && HasValidAuthenticationEmail(row) && IsValidRoleOrganization(row.Role, row.OrganizationId) &&
+        CanAccess(row.Role, row.OrganizationId, organizationId);
+
+    public bool IsCurrentIdentity(StaffIdentityEvidence evidence, StaffUser row) =>
+        row.Id == evidence.StaffUserId && row.IsActive && evidence.TenantId != Guid.Empty &&
+        allowedTenantIds.Contains(evidence.TenantId) && StaffEmail.MatchesAuthenticationEmail(row, evidence.AuthenticationEmail);
+
+    public bool IsCurrentIdentity(CurrentStaff ticket, StaffUser row) =>
+        IsCurrentIdentity(new StaffIdentityEvidence(ticket.Id, ticket.AuthenticationEmail, ticket.EntraTenantId), row);
+
+    public bool IsCurrentAndEligible(CurrentStaff ticket, StaffUser row, int organizationId,
+        StaffRoleRequirement requirement = StaffRoleRequirement.Any) =>
+        IsCurrentIdentity(ticket, row) && IsAssignmentEligible(row, organizationId) && RoleMeets(row.Role, requirement);
+
+    public bool IsCurrentAndEligible(StaffIdentityEvidence evidence, StaffUser row, int organizationId,
+        StaffRoleRequirement requirement) =>
+        IsCurrentIdentity(evidence, row) && IsAssignmentEligible(row, organizationId) && RoleMeets(row.Role, requirement);
+
+    public static bool HasLockedActiveOrganization(AsapDbContext context, StaffUser row) =>
+        context.Organizations.Local.SingleOrDefault(item => item.Id == row.OrganizationId)?.IsActive == true;
+
+    public static async Task<bool> LockOrganizationsAsync(
+        AsapDbContext context, IEnumerable<int> organizationIds, CancellationToken cancellationToken)
+    {
+        foreach (var id in organizationIds.Distinct().Order())
+        {
+            var organization = await context.Organizations.FromSqlInterpolated(
+                $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {id}")
+                .SingleOrDefaultAsync(cancellationToken);
+            if (organization is null)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 
     public async Task<StaffEligibilityResult> EvaluateAsync(
         StaffIdentityEvidence evidence,
@@ -218,7 +251,7 @@ public sealed class StaffEligibilityService(
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var candidates = await context.StaffUsers.AsNoTracking()
-            .Where(item => item.IsActive && item.Role == "super_admin" && item.OrganizationId == 1)
+            .Where(item => item.IsActive && item.Role == StaffRole.SuperAdmin && item.OrganizationId == LibraryScope.SystemOrganizationId)
             .Select(item => new { item.UserPrincipalName, item.NormalizedUserPrincipalName })
             .ToListAsync(cancellationToken);
         return candidates.Any(item => HasValidAuthenticationEmail(
@@ -244,7 +277,7 @@ public sealed class StaffEligibilityService(
         if (requireParticipation)
         {
             var participationOrganizationId = requestedOrganizationId ??
-                (row.Role == "super_admin" ? 1 : row.OrganizationId);
+                (row.Role == StaffRole.SuperAdmin ? LibraryScope.SystemOrganizationId : row.OrganizationId);
             var isActive = participationOrganizationId == row.OrganizationId
                 ? row.OrganizationIsActive
                 : await context.Organizations.AsNoTracking()
@@ -305,21 +338,25 @@ public sealed class StaffEligibilityService(
         StaffEmail.TryNormalizeAuthenticationEmail(email, out _, out var expectedNormalizedEmail) &&
         string.Equals(expectedNormalizedEmail, normalizedEmail, StringComparison.Ordinal);
 
-    private static bool IsValidRoleOrganization(string role, int organizationId) =>
-        role == "super_admin" ? organizationId == 1 :
-        role is "staff" or "admin" && organizationId != 1;
+    public static bool IsValidRoleOrganization(string role, int organizationId) =>
+        role == StaffRole.SuperAdmin ? organizationId == LibraryScope.SystemOrganizationId :
+        role is StaffRole.Staff or StaffRole.Admin && organizationId > LibraryScope.SystemOrganizationId;
 
-    private static bool RoleMeets(string role, StaffRoleRequirement requirement) => requirement switch
+    public static bool RoleMeets(string role, StaffRoleRequirement requirement) => requirement switch
     {
-        StaffRoleRequirement.Any => role is "staff" or "admin" or "super_admin",
-        StaffRoleRequirement.Admin => role is "admin" or "super_admin",
-        StaffRoleRequirement.SuperAdmin => role == "super_admin",
+        StaffRoleRequirement.Any => role is StaffRole.Staff or StaffRole.Admin or StaffRole.SuperAdmin,
+        StaffRoleRequirement.Admin => role is StaffRole.Admin or StaffRole.SuperAdmin,
+        StaffRoleRequirement.SuperAdmin => role == StaffRole.SuperAdmin,
         _ => false
     };
 
-    private static bool CanAccess(CurrentStaff staff, int organizationId) =>
-        staff.Role == "super_admin" ||
-        (organizationId != 1 && staff.OrganizationId == organizationId);
+    public static bool CanAccess(CurrentStaff staff, int organizationId) =>
+        IsValidRoleOrganization(staff.Role, staff.OrganizationId) &&
+        CanAccess(staff.Role, staff.OrganizationId, organizationId);
+
+    private static bool CanAccess(string role, int actorOrganizationId, int organizationId) =>
+        organizationId > 0 && (role == StaffRole.SuperAdmin ||
+            organizationId > LibraryScope.SystemOrganizationId && actorOrganizationId == organizationId);
 
     private static StaffEligibilityResult Invalid() =>
         new(StaffEligibilityOutcome.InvalidIdentity, null, "staff_session_invalid");

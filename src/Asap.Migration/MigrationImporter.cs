@@ -65,6 +65,7 @@ public static class MigrationImporter
         var claimTransformations = new List<ClaimTransformation>();
         var additionalCopyClaimTransformations = new List<ClaimTransformation>();
         var placementTransformations = new List<PlacementTransformation>();
+        var bibAuthorityTransformations = new List<BibAuthorityTransformation>();
         MigrationSemanticReconciliation semanticReconciliation;
         transformations.AddRange(ValidateConfigurationSourceFields(package));
         transformations.Add(new
@@ -240,6 +241,13 @@ public static class MigrationImporter
                 importedCounts,
                 transformations,
                 placementTransformations);
+            ReconcileBibAuthorityCutover(
+                titleRequestRows,
+                requestStatuses,
+                placementTransformations,
+                importedCounts,
+                transformations,
+                bibAuthorityTransformations);
             ImportHistoricalEmailDeliveryEvents(
                 connection,
                 transaction,
@@ -283,6 +291,9 @@ public static class MigrationImporter
         }
 
         var targetCounts = ReconcileTarget(options.ConnectionString, importedCounts, options.AllowedTenantIds);
+        targetCounts["title_request_bibs_automation_derived"] = bibAuthorityTransformations.Count(item => item.Classification == "automation_derived");
+        targetCounts["title_request_bibs_ambiguous_unverified"] = bibAuthorityTransformations.Count(item => item.Classification.StartsWith("ambiguous_", StringComparison.Ordinal));
+        targetCounts["title_request_bibs_staff_authoritative"] = bibAuthorityTransformations.Count(item => item.BibIdStaffVerified);
         var targetFingerprint = MigrationReconciler.ComputeTargetFingerprint(options.ConnectionString);
         var packageIdentity = MigrationPackageValidator.ComputePackageIdentitySha256(package);
         WriteReport(
@@ -296,6 +307,7 @@ public static class MigrationImporter
             claimTransformations,
             additionalCopyClaimTransformations,
             placementTransformations,
+            bibAuthorityTransformations,
             semanticReconciliation);
         return new MigrationImportResult(importedCounts, true);
     }
@@ -530,7 +542,11 @@ public static class MigrationImporter
 
     private static string? ReadOptionalSecretEnvironment(string? environmentName, string errorCode)
     {
-        if (string.IsNullOrWhiteSpace(environmentName)) return null;
+        if (string.IsNullOrWhiteSpace(environmentName))
+        {
+            return null;
+        }
+
         var value = Environment.GetEnvironmentVariable(environmentName);
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -543,7 +559,11 @@ public static class MigrationImporter
         ValidatedMigrationPackage package,
         string? postmarkToken)
     {
-        if (postmarkToken is not null) return true;
+        if (postmarkToken is not null)
+        {
+            return true;
+        }
+
         return MigrationPackageReader.ReadRowsOrEmpty(package, "polaris-settings.json", "polaris_settings")
             .Any(row => row.String("apiKey") is not null || row.String("adminPassword") is not null);
     }
@@ -587,6 +607,7 @@ public static class MigrationImporter
                 (SELECT COUNT(*) FROM [asap].[DeletedRequestAudit]),
                 (SELECT COUNT(*) FROM [asap].[AdministrativeAudit]),
                 (SELECT COUNT(*) FROM [asap].[HoldPlacementOperation]),
+                (SELECT COUNT(*) FROM [asap].[PickupPreferenceOperation]),
                 (SELECT COUNT(*) FROM [asap].[PatronSession]),
                 (SELECT COUNT(*) FROM [asap].[EmailOutbox]),
                 (SELECT COUNT(*) FROM [asap].[EmailDeliveryEvent]),
@@ -1023,10 +1044,18 @@ public static class MigrationImporter
         var explicitSourceId = row.String("sourceTemplateId");
         if (explicitSourceId is not null)
         {
-            if (mapped.TryGetValue(explicitSourceId, out var targetId)) return targetId;
+            if (mapped.TryGetValue(explicitSourceId, out var targetId))
+            {
+                return targetId;
+            }
+
             throw new MigrationOperationException("email_template_source_unresolved", $"Email template {row.RequiredString("id")} has an unresolved source template.");
         }
-        if (isRejection) return null;
+        if (isRejection)
+        {
+            return null;
+        }
+
         return FindSystemTemplateId(connection, transaction, templateKey);
     }
 
@@ -1394,7 +1423,7 @@ public static class MigrationImporter
             ValidateOptionalOrganizationReference(row.Int32("patronOrgId"), validOrganizationIds, sourceId, "patron organization");
             ValidateOptionalOrganizationReference(row.Int32("staffLibraryOrgIdCreatedBy"), validOrganizationIds, sourceId, "staff library organization");
             var identifier = row.String("identifier");
-            var bibId = row.String("bibid");
+            var bibId = row.PositiveInt32("bibid", "source_bib_invalid");
             var sourceIsbnStatus = row.String("isbnCheckStatus");
             var targetIsbnStatus = NormalizeIsbnStatus(sourceId, sourceIsbnStatus, identifier, bibId);
             var retryCount = targetIsbnStatus == "skipped_no_isbn"
@@ -1423,7 +1452,7 @@ public static class MigrationImporter
                      [Barcode], [Email], [NameFirst], [NameLast], [PatronCodeId], [PatronCodeDescription],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
                      [Title], [Author], [Identifier], [Publication], [ExactPublicationDate], [CustomFieldsJson],
-                     [AutoHold], [MaterialFormatId], [Status], [CloseReason], [BibId], [Notes],
+                     [AutoHold], [MaterialFormatId], [Status], [CloseReason], [BibId], [BibIdStaffVerified], [Notes],
                      [ClaimedByStaffUserId], [ClaimedByDisplayName], [ClaimedAtUtc], [ClaimType], [ClaimRuleId],
                      [LastPromoterCheckUtc], [IsbnCheckStatus], [IsbnCheckResult], [IsbnCheckRetryCount],
                      [IsbnCheckLastErrorCode], [LastCheckedUtc], [CreatedUtc], [UpdatedUtc])
@@ -1433,7 +1462,7 @@ public static class MigrationImporter
                      @barcode, @email, @nameFirst, @nameLast, @patronCodeId, @patronCodeDescription,
                      @pickupId, @pickupName, @libraryName,
                      @title, @author, @identifier, @publication, @exactPublicationDate, @customFields,
-                     @autoHold, @formatId, @status, @closeReason, @bibId, @notes,
+                     @autoHold, @formatId, @status, @closeReason, @bibId, @bibIdStaffVerified, @notes,
                      @claimedById, @claimedDisplay, @claimedAt, @claimType, @claimRuleId,
                      @lastPromoterCheck, @isbnStatus, @isbnResult, @retryCount,
                      @lastErrorCode, @lastChecked, @createdUtc, @updatedUtc);
@@ -1448,7 +1477,7 @@ public static class MigrationImporter
             command.Parameters.AddWithValue("@email", DbString(row.String("email")));
             command.Parameters.AddWithValue("@nameFirst", DbString(row.Text("nameFirst")));
             command.Parameters.AddWithValue("@nameLast", DbString(row.Text("nameLast")));
-            command.Parameters.AddWithValue("@patronCodeId", DbString(row.String("patronCodeId")));
+            command.Parameters.AddWithValue("@patronCodeId", DbValue(row.PositiveInt32("patronCodeId")));
             command.Parameters.AddWithValue("@patronCodeDescription", DbString(row.Text("patronCodeDescription")));
             command.Parameters.AddWithValue("@pickupId", DbValue(row.Int32("preferredPickupBranchId")));
             command.Parameters.AddWithValue("@pickupName", DbString(row.Text("preferredPickupBranchName")));
@@ -1463,7 +1492,8 @@ public static class MigrationImporter
             command.Parameters.AddWithValue("@formatId", formatId);
             command.Parameters.AddWithValue("@status", status);
             command.Parameters.AddWithValue("@closeReason", DbString(closeReason));
-            command.Parameters.AddWithValue("@bibId", DbString(bibId));
+            command.Parameters.AddWithValue("@bibId", DbValue(bibId));
+            command.Parameters.AddWithValue("@bibIdStaffVerified", false);
             command.Parameters.AddWithValue("@notes", DbString(row.Text("notes")));
             command.Parameters.AddWithValue("@claimedById", DbValue(claim.StaffUserId));
             command.Parameters.AddWithValue("@claimedDisplay", DbString(claim.DisplayName));
@@ -1623,7 +1653,7 @@ public static class MigrationImporter
             command.Parameters.AddWithValue("@sourceTitleRequestId", DbValue(sourceTitleRequestId));
             command.Parameters.AddWithValue("@libraryId", libraryId);
             command.Parameters.AddWithValue("@libraryName", DbString(row.Text("libraryOrgName")));
-            command.Parameters.AddWithValue("@bibId", row.RequiredString("bibid"));
+            command.Parameters.AddWithValue("@bibId", row.PositiveInt32("bibid", "source_bib_invalid") ?? throw new MigrationOperationException("source_bib_missing", "Additional copy requires a BIB ID."));
             command.Parameters.AddWithValue("@title", row.RequiredText("title"));
             command.Parameters.AddWithValue("@author", DbString(row.Text("author")));
             command.Parameters.AddWithValue("@identifier", DbString(row.String("identifier")));
@@ -1758,7 +1788,7 @@ public static class MigrationImporter
             command.Parameters.AddWithValue("@title", DbString(row.Text("title")));
             command.Parameters.AddWithValue("@author", DbString(row.Text("author")));
             command.Parameters.AddWithValue("@identifier", DbString(row.String("identifier")));
-            command.Parameters.AddWithValue("@bibId", DbString(row.String("bibid")));
+            command.Parameters.AddWithValue("@bibId", DbValue(row.PositiveInt32("bibid", "source_bib_invalid")));
             command.Parameters.AddWithValue("@status", DbString(status));
             command.Parameters.AddWithValue("@closeReason", DbString(closeReason));
             command.Parameters.AddWithValue("@maskedBarcode", DbString(MaskBarcode(barcode)));
@@ -1889,7 +1919,11 @@ public static class MigrationImporter
 
     private static DateTime? ParseUtcText(string? value, string errorCode)
     {
-        if (value is null) return null;
+        if (value is null)
+        {
+            return null;
+        }
+
         if (DateTimeOffset.TryParse(
                 value,
                 System.Globalization.CultureInfo.InvariantCulture,
@@ -2053,7 +2087,7 @@ public static class MigrationImporter
             var evidence = new List<PlacementEvidence>();
             var currentStatus = ResolveRequestStatus(request, statuses);
             var currentCloseReason = ResolveRequestCloseReason(request, closeReasons);
-            var requestBib = request.String("bibid");
+            var requestBib = request.PositiveInt32("bibid", "source_bib_invalid");
             if (currentStatus == "hold_placed")
             {
                 evidence.Add(new(
@@ -2106,17 +2140,21 @@ public static class MigrationImporter
                     "title_requests",
                     sourceRequestId,
                     "bibid",
-                    requestBib));
+                    request.String("bibid")!));
             }
             foreach (var sourceEvent in sourceEvents)
             {
-                if (evidence.Any(item => item.SourceRecordId == sourceEvent.Id)) continue;
+                if (evidence.Any(item => item.SourceRecordId == sourceEvent.Id))
+                {
+                    continue;
+                }
+
                 hints.AddRange(sourceEvent.BibSources.Select(source => new PlacementEvidence(
                     "event_bib_hint",
                     source.SourceCollection,
                     source.SourceRecordId,
                     source.SourceField,
-                    source.BibId)));
+                    source.SourceValue)));
             }
             var sortedHints = hints.Distinct()
                 .OrderBy(item => item.Kind, StringComparer.Ordinal)
@@ -2142,7 +2180,7 @@ public static class MigrationImporter
                     sourceId = sourceRequestId,
                     libraryOrganizationId,
                     status = currentStatus,
-                    bibId = (string?)null,
+                    bibId = (int?)null,
                     evidence = Array.Empty<PlacementEvidence>(),
                     hints = sortedHints.Select(item => new
                     {
@@ -2177,7 +2215,7 @@ public static class MigrationImporter
                     sourceId = sourceRequestId,
                     libraryOrganizationId,
                     status = currentStatus,
-                    bibId = (string?)null,
+                    bibId = (int?)null,
                     evidence = Array.Empty<PlacementEvidence>(),
                     action = "no_placement_evidence"
                 });
@@ -2185,15 +2223,19 @@ public static class MigrationImporter
             }
 
             var bibSources = new List<PlacementBibSource>();
-            var bibIds = new HashSet<string>(StringComparer.Ordinal);
+            var bibIds = new HashSet<int>();
             if (requestBib is not null)
             {
-                bibIds.Add(requestBib);
-                bibSources.Add(new("title_requests", sourceRequestId, "bibid", requestBib));
+                bibIds.Add(requestBib.Value);
+                bibSources.Add(new("title_requests", sourceRequestId, "bibid", requestBib.Value, request.String("bibid")!));
             }
             foreach (var sourceEvent in requestEvents ?? [])
             {
-                if (!evidence.Any(item => item.SourceRecordId == sourceEvent.Id)) continue;
+                if (!evidence.Any(item => item.SourceRecordId == sourceEvent.Id))
+                {
+                    continue;
+                }
+
                 foreach (var sourceBib in sourceEvent.BibSources)
                 {
                     bibIds.Add(sourceBib.BibId);
@@ -2204,7 +2246,7 @@ public static class MigrationImporter
             {
                 throw new MigrationOperationException("placed_bib_conflict", $"Title request {sourceRequestId} has conflicting placed-history BIB values.");
             }
-            var bibId = bibIds.SingleOrDefault();
+            int? bibId = bibIds.Count == 0 ? null : bibIds.Single();
             var sortedEvidence = evidence.Distinct().OrderBy(item => item.Kind, StringComparer.Ordinal)
                 .ThenBy(item => item.SourceCollection, StringComparer.Ordinal)
                 .ThenBy(item => item.SourceRecordId, StringComparer.Ordinal)
@@ -2216,7 +2258,7 @@ public static class MigrationImporter
                 .OrderBy(item => item.SourceCollection, StringComparer.Ordinal)
                 .ThenBy(item => item.SourceRecordId, StringComparer.Ordinal)
                 .ThenBy(item => item.SourceField, StringComparer.Ordinal)
-                .ThenBy(item => item.BibId, StringComparer.Ordinal)
+                .ThenBy(item => item.BibId)
                 .ToArray();
             var markerMetadata = JsonSerializer.Serialize(new
             {
@@ -2237,11 +2279,13 @@ public static class MigrationImporter
                     sourceCollection = item.SourceCollection,
                     sourceRecordId = item.SourceRecordId,
                     sourceField = item.SourceField,
-                    bibId = item.BibId
+                    bibId = item.BibId,
+                    sourceValue = item.SourceValue
                 })
             });
             using var marker = new SqlCommand(
                 """
+                UPDATE [asap].[TitleRequest] SET [LegacyHoldProtected] = 1 WHERE [Id] = @requestId;
                 INSERT INTO [asap].[TitleRequestEvent]
                     ([TitleRequestId], [EventType], [Status], [CloseReason], [ActorType], [ActorName],
                      [Message], [MetadataJson], [CreatedUtc])
@@ -2285,7 +2329,8 @@ public static class MigrationImporter
                     sourceCollection = item.SourceCollection,
                     sourceRecordId = item.SourceRecordId,
                     sourceField = item.SourceField,
-                    bibId = item.BibId
+                    bibId = item.BibId,
+                    sourceValue = item.SourceValue
                 }),
                 action = "inserted"
             });
@@ -2300,26 +2345,120 @@ public static class MigrationImporter
         var directField = row.Names.FirstOrDefault(name =>
             string.Equals(name, "bibId", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(name, "bibid", StringComparison.OrdinalIgnoreCase));
-        if (directField is not null && row.String(directField) is { } directBibId)
+        if (directField is not null && row.PositiveInt32(directField, "source_bib_invalid") is { } directBibId)
         {
-            candidates.Add(new("title_request_events", sourceId, directField, directBibId));
+            candidates.Add(new("title_request_events", sourceId, directField, directBibId, row.String(directField)!));
         }
 
-        foreach (var propertyName in new[] { "bibId", "bibid", "BibId" })
+        foreach (var propertyName in row.JsonPropertyNames("metadata")
+                     .Where(name => string.Equals(name, "bibId", StringComparison.OrdinalIgnoreCase))
+                     .Distinct(StringComparer.Ordinal))
         {
-            if (row.JsonPropertyString("metadata", propertyName) is { } metadataBibId)
+            if (row.JsonPropertyPositiveInt32("metadata", propertyName, "source_bib_invalid") is { } metadataBibId)
             {
-                candidates.Add(new("title_request_events", sourceId, $"metadata.{propertyName}", metadataBibId));
+                candidates.Add(new("title_request_events", sourceId, $"metadata.{propertyName}", metadataBibId, row.JsonPropertyString("metadata", propertyName)!));
             }
         }
 
-        if (candidates.Select(item => item.BibId).Distinct(StringComparer.Ordinal).Count() > 1)
+        if (candidates.Select(item => item.BibId).Distinct().Count() > 1)
         {
             throw new MigrationOperationException(
                 "placed_bib_conflict",
                 $"Title request event {sourceId} has conflicting direct and metadata BIB values.");
         }
         return candidates.Distinct().ToArray();
+    }
+
+    private static void ReconcileBibAuthorityCutover(
+        IReadOnlyList<SourceRow> titleRequests,
+        IReadOnlyDictionary<string, string> requestStatuses,
+        IReadOnlyList<PlacementTransformation> placementTransformations,
+        IDictionary<string, int> importedCounts,
+        ICollection<object> transformations,
+        ICollection<BibAuthorityTransformation> bibAuthorityTransformations)
+    {
+        var placedProtectedRequests = placementTransformations
+            .Where(item => item.Action == "inserted")
+            .Select(item => item.SourceId)
+            .ToHashSet(StringComparer.Ordinal);
+        var automationDerivedCount = 0;
+        var ambiguousSafeCount = 0;
+
+        foreach (var row in titleRequests.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
+        {
+            var bibId = row.PositiveInt32("bibid", "source_bib_invalid");
+            if (bibId is null)
+            {
+                continue;
+            }
+
+            var sourceId = row.RequiredString("id");
+            var requestStatus = ResolveRequestStatus(row, requestStatuses);
+            var isbnStatus = NormalizeIsbnStatus(
+                sourceId,
+                row.String("isbnCheckStatus"),
+                row.String("identifier"),
+                bibId);
+            var placedProtected = placedProtectedRequests.Contains(sourceId);
+            var retryableIdentifierState = isbnStatus is "pending" or "error_max_retries";
+            var canEnterSuggestionIdentifierQueue = requestStatus is "suggestion" or "closed";
+            if (canEnterSuggestionIdentifierQueue && retryableIdentifierState && !placedProtected)
+            {
+                transformations.Add(new
+                {
+                    entity = "title_request_bib_authority",
+                    sourceId,
+                    bibId,
+                    requestStatus,
+                    sourceIsbnCheckStatus = row.String("isbnCheckStatus"),
+                    classification = "ambiguous_risky",
+                    bibIdStaffVerified = false,
+                    outcome = "blocked_source_correction_required"
+                });
+                throw new MigrationOperationException(
+                    "bib_authority_ambiguous",
+                    $"Title request {sourceId} has a BIB ID with retryable identifier state '{isbnStatus}' and no placed-history protection; source evidence cannot establish BIB authority, so source correction is required.");
+            }
+
+            var lastChecked = row.UtcDateTime("lastChecked");
+            var updated = row.UtcDateTime("updated");
+            var automationDerived = isbnStatus == "found" &&
+                                    !string.IsNullOrWhiteSpace(row.String("identifier")) &&
+                                    lastChecked.HasValue &&
+                                    lastChecked == updated;
+            var classification = automationDerived
+                ? "automation_derived"
+                : placedProtected
+                    ? "ambiguous_protected_by_placed_history"
+                    : "ambiguous_noneligible_identifier_state";
+            var authority = new BibAuthorityTransformation(sourceId, bibId.Value, classification, false);
+            bibAuthorityTransformations.Add(authority);
+            if (automationDerived)
+            {
+                automationDerivedCount++;
+            }
+            else
+            {
+                ambiguousSafeCount++;
+            }
+
+            transformations.Add(new
+            {
+                entity = "title_request_bib_authority",
+                sourceId,
+                bibId,
+                requestStatus,
+                sourceIsbnCheckStatus = row.String("isbnCheckStatus"),
+                classification,
+                bibIdStaffVerified = false,
+                placedHistoryProtected = placedProtected,
+                outcome = "imported_without_staff_authority"
+            });
+        }
+
+        importedCounts["title_request_bib_authority_automation_derived"] = automationDerivedCount;
+        importedCounts["title_request_bib_authority_ambiguous_safe"] = ambiguousSafeCount;
+        importedCounts["title_request_bib_authority_staff_authoritative"] = 0;
     }
 
     private static void ImportHistoricalEmailDeliveryEvents(
@@ -2410,7 +2549,11 @@ public static class MigrationImporter
         ICollection<object> transformations)
     {
         importedCounts["migration_bootstrap_staff_users"] = 0;
-        if (HasUsableSuperAdministrator(connection, transaction, allowedTenantIds)) return null;
+        if (HasUsableSuperAdministrator(connection, transaction, allowedTenantIds))
+        {
+            return null;
+        }
+
         if (externalConfigurationPath is null)
         {
             throw new MigrationOperationException(
@@ -2545,7 +2688,10 @@ public static class MigrationImporter
     {
         foreach (var property in value.EnumerateObject())
         {
-            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) return property.Value;
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return property.Value;
+            }
         }
         throw new KeyNotFoundException(name);
     }
@@ -2672,7 +2818,7 @@ public static class MigrationImporter
                 sourceId,
                 row.String("isbnCheckStatus"),
                 row.String("identifier"),
-                row.String("bibid"));
+                row.PositiveInt32("bibid", "source_bib_invalid"));
             var retryCount = isbnStatus == "skipped_no_isbn" ? 0 : row.Int32("isbnCheckRetryCount") ?? 0;
             var expectedFormatId = ResolveRequestFormatId(connection, transaction, row, formatIds);
             var expectedClaim = ResolveRequestClaim(
@@ -2694,7 +2840,7 @@ public static class MigrationImporter
                        r.[LastPromoterCheckUtc], r.[IsbnCheckStatus], r.[IsbnCheckResult], r.[IsbnCheckRetryCount],
                        r.[IsbnCheckLastErrorCode], r.[LastCheckedUtc], r.[CreatedUtc], r.[UpdatedUtc],
                        r.[ClaimedByStaffUserId], r.[ClaimedByDisplayName], r.[ClaimedAtUtc], r.[ClaimType], r.[ClaimRuleId],
-                       r.[LegacyId], r.[Notes]
+                       r.[LegacyId], r.[Notes], r.[BibIdStaffVerified]
                 FROM [asap].[LegacyPocketBaseMapping] m
                 JOIN [asap].[TitleRequest] r ON r.[Id] = m.[NewId]
                 WHERE m.[EntityType] = N'title_request' AND m.[PocketBaseId] = @sourceId;
@@ -2712,7 +2858,7 @@ public static class MigrationImporter
                 StringEquals(reader, 4, row.String("email")) &&
                 StringEquals(reader, 5, row.Text("nameFirst")) &&
                 StringEquals(reader, 6, row.Text("nameLast")) &&
-                StringEquals(reader, 7, row.String("patronCodeId")) &&
+                IntEquals(reader, 7, row.PositiveInt32("patronCodeId")) &&
                 StringEquals(reader, 8, row.Text("patronCodeDescription")) &&
                 IntEquals(reader, 9, row.Int32("preferredPickupBranchId")) &&
                 StringEquals(reader, 10, row.Text("preferredPickupBranchName")) &&
@@ -2727,7 +2873,7 @@ public static class MigrationImporter
                 reader.GetInt64(19) == expectedFormatId &&
                 StringEquals(reader, 20, ResolveRequestStatus(row, requestStatuses)) &&
                 StringEquals(reader, 21, ResolveRequestCloseReason(row, requestCloseReasons)) &&
-                StringEquals(reader, 22, row.String("bibid")) &&
+                IntEquals(reader, 22, row.PositiveInt32("bibid", "source_bib_invalid")) &&
                 DateEquals(reader, 23, row.UtcDateTime("lastPromoterCheck")) &&
                 StringEquals(reader, 24, isbnStatus) &&
                 StringEquals(reader, 25, row.Text("isbnCheckResult")) &&
@@ -2742,7 +2888,8 @@ public static class MigrationImporter
                  StringEquals(reader, 34, expectedClaim.ClaimType) &&
                  LongEquals(reader, 35, expectedClaim.ClaimRuleId) &&
                  StringEquals(reader, 36, row.String("legacyId")) &&
-                 StringEquals(reader, 37, row.Text("notes")),
+                 StringEquals(reader, 37, row.Text("notes")) &&
+                 !reader.GetBoolean(38),
                 "title request");
         }
 
@@ -2787,7 +2934,7 @@ public static class MigrationImporter
                 LongEquals(reader, 0, expectedSourceId) &&
                 reader.GetInt32(1) == row.Int32("libraryOrgId") &&
                 StringEquals(reader, 2, row.Text("libraryOrgName")) &&
-                StringEquals(reader, 3, row.RequiredString("bibid")) &&
+                IntEquals(reader, 3, row.PositiveInt32("bibid", "source_bib_invalid")) &&
                 StringEquals(reader, 4, row.RequiredText("title")) &&
                 StringEquals(reader, 5, row.Text("author")) &&
                 StringEquals(reader, 6, row.String("identifier")) &&
@@ -2847,7 +2994,7 @@ public static class MigrationImporter
                 StringEquals(reader, 3, row.Text("title")) &&
                 StringEquals(reader, 4, row.Text("author")) &&
                 StringEquals(reader, 5, row.String("identifier")) &&
-                StringEquals(reader, 6, row.String("bibid")) &&
+                IntEquals(reader, 6, row.PositiveInt32("bibid", "source_bib_invalid")) &&
                  StringEquals(reader, 7, expectedStatus) &&
                  StringEquals(reader, 8, expectedCloseReason) &&
                 StringEquals(reader, 9, MaskBarcode(barcode)) &&
@@ -3031,8 +3178,12 @@ public static class MigrationImporter
         foreach (var row in titleRequests)
         {
             var sourceId = row.RequiredString("id");
-            var status = NormalizeIsbnStatus(sourceId, row.String("isbnCheckStatus"), row.String("identifier"), row.String("bibid"));
-            if (status != "found" || !requestIds.TryGetValue(sourceId, out var requestId)) continue;
+            var status = NormalizeIsbnStatus(sourceId, row.String("isbnCheckStatus"), row.String("identifier"), row.PositiveInt32("bibid", "source_bib_invalid"));
+            if (status != "found" || !requestIds.TryGetValue(sourceId, out var requestId))
+            {
+                continue;
+            }
+
             var foundTagId = FindTagId(connection, transaction, "polaris_bib_found");
             if (foundTagId is null)
             {
@@ -3206,7 +3357,11 @@ public static class MigrationImporter
         foreach (var row in rows)
         {
             var sourceId = row.RequiredString("id");
-            if (!requestIds.TryGetValue(sourceId, out var requestId)) continue;
+            if (!requestIds.TryGetValue(sourceId, out var requestId))
+            {
+                continue;
+            }
+
             var formatId = ResolveRequestFormatId(connection, transaction, row, formatIds);
             var claim = ResolveRequestClaim(
                 connection,
@@ -3217,7 +3372,11 @@ public static class MigrationImporter
                 staffIds,
                 claimRuleIds,
                 allowedTenantIds);
-            if (!claim.RequiresMigrationAnnotation) continue;
+            if (!claim.RequiresMigrationAnnotation)
+            {
+                continue;
+            }
+
             expectedCount++;
             var metadata = BuildClaimAnnotationMetadata(row, sourceId, claim);
             using var command = new SqlCommand(
@@ -3269,6 +3428,15 @@ public static class MigrationImporter
                 DateEquals(reader, 7, exportedAtUtc),
                 "placed BIB protection marker");
             EnsureSemantic(!reader.Read(), "placed BIB protection marker count");
+        }
+        // Independently verify structured authority; preserved marker JSON is provenance.
+        foreach (var item in transformations)
+        {
+            using var protection = new SqlCommand(
+                "SELECT [LegacyHoldProtected] FROM [asap].[TitleRequest] WHERE [Id] = @id;", connection, transaction);
+            protection.Parameters.AddWithValue("@id", requestIds[item.SourceId]);
+            EnsureSemantic(Convert.ToBoolean(protection.ExecuteScalar()) == (item.Action == "inserted"),
+                "structured legacy hold protection");
         }
         using var count = new SqlCommand(
             "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND JSON_VALUE([MetadataJson], '$.transform') = N'placed_bib_protection_v1';",
@@ -3356,7 +3524,8 @@ public static class MigrationImporter
                 sourceCollection = source.SourceCollection,
                 sourceRecordId = source.SourceRecordId,
                 sourceField = source.SourceField,
-                bibId = source.BibId
+                bibId = source.BibId,
+                sourceValue = source.SourceValue
             })
         });
 
@@ -3391,8 +3560,16 @@ public static class MigrationImporter
 
     private static bool JsonEquals(SqlDataReader reader, int ordinal, string? expected)
     {
-        if (reader.IsDBNull(ordinal)) return expected is null;
-        if (expected is null) return false;
+        if (reader.IsDBNull(ordinal))
+        {
+            return expected is null;
+        }
+
+        if (expected is null)
+        {
+            return false;
+        }
+
         using var actualDocument = JsonDocument.Parse(reader.GetString(ordinal));
         using var expectedDocument = JsonDocument.Parse(expected);
         return JsonElement.DeepEquals(actualDocument.RootElement, expectedDocument.RootElement);
@@ -3462,7 +3639,7 @@ public static class MigrationImporter
                        NOT ((s.[Role] IN (N'staff', N'admin') AND s.[OrganizationId] = r.[LibraryOrganizationId]) OR
                             (s.[Role] = N'super_admin' AND s.[OrganizationId] = 1)));
                 """, allowedTenantIds),
-            ["invalid_found_requests"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [IsbnCheckStatus] = N'found' AND NULLIF(LTRIM(RTRIM([BibId])), N'') IS NULL;")
+            ["invalid_found_requests"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [IsbnCheckStatus] = N'found' AND [BibId] IS NULL;")
         };
         if (counts["staff_users"] != importedCounts["staff_users"] + importedCounts.GetValueOrDefault("migration_bootstrap_staff_users") ||
             counts["format_auto_claim_rules"] != importedCounts.GetValueOrDefault("format_claim_rules") ||
@@ -3494,13 +3671,18 @@ public static class MigrationImporter
         IReadOnlyCollection<ClaimTransformation> claimTransformations,
         IReadOnlyCollection<ClaimTransformation> additionalCopyClaimTransformations,
         IReadOnlyCollection<PlacementTransformation> placementTransformations,
+        IReadOnlyCollection<BibAuthorityTransformation> bibAuthorityTransformations,
         MigrationSemanticReconciliation semanticReconciliation)
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
         var json = JsonSerializer.Serialize(new
         {
-            reportVersion = 4,
+            reportVersion = 5,
             sourceGitSha = package.Manifest.PocketBaseSourceGitSha,
             sourceSchemaVersion = package.Manifest.PocketBaseSourceSchemaVersion,
             exportedAtUtc = package.Manifest.ExportedAtUtc,
@@ -3598,6 +3780,18 @@ public static class MigrationImporter
                                 item.Value == reason)
                     })
             },
+            bibAuthorityReconciliation = new
+            {
+                sourceRequestsWithBibId = bibAuthorityTransformations.Count,
+                automationDerivedBibs = bibAuthorityTransformations.Count(item => item.Classification == "automation_derived"),
+                staffAuthoritativeBibs = bibAuthorityTransformations.Count(item => item.BibIdStaffVerified),
+                ambiguousBibsImportedWithoutStaffAuthority = bibAuthorityTransformations.Count(item => item.Classification.StartsWith("ambiguous_", StringComparison.Ordinal)),
+                blockedRiskBibs = 0,
+                byClassification = bibAuthorityTransformations
+                    .GroupBy(item => item.Classification)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .Select(group => new { classification = group.Key, count = group.Count() })
+            },
             sourceToTargetReconciliation = semanticReconciliation,
             reconciliationPassed = true
         }, new JsonSerializerOptions { WriteIndented = true }).Replace("\r\n", "\n", StringComparison.Ordinal) + "\n";
@@ -3651,7 +3845,11 @@ public static class MigrationImporter
         IReadOnlyDictionary<string, int> organizationIds)
     {
         var sourceValue = row.RequiredString(field);
-        if (organizationIds.TryGetValue(sourceValue, out var mapped)) return mapped;
+        if (organizationIds.TryGetValue(sourceValue, out var mapped))
+        {
+            return mapped;
+        }
+
         if (int.TryParse(sourceValue, out var organizationId) &&
             organizationId > 0 &&
             organizationIds.Values.Contains(organizationId))
@@ -3685,7 +3883,11 @@ public static class MigrationImporter
         string sourceId,
         string description)
     {
-        if (organizationId is null) return;
+        if (organizationId is null)
+        {
+            return;
+        }
+
         if (!validOrganizationIds.Contains(organizationId.Value))
         {
             throw new MigrationOperationException(
@@ -3732,7 +3934,11 @@ public static class MigrationImporter
         int sortOrder)
     {
         var existing = FindTagId(connection, transaction, code);
-        if (existing is not null) return existing.Value;
+        if (existing is not null)
+        {
+            return existing.Value;
+        }
+
         using var command = new SqlCommand(
             "INSERT INTO [asap].[WorkflowTag] ([Code], [Label], [SortOrder]) OUTPUT inserted.[Id] VALUES (@code, @label, @sortOrder);",
             connection,
@@ -3807,7 +4013,11 @@ public static class MigrationImporter
 
     private static long? ResolveOptionalMapping(string? sourceId, IReadOnlyDictionary<string, long> mappings)
     {
-        if (sourceId is null) return null;
+        if (sourceId is null)
+        {
+            return null;
+        }
+
         return mappings.TryGetValue(sourceId, out var mapped) ? mapped : null;
     }
 
@@ -3817,7 +4027,11 @@ public static class MigrationImporter
         string errorCode,
         string description)
     {
-        if (sourceId is null) return null;
+        if (sourceId is null)
+        {
+            return null;
+        }
+
         return mappings.TryGetValue(sourceId, out var mapped)
             ? mapped
             : throw new MigrationOperationException(
@@ -3993,8 +4207,16 @@ public static class MigrationImporter
             transaction);
         command.Parameters.AddWithValue("@id", staffUserId);
         using var reader = command.ExecuteReader();
-        if (!reader.Read()) return "claimant_unmapped";
-        if (!reader.GetBoolean(0)) return "claimant_inactive";
+        if (!reader.Read())
+        {
+            return "claimant_unmapped";
+        }
+
+        if (!reader.GetBoolean(0))
+        {
+            return "claimant_inactive";
+        }
+
         var role = reader.GetString(1);
         var organizationId = reader.GetInt32(2);
         var authenticationEmail = reader.IsDBNull(3) ? null : RealEmail(reader.GetString(3));
@@ -4086,7 +4308,11 @@ public static class MigrationImporter
         string? sourceValue,
         IReadOnlyDictionary<string, string> statuses)
     {
-        if (sourceValue is null) return null;
+        if (sourceValue is null)
+        {
+            return null;
+        }
+
         return statuses.TryGetValue(sourceValue, out var code) ? code : NormalizeStatus(sourceValue);
     }
 
@@ -4163,7 +4389,11 @@ public static class MigrationImporter
         IReadOnlyDictionary<string, string> values,
         string errorCode)
     {
-        if (reference is null) return null;
+        if (reference is null)
+        {
+            return null;
+        }
+
         return values.TryGetValue(reference, out var value)
             ? value
             : throw new MigrationOperationException(errorCode, $"Source reference {reference} cannot be resolved.");
@@ -4173,13 +4403,21 @@ public static class MigrationImporter
         string? sourceValue,
         IReadOnlyDictionary<string, string> closeReasons)
     {
-        if (sourceValue is null) return null;
+        if (sourceValue is null)
+        {
+            return null;
+        }
+
         return closeReasons.TryGetValue(sourceValue, out var code) ? code : NormalizeCloseReason(sourceValue);
     }
 
     private static JsonElement? ParseJsonElement(string? value)
     {
-        if (value is null) return null;
+        if (value is null)
+        {
+            return null;
+        }
+
         using var document = JsonDocument.Parse(value);
         return document.RootElement.Clone();
     }
@@ -4188,7 +4426,7 @@ public static class MigrationImporter
         string sourceId,
         string? sourceStatus,
         string? identifier,
-        string? bibId) => sourceStatus?.Trim().ToLowerInvariant() switch
+        int? bibId) => sourceStatus?.Trim().ToLowerInvariant() switch
         {
             null => null,
             "pending" => "pending",
@@ -4215,17 +4453,29 @@ public static class MigrationImporter
 
     private static string? NormalizeOptionalEnum(string? value, IReadOnlyCollection<string> allowed, string errorCode)
     {
-        if (value is null) return null;
+        if (value is null)
+        {
+            return null;
+        }
+
         var normalized = value.Trim();
         var canonical = allowed.FirstOrDefault(
             item => string.Equals(item, normalized, StringComparison.OrdinalIgnoreCase));
-        if (canonical is not null) return canonical;
+        if (canonical is not null)
+        {
+            return canonical;
+        }
+
         throw new MigrationOperationException(errorCode, $"Unknown source value: {value}");
     }
 
     private static DateTime? ParseDate(string? value, string errorCode)
     {
-        if (value is null) return null;
+        if (value is null)
+        {
+            return null;
+        }
+
         if (DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var date))
         {
             return date.Date;
@@ -4284,17 +4534,24 @@ public static class MigrationImporter
         string SourceCollection,
         string SourceRecordId,
         string SourceField,
-        string BibId);
+        int BibId,
+        string SourceValue);
 
     private sealed record PlacementTransformation(
         string SourceId,
         int LibraryOrganizationId,
         string Status,
-        string? BibId,
+        int? BibId,
         IReadOnlyList<PlacementEvidence> Evidence,
         IReadOnlyList<PlacementBibSource> BibSources,
         string Action,
         IReadOnlyList<PlacementEvidence> Hints);
+
+    private sealed record BibAuthorityTransformation(
+        string SourceId,
+        int BibId,
+        string Classification,
+        bool BibIdStaffVerified);
 
     private sealed record ConfigurationSourceFields(
         string File,
@@ -4350,7 +4607,11 @@ public static class MigrationImporter
     private static string? RealEmail(string? value)
     {
         var clean = Clean(value);
-        if (clean is null || clean.EndsWith("@staff.asap.local", StringComparison.OrdinalIgnoreCase)) return null;
+        if (clean is null || clean.EndsWith("@staff.asap.local", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
         try
         {
             var address = new MailAddress(clean);

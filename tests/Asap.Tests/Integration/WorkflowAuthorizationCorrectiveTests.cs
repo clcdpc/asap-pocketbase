@@ -11,6 +11,153 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    public async Task ClosedDeletionRevalidatesEachTypedRecordAndAuditsOnlyCommittedDeletes()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var ordinaryUser = await CreateCorrectiveStaffAsync(actor, "staff", 2);
+        var ordinary = await ReadCorrectiveStaffAsync(ordinaryUser);
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var titles = factory.Services.GetRequiredService<TitleRequestMutationService>();
+        var copies = factory.Services.GetRequiredService<AdditionalCopyService>();
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
+        await using var seed = await contextFactory.CreateDbContextAsync();
+        var formatId = await seed.MaterialFormats.Where(item => item.OwnerOrganizationId == 1 && item.Code == "book")
+            .Select(item => item.Id).SingleAsync();
+        TitleRequest Title(string status) => new()
+        {
+            LibraryOrganizationId = 2, Barcode = Guid.NewGuid().ToString("N"),
+            Title = "Closed deletion revalidation " + status, MaterialFormatId = formatId,
+            Status = status, CloseReason = status == "closed" ? "manual" : null,
+            CreatedUtc = now, UpdatedUtc = now
+        };
+        var reopened = Title("closed");
+        var deletable = Title("closed");
+        var forgedOpen = Title("suggestion");
+        var copy = new AdditionalCopyRequest
+        {
+            LibraryOrganizationId = 2, BibId = 9288001, Title = "Closed deletion typed copy",
+            Status = "closed", CreatedUtc = now, UpdatedUtc = now, ClosedUtc = now
+        };
+        seed.TitleRequests.AddRange(reopened, deletable, forgedOpen);
+        seed.AdditionalCopyRequests.Add(copy);
+        await seed.SaveChangesAsync();
+        var reopenedVersion = StaffVersion.Encode(reopened.RowVersion);
+        var deletableVersion = StaffVersion.Encode(deletable.RowVersion);
+        var openVersion = StaffVersion.Encode(forgedOpen.RowVersion);
+        var copyVersion = StaffVersion.Encode(copy.RowVersion);
+        var actorVersion = StaffVersion.Encode(actor.RowVersion);
+
+        Assert.AreEqual("delete_forbidden", (await titles.DeleteClosedAsync(ordinary, deletable.Id,
+            new VersionInput(deletableVersion), CancellationToken.None)).Code);
+        Assert.AreEqual("delete_forbidden", (await copies.DeleteClosedAsync(ordinary, copy.Id,
+            new VersionInput(copyVersion), CancellationToken.None)).Code);
+        Assert.AreEqual("request_not_closed", (await titles.DeleteClosedAsync(actor, forgedOpen.Id,
+            new VersionInput(openVersion, actorVersion), CancellationToken.None)).Code);
+        Assert.AreEqual("updated", (await titles.ActionAsync(actor, reopened.Id,
+            new TitleRequestActionInput { Version = reopenedVersion, Action = "reopen", Status = "suggestion" }.ToCommand(),
+            CancellationToken.None)).Code);
+        Assert.AreEqual("stale_version", (await titles.DeleteClosedAsync(actor, reopened.Id,
+            new VersionInput(reopenedVersion, actorVersion), CancellationToken.None)).Code);
+        await using (var current = await contextFactory.CreateDbContextAsync())
+        {
+            var currentVersion = await current.TitleRequests.Where(item => item.Id == reopened.Id)
+                .Select(item => item.RowVersion).SingleAsync();
+            Assert.AreEqual("request_not_closed", (await titles.DeleteClosedAsync(actor, reopened.Id,
+                new VersionInput(StaffVersion.Encode(currentVersion), actorVersion), CancellationToken.None)).Code);
+        }
+        Assert.AreEqual("deleted", (await titles.DeleteClosedAsync(actor, deletable.Id,
+            new VersionInput(deletableVersion, actorVersion), CancellationToken.None)).Code);
+        Assert.AreEqual("not_found", (await titles.DeleteClosedAsync(actor, deletable.Id,
+            new VersionInput(deletableVersion, actorVersion), CancellationToken.None)).Code);
+        Assert.AreEqual("deleted", (await copies.DeleteClosedAsync(actor, copy.Id,
+            new VersionInput(copyVersion, actorVersion), CancellationToken.None)).Code);
+        Assert.AreEqual("not_found", (await copies.DeleteClosedAsync(actor, copy.Id,
+            new VersionInput(copyVersion, actorVersion), CancellationToken.None)).Code);
+        await using var verify = await contextFactory.CreateDbContextAsync();
+        Assert.AreEqual(0, await verify.DeletedRequestAudits.CountAsync(item =>
+            item.RequestType == "title_request" &&
+            (item.OriginalRequestKey == reopened.Id.ToString() ||
+             item.OriginalRequestKey == forgedOpen.Id.ToString())));
+        Assert.AreEqual(1, await verify.DeletedRequestAudits.CountAsync(item =>
+            item.RequestType == "title_request" && item.OriginalRequestKey == deletable.Id.ToString()));
+        Assert.AreEqual(1, await verify.DeletedRequestAudits.CountAsync(item =>
+            item.RequestType == "additional_copy" && item.OriginalRequestKey == copy.Id.ToString()));
+    }
+
+    [TestMethod]
+    public async Task ClosedDeletionRejectsActorRoleChangeAfterPreviewEvenWhenLibraryStillAllowed()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        var changingUser = await CreateCorrectiveStaffAsync(superAdmin, "super_admin", 1);
+        var actor = await ReadCorrectiveStaffAsync(changingUser);
+        var actorVersion = StaffVersion.Encode(actor.RowVersion);
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var seed = await contextFactory.CreateDbContextAsync();
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
+        var title = new TitleRequest
+        {
+            LibraryOrganizationId = 2, Barcode = Guid.NewGuid().ToString("N"),
+            Title = "Actor version title", Status = "closed", CloseReason = "manual",
+            MaterialFormatId = await seed.MaterialFormats.Where(item => item.OwnerOrganizationId == 1 && item.Code == "book")
+                .Select(item => item.Id).SingleAsync(),
+            CreatedUtc = now, UpdatedUtc = now
+        };
+        var copy = new AdditionalCopyRequest
+        {
+            LibraryOrganizationId = 2, BibId = 9288002, Title = "Actor version copy",
+            Status = "closed", CreatedUtc = now, UpdatedUtc = now, ClosedUtc = now
+        };
+        if (!await seed.Organizations.AnyAsync(item => item.Id == 91906))
+        {
+            seed.Organizations.Add(new Organization
+            {
+                Id = 91906, DisplayName = "Actor version destination", IsActive = true
+            });
+        }
+        seed.TitleRequests.Add(title);
+        seed.AdditionalCopyRequests.Add(copy);
+        await seed.SaveChangesAsync();
+        var titleInput = new VersionInput(StaffVersion.Encode(title.RowVersion), actorVersion);
+        var copyInput = new VersionInput(StaffVersion.Encode(copy.RowVersion), actorVersion);
+        var changed = await factory.Services.GetRequiredService<StaffLifecycleService>().ChangeRoleAsync(
+            superAdmin, changingUser.Id,
+            new StaffRoleInput(StaffVersion.Encode(changingUser.RowVersion), "admin", 2),
+            CancellationToken.None);
+        Assert.AreEqual("updated", changed.Code);
+        var currentActor = await ReadCorrectiveStaffAsync(changingUser);
+        Assert.AreEqual("admin", currentActor.Role);
+        Assert.AreEqual(2, currentActor.OrganizationId);
+        Assert.AreEqual("actor_changed_since_preview",
+            (await factory.Services.GetRequiredService<TitleRequestMutationService>()
+                .DeleteClosedAsync(currentActor, title.Id, titleInput, CancellationToken.None)).Code);
+        Assert.AreEqual("actor_changed_since_preview",
+            (await factory.Services.GetRequiredService<AdditionalCopyService>()
+                .DeleteClosedAsync(currentActor, copy.Id, copyInput, CancellationToken.None)).Code);
+        var moved = await factory.Services.GetRequiredService<StaffLifecycleService>().ChangeRoleAsync(
+            superAdmin, changingUser.Id,
+            new StaffRoleInput(StaffVersion.Encode(currentActor.RowVersion), "admin", 91906),
+            CancellationToken.None);
+        Assert.AreEqual("updated", moved.Code);
+        var movedActor = await ReadCorrectiveStaffAsync(changingUser);
+        Assert.AreEqual("actor_changed_since_preview",
+            (await factory.Services.GetRequiredService<TitleRequestMutationService>()
+                .DeleteClosedAsync(movedActor, title.Id, titleInput, CancellationToken.None)).Code);
+        Assert.AreEqual("actor_changed_since_preview",
+            (await factory.Services.GetRequiredService<AdditionalCopyService>()
+                .DeleteClosedAsync(movedActor, copy.Id, copyInput, CancellationToken.None)).Code);
+        await using var verify = await contextFactory.CreateDbContextAsync();
+        Assert.IsTrue(await verify.TitleRequests.AnyAsync(item => item.Id == title.Id));
+        Assert.IsTrue(await verify.AdditionalCopyRequests.AnyAsync(item => item.Id == copy.Id));
+        Assert.AreEqual(0, await verify.DeletedRequestAudits.CountAsync(item =>
+            item.DeletedByStaffUserId == changingUser.Id &&
+            (item.OriginalRequestKey == title.Id.ToString() || item.OriginalRequestKey == copy.Id.ToString())));
+    }
+
+    [TestMethod]
     [DataRow(false, false)]
     [DataRow(false, true)]
     [DataRow(true, false)]
@@ -40,10 +187,10 @@ public sealed partial class PatronJourneyTests
                 {
                     var row = new AdditionalCopyRequest
                     {
-                        LibraryOrganizationId = 2, BibId = "12345", Title = "Privileged copy race",
+                        LibraryOrganizationId = 2, BibId = 12345, Title = "Privileged copy race",
                         Status = delete ? "closed" : "open", ClaimedByStaffUserId = assignee.Id,
                         ClaimedByDisplayName = assignee.DisplayName ?? assignee.UserPrincipalName,
-                        ClaimType = "manual", ClaimedAtUtc = DateTime.UtcNow,
+                        ClaimType = "manual", ClaimedAtUtc = timeProvider!.GetUtcNow().UtcDateTime,
                         Notes = "Committed copy history.", CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime, UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime,
                         ClosedUtc = delete ? timeProvider.GetUtcNow().UtcDateTime : null
                     };
@@ -60,8 +207,8 @@ public sealed partial class PatronJourneyTests
                         MaterialFormatId = await context.MaterialFormats.Where(item => item.OwnerOrganizationId == 1 && item.Code == "book").Select(item => item.Id).SingleAsync(),
                         Status = delete ? "closed" : "suggestion", CloseReason = delete ? "manual" : null, ClaimedByStaffUserId = assignee.Id,
                         ClaimedByDisplayName = assignee.DisplayName ?? assignee.UserPrincipalName,
-                        ClaimType = "manual", ClaimedAtUtc = DateTime.UtcNow,
-                        CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+                        ClaimType = "manual", ClaimedAtUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                        CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime, UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
                     };
                     context.TitleRequests.Add(row);
                     await context.SaveChangesAsync();
@@ -71,18 +218,19 @@ public sealed partial class PatronJourneyTests
             }
             async Task<string> MutateAsync()
             {
-                var input = new VersionInput(StaffVersion.Encode(requestVersion));
+                var input = new VersionInput(StaffVersion.Encode(requestVersion),
+                    delete ? StaffVersion.Encode(actor.RowVersion) : null);
                 if (additionalCopy)
                 {
                     var copies = factory.Services.GetRequiredService<AdditionalCopyService>();
                     return (delete
                         ? await copies.DeleteClosedAsync(actor, requestId, input, CancellationToken.None)
-                        : await copies.ClaimAsync(actor, requestId, input, true, CancellationToken.None)).Code;
+                        : await copies.ClearClaimAsync(actor, requestId, input, CancellationToken.None)).Code;
                 }
                 var titles = factory.Services.GetRequiredService<TitleRequestMutationService>();
                 return (delete
                     ? await titles.DeleteClosedAsync(actor, requestId, input, CancellationToken.None)
-                    : await titles.ClaimAsync(actor, requestId, input, true, CancellationToken.None)).Code;
+                    : await titles.ClearClaimAsync(actor, requestId, input, CancellationToken.None)).Code;
             }
             Task<StaffLifecycleResult> ContractAsync() => change == "deactivate"
                 ? lifecycle.DeactivateAsync(superAdmin, admin.Id, new StaffDeactivateInput(StaffVersion.Encode(admin.RowVersion)), CancellationToken.None)
@@ -190,7 +338,7 @@ public sealed partial class PatronJourneyTests
         };
         AdditionalCopyRequest Copy(string status) => new()
         {
-            LibraryOrganizationId = otherLibrary, BibId = "19001", Title = "Global claimant cleanup barrier", Status = status,
+            LibraryOrganizationId = otherLibrary, BibId = 19001, Title = "Global claimant cleanup barrier", Status = status,
             ClaimedByStaffUserId = claimant.Id,
             ClaimedByDisplayName = claimant.DisplayName ?? claimant.UserPrincipalName,
             ClaimType = "automatic_format_rule", ClaimRuleId = rule.Id, ClaimedAtUtc = now,
@@ -214,8 +362,8 @@ public sealed partial class PatronJourneyTests
         Task<TitleRequestMutationResult> MutateAsync() => reassign
             ? titles.AssignAsync(workflowActor, racingTitle.Id,
                 new AssignTitleRequestInput(StaffVersion.Encode(racingTitle.RowVersion), replacement.Id), CancellationToken.None)
-            : titles.ClaimAsync(workflowActor, racingTitle.Id,
-                new VersionInput(StaffVersion.Encode(racingTitle.RowVersion)), true, CancellationToken.None);
+            : titles.ClearClaimAsync(workflowActor, racingTitle.Id,
+                new VersionInput(StaffVersion.Encode(racingTitle.RowVersion)), CancellationToken.None);
 
         await using var blocker = new SqlConnection(databaseConnectionString);
         await blocker.OpenAsync();
@@ -285,7 +433,7 @@ public sealed partial class PatronJourneyTests
         Assert.IsNull(currentTitle.ClaimRuleId);
         var events = await verify.TitleRequestEvents.Where(item => item.TitleRequestId == racingTitle.Id).ToListAsync();
         Assert.HasCount(1, events);
-        Assert.AreEqual(lifecycleFirst ? "claim_cleared" : reassign ? "claim_manual_assigned" : "claim_manual_cleared", events[0].EventType);
+        Assert.AreEqual(lifecycleFirst ? "claim_cleared" : reassign ? "claim_manual_assigned" : "claim_admin_cleared", events[0].EventType);
         Assert.AreEqual(lifecycleFirst ? lifecycleActor.Id : workflowActor.Id, events[0].StaffUserId);
         if (lifecycleFirst)
         {

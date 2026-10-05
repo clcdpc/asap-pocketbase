@@ -15,12 +15,12 @@ const response = (status, body) => ({
 const payload = (scope, range, label) => ({
   scope: {
     mode: scope === 'all' ? 'all' : 'library',
-    libraryOrgId: scope === 'all' ? '' : scope,
+    libraryOrgId: scope === 'all' ? null : Number(scope),
     label,
     superAdmin: true
   },
   dateRange: { key: range, start: '2026-09-01T04:00:00Z', end: '2026-09-16T03:59:59Z' },
-  availableLibraries: [{ orgId: '2', name: 'Library Two' }, { orgId: '3', name: 'Library Three' }],
+  availableLibraries: [{ orgId: 2, name: 'Library Two' }, { orgId: 3, name: 'Library Three' }],
   summary: { newSuggestions: 1, openRequests: 2, closedRequests: 3, heldRequests: 4, averageDaysToHold: 2.5 },
   stageCounts: { suggestion: 1, outstanding_purchase: 0, pending_hold: 0, hold_placed: 1, closed: 1, additional_copies: 0 },
   closedReasons: [],
@@ -64,9 +64,12 @@ async function flush() {
       throw new Error(`Unexpected request ${request.url}`);
     };
 
-    const analytics = await import(pathToFileURL(path.join(temporary, 'staff/js/analytics.js')).href);
+    const { createAnalyticsController } = await import(pathToFileURL(path.join(temporary, 'staff/js/analytics.js')).href);
     const container = document.getElementById('analytics-container');
-    const initial = analytics.loadAnalytics(container);
+    const owner = {};
+    const analytics = createAnalyticsController({ root: container, sessionIdentity: { preferences: () => owner, isCurrent: captured => captured === owner } });
+    analytics.activate();
+    const initial = analytics.refresh();
     assert.strictEqual(pending.length, 1);
     pending[0].resolve(response(200, payload('all', 'lastMonth', 'All libraries')));
     await initial;
@@ -77,7 +80,7 @@ async function flush() {
     scope.dispatchEvent(new dom.window.Event('change'));
     await flush();
     assert.strictEqual(pending.length, 2);
-    const scopeRace = analytics.loadAnalytics(container);
+    const scopeRace = analytics.refresh();
     await flush();
     assert.strictEqual(pending.length, 3);
     pending[1].resolve(response(200, payload('all', 'lastMonth', 'Stale all-libraries scope response')));
@@ -94,7 +97,7 @@ async function flush() {
     range.dispatchEvent(new dom.window.Event('change'));
     await flush();
     assert.strictEqual(pending.length, 4);
-    const rangeRace = analytics.loadAnalytics(container);
+    const rangeRace = analytics.refresh();
     await flush();
     assert.strictEqual(pending.length, 5);
     pending[3].resolve(response(200, payload('2', 'lastMonth', 'Stale last-month range response')));
@@ -106,7 +109,7 @@ async function flush() {
 
     const recoveryStart = requests.length;
     const recoveryPendingStart = pending.length;
-    const recovery = analytics.loadAnalytics(container);
+    const recovery = analytics.refresh();
     await flush();
     assert.strictEqual(pending.length, recoveryPendingStart + 1);
     pending[recoveryPendingStart].resolve(response(400, {
@@ -129,7 +132,7 @@ async function flush() {
     assert.ok(container.querySelector('#analytics-scope').options.length >= 3);
     assert.match(container.textContent, /All libraries after recovery/);
 
-    const restore = analytics.loadAnalytics(container);
+    const restore = analytics.refresh();
     await flush();
     const restoreIndex = pending.length - 1;
     pending[restoreIndex].resolve(response(200, payload('2', 'last90', 'Library Two restored')));
@@ -139,7 +142,7 @@ async function flush() {
 
     const noLoopStart = requests.length;
     const noLoopPendingStart = pending.length;
-    const retryFailure = analytics.loadAnalytics(container);
+    const retryFailure = analytics.refresh();
     await flush();
     assert.strictEqual(pending.length, noLoopPendingStart + 1);
     pending[noLoopPendingStart].resolve(response(400, {
@@ -160,7 +163,7 @@ async function flush() {
 
     const arbitrary400Start = requests.length;
     const arbitrary400PendingStart = pending.length;
-    const arbitrary400 = analytics.loadAnalytics(container);
+    const arbitrary400 = analytics.refresh();
     await flush();
     pending[arbitrary400PendingStart].resolve(response(400, {
       code: 'analytics_unavailable',
@@ -171,7 +174,7 @@ async function flush() {
     assert.strictEqual(requests.length - arbitrary400Start, 1, 'other 400 responses must not recover');
     assert.match(container.textContent, /Analytics is unavailable/);
 
-    const restoreForRace = analytics.loadAnalytics(container);
+    const restoreForRace = analytics.refresh();
     await flush();
     pending[pending.length - 1].resolve(response(200, payload('2', 'last90', 'Library Two restored for race')));
     await restoreForRace;
@@ -180,7 +183,7 @@ async function flush() {
 
     const staleRecoveryStart = requests.length;
     const staleRecoveryPendingStart = pending.length;
-    const staleRecovery = analytics.loadAnalytics(container);
+    const staleRecovery = analytics.refresh();
     await flush();
     pending[staleRecoveryPendingStart].resolve(response(400, {
       code: 'invalid_scope',
@@ -188,7 +191,7 @@ async function flush() {
     }));
     await flush();
     const recoveryIndex = pending.length - 1;
-    const newerLoad = analytics.loadAnalytics(container);
+    const newerLoad = analytics.refresh();
     await flush();
     const newerPendingIndex = pending.length - 1;
     assert.deepStrictEqual(
@@ -205,10 +208,10 @@ async function flush() {
 
     const staleIndex = requests.length;
     const stalePendingIndex = pending.length;
-    const stale = analytics.loadAnalytics(container);
+    const stale = analytics.refresh();
     await flush();
     assert.strictEqual(pending.length, stalePendingIndex + 1);
-    analytics.resetAnalytics();
+    analytics.deactivate();
     pending[stalePendingIndex].resolve(response(200, payload('all', 'lastMonth', 'Stale auth response')));
     await stale;
     await flush();
@@ -216,6 +219,37 @@ async function flush() {
     assert.ok(!container.textContent.includes('Stale auth response'));
     assert.ok(requests.some(item => new URL(item.url, dom.window.location.href).searchParams.get('scope') === '2'));
     assert.ok(requests.some(item => new URL(item.url, dom.window.location.href).searchParams.get('range') === 'last90'));
+    analytics.signedOut(); analytics.activate();
+    const afterSignOut = analytics.refresh();
+    assert.equal(new URL(requests[requests.length - 1].url, dom.window.location.href).searchParams.get('scope'), null);
+    assert.equal(new URL(requests[requests.length - 1].url, dom.window.location.href).searchParams.get('range'), 'lastMonth');
+    pending[pending.length - 1].resolve(response(200, payload('all', 'lastMonth', 'New session defaults')));
+    await afterSignOut; analytics.dispose();
+
+    const { createSessionIdentity } = await import(pathToFileURL(path.join(temporary, 'staff/js/session-identity.js')).href);
+    const identity = createSessionIdentity();
+    const staff = { id: '20', tenantId: 'tenant', authenticationEmail: 'a@example.org', role: 'super_admin', organizationId: 1 };
+    const preferences = identity.accept(staff);
+    const replacement = createAnalyticsController({ root: container, sessionIdentity: identity });
+    replacement.setStaff(preferences); replacement.activate();
+    const selectedSession = replacement.refresh();
+    pending[pending.length - 1].resolve(response(200, payload('2', 'last90', 'Actor A selections')));
+    await selectedSession;
+    replacement.setStaff(identity.updatePreferences({ ...staff, version: 'v2' }, preferences));
+    const sameActor = replacement.refresh();
+    assert.equal(new URL(requests[requests.length - 1].url, dom.window.location.href).searchParams.get('range'), 'last90');
+    assert.equal(new URL(requests[requests.length - 1].url, dom.window.location.href).searchParams.get('scope'), '2');
+    replacement.setStaff(identity.accept({ ...staff, id: '21', authenticationEmail: 'b@example.org' }));
+    const newActor = replacement.refresh();
+    assert.equal(new URL(requests[requests.length - 1].url, dom.window.location.href).searchParams.get('range'), 'lastMonth');
+    assert.equal(new URL(requests[requests.length - 1].url, dom.window.location.href).searchParams.get('scope'), null);
+    pending[pending.length - 1].resolve(response(200, payload('all', 'lastMonth', 'Actor B defaults')));
+    await newActor;
+    pending[pending.length - 2].resolve(response(200, payload('2', 'last90', 'Stale actor A')));
+    await sameActor;
+    assert.match(container.textContent, /Actor B defaults/);
+    assert.doesNotMatch(container.textContent, /Stale actor A/);
+    replacement.dispose();
     console.log('Staff Analytics stale scope/range/auth reset regression checks passed');
   } finally {
     dom?.window.close();

@@ -1,4 +1,5 @@
 using Asap.Web.Features.Staff;
+using Asap.Web.Infrastructure.Data;
 
 namespace Asap.Web.Features.Analytics;
 
@@ -19,10 +20,13 @@ public static class AnalyticsEndpoints
         AnalyticsService service,
         CancellationToken cancellationToken)
     {
+        if (!LibraryScope.TryParse(string.IsNullOrWhiteSpace(scope) ? orgId : scope, LibraryScope.All, out var parsedScope))
+        {
+            return Results.BadRequest(new { code = "invalid_scope" });
+        }
         var result = await service.GetAsync(
             StaffAuthenticationEndpoints.RequireCurrentStaff(context),
-            scope,
-            orgId,
+            parsedScope,
             range,
             cancellationToken);
         return result.Code == "invalid_scope"

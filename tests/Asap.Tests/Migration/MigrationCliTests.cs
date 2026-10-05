@@ -41,9 +41,9 @@ public sealed class MigrationCliTests
             "150b30b776565194260cc327eeeffdfb46475e81",
             contract.RootElement.GetProperty("pocketBaseBaselineSha").GetString());
         Assert.AreEqual(
-            "email-identity-v1",
+            "structured-policy-v4",
             contract.RootElement.GetProperty("contractVersion").GetString());
-        Assert.AreEqual(6, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
+        Assert.AreEqual(10, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
         Assert.AreEqual(
             "CLC.ASAP",
             contract.RootElement.GetProperty("dataProtectionApplicationName").GetString());
@@ -1140,6 +1140,7 @@ public sealed class MigrationCliTests
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-request-{Guid.NewGuid():N}");
         var databaseName = $"AsapMigrationRequest_{Guid.NewGuid():N}";
+        var secondDatabaseName = $"AsapMigrationRequest_{Guid.NewGuid():N}";
         var master = new SqlConnectionStringBuilder(
             Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
             "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
@@ -1147,7 +1148,9 @@ public sealed class MigrationCliTests
             InitialCatalog = "master"
         }.ConnectionString;
         var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var secondTarget = new SqlConnectionStringBuilder(master) { InitialCatalog = secondDatabaseName }.ConnectionString;
         var connectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var secondConnectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
         Directory.CreateDirectory(root);
         try
         {
@@ -1235,7 +1238,7 @@ public sealed class MigrationCliTests
                 INSERT INTO [title_requests] VALUES
                     ('pb-request-1', '2', 'fmt-book', 'A20000000000001', 'patron@example.org',
                      'Ada', 'Reader', 'The Found Book', 'A. Writer', '9780000000001',
-                     'Coming soon', 1, 'suggestion', 'BIB-9001', 'found', 'one match', 2,
+                     'Coming soon', 1, 'suggestion', '09001', 'found', 'one match', 2,
                      '2029-03-02T12:00:00Z', 'pb-staff-2', 'Library Selector',
                      '2029-03-01T12:01:00Z', 'automatic_format_rule', 'pb-rule-1',
                      '2029-03-01T12:00:00Z', '2029-03-02T12:00:00Z');
@@ -1263,7 +1266,7 @@ public sealed class MigrationCliTests
                 INSERT INTO [title_request_events] VALUES
                     ('event-placed', 'pb-request-1', 'status_changed', 'pending_hold', 'hold_placed',
                      NULL, 'staff', 'Library Selector', 'Existing hold adopted.',
-                     '{"bibId":"BIB-9001"}', '2029-03-01T13:00:00Z');
+                     '{"bibId":"9001"}', '2029-03-01T13:00:00Z');
                 CREATE TABLE [email_templates]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY,
@@ -1461,9 +1464,12 @@ public sealed class MigrationCliTests
                 });
             var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
             var report = Path.Combine(root, "import-report.json");
+            var secondReport = Path.Combine(root, "second-import-report.json");
             DeployDacpac(master, databaseName);
+            DeployDacpac(master, secondDatabaseName);
 
             Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
+            Environment.SetEnvironmentVariable(secondConnectionEnvironmentName, secondTarget);
             using var error = new StringWriter();
             var exitCode = MigrationCli.Run(
                 [
@@ -1477,6 +1483,22 @@ public sealed class MigrationCliTests
                 error);
             Assert.AreEqual(0, exitCode, error.ToString());
 
+            using var secondError = new StringWriter();
+            Assert.AreEqual(0, MigrationCli.Run(
+                [
+                    "import", "--package", package,
+                    "--connection-string-env", secondConnectionEnvironmentName,
+                    "--allowed-tenant-ids", tenantId.ToString(),
+                    "--report", secondReport,
+                    "--external-config", ExternalConfigurationPath(package)
+                ],
+                TextWriter.Null,
+                secondError), secondError.ToString());
+            Assert.AreEqual(
+                await File.ReadAllTextAsync(report),
+                await File.ReadAllTextAsync(secondReport),
+                "Equivalent fresh targets must produce the same BIB-authority classification and report.");
+
             await using var connection = new SqlConnection(target);
             await connection.OpenAsync();
             Assert.AreEqual(1, await ScalarAsync(
@@ -1484,7 +1506,37 @@ public sealed class MigrationCliTests
                 "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book' AND [Label] = N'Printed Book' AND [SortOrder] = 7;"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
-                "SELECT COUNT(*) FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[PocketBaseId] = N'pb-request-1' AND m.[NewId] = r.[Id] WHERE r.[LegacyId] IS NULL AND r.[LibraryOrganizationId] = 2 AND r.[Status] = N'suggestion' AND r.[IsbnCheckStatus] = N'found' AND r.[BibId] = N'BIB-9001' AND r.[Title] = N'The Found Book';"));
+                "SELECT COUNT(*) FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[PocketBaseId] = N'pb-request-1' AND m.[NewId] = r.[Id] WHERE r.[LegacyId] IS NULL AND r.[LibraryOrganizationId] = 2 AND r.[Status] = N'suggestion' AND r.[IsbnCheckStatus] = N'found' AND r.[BibId] = 9001 AND r.[Title] = N'The Found Book';"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [BibId] = 9001 AND [BibIdStaffVerified] = 0;"));
+            Assert.AreEqual(1, await ScalarAsync(connection,
+                """
+                SELECT COUNT(*) FROM [asap].[TitleRequestEvent] event
+                CROSS APPLY OPENJSON(event.[MetadataJson], '$.bibSources')
+                    WITH ([bibId] int '$.bibId', [sourceValue] nvarchar(100) '$.sourceValue') source
+                WHERE event.[EventType] = N'legacy' AND source.[bibId] = 9001 AND source.[sourceValue] = N'09001';
+                """));
+            using (var authorityReport = JsonDocument.Parse(await File.ReadAllTextAsync(report)))
+            {
+                var authority = authorityReport.RootElement.GetProperty("bibAuthorityReconciliation");
+                Assert.AreEqual(1, authority.GetProperty("sourceRequestsWithBibId").GetInt32());
+                Assert.AreEqual(1, authority.GetProperty("automationDerivedBibs").GetInt32());
+                Assert.AreEqual(0, authority.GetProperty("staffAuthoritativeBibs").GetInt32());
+                Assert.AreEqual(0, authority.GetProperty("ambiguousBibsImportedWithoutStaffAuthority").GetInt32());
+                var authorityTransform = authorityReport.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
+                    item.GetProperty("entity").GetString() == "title_request_bib_authority");
+                Assert.AreEqual("automation_derived", authorityTransform.GetProperty("classification").GetString());
+                Assert.IsFalse(authorityTransform.GetProperty("bibIdStaffVerified").GetBoolean());
+                var polarisTransform = authorityReport.RootElement.GetProperty("transformations").EnumerateArray()
+                    .Single(item => item.GetProperty("entity").GetString() == "polaris_settings");
+                Assert.AreEqual("7", polarisTransform.GetProperty("retiredRequestingOrganizationSource").GetString());
+                Assert.AreEqual("3", polarisTransform.GetProperty("retiredPickupOrganizationSource").GetString());
+            }
+            Assert.AreEqual(0, await ScalarAsync(connection,
+                "SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID(N'asap.PolarisSettings') AND name IN (N'OrganizationIdForRequests', N'PickupOrganizationId');"));
+            Assert.AreEqual(1, await ScalarAsync(connection,
+                "SELECT COUNT(*) FROM [asap].[PolarisSettings] WHERE [WorkstationId] = 99 AND [SystemPolarisUserId] = 42;"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[TitleRequestWorkflowTag] j JOIN [asap].[WorkflowTag] t ON t.[Id] = j.[WorkflowTagId] WHERE t.[Code] = N'polaris_bib_found';"));
@@ -1499,7 +1551,7 @@ public sealed class MigrationCliTests
                 "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'status_changed' AND [CreatedUtc] = '2029-03-01T13:00:00';"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
-                "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND [CreatedUtc] = '2030-01-02T03:04:05' AND JSON_VALUE([MetadataJson], '$.legacyBibProtection') = N'true' AND JSON_VALUE([MetadataJson], '$.bibId') = N'BIB-9001' AND JSON_VALUE([MetadataJson], '$.transform') = N'placed_bib_protection_v1';"));
+                "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND [CreatedUtc] = '2030-01-02T03:04:05' AND JSON_VALUE([MetadataJson], '$.legacyBibProtection') = N'true' AND JSON_VALUE([MetadataJson], '$.bibId') = N'9001' AND JSON_VALUE([MetadataJson], '$.transform') = N'placed_bib_protection_v1';"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted' AND [SubjectTemplate] = N'Received: {{title}}' AND [BodyTemplate] LIKE N'%{{name}}%';"));
@@ -1540,11 +1592,30 @@ public sealed class MigrationCliTests
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[Branding] WHERE [OrganizationId] = 1 AND [LogoContentType] = N'image/png' AND [LogoFileName] = N'migration_logo.png' AND DATALENGTH([LogoData]) > 1000 AND [LogoAltText] = N'Consortium logo';"));
+
+            await using (var wrongAuthority = connection.CreateCommand())
+            {
+                wrongAuthority.CommandText = "UPDATE [asap].[TitleRequest] SET [BibIdStaffVerified] = 1 WHERE [BibId] = 9001;";
+                await wrongAuthority.ExecuteNonQueryAsync();
+            }
+            using var authorityDriftError = new StringWriter();
+            Assert.AreEqual(1, MigrationCli.Run(
+                [
+                    "reconcile", "--package", package,
+                    "--connection-string-env", connectionEnvironmentName,
+                    "--report", report,
+                    "--external-config", ExternalConfigurationPath(package)
+                ],
+                TextWriter.Null,
+                authorityDriftError));
+            StringAssert.Contains(authorityDriftError.ToString(), "Target SQL state changed after the successful import reconciliation.");
         }
         finally
         {
             Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            Environment.SetEnvironmentVariable(secondConnectionEnvironmentName, null);
             await DropDatabaseAsync(master, databaseName);
+            await DropDatabaseAsync(master, secondDatabaseName);
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1571,10 +1642,17 @@ public sealed class MigrationCliTests
 
             var invalidCases = new[]
             {
-                (Name: "found_without_bib", Status: "found", Identifier: "9780000000001", Bib: "NULL", Error: "identifier_found_without_bib"),
-                (Name: "alias_without_bib", Status: "found_in_polaris", Identifier: "9780000000002", Bib: "NULL", Error: "identifier_found_without_bib"),
-                (Name: "ambiguous_error", Status: "error", Identifier: "9780000000003", Bib: "NULL", Error: "identifier_error_ambiguous"),
-                (Name: "unknown", Status: "mystery", Identifier: "NULL", Bib: "NULL", Error: "identifier_status_invalid")
+                (Name: "found_without_bib", RequestStatus: "suggestion", CloseReason: "NULL", Status: "found", Identifier: "9780000000001", Bib: "NULL", Error: "identifier_found_without_bib"),
+                (Name: "alias_without_bib", RequestStatus: "suggestion", CloseReason: "NULL", Status: "found_in_polaris", Identifier: "9780000000002", Bib: "NULL", Error: "identifier_found_without_bib"),
+                (Name: "ambiguous_error", RequestStatus: "suggestion", CloseReason: "NULL", Status: "error", Identifier: "9780000000003", Bib: "NULL", Error: "identifier_error_ambiguous"),
+                (Name: "ambiguous_pending_bib_authority", RequestStatus: "suggestion", CloseReason: "NULL", Status: "pending", Identifier: "9780000000004", Bib: "'9004'", Error: "bib_authority_ambiguous"),
+                (Name: "ambiguous_retryable_bib_authority", RequestStatus: "suggestion", CloseReason: "NULL", Status: "error_max_retries", Identifier: "9780000000005", Bib: "'9005'", Error: "bib_authority_ambiguous"),
+                (Name: "ambiguous_closed_reopen_bib_authority", RequestStatus: "closed", CloseReason: "'rejected'", Status: "pending", Identifier: "9780000000006", Bib: "'9006'", Error: "bib_authority_ambiguous"),
+                (Name: "invalid_bib", RequestStatus: "suggestion", CloseReason: "NULL", Status: "found", Identifier: "9780000000007", Bib: "'not-a-bib'", Error: "source_bib_invalid"),
+                (Name: "zero_bib", RequestStatus: "suggestion", CloseReason: "NULL", Status: "found", Identifier: "9780000000007", Bib: "'0'", Error: "source_bib_invalid"),
+                (Name: "negative_bib", RequestStatus: "suggestion", CloseReason: "NULL", Status: "found", Identifier: "9780000000007", Bib: "'-1'", Error: "source_bib_invalid"),
+                (Name: "overflow_bib", RequestStatus: "suggestion", CloseReason: "NULL", Status: "found", Identifier: "9780000000007", Bib: "'2147483648'", Error: "source_bib_invalid"),
+                (Name: "unknown", RequestStatus: "suggestion", CloseReason: "NULL", Status: "mystery", Identifier: "NULL", Bib: "NULL", Error: "identifier_status_invalid")
             };
             foreach (var item in invalidCases)
             {
@@ -1595,13 +1673,13 @@ public sealed class MigrationCliTests
                     (
                         [id] TEXT NOT NULL PRIMARY KEY, [libraryOrgId] TEXT NOT NULL,
                         [formatRef] TEXT, [barcode] TEXT NOT NULL, [title] TEXT NOT NULL,
-                        [autohold] INTEGER NOT NULL, [status] TEXT NOT NULL, [identifier] TEXT,
+                        [autohold] INTEGER NOT NULL, [status] TEXT NOT NULL, [closeReason] TEXT, [identifier] TEXT,
                         [bibid] TEXT, [isbnCheckStatus] TEXT, [isbnCheckRetryCount] INTEGER,
                         [created] TEXT NOT NULL, [updated] TEXT NOT NULL
                     );
                     INSERT INTO [title_requests] VALUES
                         ('request-1', '2', 'fmt-book', 'A20000000000001', 'Invalid identifier state',
-                         0, 'suggestion', {{identifier}}, {{item.Bib}}, '{{item.Status}}', 3,
+                         0, '{{item.RequestStatus}}', {{item.CloseReason}}, {{identifier}}, {{item.Bib}}, '{{item.Status}}', 3,
                          '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
                     """);
                 using var error = new StringWriter();
@@ -1649,12 +1727,12 @@ public sealed class MigrationCliTests
                     ('request-1', '2', 'fmt-book', 'A20000000000001', 'Absent null', 0, 'suggestion', NULL, NULL, NULL, 0, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('request-2', '2', 'fmt-book', 'A20000000000002', 'Absent blank', 0, 'suggestion', NULL, NULL, '', 0, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('request-3', '2', 'fmt-book', 'A20000000000003', 'Pending', 0, 'suggestion', '9780000000003', NULL, 'pending', 2, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
-                    ('request-4', '2', 'fmt-book', 'A20000000000004', 'Found', 0, 'suggestion', '9780000000004', 'BIB-4', 'found', 3, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('request-4', '2', 'fmt-book', 'A20000000000004', 'Found', 0, 'suggestion', '9780000000004', '4', 'found', 3, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('request-5', '2', 'fmt-book', 'A20000000000005', 'Not found', 0, 'suggestion', '9780000000005', NULL, 'not_found', 4, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('request-6', '2', 'fmt-book', 'A20000000000006', 'Skipped', 0, 'suggestion', NULL, NULL, 'skipped_no_isbn', 9, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('request-7', '2', 'fmt-book', 'A20000000000007', 'Exhausted', 0, 'suggestion', '9780000000007', NULL, 'error_max_retries', 5, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('request-8', '2', 'fmt-book', 'A20000000000008', 'Missing identifier error', 0, 'suggestion', NULL, NULL, 'error', 7, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
-                    ('request-9', '2', 'fmt-book', 'A20000000000009', 'Historical alias', 0, 'suggestion', '9780000000009', 'BIB-9', 'found_in_polaris', 1, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                    ('request-9', '2', 'fmt-book', 'A20000000000009', 'Historical alias', 0, 'suggestion', '9780000000009', '9', 'found_in_polaris', 1, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
                 """);
             using var validError = new StringWriter();
             var validExitCode = MigrationCli.Run(
@@ -1684,6 +1762,166 @@ public sealed class MigrationCliTests
         finally
         {
             Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ImportRejectsInvalidPolarisIntegrationIdentityWithoutPartialSqlState()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-polaris-identity-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationPolarisIdentity_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+            { InitialCatalog = "master" }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        Directory.CreateDirectory(root);
+        try
+        {
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(environmentName, target);
+            var index = 0;
+            foreach (var field in new[] { "workstationId", "userId" })
+            {
+                foreach (var value in new[] { "0", "-1", "2147483648", "bad" })
+                {
+                    var caseRoot = Path.Combine(root, $"case-{index++}");
+                    Directory.CreateDirectory(caseRoot);
+                    var workstation = field == "workstationId" ? value : "99";
+                    var user = field == "userId" ? value : "42";
+                    var package = CreateMinimalPackage(caseRoot, $"""
+                        CREATE TABLE [polaris_settings] ([id] TEXT PRIMARY KEY,
+                            [workstationId] TEXT, [userId] TEXT, [requestingOrgId] TEXT, [pickupOrgId] TEXT);
+                        INSERT INTO [polaris_settings] VALUES ('native-identity', '{workstation}', '{user}', '7', '3');
+                        """);
+                    using var error = new StringWriter();
+                    Assert.AreEqual(1, MigrationCli.Run([
+                        "import", "--package", package, "--connection-string-env", environmentName,
+                        "--allowed-tenant-ids", "00000000-0000-0000-0000-000000000002",
+                        "--report", Path.Combine(caseRoot, "report.json"),
+                        "--external-config", ExternalConfigurationPath(package)
+                    ], TextWriter.Null, error), $"{field}: {value}");
+                    StringAssert.Contains(error.ToString(), "source_polaris_identity_invalid");
+                    await using var connection = new SqlConnection(target);
+                    await connection.OpenAsync();
+                    Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[StaffUser];"));
+                    Assert.AreEqual(1, await ScalarAsync(connection,
+                        "SELECT COUNT(*) FROM [asap].[PolarisSettings] WHERE [WorkstationId] IS NULL AND [SystemPolarisUserId] IS NULL;"));
+                }
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(environmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ImportRejectsMalformedBibIdentityAtEverySourceBoundaryWithoutPartialSqlState()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-native-bib-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationNativeBib_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        Directory.CreateDirectory(root);
+        try
+        {
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(environmentName, target);
+            var cases = new List<(string Boundary, string Bib, string Error)>();
+            foreach (var boundary in new[] { "request", "copy", "deleted", "event" })
+            {
+                foreach (var bib in new[] { "not-a-bib", "0", "-1", "2147483648" })
+                {
+                    cases.Add((boundary, bib, "source_bib_invalid"));
+                }
+            }
+            cases.Add(("event", """{"bibId":"9001","bibId":"9002"}""", "source_json_invalid"));
+            cases.Add(("event", """{"bibId":"9001","BibID":"9002"}""", "placed_bib_conflict"));
+            foreach (var (boundary, bib, expectedError) in cases)
+            {
+                var caseRoot = Path.Combine(root, $"case-{cases.IndexOf((boundary, bib, expectedError))}");
+                Directory.CreateDirectory(caseRoot);
+                var source = boundary switch
+                {
+                    "request" => $"""
+                        CREATE TABLE [title_requests] (
+                            [id] TEXT PRIMARY KEY, [libraryOrgId] TEXT, [formatRef] TEXT, [barcode] TEXT,
+                            [title] TEXT, [autohold] INTEGER, [status] TEXT, [bibid] TEXT,
+                            [isbnCheckStatus] TEXT, [created] TEXT, [updated] TEXT);
+                        INSERT INTO [title_requests] VALUES (
+                            'native-request', '2', 'fmt-book', 'A20000000000001', 'Native BIB', 0,
+                            'suggestion', '{bib}', 'found', '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                        """,
+                    "copy" => $"""
+                        CREATE TABLE [additional_copy_requests] (
+                            [id] TEXT PRIMARY KEY, [libraryOrgId] TEXT, [bibid] TEXT, [title] TEXT,
+                            [status] TEXT, [created] TEXT, [updated] TEXT);
+                        INSERT INTO [additional_copy_requests] VALUES (
+                            'native-copy', '2', '{bib}', 'Native copy', 'open',
+                            '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                        """,
+                    "deleted" => $"""
+                        CREATE TABLE [deleted_request_audit] (
+                            [id] TEXT PRIMARY KEY, [titleRequestId] TEXT, [libraryOrgId] TEXT,
+                            [bibid] TEXT, [status] TEXT, [deletedAt] TEXT);
+                        INSERT INTO [deleted_request_audit] VALUES (
+                            'native-deleted', 'original-request', '2', '{bib}', 'closed', '2029-01-02T00:00:00Z');
+                        """,
+                    _ => $$"""
+                        CREATE TABLE [title_requests] (
+                            [id] TEXT PRIMARY KEY, [libraryOrgId] TEXT, [formatRef] TEXT, [barcode] TEXT,
+                            [title] TEXT, [autohold] INTEGER, [status] TEXT, [created] TEXT, [updated] TEXT);
+                        INSERT INTO [title_requests] VALUES (
+                            'native-request', '2', 'fmt-book', 'A20000000000001', 'Placed BIB', 0,
+                            'hold_placed', '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                        CREATE TABLE [title_request_events] (
+                            [id] TEXT PRIMARY KEY, [titleRequest] TEXT, [eventType] TEXT,
+                            [actorType] TEXT, [metadata] TEXT, [created] TEXT);
+                        INSERT INTO [title_request_events] VALUES (
+                            'native-event', 'native-request', 'hold_placed', 'system',
+                            '{{(bib.StartsWith('{') ? bib : JsonSerializer.Serialize(new { bibId = bib }))}}',
+                            '2029-01-02T00:00:00Z');
+                        """
+                };
+                var package = CreateMinimalPackage(caseRoot, """
+                    CREATE TABLE [material_formats] (
+                        [id] TEXT PRIMARY KEY, [scope] TEXT, [libraryOrganization] TEXT,
+                        [code] TEXT, [label] TEXT, [enabled] INTEGER, [sortOrder] INTEGER);
+                    INSERT INTO [material_formats] VALUES ('fmt-book', 'system', NULL, 'book', 'Book', 1, 10);
+                    """ + source);
+                using var error = new StringWriter();
+                var exitCode = MigrationCli.Run([
+                    "import", "--package", package, "--connection-string-env", environmentName,
+                    "--allowed-tenant-ids", "00000000-0000-0000-0000-000000000002",
+                    "--report", Path.Combine(caseRoot, "report.json"),
+                    "--external-config", ExternalConfigurationPath(package)
+                ], TextWriter.Null, error);
+                Assert.AreEqual(1, exitCode, $"{boundary}: {bib}");
+                StringAssert.Contains(error.ToString(), expectedError, $"{boundary}: {bib}");
+                await using var connection = new SqlConnection(target);
+                await connection.OpenAsync();
+                foreach (var table in new[] { "StaffUser", "TitleRequest", "AdditionalCopyRequest", "DeletedRequestAudit" })
+                {
+                    Assert.AreEqual(0, await ScalarAsync(connection, $"SELECT COUNT(*) FROM [asap].[{table}];"),
+                        $"{boundary}: {bib} must roll back {table}.");
+                }
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(environmentName, null);
             await DropDatabaseAsync(master, databaseName);
             Directory.Delete(root, recursive: true);
         }
@@ -1889,9 +2127,9 @@ public sealed class MigrationCliTests
                 CREATE TABLE [material_formats] ([id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT, [code] TEXT NOT NULL, [label] TEXT NOT NULL, [enabled] INTEGER NOT NULL, [sortOrder] INTEGER NOT NULL);
                 INSERT INTO [material_formats] VALUES ('fmt-book', 'system', NULL, 'book', 'Book', 1, 10);
                 CREATE TABLE [title_requests] ([id] TEXT NOT NULL PRIMARY KEY, [libraryOrgId] TEXT NOT NULL, [formatRef] TEXT, [barcode] TEXT NOT NULL, [title] TEXT NOT NULL, [autohold] INTEGER NOT NULL, [status] TEXT NOT NULL, [bibid] TEXT, [isbnCheckStatus] TEXT, [created] TEXT NOT NULL, [updated] TEXT NOT NULL);
-                INSERT INTO [title_requests] VALUES ('request-1', '2', 'fmt-book', 'A20000000000001', 'BIB conflict', 0, 'hold_placed', 'BIB-A', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                INSERT INTO [title_requests] VALUES ('request-1', '2', 'fmt-book', 'A20000000000001', 'BIB conflict', 0, 'hold_placed', '9001', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
                 CREATE TABLE [title_request_events] ([id] TEXT NOT NULL PRIMARY KEY, [titleRequest] TEXT NOT NULL, [eventType] TEXT NOT NULL, [actorType] TEXT NOT NULL, [metadata] TEXT, [created] TEXT NOT NULL);
-                INSERT INTO [title_request_events] VALUES ('event-1', 'request-1', 'hold_placed', 'system', '{"bibId":"BIB-B"}', '2029-01-03T00:00:00Z');
+                INSERT INTO [title_request_events] VALUES ('event-1', 'request-1', 'hold_placed', 'system', '{"bibId":"9002"}', '2029-01-03T00:00:00Z');
                 """);
             using (var bibError = new StringWriter())
             {
@@ -1932,7 +2170,7 @@ public sealed class MigrationCliTests
                 );
                 INSERT INTO [title_requests] VALUES
                     ('request-ambiguous', '2', 'fmt-book', 'A20000000000012', 'Hint only', 0,
-                     'closed', 'manual', 'BIB-HINT', '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                     'closed', 'manual', '9003', '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
                 """);
             var ambiguousReport = Path.Combine(ambiguousRoot, "report.json");
             using (var ambiguousError = new StringWriter())
@@ -1980,17 +2218,17 @@ public sealed class MigrationCliTests
                     [bibid] TEXT, [isbnCheckStatus] TEXT, [created] TEXT NOT NULL, [updated] TEXT NOT NULL
                 );
                 INSERT INTO [title_requests] VALUES
-                    ('request-current', '2', 'fmt-book', 'A20000000000001', 'Current placed', 0, 'hold_placed', 'status-placed', NULL, NULL, 'BIB-1', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('request-current', '2', 'fmt-book', 'A20000000000001', 'Current placed', 0, 'hold_placed', 'status-placed', NULL, NULL, '1', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('request-completed', '2', 'fmt-book', 'A20000000000002', 'Completed', 0, 'closed', 'status-closed', 'hold_completed', 'reason-completed', NULL, NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
-                    ('request-not-picked', '2', 'fmt-book', 'A20000000000003', 'Not picked up', 0, 'closed', 'status-closed', 'hold_not_picked_up', 'reason-not-picked', 'BIB-3', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
-                    ('request-unclaimed', '2', 'fmt-book', 'A20000000000004', 'Unclaimed', 0, 'closed', 'status-closed', 'hold_unclaimed', 'reason-unclaimed', 'BIB-4', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
-                    ('request-cancelled', '2', 'fmt-book', 'A20000000000005', 'Cancelled', 0, 'closed', 'status-closed', 'hold_cancelled', 'reason-cancelled', 'BIB-5', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('request-not-picked', '2', 'fmt-book', 'A20000000000003', 'Not picked up', 0, 'closed', 'status-closed', 'hold_not_picked_up', 'reason-not-picked', '3', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('request-unclaimed', '2', 'fmt-book', 'A20000000000004', 'Unclaimed', 0, 'closed', 'status-closed', 'hold_unclaimed', 'reason-unclaimed', '4', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('request-cancelled', '2', 'fmt-book', 'A20000000000005', 'Cancelled', 0, 'closed', 'status-closed', 'hold_cancelled', 'reason-cancelled', '5', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('request-expired', '2', 'fmt-book', 'A20000000000006', 'Expired', 0, 'closed', 'status-closed', 'hold_expired', 'reason-expired', NULL, NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('request-dedicated', '2', 'fmt-book', 'A20000000000007', 'Dedicated event', 0, 'closed', 'status-closed', 'manual', 'reason-manual', NULL, NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
-                    ('request-to', '2', 'fmt-book', 'A20000000000008', 'Transition to', 0, 'closed', 'status-closed', 'manual', 'reason-manual', 'BIB-8', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
-                    ('request-from', '2', 'fmt-book', 'A20000000000009', 'Transition from', 0, 'closed', 'status-closed', 'manual', 'reason-manual', 'BIB-9', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
-                    ('request-event-terminal', '2', 'fmt-book', 'A20000000000010', 'Event terminal', 0, 'closed', 'status-closed', 'manual', 'reason-manual', 'BIB-10', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
-                    ('request-none', '2', 'fmt-book', 'A20000000000011', 'No placement evidence', 0, 'closed', 'status-closed', 'rejected', 'reason-rejected', 'BIB-11', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                    ('request-to', '2', 'fmt-book', 'A20000000000008', 'Transition to', 0, 'closed', 'status-closed', 'manual', 'reason-manual', '8', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('request-from', '2', 'fmt-book', 'A20000000000009', 'Transition from', 0, 'closed', 'status-closed', 'manual', 'reason-manual', '9', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('request-event-terminal', '2', 'fmt-book', 'A20000000000010', 'Event terminal', 0, 'closed', 'status-closed', 'manual', 'reason-manual', '10', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('request-none', '2', 'fmt-book', 'A20000000000011', 'No placement evidence', 0, 'closed', 'status-closed', 'rejected', 'reason-rejected', '11', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
                 CREATE TABLE [title_request_events]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY, [titleRequest] TEXT NOT NULL,
@@ -1999,7 +2237,7 @@ public sealed class MigrationCliTests
                     [created] TEXT NOT NULL
                 );
                 INSERT INTO [title_request_events] VALUES
-                    ('event-dedicated', 'request-dedicated', 'hold_placed', NULL, NULL, NULL, 'system', '{"bibId":"BIB-7"}', '2029-02-01T00:00:00Z'),
+                    ('event-dedicated', 'request-dedicated', 'hold_placed', NULL, NULL, NULL, 'system', '{"bibId":"7"}', '2029-02-01T00:00:00Z'),
                     ('event-to', 'request-to', 'status_changed', 'pending_hold', 'status-placed', NULL, 'staff', NULL, '2029-02-02T00:00:00Z'),
                     ('event-from', 'request-from', 'legacy_departure', 'status-placed', 'status-closed', NULL, 'system', NULL, '2029-02-03T00:00:00Z'),
                     ('event-terminal', 'request-event-terminal', 'legacy_terminal', NULL, NULL, 'reason-completed', 'system', NULL, '2029-02-04T00:00:00Z');
@@ -2021,8 +2259,10 @@ public sealed class MigrationCliTests
             await using (var connection = new SqlConnection(target))
             {
                 await connection.OpenAsync();
+                Assert.AreEqual(10, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [LegacyHoldProtected] = 1;"));
+                Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [Title] = N'No placement evidence' AND [LegacyHoldProtected] = 0;"));
                 Assert.AreEqual(10, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND JSON_VALUE([MetadataJson], '$.legacyBibProtection') = N'true';"));
-                Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e JOIN [asap].[TitleRequest] r ON r.[Id] = e.[TitleRequestId] WHERE r.[Title] = N'Dedicated event' AND JSON_VALUE(e.[MetadataJson], '$.bibId') = N'BIB-7';"));
+                Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e JOIN [asap].[TitleRequest] r ON r.[Id] = e.[TitleRequestId] WHERE r.[Title] = N'Dedicated event' AND JSON_VALUE(e.[MetadataJson], '$.bibId') = N'7';"));
                 Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e JOIN [asap].[TitleRequest] r ON r.[Id] = e.[TitleRequestId] WHERE r.[Title] = N'No placement evidence' AND JSON_VALUE(e.[MetadataJson], '$.legacyBibProtection') = N'true';"));
             }
 
@@ -2341,7 +2581,7 @@ public sealed class MigrationCliTests
         }.ConnectionString;
         var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
         var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
-        var bibId = new string('9', 128);
+        var bibId = int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var publication = new string('P', 128);
         Directory.CreateDirectory(root);
         try
@@ -2408,7 +2648,7 @@ public sealed class MigrationCliTests
                 """;
             await using var reader = await command.ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
-            Assert.AreEqual(bibId, reader.GetString(0));
+            Assert.AreEqual(int.MaxValue, reader.GetInt32(0));
             Assert.AreEqual(publication, reader.GetString(1));
             Assert.AreEqual(reader.GetDateTime(2), reader.GetDateTime(3));
             Assert.AreEqual(new DateTime(2030, 1, 3, 6, 7, 8), reader.GetDateTime(4));
@@ -2419,7 +2659,7 @@ public sealed class MigrationCliTests
             await reader.DisposeAsync();
 
             using var reportDocument = JsonDocument.Parse(await File.ReadAllTextAsync(report));
-            Assert.AreEqual(4, reportDocument.RootElement.GetProperty("reportVersion").GetInt32());
+            Assert.AreEqual(5, reportDocument.RootElement.GetProperty("reportVersion").GetInt32());
             Assert.AreEqual(1, reportDocument.RootElement.GetProperty("importedCounts")
                 .GetProperty("additional_copy_requests").GetInt32());
             Assert.IsTrue(reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Any(item =>

@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Asap.Web.Features.Staff;
 
-public sealed class StaffSignInService(IDbContextFactory<AsapDbContext> contextFactory)
+public sealed class StaffSignInService(IDbContextFactory<AsapDbContext> contextFactory, TimeProvider timeProvider)
 {
     public async Task RecordSuccessfulSignInAsync(
         long staffUserId,
@@ -25,7 +25,11 @@ public sealed class StaffSignInService(IDbContextFactory<AsapDbContext> contextF
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var staff = await context.StaffUsers.SingleOrDefaultAsync(item => item.Id == staffUserId &&
             item.IsActive && item.NormalizedUserPrincipalName == normalizedEmail, cancellationToken);
-        if (staff is null) return;
+        if (staff is null)
+        {
+            return;
+        }
+
         var normalizedDisplayName = Clean(displayName);
         staff.EntraTenantId = tenantId;
         staff.EntraObjectId = objectId;
@@ -33,7 +37,7 @@ public sealed class StaffSignInService(IDbContextFactory<AsapDbContext> contextF
         {
             staff.DisplayName = normalizedDisplayName;
         }
-        staff.LastLoginUtc = DateTime.UtcNow;
+        staff.LastLoginUtc = timeProvider.GetUtcNow().UtcDateTime;
         await context.SaveChangesAsync(cancellationToken);
     }
 

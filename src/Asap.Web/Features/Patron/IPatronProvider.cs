@@ -2,22 +2,31 @@ namespace Asap.Web.Features.Patron;
 
 public interface IPatronProvider
 {
+    // Authentication is a system-scope bootstrap before the home/effective library is known.
     Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken cancellationToken);
 
-    Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken);
+    Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken);
+
+    Task<int?> GetPatronIdAsync(string barcode, int organizationId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromException<int?>(new PolarisOperationalException(
+            "patron_id_read_unimplemented",
+            "The selected patron provider does not implement a patron-ID read."));
+    }
 
     Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
         PatronSnapshot patron,
-        CancellationToken cancellationToken);
+        int organizationId, CancellationToken cancellationToken);
 
     Task UpdatePreferredPickupBranchAsync(
         string barcode,
         int pickupBranchId,
-        CancellationToken cancellationToken);
+        int organizationId, CancellationToken cancellationToken);
 
     Task<IdentifierLookupResult> LookupIdentifierAsync(
         string identifier,
-        CancellationToken cancellationToken);
+        int organizationId, CancellationToken cancellationToken);
 }
 
 public sealed record PatronSnapshot(
@@ -26,7 +35,7 @@ public sealed record PatronSnapshot(
     string? Email,
     string? NameFirst,
     string? NameLast,
-    string? PatronCodeId,
+    int? PatronCodeId,
     string? PatronCodeDescription,
     int PatronOrganizationId,
     int HomeLibraryOrganizationId,
@@ -46,7 +55,7 @@ public enum IdentifierLookupOutcome
 
 public sealed record IdentifierLookupResult(
     IdentifierLookupOutcome Outcome,
-    string? BibId = null,
+    int? BibId = null,
     bool MultipleMatches = false,
     string? ErrorCode = null,
     bool FilteredByMaterialType = false,
@@ -55,7 +64,7 @@ public sealed record IdentifierLookupResult(
 
 public sealed class PatronAuthenticationException(string message) : Exception(message);
 
-public sealed class PolarisOperationalException(string code, string message, Exception? innerException = null)
+public class PolarisOperationalException(string code, string message, Exception? innerException = null)
     : Exception(message, innerException)
 {
     public string Code { get; } = code;

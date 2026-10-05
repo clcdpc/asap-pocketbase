@@ -14,7 +14,7 @@ public sealed partial class PatronJourneyTests
 {
     private const int Slice5IsolatedLibraryId = 99001;
 
-    private static async Task EnsureSlice5IsolatedLibraryAsync(
+    private async Task EnsureSlice5IsolatedLibraryAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         int organizationId = Slice5IsolatedLibraryId)
     {
@@ -119,7 +119,7 @@ public sealed partial class PatronJourneyTests
         }
     }
 
-    private static async Task IsolateOtherWorkflowQueuesAsync(
+    private async Task IsolateOtherWorkflowQueuesAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         string targetQueue,
         int scope = 2)
@@ -139,12 +139,12 @@ public sealed partial class PatronJourneyTests
             progress.LastOutcomeItemId = null;
             progress.LastOutcomeCode = "test_isolated_empty";
             progress.LastOutcomeUtc = null;
-            progress.UpdatedUtc = DateTime.UtcNow;
+            progress.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
         }
         await context.SaveChangesAsync();
     }
 
-    private static async Task<FairnessSeed> SeedFairnessRowsAsync(
+    private async Task<FairnessSeed> SeedFairnessRowsAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         string queueName,
         int scope = Slice5IsolatedLibraryId)
@@ -152,7 +152,7 @@ public sealed partial class PatronJourneyTests
         await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
         await using var context = await contextFactory.CreateDbContextAsync();
         var format = await context.MaterialFormats.SingleAsync(item => item.Code == "book");
-        var baseUtc = DateTime.UtcNow.AddDays(-60);
+        var baseUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-60);
         var requests = new List<TitleRequest>();
         var operations = new List<HoldPlacementOperation>();
         var copies = new List<AdditionalCopyRequest>();
@@ -176,7 +176,7 @@ public sealed partial class PatronJourneyTests
                 Author = "Slice Five",
                 MaterialFormatId = format.Id,
                 Status = status,
-                BibId = queueName == QueueNames.IdentifierProcessing ? null : (90000 + index).ToString(),
+                BibId = queueName == QueueNames.IdentifierProcessing ? null : (90000 + index),
                 AutoHold = queueName == QueueNames.HoldPlacement,
                 IsbnCheckStatus = queueName == QueueNames.IdentifierProcessing ? "pending" : "found",
                 CreatedUtc = baseUtc.AddTicks(index),
@@ -193,7 +193,7 @@ public sealed partial class PatronJourneyTests
                 copies.Add(new AdditionalCopyRequest
                 {
                     LibraryOrganizationId = scope,
-                    BibId = (91000 + index).ToString(),
+                    BibId = (91000 + index),
                     Title = $"Slice 5 fairness copy {index}",
                     Status = "open",
                     CreatedUtc = baseUtc.AddTicks(index),
@@ -215,7 +215,7 @@ public sealed partial class PatronJourneyTests
                     Title = $"Slice 5 recovery {index}",
                     MaterialFormatId = format.Id,
                     Status = "suggestion",
-                    BibId = (92000 + index).ToString(),
+                    BibId = (92000 + index),
                     IsbnCheckStatus = "found",
                     CreatedUtc = baseUtc.AddTicks(index),
                     UpdatedUtc = baseUtc.AddTicks(index)
@@ -227,7 +227,7 @@ public sealed partial class PatronJourneyTests
             {
                 TitleRequestId = request.Id,
                 PatronBarcodeSnapshot = request.Barcode,
-                BibIdSnapshot = request.BibId!,
+                BibIdSnapshot = request.BibId!.Value,
                 AttemptNumber = 1,
                 State = "ambiguous",
                 Phase = "result_recorded",
@@ -262,12 +262,12 @@ public sealed partial class PatronJourneyTests
         progress.LastOutcomeItemId = null;
         progress.LastOutcomeCode = "test_cycle_started";
         progress.LastOutcomeUtc = null;
-        progress.UpdatedUtc = DateTime.UtcNow;
+        progress.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
         await context.SaveChangesAsync();
         return new FairnessSeed(scope, cursorIds, operations.Select(item => item.Id).ToList(), requests.Select(item => item.Id).ToList(), copies.Select(item => item.Id).ToList());
     }
 
-    private static async Task DeleteFairnessRowsAsync(
+    private async Task DeleteFairnessRowsAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         string queueName,
         FairnessSeed seed)
@@ -295,7 +295,7 @@ public sealed partial class PatronJourneyTests
             progress.LastOutcomeItemId = null;
             progress.LastOutcomeCode = null;
             progress.LastOutcomeUtc = null;
-            progress.UpdatedUtc = DateTime.UtcNow;
+            progress.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
             await context.SaveChangesAsync();
         }
     }
@@ -314,26 +314,26 @@ public sealed partial class PatronJourneyTests
         public IdentifierLookupResult IdentifierResult { get; set; } =
             new(IdentifierLookupOutcome.DefinitiveNotFound);
 
-        public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken cancellationToken) => RefreshAsync(barcode, cancellationToken);
+        public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken cancellationToken) => RefreshAsync(barcode, 2, cancellationToken);
 
-        public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken) =>
-            Task.FromResult(new PatronSnapshot(7105, barcode, "fairness@example.org", "Fair", "Tester", "1", "Standard", 2, 2, "Library", 101));
+        public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken) =>
+            Task.FromResult(new PatronSnapshot(7105, barcode, "fairness@example.org", "Fair", "Tester", 1, "Standard", 2, 2, "Library", 101));
 
-        public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, CancellationToken cancellationToken) =>
+        public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PickupBranch>>([]);
 
-        public Task UpdatePreferredPickupBranchAsync(string barcode, int pickupBranchId, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task UpdatePreferredPickupBranchAsync(string barcode, int pickupBranchId, int organizationId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task<IdentifierLookupResult> LookupIdentifierAsync(string identifier, CancellationToken cancellationToken) =>
+        public Task<IdentifierLookupResult> LookupIdentifierAsync(string identifier, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(IdentifierResult);
 
-        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken) =>
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(new BibValidationResult(true));
 
-        public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(string barcode, CancellationToken cancellationToken) =>
+        public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(string barcode, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PolarisHoldSnapshot>>([]);
 
-        public Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(string barcode, CancellationToken cancellationToken) =>
+        public Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(string barcode, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PolarisCheckoutSnapshot>>([]);
 
         public Task<HoldProviderResult> CreateHoldAsync(HoldCreateCommand command, CancellationToken cancellationToken)
@@ -341,14 +341,14 @@ public sealed partial class PatronJourneyTests
             CreateCount++;
             return Task.FromResult(new HoldProviderResult(
                 HoldProviderOutcome.DefinitiveNoEffect,
-                Guid.NewGuid().ToString(), null, null, null, 2, 0,
+                Guid.NewGuid(), null, null, null, 2, 0,
                 "provider_final_no_effect"));
         }
 
         public Task<HoldProviderResult> ReplyToHoldAsync(HoldReplyCommand command, CancellationToken cancellationToken) =>
             Task.FromResult(new HoldProviderResult(
                 HoldProviderOutcome.DefinitiveNoEffect,
-                command.RequestGuid.ToString(), null, command.TxnGroupQualifier, command.TxnQualifier, 2, 0,
+                command.RequestGuid, null, command.TxnGroupQualifier, command.TxnQualifier, 2, 0,
                 "provider_final_no_effect"));
     }
 }

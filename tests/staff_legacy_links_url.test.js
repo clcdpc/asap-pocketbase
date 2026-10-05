@@ -21,15 +21,19 @@ const holder = {};
 new Function('holder', `${source}\nholder.result = {
   requestedStatusFromUrl,
   requestedRequestIdFromUrl,
+  requestedSettingsPanelFromUrl,
   replaceRequestUrl,
   replaceStageUrl,
+  requestUrl,
   statusStages
 };`)(holder);
 const {
   requestedStatusFromUrl,
   requestedRequestIdFromUrl,
+  requestedSettingsPanelFromUrl,
   replaceRequestUrl,
   replaceStageUrl,
+  requestUrl,
   statusStages
 } = holder.result;
 
@@ -83,8 +87,16 @@ const switched = new URL(replaceStageUrl(sourceUrl, 'analytics'), origin);
 assert.equal(switched.searchParams.has('request'), false);
 assert.equal(switched.searchParams.get('stage'), 'analytics');
 assert.equal(switched.searchParams.get('status'), 'new');
-assert.equal(switched.searchParams.get('scope'), '2');
+assert.equal(switched.searchParams.has('scope'), false, 'operational scope must not leak into Analytics');
 assert.equal(switched.hash, '#details');
+
+const typed = new URL(requestUrl(url('?stage=additional_copies&request=42'), bigId, 'suggestion'), origin);
+assert.equal(typed.searchParams.get('request'), bigId);
+assert.equal(typed.searchParams.get('stage'), 'suggestion');
+assert.equal(requestedSettingsPanelFromUrl(url('?stage=settings#settings-workflow')), 'workflow');
+assert.equal(requestedSettingsPanelFromUrl(url('?stage=settings#settings-unknown')), '');
+const leavingSettings = new URL(replaceStageUrl(url('?stage=settings#settings-workflow'), 'suggestion'), origin);
+assert.equal(leavingSettings.hash, '');
 
 for (const stage of ['suggestion', 'outstanding_purchase', 'pending_hold', 'hold_placed', 'additional_copies', 'closed', 'settings', 'analytics']) {
   assert.ok(statusStages.includes(stage), `missing supported stage ${stage}`);

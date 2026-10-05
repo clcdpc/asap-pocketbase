@@ -158,11 +158,11 @@ public sealed partial class PatronJourneyTests
             provider.CompleteBlockedCreate(new HoldProviderResult(
                 HoldProviderOutcome.FinalSuccess,
                 null,
-                "8123",
+                8123,
                 null,
                 null,
                 2,
-                0,
+                1,
                 "documented_final_success"));
             var result = await execution.WaitAsync(TimeSpan.FromSeconds(15));
             Assert.AreEqual("completed", result.Code);

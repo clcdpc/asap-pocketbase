@@ -13,10 +13,11 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task FulfillmentClosesOnPositiveCheckoutWithoutTerminalHoldRead()
     {
+        var scope = await CreateFulfillmentLibraryAsync();
         var barcode = $"2000000000{Random.Shared.Next(100000, 999999)}";
         var provider = new FulfillmentEvidenceProvider
         {
-            Checkouts = [new PolarisCheckoutSnapshot(9951, "tracked-9951", barcode)]
+            Checkouts = [new PolarisCheckoutSnapshot(9951, 9951, barcode)]
         };
         await using var workflowFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
@@ -26,12 +27,12 @@ public sealed partial class PatronJourneyTests
             }));
 
         var seeded = await SeedCompletedHoldIdentityAsync(
-            "positive-checkout", barcode, "9951", holdRequestId: "tracked-9951");
-        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
+            "positive-checkout", barcode, 9951, holdRequestId: 9951, organizationId: scope);
+        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, scope, seeded.RequestId);
         try
         {
             var result = await workflowFactory.Services.GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
             Assert.AreEqual("completed", result.Code);
             Assert.AreEqual("closed", await ReadStringAsync(
                 "SELECT [Status] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
@@ -44,12 +45,14 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await DeleteRequestAsync(seeded.RequestId);
+            await DeleteFulfillmentLibraryAsync(scope);
         }
     }
 
     [TestMethod]
     public async Task FulfillmentCheckoutReadFailurePersistsDiagnosticAndStopsPhase()
     {
+        var scope = await CreateFulfillmentLibraryAsync();
         var barcode = $"2000000000{Random.Shared.Next(100000, 999999)}";
         var provider = new FulfillmentEvidenceProvider
         {
@@ -64,12 +67,12 @@ public sealed partial class PatronJourneyTests
             }));
 
         var seeded = await SeedCompletedHoldIdentityAsync(
-            "checkout-failure", barcode, "9952", holdRequestId: "tracked-9952");
-        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
+            "checkout-failure", barcode, 9952, holdRequestId: 9952, organizationId: scope);
+        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, scope, seeded.RequestId);
         try
         {
             var result = await workflowFactory.Services.GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
             Assert.AreEqual("operational_failure", result.Code);
             Assert.AreEqual("hold_placed", await ReadStringAsync(
                 "SELECT [Status] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
@@ -82,16 +85,18 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await DeleteRequestAsync(seeded.RequestId);
+            await DeleteFulfillmentLibraryAsync(scope);
         }
     }
 
     [TestMethod]
     public async Task FulfillmentDoesNotCloseAfterRequestIdentityChangesDuringCheckoutRead()
     {
+        var scope = await CreateFulfillmentLibraryAsync();
         var barcode = $"2000000000{Random.Shared.Next(100000, 999999)}";
         var provider = new FulfillmentEvidenceProvider
         {
-            Checkouts = [new PolarisCheckoutSnapshot(9956, "tracked-9956", barcode)]
+            Checkouts = [new PolarisCheckoutSnapshot(9956, 9956, barcode)]
         };
         provider.BlockCheckoutRead();
         await using var workflowFactory = factory!.WithWebHostBuilder(builder =>
@@ -102,12 +107,12 @@ public sealed partial class PatronJourneyTests
             }));
 
         var seeded = await SeedCompletedHoldIdentityAsync(
-            "checkout-stale-identity", barcode, "9956", holdRequestId: "tracked-9956");
-        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
+            "checkout-stale-identity", barcode, 9956, holdRequestId: 9956, organizationId: scope);
+        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, scope, seeded.RequestId);
         try
         {
             var execution = workflowFactory.Services.GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
             await provider.CheckoutReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(15));
             await ExecuteNonQueryAsync(
                 "UPDATE [asap].[TitleRequest] SET [BibId] = N'9957' WHERE [Id] = @id;",
@@ -118,8 +123,9 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("completed", result.Code);
             Assert.AreEqual("hold_placed", await ReadStringAsync(
                 "SELECT [Status] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
-            Assert.AreEqual("9957", await ReadStringAsync(
-                "SELECT [BibId] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
+            await using var nativeCheck = await workflowFactory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync();
+            Assert.AreEqual(9957, await nativeCheck.TitleRequests.Where(item => item.Id == seeded.RequestId)
+                .Select(item => item.BibId).SingleAsync());
             Assert.AreEqual(0, await CountForRequestAsync(
                 "[asap].[TitleRequestEvent]", "[TitleRequestId]", seeded.RequestId));
             Assert.AreEqual(1, provider.CheckoutReadCount);
@@ -128,12 +134,14 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await DeleteRequestAsync(seeded.RequestId);
+            await DeleteFulfillmentLibraryAsync(scope);
         }
     }
 
     [TestMethod]
     public async Task FulfillmentDoesNotInheritAnOldIdentityWhenLatestOperationHasNoHoldId()
     {
+        var scope = await CreateFulfillmentLibraryAsync();
         var barcode = $"2000000000{Random.Shared.Next(100000, 999999)}";
         var provider = new FulfillmentEvidenceProvider
         {
@@ -147,12 +155,12 @@ public sealed partial class PatronJourneyTests
             }));
 
         var seeded = await SeedCompletedHoldIdentityAsync(
-            "null-latest-identity", barcode, "9953", holdRequestId: null);
-        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
+            "null-latest-identity", barcode, 9953, holdRequestId: null, organizationId: scope);
+        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, scope, seeded.RequestId);
         try
         {
             var result = await workflowFactory.Services.GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
             Assert.AreEqual("completed", result.Code);
             Assert.AreEqual("hold_placed", await ReadStringAsync(
                 "SELECT [Status] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
@@ -162,16 +170,18 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await DeleteRequestAsync(seeded.RequestId);
+            await DeleteFulfillmentLibraryAsync(scope);
         }
     }
 
     [TestMethod]
     public async Task FulfillmentRejectsMalformedCheckoutEvidenceAndPersistsDiagnostic()
     {
+        var scope = await CreateFulfillmentLibraryAsync();
         var barcode = $"2000000000{Random.Shared.Next(100000, 999999)}";
         var provider = new FulfillmentEvidenceProvider
         {
-            Checkouts = [new PolarisCheckoutSnapshot(0, "malformed", barcode)]
+            Checkouts = [new PolarisCheckoutSnapshot(0, 0, barcode)]
         };
         await using var workflowFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
@@ -181,12 +191,12 @@ public sealed partial class PatronJourneyTests
             }));
 
         var seeded = await SeedCompletedHoldIdentityAsync(
-            "malformed-checkout", barcode, "9954", holdRequestId: "9954");
-        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
+            "malformed-checkout", barcode, 9954, holdRequestId: 9954, organizationId: scope);
+        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, scope, seeded.RequestId);
         try
         {
             var result = await workflowFactory.Services.GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
             Assert.AreEqual("operational_failure", result.Code);
             Assert.AreEqual("hold_placed", await ReadStringAsync(
                 "SELECT [Status] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
@@ -196,16 +206,18 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await DeleteRequestAsync(seeded.RequestId);
+            await DeleteFulfillmentLibraryAsync(scope);
         }
     }
 
     [TestMethod]
     public async Task FulfillmentSqlFailureRollsBackPositiveClosureAndQueueCheckpoint()
     {
+        var scope = await CreateFulfillmentLibraryAsync();
         var barcode = $"2000000000{Random.Shared.Next(100000, 999999)}";
         var provider = new FulfillmentEvidenceProvider
         {
-            Checkouts = [new PolarisCheckoutSnapshot(9955, "tracked-9955", barcode)]
+            Checkouts = [new PolarisCheckoutSnapshot(9955, 9955, barcode)]
         };
         await using var workflowFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
@@ -215,8 +227,8 @@ public sealed partial class PatronJourneyTests
             }));
 
         var seeded = await SeedCompletedHoldIdentityAsync(
-            "fulfillment-sql-rollback", barcode, "9955", holdRequestId: "tracked-9955");
-        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
+            "fulfillment-sql-rollback", barcode, 9955, holdRequestId: 9955, organizationId: scope);
+        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, scope, seeded.RequestId);
         try
         {
             await ExecuteNonQueryAsync(
@@ -224,7 +236,7 @@ public sealed partial class PatronJourneyTests
             try
             {
                 var result = await workflowFactory.Services.GetRequiredService<WorkflowProcessingService>()
-                    .ProcessWorkflowAsync(2, CancellationToken.None);
+                    .ProcessWorkflowAsync(scope, CancellationToken.None);
                 Assert.AreEqual("sql_failure", result.Code);
                 Assert.AreEqual("hold_placed", await ReadStringAsync(
                     "SELECT [Status] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
@@ -234,7 +246,7 @@ public sealed partial class PatronJourneyTests
                     .GetRequiredService<IDbContextFactory<AsapDbContext>>()
                     .CreateDbContextAsync();
                 var progress = await context.QueueProgress.AsNoTracking().SingleAsync(item =>
-                    item.QueueName == QueueNames.FulfillmentTracking && item.ScopeOrganizationId == 2);
+                    item.QueueName == QueueNames.FulfillmentTracking && item.ScopeOrganizationId == scope);
                 Assert.AreEqual(0, progress.LastItemId);
             }
             finally
@@ -245,6 +257,7 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await DeleteRequestAsync(seeded.RequestId);
+            await DeleteFulfillmentLibraryAsync(scope);
         }
     }
 }

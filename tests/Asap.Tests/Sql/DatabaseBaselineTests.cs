@@ -3,6 +3,9 @@ using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Development;
 using Asap.Web.Infrastructure.Health;
 using Asap.Web.Features.Staff;
+using Asap.Web.Features.Patron;
+using Asap.Web.Infrastructure.Security;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,7 +15,7 @@ using Microsoft.SqlServer.Dac;
 namespace Asap.Tests.Sql;
 
 [TestClass]
-public sealed class DatabaseBaselineTests
+public sealed partial class DatabaseBaselineTests
 {
     private static string _databaseName = null!;
     private static string _masterConnectionString = null!;
@@ -80,13 +83,63 @@ public sealed class DatabaseBaselineTests
 
         Assert.AreEqual(16, Convert.ToInt32(await Scalar(connection, "SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS int);")));
         Assert.AreEqual(160, Convert.ToInt32(await Scalar(connection, "SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME();")));
-        Assert.AreEqual(6, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+        Assert.AreEqual(10, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
         Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, "SELECT COUNT(*) FROM [asap].[DeploymentState] WHERE [Id] = 1;")));
         var expectedHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(_dacpacPath))).ToLowerInvariant();
         Assert.AreEqual(
             expectedHash,
             Convert.ToString(await Scalar(connection, "SELECT [LastDacpacSha256] FROM [asap].[DeploymentState] WHERE [Id] = 1;")));
+    }
+
+    [TestMethod]
+    public async Task NativeSchemaEightUpgradeAddsPickupJournalWithoutReplacingExistingSettings()
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        await NonQuery(connection, """
+            DROP TABLE [asap].[PickupPreferenceOperation];
+            UPDATE [asap].[SchemaVersion] SET [Version] = 8 WHERE [Id] = 1;
+            UPDATE [asap].[PolarisSettings] SET [AccessId] = N'native-eight-preservation' WHERE [OrganizationId] = 1;
+            """);
+        try
+        {
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+            Assert.AreEqual(10, Convert.ToInt32(await Scalar(connection,
+                "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+            Assert.AreEqual("native-eight-preservation", await Scalar(connection,
+                "SELECT [AccessId] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;"));
+            Assert.AreEqual(0, Convert.ToInt32(await Scalar(connection,
+                "SELECT COUNT(*) FROM [asap].[PickupPreferenceOperation];")));
+        }
+        finally
+        {
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+            await NonQuery(connection, "UPDATE [asap].[PolarisSettings] SET [AccessId] = NULL WHERE [OrganizationId] = 1;");
+        }
+    }
+
+    [TestMethod]
+    public async Task RuntimeRoleCanAcquirePatronWriteIntentLocksWithoutSchemaPermissions()
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        await NonQuery(connection, """
+            CREATE USER [pickup_runtime_probe] WITHOUT LOGIN;
+            ALTER ROLE [asap_runtime] ADD MEMBER [pickup_runtime_probe];
+            """);
+        try
+        {
+            await NonQuery(connection, "EXECUTE AS USER = 'pickup_runtime_probe';");
+            await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync();
+            Assert.IsTrue(await PatronMutationLock.TryAcquireAsync(connection, transaction,
+                "runtime-probe", CancellationToken.None));
+            await transaction.RollbackAsync();
+        }
+        finally
+        {
+            await NonQuery(connection, "REVERT; DROP USER [pickup_runtime_probe];");
+        }
     }
 
     [TestMethod]
@@ -151,6 +204,104 @@ public sealed class DatabaseBaselineTests
     }
 
     [TestMethod]
+    [DataRow("SIMPLE")]
+    [DataRow("FULL")]
+    public async Task DacpacPublicationPreservesEnvironmentRecoveryAndAppliesExplicitCompatibility(string recovery)
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        var original = Convert.ToString(await Scalar(connection, "SELECT recovery_model_desc FROM sys.databases WHERE database_id = DB_ID();"));
+        try
+        {
+            // Both values come from the fixed test cases, against this fixture's
+            // generated local database. No deployment host/database is involved.
+            await NonQuery(connection, $"ALTER DATABASE CURRENT SET RECOVERY {recovery}; ALTER DATABASE CURRENT SET COMPATIBILITY_LEVEL = 150;");
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+            Assert.AreEqual(recovery, Convert.ToString(await Scalar(connection, "SELECT recovery_model_desc FROM sys.databases WHERE database_id = DB_ID();")));
+            Assert.AreEqual(160, Convert.ToInt32(await Scalar(connection, "SELECT compatibility_level FROM sys.databases WHERE database_id = DB_ID();")));
+        }
+        finally
+        {
+            Assert.IsTrue(original is "FULL" or "SIMPLE" or "BULK_LOGGED");
+            await NonQuery(connection, $"ALTER DATABASE CURRENT SET RECOVERY {original};");
+        }
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task NativePickupJournalUpgradeNormalizesSystemPreferenceWithoutLosingEvidence(bool completed)
+    {
+        var operationId = Guid.NewGuid();
+        var observedUtc = new DateTime(2026, 9, 30, 12, 0, 0, DateTimeKind.Utc);
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        try
+        {
+            // This is the prior native schema-10 invariant, which accepted system
+            // 1 as the provider's previous/observed preference. The target branch
+            // still uses a real native ID, as required by the mutation service.
+            await NonQuery(connection, """
+                ALTER TABLE [asap].[PickupPreferenceOperation] DROP CONSTRAINT [CK_PickupPreferenceOperation_Identity];
+                ALTER TABLE [asap].[PickupPreferenceOperation] ADD CONSTRAINT [CK_PickupPreferenceOperation_Identity] CHECK
+                    ([PatronId] > 0 AND [LibraryOrganizationId] > 1 AND [ToPickupBranchId] > 0
+                     AND ([FromPickupBranchId] IS NULL OR [FromPickupBranchId] > 0)
+                     AND ([ObservedPickupBranchId] IS NULL OR [ObservedPickupBranchId] > 0));
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (775511, N'Journal upgrade fixture', 1);
+                """);
+            await using (var insert = new SqlCommand("""
+                INSERT INTO [asap].[PickupPreferenceOperation]
+                    ([Id], [Barcode], [PatronId], [LibraryOrganizationId], [Origin], [FromPickupBranchId],
+                     [FromPickupBranchName], [ToPickupBranchId], [ToPickupBranchName], [State], [DispatchStartedUtc],
+                     [DispatchFinishedUtc], [ProviderConfirmedUtc], [ConfirmedByRead], [ObservedPickupBranchId], [CompletedUtc])
+                VALUES (@id, N'native-journal-upgrade', 7001, 775511, N'patron_suggestion', 1, N'Original provider label',
+                        775512, N'Real target branch', @state, @utc, @finished, @finished, 0, @observed, @finished);
+                """, connection))
+            {
+                insert.Parameters.AddWithValue("@id", operationId);
+                insert.Parameters.AddWithValue("@state", completed ? 3 : 1);
+                insert.Parameters.AddWithValue("@utc", observedUtc);
+                insert.Parameters.AddWithValue("@finished", completed ? observedUtc : DBNull.Value);
+                insert.Parameters.AddWithValue("@observed", completed ? 1 : DBNull.Value);
+                await insert.ExecuteNonQueryAsync();
+            }
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+            await using var query = new SqlCommand("""
+                SELECT [Id], [State], [FromPickupBranchId], [ObservedPickupBranchId], [ToPickupBranchId],
+                       [FromPickupBranchName], [DispatchStartedUtc], [DispatchFinishedUtc], [ProviderConfirmedUtc], [CompletedUtc]
+                FROM [asap].[PickupPreferenceOperation] WHERE [Id] = @id;
+                """, connection);
+            query.Parameters.AddWithValue("@id", operationId);
+            await using var rows = await query.ExecuteReaderAsync();
+            Assert.IsTrue(await rows.ReadAsync());
+            Assert.AreEqual(operationId, rows.GetGuid(0));
+            Assert.AreEqual(completed ? 3 : 1, rows.GetInt32(1));
+            Assert.IsTrue(rows.IsDBNull(2));
+            Assert.IsTrue(rows.IsDBNull(3));
+            Assert.AreEqual(775512, rows.GetInt32(4));
+            Assert.AreEqual("Original provider label", rows.GetString(5), "Historical diagnostics must be retained.");
+            Assert.AreEqual(observedUtc, rows.GetDateTime(6));
+            for (var column = 7; column <= 9; column++)
+            {
+                Assert.AreEqual(!completed, rows.IsDBNull(column));
+                if (completed)
+                {
+                    Assert.AreEqual(observedUtc, rows.GetDateTime(column));
+                }
+            }
+            Assert.IsFalse(await rows.ReadAsync(), "Normalization must retain the one original operation.");
+        }
+        finally
+        {
+            await NonQuery(connection, """
+                DELETE FROM [asap].[PickupPreferenceOperation] WHERE [LibraryOrganizationId] = 775511;
+                DELETE FROM [asap].[Organization] WHERE [Id] = 775511;
+                """);
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+        }
+    }
+
+    [TestMethod]
     public async Task SingletonConstraintsRejectSecondRows()
     {
         await using var connection = new SqlConnection(_databaseConnectionString);
@@ -165,6 +316,109 @@ public sealed class DatabaseBaselineTests
 
         Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, "SELECT COUNT(*) FROM [asap].[SchemaVersion];")));
         Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, "SELECT COUNT(*) FROM [asap].[DeploymentState];")));
+    }
+
+    [TestMethod]
+    public async Task PolarisColumnsUseNativeSqlTypesAndRejectNonpositiveIdentities()
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        foreach (var (table, column, type) in new[]
+        {
+            ("TitleRequest", "BibId", "int"), ("TitleRequest", "PatronCodeId", "int"),
+            ("AdditionalCopyRequest", "BibId", "int"), ("DeletedRequestAudit", "BibId", "int"),
+            ("PatronCodeEligibilityMember", "PatronCodeId", "int"),
+            ("DeploymentState", "LastHangfireSchemaVersion", "int"),
+            ("HoldPlacementOperation", "BibIdSnapshot", "int"),
+            ("HoldPlacementOperation", "PatronIdSnapshot", "int"),
+            ("HoldPlacementOperation", "PolarisUserIdSnapshot", "int"),
+            ("HoldPlacementOperation", "PolarisHoldId", "int"),
+            ("HoldPlacementOperation", "PolarisRequestGuid", "uniqueidentifier"),
+            ("HoldPlacementOperation", "ProviderStatusType", "int"),
+            ("HoldPlacementOperation", "ProviderStatusValue", "int"),
+            ("HoldPlacementOperation", "ReplyAnswer", "int"),
+            ("HoldPlacementOperation", "ReplyState", "int")
+        })
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT TYPE_NAME([system_type_id]) FROM sys.columns
+                WHERE [object_id] = OBJECT_ID(@table) AND [name] = @column;
+                """;
+            command.Parameters.AddWithValue("@table", $"[asap].[{table}]");
+            command.Parameters.AddWithValue("@column", column);
+            Assert.AreEqual(type, await command.ExecuteScalarAsync(), $"{table}.{column}");
+        }
+
+        foreach (var invalid in new[] { "0", "-1", "2147483648", "not-an-id" })
+        {
+            await Assert.ThrowsAsync<SqlException>(() => NonQuery(connection,
+                $"""
+                INSERT INTO [asap].[DeletedRequestAudit]
+                    ([RequestType], [OriginalRequestKey], [LibraryOrganizationId], [BibId], [DeletedUtc])
+                VALUES (N'title_request', N'native-invalid', 1, '{invalid}', SYSUTCDATETIME());
+                """));
+        }
+        Assert.AreEqual(0, Convert.ToInt32(await Scalar(connection,
+            "SELECT COUNT(*) FROM [asap].[DeletedRequestAudit] WHERE [OriginalRequestKey] = N'native-invalid';")));
+    }
+
+    [TestMethod]
+    public async Task NativeDacpacRefusesOlderTextColumnsWithoutMutatingTheirData()
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        await NonQuery(connection, """
+            ALTER TABLE [asap].[DeploymentState] ALTER COLUMN [LastHangfireSchemaVersion] nvarchar(20) NULL;
+            UPDATE [asap].[DeploymentState] SET [LastHangfireSchemaVersion] = N'9' WHERE [Id] = 1;
+            UPDATE [asap].[SchemaVersion] SET [Version] = 6 WHERE [Id] = 1;
+            """);
+        try
+        {
+            Assert.Throws<SqlException>(() =>
+                new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath));
+            Assert.AreEqual(6, Convert.ToInt32(await Scalar(connection,
+                "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+            Assert.AreEqual("nvarchar", await Scalar(connection, """
+                SELECT TYPE_NAME([system_type_id]) FROM sys.columns
+                WHERE [object_id] = OBJECT_ID(N'[asap].[DeploymentState]')
+                  AND [name] = N'LastHangfireSchemaVersion';
+                """));
+            Assert.AreEqual("9", await Scalar(connection,
+                "SELECT [LastHangfireSchemaVersion] FROM [asap].[DeploymentState] WHERE [Id] = 1;"));
+        }
+        finally
+        {
+            await NonQuery(connection, """
+                ALTER TABLE [asap].[DeploymentState] ALTER COLUMN [LastHangfireSchemaVersion] int NULL;
+                UPDATE [asap].[DeploymentState] SET [LastHangfireSchemaVersion] = NULL WHERE [Id] = 1;
+                UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;
+                """);
+        }
+    }
+
+    [TestMethod]
+    public async Task NativeDacpacRefusesAnExistingDatabaseWithMissingSchemaIdentity()
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        await NonQuery(connection, "DELETE FROM [asap].[SchemaVersion] WHERE [Id] = 1;");
+        var before = await Scalar(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest];");
+        try
+        {
+            Assert.Throws<SqlException>(() =>
+                new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath));
+            Assert.AreEqual(0, Convert.ToInt32(await Scalar(connection,
+                "SELECT COUNT(*) FROM [asap].[SchemaVersion];")));
+            Assert.AreEqual(before, await Scalar(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest];"));
+        }
+        finally
+        {
+            await NonQuery(connection, """
+                INSERT INTO [asap].[SchemaVersion] ([Id], [Version], [UpdatedUtc])
+                VALUES (1, 10, SYSUTCDATETIME());
+                """);
+        }
     }
 
     [TestMethod]
@@ -189,57 +443,184 @@ public sealed class DatabaseBaselineTests
     }
 
     [TestMethod]
-    public async Task ReadinessRequiresExactSchemaVersion()
+    public async Task ReadinessRequiresExactSchemaAndUsableLocalPolarisConfiguration()
     {
-        var services = new ServiceCollection()
+        var protector = new IntegrationCredentialProtector(new EphemeralDataProtectionProvider());
+        using var services = new ServiceCollection()
+            .AddSingleton(protector)
             .AddDbContextFactory<AsapDbContext>(options => options.UseSqlServer(_databaseConnectionString))
             .BuildServiceProvider();
         var readiness = new ReadinessService(
             new ConfigurationLoadResult(TestConfigurationFactory.Create(), "test.json", []),
-            new RuntimeInitializationState(),
-            services,
-            NullLogger<ReadinessService>.Instance);
-
-        Assert.IsTrue((await readiness.CheckAsync(CancellationToken.None)).IsReady);
-
-        await using (var connection = new SqlConnection(_databaseConnectionString))
-        {
-            await connection.OpenAsync();
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 4 WHERE [Id] = 1;");
-        }
-
+            new RuntimeInitializationState(), services, NullLogger<ReadinessService>.Instance);
+        await using var context = await services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+            .CreateDbContextAsync();
+        var settings = await context.PolarisSettings.SingleAsync();
+        var original = context.Entry(settings).CurrentValues.Clone();
         try
         {
-            var result = await readiness.CheckAsync(CancellationToken.None);
-            Assert.IsFalse(result.IsReady);
-            Assert.AreEqual("schema_version_mismatch", result.ErrorCode);
+            settings.Host = null;
+            settings.WorkstationId = null;
+            await context.SaveChangesAsync();
+            var missing = await readiness.CheckAsync(CancellationToken.None);
+            Assert.IsFalse(missing.IsReady);
+            Assert.AreEqual("polaris_configuration_invalid", missing.ErrorCode);
+            Assert.IsTrue((await readiness.CheckAsync(CancellationToken.None, requirePolarisConfiguration: false)).IsReady,
+                "Settings and recovery retain the storage gate while integrations are unconfigured.");
+
+            settings.Host = "https://unreachable-polaris.invalid";
+            settings.AccessId = "test-access";
+            settings.StaffDomain = "TEST";
+            settings.AdminUser = "test-user";
+            settings.WorkstationId = 99;
+            settings.SystemPolarisUserId = 42;
+            settings.ProtectedApiKey = protector.Protect("test-key");
+            settings.ProtectedAdminPassword = protector.Protect("test-password");
+            await context.SaveChangesAsync();
+            Assert.IsTrue((await readiness.CheckAsync(CancellationToken.None)).IsReady,
+                "Local readiness must not make a live PAPI call.");
+
+            settings.ProtectedApiKey = "unusable-ciphertext";
+            await context.SaveChangesAsync();
+            Assert.AreEqual("polaris_configuration_invalid", (await readiness.CheckAsync(CancellationToken.None)).ErrorCode);
+            settings.ProtectedApiKey = protector.Protect("test-key");
+            await context.SaveChangesAsync();
+            await context.Database.ExecuteSqlRawAsync("UPDATE [asap].[SchemaVersion] SET [Version] = 4 WHERE [Id] = 1;");
+            var wrongSchema = await readiness.CheckAsync(CancellationToken.None);
+            Assert.IsFalse(wrongSchema.IsReady);
+            Assert.AreEqual("schema_version_mismatch", wrongSchema.ErrorCode);
         }
         finally
         {
-            await using var connection = new SqlConnection(_databaseConnectionString);
-            await connection.OpenAsync();
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 6 WHERE [Id] = 1;");
+            context.Entry(settings).CurrentValues.SetValues(original);
+            await context.SaveChangesAsync();
+            await context.Database.ExecuteSqlRawAsync("UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;");
         }
     }
 
     [TestMethod]
-    public async Task SchemaSixRejectsInPlaceDeploymentOverAnOlderApplicationDatabase()
+    public async Task PolarisSettingsHaveNoOperationalDefaultsOrRetiredContextColumns()
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        Assert.AreEqual(0, Convert.ToInt32(await Scalar(connection,
+            "SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID(N'asap.PolarisSettings') AND name IN (N'OrganizationIdForRequests', N'PickupOrganizationId');")));
+        Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection,
+            "SELECT COUNT(*) FROM [asap].[PolarisSettings] WHERE [AccessId] IS NULL AND [WorkstationId] IS NULL AND [SystemPolarisUserId] IS NULL;")));
+        foreach (var column in new[] { "WorkstationId", "SystemPolarisUserId" })
+        {
+            foreach (var value in new[] { 0, -1 })
+            {
+                await Assert.ThrowsAsync<SqlException>(async () =>
+                    await NonQuery(connection, $"UPDATE [asap].[PolarisSettings] SET [{column}] = {value} WHERE [OrganizationId] = 1;"));
+            }
+        }
+    }
+
+    [TestMethod]
+    [DataRow(99, 42)]
+    [DataRow(-1, 0)]
+    public async Task NativeDacpacUpgradeRetiresGlobalContextWhilePreservingIntegrationIdentity(int workstationId, int userId)
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        await NonQuery(connection, """
+            ALTER TABLE [asap].[PolarisSettings] ADD [OrganizationIdForRequests] int NULL, [PickupOrganizationId] int NULL;
+            ALTER TABLE [asap].[PolarisSettings] DROP CONSTRAINT [CK_PolarisSettings_IntegrationIdentity];
+            """);
+        try
+        {
+            await NonQuery(connection, """
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (73470, N'Native upgrade library', 1);
+                INSERT INTO [asap].[TitleRequest]
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status],
+                     [BibId], [BibIdStaffVerified], [PatronCodeId], [CreatedUtc], [UpdatedUtc])
+                SELECT 73470, N'upgrade-patron', N'Native upgrade request', 1, [Id], N'hold_placed',
+                    9001, 1, 4, SYSUTCDATETIME(), SYSUTCDATETIME()
+                FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book';
+                INSERT INTO [asap].[HoldPlacementOperation]
+                    ([TitleRequestId], [PatronBarcodeSnapshot], [PatronIdSnapshot], [BibIdSnapshot],
+                     [RequestingOrganizationIdSnapshot], [AttemptNumber], [State], [Phase], [ExecutionEpoch],
+                     [PolarisRequestGuid], [PolarisHoldId], [ProviderStatusType], [ProviderStatusValue],
+                     [ResultCode], [RequestStartedUtc], [CompletedUtc])
+                SELECT [Id], [Barcode], 7001, [BibId], 73470, 1, N'succeeded', N'result_recorded', 1,
+                    '73470000-0000-0000-0000-000000000001', 8123, 2, 1, N'success', SYSUTCDATETIME(), SYSUTCDATETIME()
+                FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 73470;
+                """);
+            var requestVersion = (byte[])(await Scalar(connection,
+                "SELECT [RowVersion] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 73470;"))!;
+            await NonQuery(connection, $"""
+                UPDATE [asap].[SchemaVersion] SET [Version] = 7 WHERE [Id] = 1;
+                UPDATE [asap].[PolarisSettings] SET [OrganizationIdForRequests] = 7,
+                    [PickupOrganizationId] = 101, [WorkstationId] = {workstationId}, [SystemPolarisUserId] = {userId},
+                    [ProtectedApiKey] = N'opaque-upgrade-key', [ProtectedAdminPassword] = N'opaque-upgrade-password',
+                    [StaffDomain] = N'upgrade-domain' WHERE [OrganizationId] = 1;
+                """);
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+            Assert.AreEqual(0, Convert.ToInt32(await Scalar(connection,
+                "SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID(N'asap.PolarisSettings') AND name IN (N'OrganizationIdForRequests', N'PickupOrganizationId');")));
+            Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection,
+                "SELECT COUNT(*) FROM [asap].[PolarisSettings] WHERE [StaffDomain] = N'upgrade-domain' AND [ProtectedApiKey] = N'opaque-upgrade-key' AND [ProtectedAdminPassword] = N'opaque-upgrade-password';")));
+            Assert.AreEqual(workstationId > 0 ? (object)workstationId : DBNull.Value,
+                await Scalar(connection, "SELECT [WorkstationId] FROM [asap].[PolarisSettings];"));
+            Assert.AreEqual(userId > 0 ? (object)userId : DBNull.Value,
+                await Scalar(connection, "SELECT [SystemPolarisUserId] FROM [asap].[PolarisSettings];"));
+            Assert.AreEqual(10, Convert.ToInt32(await Scalar(connection,
+                "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+            var preservedVersion = (byte[])(await Scalar(connection,
+                "SELECT [RowVersion] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 73470;"))!;
+            Assert.IsTrue(requestVersion.SequenceEqual(preservedVersion));
+            Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, """
+                SELECT COUNT(*) FROM [asap].[TitleRequest] request
+                JOIN [asap].[HoldPlacementOperation] operation ON operation.[TitleRequestId] = request.[Id]
+                WHERE request.[LibraryOrganizationId] = 73470 AND request.[BibId] = 9001 AND request.[PatronCodeId] = 4
+                    AND request.[BibIdStaffVerified] = 1 AND request.[Status] = N'hold_placed'
+                    AND operation.[RequestingOrganizationIdSnapshot] = 73470 AND operation.[PatronIdSnapshot] = 7001
+                    AND operation.[PolarisRequestGuid] = '73470000-0000-0000-0000-000000000001'
+                    AND operation.[PolarisHoldId] = 8123 AND operation.[ProviderStatusType] = 2
+                    AND operation.[ProviderStatusValue] = 1 AND operation.[State] = N'succeeded';
+                """)));
+        }
+        finally
+        {
+            await NonQuery(connection, """
+                DELETE FROM [asap].[HoldPlacementOperation] WHERE [TitleRequestId] IN
+                    (SELECT [Id] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 73470);
+                DELETE FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 73470;
+                DELETE FROM [asap].[Organization] WHERE [Id] = 73470;
+                IF COL_LENGTH(N'asap.PolarisSettings', N'OrganizationIdForRequests') IS NOT NULL
+                    ALTER TABLE [asap].[PolarisSettings] DROP COLUMN [OrganizationIdForRequests];
+                IF COL_LENGTH(N'asap.PolarisSettings', N'PickupOrganizationId') IS NOT NULL
+                    ALTER TABLE [asap].[PolarisSettings] DROP COLUMN [PickupOrganizationId];
+                UPDATE [asap].[PolarisSettings] SET [WorkstationId] = NULL, [SystemPolarisUserId] = NULL,
+                    [StaffDomain] = NULL, [ProtectedApiKey] = NULL, [ProtectedAdminPassword] = NULL WHERE [OrganizationId] = 1;
+                IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE [name] = N'CK_PolarisSettings_IntegrationIdentity')
+                    ALTER TABLE [asap].[PolarisSettings] ADD CONSTRAINT [CK_PolarisSettings_IntegrationIdentity]
+                        CHECK (([WorkstationId] IS NULL OR [WorkstationId] > 0) AND
+                               ([SystemPolarisUserId] IS NULL OR [SystemPolarisUserId] > 0));
+                UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;
+                """);
+        }
+    }
+
+    [TestMethod]
+    public async Task SchemaSevenRejectsInPlaceDeploymentOverAnOlderApplicationDatabase()
     {
         await using (var connection = new SqlConnection(_databaseConnectionString))
         {
             await connection.OpenAsync();
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 5 WHERE [Id] = 1;");
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 6 WHERE [Id] = 1;");
         }
 
         try
         {
-            Assert.Throws<DacServicesException>(() =>
+            Assert.Throws<SqlException>(() =>
                 new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath));
 
             await using var connection = new SqlConnection(_databaseConnectionString);
             await connection.OpenAsync();
             Assert.AreEqual(
-                5,
+                6,
                 Convert.ToInt32(await Scalar(
                     connection,
                     "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
@@ -248,7 +629,7 @@ public sealed class DatabaseBaselineTests
         {
             await using var connection = new SqlConnection(_databaseConnectionString);
             await connection.OpenAsync();
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 6 WHERE [Id] = 1;");
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;");
         }
     }
 

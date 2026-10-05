@@ -11,10 +11,11 @@ using Asap.Web.Features.Staff;
 
 namespace Asap.Web.Features.Patron;
 
-public sealed class PolarisPatronProvider(
+public sealed partial class PolarisPatronProvider(
     IDbContextFactory<AsapDbContext> contextFactory,
     IntegrationCredentialProtector credentialProtector,
-    IHttpClientFactory httpClientFactory) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
+    IHttpClientFactory httpClientFactory,
+    TimeProvider timeProvider) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
 {
     private static readonly HashSet<int> DocumentedCreateNoEffectStatuses =
         [6, -4002, -4004, -4006, -4007, -4020, -4021, -4022];
@@ -42,7 +43,7 @@ public sealed class PolarisPatronProvider(
     {
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
+            var (client, _) = await CreateClientAsync(PolarisConfigurationValidation.SystemOrganizationId, cancellationToken);
             var rows = await LoadOrganizationsAsync(client, cancellationToken);
             return rows
                 .Where(row => row.OrganizationID > 0)
@@ -62,7 +63,7 @@ public sealed class PolarisPatronProvider(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (IsExpectedProviderFailure(exception))
         {
             throw Operational("polaris_organizations_failed", exception);
         }
@@ -73,8 +74,8 @@ public sealed class PolarisPatronProvider(
     {
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
-            var response = await client.PatronCodesGetAsync(null, cancellationToken);
+            var (client, _) = await CreateClientAsync(PolarisConfigurationValidation.SystemOrganizationId, cancellationToken);
+            var response = await client.CallAsync(() => client.PatronCodesGetAsync(null, cancellationToken), cancellationToken);
             var result = response.Data;
             if (response.Response?.IsSuccessStatusCode != true ||
                 result is null || result.PAPIErrorCode < 0)
@@ -91,7 +92,7 @@ public sealed class PolarisPatronProvider(
                 .OrderBy(row => row.Description, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(row => row.PatronCodeID)
                 .Select(row => new PolarisPatronCodeSnapshot(
-                    row.PatronCodeID.ToString(),
+                    row.PatronCodeID,
                     Clean(row.Description) ?? row.PatronCodeID.ToString()))
                 .ToArray();
         }
@@ -103,7 +104,7 @@ public sealed class PolarisPatronProvider(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (IsExpectedProviderFailure(exception))
         {
             throw Operational("polaris_patron_codes_failed", exception);
         }
@@ -114,10 +115,10 @@ public sealed class PolarisPatronProvider(
         string pin,
         CancellationToken cancellationToken)
     {
-        var (client, _) = await CreateClientAsync(cancellationToken);
+        var (client, _) = await CreateClientAsync(PolarisConfigurationValidation.SystemOrganizationId, cancellationToken);
         try
         {
-            var response = await client.AuthenticatePatronAsync(barcode, pin, cancellationToken);
+            var response = await client.CallAsync(() => client.AuthenticatePatronAsync(barcode, pin, cancellationToken), cancellationToken);
             var authentication = response.Data;
             if (response.Response?.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             {
@@ -166,15 +167,15 @@ public sealed class PolarisPatronProvider(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (IsExpectedProviderFailure(exception))
         {
             throw Operational("polaris_authentication_failed", exception);
         }
     }
 
-    public async Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+    public async Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken)
     {
-        var (client, _) = await CreateClientAsync(cancellationToken);
+        var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
         try
         {
             return await LoadPatronAsync(client, barcode, string.Empty, cancellationToken);
@@ -187,54 +188,110 @@ public sealed class PolarisPatronProvider(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (IsExpectedProviderFailure(exception))
         {
             throw Operational("polaris_patron_refresh_failed", exception);
         }
     }
 
-    public async Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
-        PatronSnapshot patron,
-        CancellationToken cancellationToken)
+    public async Task<int?> GetPatronIdAsync(string barcode, int organizationId, CancellationToken cancellationToken)
     {
-        var (client, settings) = await CreateClientAsync(cancellationToken);
         try
         {
-            var candidates = new[]
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
+            var response = await client.CallAsync(() => client.PatronBasicDataGetAsync(
+                barcode,
+                string.Empty,
+                cancellationToken: cancellationToken), cancellationToken);
+            var rawContent = response.Response?.Content ?? string.Empty;
+            var result = response.Data;
+            if (response.Response?.IsSuccessStatusCode != true)
             {
-                patron.PatronOrganizationId,
-                settings.PickupOrganizationId is > 0 ? settings.PickupOrganizationId.Value : 0,
-                settings.OrganizationIdForRequests is > 0 ? settings.OrganizationIdForRequests.Value : 0,
-                patron.HomeLibraryOrganizationId
-            }.Where(item => item > 0).Distinct();
-            IReadOnlyList<PickupBranch> branches = [];
-            foreach (var organizationId in candidates)
-            {
-                var response = await client.PickupBranchesGetAsync(organizationId, cancellationToken);
-                if (response.Response?.IsSuccessStatusCode != true)
-                {
-                    continue;
-                }
-
-                branches = NormalizePickupBranches(response.Response.Content);
-                if (branches.Count > 0)
-                {
-                    break;
-                }
+                throw new PolarisOperationalException(
+                    "polaris_patron_id_transport_failed",
+                    "Polaris patron data was unavailable.");
             }
 
-            if (branches.Count == 0)
+            if (!TryReadPapiErrorCode(rawContent, out var papiErrorCode) ||
+                result is null || result.PAPIErrorCode != papiErrorCode || papiErrorCode != 0)
             {
-                throw new InvalidOperationException("Polaris did not return pickup branches.");
+                throw new PolarisOperationalException(
+                    "polaris_patron_id_protocol_failed",
+                    "Polaris returned an invalid patron response.");
             }
 
-            return branches;
+            using var document = JsonDocument.Parse(rawContent);
+            var root = document.RootElement;
+            if (!TryGetUniqueProperty(root, "PatronBasicData", out var rawPatron) ||
+                !TryGetUniqueProperty(rawPatron, "PatronID", out var rawPatronId) ||
+                !TryReadPositiveInt32(rawPatronId, out var patronId) ||
+                result.PatronBasicData is null || result.PatronBasicData.PatronID != patronId)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_id_protocol_failed",
+                    "Polaris returned an incomplete patron identity.");
+            }
+
+            return patronId;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception exception) when (exception is not PolarisOperationalException)
+        catch (PolarisOperationalException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (IsExpectedProviderFailure(exception))
+        {
+            throw Operational("polaris_patron_id_failed", exception);
+        }
+    }
+
+    public async Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
+        PatronSnapshot patron,
+        int organizationId, CancellationToken cancellationToken)
+    {
+        var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
+        try
+        {
+            if (patron.PatronOrganizationId <= 1)
+            {
+                throw new PolarisOperationalException("polaris_patron_organization_invalid",
+                    "The patron's registered branch is missing.");
+            }
+            // Polaris defines pickup eligibility by the patron's live registered branch,
+            // while the client carries the explicitly selected servicing library.
+            var response = await client.CallAsync(() => client.PickupBranchesGetAsync(patron.PatronOrganizationId, cancellationToken), cancellationToken);
+            if (response.Response?.IsSuccessStatusCode != true)
+            {
+                throw new PolarisOperationalException("polaris_pickup_branches_failed",
+                    "Polaris pickup branches were unavailable.");
+            }
+            var branchIds = ReadPickupBranchIds(response);
+
+            if (branchIds.Count == 0)
+            {
+                throw new PolarisOperationalException("polaris_pickup_branches_failed", "Polaris did not return pickup branches.");
+            }
+
+            var organizations = (await LoadOrganizationsAsync(client, cancellationToken))
+                .ToDictionary(row => row.OrganizationID);
+            return branchIds.Select(id =>
+                {
+                    organizations.TryGetValue(id, out var organization);
+                    var label = Clean(organization?.DisplayName) ?? Clean(organization?.Name) ?? $"Branch {id}";
+                    return new PickupBranch(id, label);
+                })
+                .OrderBy(branch => branch.Label, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(branch => branch.Id)
+                .ToArray();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (IsExpectedProviderFailure(exception))
         {
             throw Operational("polaris_pickup_branches_failed", exception);
         }
@@ -243,86 +300,78 @@ public sealed class PolarisPatronProvider(
     public async Task UpdatePreferredPickupBranchAsync(
         string barcode,
         int pickupBranchId,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
-        var (client, settings) = await CreateClientAsync(cancellationToken);
+        DispatchAwarePapiClient? client = null;
         try
         {
-            var organizationId = settings.OrganizationIdForRequests is > 0
-                ? settings.OrganizationIdForRequests.Value
-                : 1;
+            PolarisSettings settings;
+            (client, settings) = await CreateMemberClientAsync(organizationId, cancellationToken);
+            if (pickupBranchId <= 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(pickupBranchId));
+            }
             var update = new PatronUpdateParams
             {
                 LogonBranchId = organizationId,
-                LogonUserId = settings.SystemPolarisUserId is > 0
-                    ? settings.SystemPolarisUserId.Value
-                    : 1,
-                LogonWorkstationId = settings.WorkstationId is > 0
-                    ? settings.WorkstationId.Value
-                    : 1,
+                LogonUserId = settings.SystemPolarisUserId!.Value,
+                LogonWorkstationId = settings.WorkstationId!.Value,
                 RequestPickupBranchID = pickupBranchId
             };
-            var request = PapiRestRequest.Put(
-                $"/public/v1/1033/100/{organizationId}/patron/{WebUtility.UrlEncode(barcode)}",
-                body: update);
-            request.QueryParameters.Add("ignoresa", true);
-            var response = await client.ExecutePapiAsync<PatronUpdateResult>(
-                request,
-                cancellationToken);
+            var response = await client.CallAsync(() => client.PatronUpdateAsync(
+                barcode, update, cancellationToken: cancellationToken), cancellationToken);
             var result = response.Data;
             if (response.Response?.IsSuccessStatusCode != true ||
                 !TryReadPapiErrorCode(response.Response.Content, out var papiErrorCode) ||
-                result is null || result.PAPIErrorCode != papiErrorCode || papiErrorCode != 0)
+                result is null || result.PAPIErrorCode != papiErrorCode)
             {
-                throw new InvalidOperationException("Polaris rejected the pickup preference update.");
+                throw new PolarisOperationalException("polaris_pickup_update_failed", "Polaris did not confirm the pickup preference update.");
+            }
+            // PatronRegistrationUpdate documents invalid patron/pickup identifiers
+            // as validation rejections. This request changes only the pickup field.
+            if (papiErrorCode is -3000 or -3622)
+            {
+                throw new PolarisPickupRejectedException(papiErrorCode);
+            }
+            if (papiErrorCode != 0)
+            {
+                throw new PolarisOperationalException("polaris_pickup_update_failed", "Polaris did not confirm the pickup preference update.");
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (client?.MutationDispatched != true)
         {
-            throw Operational("polaris_pickup_update_failed", exception);
+            throw new PolarisMutationNotDispatchedException(exception);
         }
     }
 
     public async Task<IdentifierLookupResult> LookupIdentifierAsync(
         string identifier,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         try
         {
-            var (client, settings) = await CreateClientAsync(cancellationToken);
-            var branch = settings.PickupOrganizationId is > 0
-                ? settings.PickupOrganizationId.Value
-                : settings.OrganizationIdForRequests is > 0
-                    ? settings.OrganizationIdForRequests.Value
-                    : 1;
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
+            var branch = organizationId;
             var attempts = new List<SearchAttempt>();
 
             var isbn = InspectSearchResponse(
-                await client.BibSearchAsync(
+                await client.CallAsync(() => client.BibSearchAsync(
                     SearchOptions(identifier, branch, SearchQualifiers.ISBN),
-                    cancellationToken));
+                    cancellationToken), cancellationToken), cancellationToken);
             if (isbn.Failure.HasValue)
             {
                 return FailureResult(isbn.Failure.Value);
             }
             attempts.Add(isbn);
 
-            var upcRequest = PapiRestRequest.Get(
-                $"/public/v1/1033/100/{branch}/search/bibs/keyword/UPC");
-            upcRequest.BlockStaffOverride = true;
-            upcRequest.QueryParameters.Add("q", identifier.Trim());
-            upcRequest.QueryParameters.Add("sort", SearchSortOptions.PDTI);
-            upcRequest.QueryParameters.Add("page", 1);
-            upcRequest.QueryParameters.Add("bibsperpage", 10);
-            upcRequest.QueryParameters.Add("limit", string.Empty);
-            var upc = InspectSearchResponse(
-                await client.ExecutePapiAsync<BibSearchResult>(
-                upcRequest,
-                cancellationToken));
+            var upcOptions = SearchOptions(identifier, branch, SearchQualifiers.KW);
+            upcOptions.SearchType = BibSearchTypes.boolean;
+            upcOptions.Term = "UPC=" + QuoteSearch(identifier.Trim());
+            var upc = InspectSearchResponse(await client.CallAsync(() => client.BibSearchAsync(upcOptions, cancellationToken), cancellationToken), cancellationToken);
             if (upc.Failure.HasValue)
             {
                 return FailureResult(upc.Failure.Value);
@@ -330,9 +379,9 @@ public sealed class PolarisPatronProvider(
             attempts.Add(upc);
 
             var lccn = InspectSearchResponse(
-                await client.BibSearchAsync(
+                await client.CallAsync(() => client.BibSearchAsync(
                     SearchOptions(identifier, branch, SearchQualifiers.LCCN),
-                    cancellationToken));
+                    cancellationToken), cancellationToken), cancellationToken);
             if (lccn.Failure.HasValue)
             {
                 return FailureResult(lccn.Failure.Value);
@@ -347,11 +396,7 @@ public sealed class PolarisPatronProvider(
             var filteredByMaterialType = false;
             var rows = allRows.Where(row =>
                 {
-                    var tom = attempts.SelectMany(item => item.PrimaryTomByControlNumber)
-                        .Where(item => item.Key == row.ControlNumber)
-                        .Select(item => item.Value)
-                        .FirstOrDefault() ?? row.TypeOfMaterial;
-                    var excluded = tom is "36" or "41";
+                    var excluded = row.PrimaryTypeOfMaterial is 36 or 41;
                     filteredByMaterialType |= excluded;
                     return !excluded;
                 })
@@ -368,10 +413,10 @@ public sealed class PolarisPatronProvider(
             string? catalogAuthor = selected.Author;
             try
             {
-                var detailResponse = await client.BibGetAsync(
+                var detailResponse = await client.CallAsync(() => client.BibGetAsync(
                     selected.ControlNumber,
                     branch,
-                    cancellationToken);
+                    cancellationToken), cancellationToken);
                 if (detailResponse.Response?.IsSuccessStatusCode == true &&
                     detailResponse.Data is { PAPIErrorCode: >= 0 } detail)
                 {
@@ -379,14 +424,18 @@ public sealed class PolarisPatronProvider(
                     catalogAuthor = Clean(detail.Author.FirstOrDefault()) ?? catalogAuthor;
                 }
             }
-            catch (Exception)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (IsExpectedProviderFailure(exception))
             {
                 // Search success remains authoritative when optional detail reconciliation fails.
             }
 
             return new IdentifierLookupResult(
                 IdentifierLookupOutcome.Found,
-                selected.ControlNumber.ToString(),
+                selected.ControlNumber,
                 MultipleMatches: rows.Length > 1 || attempts.Any(item => item.Data!.TotalRecordsFound > 1),
                 FilteredByMaterialType: filteredByMaterialType,
                 CatalogTitle: catalogTitle,
@@ -408,38 +457,81 @@ public sealed class PolarisPatronProvider(
                 IdentifierLookupOutcome.TransientFailure,
                 ErrorCode: "polaris_timeout");
         }
-        catch (Exception)
+        catch (Exception exception) when (exception is PolarisOperationalException || IsExpectedProviderFailure(exception))
         {
             return OperationalResult("polaris_search_operational_failure");
         }
     }
 
-    public async Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
+    public async Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (bibId <= 0)
         {
             return new BibValidationResult(false);
         }
         try
         {
-            var (client, settings) = await CreateClientAsync(cancellationToken);
-            var branchId = settings.PickupOrganizationId is > 0
-                ? settings.PickupOrganizationId
-                : settings.OrganizationIdForRequests;
-            var response = await client.BibGetAsync(bibId, branchId, cancellationToken);
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
+            var branchId = organizationId;
+            var response = await client.CallAsync(() => client.BibGetAsync(bibId, branchId, cancellationToken), cancellationToken);
             var data = response.Data;
-            if (response.Response?.IsSuccessStatusCode != true || data is null || data.PAPIErrorCode != 0 ||
-                data.BibGetRows.Count == 0)
+            if (response.Response?.IsSuccessStatusCode != true)
             {
-                return new BibValidationResult(false);
+                throw new PolarisOperationalException(
+                    "polaris_bib_validation_transport_failed",
+                    "Polaris BIB validation was unavailable.");
             }
-            return new BibValidationResult(true, Clean(data.Title), Clean(data.Author.FirstOrDefault()));
+
+            var rawContent = response.Response.Content;
+            if (data is null ||
+                !TryReadPapiErrorCode(rawContent, out var papiErrorCode) ||
+                data.PAPIErrorCode != papiErrorCode)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_bib_validation_protocol_failed",
+                    "Polaris returned an invalid BIB validation response.");
+            }
+
+            if (papiErrorCode < 0)
+            {
+                if (papiErrorCode == -1 && IsDefinitiveInvalidBibResponse(rawContent))
+                {
+                    return new BibValidationResult(false);
+                }
+
+                throw new PolarisOperationalException(
+                    "polaris_bib_validation_failed",
+                    "Polaris could not complete BIB validation.");
+            }
+
+            if (!TryReadUsableBibGetRows(rawContent, out var rawRowCount) ||
+                data.BibGetRows is null || data.BibGetRows.Count == 0 || data.BibGetRows.Count != rawRowCount ||
+                data.BibGetRows.Any(row => row is null || row.ElementID <= 0 || row.Value is null))
+            {
+                throw new PolarisOperationalException(
+                    "polaris_bib_validation_protocol_failed",
+                    "Polaris returned an incomplete BIB validation response.");
+            }
+
+            var publication = data.BibGetRows
+                .Where(row => string.Equals(row.Label, "Publication Date", StringComparison.OrdinalIgnoreCase))
+                .Select(row => Clean(row.Value))
+                .FirstOrDefault(value => value is not null);
+            return new BibValidationResult(
+                true,
+                Clean(data.Title),
+                Clean(data.Author?.FirstOrDefault()),
+                publication,
+                Clean(data.Format),
+                Clean(data.ISBN) ?? Clean(data.ISSN) ?? Clean(data.UPC?.FirstOrDefault()),
+                Clean(data.Publisher?.FirstOrDefault()));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception exception) when (exception is not PolarisOperationalException)
+        catch (Exception exception) when (IsExpectedProviderFailure(exception))
         {
             throw Operational("polaris_bib_validation_failed", exception);
         }
@@ -447,26 +539,28 @@ public sealed class PolarisPatronProvider(
 
     public async Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
         string barcode,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
-            var response = await client.PatronHoldRequestsGetAsync(
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
+            var response = await client.CallAsync(() => client.PatronHoldRequestsGetAsync(
                 barcode,
                 PatronHoldStatus.all,
                 password: string.Empty,
-                cancellationToken);
+                cancellationToken), cancellationToken);
             var data = response.Data;
-            if (response.Response?.IsSuccessStatusCode != true || data is null || data.PAPIErrorCode != 0)
+            if (response.Response?.IsSuccessStatusCode != true || data is null)
             {
                 throw new PolarisOperationalException("polaris_hold_read_failed", "Polaris hold data was unavailable.");
             }
-            if (data.PatronHoldRequestsGetRows.Any(item => item.HoldRequestID <= 0 || item.BibID <= 0))
+
+            using var document = JsonDocument.Parse(response.Response.Content ?? string.Empty);
+            if (!TryValidatePatronHoldResponse(document.RootElement, data))
             {
                 throw new PolarisOperationalException(
                     "polaris_hold_read_failed",
-                    "Polaris returned an incomplete hold row.");
+                    "Polaris returned an incomplete hold response.");
             }
 
             return data.PatronHoldRequestsGetRows
@@ -487,24 +581,82 @@ public sealed class PolarisPatronProvider(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (IsExpectedProviderFailure(exception))
         {
             throw Operational("polaris_hold_read_failed", exception);
         }
     }
 
+    private static bool TryValidatePatronHoldResponse(
+        JsonElement root,
+        PatronHoldRequestsGetResult data)
+    {
+        if (root.ValueKind != JsonValueKind.Object ||
+            !TryGetUniqueProperty(root, "PAPIErrorCode", out var codeElement) ||
+            codeElement.ValueKind != JsonValueKind.Number ||
+            !codeElement.TryGetInt32(out var code) ||
+            code != 0 || data.PAPIErrorCode != code ||
+            !TryGetUniqueProperty(root, "PatronHoldRequestsGetRows", out var rows) ||
+            rows.ValueKind != JsonValueKind.Array ||
+            data.PatronHoldRequestsGetRows is null ||
+            data.PatronHoldRequestsGetRows.Count != rows.GetArrayLength())
+        {
+            return false;
+        }
+
+        var rowIndex = 0;
+        foreach (var row in rows.EnumerateArray())
+        {
+            var model = data.PatronHoldRequestsGetRows[rowIndex++];
+            if (row.ValueKind != JsonValueKind.Object || model is null ||
+                !TryGetUniqueProperty(row, "StatusID", out var statusIdElement) ||
+                !TryReadPositiveInt32(statusIdElement, out var statusId) ||
+                !IsPolarisHoldStatusId(statusId) ||
+                statusId != model.StatusID ||
+                !TryGetUniqueProperty(row, "StatusDescription", out var statusDescriptionElement) ||
+                statusDescriptionElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var statusDescription = Clean(statusDescriptionElement.GetString());
+            var modelStatusDescription = Clean(model.StatusDescription);
+            if (statusDescription is null || modelStatusDescription is null ||
+                !string.Equals(statusDescription, modelStatusDescription, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (!TryGetUniqueProperty(row, "HoldRequestID", out var holdRequestIdElement) ||
+                !TryReadPositiveInt32(holdRequestIdElement, out var holdRequestId) ||
+                holdRequestId != model.HoldRequestID ||
+                !TryGetUniqueProperty(row, "BibID", out var bibIdElement) ||
+                !TryReadPositiveInt32(bibIdElement, out var bibId) ||
+                bibId != model.BibID)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // PatronHoldRequestsGet documents these status IDs; zero and all unlisted values are invalid.
+    private static bool IsPolarisHoldStatusId(int statusId) =>
+        statusId is 1 or 3 or 4 or 5 or 6 or 7 or 8 or 9 or 16;
+
     public async Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(
         string barcode,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
-            var response = await client.PatronItemsOutGetAsync(
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
+            var response = await client.CallAsync(() => client.PatronItemsOutGetAsync(
                 barcode,
                 PatronItemsOutGetStatus.All,
                 password: string.Empty,
-                cancellationToken);
+                cancellationToken), cancellationToken);
             var data = response.Data;
             if (response.Response?.IsSuccessStatusCode != true || data is null || data.PAPIErrorCode != 0)
             {
@@ -529,7 +681,7 @@ public sealed class PolarisPatronProvider(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (IsExpectedProviderFailure(exception))
         {
             throw Operational("polaris_checkout_read_failed", exception);
         }
@@ -539,10 +691,18 @@ public sealed class PolarisPatronProvider(
         HoldCreateCommand command,
         CancellationToken cancellationToken)
     {
+        DispatchAwarePapiClient? client = null;
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
-            var response = await client.HoldRequestCreateAsync(new HoldRequestCreateParams
+            cancellationToken.ThrowIfCancellationRequested();
+            ArgumentNullException.ThrowIfNull(command);
+            if (command.PatronId <= 0 || command.BibId <= 0 || command.PickupBranchId <= 1 ||
+                command.WorkstationId <= 0 || command.PolarisUserId <= 0)
+            {
+                throw new ArgumentException("Hold creation requires explicit native patron, BIB, pickup and integration identities.", nameof(command));
+            }
+            (client, _) = await CreateMemberClientAsync(command.RequestingOrganizationId, cancellationToken);
+            var response = await client.CallAsync(() => client.HoldRequestCreateAsync(new HoldRequestCreateParams
             {
                 PatronID = command.PatronId,
                 BibID = command.BibId,
@@ -550,33 +710,20 @@ public sealed class PolarisPatronProvider(
                 RequestingOrgID = command.RequestingOrganizationId,
                 WorkstationID = command.WorkstationId,
                 UserID = command.PolarisUserId
-            }, cancellationToken);
+            }, cancellationToken), cancellationToken);
             return NormalizeHoldResponse(
                 response.Response?.IsSuccessStatusCode == true,
                 response.Response?.Content,
-                response.Data?.StatusType,
-                response.Data?.StatusValue,
-                response.Data?.RequestGuid,
-                response.Data?.TxnGroupQualifier,
-                response.Data?.TxnQualifier,
+                response.Data,
                 isReply: false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (client?.MutationDispatched != true)
         {
-            return new HoldProviderResult(
-                HoldProviderOutcome.Ambiguous,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                "create_transport_ambiguous",
-                exception is OperationCanceledException ? "provider_timeout" : "provider_transport_error");
+            throw new PolarisMutationNotDispatchedException(exception);
         }
     }
 
@@ -584,59 +731,52 @@ public sealed class PolarisPatronProvider(
         HoldReplyCommand command,
         CancellationToken cancellationToken)
     {
+        DispatchAwarePapiClient? client = null;
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            ArgumentNullException.ThrowIfNull(command);
+            if (command.RequestGuid == Guid.Empty || string.IsNullOrWhiteSpace(command.TxnGroupQualifier) ||
+                string.IsNullOrWhiteSpace(command.TxnQualifier))
+            {
+                throw new ArgumentException("A hold reply requires the original conversation identity and qualifiers.", nameof(command));
+            }
+            (client, _) = await CreateMemberClientAsync(command.RequestingOrganizationId, cancellationToken);
             var createContext = new HoldRequestCreateResult
             {
                 RequestGuid = command.RequestGuid,
-                TxnGroupQualifier = command.TxnGroupQualifier,
+                TxnGroupQualifer = command.TxnGroupQualifier,
                 TxnQualifier = command.TxnQualifier
             };
-            var response = await client.HoldRequestReplyAsync(
+            var response = await client.CallAsync(() => client.HoldRequestReplyAsync(
                 createContext,
                 command.RequestingOrganizationId,
                 HoldRequestReplyAnswer.Yes,
                 HoldRequestReplyState.AcceptEvenWithExistingHolds,
-                cancellationToken);
+                cancellationToken), cancellationToken);
             return NormalizeHoldResponse(
                 response.Response?.IsSuccessStatusCode == true,
                 response.Response?.Content,
-                null,
-                null,
-                command.RequestGuid,
-                command.TxnGroupQualifier,
-                command.TxnQualifier,
-                isReply: true);
+                response.Data,
+                isReply: true,
+                replyContext: command);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (client?.MutationDispatched != true)
         {
-            return new HoldProviderResult(
-                HoldProviderOutcome.Ambiguous,
-                command.RequestGuid.ToString(),
-                null,
-                command.TxnGroupQualifier,
-                command.TxnQualifier,
-                null,
-                null,
-                "reply_transport_ambiguous",
-                exception is OperationCanceledException ? "provider_timeout" : "provider_transport_error");
+            throw new PolarisMutationNotDispatchedException(exception);
         }
     }
 
     internal static HoldProviderResult NormalizeHoldResponse(
         bool httpSucceeded,
         string? content,
-        int? typedStatusType,
-        int? typedStatusValue,
-        Guid? typedRequestGuid,
-        string? typedTxnGroupQualifier,
-        string? typedTxnQualifier,
-        bool isReply)
+        HoldRequestCreateResult? data,
+        bool isReply,
+        HoldReplyCommand? replyContext = null)
     {
         if (!httpSucceeded || string.IsNullOrWhiteSpace(content))
         {
@@ -646,81 +786,85 @@ public sealed class PolarisPatronProvider(
         {
             using var document = JsonDocument.Parse(content);
             var root = document.RootElement;
-            if (!TryGetInt32(root, ["PAPIErrorCode"], out var papiErrorCode))
+            // The package owns deserialization. Raw validation detects absent/defaulted or
+            // duplicate fields before an external write is classified as a definitive outcome.
+            if (data is null || root.ValueKind != JsonValueKind.Object ||
+                root.EnumerateObject().Select(property => property.Name)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Count() != root.EnumerateObject().Count() ||
+                !TryGetUniqueProperty(root, "PAPIErrorCode", out var errorCode) ||
+                errorCode.ValueKind != JsonValueKind.Number || !errorCode.TryGetInt32(out var papiErrorCode) ||
+                papiErrorCode != data.PAPIErrorCode ||
+                !TryGetUniqueProperty(root, "StatusType", out var rawType) ||
+                rawType.ValueKind != JsonValueKind.Number || !rawType.TryGetInt32(out var statusType) ||
+                statusType != data.StatusType ||
+                !TryGetUniqueProperty(root, "StatusValue", out var rawValue) ||
+                rawValue.ValueKind != JsonValueKind.Number || !rawValue.TryGetInt32(out var statusValue) ||
+                statusValue != data.StatusValue)
             {
                 return Ambiguous(isReply, "provider_protocol_error");
             }
-            var statusType = ReadInt(root, "StatusType") ?? typedStatusType;
-            var statusValue = ReadInt(root, "StatusValue") ?? typedStatusValue;
-            var requestGuid = ReadString(root, "RequestGUID", "RequestGuid") ?? typedRequestGuid?.ToString();
-            var holdId = ReadString(root, "HoldRequestID", "HoldRequestId", "SysHoldRequestID");
-            var group = ReadString(root, "TxnGroupQualifier", "TxnGroupQualifer") ?? typedTxnGroupQualifier;
-            var qualifier = ReadString(root, "TxnQualifier") ?? typedTxnQualifier;
-            var common = new
-            {
-                requestGuid,
-                holdId,
-                group,
-                qualifier,
-                statusType,
-                statusValue
-            };
+            var requestGuid = data.RequestGuid ?? replyContext?.RequestGuid;
+            var group = Clean(data.TxnGroupQualifer) ?? replyContext?.TxnGroupQualifier;
+            var qualifier = Clean(data.TxnQualifier) ?? replyContext?.TxnQualifier;
+            // Create/reply return a conversation GUID, not a SysHoldRequestID. Final hold
+            // identity is established independently from the patron's typed hold listing.
             if (papiErrorCode != 0)
             {
                 return new HoldProviderResult(
                     HoldProviderOutcome.Ambiguous,
-                    common.requestGuid,
-                    common.holdId,
-                    common.group,
-                    common.qualifier,
-                    common.statusType,
-                    common.statusValue,
+                    requestGuid,
+                    null,
+                    group,
+                    qualifier,
+                    statusType,
+                    statusValue,
                     isReply ? "reply_papi_error" : "create_papi_error",
                     "provider_papi_error");
             }
             if (!isReply && statusType == 3 && statusValue == 5 &&
-                Guid.TryParse(requestGuid, out _) && !string.IsNullOrWhiteSpace(group) && !string.IsNullOrWhiteSpace(qualifier))
+                requestGuid is { } guid && guid != Guid.Empty &&
+                !string.IsNullOrWhiteSpace(group) && !string.IsNullOrWhiteSpace(qualifier))
             {
                 return new HoldProviderResult(
                     HoldProviderOutcome.ReplyRequired,
                     requestGuid,
-                    holdId,
+                    null,
                     group,
                     qualifier,
                     statusType,
                     statusValue,
                     "create_status_5_reply_required");
             }
-            if (statusType == 2 && statusValue.GetValueOrDefault() == 0)
+            if (statusType == 2 && statusValue == 1)
             {
                 return new HoldProviderResult(
                     HoldProviderOutcome.FinalSuccess,
                     requestGuid,
-                    holdId,
+                    null,
                     group,
                     qualifier,
                     statusType,
                     statusValue,
                     isReply ? "documented_reply_success" : "documented_create_success");
             }
-            if (!isReply && statusType == 1 && statusValue.HasValue &&
-                DocumentedCreateNoEffectStatuses.Contains(statusValue.Value))
+            if (statusType == 2 && statusValue == 0 ||
+                !isReply && statusType == 1 && DocumentedCreateNoEffectStatuses.Contains(statusValue))
             {
                 return new HoldProviderResult(
                     HoldProviderOutcome.DefinitiveNoEffect,
                     requestGuid,
-                    holdId,
+                    null,
                     group,
                     qualifier,
                     statusType,
                     statusValue,
-                    "documented_create_rejection",
-                    $"provider_status_{statusValue.Value}");
+                    isReply ? "documented_reply_rejection" : "documented_create_rejection",
+                    $"provider_status_{statusValue}");
             }
             return new HoldProviderResult(
                 HoldProviderOutcome.Ambiguous,
                 requestGuid,
-                holdId,
+                null,
                 group,
                 qualifier,
                 statusType,
@@ -745,43 +889,28 @@ public sealed class PolarisPatronProvider(
         isReply ? "reply_response_ambiguous" : "create_response_ambiguous",
         code);
 
-    private static int? ReadInt(JsonElement root, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (!root.TryGetProperty(name, out var value)) continue;
-            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)) return number;
-            if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out number)) return number;
-        }
-        return null;
-    }
-
-    private static string? ReadString(JsonElement root, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (!root.TryGetProperty(name, out var value)) continue;
-            if (value.ValueKind == JsonValueKind.String) return Clean(value.GetString());
-            if (value.ValueKind == JsonValueKind.Number) return value.GetRawText();
-        }
-        return null;
-    }
-
     private async Task<PatronSnapshot> LoadPatronAsync(
-        PapiClient client,
+        DispatchAwarePapiClient client,
         string barcode,
         string pin,
         CancellationToken cancellationToken)
     {
-        var response = await client.PatronBasicDataGetAsync(
+        var response = await client.CallAsync(() => client.PatronBasicDataGetAsync(
             barcode,
             pin,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken), cancellationToken);
         var rawContent = response.Response?.Content ?? string.Empty;
         var result = response.Data;
         var patron = result?.PatronBasicData;
         if (response.Response?.IsSuccessStatusCode != true)
         {
+            if (response.Response?.StatusCode == HttpStatusCode.NotFound)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_not_found",
+                    "Polaris did not find the patron.");
+            }
+
             throw new PolarisOperationalException(
                 "polaris_patron_transport_failed",
                 "Polaris patron data was unavailable.");
@@ -799,7 +928,9 @@ public sealed class PolarisPatronProvider(
         {
             throw string.IsNullOrEmpty(pin)
                 ? new PolarisOperationalException(
-                    "polaris_patron_refresh_failed",
+                    papiErrorCode == -3000
+                        ? "polaris_patron_not_found"
+                        : "polaris_patron_refresh_failed",
                     "Polaris did not return the patron.")
                 : new PatronAuthenticationException("Incorrect Login - Please try again");
         }
@@ -822,7 +953,7 @@ public sealed class PolarisPatronProvider(
             Clean(patron.EmailAddress),
             Clean(patron.NameFirst),
             Clean(patron.NameLast),
-            patron.PatronCodeID <= 0 ? null : patron.PatronCodeID.ToString(),
+            patron.PatronCodeID <= 0 ? null : patron.PatronCodeID,
             null,
             patron.PatronOrgID,
             home.OrganizationID,
@@ -831,12 +962,12 @@ public sealed class PolarisPatronProvider(
     }
 
     private static async Task<IReadOnlyList<OrganizationsGetRow>> LoadOrganizationsAsync(
-        PapiClient client,
+        DispatchAwarePapiClient client,
         CancellationToken cancellationToken)
     {
-        var response = await client.OrganizationsGetAsync(
+        var response = await client.CallAsync(() => client.OrganizationsGetAsync(
             OrganizationType.All,
-            cancellationToken);
+            cancellationToken), cancellationToken);
         var result = response.Data;
         if (response.Response?.IsSuccessStatusCode != true ||
             result is null || result.PAPIErrorCode < 0 || result.OrganizationsGetRows.Count == 0)
@@ -849,8 +980,20 @@ public sealed class PolarisPatronProvider(
         return result.OrganizationsGetRows;
     }
 
-    private async Task<(PapiClient Client, PolarisSettings Settings)> CreateClientAsync(
-        CancellationToken cancellationToken)
+    private Task<(DispatchAwarePapiClient Client, PolarisSettings Settings)> CreateMemberClientAsync(
+        int organizationId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (organizationId <= PolarisConfigurationValidation.SystemOrganizationId)
+        {
+            throw new PolarisOperationalException("polaris_operation_context_missing",
+                "A member operation requires an explicit servicing library.");
+        }
+        return CreateClientAsync(organizationId, cancellationToken);
+    }
+
+    private async Task<(DispatchAwarePapiClient Client, PolarisSettings Settings)> CreateClientAsync(
+        int organizationId, CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var settings = await context.PolarisSettings.AsNoTracking()
@@ -859,43 +1002,27 @@ public sealed class PolarisPatronProvider(
                 "polaris_configuration_missing",
                 "Polaris configuration is missing.");
 
-        if (string.IsNullOrWhiteSpace(settings.Host) ||
-            string.IsNullOrWhiteSpace(settings.AccessId) ||
-            string.IsNullOrWhiteSpace(settings.ProtectedApiKey) ||
-            string.IsNullOrWhiteSpace(settings.StaffDomain) ||
-            string.IsNullOrWhiteSpace(settings.AdminUser) ||
-            string.IsNullOrWhiteSpace(settings.ProtectedAdminPassword))
+        if (!PolarisConfigurationValidation.TryReadCredentials(
+                settings, credentialProtector, out var accessKey, out var password))
         {
             throw new PolarisOperationalException(
                 "polaris_configuration_incomplete",
-                "Polaris configuration is incomplete.");
+                "Polaris configuration is incomplete or its credentials are unavailable.");
         }
 
-        string accessKey;
-        string password;
-        try
-        {
-            accessKey = credentialProtector.Unprotect(settings.ProtectedApiKey);
-            password = credentialProtector.Unprotect(settings.ProtectedAdminPassword);
-        }
-        catch (Exception exception)
-        {
-            throw Operational("polaris_credentials_unavailable", exception);
-        }
-
-        var client = new PapiClient(
+        var client = new DispatchAwarePapiClient(
             httpClientFactory.CreateClient("Polaris"),
             new PapiSettings
             {
-                Hostname = settings.Host,
-                AccessId = settings.AccessId,
+                Hostname = settings.Host!,
+                AccessId = settings.AccessId!,
                 AccessKey = accessKey,
-                OrganizationId = settings.OrganizationIdForRequests ?? 1,
-                UserId = settings.SystemPolarisUserId ?? 1,
-                WorkstationId = settings.WorkstationId ?? 1,
+                OrganizationId = organizationId,
+                UserId = settings.SystemPolarisUserId!.Value,
+                WorkstationId = settings.WorkstationId!.Value,
                 PolarisOverrideAccount = new PolarisUser(
-                    settings.StaffDomain,
-                    settings.AdminUser,
+                    settings.StaffDomain!,
+                    settings.AdminUser!,
                     password)
             });
         return (client, settings);
@@ -932,129 +1059,36 @@ public sealed class PolarisPatronProvider(
     private static string? Clean(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    private static IReadOnlyList<PickupBranch> NormalizePickupBranches(string? content)
+    private static IReadOnlyList<int> ReadPickupBranchIds(IRestResponse<PickupBranchesGetResult> response)
     {
-        if (string.IsNullOrWhiteSpace(content))
+        var data = response.Data;
+        using var document = JsonDocument.Parse(response.Response?.Content ?? string.Empty);
+        var root = document.RootElement;
+        // Validate presence, uniqueness and range before trusting a model whose Int32
+        // fields default to zero when omitted. Mapping uses the package's typed IDs.
+        if (data is null || !TryReadPapiErrorCode(response.Response?.Content, out var code) ||
+            code < 0 || data.PAPIErrorCode != code ||
+            !TryGetUniqueProperty(root, "PickupBranchesRows", out var rows) ||
+            rows.ValueKind != JsonValueKind.Array || data.PickupBranchesRows is null ||
+            data.PickupBranchesRows.Count != rows.GetArrayLength())
         {
-            return [];
+            throw new PolarisOperationalException("polaris_pickup_protocol_failed",
+                "Polaris returned an invalid pickup branch response.");
         }
-
-        try
+        var index = 0;
+        foreach (var row in rows.EnumerateArray())
         {
-            using var document = JsonDocument.Parse(content);
-            var root = document.RootElement;
-            if (root.ValueKind == JsonValueKind.Object &&
-                TryGetInt32(root, ["PAPIErrorCode"], out var papiErrorCode) &&
-                papiErrorCode < 0)
+            var model = data.PickupBranchesRows[index++];
+            if (row.ValueKind != JsonValueKind.Object || model is null || HasDuplicateProperties(row) ||
+                !TryGetUniqueProperty(row, "ID", out var rawId) ||
+                rawId.ValueKind != JsonValueKind.Number || !rawId.TryGetInt32(out var id) ||
+                id <= PolarisConfigurationValidation.SystemOrganizationId || id != model.ID)
             {
-                return [];
-            }
-
-            var rows = FindPickupBranchRows(root);
-            var byId = new Dictionary<int, PickupBranch>();
-            foreach (var row in rows)
-            {
-                if (row.ValueKind != JsonValueKind.Object ||
-                    !TryGetInt32(
-                        row,
-                        ["OrganizationID", "OrganizationId", "OrgID", "OrgId", "PickupBranchID",
-                         "PickupBranchId", "BranchID", "BranchId", "ID", "Id"],
-                        out var id) ||
-                    id <= 0 ||
-                    byId.ContainsKey(id))
-                {
-                    continue;
-                }
-
-                var label = TryGetString(
-                    row,
-                    ["DisplayName", "OrganizationName", "Name", "BranchName", "Description", "Label"]);
-                byId.Add(id, new PickupBranch(id, label ?? $"Branch {id}"));
-            }
-
-            return byId.Values
-                .OrderBy(item => item.Label, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(item => item.Id)
-                .ToArray();
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-    }
-
-    private static IEnumerable<JsonElement> FindPickupBranchRows(JsonElement root)
-    {
-        var container = root;
-        if (root.ValueKind == JsonValueKind.Object &&
-            TryGetProperty(root, ["PickupBranchesRows", "PickupBranchRows", "Branches"], out var found))
-        {
-            container = found;
-        }
-
-        if (container.ValueKind == JsonValueKind.Object &&
-            TryGetProperty(container, ["PickupBranchRow"], out found))
-        {
-            container = found;
-        }
-
-        return container.ValueKind switch
-        {
-            JsonValueKind.Array => container.EnumerateArray().ToArray(),
-            JsonValueKind.Object => [container],
-            _ => []
-        };
-    }
-
-    private static bool TryGetProperty(
-        JsonElement element,
-        IReadOnlyList<string> names,
-        out JsonElement value)
-    {
-        foreach (var name in names)
-        {
-            if (element.TryGetProperty(name, out value))
-            {
-                return true;
+                throw new PolarisOperationalException("polaris_pickup_protocol_failed",
+                    "Polaris returned an invalid pickup branch identity.");
             }
         }
-
-        value = default;
-        return false;
-    }
-
-    private static bool TryGetInt32(
-        JsonElement element,
-        IReadOnlyList<string> names,
-        out int value)
-    {
-        if (TryGetProperty(element, names, out var property))
-        {
-            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out value))
-            {
-                return true;
-            }
-
-            if (property.ValueKind == JsonValueKind.String &&
-                int.TryParse(property.GetString(), out value))
-            {
-                return true;
-            }
-        }
-
-        value = 0;
-        return false;
-    }
-
-    private static string? TryGetString(JsonElement element, IReadOnlyList<string> names)
-    {
-        if (!TryGetProperty(element, names, out var property) ||
-            property.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
-
-        return Clean(property.GetString());
+        return data.PickupBranchesRows.Select(row => row.ID).Distinct().ToArray();
     }
 
     private static BibSearchOptions SearchOptions(
@@ -1072,55 +1106,75 @@ public sealed class PolarisPatronProvider(
         };
 
     private static SearchAttempt InspectSearchResponse(
-        IRestResponse<BibSearchResult> response)
+        IRestResponse<BibSearchResult> response, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (response.Response?.IsSuccessStatusCode != true)
         {
             return new SearchAttempt(
                 IsTransient(response.Response?.StatusCode)
                     ? IdentifierLookupOutcome.TransientFailure
                     : IdentifierLookupOutcome.OperationalFailure,
-                null,
-                new Dictionary<int, string>());
+                null);
         }
 
         var content = response.Response?.Content ?? string.Empty;
-        Dictionary<int, string> primaryTomByControlNumber;
         try
         {
             using var document = JsonDocument.Parse(content);
             var root = document.RootElement;
-            if (!TryGetProperty(root, "PAPIErrorCode", out var codeElement) ||
+            var data = response.Data;
+            if (root.ValueKind != JsonValueKind.Object || data is null ||
+                !TryGetUniqueProperty(root, "PAPIErrorCode", out var codeElement) ||
+                codeElement.ValueKind != JsonValueKind.Number ||
                 !codeElement.TryGetInt32(out var code) ||
-                code < -1)
-            {
-                return SearchAttempt.Operational;
-            }
-
-            if (code == -1)
-            {
-                return new SearchAttempt(
-                    null,
-                    response.Data ?? new BibSearchResult { PAPIErrorCode = -1 },
-                    new Dictionary<int, string>());
-            }
-
-            if (!TryGetProperty(root, "BibSearchRows", out var rowsElement) ||
+                code < -1 || data.PAPIErrorCode != code ||
+                !TryGetUniqueProperty(root, "TotalRecordsFound", out var totalElement) ||
+                totalElement.ValueKind != JsonValueKind.Number ||
+                !totalElement.TryGetInt32(out var totalRecordsFound) ||
+                totalRecordsFound < 0 || data.TotalRecordsFound != totalRecordsFound ||
+                !TryGetUniqueProperty(root, "BibSearchRows", out var rowsElement) ||
                 rowsElement.ValueKind != JsonValueKind.Array ||
-                response.Data is null)
+                data.BibSearchRows is null || data.BibSearchRows.Count != rowsElement.GetArrayLength())
             {
                 return SearchAttempt.Operational;
             }
 
-            primaryTomByControlNumber = new Dictionary<int, string>();
+            if (rowsElement.GetArrayLength() == 0)
+            {
+                if (totalRecordsFound != 0 ||
+                    code != 0 && (code != -1 || !HasNoSearchErrorMessage(root)))
+                {
+                    return SearchAttempt.Operational;
+                }
+
+                return new SearchAttempt(null, data);
+            }
+
+            if (code < 0)
+            {
+                return SearchAttempt.Operational;
+            }
+
+            if (totalRecordsFound < rowsElement.GetArrayLength() ||
+                code > 0 && code != rowsElement.GetArrayLength())
+            {
+                return SearchAttempt.Operational;
+            }
+
+            var rowIndex = 0;
             foreach (var row in rowsElement.EnumerateArray())
             {
-                if (TryGetProperty(row, "ControlNumber", out var control) &&
-                    control.TryGetInt32(out var controlNumber) &&
-                    TryGetProperty(row, "PrimaryTypeOfMaterial", out var tom))
+                var model = data.BibSearchRows[rowIndex++];
+                if (row.ValueKind != JsonValueKind.Object || model is null ||
+                    !TryGetUniqueProperty(row, "ControlNumber", out var control) ||
+                    !TryReadPositiveInt32(control, out var controlNumber) ||
+                    controlNumber != model.ControlNumber ||
+                    HasUndocumentedBibIdentityAlias(row) || HasDuplicateProperties(row))
                 {
-                    primaryTomByControlNumber[controlNumber] = tom.ToString().Trim();
+                    return SearchAttempt.Operational;
                 }
+
             }
         }
         catch (JsonException)
@@ -1128,7 +1182,21 @@ public sealed class PolarisPatronProvider(
             return SearchAttempt.Operational;
         }
 
-        return new SearchAttempt(null, response.Data, primaryTomByControlNumber);
+        return new SearchAttempt(null, response.Data);
+    }
+
+    private static bool HasUndocumentedBibIdentityAlias(JsonElement row)
+    {
+        foreach (var property in row.EnumerateObject())
+        {
+            if (string.Equals(property.Name, "BibID", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(property.Name, "BibliographicRecordID", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryGetProperty(
@@ -1155,7 +1223,7 @@ public sealed class PolarisPatronProvider(
         try
         {
             using var document = JsonDocument.Parse(content ?? string.Empty);
-            return TryGetProperty(document.RootElement, "PAPIErrorCode", out var code) &&
+            return TryGetUniqueProperty(document.RootElement, "PAPIErrorCode", out var code) &&
                    code.TryGetInt32(out papiErrorCode);
         }
         catch (JsonException)
@@ -1164,51 +1232,133 @@ public sealed class PolarisPatronProvider(
         }
     }
 
+    private static bool IsDefinitiveInvalidBibResponse(string? content)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content ?? string.Empty);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !TryGetUniqueProperty(root, "ErrorMessage", out var errorMessage) ||
+                errorMessage.ValueKind != JsonValueKind.String ||
+                !string.Equals(errorMessage.GetString()?.Trim(), "Invalid BibID", StringComparison.OrdinalIgnoreCase) ||
+                !TryGetUniqueProperty(root, "BibGetRows", out var rows))
+            {
+                return false;
+            }
+
+            return rows.ValueKind == JsonValueKind.Null ||
+                   rows.ValueKind == JsonValueKind.Array && rows.GetArrayLength() == 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadUsableBibGetRows(string? content, out int rowCount)
+    {
+        rowCount = 0;
+        try
+        {
+            using var document = JsonDocument.Parse(content ?? string.Empty);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !TryGetUniqueProperty(root, "BibGetRows", out var rows) ||
+                rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() == 0)
+            {
+                return false;
+            }
+
+            foreach (var row in rows.EnumerateArray())
+            {
+                if (row.ValueKind != JsonValueKind.Object ||
+                    !TryGetUniqueProperty(row, "ElementID", out var elementId) ||
+                    elementId.ValueKind != JsonValueKind.Number ||
+                    !elementId.TryGetInt32(out var numericElementId) || numericElementId <= 0 ||
+                    !TryGetUniqueProperty(row, "Value", out var value) ||
+                    value.ValueKind != JsonValueKind.String)
+                {
+                    return false;
+                }
+
+                rowCount++;
+            }
+
+            return rowCount > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetUniqueProperty(
+        JsonElement element,
+        string name,
+        out JsonElement value)
+    {
+        value = default;
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var found = false;
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (found)
+            {
+                value = default;
+                return false;
+            }
+
+            value = property.Value;
+            found = true;
+        }
+
+        return found;
+    }
+
     private static int? ResolvePreferredPickupId(
         int requestPickupBranchId,
         int patronOrganizationId,
         string rawContent)
     {
-        if (requestPickupBranchId > 0)
+        using var document = JsonDocument.Parse(rawContent);
+        if (!TryGetUniqueProperty(document.RootElement, "PatronBasicData", out var patron) ||
+            patron.ValueKind != JsonValueKind.Object || HasDuplicateProperties(patron))
         {
-            return requestPickupBranchId;
+            throw new PolarisOperationalException("polaris_pickup_preference_invalid", "Polaris returned an invalid pickup preference.");
         }
-
-        try
+        if (!TryGetUniqueProperty(patron, "RequestPickupBranchID", out var value))
         {
-            using var document = JsonDocument.Parse(rawContent);
-            if (!TryGetProperty(document.RootElement, "PatronBasicData", out var patron))
-            {
-                return patronOrganizationId;
-            }
-
-            if (!TryGetProperty(patron, "RequestPickupBranchID", out var value) ||
-                value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-            {
-                return patronOrganizationId;
-            }
-
-            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var numericId))
-            {
-                return numericId;
-            }
-
-            if (value.ValueKind == JsonValueKind.String)
-            {
-                var text = value.GetString();
-                if (string.IsNullOrWhiteSpace(text))
-                {
-                    return patronOrganizationId;
-                }
-
-                return int.TryParse(text, out var textId) ? textId : null;
-            }
+            // Preserve the established registered-branch fallback for responses
+            // that omit the field added in PAPI 6.7. It never falls back to system 1.
+            return patronOrganizationId > PolarisConfigurationValidation.SystemOrganizationId ? patronOrganizationId : null;
         }
-        catch (JsonException)
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var id) ||
+            id < 0 || id != requestPickupBranchId)
         {
+            // No other no-preference sentinel is documented. Reject malformed or
+            // negative values instead of inventing provider semantics for them.
+            throw new PolarisOperationalException("polaris_pickup_preference_invalid", "Polaris returned an invalid pickup preference.");
         }
-
-        return patronOrganizationId;
+        // Zero is no usable preference; organization 1 is system scope, not a branch.
+        return id > PolarisConfigurationValidation.SystemOrganizationId ? id : null;
     }
 
     private static bool IsTransient(HttpStatusCode? statusCode) =>
@@ -1230,12 +1380,10 @@ public sealed class PolarisPatronProvider(
 
     private sealed record SearchAttempt(
         IdentifierLookupOutcome? Failure,
-        BibSearchResult? Data,
-        IReadOnlyDictionary<int, string> PrimaryTomByControlNumber)
+        BibSearchResult? Data)
     {
         public static SearchAttempt Operational { get; } = new(
             IdentifierLookupOutcome.OperationalFailure,
-            null,
-            new Dictionary<int, string>());
+            null);
     }
 }

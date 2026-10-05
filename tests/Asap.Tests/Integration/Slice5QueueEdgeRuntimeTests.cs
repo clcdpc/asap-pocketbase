@@ -66,12 +66,12 @@ public sealed partial class PatronJourneyTests
                              .Where(item => seed.RequestIds.Contains(item.Id)).ToListAsync())
                 {
                     request.IsbnCheckStatus = "found";
-                    request.BibId = $"s5-{request.Id}";
+                    request.BibId = checked(95000 + (int)request.Id);
                 }
                 await hideSeedRows.SaveChangesAsync();
             }
 
-            var highCreatedUtc = DateTime.UtcNow.AddDays(-9);
+            var highCreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-9);
             await InsertExplicitIdentifierRequestAsync(
                 contextFactory, scope, highId, "Slice 5 committed watermark row", highCreatedUtc);
 
@@ -81,7 +81,7 @@ public sealed partial class PatronJourneyTests
                 contextFactory, QueueNames.IdentifierProcessing, scope)).CycleMaxId);
 
             await InsertExplicitIdentifierRequestAsync(
-                contextFactory, scope, lateId, "Slice 5 late commit", DateTime.UtcNow.AddDays(-8));
+                contextFactory, scope, lateId, "Slice 5 late commit", timeProvider!.GetUtcNow().UtcDateTime.AddDays(-8));
 
             Assert.AreEqual("completed", (await service.ProcessIdentifierAsync(scope, CancellationToken.None)).Code);
             Assert.AreEqual("skipped_no_isbn", await ReadStatusAsync(contextFactory, lateId));
@@ -129,8 +129,8 @@ public sealed partial class PatronJourneyTests
                     MaterialFormatId = formatId,
                     Status = "suggestion",
                     IsbnCheckStatus = "pending",
-                    CreatedUtc = DateTime.UtcNow.AddDays(-30),
-                    UpdatedUtc = DateTime.UtcNow.AddDays(-30)
+                    CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-30),
+                    UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-30)
                 };
                 seed.TitleRequests.Add(imported);
                 await seed.SaveChangesAsync();
@@ -322,8 +322,8 @@ public sealed partial class PatronJourneyTests
                     MaterialFormatId = backdated.MaterialFormatId,
                     Status = "suggestion",
                     IsbnCheckStatus = "pending",
-                    CreatedUtc = DateTime.UtcNow.AddMinutes(-1),
-                    UpdatedUtc = DateTime.UtcNow.AddMinutes(-1)
+                    CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1),
+                    UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1)
                 };
                 mutate.TitleRequests.AddRange(backdated, late);
                 await mutate.SaveChangesAsync();
@@ -488,7 +488,7 @@ public sealed partial class PatronJourneyTests
             {
                 var behind = await mutate.TitleRequests.SingleAsync(item => item.Id == seed.CursorIds[0]);
                 behind.IsbnCheckStatus = "found";
-                behind.BibId = "99901";
+                behind.BibId = 99901;
                 await mutate.SaveChangesAsync();
             }
 
@@ -544,7 +544,7 @@ public sealed partial class PatronJourneyTests
                 await seed.SaveChangesAsync();
                 var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
                     .Select(item => item.Id).SingleAsync();
-                var baseUtc = DateTime.UtcNow.AddDays(-80);
+                var baseUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-80);
                 var globalRows = Enumerable.Range(0, 2).Select(index => new TitleRequest
                 {
                     LibraryOrganizationId = 102,

@@ -148,7 +148,10 @@ internal static class MigrationOperationalConfiguration
     {
         foreach (var property in value.EnumerateObject())
         {
-            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) return property.Value;
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return property.Value;
+            }
         }
         throw new KeyNotFoundException(name);
     }

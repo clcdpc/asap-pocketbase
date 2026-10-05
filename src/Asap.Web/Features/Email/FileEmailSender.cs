@@ -7,11 +7,13 @@ public sealed class FileEmailSender : IEmailSender
 {
     private static readonly UTF8Encoding Utf8WithoutBom = new(encoderShouldEmitUTF8Identifier: false);
     private readonly string outputDirectory;
+    private readonly TimeProvider timeProvider;
 
-    public FileEmailSender(string outputDirectory)
+    public FileEmailSender(string outputDirectory, TimeProvider timeProvider)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
         this.outputDirectory = Path.GetFullPath(outputDirectory);
+        this.timeProvider = timeProvider;
     }
 
     public Task<EmailTransportReadiness> CheckReadinessAsync(
@@ -19,7 +21,7 @@ public sealed class FileEmailSender : IEmailSender
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(EmailTransportReadiness.Configured);
+        return Task.FromResult(EmailTransportReadiness.LocalCapture);
     }
 
     public async Task<EmailSendResult> SendAsync(
@@ -31,7 +33,7 @@ public sealed class FileEmailSender : IEmailSender
 
         Directory.CreateDirectory(outputDirectory);
 
-        var fileId = $"{DateTime.UtcNow:yyyyMMddTHHmmssfffffffZ}-{envelope.OutboxId}-{Guid.NewGuid():N}";
+        var fileId = $"{timeProvider.GetUtcNow():yyyyMMddTHHmmssfffffffZ}-{envelope.OutboxId}-{Guid.NewGuid():N}";
         var finalPath = Path.Combine(outputDirectory, $"{fileId}.html");
         var temporaryPath = Path.Combine(outputDirectory, $".{fileId}.tmp");
 

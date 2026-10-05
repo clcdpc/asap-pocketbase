@@ -11,11 +11,27 @@ public interface IStaffPolarisProvider
                 "polaris_organization_read_unimplemented",
                 "The selected Polaris provider does not implement organization reference reads."));
 
-    Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken);
+    Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken);
+
+    Task<StaffBibSearchResult> SearchBibsAsync(
+        string mode, string query, string title, string author, int organizationId, CancellationToken cancellationToken) =>
+        Task.FromException<StaffBibSearchResult>(new PolarisOperationalException(
+            "polaris_bib_search_unimplemented", "The selected Polaris provider does not implement BIB search."));
+
+    Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(
+        string query,
+        int organizationId, CancellationToken cancellationToken) =>
+        Task.FromException<IReadOnlyList<PatronSnapshot>>(new PolarisOperationalException(
+            "polaris_patron_search_unimplemented", "The selected Polaris provider does not implement patron search."));
+
+    Task<StaffBibHoldingsSummary> GetBibHoldingsAsync(
+        int bibId, int organizationId, CancellationToken cancellationToken) =>
+        Task.FromException<StaffBibHoldingsSummary>(new PolarisOperationalException(
+            "polaris_bib_holdings_unimplemented", "The selected Polaris provider does not implement BIB holdings."));
 
     Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
         string barcode,
-        CancellationToken cancellationToken);
+        int organizationId, CancellationToken cancellationToken);
 
     Task<HoldProviderResult> CreateHoldAsync(
         HoldCreateCommand command,
@@ -27,14 +43,24 @@ public interface IStaffPolarisProvider
 
     Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(
         string barcode,
-        CancellationToken cancellationToken) =>
+        int organizationId, CancellationToken cancellationToken) =>
         Task.FromException<IReadOnlyList<PolarisCheckoutSnapshot>>(
             new PolarisOperationalException(
                 "polaris_checkout_read_unimplemented",
                 "The selected Polaris provider does not implement checkout evidence."));
 }
 
-public sealed record BibValidationResult(bool IsValid, string? Title = null, string? Author = null);
+public sealed record BibValidationResult(
+    bool IsValid, string? Title = null, string? Author = null, string? Publication = null,
+    string? Format = null, string? Identifier = null, string? Publisher = null);
+
+public sealed record StaffBibSearchRow(
+    int BibId, string? Title, string? Author, string? Publication, string? Format, string? Identifier);
+
+public sealed record StaffBibSearchResult(IReadOnlyList<StaffBibSearchRow> Results, int TotalMatches);
+
+public sealed record StaffBibHoldingsSummary(
+    int MyLibraryCount, int OtherLibraryCount, int ConsortiumCount, bool IsHoldable, bool HasHoldableAtMyLibrary);
 
 public sealed record PolarisHoldSnapshot(
     int HoldRequestId,
@@ -46,7 +72,7 @@ public sealed record PolarisHoldSnapshot(
 
 public sealed record PolarisCheckoutSnapshot(
     int BibId,
-    string? HoldRequestId = null,
+    int? HoldRequestId = null,
     string? PatronBarcode = null);
 
 public sealed record HoldCreateCommand(
@@ -73,8 +99,8 @@ public enum HoldProviderOutcome
 
 public sealed record HoldProviderResult(
     HoldProviderOutcome Outcome,
-    string? RequestGuid,
-    string? HoldRequestId,
+    Guid? RequestGuid,
+    int? HoldRequestId,
     string? TxnGroupQualifier,
     string? TxnQualifier,
     int? StatusType,
