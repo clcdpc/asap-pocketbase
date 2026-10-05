@@ -245,7 +245,10 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     dom.summary.textContent = state.stale ? 'Requests unavailable. Refresh to load current requests.'
       : `${requests.length} ${statusLabel(getContext().status).toLocaleLowerCase()} request${requests.length === 1 ? '' : 's'}`;
     dom.empty.hidden = state.stale || requests.length !== 0;
-    if (state.stale) { dom.queueAutomation.textContent = ''; return; }
+    if (state.stale) {
+      dom.queueAutomation.textContent = getContext().status === 'closed' ? '' : 'Workflow rules will appear with requests in this stage.';
+      return;
+    }
     const stageRequests = state.requests.filter(request => request.status === getContext().status);
     dom.queueAutomation.textContent = getContext().status === 'closed' ? ''
       : getContext().scope === 'all' ? 'Workflow rules are shown for each request’s library.'
