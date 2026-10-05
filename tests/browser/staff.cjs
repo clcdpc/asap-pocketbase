@@ -3349,6 +3349,7 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
       const versions = [];
       let latest = (await session(context, args.baseOrigin)).staff;
       const deleteRoute = async route => {
+        if (route.request().method() !== 'DELETE') { await route.fallback(); return; }
         versions.push(route.request().postDataJSON().actorVersion);
         if (versions.length === 2) {
           const result = await route.fetch();
