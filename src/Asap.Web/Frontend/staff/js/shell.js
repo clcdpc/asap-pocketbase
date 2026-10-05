@@ -149,6 +149,16 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
   get('#sign-out').addEventListener('click', () => onSignOutIntent(), { signal: events.signal });
   return { announce, presentView, showWorkspace, showSignedOut, preferencesChanged, recordReceipt, clearReceipt, settingsRefreshed, queueRefreshed,
     rememberOpened, forgetUnavailable, renderRecent, refreshReadiness,
+    configurationCommitted(scope) {
+      if (disposed || !sessionIdentity.actor()) return;
+      const currentScope = readinessScope();
+      const effectiveScope = currentScope === 'default' ? String(sessionIdentity.actor().organizationId) : currentScope;
+      if (scope !== 'system' && String(scope) !== '1' && String(scope) !== effectiveScope) return;
+      reads.begin('readiness').abort();
+      dom.readiness.textContent = 'Email delivery status is unavailable. Requests and staff workflows remain available.';
+      dom.readiness.hidden = false;
+      void refreshReadiness();
+    },
     isPresentationOwner,
     signOutFailed(owner, message = 'Sign out did not complete. Please try again.') {
       if (disposed || !isPresentationOwner(owner)) return;

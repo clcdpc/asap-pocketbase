@@ -31,6 +31,10 @@ function populateLibraries(select, organizations, scope) {
   select.value = scope;
 }
 
+function affectsProjection(scope, loadedScope) {
+  return scope === 'system' || String(scope) === '1' || loadedScope === 'all' || String(scope) === loadedScope;
+}
+
 function focusPort({ grid, label, fallback, sessionIdentity, getContext, copy }) {
   const owner = sessionIdentity.preferences();
   const context = getContext();
@@ -43,6 +47,7 @@ function focusPort({ grid, label, fallback, sessionIdentity, getContext, copy })
 
 export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   onOpen, onScopeIntent, onStatusIntent, onScopeAccepted, onLibraries, onRefreshed, onRendered,
+  resolveScope = () => getContext().scope,
   request = authorizedJson }) {
   const dom = {
     statusTabs: [...root.querySelectorAll('#status-tabs [data-status]')],
@@ -59,7 +64,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     grid: root.querySelector('#request-grid'),
     empty: root.querySelector('#queue-empty'),
   };
-  const state = { requests: [], grid: null, gridStatus: null, loadedContext: null, sequence: 0 };
+  const state = { requests: [], grid: null, gridStatus: null, loadedContext: null, stale: true, sequence: 0 };
   const reads = createLatestLoad();
   const events = new window.AbortController();
   let disposed = false, acceptingScope = false;
@@ -69,12 +74,17 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   async function refresh(options = {}) {
     const owner = sessionIdentity.preferences();
     if (disposed || !owner) return false;
-    const context = getContext();
     const load = reads.begin('queue');
     const sequence = ++state.sequence;
     dom.refresh.disabled = true;
     if (!options.silent) announce('Loading authorized requests...');
     try {
+      const resolution = resolveScope(owner);
+      const acceptedScope = typeof resolution === 'string' ? resolution : await resolution;
+      if (!acceptedScope || disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
+      acceptingScope = true;
+      try { onScopeAccepted(acceptedScope); } finally { acceptingScope = false; }
+      const context = getContext();
       const scope = owner.role === 'super_admin' ? context.scope : String(owner.organizationId);
       const result = await request(`/api/asap/staff/title-requests?scope=${encodeURIComponent(scope)}`, { signal: load.signal });
       if (disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner) || context.scope !== getContext().scope || context.status !== getContext().status) return false;
@@ -82,13 +92,14 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       try { onScopeAccepted(result.scope); } finally { acceptingScope = false; }
       state.requests = Object.freeze(Array.isArray(result.items) ? result.items.map(item => Object.freeze({ ...item })) : []);
       state.loadedContext = Object.freeze({ scope: result.scope, status: getContext().status });
+      state.stale = false;
       if (owner.role === 'super_admin') { setLibraries(result.organizations); onLibraries(result.organizations); }
       populateTags(); renderGrid();
       onRefreshed({ sequence, items: state.requests, context: state.loadedContext });
       if (!options.silent) announce(`${state.requests.length} authorized requests loaded.`);
       return true;
     } catch (error) {
-      if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) && context.scope === getContext().scope && context.status === getContext().status &&
+      if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) &&
           !options.silent && !isAbortError(error) && error.status !== 401) announce(error.message || 'Requests could not be loaded.', 'error');
       return false;
     } finally {
@@ -113,16 +124,22 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     dom.claim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
   }
 
-  function clearTitleQueueForContextChange() {
+  function retireProjection() {
     if (disposed) return;
     state.requests = [];
     state.loadedContext = null;
+    state.stale = true;
     if (!acceptingScope) invalidate();
     state.grid?.destroy?.();
     // An older Grid.js render can finish after navigation; keep its container detached.
     dom.grid = detachGridContainer(dom.grid);
     state.grid = null;
+    populateTags();
     renderGrid();
+  }
+
+  function markStale(scope = 'system') {
+    if (!disposed && affectsProjection(scope, state.loadedContext?.scope ?? getContext().scope)) retireProjection();
   }
 
   function updateStatusTabs() {
@@ -225,8 +242,10 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     const owner = sessionIdentity.preferences();
     onRendered();
     const requests = filteredRequests();
-    dom.summary.textContent = `${requests.length} ${statusLabel(getContext().status).toLocaleLowerCase()} request${requests.length === 1 ? '' : 's'}`;
-    dom.empty.hidden = requests.length !== 0;
+    dom.summary.textContent = state.stale ? 'Requests unavailable. Refresh to load current requests.'
+      : `${requests.length} ${statusLabel(getContext().status).toLocaleLowerCase()} request${requests.length === 1 ? '' : 's'}`;
+    dom.empty.hidden = state.stale || requests.length !== 0;
+    if (state.stale) { dom.queueAutomation.textContent = ''; return; }
     const stageRequests = state.requests.filter(request => request.status === getContext().status);
     dom.queueAutomation.textContent = getContext().status === 'closed' ? ''
       : getContext().scope === 'all' ? 'Workflow rules are shown for each request’s library.'
@@ -283,7 +302,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   dom.search.addEventListener('input', renderGrid, { signal: events.signal });
   for (const input of [dom.claim, dom.tag, dom.similar]) input.addEventListener('change', renderGrid, { signal: events.signal });
   return {
-    refresh, invalidate, render: renderGrid, resetFilters: resetQueueFilters, setStaff, setLibraries,
+    refresh, invalidate, markStale, render: renderGrid, resetFilters: resetQueueFilters, setStaff, setLibraries,
     find: id => state.requests.find(item => item.id === id), sequence: () => state.sequence,
     libraryScope: scopeForLibraryOrAll,
     libraries: () => [...dom.scope.options].filter(option => option.value !== 'all')
@@ -291,7 +310,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     focusReturn: (id, fallback) => focusPort({ grid: () => dom.grid, label: `Open request ${id}`, fallback, sessionIdentity, getContext }),
     activate({ previous }) { if (disposed) return; if (previous !== 'queue') resetQueueFilters(); updateStatusTabs(); },
     deactivate: invalidate,
-    refreshOnEntry({ context, previous }) { if (previous !== 'queue' && state.loadedContext?.scope !== context.scope) return refresh(); },
+    refreshOnEntry() { if (state.stale || state.loadedContext?.scope !== getContext().scope) return refresh(); },
     contextChanged(next, previous) {
       if (disposed) return;
       dom.scope.value = next.scope;
@@ -299,10 +318,10 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
         invalidate(); resetQueueFilters(); updateStatusTabs();
         if (next.scope === previous.scope) renderGrid();
       }
-      if (next.scope !== previous.scope) { resetQueueFilters(); clearTitleQueueForContextChange(); }
+      if (next.scope !== previous.scope) { resetQueueFilters(); retireProjection(); }
     },
     preferencesChanged() { if (disposed) return; dom.claim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all'; renderGrid(); },
-    clear: clearTitleQueueForContextChange,
+    clear: retireProjection,
     signedOut() { if (disposed) return; invalidate(); state.requests = []; state.loadedContext = null; state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); },
     dispose() { if (disposed) return; disposed = true; events.abort(); invalidate(); state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); state.requests = []; }
   };
@@ -310,6 +329,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
 
 export function createCopyQueue({ root, sessionIdentity, getContext, announce,
   onOpen, onScopeIntent, onStatusIntent, onScopeAccepted, onLibraries, onRefreshed, onRendered, recovery,
+  resolveScope = () => getContext().scope,
   request = authorizedJson }) {
   const dom = {
     additionalCopyStatusTabs: [...root.querySelectorAll('#additional-copy-status-tabs [data-copy-status]')],
@@ -325,7 +345,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
     additionalCopyCreateReviewSummary: root.querySelector('#additional-copy-create-review-summary'),
     additionalCopyCreateReviewDone: root.querySelector('#additional-copy-create-review-done'),
   };
-  const state = { additionalCopies: [], additionalCopyGrid: null, loadedContext: null };
+  const state = { additionalCopies: [], additionalCopyGrid: null, loadedContext: null, stale: true };
   const reads = createLatestLoad();
   const events = new window.AbortController();
   let disposed = false, acceptingScope = false;
@@ -335,7 +355,6 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
   async function refresh(options = {}) {
     const owner = sessionIdentity.preferences();
     if (disposed || !owner) return false;
-    const context = getContext();
     const load = reads.begin('queue');
     const wasReviewReady = recovery.current()?.reviewReady;
     const evidence = recovery.begin();
@@ -343,6 +362,12 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
     if (wasReviewReady) renderAdditionalCopyGrid();
     if (!options.silent) announce('Loading authorized additional-copy tasks...');
     try {
+      const resolution = resolveScope(owner);
+      const acceptedScope = typeof resolution === 'string' ? resolution : await resolution;
+      if (!acceptedScope || disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
+      acceptingScope = true;
+      try { onScopeAccepted(acceptedScope); } finally { acceptingScope = false; }
+      const context = getContext();
       const scope = owner.role === 'super_admin' ? context.scope : String(owner.organizationId);
       const result = await request(`/api/asap/staff/additional-copies?scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(context.additionalCopyStatus)}`, { signal: load.signal });
       if (disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner) || context.scope !== getContext().scope || context.additionalCopyStatus !== getContext().additionalCopyStatus) return false;
@@ -350,6 +375,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
       try { onScopeAccepted(result.scope); } finally { acceptingScope = false; }
       state.additionalCopies = Object.freeze(Array.isArray(result.items) ? result.items.map(item => Object.freeze({ ...item })) : []);
       state.loadedContext = Object.freeze({ scope: result.scope, status: context.additionalCopyStatus });
+      state.stale = false;
       if (owner.role === 'super_admin') { setLibraries(result.availableLibraries); onLibraries(result.availableLibraries); }
       const reviewReady = recovery.loaded(evidence, { scope: result.scope, status: result.status });
       if (reviewReady) { dom.additionalCopySearch.value = ''; dom.additionalCopyClaim.value = 'all'; }
@@ -358,7 +384,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
         : `${state.additionalCopies.length} authorized additional-copy tasks loaded.`);
       return true;
     } catch (error) {
-      if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) && context.scope === getContext().scope && context.additionalCopyStatus === getContext().additionalCopyStatus &&
+      if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) &&
           !options.silent && !isAbortError(error) && error.status !== 401) announce(error.message || 'Additional-copy tasks could not be loaded.', 'error');
       return false;
     } finally {
@@ -381,16 +407,21 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
     dom.additionalCopyClaim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
   }
 
-  function clearAdditionalCopyQueueForScopeChange() {
+  function retireProjection() {
     if (disposed) return;
     state.additionalCopies = [];
     state.loadedContext = null;
+    state.stale = true;
     if (!acceptingScope) invalidate();
     state.additionalCopyGrid?.destroy?.();
     // An older Grid.js render can finish after the scope changes; keep its container detached.
     dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid);
     state.additionalCopyGrid = null;
     renderAdditionalCopyGrid();
+  }
+
+  function markStale(scope = 'system') {
+    if (!disposed && affectsProjection(scope, state.loadedContext?.scope ?? getContext().scope)) retireProjection();
   }
 
   function updateAdditionalCopyStatusTabs() {
@@ -423,7 +454,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
     const owner = sessionIdentity.preferences();
     onRendered();
     const uncertainCreation = recovery.current();
-    const reviewReady = Boolean(uncertainCreation?.reviewReady) && !uncertainCreation.reviewed &&
+    const reviewReady = !state.stale && Boolean(uncertainCreation?.reviewReady) && !uncertainCreation.reviewed &&
       getContext().additionalCopyStatus === 'open' &&
       (getContext().scope === 'all' || String(getContext().scope) === String(uncertainCreation.libraryOrgId));
     dom.additionalCopyCreateReview.hidden = !reviewReady;
@@ -438,8 +469,10 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
           : `Creation for BIB ${uncertainCreation.bibid} could not be confirmed. Review the ${matching.length} matching open task${matching.length === 1 ? '' : 's'} for this library before creating another: ${ids}.`;
     }
     const requests = filteredAdditionalCopies();
-    dom.additionalCopySummary.textContent = `${requests.length} ${getContext().additionalCopyStatus} task${requests.length === 1 ? '' : 's'}`;
-    dom.additionalCopyEmpty.hidden = requests.length !== 0;
+    dom.additionalCopySummary.textContent = state.stale ? 'Additional-copy tasks unavailable. Refresh to load current tasks.'
+      : `${requests.length} ${getContext().additionalCopyStatus} task${requests.length === 1 ? '' : 's'}`;
+    dom.additionalCopyEmpty.hidden = state.stale || requests.length !== 0;
+    if (state.stale) return;
     const rows = requests.map(request => [
       request.title,
       request.author || '—',
@@ -518,19 +551,19 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
   return {
     refresh, invalidate, render: renderAdditionalCopyGrid, resetFilters: resetAdditionalCopyFilters, setStaff, setLibraries,
     find: id => state.additionalCopies.find(item => item.id === id),
-    markStale() { state.loadedContext = null; },
+    markStale,
     focusReturn: (id, fallback) => focusPort({ grid: () => dom.additionalCopyGrid, label: `Open additional-copy task ${id}`, fallback, sessionIdentity, getContext, copy: true }),
     activate({ previous }) { if (disposed) return; if (previous !== 'additional-copies') resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); },
     deactivate: invalidate,
-    refreshOnEntry() { if (state.loadedContext?.scope !== getContext().scope || state.loadedContext?.status !== getContext().additionalCopyStatus) return refresh(); },
+    refreshOnEntry() { if (state.stale || state.loadedContext?.scope !== getContext().scope || state.loadedContext?.status !== getContext().additionalCopyStatus) return refresh(); },
     contextChanged(next, previous) {
       if (disposed) return;
       dom.additionalCopyScope.value = next.scope;
-      if (next.additionalCopyStatus !== previous.additionalCopyStatus) { resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); clearAdditionalCopyQueueForScopeChange(); }
-      if (next.scope !== previous.scope) { resetAdditionalCopyFilters(); clearAdditionalCopyQueueForScopeChange(); }
+      if (next.additionalCopyStatus !== previous.additionalCopyStatus) { resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); retireProjection(); }
+      if (next.scope !== previous.scope) { resetAdditionalCopyFilters(); retireProjection(); }
     },
     preferencesChanged() { if (disposed) return; dom.additionalCopyClaim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all'; if (state.loadedContext) renderAdditionalCopyGrid(); },
-    clear: clearAdditionalCopyQueueForScopeChange,
+    clear: retireProjection,
     signedOut() { if (disposed) return; invalidate(); state.additionalCopies = []; state.loadedContext = null; state.additionalCopyGrid?.destroy?.(); state.additionalCopyGrid = null; dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid); dom.additionalCopyCreateReview.hidden = true; },
     dispose() { if (disposed) return; disposed = true; events.abort(); invalidate(); state.additionalCopyGrid?.destroy?.(); state.additionalCopyGrid = null; dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid); state.additionalCopies = []; }
   };

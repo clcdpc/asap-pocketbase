@@ -239,6 +239,8 @@ export function createSettingsController({
   onScopeChange,
   onCommitted = () => {},
   onConfigurationCommitted = () => {},
+  onStaffAccessCommitted = () => {},
+  onOrganizationCatalogCommitted = () => {},
   refreshCurrentStaff = async () => true,
   onRefreshed = () => {},
   onUnconfirmed = () => {}
@@ -1248,12 +1250,16 @@ export function createSettingsController({
       const patronCodeChoices = patronCodesResponse?.data ?? patronCodesResponse;
       data.patronCodeChoices = Array.isArray(patronCodeChoices) ? patronCodeChoices : [];
       const wasHidden = dom.form.hidden;
-      const staffReview = (state.unconfirmedMutation || state.awaitingReloadMutation)?.slot === 'administration-staff-mutation';
+      const review = state.unconfirmedMutation || state.awaitingReloadMutation;
+      const staffReview = review?.slot === 'administration-staff-mutation';
       if (!staffReview) {
         state.awaitingReload = false; state.awaitingReloadMutation = null; state.outcomeUncertain = false; state.unconfirmedMutation = null;
       }
       populate(data || {});
-      onRefreshed(context.owner, { kind: 'settings', scope: context.scope });
+      onRefreshed(context.owner, { kind: 'settings', scope: context.scope,
+        changed: !staffReview && review?.outcome === 'uncertain',
+        catalogChanged: review?.outcome === 'uncertain' &&
+          (review.catalogChanged || ['administration-settings-organization-sync', 'administration-settings-participation'].includes(review.slot)) });
       dom.form.hidden = false;
       dom.form.inert = Boolean(state.pendingMutation || state.awaitingReload);
       if (wasHidden) dom.panels.find(item => item.dataset.settingsPanelContent === state.activePanel)?.focus({ preventScroll: true });
@@ -1333,7 +1339,8 @@ export function createSettingsController({
       renderStaffUsers();
       renderStaffAudit();
       updateDirtyState();
-      onRefreshed(loadState.context.owner, { kind: 'staff', scope: loadState.context.scope });
+      onRefreshed(loadState.context.owner, { kind: 'staff', scope: loadState.context.scope,
+        changed: review?.slot === 'administration-staff-mutation' });
       if (!options.silent) setStaffStatus(`Staff access loaded for ${scopedStaffLabel()}.`, 'success');
       return true;
     } catch (error) {
@@ -1360,6 +1367,7 @@ export function createSettingsController({
       const cleanup = response?.cleanup ?? response?.data?.cleanup ?? {};
       const committedMessage = `${successMessage} ${cleanupSummary(cleanup)}`;
       recordCommitted(mutation, committedMessage);
+      onStaffAccessCommitted(mutation.owner);
       if (!isSettingsOperationCurrent(mutation)) return null;
       if (consumes === staffCreateDraft) resetStaffCreateDraft();
       state.lastStaffCleanup = { staffId: stringValue(property(response?.user ?? response?.data?.user, 'id') || staffId), cleanup };
@@ -1643,6 +1651,8 @@ export function createSettingsController({
       : 'Settings saved.';
     try {
       const payload = collectPayload();
+      // System saves replace the authoritative participation set as well as configuration.
+      mutation.catalogChanged = Array.isArray(payload.systemSettings?.enabledLibraryOrgIds);
       const deletedFormats = state.pendingDeletedFormats.slice();
       totalFormatDeletes = deletedFormats.length;
       const response = await authorizedJson('/api/asap/staff/settings', {
@@ -1651,6 +1661,7 @@ export function createSettingsController({
       });
       committed = true;
       recordCommitted(mutation, committedMessage(), mutation.context.scope);
+      if (mutation.catalogChanged) onOrganizationCatalogCommitted(mutation.owner);
       if (!isSettingsOperationCurrent(mutation)) return;
       state.data.version = response?.data?.version || state.data.version;
       state.baselineSnapshot = snapshotForm(dom.form);
@@ -1866,6 +1877,7 @@ export function createSettingsController({
         body: {}
       });
       recordCommitted(mutation, 'Polaris organizations synchronized.', 'system');
+      onOrganizationCatalogCommitted(mutation.owner);
       if (!isSettingsOperationCurrent(mutation)) return;
       dom.syncResult.textContent = `Synchronized ${response.data?.received || 0} organizations.`;
       const refreshed = await load({ silent: true, owner: mutation });
@@ -1895,6 +1907,7 @@ export function createSettingsController({
       });
       const committedMessage = `${organization.name} ${active ? 'activated' : 'deactivated'}.`;
       recordCommitted(mutation, committedMessage, String(organization.id));
+      onOrganizationCatalogCommitted(mutation.owner, { id: organization.id, active });
       if (!isSettingsOperationCurrent(mutation)) return;
       const refreshed = await load({ silent: true, owner: mutation });
       if (isSettingsOperationCurrent(mutation)) notify(refreshed

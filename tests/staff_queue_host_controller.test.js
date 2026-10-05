@@ -56,8 +56,25 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       calls[0].pending.resolve({ items: [{ id: '91', title: 'Old', status: 'suggestion' }], scope: '2' }); await old;
       assert.equal(owner.find(id).title, 'Current'); assert.equal(owner.find('91'), undefined);
       assert.ok(calls[0].init.signal.aborted);
+      owner.markStale('2');
+      assert.equal(owner.find(id).title, 'Current', 'unrelated library commits preserve the projection');
+      const beforeCommit = owner.refresh();
+      owner.markStale('3'); owner.render();
+      assert.equal(owner.find(id), undefined, 'known stale rows are retired immediately');
+      assert.ok(calls[2].init.signal.aborted);
+      calls[2].pending.resolve({ items: [{ id, title: 'Pre-commit', status: copy ? 'open' : 'suggestion' }], scope: '3', status: 'open' });
+      assert.equal(await beforeCommit, false);
+      assert.equal(owner.find(id), undefined, 'a late pre-commit read cannot restore retired data');
+      const failedEntry = owner.refreshOnEntry({ context, previous: 'settings' });
+      calls[3].pending.resolve(Promise.reject(Object.assign(new Error('Review unavailable'), { status: 503 })));
+      assert.equal(await failedEntry, false);
+      assert.equal(owner.find(id), undefined, 'a failed same-scope re-entry keeps data unavailable');
+      const retryEntry = owner.refreshOnEntry({ context, previous: 'settings' });
+      calls[4].pending.resolve({ items: [{ id, title: 'Reviewed', status: copy ? 'open' : 'suggestion' }], scope: '3', status: 'open' });
+      assert.equal(await retryEntry, true);
+      assert.equal(owner.find(id).title, 'Reviewed');
       const stale = owner.refresh(); owner.dispose();
-      calls[2].pending.resolve({ items: [], scope: '3' }); await stale;
+      calls.at(-1).pending.resolve({ items: [], scope: '3' }); await stale;
       assert.ok(grids.every(grid => grid.destroyed));
       assert.equal(notices.includes('0 authorized requests loaded.'), false, 'disposed read cannot announce');
       const replacement = (copy ? createCopyQueue : createTitleQueue)({ root: get(copy ? '#additional-copy-view' : '#queue-view'),

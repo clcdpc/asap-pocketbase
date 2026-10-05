@@ -38,7 +38,9 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         }));
       }
       dom.operationsScope.value = reconciledScope;
+      const changed = state.operationsScope !== reconciledScope;
       state.operationsScope = reconciledScope;
+      if (changed) onScopeChange();
     }
 
   function setStaff(staff) {
@@ -192,6 +194,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       const organizations = organizationResult?.data ?? organizationResult;
       if (sessionIdentity.preferences().role === 'super_admin' && Array.isArray(organizations)) {
         setLibraries(organizations.filter(item => Number(item.id) > 1 && item.active !== false));
+        if (requestedScope !== state.operationsScope) return loadOperations(options);
       }
       renderOperations({ queue, email });
       if (state.operationMutation?.uncertain) state.operationMutation.reviewed = true;
@@ -294,6 +297,14 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   listen(dom.refreshOperations, 'click', () => loadOperations());
   return {
     setStaff, setLibraries, currentScope: () => state.operationsScope,
+    retireCatalog() {
+      if (disposed) return;
+      reads.begin('operations').abort();
+      dom.refreshOperations.disabled = false;
+      setLibraries([]);
+      dom.queueProgressTable.replaceChildren(element('p', { text: 'Queue progress unavailable. Refresh Operations to review current work.' }));
+      dom.emailOperationsTable.replaceChildren(element('p', { text: 'Email operations unavailable. Refresh Operations to review current work.' }));
+    },
     activate() { active = true; },
     deactivate() { active = false; reads.begin('operations').abort(); },
     refresh: loadOperations, run: runOperation,

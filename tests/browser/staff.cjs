@@ -3553,6 +3553,77 @@ async function runSettingsLayout(browser, args, axeSource, report) {
   }
 }
 
+async function runOperationalCatalogCommits(browser, args, axeSource, report) {
+  const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const page = await context.newPage(), errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    const titleResponse = await context.request.get(`${args.baseOrigin}/api/asap/staff/title-requests?scope=2`);
+    assert.equal(titleResponse.status(), 200);
+    const title = (await titleResponse.json()).items[0];
+    assert.ok(title, 'Operational retirement journey requires a real persisted Title projection');
+    const copyResponse = await context.request.get(`${args.baseOrigin}/api/asap/staff/additional-copies?scope=2&status=open`);
+    assert.equal(copyResponse.status(), 200);
+    const copy = (await copyResponse.json()).items[0];
+    assert.ok(copy, 'Operational retirement journey requires a real persisted Copy projection');
+    await page.goto(`${args.baseOrigin}/staff/?stage=${title.status}&scope=2`, { waitUntil: 'networkidle' });
+    await page.locator('#claim-filter').selectOption('all');
+    await page.getByRole('button', { name: `Open request ${title.id}`, exact: true }).waitFor();
+    await page.locator('[data-view="additional-copies"]').click();
+    await page.locator('#additional-copy-claim-filter').selectOption('all');
+    await page.getByRole('button', { name: `Open additional-copy task ${copy.id}`, exact: true }).waitFor();
+    await page.locator('[data-view="operations"]').click();
+    await page.locator('#operations-scope').selectOption('2');
+    await page.locator('[data-view="settings"]').click();
+    await page.locator('#settings-form').waitFor({ state: 'visible' });
+    const organizations = await context.request.get(`${args.baseOrigin}/api/asap/staff/organizations`);
+    const library = (await organizations.json()).data.find(item => item.id === 2);
+    assert.equal(library.active, true);
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: `Deactivate ${library.name}`, exact: true }).click();
+    await page.locator('#settings-message').filter({ hasText: `${library.name} deactivated.` }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy'));
+    assert.equal(await page.locator('#request-grid .grid-open').count(), 0);
+    assert.equal(await page.locator('#additional-copy-grid .grid-open').count(), 0);
+    assert.equal(await page.locator('#operations-scope').inputValue(), 'all');
+    const failQueue = route => route.fulfill({ status: 503, contentType: 'application/json',
+      json: { message: 'Forced unavailable queue after confirmed participation change' } });
+    await page.route('**/api/asap/staff/title-requests?*', failQueue);
+    await page.route('**/api/asap/staff/additional-copies?*', failQueue);
+    await page.locator('[data-view="queue"]').click();
+    await page.waitForFunction(() => new URL(location.href).searchParams.get('scope') === 'all');
+    await page.locator('#app-status').filter({ hasText: 'Forced unavailable queue' }).waitFor();
+    assert.equal(await page.locator('#request-grid .grid-open').count(), 0);
+    for (const selector of ['#library-scope', '#additional-copy-library-scope', '#operations-scope']) {
+      assert.equal(await page.locator(`${selector} option[value="2"]`).count(), 0);
+    }
+    await page.locator('#new-suggestion').click();
+    await page.locator('#staff-suggestion-dialog[open]').waitFor();
+    assert.equal(await page.getByLabel('Servicing library', { exact: true }).locator('option[value="2"]').count(), 0);
+    await page.keyboard.press('Escape');
+    await page.locator('#staff-suggestion-dialog').waitFor({ state: 'hidden' });
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'operational-catalog-deactivated-unavailable');
+    await page.locator('[data-view="additional-copies"]').click();
+    await page.locator('#app-status').filter({ hasText: 'Forced unavailable queue' }).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get('scope'), 'all');
+    assert.equal(await page.locator('#additional-copy-grid .grid-open').count(), 0);
+    await page.unroute('**/api/asap/staff/title-requests?*', failQueue);
+    await page.unroute('**/api/asap/staff/additional-copies?*', failQueue);
+    await page.locator('[data-view="settings"]').click();
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: `Activate ${library.name}`, exact: true }).click();
+    await page.locator('#settings-message').filter({ hasText: `${library.name} activated.` }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy'));
+    await page.locator('[data-view="queue"]').click();
+    await page.locator('#library-scope option[value="2"]').waitFor({ state: 'attached' });
+    await page.locator('#library-scope').selectOption('2');
+    await page.getByRole('button', { name: `Open request ${title.id}`, exact: true }).waitFor();
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'operational-catalog-reactivated');
+    assert.deepEqual(errors, [], 'Operational catalog commits raised browser errors');
+    assert.equal(traffic.externalRequests, 0, 'Operational catalog commits requested external assets');
+  } finally { await context.close(); }
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
   await fs.mkdir(args.artifactRoot, { recursive: true });
@@ -3578,7 +3649,8 @@ async function main() {
     await runClosedDeletionControls(browser, args, axeSource, report);
     await runCurrentStaffPreferenceRevisions(browser, args, axeSource, report);
     await runSettingsLayout(browser, args, axeSource, report);
-    assert.equal(report.states.length, 52, 'Expected fifty-two major staff browser states');
+    await runOperationalCatalogCommits(browser, args, axeSource, report);
+    assert.equal(report.states.length, 54, 'Expected fifty-four major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),

@@ -253,10 +253,56 @@ and diagnostic-unavailable tests fail against the independently audited baseline
 Final completion SHA, gate results, exact artifact identity/digests and PR CI
 are recorded on #365/#351 only after the full gate and fresh re-review pass.
 
+## Authoritative operational projection closure
+
+The review of `d692a9d4ddca21ac47d584fa7329b5ae7f5bfd51` found that
+commit-time Title configuration invalidation did not retire persistent queue
+DTOs or the operational organization catalog. The preceding three closure
+fixes remain intact. Settings now emits separate configuration, Staff Access
+and organization-catalog commit intents through the composition root.
+
+Both queue owners expose scoped `markStale`. Affected snapshots, Grid
+containers, claim fields, workflow/timeout contexts, format labels and tag
+options retire immediately; a same-scope entry must read authoritative data.
+System configuration affects every library and the all-library projection;
+library configuration affects that library and the all-library projection.
+Late pre-commit reads and failed refreshes cannot restore retired rows.
+Ordinary staff-roster review preserves unrelated queues. Review of an
+uncertain Settings/Staff Access command also retires its affected projections
+without changing the command's recorded outcome to confirmed success.
+
+Organization sync, activation/deactivation and system Settings saves (which
+replace the enabled-library set) retire operational choices and Operations
+tables. Navigation owns catalog revalidation and scope canonicalization;
+Router owns the accepted URL. Confirmed deactivation immediately retires the
+selected scope, and a queue entry reviews the catalog before presenting it.
+Failed catalog review keeps the source view with an error and retired data;
+failed queue review leaves the valid accepted scope with unavailable rows.
+New Suggestion and Operations receive only refreshed operational choices.
+Activation/sync refresh available choices and labels without a page reload.
+
+Shell independently retires and reviews affected email readiness on a
+configuration commit, even when Settings' own reload fails. Analytics already
+replaces its projection with Loading on every entry and recovers an invalid
+library scope through its own authorized all-library read. Current-actor
+preference revisions, command receipts, drafts, provider fencing and recovery
+remain under their existing owners.
+
+Thirty-one additional application journeys cover claims, Mine/Unclaimed
+filters, metadata, scoped/system DTOs, failed and uncertain reviews,
+participation, activation/sync, operational choices and email readiness.
+Twenty-two of the first twenty-six fail against the audited HEAD; roster-only
+and unrelated-library controls pass. Queue-owner tests additionally prove
+late-read retirement, failed same-scope entry and explicit retry. A real-SQL
+Kestrel journey deactivates the selected library after caching both queues,
+forces failed queue reads, checks canonical URLs and choices, then reactivates
+it through Settings. Its two additional scanned states retain all browser
+accessibility, layout, image, page-error and external-traffic guards.
+
 ## Closure validation contract
 
 Issue #365's execution-state evidence records actual final-SHA results and CI.
-Closure requires all 47 current frontend files (including 160 navigation/draft
+Closure requires all 47 current frontend files (including 191 navigation/draft
 journeys and nine genuine Grid focus cases), a zero-warning Release build,
 the unchanged 784-test non-browser minimum and all three real-SQL Kestrel
 browser journeys with zero skips. The .NET gates include migration import,

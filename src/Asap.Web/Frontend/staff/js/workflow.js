@@ -84,6 +84,7 @@ export function createWorkflowApp() {
     onScopeIntent: scope => navigation.changeQueueContext('queue', { scope }),
     onStatusIntent: status => navigation.changeQueueContext('queue', { status }),
     onScopeAccepted: navigation.queueScopeAccepted, onLibraries: populateScopes,
+    resolveScope: navigation.resolveOperationalScope,
     onRendered: () => bulk.contextChanged(navigation.context()), onRefreshed: shell.queueRefreshed
   });
   const copyCreation = createCopyCreationController({ root: get('#additional-copy-create-dialog'), sessionIdentity, announce, onReceipt, clearReceipt,
@@ -109,6 +110,7 @@ export function createWorkflowApp() {
     onScopeIntent: scope => navigation.changeQueueContext('additional-copies', { scope }),
     onStatusIntent: additionalCopyStatus => navigation.changeQueueContext('additional-copies', { additionalCopyStatus }),
     onScopeAccepted: navigation.queueScopeAccepted, onLibraries: populateScopes,
+    resolveScope: navigation.resolveOperationalScope,
     onRendered: () => bulk.contextChanged(navigation.context()), onRefreshed() {},
     recovery: { current: copyCreation.review.current, begin: copyCreation.review.begin, loaded: copyCreation.review.loaded,
       acknowledge: () => copyCreation.review.acknowledge(navigation.context()) }
@@ -143,12 +145,28 @@ export function createWorkflowApp() {
     onPanelChange: navigation.settingsPanelChanged,
     onScopeChange: scope => { navigation.settingsScopeChanged(scope); void shell.refreshReadiness(); },
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner),
-    onConfigurationCommitted: (owner, scope) => { if (sessionIdentity.isCurrent(owner)) titleDetail.invalidateConfiguration(scope); },
+    onConfigurationCommitted: (owner, scope) => {
+      if (!sessionIdentity.isCurrent(owner)) return;
+      titleDetail.invalidateConfiguration(scope); titleQueue.markStale(scope); copyQueue.markStale(scope);
+      shell.configurationCommitted(scope);
+    },
+    onStaffAccessCommitted: owner => {
+      if (!sessionIdentity.isCurrent(owner)) return;
+      titleQueue.markStale(); copyQueue.markStale();
+    },
+    onOrganizationCatalogCommitted: organizationCatalogCommitted,
     onCommitted: (message, owner, attempt) => shell.recordReceipt(`${message} Sign in again to review the current values.`, owner, attempt, { feature: 'settings' }),
     onUnconfirmed: (message, owner, attempt) => shell.recordReceipt(`${message} Sign in again and check saved values before retrying.`, owner, attempt, { feature: 'settings' }),
     onRefreshed: (owner, review) => {
       shell.settingsRefreshed(owner, review);
       if (sessionIdentity.isCurrent(owner) && review.kind === 'settings') titleDetail.invalidateConfiguration(review.scope);
+      if (sessionIdentity.isCurrent(owner) && review.kind === 'staff' && review.changed) {
+        titleQueue.markStale(); copyQueue.markStale();
+      }
+      if (sessionIdentity.isCurrent(owner) && review.kind === 'settings' && review.changed) {
+        titleQueue.markStale(review.scope); copyQueue.markStale(review.scope); shell.configurationCommitted(review.scope);
+        if (review.catalogChanged) organizationCatalogCommitted(owner);
+      }
     }
   });
   const features = [bulk, suggestion, titleDetail, copyCreation, copyDetail, detailHost, polarisLookup,
@@ -160,6 +178,12 @@ export function createWorkflowApp() {
     }
   });
   function populateScopes(libraries) { operations.setLibraries(libraries); titleQueue.setLibraries(libraries); copyQueue.setLibraries(libraries); }
+  function organizationCatalogCommitted(owner, change) {
+    if (!sessionIdentity.isCurrent(owner)) return;
+    titleQueue.markStale(); copyQueue.markStale();
+    populateScopes([]); operations.retireCatalog();
+    navigation.organizationCatalogChanged(change);
+  }
   let started = false, disposed = false;
   return {
     async start() { if (started || disposed) return; started = true; settings.bind(); navigation.start(); await session.start(); },

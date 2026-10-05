@@ -81,7 +81,8 @@ async function fixture(route, journey, options = {}) {
       if (pathname.endsWith('/title-requests') || pathname.endsWith('/additional-copies')) {
         const scope = parsed.searchParams.get('scope') || 'all';
         return response(200, { scope, status: parsed.searchParams.get('status') || 'open',
-          organizations, availableLibraries: organizations,
+          organizations: organizations.filter(item => item.active !== false),
+          availableLibraries: organizations.filter(item => item.active !== false),
           items: pathname.endsWith('/title-requests') ? options.titleItems || [request]
             : options.copyItems || (options.copyRequest ? [copyRequest] : []) });
       }
@@ -2017,6 +2018,311 @@ for (const [parameter, value] of [['stage', 'new'], ['status', 'submitted']]) {
       assert.equal(ui.get('#queue-view').hidden, false);
     }));
 }
+
+for (const copy of [false, true]) {
+  const view = copy ? 'additional-copies' : 'queue';
+  const grid = copy ? '#additional-copy-grid' : '#request-grid';
+  const filter = copy ? '#additional-copy-claim-filter' : '#claim-filter';
+  for (const change of ['cleanup', 'profile', 'roster only', 'failed cleanup review', 'unconfirmed cleanup review']) {
+    test(`authoritative projections: ${view} after Staff Access ${change}`, () =>
+      fixture(`?stage=${copy ? 'additional_copies' : 'suggestion'}&scope=2`, async ui => {
+        let committed = false, queueReads = 0;
+        const staffB = { id: '21', displayName: 'Staff B', userPrincipalName: 'b@example.org',
+          role: 'staff', organizationId: 2, active: true, version: 'b-v1' };
+        ui.setApi(({ pathname, init }) => {
+          if (pathname.endsWith('/users') && init.method === 'GET') {
+            if (committed && change === 'failed cleanup review') return response(503, { message: 'Roster unavailable' });
+            return response(200, { users: [{ ...staffB, active: !committed || change === 'profile' }] });
+          }
+          if (pathname.endsWith('/audit')) return response(200, { data: [] });
+          if (pathname.endsWith('/users/21') && ['DELETE', 'PATCH'].includes(init.method)) {
+            committed = true;
+            if (change === 'unconfirmed cleanup review') return response(503, { message: 'Committed response lost' });
+            return response(200, { user: staffB, cleanup: { openTitleClaimsCleared: 1, openAdditionalCopyClaimsCleared: 1 } });
+          }
+          if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
+            queueReads++;
+            const item = copy ? ui.readCopyRequest() : ui.readRequest();
+            return response(200, { scope: '2', status: 'open',
+              organizations: [{ id: 2, name: 'Library A' }], availableLibraries: [{ id: 2, name: 'Library A' }],
+              items: [{ ...item, claimedByStaffUserId: change === 'profile' ? '21' : null,
+                claimedByDisplayName: change === 'profile' ? 'Renamed Staff B' : null }] });
+          }
+        });
+        await until(() => /Staff B/.test(ui.get(grid).textContent), 'original claim projection loaded');
+        ui.get('[data-view="settings"]').click();
+        await until(() => !ui.get('#settings-form').hidden, 'Settings loaded');
+        ui.get('[data-settings-panel="staff"]').click();
+        await until(() => ui.get('.settings-staff-row'), 'Staff B roster loaded');
+        if (change !== 'roster only') {
+          ui.allowDiscard();
+          if (change === 'profile') ui.edit('.settings-staff-row input[aria-label^="Display name"]', 'Renamed Staff B');
+          [...ui.get('.settings-staff-row').querySelectorAll('button')]
+            .find(button => button.textContent === (change === 'profile' ? 'Save profile' : 'Deactivate')).click();
+          await until(() => committed && !ui.get('#settings-form').hasAttribute('aria-busy') &&
+            /deactivated|profile saved|uncertain/.test(ui.get('#staff-access-status').textContent + ui.get('#settings-message').textContent), 'Staff Access committed and review settled');
+          if (change === 'unconfirmed cleanup review') {
+            ui.get('#staff-refresh').click();
+            await until(() => /Staff access loaded/.test(ui.get('#staff-access-status').textContent) && !ui.get('#settings-form').inert, 'uncertain mutation authoritatively reviewed');
+          }
+        }
+        ui.get(`[data-view="${view}"]`).click();
+        await settle();
+        if (change === 'roster only') {
+          assert.equal(queueReads, 0, 'ordinary roster review preserves the loaded queue');
+          assert.match(ui.get(grid).textContent, /Staff B/);
+          return;
+        }
+        await until(() => queueReads === 1, 'same-scope queue refreshed after committed Staff Access');
+        await until(() => ui.get(grid).textContent.includes(change === 'profile' ? 'Renamed Staff B' : 'Unclaimed'), 'fresh claim presentation');
+        if (change === 'profile') return;
+        ui.get(filter).value = 'mine'; ui.get(filter).dispatchEvent(new ui.dom.window.Event('change'));
+        await until(() => !ui.get(`${grid} .grid-open`), 'Mine excludes the cleared claim');
+        ui.get(filter).value = 'unclaimed'; ui.get(filter).dispatchEvent(new ui.dom.window.Event('change'));
+        await until(() => ui.get(`${grid} .grid-open`), 'Unclaimed includes the refreshed claim');
+        assert.doesNotMatch(ui.get(grid).textContent, /Staff B/);
+      }, { request: { claimedByStaffUserId: '21', claimedByDisplayName: 'Staff B' },
+        copyRequest: { claimedByStaffUserId: '21', claimedByDisplayName: 'Staff B' } }));
+  }
+  for (const uncertain of [false, true]) {
+    test(`authoritative projections: ${view} configuration ${uncertain ? 'uncertain review' : 'commit'} survives failed queue refresh`, () =>
+      fixture('?stage=settings&settingsScope=system', async ui => {
+        let changed = false, available = false, queueReads = 0;
+        ui.setApi(({ pathname, init }) => {
+          if (pathname.endsWith('/settings') && init.method === 'POST') {
+            changed = true;
+            return response(uncertain ? 503 : 200, { data: { version: 'v2' }, message: 'Lost configuration response' });
+          }
+          if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
+            queueReads++;
+            if (changed && !available) return response(503, { message: 'Queue review unavailable' });
+            return response(200, { scope: 'all', status: 'open',
+              organizations: [{ id: 2, name: 'Library A' }], availableLibraries: [{ id: 2, name: 'Library A' }],
+              items: [{ ...(copy ? ui.readCopyRequest() : ui.readRequest()), title: changed ? 'Reviewed request' : 'Before configuration commit' }] });
+          }
+        });
+        await until(() => !ui.get('#settings-form').hidden, 'Settings loaded');
+        ui.get(`[data-view="${view}"]`).click();
+        await until(() => /Before configuration commit/.test(ui.get(grid).textContent), 'pre-change queue');
+        ui.get('[data-view="settings"]').click(); await settle();
+        ui.edit('#patron-login-note', 'New configuration');
+        ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+        await until(() => changed && !ui.get('#settings-form').hasAttribute('aria-busy'), 'configuration attempt settled');
+        if (uncertain) {
+          ui.allowDiscard();
+          ui.get('#settings-refresh').click();
+          await until(() => !ui.get('#settings-form').inert, 'uncertain configuration authoritatively reviewed');
+        }
+        assert.equal(ui.get(`${grid} .grid-open`), null, 'affected pre-change projection retired');
+        const before = queueReads;
+        ui.get(`[data-view="${view}"]`).click();
+        await until(() => queueReads > before && /Queue review unavailable/.test(ui.get('#app-status').textContent), 'same-scope failed refresh presented');
+        assert.equal(ui.get(`${grid} .grid-open`), null);
+        assert.doesNotMatch(ui.get(grid).textContent, /Before configuration commit/);
+        assert.match(ui.get(copy ? '#additional-copy-summary' : '#queue-summary').textContent, /unavailable/i);
+        available = true; ui.get(copy ? '#refresh-additional-copies' : '#refresh-queue').click();
+        await until(() => /Reviewed request/.test(ui.get(grid).textContent), 'explicit retry renders fresh data');
+      }, { copyRequest: {} }));
+  }
+  for (const settingsScope of ['2', '3', 'system', '1']) {
+    test(`authoritative projections: ${view} configuration scope ${settingsScope}`, () =>
+      fixture(`?stage=settings&settingsScope=${settingsScope}`, async ui => {
+        let committed = false, queueReads = 0;
+        ui.setApi(({ pathname, init, parsed }) => {
+          if (pathname.endsWith('/settings') && init.method === 'POST') { committed = true; return response(200, { data: { version: 'v2' } }); }
+          if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
+            queueReads++;
+            const item = copy ? ui.readCopyRequest() : ui.readRequest();
+            return response(200, { scope: parsed.searchParams.get('scope'), status: 'open',
+              organizations: [{ id: 2, name: 'Library A' }], availableLibraries: [{ id: 2, name: 'Library A' }],
+              items: [{ ...item, formatLabel: committed ? 'New format' : 'Old format',
+                workflowContext: { outstandingTimeoutEnabled: true, outstandingTimeoutDays: committed ? 9 : 5 },
+                timeoutContext: { enabled: true, days: committed ? 9 : 5 } }] });
+          }
+        });
+        await until(() => !ui.get('#settings-form').hidden, 'Settings configuration loaded');
+        ui.get('[data-view="queue"]').click();
+        await until(() => ui.get('#library-scope option[value="2"]'), 'operational choices loaded');
+        ui.get('#library-scope').value = '2'; ui.get('#library-scope').dispatchEvent(new ui.dom.window.Event('change'));
+        await settle();
+        if (copy) ui.get('[data-view="additional-copies"]').click();
+        await until(() => /Old format/.test(ui.get(grid).textContent), 'original workflow DTO');
+        ui.get('[data-view="settings"]').click(); await settle();
+        if (['2', '3'].includes(settingsScope)) {
+          const toggle = ui.get('[data-setting-key="loginNote"] .settings-override-toggle');
+          toggle.checked = true; toggle.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+        }
+        ui.edit('#patron-login-note', 'Committed configuration');
+        ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+        await until(() => committed && !ui.get('#settings-form').inert, 'configuration committed and reviewed');
+        const before = queueReads;
+        ui.get(`[data-view="${view}"]`).click(); await settle();
+        if (settingsScope === '3') {
+          assert.equal(queueReads, before, 'unaffected library projection stays loaded');
+          assert.match(ui.get(grid).textContent, /Old format/);
+        } else {
+          await until(() => queueReads === before + 1 && /New format/.test(ui.get(grid).textContent), 'affected same-scope DTO refreshed');
+          assert.match(ui.get(grid).textContent, /9 days/);
+          assert.doesNotMatch(ui.get(grid).textContent, /Old format|5 days/);
+        }
+      }, { copyRequest: {} }));
+  }
+  for (const failed of [false, true]) {
+    test(`authoritative projections: ${view} current-library deactivation${failed ? ' with failed refresh' : ''}`, () =>
+      fixture(`?stage=${copy ? 'additional_copies' : 'suggestion'}&scope=2&marker=keep#anchor`, async ui => {
+        let committed = false, queueReads = 0;
+        const libraries = () => [{ id: 2, name: 'Library A', active: !committed, version: 'org-v1' },
+          { id: 3, name: 'Library B', active: true }];
+        ui.setApi(({ pathname, init, parsed }) => {
+          if (pathname.endsWith('/organizations')) return response(200, { data: libraries() });
+          if (pathname.endsWith('/organizations/2/deactivate')) { committed = true; return response(200, { data: {} }); }
+          if (pathname.endsWith('/settings') && committed && failed) return response(503, { message: 'Settings unavailable' });
+          if (pathname.endsWith('/title-requests') || pathname.endsWith('/additional-copies')) {
+            queueReads++;
+            if (failed) return response(503, { message: 'Queue unavailable after confirmed deactivation' });
+            assert.equal(parsed.searchParams.get('scope'), 'all', 'invalid scope is retired before queue read');
+            return response(200, { scope: 'all', status: 'open', items: [],
+              organizations: libraries().filter(item => item.active), availableLibraries: libraries().filter(item => item.active) });
+          }
+        });
+        await until(() => ui.get(`${grid} .grid-open`), 'pre-commit queue snapshot');
+        ui.get('[data-view="operations"]').click(); await settle();
+        ui.get('#operations-scope').value = '2'; ui.get('#operations-scope').dispatchEvent(new ui.dom.window.Event('change'));
+        await settle();
+        ui.get('[data-view="settings"]').click();
+        await until(() => ui.get('[aria-label="Deactivate Library A"]'), 'participation controls');
+        ui.allowDiscard(); ui.get('[aria-label="Deactivate Library A"]').click();
+        await until(() => committed && !ui.get('#settings-refresh').disabled &&
+          /deactivated/.test(ui.get('#settings-message').textContent), 'participation commit settled');
+        assert.equal(ui.get(`${grid} .grid-open`), null, 'commit immediately retires invalid rows');
+        assert.equal(ui.get('#library-scope option[value="2"]'), null, 'cached Title choices retired');
+        assert.equal(ui.get('#additional-copy-library-scope option[value="2"]'), null, 'cached Copy choices retired');
+        assert.equal(ui.get('#operations-scope option[value="2"]'), null, 'Operations choice retired');
+        assert.equal(ui.get('#operations-scope').value, 'all', 'Operations selection canonicalized');
+        ui.get(`[data-view="${view}"]`).click();
+        await until(() => queueReads > 0, 'queue refresh attempted');
+        assert.equal(ui.params().get('scope'), 'all');
+        assert.equal(ui.params().get('marker'), 'keep');
+        assert.equal(ui.get(`${grid} .grid-open`), null, 'failed refresh cannot resurrect invalid rows');
+        ui.get('#new-suggestion').click(); await until(() => ui.get('#staff-suggestion-dialog').open, 'New Suggestion opened');
+        assert.equal(ui.get('[aria-label="Servicing library"] option[value="2"]'), null);
+        ui.get('#close-staff-suggestion').click();
+        ui.get('[data-view="operations"]').click(); await settle();
+        assert.equal(ui.get('#operations-scope option[value="2"]'), null);
+      }, { copyRequest: {} }));
+  }
+}
+
+for (const action of ['activation', 'sync']) {
+  test(`authoritative projections: ${action} refreshes operational library choices and labels`, () =>
+    fixture('?stage=suggestion&scope=2', async ui => {
+      let committed = false;
+      const libraries = () => [{ id: 2, name: committed ? 'Renamed Library A' : 'Library A', active: true, version: 'org-v1' },
+        { id: 3, name: 'New Library B', active: committed, version: 'org-v1' }];
+      ui.setApi(({ pathname, parsed }) => {
+        if (pathname.endsWith('/organizations')) return response(200, { data: libraries() });
+        if (pathname.endsWith('/organizations/3/activate') || pathname.endsWith('/organizations/sync')) {
+          committed = true; return response(200, { data: { received: 2 } });
+        }
+        if (pathname.endsWith('/title-requests')) return response(200, {
+          scope: parsed.searchParams.get('scope'), items: [ui.readRequest()], organizations: libraries().filter(item => item.active) });
+      });
+      await until(() => ui.get('#request-grid .grid-open'), 'initial operational queue');
+      assert.equal(ui.get('#library-scope option[value="3"]'), null);
+      ui.get('[data-view="settings"]').click();
+      await until(() => ui.get('[aria-label="Activate New Library B"]'), 'inactive library listed in Settings');
+      ui.allowDiscard();
+      ui.get(action === 'activation' ? '[aria-label="Activate New Library B"]' : '#btn-sync-organizations').click();
+      await until(() => committed && !ui.get('#settings-form').hasAttribute('aria-busy'), 'catalog change settled');
+      ui.get('[data-view="queue"]').click();
+      await until(() => ui.get('#library-scope option[value="3"]'), 'new authoritative library offered');
+      assert.equal(ui.get('#library-scope option[value="2"]').textContent, 'Renamed Library A');
+      assert.equal(ui.params().get('scope'), '2', 'still-active operational scope preserved');
+      assert.equal(ui.get('#additional-copy-library-scope option[value="3"]').textContent, 'New Library B');
+      assert.equal(ui.get('#operations-scope option[value="3"]').textContent, 'New Library B');
+      ui.get('#new-suggestion').click(); await until(() => ui.get('#staff-suggestion-dialog').open, 'New Suggestion opened');
+      assert.equal(ui.get('[aria-label="Servicing library"] option[value="3"]').textContent, 'New Library B');
+    }, { organizations: [{ id: 2, name: 'Library A', active: true }, { id: 3, name: 'New Library B', active: false }] }));
+}
+
+test('authoritative projections: unavailable organization review keeps retired rows unavailable until retry', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    let committed = false, available = false, queueReads = 0;
+    ui.setApi(({ pathname, parsed }) => {
+      if (pathname.endsWith('/organizations') && committed) return available
+        ? response(200, { data: [{ id: 3, name: 'Library B', active: true }] })
+        : response(503, { message: 'Catalog unavailable' });
+      if (pathname.endsWith('/organizations/sync')) { committed = true; return response(200, { data: { received: 1 } }); }
+      if (pathname.endsWith('/title-requests')) {
+        queueReads++;
+        assert.equal(parsed.searchParams.get('scope'), 'all');
+        return response(200, { scope: 'all', items: [], organizations: [{ id: 3, name: 'Library B' }] });
+      }
+    });
+    await until(() => ui.get('#request-grid .grid-open'), 'pre-sync rows');
+    ui.get('[data-view="settings"]').click(); await until(() => !ui.get('#settings-form').hidden, 'Settings loaded');
+    ui.get('#btn-sync-organizations').click();
+    await until(() => committed && !ui.get('#settings-form').hasAttribute('aria-busy'), 'sync commit and failed review settled');
+    ui.get('[data-view="queue"]').click();
+    await until(() => /Operational libraries could not be reviewed/.test(ui.get('#app-status').textContent), 'catalog failure presented');
+    assert.equal(ui.get('#request-grid .grid-open'), null);
+    assert.equal(ui.get('#library-scope option[value="2"]'), null);
+    assert.equal(queueReads, 0, 'invalid scope cannot dispatch a queue read without authoritative review');
+    available = true; ui.get('[data-view="queue"]').click();
+    await until(() => queueReads === 1 && !ui.get('#queue-view').hidden, 'retry canonically enters the available queue');
+    assert.equal(ui.params().get('scope'), 'all');
+    assert.equal(ui.get('#request-grid .grid-open'), null);
+  }));
+
+test('authoritative projections: system save participation retires the selected library despite failed Settings reload', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    let committed = false;
+    ui.setApi(({ pathname, init, parsed }) => {
+      if (pathname.endsWith('/organizations')) return response(200, { data: [
+        { id: 2, name: 'Library A', active: !committed }, { id: 3, name: 'Library B', active: true }] });
+      if (pathname.endsWith('/settings') && init.method === 'POST') {
+        assert.deepEqual(JSON.parse(init.body).systemSettings.enabledLibraryOrgIds, [3]);
+        committed = true; return response(200, { data: { version: 'v2' } });
+      }
+      if (pathname.endsWith('/settings') && committed) return response(503, { message: 'Settings reload unavailable' });
+      if (pathname.endsWith('/title-requests')) {
+        assert.equal(parsed.searchParams.get('scope'), 'all');
+        return response(200, { scope: 'all', items: [], organizations: [{ id: 3, name: 'Library B' }] });
+      }
+    });
+    await until(() => ui.get('#request-grid .grid-open'), 'pre-save operational rows');
+    ui.get('[data-view="settings"]').click(); await until(() => !ui.get('#settings-form').hidden, 'system Settings loaded');
+    const enabled = ui.get('[aria-label="Enable Library A"]');
+    enabled.checked = false; enabled.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+    ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+    await until(() => committed && !ui.get('#settings-form').hasAttribute('aria-busy'), 'system participation committed');
+    assert.equal(ui.get('#request-grid .grid-open'), null);
+    assert.equal(ui.get('#library-scope option[value="2"]'), null);
+    ui.get('[data-view="queue"]').click();
+    await until(() => ui.params().get('stage') === 'suggestion' && ui.params().get('scope') === 'all', 'participation save repairs the accepted queue route');
+    assert.equal(ui.get('#operations-scope option[value="2"]'), null);
+    assert.equal(ui.get('#request-grid .grid-open'), null);
+  }));
+
+test('authoritative projections: email readiness refresh survives failed Settings review', () =>
+  fixture('?stage=settings&settingsScope=system', async ui => {
+    let committed = false, readinessReads = 0;
+    ui.setApi(({ pathname, init }) => {
+      if (pathname.endsWith('/settings') && init.method === 'POST') { committed = true; return response(200, { data: { version: 'v2' } }); }
+      if (pathname.endsWith('/settings') && committed) return response(503, { message: 'Settings review unavailable' });
+      if (pathname.endsWith('/email-readiness')) {
+        readinessReads++;
+        return response(200, { state: committed ? 'ready' : 'not_configured' });
+      }
+    });
+    ui.get('#settings-refresh').click(); await settle();
+    await until(() => !ui.get('#email-readiness-warning').hidden, 'cached email warning');
+    const before = readinessReads;
+    ui.edit('#patron-login-note', 'Commit email configuration');
+    ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+    await until(() => /could not be refreshed/.test(ui.get('#settings-message').textContent), 'confirmed configuration with failed review');
+    await until(() => readinessReads > before && ui.get('#email-readiness-warning').hidden, 'Shell reviews readiness despite failed Settings reload');
+  }));
 
 (async () => {
   let failed = 0;

@@ -9,6 +9,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
   let context = Object.freeze({ scope: 'all', status: 'suggestion', additionalCopyStatus: 'open', activeView: 'queue' });
   let generation = 0;
   let disposed = false;
+  let catalogStale = false;
   const reads = createLatestLoad();
 
   function gather(options = {}, prior = null) {
@@ -44,6 +45,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
   function invalidate() {
     generation += 1;
     reads.begin('route').abort();
+    reads.begin('operational-catalog').abort();
     onInvalidate();
     return generation;
   }
@@ -61,8 +63,40 @@ export function createNavigationController({ router, sessionIdentity, detailHost
   }
 
   function queueScopeAccepted(scope) {
-    if (disposed || !sessionIdentity.actor() || !scope || context.scope === scope) return;
+    if (disposed || !sessionIdentity.actor() || !scope) return;
+    catalogStale = false;
+    if (context.scope === scope) return;
     align({ scope }); syncQueueRoute();
+  }
+
+  function organizationCatalogChanged(change) {
+    if (disposed || !sessionIdentity.actor()) return;
+    invalidate(); catalogStale = true;
+    if (sessionIdentity.actor().role === 'super_admin' && change?.active === false && String(change.id) === context.scope) {
+      align({ scope: 'all' }); syncQueueRoute();
+    }
+  }
+
+  function resolveOperationalScope(owner) {
+    if (disposed || !sessionIdentity.isCurrent(owner)) return null;
+    if (!catalogStale || owner.role !== 'super_admin') return context.scope;
+    return reviewOperationalCatalog(owner);
+  }
+
+  async function reviewOperationalCatalog(owner) {
+    const load = reads.begin('operational-catalog');
+    try {
+      const result = await request('/api/asap/staff/organizations', { signal: load.signal });
+      if (disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner)) return null;
+      const libraries = (result?.data ?? result).filter(item => Number(item.id) > 1 && item.active !== false);
+      views.queue.setLibraries(libraries);
+      return libraries.some(item => String(item.id) === context.scope) ? context.scope : 'all';
+    } catch (error) {
+      if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
+        announce('Operational libraries could not be reviewed. Refresh to load current requests.', 'error');
+      }
+      return null;
+    } finally { reads.finish('operational-catalog', load.token); }
   }
 
   function detailUpdated(request, copy = false) {
@@ -104,10 +138,24 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       closeTransient();
       invalidate();
     }
+    if (updateUrl && catalogStale && ['queue', 'additional-copies'].includes(name) && sessionIdentity.actor().role === 'super_admin') {
+      const owner = sessionIdentity.preferences(), ticket = generation;
+      void enterReviewedQueue(name, previous, owner, ticket);
+      return true;
+    }
     activate(name);
     if (updateUrl && previous !== name) writeStage(name);
     if (updateUrl) void views[name]?.refreshOnEntry?.({ context, previous });
     return true;
+  }
+
+  async function enterReviewedQueue(name, previous, owner, ticket) {
+    const scope = await resolveOperationalScope(owner);
+    if (!scope || disposed || generation !== ticket || !sessionIdentity.isCurrent(owner) || !allow()) return;
+    queueScopeAccepted(scope);
+    activate(name);
+    if (previous !== name) writeStage(name);
+    await views[name]?.refreshOnEntry?.({ context, previous });
   }
 
   function changeQueueContext(name, changes) {
@@ -149,13 +197,13 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     }
     if (['operations', 'analytics', 'profile'].includes(stage)) return { name: stage, warning };
     let scope = owner.role === 'super_admin' ? 'all' : String(owner.organizationId);
-    if (owner.role === 'super_admin' && /^[1-9]\d{0,9}$/.test(route.scope) && Number(route.scope) > 1) {
+    if (owner.role === 'super_admin' && (catalogStale || /^[1-9]\d{0,9}$/.test(route.scope) && Number(route.scope) > 1)) {
       try {
         const result = await request('/api/asap/staff/organizations', { signal });
         organizations = (result?.data ?? result).filter(item => Number(item.id) > 1 && item.active !== false);
         if (organizations.some(item => String(item.id) === route.scope)) scope = route.scope;
       } catch (error) {
-        if (isAbortError(error) || error.status === 401) throw error;
+        if (catalogStale || isAbortError(error) || error.status === 401) throw error;
       }
     }
     return { name: stage === 'additional_copies' ? 'additional-copies' : 'queue', scope,
@@ -190,6 +238,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       if (target.scope) align({ scope: target.scope, status: target.status,
         additionalCopyStatus: target.copyStatus });
       if (target.organizations) {
+        catalogStale = false;
         views.queue.setLibraries(target.organizations);
         views['additional-copies'].setLibraries(target.organizations);
       }
@@ -318,12 +367,12 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     return views.queue.openDetail(intent.id, intent.opener, { fromRecent: true });
   }
 
-  return { context: () => context, generation: () => generation, align, queueScopeAccepted, detailUpdated, allow, invalidate, openCreatedTitle, openExistingTitle,
+  return { context: () => context, generation: () => generation, align, queueScopeAccepted, organizationCatalogChanged, resolveOperationalScope, detailUpdated, allow, invalidate, openCreatedTitle, openExistingTitle,
     captureClosedReview, reviewClosed, beforeDetailOpen, alignTitle, alignCopy, detailOpened, detailClosed, prepareSuggestion, openRecentTitle,
     settingsPanelChanged(panel) { invalidate(); router.pushSettingsPanel(panel); router.remember(); },
     settingsScopeChanged(scope) { invalidate(); router.pushSettingsScope(scope); router.remember(); },
     switchView, changeQueueContext, navigateFromUrl,
     start() { router.start(navigateFromUrl); },
-    dispose() { disposed = true; reads.begin('route').abort(); router.dispose(); }
+    dispose() { disposed = true; reads.begin('route').abort(); reads.begin('operational-catalog').abort(); router.dispose(); }
   };
 }
