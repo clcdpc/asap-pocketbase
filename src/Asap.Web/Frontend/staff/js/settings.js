@@ -935,7 +935,7 @@ export function createSettingsController({
       const checkbox = node('input', {
         type: 'checkbox',
         value: organization.id,
-        checked: organization.active,
+        checked: organization.isActive,
         'aria-label': `Enable ${organization.name}`
       });
       dom.enabledLibraries.append(node('label', { className: 'settings-list-row' }, [
@@ -952,7 +952,7 @@ export function createSettingsController({
       return;
     }
     for (const organization of state.organizations) {
-      const active = Boolean(organization.active);
+      const active = Boolean(organization.isActive);
       const item = node('li', { className: 'settings-list-row' }, [
         node('span', { className: 'settings-organization-name', text: `${organization.name}${organization.abbreviation ? ` (${organization.abbreviation})` : ''}` }),
         node('span', { className: `status-badge${active ? '' : ' blocked'}`, text: active ? 'Active' : 'Inactive' })

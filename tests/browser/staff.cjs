@@ -3576,9 +3576,10 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.locator('#operations-scope').selectOption('2');
     await page.locator('[data-view="settings"]').click();
     await page.locator('#settings-form').waitFor({ state: 'visible' });
+    await page.getByRole('tab', { name: 'Staff access', exact: true }).click();
     const organizations = await context.request.get(`${args.baseOrigin}/api/asap/staff/organizations`);
     const library = (await organizations.json()).data.find(item => item.id === 2);
-    assert.equal(library.active, true);
+    assert.equal(library.isActive, true);
     page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: `Deactivate ${library.name}`, exact: true }).click();
     await page.locator('#settings-message').filter({ hasText: `${library.name} deactivated.` }).waitFor();
@@ -3610,6 +3611,7 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.unroute('**/api/asap/staff/title-requests?*', failQueue);
     await page.unroute('**/api/asap/staff/additional-copies?*', failQueue);
     await page.locator('[data-view="settings"]').click();
+    await page.getByRole('tab', { name: 'Staff access', exact: true }).click();
     page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: `Activate ${library.name}`, exact: true }).click();
     await page.locator('#settings-message').filter({ hasText: `${library.name} activated.` }).waitFor();

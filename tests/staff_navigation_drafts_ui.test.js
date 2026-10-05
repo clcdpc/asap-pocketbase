@@ -37,7 +37,7 @@ async function fixture(route, journey, options = {}) {
     let staff = { id: '20', role: options.role || 'super_admin', organizationId: options.role === 'staff' ? 2 : 1,
       organizationName: 'System', displayName: 'Staff', version: 'actor-v1', ...options.staff };
     const organizations = options.organizations ||
-      [{ id: 2, name: 'Library A', active: true }, { id: 3, name: 'Library B', active: true }];
+      [{ id: 2, name: 'Library A', isActive: true }, { id: 3, name: 'Library B', isActive: true }];
     if (options.retainedOperation) {
       dom.window.sessionStorage.setItem('asap.staff.operation..20', JSON.stringify(options.retainedOperation));
     }
@@ -81,8 +81,8 @@ async function fixture(route, journey, options = {}) {
       if (pathname.endsWith('/title-requests') || pathname.endsWith('/additional-copies')) {
         const scope = parsed.searchParams.get('scope') || 'all';
         return response(200, { scope, status: parsed.searchParams.get('status') || 'open',
-          organizations: organizations.filter(item => item.active !== false),
-          availableLibraries: organizations.filter(item => item.active !== false),
+          organizations: organizations.filter(item => item.isActive),
+          availableLibraries: organizations.filter(item => item.isActive),
           items: pathname.endsWith('/title-requests') ? options.titleItems || [request]
             : options.copyItems || (options.copyRequest ? [copyRequest] : []) });
       }
@@ -192,7 +192,7 @@ test('committed status during target validation retains the accepted detail entr
     ui.allowDiscard();
     [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own').click();
     await until(() => ui.get('.detail-meta .status-badge').textContent === 'Pending hold', 'committed source detail');
-    validateScope(response(200, { data: [{ id: 2, name: 'Library A', active: true }] }));
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', isActive: true }] }));
     await until(() => ui.params().get('request') === id && ui.params().get('stage') === 'pending_hold', 'updated accepted source restored');
     assert.equal(ui.get('#request-dialog').open, true);
     assert.equal(ui.get('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
@@ -222,7 +222,7 @@ for (const [stage, view, refresh, endpoint, scopeControl] of [
   test(`authoritative ${view} scope synchronizes accepted URL without losing request identity`, () =>
     fixture(`?stage=${stage}&scope=2&marker=keep#anchor`, async ui => {
       ui.setApi(({ pathname }) => pathname.endsWith(endpoint) ? response(200, { scope: 'all', status: 'open',
-        organizations: [{ id: 2, name: 'Library A', active: true }], availableLibraries: [{ id: 2, name: 'Library A', active: true }], items: [] }) : undefined);
+        organizations: [{ id: 2, name: 'Library A', isActive: true }], availableLibraries: [{ id: 2, name: 'Library A', isActive: true }], items: [] }) : undefined);
       ui.get(refresh).click();
       await until(() => ui.get(scopeControl).value === 'all', 'accepted authoritative scope');
       assert.equal(ui.params().get('scope'), 'all');
@@ -459,7 +459,7 @@ test('inactive operational scope canonicalizes to the authorized default', () =>
   fixture('?stage=suggestion&scope=3', async ui => {
     assert.equal(ui.params().get('scope'), 'all');
     assert.equal(ui.get('#library-scope').value, 'all');
-  }, { organizations: [{ id: 2, name: 'Library A', active: true }, { id: 3, name: 'Inactive library', active: false }] }));
+  }, { organizations: [{ id: 2, name: 'Library A', isActive: true }, { id: 3, name: 'Inactive library', isActive: false }] }));
 test('invalid additional-copy subroute canonicalizes to Open', () =>
   fixture('?stage=additional_copies&scope=2&copyStatus=bad', async ui => {
     assert.equal(ui.params().get('copyStatus'), 'open');
@@ -1489,7 +1489,7 @@ test('route validation retains its source and rechecks a draft created while tar
     await until(() => validateScope, 'target validation pending');
     assert.equal(ui.get('#request-dialog').open, true, 'source is mounted until validation and final admission');
     ui.edit('.edit-form input', 'New draft during target validation');
-    validateScope(response(200, { data: [{ id: 2, name: 'Library A', active: true }] }));
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', isActive: true }] }));
     await until(() => ui.dom.window.location.href === accepted, 'rejected target restores accepted history entry');
     assert.equal(ui.get('#request-dialog').open, true);
     assert.equal(ui.get('.edit-form input').value, 'New draft during target validation');
@@ -1535,7 +1535,7 @@ for (const owner of ['request editor', 'Staff Suggestion']) {
       await until(() => !ui.get('#polaris-dialog').open, 'programmatic Polaris selection applied');
       const newerTitle = ui.get(titleSelector).value;
       assert.match(newerTitle, /New Polaris title/);
-      validateScope(response(200, { data: [{ id: 2, name: 'Library A', active: true }] }));
+      validateScope(response(200, { data: [{ id: 2, name: 'Library A', isActive: true }] }));
       await until(() => ui.dom.window.location.href === accepted, 'declined fresh consent restores source history');
       assert.equal(ui.confirms.length, 2, 'first consent cannot authorize discarding newer programmatic values');
       assert.equal(ui.get(isRequest ? '#request-dialog' : '#staff-suggestion-dialog').open, true);
@@ -1601,7 +1601,7 @@ test('programmatic hold-resolution Revert invalidates consent while a competing 
     await until(() => validateScope, 'route validation after initial request consent');
     [...ui.get('.resolution-form').querySelectorAll('button')].find(button => button.textContent === 'Revert resolution changes').click();
     assert.equal(ui.get('.resolution-form textarea[required]').value, '');
-    validateScope(response(200, { data: [{ id: 2, name: 'Library A', active: true }] }));
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', isActive: true }] }));
     await until(() => ui.dom.window.location.href === accepted, 'fresh consent rejects discarding competing editor');
     assert.equal(ui.confirms.length, 2);
     assert.equal(ui.get('.edit-form input').value, 'Competing editor draft');
@@ -1826,7 +1826,7 @@ test('programmatic Settings domain changes advance navigation consent without di
     ui.dom.window.history.go(-2);
     await until(() => validateScope, 'route validation pending after Settings consent');
     ui.get('#add-publication-option').click();
-    validateScope(response(200, { data: [{ id: 2, name: 'Library A', active: true }] }));
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', isActive: true }] }));
     await until(() => ui.dom.window.location.href === accepted, 'new domain value retains the Settings source');
     assert.equal(ui.confirms.length, 2);
     assert.equal(ui.get('#patron-login-note').value, 'Already dirty Settings');
@@ -2171,8 +2171,8 @@ for (const copy of [false, true]) {
     test(`authoritative projections: ${view} current-library deactivation${failed ? ' with failed refresh' : ''}`, () =>
       fixture(`?stage=${copy ? 'additional_copies' : 'suggestion'}&scope=2&marker=keep#anchor`, async ui => {
         let committed = false, queueReads = 0;
-        const libraries = () => [{ id: 2, name: 'Library A', active: !committed, version: 'org-v1' },
-          { id: 3, name: 'Library B', active: true }];
+        const libraries = () => [{ id: 2, name: 'Library A', isActive: !committed, version: 'org-v1' },
+          { id: 3, name: 'Library B', isActive: true }];
         ui.setApi(({ pathname, init, parsed }) => {
           if (pathname.endsWith('/organizations')) return response(200, { data: libraries() });
           if (pathname.endsWith('/organizations/2/deactivate')) { committed = true; return response(200, { data: {} }); }
@@ -2182,7 +2182,7 @@ for (const copy of [false, true]) {
             if (failed) return response(503, { message: 'Queue unavailable after confirmed deactivation' });
             assert.equal(parsed.searchParams.get('scope'), 'all', 'invalid scope is retired before queue read');
             return response(200, { scope: 'all', status: 'open', items: [],
-              organizations: libraries().filter(item => item.active), availableLibraries: libraries().filter(item => item.active) });
+              organizations: libraries().filter(item => item.isActive), availableLibraries: libraries().filter(item => item.isActive) });
           }
         });
         await until(() => ui.get(`${grid} .grid-open`), 'pre-commit queue snapshot');
@@ -2217,15 +2217,15 @@ for (const action of ['activation', 'sync']) {
   test(`authoritative projections: ${action} refreshes operational library choices and labels`, () =>
     fixture('?stage=suggestion&scope=2', async ui => {
       let committed = false;
-      const libraries = () => [{ id: 2, name: committed ? 'Renamed Library A' : 'Library A', active: true, version: 'org-v1' },
-        { id: 3, name: 'New Library B', active: committed, version: 'org-v1' }];
+      const libraries = () => [{ id: 2, name: committed ? 'Renamed Library A' : 'Library A', isActive: true, version: 'org-v1' },
+        { id: 3, name: 'New Library B', isActive: committed, version: 'org-v1' }];
       ui.setApi(({ pathname, parsed }) => {
         if (pathname.endsWith('/organizations')) return response(200, { data: libraries() });
         if (pathname.endsWith('/organizations/3/activate') || pathname.endsWith('/organizations/sync')) {
           committed = true; return response(200, { data: { received: 2 } });
         }
         if (pathname.endsWith('/title-requests')) return response(200, {
-          scope: parsed.searchParams.get('scope'), items: [ui.readRequest()], organizations: libraries().filter(item => item.active) });
+          scope: parsed.searchParams.get('scope'), items: [ui.readRequest()], organizations: libraries().filter(item => item.isActive) });
       });
       await until(() => ui.get('#request-grid .grid-open'), 'initial operational queue');
       assert.equal(ui.get('#library-scope option[value="3"]'), null);
@@ -2242,7 +2242,7 @@ for (const action of ['activation', 'sync']) {
       assert.equal(ui.get('#operations-scope option[value="3"]').textContent, 'New Library B');
       ui.get('#new-suggestion').click(); await until(() => ui.get('#staff-suggestion-dialog').open, 'New Suggestion opened');
       assert.equal(ui.get('[aria-label="Servicing library"] option[value="3"]').textContent, 'New Library B');
-    }, { organizations: [{ id: 2, name: 'Library A', active: true }, { id: 3, name: 'New Library B', active: false }] }));
+    }, { organizations: [{ id: 2, name: 'Library A', isActive: true }, { id: 3, name: 'New Library B', isActive: false }] }));
 }
 
 test('authoritative projections: unavailable organization review keeps retired rows unavailable until retry', () =>
@@ -2250,7 +2250,7 @@ test('authoritative projections: unavailable organization review keeps retired r
     let committed = false, available = false, queueReads = 0;
     ui.setApi(({ pathname, parsed }) => {
       if (pathname.endsWith('/organizations') && committed) return available
-        ? response(200, { data: [{ id: 3, name: 'Library B', active: true }] })
+        ? response(200, { data: [{ id: 3, name: 'Library B', isActive: true }] })
         : response(503, { message: 'Catalog unavailable' });
       if (pathname.endsWith('/organizations/sync')) { committed = true; return response(200, { data: { received: 1 } }); }
       if (pathname.endsWith('/title-requests')) {
@@ -2279,7 +2279,7 @@ test('authoritative projections: system save participation retires the selected 
     let committed = false;
     ui.setApi(({ pathname, init, parsed }) => {
       if (pathname.endsWith('/organizations')) return response(200, { data: [
-        { id: 2, name: 'Library A', active: !committed }, { id: 3, name: 'Library B', active: true }] });
+        { id: 2, name: 'Library A', isActive: !committed }, { id: 3, name: 'Library B', isActive: true }] });
       if (pathname.endsWith('/settings') && init.method === 'POST') {
         assert.deepEqual(JSON.parse(init.body).systemSettings.enabledLibraryOrgIds, [3]);
         committed = true; return response(200, { data: { version: 'v2' } });

@@ -12,7 +12,7 @@ const actor = id => ({ id, tenantId: `tenant-${id}`, authenticationEmail: `${id}
       onScopeChange() {}, clearReceipt() {}, onReceipt: (...value) => receipts.push(value),
       request: async (path, init = {}) => {
         if (init.method === 'POST') return new Promise(resolve => pending.push({ path, init, resolve }));
-        if (path.endsWith('/organizations')) return { data: [{ id: 2, name: 'A', active: true }] };
+        if (path.endsWith('/organizations')) return { data: [{ id: 2, name: 'A', isActive: true }] };
         return { items: [] };
       } };
     const first = createOperationsController(options); first.setStaff(session.preferences()); first.activate();

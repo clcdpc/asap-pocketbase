@@ -280,6 +280,9 @@ Failed catalog review keeps the source view with an error and retired data;
 failed queue review leaves the valid accepted scope with unavailable rows.
 New Suggestion and Operations receive only refreshed operational choices.
 Activation/sync refresh available choices and labels without a page reload.
+Settings participation controls and Navigation/Operations catalog filters use
+the administration API's `isActive` field. Fixtures use that same contract;
+inactive libraries cannot pass review because an assumed `active` field is absent.
 
 Shell independently retires and reviews affected email readiness on a
 configuration commit, even when Settings' own reload fails. Analytics already

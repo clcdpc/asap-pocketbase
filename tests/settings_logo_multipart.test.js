@@ -116,7 +116,7 @@ async function flush() {
       }
       if (requestUrl.endsWith('/api/asap/staff/organizations')) {
         return response(200, [
-          { id: 2, name: 'Library Two', abbreviation: 'TWO', active: true, version: 'org-2' }
+          { id: 2, name: 'Library Two', abbreviation: 'TWO', isActive: true, version: 'org-2' }
         ]);
       }
       if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {

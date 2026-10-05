@@ -25,7 +25,7 @@ async function diagnosticFixture(journey) {
           stored: { configuredSystem: { patron: { loginNote: 'Saved' } }, systemSettings: {}, polaris: {} },
           effective: {}, ui_text: { loginNote: 'Saved' }, emails: {}, workflow: {} });
       }
-      if (path.endsWith('/organizations')) return response(200, { data: [{ id: 2, name: 'Library', active: true }] });
+      if (path.endsWith('/organizations')) return response(200, { data: [{ id: 2, name: 'Library', isActive: true }] });
       if (path.includes('/patron-codes')) return response(200, { data: [] });
       throw new Error(`Unexpected diagnostic fixture path: ${path}`);
     };

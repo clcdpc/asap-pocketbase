@@ -193,7 +193,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== state.operationsScope) return false;
       const organizations = organizationResult?.data ?? organizationResult;
       if (sessionIdentity.preferences().role === 'super_admin' && Array.isArray(organizations)) {
-        setLibraries(organizations.filter(item => Number(item.id) > 1 && item.active !== false));
+        setLibraries(organizations.filter(item => Number(item.id) > 1 && item.isActive));
         if (requestedScope !== state.operationsScope) return loadOperations(options);
       }
       renderOperations({ queue, email });

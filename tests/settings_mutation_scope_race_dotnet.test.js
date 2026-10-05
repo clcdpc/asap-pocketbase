@@ -138,8 +138,8 @@ async function flush() {
         }
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
           return response(200, [
-            { id: 2, name: 'Library Two', abbreviation: 'TWO', active: true, version: 'org-2' },
-            { id: 3, name: 'Library Three', abbreviation: 'THREE', active: true, version: 'org-3' }
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', isActive: true, version: 'org-2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', isActive: true, version: 'org-3' }
           ]);
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
@@ -270,7 +270,7 @@ async function flush() {
             : response(200, data);
         }
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
-          return response(200, [{ id: 2, name: 'Library Two', active: true, version: 'org-2' }]);
+          return response(200, [{ id: 2, name: 'Library Two', isActive: true, version: 'org-2' }]);
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
           return response(200, { code: 'ok', data: [] });
@@ -411,8 +411,8 @@ async function flush() {
         }
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
           return response(200, [
-            { id: 2, name: 'Library Two', abbreviation: 'TWO', active: true, version: 'org-2' },
-            { id: 3, name: 'Library Three', abbreviation: 'THREE', active: true, version: 'org-3' }
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', isActive: true, version: 'org-2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', isActive: true, version: 'org-3' }
           ]);
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });

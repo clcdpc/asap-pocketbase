@@ -158,9 +158,9 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         if (requestUrl.includes('/api/asap/staff/settings?orgId=')) return response(200, settingsData('system'));
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
           return response(200, [
-            { id: 1, name: 'System', active: true, version: 'org-v1' },
-            { id: 2, name: 'Library Two', active: true, version: 'org-v2' },
-            { id: 3, name: 'Library Three', active: true, version: 'org-v3' }
+            { id: 1, name: 'System', isActive: true, version: 'org-v1' },
+            { id: 2, name: 'Library Two', isActive: true, version: 'org-v2' },
+            { id: 3, name: 'Library Three', isActive: true, version: 'org-v3' }
           ]);
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
@@ -388,7 +388,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         const requestUrl = String(url);
         adminRequests.push(requestUrl);
         if (requestUrl.includes('/api/asap/staff/settings?orgId=')) return response(200, settingsData('2'));
-        if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, [{ id: 2, name: 'Library Two', active: true, version: 'org-v2' }]);
+        if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, [{ id: 2, name: 'Library Two', isActive: true, version: 'org-v2' }]);
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
         if (requestUrl === '/api/asap/staff/users?orgId=2') return response(200, { canAssignSuperAdmin: false, users: [staffUser(22)] });
         if (requestUrl === '/api/asap/staff/audit?limit=50&organizationId=2') return response(200, { code: 'ok', data: [] });

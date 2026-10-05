@@ -85,8 +85,8 @@ async function until(predicate, message) {
       if (url.includes('/email-readiness')) return response(200, {});
       if (url.includes('/settings?orgId=')) return response(200, settings);
       if (url.endsWith('/api/asap/staff/organizations')) {
-        return response(200, [{ id: 1, name: 'System', active: true, version: 'org-v1' },
-          { id: 2, name: 'Library Two', active: true, version: 'org-v2' }]);
+        return response(200, [{ id: 1, name: 'System', isActive: true, version: 'org-v1' },
+          { id: 2, name: 'Library Two', isActive: true, version: 'org-v2' }]);
       }
       if (url.includes('/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
       if (url === '/api/asap/staff/users' && options.method !== 'POST') {

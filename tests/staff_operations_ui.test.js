@@ -92,9 +92,9 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
       if (url.endsWith('/session')) return response(200, session);
       if (url.endsWith('/api/asap/staff/organizations')) return response(200, { code: 'ok', data: organizations.map(item => ({
         id: item.id,
-        displayName: item.name,
+        name: item.name,
         abbreviation: null,
-        active: true,
+        isActive: true,
         version: 'organization-version'
       })) });
       if (url.includes('/workflow/queues')) {
