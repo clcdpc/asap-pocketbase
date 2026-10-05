@@ -102,9 +102,9 @@ cannot revoke a replacement actor.
 
 Operations captures immutable actor, tenant-bound storage key, scope, path,
 body/version and operation identity before dispatch. Its outcome and retry
-evidence are separate mutable records. Retained storage keeps the existing
-supported flat format and actor-key/legacy-key reader; restoration always
-requires fresh review. Retry evidence belongs to the exact retained object,
+evidence are separate mutable records. Retained storage uses a full actor key
+and verifies the serialized actor evidence; restoration always requires fresh
+review. Retry evidence belongs to the exact retained object,
 captured actor and scope. A visible all-library projection may additionally
 review a still-active captured library under its exact scope; broad reads alone
 do not authorize that narrower command. Inactive or unavailable captured
@@ -118,6 +118,29 @@ actor replacement cannot use it. Reads can be cancelled or superseded by their
 owner. Submitted commands never inherit those read signals, and their outcomes
 and receipts remain authoritative until explicitly resolved under the captured
 identity.
+
+Durable recovery shares the exported `actorKey(staff)` from `session-identity.js`:
+tenant ID, StaffUser ID, authentication email, role and organization ID. Display
+name, rowversion and notification/reminder preferences do not change that key.
+HTTP preflight, Settings contexts and Bulk Delete actor verification use the same
+helper; Settings does not substitute a user principal name for authentication email.
+Additional Copy creation stores the key both in its storage address and payload;
+Operations does the same. Missing, malformed or foreign actor evidence cannot
+acquire a command guard, acknowledgement, review or retry. Global and
+tenant/staff-only legacy keys are left inert and untouched. Late completion
+removes only the exact serialized record saved by that attempt; it cannot clear
+a newer or foreign record, even with a reused operation ID. Operations' original
+pending record already requires review on restore, so a late uncertain result
+does not rewrite storage.
+
+The same-root persistence audit found only these two recovery stores and Recent
+Requests display history. Recent Requests is presentation-only: opening an item
+performs authorized detail loading and transactional departure; it supplies no
+command/retry authority. Shell receipts survive feature UI retirement in memory
+under captured session snapshots, are filtered by actor epoch, and cannot
+authorize a command. Other feature attempts, provider evidence, Settings guards
+and Bulk Delete ledgers stay with their captured owner and are retired on actor
+replacement. The staff frontend has no localStorage recovery path.
 
 Small contract tests cover preparation, fresh consent, blocked/stale/disposed
 owners, actor versus preference changes, supersession and exactly-once commit.
@@ -377,7 +400,7 @@ accessibility, layout, image, page-error and external-traffic guards.
 ## Closure validation contract
 
 Issue #365's execution-state evidence records actual final-SHA results and CI.
-Closure requires all 49 current frontend files (including 228 navigation/draft
+Closure requires all 49 current frontend files (including 239 navigation/draft
 journeys and nine genuine Grid focus cases), a zero-warning Release build,
 the unchanged 784-test non-browser minimum and all three real-SQL Kestrel
 browser journeys with zero skips. The .NET gates include migration import,

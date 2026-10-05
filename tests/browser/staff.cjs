@@ -1193,7 +1193,13 @@ async function runStaleMutationCompletions(browser, args, report) {
     }
     page.off('request', countStaleCreate);
     await page.goto(`${args.baseOrigin}/staff/?request=${args.staleCreateSourceId}`, { waitUntil: 'networkidle' });
-    const copyRecoveryKey = `asap.staff.unconfirmedCopyCreation.${args.superIdentity.tenantId.toLowerCase()}.${args.superIdentity.staffId}`;
+    const copyRecoveryIdentity = await page.evaluate(async () => {
+      const { staff } = await (await fetch('/api/asap/staff/session')).json();
+      const { copyCreationStorageKey } = await import('/staff/js/copy-creation.js');
+      const { actorKey } = await import('/staff/js/session-identity.js');
+      return { storageKey: copyCreationStorageKey(staff), actorKey: actorKey(staff) };
+    });
+    const copyRecoveryKey = copyRecoveryIdentity.storageKey;
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     await page.locator('#additional-copy-reminder').uncheck();
@@ -1219,6 +1225,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     const sourceDetail = await page.locator('#request-dialog .edit-form').elementHandle();
     const pendingAttempt = await page.evaluate(key =>
       JSON.parse(window.sessionStorage.getItem(key)), copyRecoveryKey);
+    assert.equal(pendingAttempt.actorKey, copyRecoveryIdentity.actorKey, 'durable evidence captures the full session actor');
     assert.equal(pendingAttempt.sourceId, String(args.staleCreateSourceId),
       'the original source version must be saved before the task request is dispatched');
     const createdId = acceptedCreate.json.additionalCopyRequest.id;

@@ -117,5 +117,137 @@ const actor = id => ({ id, tenantId: `tenant-${id}`, authenticationEmail: `${id}
       controller.dispose();
     });
   }
-  console.log('Operations retained lifetime, captured actor cleanup and six exact-authority recovery cases passed');
+  const sameIdActor = { ...actor('20'), organizationId: 3 };
+  for (const change of [{ authenticationEmail: 'replacement@example.org' }, { role: 'admin' }, { organizationId: 4 }]) {
+    for (const kind of ['legacy', 'modern foreign', 'missing evidence at modern key', 'foreign evidence at modern key']) {
+      await fixture(async ({ load, get, dom }) => {
+        const { createSessionIdentity, actorKey } = await load('session-identity');
+        const { createOperationsController } = await load('operations-controller');
+        const session = createSessionIdentity(); session.accept(sameIdActor);
+        const posts = [];
+        const options = { root: get('#operations-view'), sessionIdentity: session, announce() {},
+          onScopeChange() {}, clearReceipt() {}, onReceipt() {},
+          request: async (path, init = {}) => {
+            if (init.method === 'POST') { posts.push({ path, init }); throw new Error('Response lost'); }
+            if (path.endsWith('/organizations')) return { data: [{ id: 3, isActive: true }, { id: 4, isActive: true }] };
+            return { items: [] };
+          } };
+        const first = createOperationsController(options); first.setStaff(session.preferences()); first.activate();
+        await first.run('/api/asap/staff/workflow/weekly-summary/run-now?force=true', 'Captured operation'); first.dispose();
+        const oldKey = `asap.staff.operation.${sameIdActor.tenantId}.${sameIdActor.id}.${encodeURIComponent(actorKey(sameIdActor))}`;
+        const oldRaw = dom.window.sessionStorage.getItem(oldKey);
+        const replacement = { ...sameIdActor, ...change }; session.accept(replacement);
+        let testedKey = oldKey, testedRaw = oldRaw;
+        if (kind !== 'modern foreign') {
+          testedKey = kind === 'legacy' ? `asap.staff.operation.${sameIdActor.tenantId}.${sameIdActor.id}`
+            : `asap.staff.operation.${replacement.tenantId}.${replacement.id}.${encodeURIComponent(actorKey(replacement))}`;
+          const legacy = JSON.parse(oldRaw);
+          if (kind !== 'foreign evidence at modern key') delete legacy.actorKey;
+          testedRaw = JSON.stringify(legacy); dom.window.sessionStorage.setItem(testedKey, testedRaw);
+        }
+        const second = createOperationsController(options); second.setStaff(session.preferences()); second.activate();
+        const controls = ['#run-workflow-now', '#run-weekly-now', '#force-weekly-now', '#send-test-email', '#operations-scope'];
+        for (const selector of controls) assert.equal(get(selector).disabled, false, `${kind} cannot block ${selector}`);
+        assert.equal(await second.refresh(), true);
+        assert.equal(get('#operations-outcome').hidden, true, 'foreign recovery cannot become current/reviewed');
+        assert.equal(get('#operations-outcome button'), null, 'foreign or unverifiable evidence cannot expose Retry');
+        assert.equal(posts.length, 1, 'review never dispatches a foreign retained command');
+        second.signedOut(); second.dispose();
+        assert.equal(dom.window.sessionStorage.getItem(testedKey), testedRaw, 'replacement actor cannot clear unverifiable or foreign evidence');
+        assert.equal(dom.window.sessionStorage.getItem(oldKey), oldRaw);
+      });
+    }
+  }
+  for (const path of ['/api/asap/staff/workflow/weekly-summary/run-now?force=true', '/api/asap/staff/email-operations/71/retry']) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createSessionIdentity, actorKey } = await load('session-identity');
+      const { createOperationsController } = await load('operations-controller');
+      const session = createSessionIdentity(); const owner = session.accept(sameIdActor);
+      const posts = [], reads = [];
+      const options = { root: get('#operations-view'), sessionIdentity: session, announce() {},
+        onScopeChange() {}, clearReceipt() {}, onReceipt() {},
+        request: async (requestPath, init = {}) => {
+          if (init.method === 'POST') { posts.push({ path: requestPath, init }); throw new Error('Response lost'); }
+          reads.push(requestPath);
+          return requestPath.endsWith('/organizations') ? { data: [{ id: 3, isActive: true }] } : { items: [] };
+        } };
+      const first = createOperationsController(options); first.setStaff(owner); first.activate();
+      first.setLibraries([{ id: 3, isActive: true }]);
+      get('#operations-scope').value = '3'; get('#operations-scope').dispatchEvent(new dom.window.Event('change'));
+      await new Promise(resolve => setImmediate(resolve));
+      const body = path.endsWith('/retry') ? { version: 'captured-v1' } : undefined;
+      await first.run(path, 'Captured operation', null, body); first.dispose();
+      const key = `asap.staff.operation.${sameIdActor.tenantId}.${sameIdActor.id}.${encodeURIComponent(actorKey(sameIdActor))}`;
+      const raw = dom.window.sessionStorage.getItem(key), captured = JSON.parse(raw);
+      const revised = session.updatePreferences({ ...sameIdActor, version: 'v2', displayName: 'Revised',
+        weeklyActionSummaryEnabled: true, purchaseReminderDefault: true }, owner);
+      const second = createOperationsController(options); second.setStaff(revised); second.activate();
+      assert.equal(get('#send-test-email').disabled, true, 'exact actor revision restores command guard');
+      assert.equal(get('#operations-outcome button'), null, 'restoration does not restore review authority');
+      reads.length = 0; await second.refresh();
+      assert.equal(reads.filter(value => value.endsWith('organizationId=3')).length, 2, 'captured scope reviewed independently of all projection');
+      assert.equal(dom.window.sessionStorage.getItem(key), raw, 'review cannot rewrite captured identity');
+      const retry = get('#operations-outcome button'); assert.ok(retry);
+      retry.click(); await new Promise(resolve => setImmediate(resolve));
+      assert.equal(posts[1].path, posts[0].path); assert.deepEqual(posts[1].init.body, posts[0].init.body);
+      assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).operationId, captured.operationId);
+      await second.refresh(); const oldRetry = get('#operations-outcome button'); assert.ok(oldRetry);
+      session.accept({ ...revised, authenticationEmail: 'replacement@example.org' }); second.setStaff(session.preferences());
+      oldRetry.click(); await new Promise(resolve => setImmediate(resolve));
+      assert.equal(posts.length, 2, 'actor replacement cannot reuse exact captured review');
+      assert.equal(get('#send-test-email').disabled, false);
+      second.dispose();
+    });
+  }
+  for (const outcome of ['committed', 'uncertain']) {
+    for (const replacement of ['newer', 'foreign']) {
+      await fixture(async ({ load, get, dom }) => {
+        const { createSessionIdentity } = await load('session-identity');
+        const { createOperationsController } = await load('operations-controller');
+        const session = createSessionIdentity(); session.accept(sameIdActor);
+        let complete, reject;
+        const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: session,
+          announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {},
+          request: () => new Promise((resolve, fail) => { complete = resolve; reject = fail; }) });
+        controller.setStaff(session.preferences()); controller.activate();
+        const saving = controller.run('/api/asap/staff/email-operations/test', 'Pending operation');
+        const key = `asap.staff.operation.${sameIdActor.tenantId}.${sameIdActor.id}.${encodeURIComponent(session.actor().key)}`;
+        const saved = JSON.parse(dom.window.sessionStorage.getItem(key));
+        // Keeping operationId identical reproduces the old overly broad cleanup.
+        const next = JSON.stringify({ ...saved, ...(replacement === 'foreign'
+          ? { actorKey: 'another-actor' } : { message: 'Newer record' }) });
+        dom.window.sessionStorage.setItem(key, next); controller.dispose();
+        if (outcome === 'committed') complete({ code: 'queued' });
+        else reject(new Error('Response lost'));
+        await saving;
+        assert.equal(dom.window.sessionStorage.getItem(key), next, `${outcome} cannot remove or rewrite a ${replacement} record`);
+      });
+    }
+  }
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createOperationsController } = await load('operations-controller');
+    const session = createSessionIdentity(); session.accept(sameIdActor);
+    const pending = [];
+    const options = { root: get('#operations-view'), sessionIdentity: session, announce() {},
+      onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
+        if (init.method === 'POST') return new Promise(resolve => pending.push(resolve));
+        return path.endsWith('/organizations') ? { data: [{ id: 3, isActive: true }] } : { items: [] };
+      } };
+    const first = createOperationsController(options); first.setStaff(session.preferences()); first.activate();
+    const saving = first.run('/api/asap/staff/email-operations/test', 'Reloaded operation'); first.dispose();
+    const key = `asap.staff.operation.${sameIdActor.tenantId}.${sameIdActor.id}.${encodeURIComponent(session.actor().key)}`;
+    const original = JSON.parse(dom.window.sessionStorage.getItem(key));
+    const second = createOperationsController(options); second.setStaff(session.preferences()); second.activate(); await second.refresh();
+    get('#operations-outcome button').click();
+    const newerRaw = dom.window.sessionStorage.getItem(key), newer = JSON.parse(newerRaw);
+    assert.equal(newer.operationId, original.operationId, 'reload retry preserves immutable command identity');
+    assert.notEqual(newer.recordId, original.recordId, 'each dispatch owns distinct durable evidence');
+    pending[0]({ code: 'queued' }); await saving;
+    assert.equal(dom.window.sessionStorage.getItem(key), newerRaw, 'pre-reload completion cannot clear a newer retry of the same operation');
+    pending[1]({ code: 'queued' }); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(dom.window.sessionStorage.getItem(key), null, 'new retry clears its own exact record');
+    second.dispose();
+  });
+  console.log('Operations controller: 27 fixtures passed, including six authority cases, twelve actor-isolation cases, two preference restores and five exact-record races');
 })().catch(error => { console.error(error); process.exitCode = 1; });

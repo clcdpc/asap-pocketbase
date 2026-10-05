@@ -497,7 +497,43 @@ async function flush() {
       assert.equal(document.getElementById('settings-form').inert, false, 'retired finally cannot change replacement interactivity');
       assert.equal(replacement.hasPendingMutation(), false); replacement.dispose(); dom.window.close();
     }
-    console.log('Settings mutation scope race regression checks passed');
+    for (const outcome of ['committed', 'uncertain']) {
+      const dom = new JSDOM(fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8'), { url: 'http://localhost/staff/' });
+      Object.assign(global, { window: dom.window, document: dom.window.document, FormData: dom.window.FormData, Node: dom.window.Node });
+      const owner = { id: '20', tenantId: 'same-tenant', authenticationEmail: 'staff@example.org',
+        userPrincipalName: 'staff@example.org', role: 'super_admin', organizationId: 1, version: 'actor-v1' };
+      let complete, fail;
+      const receipts = [];
+      global.fetch = async (url, options = {}) => {
+        if (url.endsWith('/session')) return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
+        if (url.endsWith('/settings') && options.method === 'POST') return new Promise((resolve, reject) => { complete = resolve; fail = reject; });
+        if (url.includes('/settings?')) return response(200, settingsData(1, 'current-version', 'Current'));
+        if (url.endsWith('/organizations')) return response(200, []);
+        if (url.includes('/patron-codes?')) return response(200, { data: [] });
+        throw new Error(`Unexpected request: ${url}`);
+      };
+      const controller = settingsModule.createSettingsController({ root: document.getElementById('settings-view'),
+        tab: document.getElementById('settings-view-tab'), announce() {},
+        onCommitted: (...args) => receipts.push(args), onUnconfirmed: (...args) => receipts.push(args) });
+      controller.bind(); controller.setStaff(owner); await controller.activate();
+      document.getElementById('patron-login-note').value = 'Old actor draft';
+      document.getElementById('patron-login-note').dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+      await flush(); assert.ok(complete); assert.equal(controller.hasPendingMutation(), true);
+      controller.setStaff({ ...owner, version: 'actor-v2', displayName: 'Revised', purchaseReminderDefault: true });
+      assert.equal(controller.hasPendingMutation(), true, 'same actor preference changes preserve captured mutation');
+      controller.setStaff({ ...owner, authenticationEmail: undefined });
+      assert.equal(controller.hasPendingMutation(), false, 'principal-name fallback cannot adopt a command from different authentication evidence');
+      await controller.activate();
+      if (outcome === 'committed') complete(response(200, { data: { version: 'old-actor-version' } }));
+      else fail(new Error('Old actor response lost'));
+      await flush(); await flush();
+      assert.equal(receipts.at(-1)[1], owner); assert.equal(receipts.at(-1)[2].outcome, outcome);
+      assert.equal(controller.hasUnconfirmedOutcome(), false, 'late old failure cannot block replacement Settings');
+      assert.equal(document.getElementById('settings-version').value, 'current-version');
+      controller.dispose(); dom.window.close();
+    }
+    console.log('Settings scope races and two canonical authentication-evidence replacement cases passed');
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }

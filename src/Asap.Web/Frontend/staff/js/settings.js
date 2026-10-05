@@ -2,6 +2,7 @@ import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { createDraftScope } from './draft-scope.js';
 import { createSettingsDomainEditors } from './settings-domains.js';
+import { actorKey } from './session-identity.js';
 
 const WORKFLOW_FIELDS = [
   ['suggestionLimit', 'suggestion-limit', 'number'],
@@ -486,23 +487,12 @@ export function createSettingsController({
     return state.scope === 'system';
   }
 
-  function staffContextKey(staff) {
-    if (!staff) return '';
-    return [
-      property(staff, 'id'),
-      property(staff, 'tenantId'),
-      property(staff, 'authenticationEmail') || property(staff, 'userPrincipalName'),
-      property(staff, 'role'),
-      property(staff, 'organizationId')
-    ].map(value => value === null || value === undefined ? '' : String(value)).join('|');
-  }
-
   function captureSettingsContext() {
-    return { scope: String(state.scope), staff: staffContextKey(state.staff), generation: contextGeneration, owner: state.staff };
+    return { scope: String(state.scope), staff: actorKey(state.staff), generation: contextGeneration, owner: state.staff };
   }
 
   function isSettingsContextCurrent(context) {
-    return !disposed && context && context.generation === contextGeneration && context.scope === String(state.scope) && context.staff === staffContextKey(state.staff);
+    return !disposed && context && context.generation === contextGeneration && context.scope === String(state.scope) && context.staff === actorKey(state.staff);
   }
 
   function beginSettingsOperation(slot) {
@@ -2038,7 +2028,7 @@ export function createSettingsController({
 
   function setStaff(staff) {
     if (disposed) return;
-    const replaced = staffContextKey(state.staff) !== staffContextKey(staff);
+    const replaced = actorKey(state.staff) !== actorKey(staff);
     if (replaced) {
       cancelSettingsOperations();
       state.pendingMutation = null; state.saving = false; state.outcomeUncertain = false; state.awaitingReload = false; state.awaitingReloadMutation = null; state.unconfirmedMutation = null;

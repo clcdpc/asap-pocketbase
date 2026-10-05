@@ -6,6 +6,8 @@ const { pathToFileURL } = require('node:url');
 const { JSDOM } = require('jsdom');
 
 const frontend = path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend');
+let actorKey;
+const operationStorageKey = staff => `asap.staff.operation.${staff.tenantId || ''}.${staff.id || ''}.${encodeURIComponent(actorKey(staff))}`;
 const id = '9007199254740993';
 const response = (status, body) => ({ ok: status < 400, status,
   statusText: status < 400 ? 'OK' : 'Request failed', json: async () => body });
@@ -39,7 +41,7 @@ async function fixture(route, journey, options = {}) {
     const organizations = options.organizations ||
       [{ id: 2, name: 'Library A', isActive: true }, { id: 3, name: 'Library B', isActive: true }];
     if (options.retainedOperation) {
-      dom.window.sessionStorage.setItem('asap.staff.operation..20', JSON.stringify(options.retainedOperation));
+      dom.window.sessionStorage.setItem(operationStorageKey(staff), JSON.stringify({ actorKey: actorKey(staff), ...options.retainedOperation }));
     }
     for (const [key, value] of options.storage || []) dom.window.sessionStorage.setItem(key, value);
     let request = { id, type: 'title_request', version: 'v1', title: 'Saved title', author: null,
@@ -605,9 +607,38 @@ test('reload preserves an unresolved operation and retries only its recorded ide
     const query = new URL(posts[0].url, 'https://localhost').searchParams;
     assert.equal(query.get('organizationId'), '3');
     assert.equal(query.get('operationId'), '33333333-3333-4333-8333-333333333333');
-    assert.equal(ui.dom.window.sessionStorage.getItem('asap.staff.operation..20'), null);
+    assert.equal(ui.dom.window.sessionStorage.getItem(operationStorageKey(ui.readStaff())), null);
   }, { retainedOperation: { path: '/api/asap/staff/workflow/weekly-summary/run-now?force=true',
     message: 'Forced weekly summary', scope: '3', operationId: '33333333-3333-4333-8333-333333333333' } }));
+
+for (const [component, change] of [['email', { authenticationEmail: 'replacement@example.org' }],
+  ['role', { role: 'admin' }], ['organization', { organizationId: 3 }]]) {
+  for (const legacy of [true, false]) {
+    test(`Operations ${legacy ? 'unverifiable legacy' : 'modern foreign'} recovery is inert after same-ID ${component} replacement`, () => {
+      const original = { id: '20', tenantId: 'actor-tenant', authenticationEmail: 'original@example.org', role: 'super_admin', organizationId: 2 };
+      const replacement = { ...original, ...change };
+      const key = legacy ? `asap.staff.operation.${original.tenantId}.${original.id}` : operationStorageKey(original);
+      const raw = JSON.stringify({ path: '/api/asap/staff/workflow/weekly-summary/run-now?force=true',
+        message: 'Original forced summary', scope: '2', operationId: '33333333-3333-4333-8333-333333333333',
+        ...(legacy ? {} : { actorKey: actorKey(original) }) });
+      return fixture('?stage=operations', async ui => {
+        for (const selector of ['#run-workflow-now', '#run-weekly-now', '#force-weekly-now', '#send-test-email']) {
+          assert.equal(ui.get(selector).disabled, false, `${component} replacement cannot inherit the command guard`);
+        }
+        assert.equal(ui.get('#operations-outcome').hidden, true);
+        assert.equal(ui.get('#operations-outcome button'), null);
+        ui.get('#refresh-operations').click(); await settle();
+        assert.equal(ui.get('#operations-outcome button'), null, 'current review cannot claim foreign recovery');
+        assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+        ui.setOperation(() => response(202, { code: 'queued' }));
+        ui.get('#run-workflow-now').click();
+        await until(() => ui.calls.some(call => call.init.method === 'POST') && !ui.get('#send-test-email').disabled,
+          'replacement can complete its own operation');
+        assert.equal(ui.dom.window.sessionStorage.getItem(key), raw, 'own command cleanup preserves foreign/legacy evidence');
+      }, { staff: replacement, storage: new Map([[key, raw]]) });
+    });
+  }
+}
 
 function protectedUnload(ui) {
   const event = new ui.dom.window.Event('beforeunload', { cancelable: true });
@@ -855,8 +886,8 @@ for (const loss of ['session', 'access']) {
 }
 
 const actorTenant = '11111111-1111-4111-8111-111111111111';
-const actorA = { id: '20', tenantId: actorTenant };
-const copyStorageKey = actor => `asap.staff.unconfirmedCopyCreation.${actor.tenantId}.${actor.id}`;
+const actorA = { id: '20', tenantId: actorTenant, authenticationEmail: 'a@example.org', role: 'super_admin', organizationId: 1 };
+const copyStorageKey = staff => `asap.staff.unconfirmedCopyCreation.${encodeURIComponent(actorKey(staff))}`;
 const submitCopy = ui => ui.get('#additional-copy-create-form').dispatchEvent(
   new ui.dom.window.Event('submit', { cancelable: true }));
 async function openCopyPreview(ui) {
@@ -918,8 +949,9 @@ test('Additional Copy submission blocks departure; unresolved creation safely cl
     assert.equal(ui.get('#additional-copy-create-review').hidden, false);
     assert.match(ui.get('#additional-copy-create-review-summary').textContent, /BIB 9001/);
     const saved = JSON.parse(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)));
-    const { recordId, emailPurchaseReminder, ...source } = saved;
+    const { recordId, emailPurchaseReminder, actorKey: savedActorKey, ...source } = saved;
     assert.deepEqual(source, { libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' });
+    assert.equal(savedActorKey, actorKey(actorA));
     assert.equal(emailPurchaseReminder, false);
     assert.match(recordId, /^[0-9a-f-]{36}$/i);
   }, { staff: actorA, storage });
@@ -961,21 +993,93 @@ test('Additional Copy recovery is isolated across tenants even with the same Sta
     await openCopyPreview(ui);
     assert.ok(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)));
   }, { status: 'pending_hold', staff: { ...actorA, tenantId: '22222222-2222-4222-8222-222222222222' },
-    storage: new Map([[copyStorageKey(actorA), JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' })]]) }));
+    storage: new Map([[copyStorageKey(actorA), JSON.stringify({ actorKey: actorKey(actorA), libraryOrgId: 2,
+      bibid: 9001, sourceId: id, version: 'v1' })]]) }));
 
 for (const saved of ['{broken', '{}', JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: '0', version: 'v1' }),
   JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: '' })]) {
+  const withActorEvidence = () => {
+    try { return JSON.stringify({ actorKey: actorKey(actorA), ...JSON.parse(saved) }); }
+    catch { return saved; }
+  };
   test(`malformed Additional Copy recovery is ignored (${saved})`, () =>
     fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
       assert.equal(ui.get('#additional-copy-create-review').hidden, true);
       await openCopyPreview(ui);
-    }, { status: 'pending_hold', staff: actorA, storage: new Map([[copyStorageKey(actorA), saved]]) }));
+    }, { status: 'pending_hold', staff: actorA, storage: new Map([[copyStorageKey(actorA), withActorEvidence()]]) }));
 }
 
-test('obsolete global Additional Copy marker is removed without assigning it to the signing-in actor', () =>
+for (const [component, change] of [['email', { authenticationEmail: 'replacement@example.org' }],
+  ['role', { role: 'admin' }], ['organization', { organizationId: 3 }]]) {
+  test(`Additional Copy same-ID ${component} replacement cannot adopt, acknowledge or overwrite prior recovery`, async () => {
+    const original = { ...actorA, role: 'staff', organizationId: 2 };
+    const storage = new Map();
+    await fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+      await openCopyPreview(ui);
+      ui.setApi(({ pathname, init }) => {
+        if (pathname.endsWith('/additional-copy') && init.method === 'POST') throw new Error('Original response lost');
+      });
+      submitCopy(ui); await until(() => /could not be confirmed/.test(ui.get('#app-status').textContent), 'original uncertain create');
+    }, { status: 'pending_hold', staff: original, storage });
+    const key = copyStorageKey(original), raw = storage.get(key);
+    const replacement = { ...original, ...change }, replacementKey = copyStorageKey(replacement);
+    assert.notEqual(replacementKey, key);
+    await fixture(`?stage=pending_hold&scope=${replacement.organizationId}&request=${id}`, async ui => {
+      assert.equal(ui.get('#additional-copy-create-review').hidden, true);
+      ui.get('#additional-copy-create-review-done').click(); await settle();
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0, 'foreign acknowledgement cannot dispatch');
+      await openCopyPreview(ui);
+      ui.setApi(({ pathname, init }) => {
+        if (pathname.endsWith('/additional-copy') && init.method === 'POST') throw new Error('Replacement response lost');
+      });
+      submitCopy(ui); await until(() => /could not be confirmed/.test(ui.get('#app-status').textContent), 'replacement creates its own recovery');
+      assert.equal(ui.dom.window.sessionStorage.getItem(key), raw);
+      const own = JSON.parse(ui.dom.window.sessionStorage.getItem(replacementKey));
+      assert.equal(own.actorKey, actorKey(replacement)); assert.equal(own.version, 'replacement-v2');
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 1);
+    }, { status: 'pending_hold', staff: replacement, requestLibrary: replacement.organizationId,
+      request: { version: 'replacement-v2' }, storage });
+    assert.equal(storage.get(key), raw);
+  });
+}
+
+test('Additional Copy tenant/staff-only legacy evidence cannot block or be claimed by the current actor', () => {
+  const legacyKey = `asap.staff.unconfirmedCopyCreation.${actorA.tenantId}.${actorA.id}`;
+  const raw = JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' });
+  return fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    assert.equal(ui.get('#additional-copy-create-review').hidden, true);
+    ui.get('#additional-copy-create-review-done').click(); await openCopyPreview(ui);
+    assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+    assert.equal(ui.dom.window.sessionStorage.getItem(legacyKey), raw);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), null);
+  }, { status: 'pending_hold', staff: actorA, storage: new Map([[legacyKey, raw]]) });
+});
+
+test('Additional Copy exact actor restores after display, version and reminder preference revisions', async () => {
+  const raw = JSON.stringify({ actorKey: actorKey(actorA), libraryOrgId: 2, bibid: 9001,
+    sourceId: id, version: 'captured-v1', emailPurchaseReminder: true, recordId: 'original-record' });
+  const revised = { ...actorA, displayName: 'Revised', version: 'actor-v2', purchaseReminderDefault: false };
+  const storage = new Map([[copyStorageKey(actorA), raw]]);
+  await fixture('?stage=additional_copies&scope=2', async ui => {
+    assert.equal(ui.get('#additional-copy-create-review').hidden, false);
+    assert.equal(ui.get('#additional-copy-create-review-done').disabled, false);
+    ui.get('#additional-copy-create-review-done').click();
+    assert.equal(ui.get('#additional-copy-create-review').hidden, true);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(revised)), raw);
+  }, { staff: revised, storage });
+  await fixture('?stage=additional_copies&scope=2', async ui => {
+    assert.equal(ui.get('#additional-copy-create-review').hidden, false, 'fresh owner still requires fresh acknowledgement');
+    assert.match(ui.get('#additional-copy-create-review-summary').textContent, /BIB 9001/);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), raw);
+  }, { staff: { ...revised, displayName: 'Revised again', version: 'actor-v3' }, storage });
+});
+
+test('obsolete global Additional Copy marker is inert and preserved without claiming ownership', () =>
   fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
     await openCopyPreview(ui);
-    assert.equal(ui.dom.window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation'), null);
+    assert.equal(ui.get('#additional-copy-create-review').hidden, true);
+    assert.equal(ui.dom.window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation'),
+      JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' }));
     assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), null);
   }, { status: 'pending_hold', staff: actorA, storage: new Map([['asap.staff.unconfirmedCopyCreation',
     JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' })]]) }));
@@ -1875,7 +1979,7 @@ test('same-actor Profile revision preserves an Operations attempt started before
     assert.equal(ui.get('#weekly-email').value, 'updated@example.org');
     ui.get('[data-view="operations"]').click(); await settle();
     assert.equal(ui.get('#run-workflow-now').disabled, false);
-    assert.equal(ui.dom.window.sessionStorage.getItem('asap.staff.operation..20'), null);
+    assert.equal(ui.dom.window.sessionStorage.getItem(operationStorageKey(ui.readStaff())), null);
   }, { staff: profileStaff }));
 
 // #353 pins current behavior before extraction. The two explicitly labelled
@@ -2588,6 +2692,8 @@ test('authoritative projections: email readiness refresh survives failed Setting
   }));
 
 (async () => {
+  const identitySource = fs.readFileSync(path.join(frontend, 'staff/js/session-identity.js'), 'utf8');
+  ({ actorKey } = await import(`data:text/javascript;base64,${Buffer.from(identitySource).toString('base64')}`));
   let failed = 0;
   const selected = cases.filter(item => !process.argv[2] || item.name.includes(process.argv[2]));
   assert.ok(selected.length, 'the requested journey filter must discover tests');

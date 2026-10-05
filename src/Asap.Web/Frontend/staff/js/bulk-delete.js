@@ -2,6 +2,7 @@ import { authorizedJson, isAbortError, loadStaffSession } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { createDraftScope } from './draft-scope.js';
 import { element, closeReasonLabel } from './ui.js';
+import { actorKey } from './session-identity.js';
 
 function itemLabel(item) {
   return `${item.type === 'title_request' ? 'Title request ' : 'Additional-copy task '}${item.id} (${item.libraryOrgName})`;
@@ -98,9 +99,7 @@ export function createBulkDeleteController({ root, titleTrigger, copyTrigger, se
       if (!session.authenticated) { onSessionLost(); return; }
       if (!session.accessAllowed) { onAccessUnavailable(); return; }
       const actor = session.staff, owner = batch.owner;
-      if (!actor || String(actor.id) !== String(owner.id) || actor.tenantId !== owner.tenantId ||
-          actor.authenticationEmail !== owner.authenticationEmail || actor.role !== owner.role ||
-          actor.organizationId !== owner.organizationId || !['admin', 'super_admin'].includes(actor.role) ||
+      if (!actor || actorKey(actor) !== actorKey(owner) || !['admin', 'super_admin'].includes(actor.role) ||
           scope === 'all' && actor.role !== 'super_admin' || actor.role === 'admin' && scope !== String(actor.organizationId) ||
           typeof actor.version !== 'string' || !actor.version) throw new Error('Staff role or library scope changed. Reload the workspace before previewing deletion.');
       const query = encodeURIComponent(scope);

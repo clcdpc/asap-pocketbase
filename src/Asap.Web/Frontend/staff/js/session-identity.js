@@ -1,4 +1,6 @@
-function actorKey(staff) {
+// Session epochs and durable command recovery share this identity. Preferences
+// and rowversions deliberately do not participate in it.
+export function actorKey(staff) {
   return staff ? [staff.tenantId, staff.id, staff.authenticationEmail, staff.role, staff.organizationId]
     .map(value => String(value ?? '')).join('|') : null;
 }

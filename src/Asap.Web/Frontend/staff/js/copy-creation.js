@@ -4,20 +4,22 @@ import { positivePolarisId } from './research.js';
 import { validRequestId } from './recent-requests.js';
 import { unconfirmedResponseError, notificationOutcome } from './mutation-outcome.js';
 import { statusLabel } from './ui.js';
+import { actorKey } from './session-identity.js';
 
 export function copyCreationStorageKey(staff) {
   if (!staff?.tenantId || !validRequestId(String(staff.id))) return null;
-  return `asap.staff.unconfirmedCopyCreation.${String(staff.tenantId).toLowerCase()}.${staff.id}`;
+  return `asap.staff.unconfirmedCopyCreation.${encodeURIComponent(actorKey(staff))}`;
 }
 
-export function decodeCopyCreation(raw, storageKey) {
+export function decodeCopyCreation(raw, storageKey, expectedActorKey) {
   try {
     const saved = JSON.parse(raw);
-    if (!Number.isSafeInteger(saved?.libraryOrgId) || saved.libraryOrgId <= 0 ||
+    if (typeof expectedActorKey !== 'string' || !expectedActorKey || saved?.actorKey !== expectedActorKey ||
+        !Number.isSafeInteger(saved.libraryOrgId) || saved.libraryOrgId <= 0 ||
         positivePolarisId(saved.bibid) === null || !validRequestId(saved.sourceId) ||
         typeof saved.version !== 'string' || !saved.version ||
         saved.emailPurchaseReminder !== undefined && typeof saved.emailPurchaseReminder !== 'boolean') return null;
-    return { libraryOrgId: saved.libraryOrgId, bibid: positivePolarisId(saved.bibid), sourceId: saved.sourceId,
+    return { actorKey: saved.actorKey, libraryOrgId: saved.libraryOrgId, bibid: positivePolarisId(saved.bibid), sourceId: saved.sourceId,
       version: saved.version, emailPurchaseReminder: saved.emailPurchaseReminder,
       storageKey, storageValue: raw, reviewReady: false, reviewed: false };
   } catch { return null; }
@@ -44,21 +46,23 @@ export function createCopyCreationController({ root, sessionIdentity, announce, 
   }
   function loadRecovery() {
     if (disposed) return;
+    if (retained && sessionIdentity.isCurrent(retained.owner)) return;
     retained = null;
     try {
-      // The obsolete marker has no actor evidence and cannot be adopted.
-      storage().removeItem('asap.staff.unconfirmedCopyCreation');
-      const key = copyCreationStorageKey(sessionIdentity.preferences());
+      // Global and tenant/staff-only legacy records cannot prove ownership.
+      // Leave them untouched; only the full actor's key and evidence can restore.
+      const owner = sessionIdentity.preferences();
+      const key = copyCreationStorageKey(owner);
       if (!key) return;
-      const value = decodeCopyCreation(storage().getItem(key), key);
-      if (value) retained = { ...value, owner: sessionIdentity.preferences() };
+      const value = decodeCopyCreation(storage().getItem(key), key, actorKey(owner));
+      if (value) retained = { ...value, owner };
     } catch { /* A submitted command verifies storage availability before dispatch. */ }
     if (retained) onRecoveryChanged({ owner: retained.owner, restored: true });
   }
   function writeAttempt(value, owner) {
     const storageKey = copyCreationStorageKey(owner);
     if (!storageKey) return null;
-    const payload = { libraryOrgId: value.libraryOrgId, bibid: value.bibid, sourceId: value.sourceId,
+    const payload = { actorKey: actorKey(owner), libraryOrgId: value.libraryOrgId, bibid: value.bibid, sourceId: value.sourceId,
       version: value.version, emailPurchaseReminder: value.emailPurchaseReminder, recordId: window.crypto.randomUUID() };
     const storageValue = JSON.stringify(payload);
     try {

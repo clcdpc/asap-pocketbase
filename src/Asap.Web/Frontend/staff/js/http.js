@@ -1,4 +1,5 @@
 import { HttpError, isAbortError, requestJson } from '../../shared/http.js';
+import { actorKey } from './session-identity.js';
 
 let antiforgeryToken = null;
 let sessionInvalidHandler = null;
@@ -33,9 +34,7 @@ export async function loadStaffSession(options = {}) {
       { code: 'staff_session_changed' });
   }
   const nextContext = data.authenticated && data.accessAllowed && data.staff?.tenantId && data.staff?.id
-    ? [data.staff.tenantId, data.staff.id, data.staff.authenticationEmail,
-      data.staff.role, data.staff.organizationId]
-      .map(value => String(value ?? '')).join('|')
+    ? actorKey(data.staff)
     : null;
   if (sessionContext && nextContext !== sessionContext) {
     sessionInvalidated = true;

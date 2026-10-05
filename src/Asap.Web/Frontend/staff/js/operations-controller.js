@@ -2,6 +2,7 @@ import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { element, commandButton, text, dateTime } from './ui.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
+import { actorKey } from './session-identity.js';
 
 export function createOperationsController({ root, sessionIdentity, announce, onScopeChange,
   onReceipt, clearReceipt, request = authorizedJson }) {
@@ -60,16 +61,15 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     dom.operationsScope.replaceChildren(element('option', { value: state.operationsScope,
       text: staff?.role === 'super_admin' ? 'All libraries' : 'My library' }));
     dom.operationsScope.value = state.operationsScope;
-    if (staff) {
+    if (staff && sessionIdentity.isCurrent(staff)) {
       try {
-        const actorKey = operationStorageKey(staff);
-        const legacyKey = `asap.staff.operation.${staff.tenantId || ''}.${staff.id || ''}`;
-        const key = window.sessionStorage.getItem(actorKey) ? actorKey : legacyKey;
-        const retained = JSON.parse(window.sessionStorage.getItem(key) || 'null');
-        if (supportedOperation(retained) &&
-            (!retained.actorKey || retained.actorKey === sessionIdentity.actor()?.key) &&
-            /^\/api\/asap\/staff\/(workflow\/(run-now|weekly-summary\/run-now\?force=(true|false))|email-operations\/(test|[1-9]\d*\/retry))$/.test(retained.path)) {
-          state.operationMutation = captureOperation({ ...retained, storageKey: key, actorKey: sessionIdentity.actor().key });
+        // Tenant/staff-only legacy records have no reliable actor authority.
+        // They are neither adopted nor cleared by the current actor.
+        const key = operationStorageKey(staff);
+        const raw = window.sessionStorage.getItem(key);
+        const retained = JSON.parse(raw || 'null');
+        if (supportedOperation(retained) && retained.actorKey === sessionIdentity.actor().key) {
+          state.operationMutation = captureOperation({ ...retained, storageKey: key, storageValue: raw });
           state.operationMutation.uncertain = true;
         }
       } catch { /* Invalid recovery cannot authorize dispatch. */ }
@@ -89,6 +89,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     Object.defineProperty(operation, 'body', { value: value.body ? Object.freeze({ ...value.body }) : value.body, enumerable: true });
     Object.defineProperty(operation, 'owner', { value: sessionIdentity.preferences() });
     Object.defineProperty(operation, 'reviewEvidence', { value: null, writable: true });
+    Object.defineProperty(operation, 'storageValue', { value: value.storageValue, writable: true });
     return operation;
   }
 
@@ -114,17 +115,26 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   }
 
   function operationStorageKey(staff = sessionIdentity.preferences()) {
-    return `asap.staff.operation.${staff?.tenantId || ''}.${staff?.id || ''}.${encodeURIComponent(sessionIdentity.actor()?.key || '')}`;
+    return `asap.staff.operation.${staff?.tenantId || ''}.${staff?.id || ''}.${encodeURIComponent(actorKey(staff) || '')}`;
   }
 
-  function storeOperation(operation, storageKey = operation?.storageKey, expectedId = operation?.operationId) {
+  function storeOperation(operation) {
     try {
-      if (operation) window.sessionStorage.setItem(operation.storageKey, JSON.stringify(operation));
-      else if (storageKey && JSON.parse(window.sessionStorage.getItem(storageKey) || 'null')?.operationId === expectedId) {
-        window.sessionStorage.removeItem(storageKey);
-      }
+      // Retry preserves command identity but owns a fresh storage record. A
+      // completion from before reload cannot clear this newer retry's evidence.
+      const raw = JSON.stringify({ ...operation, recordId: window.crypto.randomUUID() });
+      window.sessionStorage.setItem(operation.storageKey, raw);
+      operation.storageValue = raw;
       return true;
     } catch { return false; }
+  }
+
+  function clearOperation(operation) {
+    try {
+      if (window.sessionStorage.getItem(operation.storageKey) === operation.storageValue) {
+        window.sessionStorage.removeItem(operation.storageKey);
+      }
+    } catch { /* Unavailable storage retains evidence rather than assuming cleanup. */ }
   }
 
   function updateOperationControls() {
@@ -299,7 +309,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         : result.manualRunId && !path.endsWith('/retry') ? `${message} Run ${result.manualRunId} queued.` : `${message} queued.`;
       operation.outcome = 'committed';
       onReceipt(`${committedMessage} Sign in again to review workflow operations.`, owner, operation);
-      storeOperation(null, operation.storageKey, operation.operationId);
+      clearOperation(operation);
       if (state.operationMutation === operation) state.operationMutation = null;
       if (sessionIdentity.isCurrent(owner)) updateOperationControls();
       if (disposed || !sessionIdentity.isCurrent(owner)) return;
@@ -317,11 +327,12 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       const uncertain = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
       if (uncertain) {
         operation.uncertain = true;
-        storeOperation(operation);
+        // The record saved before dispatch already requires review on restore.
+        // A late uncertain outcome must not overwrite a replacement record.
         operation.outcome = 'uncertain';
         onReceipt(`${message} outcome is unconfirmed. Review Operations before retrying. Sign in again to check the authoritative result.`, owner, operation);
       } else {
-        storeOperation(null, operation.storageKey, operation.operationId);
+        clearOperation(operation);
         if (state.operationMutation === operation) state.operationMutation = null;
       }
       if (sessionIdentity.isCurrent(owner)) updateOperationControls();
