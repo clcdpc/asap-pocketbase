@@ -116,7 +116,7 @@ async function flush() {
       }
       if (requestUrl.endsWith('/api/asap/staff/organizations')) {
         return response(200, [
-          { id: 2, name: 'Library Two', abbreviation: 'TWO', active: true, version: 'org-2' }
+          { id: 2, name: 'Library Two', abbreviation: 'TWO', isActive: true, version: 'org-2' }
         ]);
       }
       if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
@@ -130,6 +130,7 @@ async function flush() {
     };
 
     const controller = settingsModule.createSettingsController({
+      prepareDeparture: () => ({ commit: () => true }),
       root: document.getElementById('settings-view'),
       tab: document.getElementById('settings-view-tab'),
       announce: () => {},

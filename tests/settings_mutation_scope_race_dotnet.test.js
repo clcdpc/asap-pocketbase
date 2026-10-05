@@ -138,8 +138,8 @@ async function flush() {
         }
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
           return response(200, [
-            { id: 2, name: 'Library Two', abbreviation: 'TWO', active: true, version: 'org-2' },
-            { id: 3, name: 'Library Three', abbreviation: 'THREE', active: true, version: 'org-3' }
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', isActive: true, version: 'org-2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', isActive: true, version: 'org-3' }
           ]);
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
@@ -156,6 +156,7 @@ async function flush() {
       };
 
       const controller = settingsModule.createSettingsController({
+        prepareDeparture: () => ({ commit: () => true }),
         root: document.getElementById('settings-view'),
         tab: document.getElementById('settings-view-tab'),
         announce: (message, kind) => announcements.push({ message, kind }),
@@ -270,7 +271,7 @@ async function flush() {
             : response(200, data);
         }
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
-          return response(200, [{ id: 2, name: 'Library Two', active: true, version: 'org-2' }]);
+          return response(200, [{ id: 2, name: 'Library Two', isActive: true, version: 'org-2' }]);
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
           return response(200, { code: 'ok', data: [] });
@@ -286,6 +287,7 @@ async function flush() {
         throw new Error('Unexpected request: ' + requestUrl);
       };
       const controller = settingsModule.createSettingsController({
+        prepareDeparture: () => ({ commit: () => true }),
         root: document.getElementById('settings-view'),
         tab: document.getElementById('settings-view-tab'),
         announce: () => {},
@@ -411,14 +413,15 @@ async function flush() {
         }
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
           return response(200, [
-            { id: 2, name: 'Library Two', abbreviation: 'TWO', active: true, version: 'org-2' },
-            { id: 3, name: 'Library Three', abbreviation: 'THREE', active: true, version: 'org-3' }
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', isActive: true, version: 'org-2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', isActive: true, version: 'org-3' }
           ]);
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
         throw new Error('Unexpected request: ' + requestUrl);
       };
       const controller = settingsModule.createSettingsController({
+        prepareDeparture: () => ({ commit: () => true }),
         root: document.getElementById('settings-view'),
         tab: document.getElementById('settings-view-tab'),
         announce: () => {},
@@ -438,21 +441,99 @@ async function flush() {
       scope.value = '3';
       scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
       await flush();
-      assert.strictEqual(form.hidden, true, 'prior library values must be hidden while the new scope loads');
-      assert.strictEqual(controller.isDirty(), false, 'prior library draft must not remain actionable');
+      assert.strictEqual(form.hidden, false, 'the source stays mounted until the replacement is ready');
+      assert.strictEqual(scope.value, '2', 'the source scope stays authoritative during target loading');
+      assert.strictEqual(document.getElementById('branding-alt').value, 'Two logo');
+      assert.strictEqual(controller.isDirty(), false, 'the unchanged source remains clean');
       releaseFailedScope();
       await flush();
-      assert.strictEqual(form.hidden, true, 'failed scope load must not reveal prior library values');
+      assert.strictEqual(form.hidden, false, 'failed scope load retains the source owner');
+      assert.strictEqual(scope.value, '2');
+      assert.strictEqual(document.getElementById('branding-alt').value, 'Two logo');
       assert.strictEqual(document.getElementById('settings-refresh').disabled, false);
       allowThree = true;
-      document.getElementById('settings-refresh').click();
+      scope.value = '3'; scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
       await flush();
       assert.strictEqual(form.hidden, false);
       assert.strictEqual(document.getElementById('branding-alt').value, 'Three logo');
       dom.window.close();
     }
 
-    console.log('Settings mutation scope race regression checks passed');
+    for (const outcome of ['committed', 'uncertain']) {
+      const dom = new JSDOM(fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8'), { url: 'http://localhost/staff/' });
+      Object.assign(global, { window: dom.window, document: dom.window.document, FormData: dom.window.FormData, Node: dom.window.Node });
+      const receipts = [], posts = [];
+      let complete, fail;
+      global.fetch = async (url, options = {}) => {
+        const requestUrl = String(url);
+        if (requestUrl.endsWith('/session')) return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
+        if (requestUrl.endsWith('/settings') && options.method === 'POST') {
+          posts.push(options); return new Promise((resolve, reject) => { complete = resolve; fail = reject; });
+        }
+        if (requestUrl.includes('/settings?')) return response(200, settingsData(1, 'replacement-version', 'Replacement'));
+        if (requestUrl.endsWith('/organizations')) return response(200, []);
+        if (requestUrl.includes('/patron-codes?')) return response(200, { data: [] });
+        throw new Error(`Unexpected request: ${requestUrl}`);
+      };
+      const options = { root: document.getElementById('settings-view'), tab: document.getElementById('settings-view-tab'), announce() {},
+        onCommitted: (...args) => receipts.push(args), onUnconfirmed: (...args) => receipts.push(args) };
+      const first = settingsModule.createSettingsController(options); first.bind();
+      first.setStaff({ id: '1', tenantId: 'tenant-a', authenticationEmail: 'a@example.org', role: 'super_admin', organizationId: 1 });
+      await first.activate();
+      const input = document.getElementById('patron-login-note'); input.value = 'Submitted draft';
+      input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+      await flush(); assert.ok(complete); assert.equal(posts[0].signal, undefined, 'committing Settings request has no read cancellation signal');
+      first.dispose();
+      const replacement = settingsModule.createSettingsController(options); replacement.bind();
+      replacement.setStaff({ id: '2', tenantId: 'tenant-b', authenticationEmail: 'b@example.org', role: 'super_admin', organizationId: 1 });
+      await replacement.activate(); first.dispose();
+      if (outcome === 'committed') complete(response(200, { data: { version: 'old-commit-version' } }));
+      else fail(new Error('Lost response'));
+      await flush(); await flush();
+      assert.equal(receipts.at(-1)[1].id, '1'); assert.equal(receipts.at(-1)[2].outcome, outcome, 'record old attempt truth before presentation checks');
+      assert.equal(document.getElementById('settings-version').value, 'replacement-version');
+      assert.equal(document.getElementById('patron-login-note').value, '');
+      assert.equal(document.getElementById('settings-form').inert, false, 'retired finally cannot change replacement interactivity');
+      assert.equal(replacement.hasPendingMutation(), false); replacement.dispose(); dom.window.close();
+    }
+    for (const outcome of ['committed', 'uncertain']) {
+      const dom = new JSDOM(fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8'), { url: 'http://localhost/staff/' });
+      Object.assign(global, { window: dom.window, document: dom.window.document, FormData: dom.window.FormData, Node: dom.window.Node });
+      const owner = { id: '20', tenantId: 'same-tenant', authenticationEmail: 'staff@example.org',
+        userPrincipalName: 'staff@example.org', role: 'super_admin', organizationId: 1, version: 'actor-v1' };
+      let complete, fail;
+      const receipts = [];
+      global.fetch = async (url, options = {}) => {
+        if (url.endsWith('/session')) return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
+        if (url.endsWith('/settings') && options.method === 'POST') return new Promise((resolve, reject) => { complete = resolve; fail = reject; });
+        if (url.includes('/settings?')) return response(200, settingsData(1, 'current-version', 'Current'));
+        if (url.endsWith('/organizations')) return response(200, []);
+        if (url.includes('/patron-codes?')) return response(200, { data: [] });
+        throw new Error(`Unexpected request: ${url}`);
+      };
+      const controller = settingsModule.createSettingsController({ root: document.getElementById('settings-view'),
+        tab: document.getElementById('settings-view-tab'), announce() {},
+        onCommitted: (...args) => receipts.push(args), onUnconfirmed: (...args) => receipts.push(args) });
+      controller.bind(); controller.setStaff(owner); await controller.activate();
+      document.getElementById('patron-login-note').value = 'Old actor draft';
+      document.getElementById('patron-login-note').dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+      await flush(); assert.ok(complete); assert.equal(controller.hasPendingMutation(), true);
+      controller.setStaff({ ...owner, version: 'actor-v2', displayName: 'Revised', purchaseReminderDefault: true });
+      assert.equal(controller.hasPendingMutation(), true, 'same actor preference changes preserve captured mutation');
+      controller.setStaff({ ...owner, authenticationEmail: undefined });
+      assert.equal(controller.hasPendingMutation(), false, 'principal-name fallback cannot adopt a command from different authentication evidence');
+      await controller.activate();
+      if (outcome === 'committed') complete(response(200, { data: { version: 'old-actor-version' } }));
+      else fail(new Error('Old actor response lost'));
+      await flush(); await flush();
+      assert.equal(receipts.at(-1)[1], owner); assert.equal(receipts.at(-1)[2].outcome, outcome);
+      assert.equal(controller.hasUnconfirmedOutcome(), false, 'late old failure cannot block replacement Settings');
+      assert.equal(document.getElementById('settings-version').value, 'current-version');
+      controller.dispose(); dom.window.close();
+    }
+    console.log('Settings scope races and two canonical authentication-evidence replacement cases passed');
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }

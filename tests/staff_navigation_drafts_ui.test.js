@@ -6,6 +6,8 @@ const { pathToFileURL } = require('node:url');
 const { JSDOM } = require('jsdom');
 
 const frontend = path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend');
+let actorKey;
+const operationStorageKey = staff => `asap.staff.operation.${staff.tenantId || ''}.${staff.id || ''}.${encodeURIComponent(actorKey(staff))}`;
 const id = '9007199254740993';
 const response = (status, body) => ({ ok: status < 400, status,
   statusText: status < 400 ? 'OK' : 'Request failed', json: async () => body });
@@ -18,7 +20,7 @@ async function until(predicate, message) {
 
 async function fixture(route, journey, options = {}) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-navigation-drafts-'));
-  let dom;
+  let dom, app;
   try {
     fs.cpSync(path.join(frontend, 'staff'), path.join(temporary, 'staff'), { recursive: true });
     fs.cpSync(path.join(frontend, 'shared'), path.join(temporary, 'shared'), { recursive: true });
@@ -37,9 +39,9 @@ async function fixture(route, journey, options = {}) {
     let staff = { id: '20', role: options.role || 'super_admin', organizationId: options.role === 'staff' ? 2 : 1,
       organizationName: 'System', displayName: 'Staff', version: 'actor-v1', ...options.staff };
     const organizations = options.organizations ||
-      [{ id: 2, name: 'Library A', active: true }, { id: 3, name: 'Library B', active: true }];
+      [{ id: 2, name: 'Library A', isActive: true }, { id: 3, name: 'Library B', isActive: true }];
     if (options.retainedOperation) {
-      dom.window.sessionStorage.setItem('asap.staff.operation..20', JSON.stringify(options.retainedOperation));
+      dom.window.sessionStorage.setItem(operationStorageKey(staff), JSON.stringify({ actorKey: actorKey(staff), ...options.retainedOperation }));
     }
     for (const [key, value] of options.storage || []) dom.window.sessionStorage.setItem(key, value);
     let request = { id, type: 'title_request', version: 'v1', title: 'Saved title', author: null,
@@ -72,7 +74,7 @@ async function fixture(route, journey, options = {}) {
       if (pathname.endsWith('/email-readiness')) return response(200, {});
       if (pathname.endsWith('/organizations')) return response(200, { code: 'ok', data: organizations });
       if (pathname.endsWith('/settings') && init.method !== 'POST') return response(200, {
-        orgId: parsed.searchParams.get('orgId'), version: 'settings-v1',
+        orgId: parsed.searchParams.get('orgId') === '1' ? 'system' : parsed.searchParams.get('orgId'), version: 'settings-v1',
         stored: { configuredSystem: { patron: { loginNote: 'Saved login note' } },
           systemSettings: {}, workflow: {}, patron: {}, email: {}, formats: [], templates: [] },
         effective: {}, ui_text: { loginNote: 'Saved login note' }, workflow: {}, emails: {}
@@ -81,7 +83,8 @@ async function fixture(route, journey, options = {}) {
       if (pathname.endsWith('/title-requests') || pathname.endsWith('/additional-copies')) {
         const scope = parsed.searchParams.get('scope') || 'all';
         return response(200, { scope, status: parsed.searchParams.get('status') || 'open',
-          organizations, availableLibraries: organizations,
+          organizations: organizations.filter(item => item.isActive),
+          availableLibraries: organizations.filter(item => item.isActive),
           items: pathname.endsWith('/title-requests') ? options.titleItems || [request]
             : options.copyItems || (options.copyRequest ? [copyRequest] : []) });
       }
@@ -130,7 +133,8 @@ async function fixture(route, journey, options = {}) {
     };
     dom.window.confirm = message => { confirms.push(message); return discard; };
     const module = await import(pathToFileURL(path.join(temporary, 'staff/js/workflow.js')).href);
-    await module.createWorkflowApp().start();
+    app = module.createWorkflowApp();
+    await app.start();
     await settle();
     const get = selector => document.querySelector(selector);
     const edit = (selector, value) => { const control = get(selector); control.value = value;
@@ -149,6 +153,7 @@ async function fixture(route, journey, options = {}) {
       open: async () => { await until(() => get('.grid-open'), 'queue opener'); get('.grid-open').click();
         await until(() => get('#request-dialog').open, 'detail opened'); } });
   } finally {
+    app?.dispose();
     if (dom && options.storage) {
       options.storage.clear();
       for (let index = 0; index < dom.window.sessionStorage.length; index += 1) {
@@ -163,6 +168,70 @@ async function fixture(route, journey, options = {}) {
 
 const cases = [];
 const test = (name, body) => cases.push({ name, body });
+test('committed title status synchronizes detail queue and accepted URL', () => fixture(`?stage=suggestion&scope=2&request=${id}&marker=keep#anchor`, async ui => {
+  await until(() => ui.get('#request-dialog').open, 'detail open');
+  ui.setOperation(() => response(200, { committed: true,
+    request: { ...ui.readRequest(), version: 'v2', status: 'pending_hold' }, finalStatus: 'pending_hold' }));
+  ui.allowDiscard();
+  [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own').click();
+  await until(() => ui.get('.detail-meta .status-badge').textContent.toLowerCase() === 'pending hold', 'committed detail status');
+  assert.equal(ui.params().get('stage'), 'pending_hold');
+  assert.equal(ui.get('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
+  assert.equal(ui.params().get('request'), id);
+  assert.equal(ui.params().get('marker'), 'keep');
+  assert.equal(ui.dom.window.location.hash, '#anchor');
+}));
+test('committed status during target validation retains the accepted detail entry', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    await ui.open();
+    let validateScope;
+    ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
+      ? new Promise(done => { validateScope = done; }) : undefined);
+    ui.dom.window.history.back();
+    await until(() => validateScope, 'target validation pending');
+    ui.setOperation(() => response(200, { committed: true,
+      request: { ...ui.readRequest(), version: 'v2', status: 'pending_hold' }, finalStatus: 'pending_hold' }));
+    ui.allowDiscard();
+    [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own').click();
+    await until(() => ui.get('.detail-meta .status-badge').textContent === 'Pending hold', 'committed source detail');
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', isActive: true }] }));
+    await until(() => ui.params().get('request') === id && ui.params().get('stage') === 'pending_hold', 'updated accepted source restored');
+    assert.equal(ui.get('#request-dialog').open, true);
+    assert.equal(ui.get('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
+  }));
+test('authoritative deep-link title stage follows current server detail', () =>
+  fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+    await until(() => ui.get('#request-dialog').open, 'authoritative detail opened');
+    assert.equal(ui.params().get('stage'), 'pending_hold');
+    assert.equal(ui.get('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
+  }, { status: 'pending_hold' }));
+test('committed copy status synchronizes detail tab and accepted URL', () =>
+  fixture('?stage=additional_copies&scope=2&request=71', async ui => {
+    await until(() => ui.get('#request-dialog').open, 'copy detail open');
+    ui.setOperation(() => response(200, { committed: true,
+      request: { ...ui.readCopyRequest(), version: 'copy-v2', status: 'closed' }, finalStatus: 'closed' }));
+    ui.allowDiscard();
+    [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Close task').click();
+    await until(() => ui.get('.detail-meta .status-badge').textContent === 'Closed', 'committed copy status');
+    assert.equal(ui.params().get('copyStatus'), 'closed');
+    assert.equal(ui.params().get('request'), '71');
+    assert.equal(ui.get('[data-copy-status="closed"]').getAttribute('aria-selected'), 'true');
+  }, { copyRequest: { id: '71' } }));
+for (const [stage, view, refresh, endpoint, scopeControl] of [
+  ['suggestion', 'queue', '#refresh-queue', '/title-requests', '#library-scope'],
+  ['additional_copies', 'additional-copies', '#refresh-additional-copies', '/additional-copies', '#additional-copy-library-scope']
+]) {
+  test(`authoritative ${view} scope synchronizes accepted URL without losing request identity`, () =>
+    fixture(`?stage=${stage}&scope=2&marker=keep#anchor`, async ui => {
+      ui.setApi(({ pathname }) => pathname.endsWith(endpoint) ? response(200, { scope: 'all', status: 'open',
+        organizations: [{ id: 2, name: 'Library A', isActive: true }], availableLibraries: [{ id: 2, name: 'Library A', isActive: true }], items: [] }) : undefined);
+      ui.get(refresh).click();
+      await until(() => ui.get(scopeControl).value === 'all', 'accepted authoritative scope');
+      assert.equal(ui.params().get('scope'), 'all');
+      assert.equal(ui.params().get('marker'), 'keep');
+      assert.equal(ui.dom.window.location.hash, '#anchor');
+    }));
+}
 for (const exit of ['close', 'escape', 'top-level', 'back', 'sign-out']) {
   test(`dirty request blocks ${exit}`, () => fixture('?stage=suggestion&scope=2', async ui => {
     await ui.open();
@@ -392,7 +461,7 @@ test('inactive operational scope canonicalizes to the authorized default', () =>
   fixture('?stage=suggestion&scope=3', async ui => {
     assert.equal(ui.params().get('scope'), 'all');
     assert.equal(ui.get('#library-scope').value, 'all');
-  }, { organizations: [{ id: 2, name: 'Library A', active: true }, { id: 3, name: 'Inactive library', active: false }] }));
+  }, { organizations: [{ id: 2, name: 'Library A', isActive: true }, { id: 3, name: 'Inactive library', isActive: false }] }));
 test('invalid additional-copy subroute canonicalizes to Open', () =>
   fixture('?stage=additional_copies&scope=2&copyStatus=bad', async ui => {
     assert.equal(ui.params().get('copyStatus'), 'open');
@@ -538,9 +607,38 @@ test('reload preserves an unresolved operation and retries only its recorded ide
     const query = new URL(posts[0].url, 'https://localhost').searchParams;
     assert.equal(query.get('organizationId'), '3');
     assert.equal(query.get('operationId'), '33333333-3333-4333-8333-333333333333');
-    assert.equal(ui.dom.window.sessionStorage.getItem('asap.staff.operation..20'), null);
+    assert.equal(ui.dom.window.sessionStorage.getItem(operationStorageKey(ui.readStaff())), null);
   }, { retainedOperation: { path: '/api/asap/staff/workflow/weekly-summary/run-now?force=true',
     message: 'Forced weekly summary', scope: '3', operationId: '33333333-3333-4333-8333-333333333333' } }));
+
+for (const [component, change] of [['email', { authenticationEmail: 'replacement@example.org' }],
+  ['role', { role: 'admin' }], ['organization', { organizationId: 3 }]]) {
+  for (const legacy of [true, false]) {
+    test(`Operations ${legacy ? 'unverifiable legacy' : 'modern foreign'} recovery is inert after same-ID ${component} replacement`, () => {
+      const original = { id: '20', tenantId: 'actor-tenant', authenticationEmail: 'original@example.org', role: 'super_admin', organizationId: 2 };
+      const replacement = { ...original, ...change };
+      const key = legacy ? `asap.staff.operation.${original.tenantId}.${original.id}` : operationStorageKey(original);
+      const raw = JSON.stringify({ path: '/api/asap/staff/workflow/weekly-summary/run-now?force=true',
+        message: 'Original forced summary', scope: '2', operationId: '33333333-3333-4333-8333-333333333333',
+        ...(legacy ? {} : { actorKey: actorKey(original) }) });
+      return fixture('?stage=operations', async ui => {
+        for (const selector of ['#run-workflow-now', '#run-weekly-now', '#force-weekly-now', '#send-test-email']) {
+          assert.equal(ui.get(selector).disabled, false, `${component} replacement cannot inherit the command guard`);
+        }
+        assert.equal(ui.get('#operations-outcome').hidden, true);
+        assert.equal(ui.get('#operations-outcome button'), null);
+        ui.get('#refresh-operations').click(); await settle();
+        assert.equal(ui.get('#operations-outcome button'), null, 'current review cannot claim foreign recovery');
+        assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+        ui.setOperation(() => response(202, { code: 'queued' }));
+        ui.get('#run-workflow-now').click();
+        await until(() => ui.calls.some(call => call.init.method === 'POST') && !ui.get('#send-test-email').disabled,
+          'replacement can complete its own operation');
+        assert.equal(ui.dom.window.sessionStorage.getItem(key), raw, 'own command cleanup preserves foreign/legacy evidence');
+      }, { staff: replacement, storage: new Map([[key, raw]]) });
+    });
+  }
+}
 
 function protectedUnload(ui) {
   const event = new ui.dom.window.Event('beforeunload', { cancelable: true });
@@ -788,8 +886,8 @@ for (const loss of ['session', 'access']) {
 }
 
 const actorTenant = '11111111-1111-4111-8111-111111111111';
-const actorA = { id: '20', tenantId: actorTenant };
-const copyStorageKey = actor => `asap.staff.unconfirmedCopyCreation.${actor.tenantId}.${actor.id}`;
+const actorA = { id: '20', tenantId: actorTenant, authenticationEmail: 'a@example.org', role: 'super_admin', organizationId: 1 };
+const copyStorageKey = staff => `asap.staff.unconfirmedCopyCreation.${encodeURIComponent(actorKey(staff))}`;
 const submitCopy = ui => ui.get('#additional-copy-create-form').dispatchEvent(
   new ui.dom.window.Event('submit', { cancelable: true }));
 async function openCopyPreview(ui) {
@@ -851,7 +949,11 @@ test('Additional Copy submission blocks departure; unresolved creation safely cl
     assert.equal(ui.get('#additional-copy-create-review').hidden, false);
     assert.match(ui.get('#additional-copy-create-review-summary').textContent, /BIB 9001/);
     const saved = JSON.parse(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)));
-    assert.deepEqual(saved, { libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' });
+    const { recordId, emailPurchaseReminder, actorKey: savedActorKey, ...source } = saved;
+    assert.deepEqual(source, { libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' });
+    assert.equal(savedActorKey, actorKey(actorA));
+    assert.equal(emailPurchaseReminder, false);
+    assert.match(recordId, /^[0-9a-f-]{36}$/i);
   }, { staff: actorA, storage });
 });
 
@@ -891,21 +993,93 @@ test('Additional Copy recovery is isolated across tenants even with the same Sta
     await openCopyPreview(ui);
     assert.ok(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)));
   }, { status: 'pending_hold', staff: { ...actorA, tenantId: '22222222-2222-4222-8222-222222222222' },
-    storage: new Map([[copyStorageKey(actorA), JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' })]]) }));
+    storage: new Map([[copyStorageKey(actorA), JSON.stringify({ actorKey: actorKey(actorA), libraryOrgId: 2,
+      bibid: 9001, sourceId: id, version: 'v1' })]]) }));
 
 for (const saved of ['{broken', '{}', JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: '0', version: 'v1' }),
   JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: '' })]) {
+  const withActorEvidence = () => {
+    try { return JSON.stringify({ actorKey: actorKey(actorA), ...JSON.parse(saved) }); }
+    catch { return saved; }
+  };
   test(`malformed Additional Copy recovery is ignored (${saved})`, () =>
     fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
       assert.equal(ui.get('#additional-copy-create-review').hidden, true);
       await openCopyPreview(ui);
-    }, { status: 'pending_hold', staff: actorA, storage: new Map([[copyStorageKey(actorA), saved]]) }));
+    }, { status: 'pending_hold', staff: actorA, storage: new Map([[copyStorageKey(actorA), withActorEvidence()]]) }));
 }
 
-test('obsolete global Additional Copy marker is removed without assigning it to the signing-in actor', () =>
+for (const [component, change] of [['email', { authenticationEmail: 'replacement@example.org' }],
+  ['role', { role: 'admin' }], ['organization', { organizationId: 3 }]]) {
+  test(`Additional Copy same-ID ${component} replacement cannot adopt, acknowledge or overwrite prior recovery`, async () => {
+    const original = { ...actorA, role: 'staff', organizationId: 2 };
+    const storage = new Map();
+    await fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+      await openCopyPreview(ui);
+      ui.setApi(({ pathname, init }) => {
+        if (pathname.endsWith('/additional-copy') && init.method === 'POST') throw new Error('Original response lost');
+      });
+      submitCopy(ui); await until(() => /could not be confirmed/.test(ui.get('#app-status').textContent), 'original uncertain create');
+    }, { status: 'pending_hold', staff: original, storage });
+    const key = copyStorageKey(original), raw = storage.get(key);
+    const replacement = { ...original, ...change }, replacementKey = copyStorageKey(replacement);
+    assert.notEqual(replacementKey, key);
+    await fixture(`?stage=pending_hold&scope=${replacement.organizationId}&request=${id}`, async ui => {
+      assert.equal(ui.get('#additional-copy-create-review').hidden, true);
+      ui.get('#additional-copy-create-review-done').click(); await settle();
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0, 'foreign acknowledgement cannot dispatch');
+      await openCopyPreview(ui);
+      ui.setApi(({ pathname, init }) => {
+        if (pathname.endsWith('/additional-copy') && init.method === 'POST') throw new Error('Replacement response lost');
+      });
+      submitCopy(ui); await until(() => /could not be confirmed/.test(ui.get('#app-status').textContent), 'replacement creates its own recovery');
+      assert.equal(ui.dom.window.sessionStorage.getItem(key), raw);
+      const own = JSON.parse(ui.dom.window.sessionStorage.getItem(replacementKey));
+      assert.equal(own.actorKey, actorKey(replacement)); assert.equal(own.version, 'replacement-v2');
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 1);
+    }, { status: 'pending_hold', staff: replacement, requestLibrary: replacement.organizationId,
+      request: { version: 'replacement-v2' }, storage });
+    assert.equal(storage.get(key), raw);
+  });
+}
+
+test('Additional Copy tenant/staff-only legacy evidence cannot block or be claimed by the current actor', () => {
+  const legacyKey = `asap.staff.unconfirmedCopyCreation.${actorA.tenantId}.${actorA.id}`;
+  const raw = JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' });
+  return fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
+    assert.equal(ui.get('#additional-copy-create-review').hidden, true);
+    ui.get('#additional-copy-create-review-done').click(); await openCopyPreview(ui);
+    assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+    assert.equal(ui.dom.window.sessionStorage.getItem(legacyKey), raw);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), null);
+  }, { status: 'pending_hold', staff: actorA, storage: new Map([[legacyKey, raw]]) });
+});
+
+test('Additional Copy exact actor restores after display, version and reminder preference revisions', async () => {
+  const raw = JSON.stringify({ actorKey: actorKey(actorA), libraryOrgId: 2, bibid: 9001,
+    sourceId: id, version: 'captured-v1', emailPurchaseReminder: true, recordId: 'original-record' });
+  const revised = { ...actorA, displayName: 'Revised', version: 'actor-v2', purchaseReminderDefault: false };
+  const storage = new Map([[copyStorageKey(actorA), raw]]);
+  await fixture('?stage=additional_copies&scope=2', async ui => {
+    assert.equal(ui.get('#additional-copy-create-review').hidden, false);
+    assert.equal(ui.get('#additional-copy-create-review-done').disabled, false);
+    ui.get('#additional-copy-create-review-done').click();
+    assert.equal(ui.get('#additional-copy-create-review').hidden, true);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(revised)), raw);
+  }, { staff: revised, storage });
+  await fixture('?stage=additional_copies&scope=2', async ui => {
+    assert.equal(ui.get('#additional-copy-create-review').hidden, false, 'fresh owner still requires fresh acknowledgement');
+    assert.match(ui.get('#additional-copy-create-review-summary').textContent, /BIB 9001/);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), raw);
+  }, { staff: { ...revised, displayName: 'Revised again', version: 'actor-v3' }, storage });
+});
+
+test('obsolete global Additional Copy marker is inert and preserved without claiming ownership', () =>
   fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
     await openCopyPreview(ui);
-    assert.equal(ui.dom.window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation'), null);
+    assert.equal(ui.get('#additional-copy-create-review').hidden, true);
+    assert.equal(ui.dom.window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation'),
+      JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' }));
     assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), null);
   }, { status: 'pending_hold', staff: actorA, storage: new Map([['asap.staff.unconfirmedCopyCreation',
     JSON.stringify({ libraryOrgId: 2, bibid: 9001, sourceId: id, version: 'v1' })]]) }));
@@ -1408,12 +1582,1125 @@ test('bulk access loss from a concurrent read retains the pending ledger until D
   }, { status: 'closed', copyItems: [{ id: '71', type: 'additional_copy', status: 'closed', version: 'copy-v1',
     libraryOrgId: 2, libraryOrgName: 'Library A', title: 'Not attempted copy' }] }));
 
-(async () => {
-  let failed = 0;
-  for (const item of cases) {
-    try { await item.body(); console.log(`PASS ${item.name}`); }
-    catch (error) { failed += 1; console.error(`FAIL ${item.name}: ${error.message}`); }
+test('route validation retains its source and rechecks a draft created while target scope loads', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    await ui.open();
+    const accepted = ui.dom.window.location.href;
+    let validateScope;
+    ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
+      ? new Promise(done => { validateScope = done; }) : undefined);
+    ui.dom.window.history.back();
+    await until(() => validateScope, 'target validation pending');
+    assert.equal(ui.get('#request-dialog').open, true, 'source is mounted until validation and final admission');
+    ui.edit('.edit-form input', 'New draft during target validation');
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', isActive: true }] }));
+    await until(() => ui.dom.window.location.href === accepted, 'rejected target restores accepted history entry');
+    assert.equal(ui.get('#request-dialog').open, true);
+    assert.equal(ui.get('.edit-form input').value, 'New draft during target validation');
+    assert.equal(ui.confirms.length, 1);
+    assert.equal(requestMutations(ui).length, 0);
+  }));
+
+for (const owner of ['request editor', 'Staff Suggestion']) {
+  test(`programmatic Polaris changes to an already-dirty ${owner} require fresh navigation consent`, () =>
+    fixture('?stage=suggestion&scope=2', async ui => {
+      const isRequest = owner === 'request editor';
+      if (isRequest) await ui.open();
+      else {
+        const scope = ui.get('#library-scope');
+        scope.value = '3'; scope.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+        await until(() => ui.params().get('scope') === '3', 'source library selected');
+        ui.get('#new-suggestion').click();
+        const servicing = ui.get('[aria-label="Servicing library"]');
+        servicing.value = '3'; servicing.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+        ui.edit('[aria-label="Patron barcode or name"]', '20000000000001');
+        ui.get('#staff-suggestion-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+        await until(() => ui.get('.staff-suggestion-fields'), 'suggestion form ready');
+      }
+      const titleSelector = isRequest ? '.edit-form input' : '.staff-suggestion-fields input[maxlength="500"]';
+      ui.edit(titleSelector, 'Already dirty');
+      const accepted = ui.dom.window.location.href;
+      let validateScope;
+      const selected = { bibId: 9002, title: 'New Polaris title', author: 'New author', identifier: '9780000000002' };
+      ui.setApi(({ pathname, init }) => {
+        if (pathname.endsWith('/organizations')) return new Promise(done => { validateScope = done; });
+        if (pathname.endsWith('/bib-lookup')) return response(200,
+          JSON.parse(init.body).mode === 'bib' ? selected : { results: [selected], totalMatches: 1 });
+      });
+      ui.dom.window.confirm = message => { ui.confirms.push(message); return ui.confirms.length === 1; };
+      ui.dom.window.history.back();
+      await until(() => validateScope, 'route validation pending after first consent');
+      assert.equal(ui.confirms.length, 1);
+      const form = ui.get(isRequest ? '.edit-form' : '.staff-suggestion-fields');
+      [...form.querySelectorAll('button')].find(button => button.textContent.trim() === 'Search Polaris catalog').click();
+      ui.get('#polaris-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+      await until(() => ui.get('#polaris-results button'), 'real Polaris search result');
+      ui.get('#polaris-results button').click();
+      await until(() => !ui.get('#polaris-dialog').open, 'programmatic Polaris selection applied');
+      const newerTitle = ui.get(titleSelector).value;
+      assert.match(newerTitle, /New Polaris title/);
+      validateScope(response(200, { data: [{ id: 2, name: 'Library A', isActive: true }] }));
+      await until(() => ui.dom.window.location.href === accepted, 'declined fresh consent restores source history');
+      assert.equal(ui.confirms.length, 2, 'first consent cannot authorize discarding newer programmatic values');
+      assert.equal(ui.get(isRequest ? '#request-dialog' : '#staff-suggestion-dialog').open, true);
+      assert.equal(ui.get(titleSelector).value, newerTitle);
+      assert.equal(protectedUnload(ui), true);
+      assert.ok(!ui.calls.some(call => /\/(action|assign|sign-out)$/.test(call.url)));
+      assert.ok(!ui.calls.some(call => call.url.endsWith('/suggestions')));
+    }));
+}
+
+test('Analytics view round trip preserves scope/range and rejects the prior activation response', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    const pending = [];
+    const analyticsData = (scope, range, label) => ({
+      scope: { mode: scope === 'all' ? 'all' : 'library', libraryOrgId: scope === 'all' ? null : Number(scope), label, superAdmin: true },
+      dateRange: { key: range, start: '2026-09-01', end: '2026-09-30' },
+      availableLibraries: [{ orgId: 2, name: 'Library A' }], summary: {}, stageCounts: {},
+      aging: {}, exceptions: {}, closedReasons: []
+    });
+    ui.setApi(({ pathname, parsed, init }) => pathname.endsWith('/analytics')
+      ? new Promise(resolve => pending.push({ parsed, init, resolve })) : undefined);
+    ui.get('[data-view="analytics"]').click();
+    await until(() => pending.length === 1, 'initial Analytics request');
+    pending[0].resolve(response(200, analyticsData('all', 'lastMonth', 'All libraries')));
+    await until(() => ui.get('#analytics-scope'), 'Analytics controls');
+    ui.get('#analytics-scope').value = '2';
+    ui.get('#analytics-scope').dispatchEvent(new ui.dom.window.Event('change'));
+    await until(() => pending.length === 2, 'library-scoped request');
+    pending[1].resolve(response(200, analyticsData('2', 'lastMonth', 'Library A')));
+    await until(() => ui.get('#analytics-date-range'), 'scoped controls');
+    ui.get('#analytics-date-range').value = 'last90';
+    ui.get('#analytics-date-range').dispatchEvent(new ui.dom.window.Event('change'));
+    await until(() => pending.length === 3, 'selected range request');
+    ui.get('[data-view="profile"]').click();
+    assert.equal(pending[2].init.signal.aborted, true, 'leaving aborts visible reads');
+    ui.get('[data-view="analytics"]').click();
+    await until(() => pending.length === 4, 'first reactivated request');
+    assert.equal(pending[3].parsed.searchParams.get('scope'), '2');
+    assert.equal(pending[3].parsed.searchParams.get('range'), 'last90');
+    pending[3].resolve(response(200, analyticsData('2', 'last90', 'Current activation')));
+    await until(() => ui.get('#analytics-scope'), 'reactivated controls');
+    assert.equal(ui.get('#analytics-scope').value, '2');
+    assert.equal(ui.get('#analytics-date-range').value, 'last90');
+    const focused = document.activeElement;
+    pending[2].resolve(response(200, analyticsData('all', 'lastMonth', 'Stale activation')));
+    await settle();
+    assert.match(ui.get('#analytics-container').textContent, /Current activation/);
+    assert.doesNotMatch(ui.get('#analytics-container').textContent, /Stale activation/);
+    assert.equal(document.activeElement, focused);
+  }));
+
+test('programmatic hold-resolution Revert invalidates consent while a competing editor draft remains', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    await ui.open();
+    ui.edit('.edit-form input', 'Competing editor draft');
+    ui.edit('.resolution-form textarea[required]', 'Unsaved resolution reason');
+    const accepted = ui.dom.window.location.href;
+    let validateScope;
+    ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
+      ? new Promise(resolve => { validateScope = resolve; }) : undefined);
+    ui.dom.window.confirm = message => { ui.confirms.push(message); return ui.confirms.length === 1; };
+    ui.dom.window.history.back();
+    await until(() => validateScope, 'route validation after initial request consent');
+    [...ui.get('.resolution-form').querySelectorAll('button')].find(button => button.textContent === 'Revert resolution changes').click();
+    assert.equal(ui.get('.resolution-form textarea[required]').value, '');
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', isActive: true }] }));
+    await until(() => ui.dom.window.location.href === accepted, 'fresh consent rejects discarding competing editor');
+    assert.equal(ui.confirms.length, 2);
+    assert.equal(ui.get('.edit-form input').value, 'Competing editor draft');
+    assert.equal(protectedUnload(ui), true);
+  }, { holdOperation: { id: '81', version: 'hold-v1', state: 'unknown', phase: 'acquired',
+    attemptNumber: 1, canResolveNotPerformed: true } }));
+
+for (const settingsScope of ['2', 'system', '1']) {
+  test(`authoritative ${settingsScope} Settings configuration refresh invalidates cached Title form configuration`, () =>
+    fixture('?stage=suggestion&scope=2', async ui => {
+      let configurationReads = 0;
+      ui.setApi(({ pathname }) => {
+        if (pathname === '/api/asap/config') {
+          configurationReads++;
+          return response(200, { availableFormats: ['book'], formatLabels: { book: configurationReads === 1 ? 'Configuration A' : 'Configuration B' } });
+        }
+      });
+      await ui.open();
+      assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration A/);
+      ui.get('#close-request').click();
+      ui.dom.window.history.pushState({}, '', `?stage=settings&settingsScope=${settingsScope}`);
+      ui.dom.window.dispatchEvent(new ui.dom.window.PopStateEvent('popstate'));
+      await until(() => !ui.get('#settings-view').hidden && !ui.get('#settings-form').hidden, 'authoritative configuration refresh');
+      ui.get('[data-view="queue"]').click();
+      await ui.open();
+      assert.equal(configurationReads, 2, 'reopen fetches fresh public form configuration');
+      assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration B/);
+    }));
+}
+
+test('staff roster review preserves the cached Title configuration', () =>
+  fixture('?stage=settings&settingsScope=2', async ui => {
+    let configurationReads = 0, rosterReads = 0;
+    ui.setApi(({ pathname }) => {
+      if (pathname === '/api/asap/config') {
+        configurationReads++;
+        return response(200, { availableFormats: ['book'], formatLabels: { book: 'Cached configuration' } });
+      }
+      if (pathname.endsWith('/users')) { rosterReads++; return response(200, { data: [] }); }
+      if (pathname.endsWith('/audit')) return response(200, { data: [] });
+    });
+    ui.get('[data-view="queue"]').click(); await settle(); await ui.open();
+    ui.get('#close-request').click(); await settle();
+    ui.get('[data-view="settings"]').click(); await settle();
+    ui.get('[data-settings-panel="staff"]').click();
+    await until(() => rosterReads === 1 && /Staff access loaded/.test(ui.get('#staff-access-status').textContent), 'authoritative roster reviewed');
+    ui.get('[data-view="queue"]').click(); await settle();
+    await ui.open();
+    assert.equal(configurationReads, 1, 'staff access review does not invalidate public form configuration');
+    assert.match(ui.get('[aria-label="Format"]').textContent, /Cached configuration/);
+  }));
+
+for (const commit of ['library save', 'system save', 'library reset']) {
+  test(`confirmed ${commit} invalidates Title configuration even when Settings refresh fails`, () =>
+    fixture(`?stage=settings&settingsScope=${commit === 'system save' ? 'system' : '2'}`, async ui => {
+      let committed = false, failRefresh = true, configurationReads = 0, reloads = 0;
+      ui.setApi(({ pathname, init }) => {
+        if (pathname === '/api/asap/config') {
+          configurationReads++;
+          return response(200, { availableFormats: ['book'], formatLabels: { book: committed ? 'Configuration B' : 'Configuration A' } });
+        }
+        if ((pathname.endsWith('/settings') || pathname.endsWith('/settings/reset')) && init.method === 'POST') {
+          committed = true; return response(200, { data: { version: 'settings-v2' } });
+        }
+        if (pathname.endsWith('/settings') && committed) {
+          reloads++;
+          if (failRefresh) return response(503, { message: 'Forced post-commit reload failure' });
+        }
+      });
+      await until(() => !ui.get('#settings-form').hidden, 'Settings cached before the Title configuration');
+      ui.get('[data-view="queue"]').click(); await ui.open();
+      assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration A/);
+      ui.get('#close-request').click(); await settle();
+      ui.get('[data-view="settings"]').click(); await settle();
+      ui.allowDiscard();
+      if (commit === 'library reset') ui.get('#settings-reset').click();
+      else {
+        if (commit === 'library save') {
+          const override = ui.get('[data-setting-key="loginNote"] .settings-override-toggle');
+          override.checked = true; override.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+        }
+        ui.edit('#patron-login-note', 'Configuration B note');
+        ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+      }
+      await until(() => /could not be refreshed/.test(ui.get('#settings-message').textContent), 'confirmed commit and failed presentation refresh');
+      assert.equal(committed, true); assert.equal(ui.get('#settings-save-title').textContent, 'Saved; reload needed');
+      const staleControlsInert = ui.get('#settings-form').inert;
+      const posts = ui.calls.filter(call => call.init.method === 'POST').length;
+      ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+      await settle(); assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, posts);
+      ui.get('[data-view="queue"]').click(); await ui.open();
+      assert.equal(configurationReads, 2, 'confirmed source change forces a configuration fetch despite failed refresh');
+      assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration B/);
+      assert.equal(staleControlsInert, true, 'stale Settings controls cannot be edited as authoritative');
+      ui.get('#close-request').click(); await settle();
+      const beforeReturn = reloads; failRefresh = false;
+      ui.get('[data-view="settings"]').click();
+      await until(() => reloads > beforeReturn && !ui.get('#settings-form').inert, 'returning to Settings reviews the confirmed commit');
+      assert.equal(ui.get('#settings-save-title').textContent, 'No changes');
+    }));
+}
+
+for (const kind of ['Title', 'Additional Copy']) {
+  test(`own Staff Access metadata revision reaches shell/Profile and subsequent ${kind} delete`, () =>
+    fixture('?stage=settings&settingsScope=2', async ui => {
+      let configurationReads = 0, deletes = 0, saved = false;
+      ui.setApi(({ pathname, init }) => {
+        const current = ui.readStaff();
+        if (pathname.endsWith('/users') && init.method === 'GET') return response(200, { users: [{ ...current, active: true, userPrincipalName: current.authenticationEmail }] });
+        if (pathname.endsWith('/audit')) return response(200, { data: [] });
+        if (pathname.endsWith('/users/20') && init.method === 'PATCH') {
+          const body = JSON.parse(init.body);
+          assert.equal(body.email, current.authenticationEmail); assert.equal(body.version, 'actor-v1');
+          ui.setStaff({ displayName: body.displayName, notificationEmail: body.notificationEmail, version: 'actor-v2' });
+          saved = true; return response(200, { user: { ...ui.readStaff(), active: true } });
+        }
+        if (pathname === '/api/asap/config') { configurationReads++; return response(200, { availableFormats: ['book'], formatLabels: { book: 'Cached configuration' } }); }
+        if (init.method === 'DELETE') {
+          assert.equal(JSON.parse(init.body).actorVersion, 'actor-v2'); deletes++;
+          return response(200, { deleted: true });
+        }
+      });
+      ui.get('[data-view="queue"]').click(); ui.get('[data-status="closed"]').click(); await ui.open();
+      ui.get('#close-request').click(); await settle();
+      ui.get('[data-view="settings"]').click(); await settle();
+      ui.get('[data-settings-panel="staff"]').click();
+      await until(() => ui.get('.settings-staff-row'), 'own admin roster row');
+      ui.edit('.settings-staff-row input[aria-label^="Display name"]', 'New authoritative name');
+      ui.edit('.settings-staff-row input[aria-label^="Notification email"]', 'new-notification@example.org');
+      [...ui.get('.settings-staff-row').querySelectorAll('button')].find(button => button.textContent === 'Save profile').click();
+      await until(() => saved && /Staff profile saved/.test(ui.get('#staff-access-status').textContent) && !ui.get('#settings-form').inert, 'metadata committed and authoritative session/roster accepted');
+      assert.equal(ui.get('#workspace').hidden, false); assert.equal(ui.get('#staff-identity').textContent, 'New authoritative name');
+      assert.equal(ui.get('#notification-email').value, 'new-notification@example.org');
+      ui.get('[data-view="profile"]').click(); await settle();
+      assert.equal(ui.get('#notification-email').value, 'new-notification@example.org');
+      ui.get('[data-view="queue"]').click(); await ui.open();
+      assert.equal(configurationReads, 1, 'staff roster mutation preserves the Title configuration cache');
+      if (kind === 'Additional Copy') {
+        ui.get('#close-request').click(); await settle();
+        ui.get('[data-view="additional-copies"]').click();
+        ui.get('[data-copy-status="closed"]').click();
+        await until(() => ui.get('#additional-copy-grid .grid-open'), 'closed Copy queue opener');
+        ui.get('#additional-copy-grid .grid-open').click();
+        await until(() => ui.get('#request-dialog').open, 'Copy opened');
+      }
+      ui.allowDiscard();
+      [...ui.get('.action-bar').querySelectorAll('button')].find(button => button.textContent.includes('Permanently delete')).click();
+      await until(() => deletes === 1 && !ui.get('#request-dialog').open, 'explicit delete with accepted actorVersion');
+    }, { role: 'admin', staff: { tenantId: 'same-actor', authenticationEmail: 'admin@example.org', organizationId: 2 }, status: 'closed',
+      copyRequest: { status: 'closed', capabilities: { canDelete: true } } }));
+
+  test(`external same-actor rowversion conflict refreshes ${kind} actorVersion without replay`, () =>
+    fixture(kind === 'Title' ? `?stage=closed&scope=2&request=${id}` : '?stage=additional_copies&scope=2&copyStatus=closed&request=71', async ui => {
+      const versions = [];
+      ui.setApi(({ init }) => {
+        if (init.method === 'DELETE') {
+          versions.push(JSON.parse(init.body).actorVersion);
+          if (versions.length === 1) return response(409, { code: 'actor_changed_since_preview', message: 'Actor changed since preview. Review before retrying.' });
+          return response(200, { deleted: true });
+        }
+      });
+      await until(() => ui.get('#request-dialog').open, 'closed detail');
+      ui.setStaff({ version: 'external-v2', displayName: 'External metadata', notificationEmail: 'external@example.org' });
+      ui.allowDiscard();
+      const remove = () => [...ui.get('.action-bar').querySelectorAll('button')].find(button => button.textContent.includes('Permanently delete')).click();
+      remove();
+      await until(() => /Actor changed since preview/.test(ui.get('#app-status').textContent), 'authoritative conflict reviewed');
+      assert.deepEqual(versions, ['actor-v1'], 'no destructive replay after accepting a new preference revision');
+      assert.equal(ui.get('#staff-identity').textContent, 'External metadata'); assert.equal(ui.get('#notification-email').value, 'external@example.org');
+      remove(); await until(() => versions.length === 2 && !ui.get('#request-dialog').open, 'deliberate retry');
+      assert.deepEqual(versions, ['actor-v1', 'external-v2']);
+    }, { staff: { tenantId: 'external-revision', authenticationEmail: 'admin@example.org' }, status: 'closed',
+      copyRequest: { status: 'closed', capabilities: { canDelete: true } } }));
+}
+
+for (const boundary of ['authenticationEmail', 'role', 'organizationId']) {
+  test(`own Staff Access ${boundary} change follows the global identity/access boundary`, () =>
+    fixture('?stage=settings&settingsScope=system', async ui => {
+      ui.setApi(({ pathname, init }) => {
+        const current = ui.readStaff();
+        if (pathname.endsWith('/users') && init.method === 'GET') return response(200, { users: [{ ...current, active: true, userPrincipalName: current.authenticationEmail }] });
+        if (pathname.endsWith('/audit')) return response(200, { data: [] });
+        if (pathname.endsWith(boundary === 'authenticationEmail' ? '/users/20' : '/users/20/role') && ['PATCH', 'POST'].includes(init.method)) {
+          ui.setStaff(boundary === 'authenticationEmail' ? { authenticationEmail: 'changed@example.org', version: 'access-v2' }
+            : boundary === 'role' ? { role: 'staff', version: 'access-v2' } : { organizationId: 2, version: 'access-v2' });
+          return response(200, { user: ui.readStaff() });
+        }
+      });
+      ui.get('[data-settings-panel="staff"]').click(); await until(() => ui.get('.settings-staff-row'), 'own roster');
+      if (boundary === 'authenticationEmail') ui.edit('.settings-staff-row input[aria-label^="Authentication email"]', 'changed@example.org');
+      else {
+        const role = ui.get('.settings-staff-row select[aria-label^="Role"]'); role.value = 'staff';
+        role.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+      }
+      [...ui.get('.settings-staff-row').querySelectorAll('button')].find(button => button.textContent === (boundary === 'authenticationEmail' ? 'Save profile' : 'Update access')).click();
+      await until(() => ui.get('#workspace').hidden, 'identity boundary revokes the workspace');
+      assert.match(ui.get('#signed-out-message').textContent, /Staff (profile saved|access updated)/, 'confirmed commit receipt survives access loss');
+    }, { staff: { tenantId: 'access-boundary', authenticationEmail: 'admin@example.org' } }));
+}
+
+for (const status of [401, 403]) {
+  test(`Polaris diagnostic ${status} follows the global session/access boundary`, () =>
+    fixture('?stage=settings&settingsScope=system#settings-polaris', async ui => {
+      ui.setApi(({ pathname }) => pathname.endsWith('/polaris/test') ? response(status, { code: 'staff_session_invalid', accessAllowed: false }) : undefined);
+      ui.get('#btn-test-polaris').click(); await until(() => ui.get('#workspace').hidden, 'diagnostic access loss');
+      assert.doesNotMatch(ui.get('#signed-out-message').textContent, /Settings change outcome is uncertain/);
+    }, { staff: { tenantId: 'polaris-boundary', authenticationEmail: 'admin@example.org' } }));
+}
+
+test('programmatic Settings domain changes advance navigation consent without dirtying baseline population', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    ui.get('[data-view="settings"]').click();
+    await until(() => !ui.get('#settings-form').hidden, 'clean Settings baseline');
+    ui.get('[data-settings-panel="patron"]').click();
+    assert.equal(protectedUnload(ui), false);
+    ui.edit('#patron-login-note', 'Already dirty Settings');
+    const accepted = ui.dom.window.location.href;
+    let validateScope;
+    ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
+      ? new Promise(resolve => { validateScope = resolve; }) : undefined);
+    ui.dom.window.confirm = message => { ui.confirms.push(message); return ui.confirms.length === 1; };
+    ui.dom.window.history.go(-2);
+    await until(() => validateScope, 'route validation pending after Settings consent');
+    ui.get('#add-publication-option').click();
+    validateScope(response(200, { data: [{ id: 2, name: 'Library A', isActive: true }] }));
+    await until(() => ui.dom.window.location.href === accepted, 'new domain value retains the Settings source');
+    assert.equal(ui.confirms.length, 2);
+    assert.equal(ui.get('#patron-login-note').value, 'Already dirty Settings');
+    assert.equal(protectedUnload(ui), true);
+  }));
+
+for (const review of ['unauthenticated', 'active', 'unavailable']) {
+  test(`lost Sign Out response uses the HTTP session boundary when review is ${review}`, () =>
+    fixture('?stage=suggestion&scope=2', async ui => {
+      let reviewing = false, reviewReads = 0;
+      ui.setApi(({ pathname }) => {
+        if (pathname.endsWith('/sign-out')) { reviewing = true; throw new Error('Response lost after cookie clear'); }
+        if (reviewing && pathname.endsWith('/session')) {
+          reviewReads++;
+          if (review === 'unavailable') throw new Error('Session unavailable');
+          return response(200, review === 'unauthenticated' ? { authenticated: false, accessAllowed: false }
+            : { authenticated: true, accessAllowed: true, staff: ui.readStaff(), antiforgeryToken: 'fresh-token' });
+        }
+      });
+      ui.get('#sign-out').click();
+      await until(() => reviewReads && (review === 'active' ? /session is still active/.test(ui.get('#app-status').textContent)
+        : ui.get('#workspace').hidden), 'authoritative Sign Out review completed');
+      assert.equal(ui.get('#workspace').hidden, review !== 'active');
+      if (review === 'unavailable') assert.match(ui.get('#signed-out-message').textContent, /Sign out result could not be confirmed/i);
+      if (review === 'unauthenticated') assert.match(ui.get('#signed-out-message').textContent, /session ended|signed out/i);
+      assert.doesNotMatch(ui.get('#signed-out-message').textContent, /did not complete/);
+    }, { staff: { tenantId: 'audit-tenant', authenticationEmail: 'staff@example.org' } }));
+}
+
+test('same-actor Profile revision preserves an Operations attempt started before preference refresh', () =>
+  fixture('?stage=operations', async ui => {
+    let completeOperation;
+    ui.setApi(({ pathname, init }) => {
+      if (pathname.endsWith('/workflow/run-now')) return new Promise(done => { completeOperation = done; });
+      if (pathname.endsWith('/profile')) {
+        ui.setStaff({ version: 'actor-v2', weeklyActionSummaryEmail: 'updated@example.org' });
+        return response(200, { staff: ui.readStaff() });
+      }
+    });
+    ui.get('#run-workflow-now').click(); await until(() => completeOperation, 'operation pending');
+    ui.get('[data-view="profile"]').click(); await settle();
+    ui.edit('#weekly-email', 'updated@example.org'); submitProfile(ui);
+    await until(() => /Profile saved\./.test(ui.get('#app-status').textContent), 'preferences refreshed');
+    completeOperation(response(202, { code: 'queued' })); await settle();
+    assert.equal(ui.params().get('stage'), 'profile');
+    assert.equal(ui.get('#weekly-email').value, 'updated@example.org');
+    ui.get('[data-view="operations"]').click(); await settle();
+    assert.equal(ui.get('#run-workflow-now').disabled, false);
+    assert.equal(ui.dom.window.sessionStorage.getItem(operationStorageKey(ui.readStaff())), null);
+  }, { staff: profileStaff }));
+
+// #353 pins current behavior before extraction. The two explicitly labelled
+// limitations below are improved by the owning draft/controller phases.
+test('characterization: declined editor Revert preserves both editor and inline draft', () =>
+  fixture(`?request=${id}`, async ui => {
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    ui.edit('.edit-form input', 'Editor draft');
+    actionButton('Revert changes', ui.get('.edit-form')).click();
+    assert.equal(ui.get('.edit-form input').value, 'Editor draft');
+    assert.equal(assignment.querySelector('select').value, '21');
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(protectedUnload(ui), true);
+  }));
+
+test('editor Revert preserves competing inline UI and its draft registration', () =>
+  fixture(`?request=${id}`, async ui => {
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    ui.edit('.edit-form input', 'Editor draft');
+    ui.allowDiscard(); actionButton('Revert changes', ui.get('.edit-form')).click();
+    assert.equal(assignment.isConnected, true);
+    assert.equal(ui.get('.edit-form input').value, 'Saved title');
+    assert.equal(protectedUnload(ui), true);
+    actionButton('Claim').click(); await settle();
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(assignment.querySelector('select').value, '21');
+    submitForm(ui, assignment); await until(() => !assignment.isConnected, 'retained inline draft submits');
+    assert.equal(requestMutations(ui).length, 1);
+  }));
+
+test('Additional Copy reminder owns a guarded draft and explicit Cancel lifetime', () =>
+  fixture(`?stage=pending_hold&request=${id}`, async ui => {
+    const opener = actionButton('Additional copy'); opener.click();
+    await until(() => ui.get('#additional-copy-create-dialog').open, 'copy preview');
+    ui.get('#additional-copy-reminder').checked = true;
+    ui.get('#additional-copy-reminder').dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+    assert.equal(protectedUnload(ui), true, 'changed reminder is an owned draft');
+    ui.get('#cancel-additional-copy').click();
+    assert.equal(ui.get('#additional-copy-create-dialog').open, false);
+    assert.equal(ui.get('#additional-copy-reminder').checked, false);
+    assert.equal(protectedUnload(ui), false, 'Cancel releases only the reminder registration');
+    assert.equal(document.activeElement, opener);
+    assert.equal(requestMutations(ui).length, 0);
+  }, { status: 'pending_hold' }));
+
+test('Cancel Additional Copy reminder preserves a competing parent editor draft', () =>
+  fixture(`?stage=pending_hold&request=${id}`, async ui => {
+    await openCopyPreview(ui);
+    ui.edit('.edit-form input', 'Parent draft');
+    ui.get('#additional-copy-reminder').checked = true;
+    ui.get('#cancel-additional-copy').click();
+    assert.equal(ui.get('.edit-form input').value, 'Parent draft');
+    assert.equal(protectedUnload(ui), true);
+    assert.equal(requestMutations(ui).length, 0);
+  }, { status: 'pending_hold' }));
+
+test('Additional Copy preview cannot attach a newer source version to a stale parent', () =>
+  fixture(`?stage=pending_hold&request=${id}`, async ui => {
+    ui.setApi(({ pathname, init }) => pathname.endsWith('/additional-copy') && init.method === 'GET'
+      ? response(200, { version: 'v2', bibid: 9001, openCount: 0 }) : undefined);
+    actionButton('Additional copy').click();
+    await until(() => /request changed.*Reload/i.test(ui.get('#app-status').textContent), 'preview detects invalidated parent');
+    assert.equal(ui.get('#additional-copy-create-dialog').open, false);
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(ui.dom.window.sessionStorage.getItem(copyStorageKey(actorA)), null);
+  }, { status: 'pending_hold', staff: actorA }));
+
+test('authoritative parent replacement disposes clean Copy child and its stale submit', () =>
+  fixture(`?stage=pending_hold&request=${id}`, async ui => {
+    await openCopyPreview(ui);
+    actionButton('Claim').click();
+    await until(() => !ui.get('#additional-copy-create-dialog').open, 'parent replacement disposes child');
+    assert.equal(protectedUnload(ui), false);
+    submitCopy(ui); await settle();
+    assert.equal(ui.calls.filter(call => call.init.method === 'POST' && call.url.endsWith('/additional-copy')).length, 0);
+  }, { status: 'pending_hold', staff: actorA }));
+
+test('characterization: definitive inline failure preserves values and competing registration', () =>
+  fixture(`?request=${id}`, async ui => {
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    ui.setOperation(() => response(400, { message: 'Assignment rejected' }));
+    submitForm(ui, assignment);
+    await until(() => /Assignment rejected/.test(ui.get('#app-status').textContent), 'definite failure');
+    assert.equal(assignment.querySelector('select').value, '21');
+    assert.equal(assignment.querySelector('select').disabled, false);
+    assert.equal(protectedUnload(ui), true);
+    actionButton('Claim').click(); await settle();
+    assert.equal(requestMutations(ui).length, 1);
+    assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+  }));
+
+test('characterization: clean open assignment is disposed on departure and cannot submit', () =>
+  fixture(`?request=${id}`, async ui => {
+    const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    ui.get('[data-view="profile"]').click(); await settle();
+    assert.equal(ui.confirms.length, 0);
+    assert.equal(assignment.isConnected, false);
+    submitForm(ui, assignment); await settle();
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(ui.get('#profile-view').hidden, false);
+  }));
+
+for (const view of ['additional-copies', 'settings']) {
+  test(`characterization: Recent Requests from ${view} converges on title route`, () =>
+    fixture('?stage=suggestion&scope=2', async ui => {
+      await ui.open(); ui.get('#close-request').click(); await settle();
+      ui.get(`[data-view="${view}"]`).click(); await settle();
+      ui.get('#recent-request-list button').click();
+      await until(() => ui.get('#request-dialog').open, 'recent detail');
+      assert.equal(ui.params().get('request'), id);
+      assert.equal(ui.params().get('stage'), 'suggestion');
+      assert.equal(ui.get('#queue-view').hidden, false);
+      assert.equal(ui.get('#additional-copy-view').hidden, true);
+      assert.equal(ui.get('#settings-view').hidden, true);
+    }, { staff: { ...actorA, authenticationEmail: 'staff@example.org' } }));
+}
+
+test('Suggestion lookup returning exactly to baseline releases its draft guard', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    ui.get('#new-suggestion').click();
+    ui.edit('input[aria-label="Patron barcode or name"]', 'Unsaved patron');
+    assert.equal(protectedUnload(ui), true);
+    ui.edit('input[aria-label="Patron barcode or name"]', '');
+    assert.equal(protectedUnload(ui), false);
+    ui.get('#close-staff-suggestion').click(); await settle();
+    assert.equal(ui.get('#staff-suggestion-dialog').open, false);
+    assert.equal(ui.confirms.length, 0);
+  }));
+
+for (const [parameter, value] of [['stage', 'new'], ['status', 'submitted']]) {
+  test(`legacy Title detail preserves the supported ${parameter}=${value} alias and unrelated URL context`, () =>
+    fixture(`?${parameter}=${value}&request=${id}&marker=legacy#details`, async ui => {
+      assert.equal(ui.params().get(parameter), value);
+      assert.equal(ui.params().get('marker'), 'legacy');
+      assert.equal(ui.dom.window.location.hash, '#details');
+      assert.equal(ui.get('#request-dialog').open, true);
+      assert.equal(ui.get('#queue-view').hidden, false);
+    }));
+}
+
+for (const copy of [false, true]) {
+  const view = copy ? 'additional-copies' : 'queue';
+  const grid = copy ? '#additional-copy-grid' : '#request-grid';
+  const filter = copy ? '#additional-copy-claim-filter' : '#claim-filter';
+  for (const change of ['cleanup', 'profile', 'roster only', 'failed cleanup review', 'unconfirmed cleanup review']) {
+    test(`authoritative projections: ${view} after Staff Access ${change}`, () =>
+      fixture(`?stage=${copy ? 'additional_copies' : 'suggestion'}&scope=2`, async ui => {
+        let committed = false, queueReads = 0;
+        const staffB = { id: '21', displayName: 'Staff B', userPrincipalName: 'b@example.org',
+          role: 'staff', organizationId: 2, active: true, version: 'b-v1' };
+        ui.setApi(({ pathname, init }) => {
+          if (pathname.endsWith('/users') && init.method === 'GET') {
+            if (committed && change === 'failed cleanup review') return response(503, { message: 'Roster unavailable' });
+            return response(200, { users: [{ ...staffB, active: !committed || change === 'profile' }] });
+          }
+          if (pathname.endsWith('/audit')) return response(200, { data: [] });
+          if (pathname.endsWith('/users/21') && ['DELETE', 'PATCH'].includes(init.method)) {
+            committed = true;
+            if (change === 'unconfirmed cleanup review') return response(503, { message: 'Committed response lost' });
+            return response(200, { user: staffB, cleanup: { openTitleClaimsCleared: 1, openAdditionalCopyClaimsCleared: 1 } });
+          }
+          if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
+            queueReads++;
+            const item = copy ? ui.readCopyRequest() : ui.readRequest();
+            return response(200, { scope: '2', status: 'open',
+              organizations: [{ id: 2, name: 'Library A' }], availableLibraries: [{ id: 2, name: 'Library A' }],
+              items: [{ ...item, claimedByStaffUserId: change === 'profile' ? '21' : null,
+                claimedByDisplayName: change === 'profile' ? 'Renamed Staff B' : null }] });
+          }
+        });
+        await until(() => /Staff B/.test(ui.get(grid).textContent), 'original claim projection loaded');
+        ui.get('[data-view="settings"]').click();
+        await until(() => !ui.get('#settings-form').hidden, 'Settings loaded');
+        ui.get('[data-settings-panel="staff"]').click();
+        await until(() => ui.get('.settings-staff-row'), 'Staff B roster loaded');
+        if (change !== 'roster only') {
+          ui.allowDiscard();
+          if (change === 'profile') ui.edit('.settings-staff-row input[aria-label^="Display name"]', 'Renamed Staff B');
+          [...ui.get('.settings-staff-row').querySelectorAll('button')]
+            .find(button => button.textContent === (change === 'profile' ? 'Save profile' : 'Deactivate')).click();
+          await until(() => committed && !ui.get('#settings-form').hasAttribute('aria-busy') &&
+            /deactivated|profile saved|uncertain/.test(ui.get('#staff-access-status').textContent + ui.get('#settings-message').textContent), 'Staff Access committed and review settled');
+          if (change === 'unconfirmed cleanup review') {
+            ui.get('#staff-refresh').click();
+            await until(() => /Staff access loaded/.test(ui.get('#staff-access-status').textContent) && !ui.get('#settings-form').inert, 'uncertain mutation authoritatively reviewed');
+          }
+        }
+        ui.get(`[data-view="${view}"]`).click();
+        await settle();
+        if (change === 'roster only') {
+          assert.equal(queueReads, 0, 'ordinary roster review preserves the loaded queue');
+          assert.match(ui.get(grid).textContent, /Staff B/);
+          return;
+        }
+        await until(() => queueReads === 1, 'same-scope queue refreshed after committed Staff Access');
+        await until(() => ui.get(grid).textContent.includes(change === 'profile' ? 'Renamed Staff B' : 'Unclaimed'), 'fresh claim presentation');
+        if (change === 'profile') return;
+        ui.get(filter).value = 'mine'; ui.get(filter).dispatchEvent(new ui.dom.window.Event('change'));
+        await until(() => !ui.get(`${grid} .grid-open`), 'Mine excludes the cleared claim');
+        ui.get(filter).value = 'unclaimed'; ui.get(filter).dispatchEvent(new ui.dom.window.Event('change'));
+        await until(() => ui.get(`${grid} .grid-open`), 'Unclaimed includes the refreshed claim');
+        assert.doesNotMatch(ui.get(grid).textContent, /Staff B/);
+      }, { request: { claimedByStaffUserId: '21', claimedByDisplayName: 'Staff B' },
+        copyRequest: { claimedByStaffUserId: '21', claimedByDisplayName: 'Staff B' } }));
   }
-  assert.equal(failed, 0, `${failed}/${cases.length} navigation/draft journeys failed`);
-  console.log(`${cases.length} staff navigation/draft journeys passed.`);
+  for (const uncertain of [false, true]) {
+    test(`authoritative projections: ${view} configuration ${uncertain ? 'uncertain review' : 'commit'} survives failed queue refresh`, () =>
+      fixture('?stage=settings&settingsScope=system', async ui => {
+        let changed = false, available = false, queueReads = 0;
+        ui.setApi(({ pathname, init }) => {
+          if (pathname.endsWith('/settings') && init.method === 'POST') {
+            changed = true;
+            return response(uncertain ? 503 : 200, { data: { version: 'v2' }, message: 'Lost configuration response' });
+          }
+          if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
+            queueReads++;
+            if (changed && !available) return response(503, { message: 'Queue review unavailable' });
+            return response(200, { scope: 'all', status: 'open',
+              organizations: [{ id: 2, name: 'Library A' }], availableLibraries: [{ id: 2, name: 'Library A' }],
+              items: [{ ...(copy ? ui.readCopyRequest() : ui.readRequest()), title: changed ? 'Reviewed request' : 'Before configuration commit' }] });
+          }
+        });
+        await until(() => !ui.get('#settings-form').hidden, 'Settings loaded');
+        ui.get(`[data-view="${view}"]`).click();
+        await until(() => /Before configuration commit/.test(ui.get(grid).textContent), 'pre-change queue');
+        ui.get('[data-view="settings"]').click(); await settle();
+        ui.edit('#patron-login-note', 'New configuration');
+        ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+        await until(() => changed && !ui.get('#settings-form').hasAttribute('aria-busy'), 'configuration attempt settled');
+        if (uncertain) {
+          ui.allowDiscard();
+          ui.get('#settings-refresh').click();
+          await until(() => !ui.get('#settings-form').inert, 'uncertain configuration authoritatively reviewed');
+        }
+        assert.equal(ui.get(`${grid} .grid-open`), null, 'affected pre-change projection retired');
+        const before = queueReads;
+        ui.get(`[data-view="${view}"]`).click();
+        await until(() => queueReads > before && /Queue review unavailable/.test(ui.get('#app-status').textContent), 'same-scope failed refresh presented');
+        assert.equal(ui.get(`${grid} .grid-open`), null);
+        assert.doesNotMatch(ui.get(grid).textContent, /Before configuration commit/);
+        assert.match(ui.get(copy ? '#additional-copy-summary' : '#queue-summary').textContent, /unavailable/i);
+        available = true; ui.get(copy ? '#refresh-additional-copies' : '#refresh-queue').click();
+        await until(() => /Reviewed request/.test(ui.get(grid).textContent), 'explicit retry renders fresh data');
+      }, { copyRequest: {} }));
+  }
+  for (const settingsScope of ['2', '3', 'system', '1']) {
+    test(`authoritative projections: ${view} configuration scope ${settingsScope}`, () =>
+      fixture(`?stage=settings&settingsScope=${settingsScope}`, async ui => {
+        let committed = false, queueReads = 0;
+        ui.setApi(({ pathname, init, parsed }) => {
+          if (pathname.endsWith('/settings') && init.method === 'POST') { committed = true; return response(200, { data: { version: 'v2' } }); }
+          if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
+            queueReads++;
+            const item = copy ? ui.readCopyRequest() : ui.readRequest();
+            return response(200, { scope: parsed.searchParams.get('scope'), status: 'open',
+              organizations: [{ id: 2, name: 'Library A' }], availableLibraries: [{ id: 2, name: 'Library A' }],
+              items: [{ ...item, formatLabel: committed ? 'New format' : 'Old format',
+                workflowContext: { outstandingTimeoutEnabled: true, outstandingTimeoutDays: committed ? 9 : 5 },
+                timeoutContext: { enabled: true, days: committed ? 9 : 5 } }] });
+          }
+        });
+        await until(() => !ui.get('#settings-form').hidden, 'Settings configuration loaded');
+        ui.get('[data-view="queue"]').click();
+        await until(() => ui.get('#library-scope option[value="2"]'), 'operational choices loaded');
+        ui.get('#library-scope').value = '2'; ui.get('#library-scope').dispatchEvent(new ui.dom.window.Event('change'));
+        await settle();
+        if (copy) ui.get('[data-view="additional-copies"]').click();
+        await until(() => /Old format/.test(ui.get(grid).textContent), 'original workflow DTO');
+        ui.get('[data-view="settings"]').click(); await settle();
+        if (['2', '3'].includes(settingsScope)) {
+          const toggle = ui.get('[data-setting-key="loginNote"] .settings-override-toggle');
+          toggle.checked = true; toggle.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+        }
+        ui.edit('#patron-login-note', 'Committed configuration');
+        ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+        await until(() => committed && !ui.get('#settings-form').inert, 'configuration committed and reviewed');
+        const before = queueReads;
+        ui.get(`[data-view="${view}"]`).click(); await settle();
+        if (settingsScope === '3') {
+          assert.equal(queueReads, before, 'unaffected library projection stays loaded');
+          assert.match(ui.get(grid).textContent, /Old format/);
+        } else {
+          await until(() => queueReads === before + 1 && /New format/.test(ui.get(grid).textContent), 'affected same-scope DTO refreshed');
+          assert.match(ui.get(grid).textContent, /9 days/);
+          assert.doesNotMatch(ui.get(grid).textContent, /Old format|5 days/);
+        }
+      }, { copyRequest: {} }));
+  }
+  for (const failed of [false, true]) {
+    test(`authoritative projections: ${view} current-library deactivation${failed ? ' with failed refresh' : ''}`, () =>
+      fixture(`?stage=${copy ? 'additional_copies' : 'suggestion'}&scope=2&marker=keep#anchor`, async ui => {
+        let committed = false, queueReads = 0;
+        const libraries = () => [{ id: 2, name: 'Library A', isActive: !committed, version: 'org-v1' },
+          { id: 3, name: 'Library B', isActive: true }];
+        ui.setApi(({ pathname, init, parsed }) => {
+          if (pathname.endsWith('/organizations')) return response(200, { data: libraries() });
+          if (pathname.endsWith('/organizations/2/deactivate')) { committed = true; return response(200, { data: {} }); }
+          if (pathname.endsWith('/settings') && committed && failed) return response(503, { message: 'Settings unavailable' });
+          if (pathname.endsWith('/title-requests') || pathname.endsWith('/additional-copies')) {
+            queueReads++;
+            if (failed) return response(503, { message: 'Queue unavailable after confirmed deactivation' });
+            assert.equal(parsed.searchParams.get('scope'), 'all', 'invalid scope is retired before queue read');
+            return response(200, { scope: 'all', status: 'open', items: [],
+              organizations: libraries().filter(item => item.isActive), availableLibraries: libraries().filter(item => item.isActive) });
+          }
+        });
+        await until(() => ui.get(`${grid} .grid-open`), 'pre-commit queue snapshot');
+        ui.get('[data-view="operations"]').click(); await settle();
+        ui.get('#operations-scope').value = '2'; ui.get('#operations-scope').dispatchEvent(new ui.dom.window.Event('change'));
+        await settle();
+        ui.get('[data-view="settings"]').click();
+        await until(() => ui.get('[aria-label="Deactivate Library A"]'), 'participation controls');
+        ui.allowDiscard(); ui.get('[aria-label="Deactivate Library A"]').click();
+        await until(() => committed && !ui.get('#settings-refresh').disabled &&
+          /deactivated/.test(ui.get('#settings-message').textContent), 'participation commit settled');
+        assert.equal(ui.get(`${grid} .grid-open`), null, 'commit immediately retires invalid rows');
+        assert.equal(ui.get('#library-scope option[value="2"]'), null, 'cached Title choices retired');
+        assert.equal(ui.get('#additional-copy-library-scope option[value="2"]'), null, 'cached Copy choices retired');
+        assert.equal(ui.get('#operations-scope option[value="2"]'), null, 'Operations choice retired');
+        assert.equal(ui.get('#operations-scope').value, 'all', 'Operations selection canonicalized');
+        ui.get(`[data-view="${view}"]`).click();
+        await until(() => queueReads > 0, 'queue refresh attempted');
+        assert.equal(ui.params().get('scope'), 'all');
+        assert.equal(ui.params().get('marker'), 'keep');
+        assert.equal(ui.get(`${grid} .grid-open`), null, 'failed refresh cannot resurrect invalid rows');
+        ui.get('#new-suggestion').click(); await until(() => ui.get('#staff-suggestion-dialog').open, 'New Suggestion opened');
+        assert.equal(ui.get('[aria-label="Servicing library"] option[value="2"]'), null);
+        ui.get('#close-staff-suggestion').click();
+        ui.get('[data-view="operations"]').click(); await settle();
+        assert.equal(ui.get('#operations-scope option[value="2"]'), null);
+      }, { copyRequest: {} }));
+  }
+}
+
+for (const action of ['activation', 'sync']) {
+  test(`authoritative projections: ${action} refreshes operational library choices and labels`, () =>
+    fixture('?stage=suggestion&scope=2', async ui => {
+      let committed = false;
+      const libraries = () => [{ id: 2, name: committed ? 'Renamed Library A' : 'Library A', isActive: true, version: 'org-v1' },
+        { id: 3, name: 'New Library B', isActive: committed, version: 'org-v1' }];
+      ui.setApi(({ pathname, parsed }) => {
+        if (pathname.endsWith('/organizations')) return response(200, { data: libraries() });
+        if (pathname.endsWith('/organizations/3/activate') || pathname.endsWith('/organizations/sync')) {
+          committed = true; return response(200, { data: { received: 2 } });
+        }
+        if (pathname.endsWith('/title-requests')) return response(200, {
+          scope: parsed.searchParams.get('scope'), items: [ui.readRequest()], organizations: libraries().filter(item => item.isActive) });
+      });
+      await until(() => ui.get('#request-grid .grid-open'), 'initial operational queue');
+      assert.equal(ui.get('#library-scope option[value="3"]'), null);
+      ui.get('[data-view="settings"]').click();
+      await until(() => ui.get('[aria-label="Activate New Library B"]'), 'inactive library listed in Settings');
+      ui.allowDiscard();
+      ui.get(action === 'activation' ? '[aria-label="Activate New Library B"]' : '#btn-sync-organizations').click();
+      await until(() => committed && !ui.get('#settings-form').hasAttribute('aria-busy'), 'catalog change settled');
+      ui.get('[data-view="queue"]').click();
+      await until(() => ui.get('#library-scope option[value="3"]'), 'new authoritative library offered');
+      assert.equal(ui.get('#library-scope option[value="2"]').textContent, 'Renamed Library A');
+      assert.equal(ui.params().get('scope'), '2', 'still-active operational scope preserved');
+      assert.equal(ui.get('#additional-copy-library-scope option[value="3"]').textContent, 'New Library B');
+      assert.equal(ui.get('#operations-scope option[value="3"]').textContent, 'New Library B');
+      ui.get('#new-suggestion').click(); await until(() => ui.get('#staff-suggestion-dialog').open, 'New Suggestion opened');
+      assert.equal(ui.get('[aria-label="Servicing library"] option[value="3"]').textContent, 'New Library B');
+    }, { organizations: [{ id: 2, name: 'Library A', isActive: true }, { id: 3, name: 'New Library B', isActive: false }] }));
+}
+
+test('authoritative projections: unavailable organization review keeps retired rows unavailable until retry', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    let committed = false, available = false, queueReads = 0;
+    ui.setApi(({ pathname, parsed }) => {
+      if (pathname.endsWith('/organizations') && committed) return available
+        ? response(200, { data: [{ id: 3, name: 'Library B', isActive: true }] })
+        : response(503, { message: 'Catalog unavailable' });
+      if (pathname.endsWith('/organizations/sync')) { committed = true; return response(200, { data: { received: 1 } }); }
+      if (pathname.endsWith('/title-requests')) {
+        queueReads++;
+        assert.equal(parsed.searchParams.get('scope'), 'all');
+        return response(200, { scope: 'all', items: [], organizations: [{ id: 3, name: 'Library B' }] });
+      }
+    });
+    await until(() => ui.get('#request-grid .grid-open'), 'pre-sync rows');
+    ui.get('[data-view="settings"]').click(); await until(() => !ui.get('#settings-form').hidden, 'Settings loaded');
+    ui.get('#btn-sync-organizations').click();
+    await until(() => committed && !ui.get('#settings-form').hasAttribute('aria-busy'), 'sync commit and failed review settled');
+    ui.get('[data-view="queue"]').click();
+    await until(() => /Operational libraries could not be reviewed/.test(ui.get('#app-status').textContent), 'catalog failure presented');
+    assert.equal(ui.get('#request-grid .grid-open'), null);
+    assert.equal(ui.get('#library-scope option[value="2"]'), null);
+    assert.equal(queueReads, 0, 'invalid scope cannot dispatch a queue read without authoritative review');
+    available = true; ui.get('[data-view="queue"]').click();
+    await until(() => queueReads === 1 && !ui.get('#queue-view').hidden, 'retry canonically enters the available queue');
+    assert.equal(ui.params().get('scope'), 'all');
+    assert.equal(ui.get('#request-grid .grid-open'), null);
+  }));
+
+test('authoritative projections: system save participation retires the selected library despite failed Settings reload', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    let committed = false;
+    ui.setApi(({ pathname, init, parsed }) => {
+      if (pathname.endsWith('/organizations')) return response(200, { data: [
+        { id: 2, name: 'Library A', isActive: !committed }, { id: 3, name: 'Library B', isActive: true }] });
+      if (pathname.endsWith('/settings') && init.method === 'POST') {
+        assert.deepEqual(JSON.parse(init.body).systemSettings.enabledLibraryOrgIds, [3]);
+        committed = true; return response(200, { data: { version: 'v2' } });
+      }
+      if (pathname.endsWith('/settings') && committed) return response(503, { message: 'Settings reload unavailable' });
+      if (pathname.endsWith('/title-requests')) {
+        assert.equal(parsed.searchParams.get('scope'), 'all');
+        return response(200, { scope: 'all', items: [], organizations: [{ id: 3, name: 'Library B' }] });
+      }
+    });
+    await until(() => ui.get('#request-grid .grid-open'), 'pre-save operational rows');
+    ui.get('[data-view="settings"]').click(); await until(() => !ui.get('#settings-form').hidden, 'system Settings loaded');
+    const enabled = ui.get('[aria-label="Enable Library A"]');
+    enabled.checked = false; enabled.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+    ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+    await until(() => committed && !ui.get('#settings-form').hasAttribute('aria-busy'), 'system participation committed');
+    assert.equal(ui.get('#request-grid .grid-open'), null);
+    assert.equal(ui.get('#library-scope option[value="2"]'), null);
+    ui.get('[data-view="queue"]').click();
+    await until(() => ui.params().get('stage') === 'suggestion' && ui.params().get('scope') === 'all', 'participation save repairs the accepted queue route');
+    assert.equal(ui.get('#operations-scope option[value="2"]'), null);
+    assert.equal(ui.get('#request-grid .grid-open'), null);
+  }));
+
+for (const outcome of ['failed load', 'changed draft decline', 'changed draft accept']) {
+  test(`ownership transfer: initial Settings entry ${outcome}`, () =>
+    fixture('?stage=profile&marker=keep#anchor', async ui => {
+      ui.edit('#weekly-email', 'Profile source draft'); ui.allowDiscard();
+      const url = ui.dom.window.location.href; let complete;
+      ui.setApi(({ pathname }) => pathname.endsWith('/settings')
+        ? new Promise(resolve => { complete = resolve; }) : undefined);
+      ui.get('[data-view="settings"]').click(); await until(() => complete, 'Settings target pending');
+      assert.equal(ui.get('#profile-view').hidden, false);
+      assert.equal(ui.get('#weekly-email').value, 'Profile source draft'); assert.equal(protectedUnload(ui), true);
+      if (outcome === 'failed load') {
+        complete(response(500, { message: 'Settings target unavailable' }));
+        await until(() => /Settings target unavailable/.test(ui.get('#app-status').textContent), 'Settings failure announced');
+        assert.equal(ui.get('#profile-view').hidden, false); assert.equal(ui.dom.window.location.href, url);
+        assert.equal(ui.get('#weekly-email').value, 'Profile source draft'); assert.equal(protectedUnload(ui), true);
+        ui.setApi(null); ui.get('[data-view="settings"]').click();
+        await until(() => !ui.get('#settings-view').hidden && !ui.get('#settings-form').hidden, 'later Settings success commits');
+        assert.equal(protectedUnload(ui), false);
+      } else {
+        ui.edit('#weekly-email', 'New Profile draft'); const initial = ui.confirms.length, accept = outcome.endsWith('accept');
+        ui.dom.window.confirm = message => { ui.confirms.push(message); return accept; };
+        complete(response(200, { orgId: 'system', version: 'settings-v1', stored: {}, effective: {} }));
+        await until(() => ui.confirms.length === initial + 1, 'Settings load requires fresh consent'); await settle();
+        assert.equal(ui.get('#profile-view').hidden, accept);
+        if (!accept) {
+          assert.equal(ui.get('#weekly-email').value, 'New Profile draft'); assert.equal(ui.dom.window.location.href, url);
+          assert.equal(protectedUnload(ui), true);
+        } else assert.equal(ui.params().get('stage'), 'settings');
+      }
+    }));
+}
+
+for (const type of ['title', 'copy']) {
+  for (const failure of ['detail', 'queue']) {
+    test(`ownership transfer: history ${type} failed ${failure} restores the source`, () =>
+      fixture(type === 'title' ? `?stage=suggestion&scope=2&request=${id}` : '?stage=additional_copies&scope=2&request=71', async ui => {
+        await until(() => ui.get('#request-dialog').open, 'initial detail ready');
+        ui.get('[data-view="profile"]').click(); ui.edit('#weekly-email', 'History source draft'); ui.allowDiscard();
+        const url = ui.dom.window.location.href;
+        const path = type === 'title' ? '/title-requests' : '/additional-copies';
+        ui.setApi(({ pathname }) => pathname.endsWith(failure === 'detail' ? `${path}/${type === 'title' ? id : '71'}` : path)
+          ? response(500, { message: 'History target unavailable' }) : undefined);
+        await ui.back(); await until(() => ui.dom.window.location.href === url, 'accepted source history restored');
+        assert.equal(ui.get('#profile-view').hidden, false); assert.equal(ui.get('#weekly-email').value, 'History source draft');
+        assert.equal(ui.get('#request-dialog').open, false); assert.equal(protectedUnload(ui), true);
+        ui.setApi(null); await ui.back(); await until(() => ui.get('#request-dialog').open, 'successful traversal commits');
+        assert.equal(ui.get('#profile-view').hidden, true); assert.equal(protectedUnload(ui), false);
+      }, { copyRequest: {} }));
+  }
+}
+
+test('ownership transfer: duplicate target failure retains the Suggestion owner', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    ui.get('#new-suggestion').click();
+    const scope = ui.get('[aria-label="Servicing library"]');
+    scope.value = '3'; scope.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+    ui.edit('[aria-label="Patron barcode or name"]', '20000000000001');
+    ui.get('#staff-suggestion-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+    await until(() => ui.get('.staff-suggestion-fields'), 'Suggestion editor ready');
+    const field = '.staff-suggestion-fields input[maxlength="500"]'; ui.edit(field, 'Exact duplicate draft');
+    ui.get('#staff-suggestion-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+    await until(() => ui.get('.staff-suggestion-conflict button'), 'duplicate conflict ready');
+    const url = ui.dom.window.location.href; ui.allowDiscard();
+    ui.setApi(({ pathname }) => pathname.endsWith(`/title-requests/${id}`)
+      ? response(500, { message: 'Duplicate target unavailable' }) : undefined);
+    ui.get('.staff-suggestion-conflict button').click();
+    await until(() => /Duplicate target unavailable/.test(ui.get('#app-status').textContent), 'duplicate failure announced');
+    assert.equal(ui.get('#staff-suggestion-dialog').open, true); assert.equal(ui.get(field).value, 'Exact duplicate draft');
+    assert.equal(ui.get('#request-dialog').open, false); assert.equal(ui.dom.window.location.href, url);
+    assert.equal(protectedUnload(ui), true);
+    ui.setApi(null); ui.get('.staff-suggestion-conflict button').click();
+    await until(() => ui.get('#request-dialog').open, 'duplicate retry commits');
+    assert.equal(ui.get('#staff-suggestion-dialog').open, false); assert.equal(protectedUnload(ui), false);
+  }, { requestLibrary: 3 }));
+
+for (const source of ['profile', 'settings']) {
+  for (const failure of ['server', 'transport', 'missing']) {
+    test(`ownership transfer: ${source} Recent Request ${failure} preserves the source`, () =>
+      fixture('?stage=suggestion&scope=2&marker=keep#anchor', async ui => {
+        await ui.open(); ui.get('#close-request').click(); await settle();
+        ui.get(`[data-view="${source}"]`).click();
+        if (source === 'settings') await until(() => !ui.get('#settings-form').hidden, 'Settings ready');
+        const field = source === 'profile' ? '#weekly-email' : '#patron-login-note';
+        ui.edit(field, 'Exact unsaved draft'); ui.allowDiscard();
+        const url = ui.dom.window.location.href;
+        ui.setApi(({ pathname }) => {
+          if (!pathname.endsWith(`/title-requests/${id}`)) return;
+          if (failure === 'transport') throw new Error('Target transport failed');
+          return response(failure === 'missing' ? 404 : 500, { message: 'Target unavailable' });
+        });
+        ui.get('#recent-request-list button').click();
+        await until(() => /unavailable|no longer available|transport failed/i.test(ui.get('#app-status').textContent), 'target error retained');
+        assert.equal(ui.get(field).value, 'Exact unsaved draft');
+        assert.equal(ui.get(`#${source}-view`).hidden, false);
+        assert.equal(ui.dom.window.location.href, url); assert.equal(protectedUnload(ui), true);
+        assert.equal(ui.get('#request-dialog').open, false);
+        if (failure === 'missing') assert.equal(ui.get('#recent-request-list button'), null, '404 forgets only the recent target');
+        else {
+          ui.setApi(null); ui.get('#recent-request-list button').click();
+          await until(() => ui.get('#request-dialog').open, 'successful retry commits');
+          assert.equal(ui.get(`#${source}-view`).hidden, true);
+          assert.equal(ui.params().get('request'), id); assert.equal(protectedUnload(ui), false);
+        }
+      }, { staff: { ...actorA, ...profileStaff, authenticationEmail: 'staff@example.org' } }));
+  }
+  for (const accept of [false, true]) {
+    test(`ownership transfer: ${source} Recent Request changed draft second consent ${accept}`, () =>
+      fixture('?stage=suggestion&scope=2', async ui => {
+        await ui.open(); ui.get('#close-request').click(); await settle();
+        ui.get(`[data-view="${source}"]`).click();
+        if (source === 'settings') await until(() => !ui.get('#settings-form').hidden, 'Settings ready');
+        const field = source === 'profile' ? '#weekly-email' : '#patron-login-note';
+        ui.edit(field, 'First draft'); ui.allowDiscard();
+        const url = ui.dom.window.location.href; let complete;
+        ui.setApi(({ pathname, parsed }) => pathname.endsWith(`/title-requests/${id}`) && parsed.searchParams.get('scope') === 'all'
+          ? new Promise(resolve => { complete = resolve; }) : undefined);
+        ui.get('#recent-request-list button').click(); await until(() => complete, 'target pending');
+        assert.equal(ui.get(field).value, 'First draft'); assert.equal(ui.get('#request-dialog').open, false);
+        ui.edit(field, 'Newer draft'); const initial = ui.confirms.length;
+        ui.dom.window.confirm = message => { ui.confirms.push(message); return accept; };
+        complete(response(200, ui.readRequest()));
+        await until(() => ui.confirms.length === initial + 1, 'fresh consent requested'); await settle();
+        assert.equal(ui.get('#request-dialog').open, accept);
+        assert.equal(ui.get(`#${source}-view`).hidden, accept);
+        if (!accept) {
+          assert.equal(ui.get(field).value, 'Newer draft'); assert.equal(ui.dom.window.location.href, url);
+          assert.equal(protectedUnload(ui), true);
+        } else assert.equal(ui.params().get('request'), id);
+      }, { staff: { ...actorA, ...profileStaff, authenticationEmail: 'staff@example.org' } }));
+  }
+  test(`ownership transfer: ${source} uncertain Sign Out retains exact draft and permits deliberate retry`, () =>
+    fixture(source === 'profile' ? '?stage=profile' : '?stage=settings&settingsScope=system', async ui => {
+      if (source === 'settings') await until(() => !ui.get('#settings-form').hidden, 'Settings ready');
+      const field = source === 'profile' ? '#weekly-email' : '#patron-login-note';
+      ui.edit(field, 'Exact Sign Out draft'); ui.allowDiscard();
+      const url = ui.dom.window.location.href;
+      ui.setApi(({ pathname }) => pathname.endsWith('/sign-out') ? response(503, { message: 'Response lost' }) : undefined);
+      ui.get('#sign-out').click();
+      await until(() => /not confirmed.*session is still active/.test(ui.get('#app-status').textContent), 'authoritative same-session review');
+      assert.equal(ui.get(field).value, 'Exact Sign Out draft'); assert.equal(ui.get(`#${source}-view`).hidden, false);
+      assert.equal(ui.get('#workspace').hidden, false); assert.equal(ui.dom.window.location.href, url);
+      assert.equal(protectedUnload(ui), true);
+      ui.setApi(null); ui.get('#sign-out').click();
+      await until(() => ui.get('#workspace').hidden, 'confirmed retry revokes source');
+      assert.equal(protectedUnload(ui), false);
+      assert.ok(ui.calls.filter(call => call.url.endsWith('/sign-out')).every(call => call.init.signal === undefined));
+    }));
+}
+
+for (const source of ['profile', 'settings']) {
+  for (const review of ['unauthenticated', 'access unavailable', 'malformed', 'unavailable']) {
+    test(`ownership transfer: dirty ${source} Sign Out ${review} revokes conservatively`, () =>
+      fixture(source === 'profile' ? '?stage=profile' : '?stage=settings&settingsScope=system', async ui => {
+        const field = source === 'profile' ? '#weekly-email' : '#patron-login-note';
+        ui.edit(field, 'Revoked draft'); ui.allowDiscard();
+        ui.setApi(({ pathname }) => {
+          if (pathname.endsWith('/sign-out')) return response(503, { message: 'Sign Out response lost' });
+          if (!pathname.endsWith('/session')) return;
+          if (review === 'unavailable') throw new Error('Session unavailable');
+          return response(200, review === 'malformed' ? {} : review === 'unauthenticated'
+            ? { authenticated: false, accessAllowed: false }
+            : { authenticated: true, accessAllowed: false });
+        });
+        ui.get('#sign-out').click(); await until(() => ui.get('#workspace').hidden, 'source revoked after session review');
+        assert.equal(protectedUnload(ui), false);
+        if (source === 'settings') assert.equal(ui.get('#settings-form').hidden, true, 'revoked Settings owner is retired');
+        else assert.notEqual(ui.get(field).value, 'Revoked draft', 'revoked Profile owner is retired');
+        assert.match(ui.get('#signed-out-message').textContent, review === 'unauthenticated' ? /signed out/
+          : review === 'access unavailable' ? /access is not currently available/ : /could not be confirmed/);
+      }));
+  }
+}
+
+for (const view of ['queue', 'additional-copies']) {
+  for (const outcome of ['failure then retry', 'changed draft decline', 'changed draft accept']) {
+    test(`ownership transfer: stale catalog ${view} ${outcome}`, () =>
+      fixture('?stage=settings&settingsScope=system', async ui => {
+        let retired = false, available = true, complete;
+        ui.setApi(({ pathname }) => {
+          if (pathname.endsWith('/organizations/sync')) { retired = true; return response(200, { data: { received: 2 } }); }
+          if (pathname.endsWith('/organizations') && retired && !available) return response(503, { message: 'Catalog unavailable' });
+        });
+        ui.get('#btn-sync-organizations').click();
+        await until(() => retired && !ui.get('#settings-form').hasAttribute('aria-busy'), 'catalog retired');
+        available = false;
+        ui.edit('#patron-login-note', 'Exact catalog draft'); ui.allowDiscard();
+        const url = ui.dom.window.location.href, before = ui.calls.length;
+        if (outcome !== 'failure then retry') {
+          ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
+            ? new Promise(resolve => { complete = resolve; }) : undefined);
+        }
+        ui.get(`[data-view="${view}"]`).click();
+        if (outcome === 'failure then retry') {
+          await until(() => /Operational libraries could not be reviewed/.test(ui.get('#app-status').textContent), 'failed catalog review');
+          assert.equal(ui.get('#patron-login-note').value, 'Exact catalog draft');
+          assert.equal(ui.get('#settings-view').hidden, false); assert.equal(ui.dom.window.location.href, url);
+          assert.equal(protectedUnload(ui), true);
+          assert.equal(ui.calls.slice(before).filter(call => /\/(title-requests|additional-copies)\?/.test(call.url)).length, 0);
+          available = true; ui.get(`[data-view="${view}"]`).click();
+          await until(() => !ui.get(view === 'queue' ? '#queue-view' : '#additional-copy-view').hidden, 'later catalog success commits');
+          assert.equal(protectedUnload(ui), false);
+        } else {
+          await until(() => complete, 'catalog pending'); ui.edit('#patron-login-note', 'New catalog draft');
+          const initial = ui.confirms.length, accept = outcome.endsWith('accept');
+          ui.dom.window.confirm = message => { ui.confirms.push(message); return accept; };
+          complete(response(200, { data: [{ id: 2, name: 'A', isActive: true }] }));
+          await until(() => ui.confirms.length === initial + 1, 'catalog requires second consent'); await settle();
+          assert.equal(ui.get('#settings-view').hidden, accept);
+          if (!accept) {
+            assert.equal(ui.get('#patron-login-note').value, 'New catalog draft'); assert.equal(ui.dom.window.location.href, url);
+            assert.equal(protectedUnload(ui), true);
+          }
+        }
+      }));
+  }
+}
+
+test('ownership transfer: committed Settings scope refreshes the active Staff roster', () =>
+  fixture('?stage=settings&settingsScope=system', async ui => {
+    let complete;
+    ui.setApi(({ pathname, parsed }) => {
+      if (pathname.endsWith('/users')) return response(200, { data: { canAssignSuperAdmin: true, users: [{
+        id: '21', version: 'staff-v1', userPrincipalName: 'staff@example.org', role: 'staff', organizationId: 2, active: true,
+        displayName: parsed.searchParams.get('orgId') === '2' ? 'Library staff' : 'System staff' }] } });
+      if (pathname.endsWith('/audit')) return response(200, { data: [] });
+      if (pathname.endsWith('/settings') && parsed.searchParams.get('orgId') === '2') return new Promise(resolve => { complete = resolve; });
+    });
+    ui.get('[data-settings-panel="staff"]').click(); await until(() => ui.get('[aria-label="Display name for System staff"]'), 'source roster ready');
+    ui.edit('[aria-label="Display name for System staff"]', 'Exact roster draft'); ui.allowDiscard();
+    const url = ui.dom.window.location.href;
+    ui.get('#settings-scope').value = '2'; ui.get('#settings-scope').dispatchEvent(new ui.dom.window.Event('change'));
+    await until(() => complete, 'scope target pending');
+    assert.equal(ui.get('[aria-label="Display name for System staff"]').value, 'Exact roster draft');
+    assert.equal(ui.dom.window.location.href, url); assert.equal(protectedUnload(ui), true);
+    complete(response(200, { orgId: '2', version: 'target-v1', stored: {}, effective: {} }));
+    await until(() => ui.get('[aria-label="Display name for Library staff"]'), 'committed scope automatically reviews its active roster');
+    assert.equal(ui.params().get('settingsScope'), '2'); assert.equal(protectedUnload(ui), false);
+    assert.ok(ui.calls.some(call => call.url.includes('/users?orgId=2')));
+    assert.ok(ui.calls.some(call => call.url.includes('/audit?limit=50&organizationId=2')));
+  }));
+
+for (const failure of ['failed load', 'changed draft']) {
+  test(`ownership transfer: Settings scope ${failure} retains source until commit`, () =>
+    fixture('?stage=settings&settingsScope=system', async ui => {
+      ui.edit('#patron-login-note', 'Scope source draft'); ui.allowDiscard();
+      const url = ui.dom.window.location.href; let complete;
+      ui.setApi(({ pathname, parsed }) => pathname.endsWith('/settings') && parsed.searchParams.get('orgId') === '2'
+        ? new Promise(resolve => { complete = resolve; }) : undefined);
+      ui.get('#settings-scope').value = '2'; ui.get('#settings-scope').dispatchEvent(new ui.dom.window.Event('change'));
+      await until(() => complete, 'scope target pending');
+      assert.equal(ui.get('#settings-form').hidden, false); assert.equal(ui.get('#patron-login-note').value, 'Scope source draft');
+      if (failure === 'failed load') complete(response(500, { message: 'Scope unavailable' }));
+      else {
+        ui.edit('#patron-login-note', 'New scope draft'); ui.dom.window.confirm = () => false;
+        complete(response(200, { orgId: '2', version: 'target-v1', stored: {}, effective: {} }));
+      }
+      await settle();
+      assert.equal(ui.get('#patron-login-note').value, failure === 'failed load' ? 'Scope source draft' : 'New scope draft');
+      assert.equal(ui.get('#settings-scope').value, 'system'); assert.equal(ui.dom.window.location.href, url);
+      assert.equal(protectedUnload(ui), true);
+    }));
+}
+
+test('authoritative projections: email readiness refresh survives failed Settings review', () =>
+  fixture('?stage=settings&settingsScope=system', async ui => {
+    let committed = false, readinessReads = 0;
+    ui.setApi(({ pathname, init }) => {
+      if (pathname.endsWith('/settings') && init.method === 'POST') { committed = true; return response(200, { data: { version: 'v2' } }); }
+      if (pathname.endsWith('/settings') && committed) return response(503, { message: 'Settings review unavailable' });
+      if (pathname.endsWith('/email-readiness')) {
+        readinessReads++;
+        return response(200, { state: committed ? 'ready' : 'not_configured' });
+      }
+    });
+    ui.get('#settings-refresh').click(); await settle();
+    await until(() => !ui.get('#email-readiness-warning').hidden, 'cached email warning');
+    const before = readinessReads;
+    ui.edit('#patron-login-note', 'Commit email configuration');
+    ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+    await until(() => /could not be refreshed/.test(ui.get('#settings-message').textContent), 'confirmed configuration with failed review');
+    await until(() => readinessReads > before && ui.get('#email-readiness-warning').hidden, 'Shell reviews readiness despite failed Settings reload');
+  }));
+
+(async () => {
+  const identitySource = fs.readFileSync(path.join(frontend, 'staff/js/session-identity.js'), 'utf8');
+  ({ actorKey } = await import(`data:text/javascript;base64,${Buffer.from(identitySource).toString('base64')}`));
+  let failed = 0;
+  const selected = cases.filter(item => !process.argv[2] || item.name.includes(process.argv[2]));
+  assert.ok(selected.length, 'the requested journey filter must discover tests');
+  for (const item of selected) {
+    try { await item.body(); console.log(`PASS ${item.name}`); }
+    catch (error) { failed += 1; console.error(`FAIL ${item.name}: ${error.stack}`); }
+  }
+  assert.equal(failed, 0, `${failed}/${selected.length} navigation/draft journeys failed`);
+  console.log(`${selected.length} staff navigation/draft journeys passed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

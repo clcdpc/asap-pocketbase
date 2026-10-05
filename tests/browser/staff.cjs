@@ -323,7 +323,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#request-dialog[open]').waitFor();
     assert.deepEqual(errors, [], `Request detail raised a browser error: ${errors.join('; ')}`);
     assert.equal(await page.evaluate(() => document.activeElement.id), 'close-request');
-    assert.match(page.url(), new RegExp(`[?&]request=${args.primaryRequestId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
+    assert.equal(new URL(page.url()).searchParams.get('request'), args.primaryRequestId);
     assert.equal(await page.locator('#library-scope').inputValue(), 'all');
     const format = page.getByLabel('Format', { exact: true });
     const publication = page.getByLabel('Publication timing', { exact: true });
@@ -1193,7 +1193,13 @@ async function runStaleMutationCompletions(browser, args, report) {
     }
     page.off('request', countStaleCreate);
     await page.goto(`${args.baseOrigin}/staff/?request=${args.staleCreateSourceId}`, { waitUntil: 'networkidle' });
-    const copyRecoveryKey = `asap.staff.unconfirmedCopyCreation.${args.superIdentity.tenantId.toLowerCase()}.${args.superIdentity.staffId}`;
+    const copyRecoveryIdentity = await page.evaluate(async () => {
+      const { staff } = await (await fetch('/api/asap/staff/session')).json();
+      const { copyCreationStorageKey } = await import('/staff/js/copy-creation.js');
+      const { actorKey } = await import('/staff/js/session-identity.js');
+      return { storageKey: copyCreationStorageKey(staff), actorKey: actorKey(staff) };
+    });
+    const copyRecoveryKey = copyRecoveryIdentity.storageKey;
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     await page.locator('#additional-copy-reminder').uncheck();
@@ -1216,8 +1222,10 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.getByRole('button', { name: 'Create task' }).click();
     const acceptedCreate = await delayedMutation.accepted;
     assert.equal(acceptedCreate.status, 200);
+    const sourceDetail = await page.locator('#request-dialog .edit-form').elementHandle();
     const pendingAttempt = await page.evaluate(key =>
       JSON.parse(window.sessionStorage.getItem(key)), copyRecoveryKey);
+    assert.equal(pendingAttempt.actorKey, copyRecoveryIdentity.actorKey, 'durable evidence captures the full session actor');
     assert.equal(pendingAttempt.sourceId, String(args.staleCreateSourceId),
       'the original source version must be saved before the task request is dispatched');
     const createdId = acceptedCreate.json.additionalCopyRequest.id;
@@ -1238,6 +1246,10 @@ async function runStaleMutationCompletions(browser, args, report) {
     );
     assert.equal(createdResponse.status(), 200, await createdResponse.text());
 
+    // The commit receipt precedes the authoritative parent refresh. Wait for
+    // its old controls to retire before opening another child workflow.
+    await page.waitForFunction(form => !form.isConnected, sourceDetail);
+    await sourceDetail.dispose();
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     const uncertainPreview = await context.request.get(
@@ -2554,7 +2566,7 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     assert.equal(suggestionPosts, 1, 'Double submit must issue one staff suggestion request');
     await desktopPage.locator('#staff-suggestion-dialog').waitFor({ state: 'hidden' });
     await desktopPage.locator('#request-dialog[open]').waitFor();
-    assert.match(desktopPage.url(), /[?&]request=[0-9]+$/);
+    assert.match(new URL(desktopPage.url()).searchParams.get('request') || '', /^[1-9]\d*$/);
     assert.match(await desktopPage.locator('#request-dialog-title').textContent(), /Catalog title 9001/i);
     await scan(desktopPage, axeSource, args.artifactRoot, report, 'desktop', 'staff-suggestion-created');
     assert.deepEqual(desktopErrors, [], `Staff suggestion browser flow raised an error: ${desktopErrors.join('; ')}`);
@@ -2757,6 +2769,57 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
   } finally {
     await context.close();
   }
+}
+
+async function runOwnershipTransfers(browser, args, axeSource, report) {
+  const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const page = await context.newPage(), errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const protectedUnload = () => page.evaluate(() => {
+    const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented;
+  });
+  try {
+    for (const source of ['profile', 'settings']) {
+      await page.goto(`${args.baseOrigin}/staff/?stage=suggestion&scope=2&request=${args.primaryRequestId}`, { waitUntil: 'networkidle' });
+      await page.locator('#request-dialog[open]').waitFor();
+      await page.getByRole('button', { name: 'Close request details' }).click();
+      await page.waitForFunction(() => !new URL(location.href).searchParams.has('request'));
+      await page.locator(`[data-view="${source}"]`).click();
+      await page.locator(`#${source}-view`).waitFor({ state: 'visible' });
+      if (source === 'settings') {
+        await page.locator('#settings-form').waitFor({ state: 'visible' });
+        await page.locator('[data-settings-panel="patron"]').click();
+      }
+      const field = page.locator(source === 'profile' ? '#weekly-email' : '#patron-login-note');
+      const draft = source === 'profile' ? 'transfer-draft@example.org' : 'Exact Settings transfer draft';
+      await field.fill(draft); const sourceUrl = page.url();
+      const detailPath = `**/api/asap/staff/title-requests/${args.primaryRequestId}*`;
+      await page.route(detailPath, route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'Transfer target unavailable' }) }));
+      await page.locator('#recent-work summary').click();
+      page.once('dialog', dialog => dialog.accept());
+      await page.locator('#recent-request-list button').first().click();
+      await page.locator('#app-status').filter({ hasText: 'Transfer target unavailable' }).waitFor();
+      assert.equal(await field.inputValue(), draft); assert.equal(page.url(), sourceUrl);
+      assert.equal(await page.locator(`#${source}-view`).isVisible(), true);
+      assert.equal(await page.locator('#request-dialog').isVisible(), false); assert.equal(await protectedUnload(), true);
+      await scan(page, axeSource, args.artifactRoot, report, 'desktop', `${source}-failed-transfer-retains-draft`);
+      await page.unroute(detailPath);
+      const signOutPath = '**/api/asap/staff/sign-out';
+      await page.route(signOutPath, route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ message: 'Sign Out response lost' }) }));
+      page.once('dialog', dialog => dialog.accept()); await page.locator('#sign-out').click();
+      await page.locator('#app-status').filter({ hasText: 'Your staff session is still active' }).waitFor();
+      assert.equal(await field.inputValue(), draft); assert.equal(page.url(), sourceUrl);
+      assert.equal(await page.locator(`#${source}-view`).isVisible(), true); assert.equal(await protectedUnload(), true);
+      await scan(page, axeSource, args.artifactRoot, report, 'desktop', `${source}-unconfirmed-sign-out-retains-draft`);
+      await page.unroute(signOutPath);
+      await page.locator('#recent-work summary').click();
+      page.once('dialog', dialog => dialog.accept()); await page.locator('#recent-request-list button').first().click();
+      await page.locator('#request-dialog[open]').waitFor();
+      assert.equal(new URL(page.url()).searchParams.get('request'), args.primaryRequestId);
+      assert.equal(await page.locator(`#${source}-view`).isVisible(), false); assert.equal(await protectedUnload(), false);
+    }
+    assert.deepEqual(errors, []); assert.equal(traffic.externalRequests, 0);
+  } finally { await context.close(); }
 }
 
 async function runNavigationSupport(browser, args, axeSource, report) {
@@ -3297,6 +3360,115 @@ async function runSettingsUnconfirmedSessionCase(browser, args) {
   }
 }
 
+async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, report) {
+  const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const external = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const page = await context.newPage(), errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const original = (await session(context, args.baseOrigin)).staff;
+  async function reviseStaff(displayName, notificationEmail) {
+    const current = await session(external.context, args.baseOrigin);
+    const result = await external.context.request.patch(`${args.baseOrigin}/api/asap/staff/users/${original.id}`, {
+      headers: { 'X-ASAP-Antiforgery': current.antiforgeryToken },
+      data: { version: current.staff.version, email: original.authenticationEmail, displayName, notificationEmail }
+    });
+    assert.equal(result.status(), 200, await result.text());
+    return (await session(external.context, args.baseOrigin)).staff;
+  }
+  try {
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=system#settings-staff`, { waitUntil: 'networkidle' });
+    await page.locator('#settings-form').waitFor({ state: 'visible' });
+    await page.locator('#settings-nav-staff').click();
+    const row = page.locator('.settings-staff-row').filter({ has: page.getByLabel(`Authentication email for ${original.displayName || original.userPrincipalName}`, { exact: true }) });
+    await row.waitFor();
+    await row.getByLabel(/^Display name/).fill('Authoritative browser actor');
+    await row.getByLabel(/^Notification email/).fill('actor-revision@example.org');
+    await row.getByRole('button', { name: 'Save profile', exact: true }).click();
+    await page.locator('#staff-access-status').filter({ hasText: /Staff profile saved/ }).waitFor();
+    await page.waitForFunction(() => !document.getElementById('settings-form').inert);
+    const revised = (await session(context, args.baseOrigin)).staff;
+    assert.notEqual(revised.version, original.version, 'real SQL Staff Access metadata write advances rowversion');
+    for (const key of ['id', 'tenantId', 'authenticationEmail', 'role', 'organizationId']) assert.equal(revised[key], original[key]);
+    assert.equal(await page.locator('#staff-identity').textContent(), revised.displayName);
+    await page.getByRole('button', { name: 'Profile', exact: true }).click();
+    assert.equal(await page.locator('#notification-email').inputValue(), revised.notificationEmail);
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'staff-access-current-preferences');
+
+    for (const kind of ['Title', 'Additional Copy']) {
+      const copy = kind === 'Additional Copy', id = copy ? args.staleCopyBId : args.staleTitleAId;
+      const detailPath = `/api/asap/staff/${copy ? 'additional-copies' : 'title-requests'}/${id}`;
+      const deletePath = `/api/asap/staff/${copy ? 'additional-copies' : 'requests'}/${id}`;
+      const source = await context.request.get(args.baseOrigin + detailPath);
+      assert.equal(source.status(), 200, await source.text());
+      const snapshot = await source.json();
+      const detailRoute = route => route.fulfill({ status: 200, contentType: 'application/json',
+        json: { ...snapshot, status: 'closed', capabilities: { ...snapshot.capabilities, canDelete: true } } });
+      await page.route(args.baseOrigin + detailPath + '*', detailRoute);
+      const versions = [];
+      let latest = (await session(context, args.baseOrigin)).staff;
+      const deleteRoute = async route => {
+        if (route.request().method() !== 'DELETE') { await route.fallback(); return; }
+        versions.push(route.request().postDataJSON().actorVersion);
+        if (versions.length === 2) {
+          const result = await route.fetch();
+          assert.equal(result.status(), 409, await result.text());
+          assert.equal((await result.json()).code, 'actor_changed_since_preview', 'real backend rejects externally revised actor');
+          await route.fulfill({ response: result });
+        } else {
+          assert.equal(versions.at(-1), latest.version, `${kind} deletion uses accepted authoritative staff rowversion`);
+          await route.fulfill({ status: 200, json: { deleted: true } });
+        }
+      };
+      await page.route(args.baseOrigin + deletePath, deleteRoute);
+      const view = copy ? 'Additional copies' : 'Requests';
+      const stage = copy ? '[data-copy-status="closed"]' : '[data-status="closed"]';
+      await page.getByRole('button', { name: view, exact: true }).click();
+      await page.locator(stage).click();
+      // The real list may contain the source in another stage; the named route intent still opens its authoritative detail.
+      await page.evaluate(({ id, copy }) => {
+        const url = new URL(location.href); url.searchParams.set('request', id);
+        url.searchParams.set('stage', copy ? 'additional_copies' : 'closed');
+        if (copy) url.searchParams.set('copyStatus', 'closed');
+        history.pushState({}, '', url); dispatchEvent(new PopStateEvent('popstate'));
+      }, { id, copy });
+      await page.locator('#request-dialog[open]').waitFor();
+      const remove = async () => {
+        page.once('dialog', dialog => dialog.accept());
+        await page.getByRole('button', { name: copy ? 'Permanently delete task' : 'Permanently delete request', exact: true }).click();
+      };
+      await remove(); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+      assert.equal(versions.length, 1, `${kind} uses the Staff Access revision on its first deliberate delete`);
+      await page.evaluate(({ id }) => {
+        const url = new URL(location.href); url.searchParams.set('request', id);
+        history.pushState({}, '', url); dispatchEvent(new PopStateEvent('popstate'));
+      }, { id });
+      await page.locator('#request-dialog[open]').waitFor();
+      latest = await reviseStaff(`External browser ${kind}`, 'external-revision@example.org');
+      await remove();
+      await page.locator('#app-status').filter({ hasText: /changed.*Reload|no longer actionable/i }).waitFor();
+      assert.equal(versions.length, 2, 'authoritative conflict cannot automatically replay deletion');
+      assert.equal(await page.locator('#staff-identity').textContent(), latest.displayName);
+      await remove(); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+      assert.equal(versions.length, 3); assert.equal(versions[2], latest.version);
+      await page.unroute(args.baseOrigin + detailPath + '*', detailRoute);
+      await page.unroute(args.baseOrigin + deletePath, deleteRoute);
+    }
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.locator('#settings-nav-polaris').click();
+    await page.route('**/api/asap/staff/polaris/test', route => route.fulfill({ status: 502, json: { code: 'polaris_unavailable' } }));
+    await page.locator('#btn-test-polaris').click();
+    await page.locator('#polaris-test-result').filter({ hasText: 'Polaris is unavailable.' }).waitFor();
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'No changes');
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'polaris-diagnostic-unavailable');
+    await page.getByRole('button', { name: 'Profile', exact: true }).click();
+    await page.locator('#profile-view').waitFor({ state: 'visible' });
+    assert.deepEqual(errors, []); assert.equal(traffic.externalRequests + external.traffic.externalRequests, 0);
+  } finally {
+    await reviseStaff(original.displayName, original.notificationEmail);
+    await context.close(); await external.context.close();
+  }
+}
+
 async function runSettingsLayout(browser, args, axeSource, report) {
   const sections = [
     { name: 'start', pairs: [['leap-bib-url-pattern', 'leap-patron-url-pattern']], wide: ['system-staff-url', 'format-icon-url-pattern'] },
@@ -3439,6 +3611,79 @@ async function runSettingsLayout(browser, args, axeSource, report) {
   }
 }
 
+async function runOperationalCatalogCommits(browser, args, axeSource, report) {
+  const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const page = await context.newPage(), errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    const titleResponse = await context.request.get(`${args.baseOrigin}/api/asap/staff/title-requests?scope=2`);
+    assert.equal(titleResponse.status(), 200);
+    const title = (await titleResponse.json()).items[0];
+    assert.ok(title, 'Operational retirement journey requires a real persisted Title projection');
+    const copyResponse = await context.request.get(`${args.baseOrigin}/api/asap/staff/additional-copies?scope=2&status=open`);
+    assert.equal(copyResponse.status(), 200);
+    const copy = (await copyResponse.json()).items[0];
+    assert.ok(copy, 'Operational retirement journey requires a real persisted Copy projection');
+    await page.goto(`${args.baseOrigin}/staff/?stage=${title.status}&scope=2`, { waitUntil: 'networkidle' });
+    await page.locator('#claim-filter').selectOption('all');
+    await page.getByRole('button', { name: `Open request ${title.id}`, exact: true }).waitFor();
+    await page.locator('[data-view="additional-copies"]').click();
+    await page.locator('#additional-copy-claim-filter').selectOption('all');
+    await page.getByRole('button', { name: `Open additional-copy task ${copy.id}`, exact: true }).waitFor();
+    await page.locator('[data-view="operations"]').click();
+    await page.locator('#operations-scope').selectOption('2');
+    await page.locator('[data-view="settings"]').click();
+    await page.locator('#settings-form').waitFor({ state: 'visible' });
+    await page.getByRole('tab', { name: 'Staff access', exact: true }).click();
+    const organizations = await context.request.get(`${args.baseOrigin}/api/asap/staff/organizations`);
+    const library = (await organizations.json()).data.find(item => item.id === 2);
+    assert.equal(library.isActive, true);
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: `Deactivate ${library.name}`, exact: true }).click();
+    await page.locator('#settings-message').filter({ hasText: `${library.name} deactivated.` }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy'));
+    assert.equal(await page.locator('#request-grid .grid-open').count(), 0);
+    assert.equal(await page.locator('#additional-copy-grid .grid-open').count(), 0);
+    assert.equal(await page.locator('#operations-scope').inputValue(), 'all');
+    const failQueue = route => route.fulfill({ status: 503, contentType: 'application/json',
+      json: { message: 'Forced unavailable queue after confirmed participation change' } });
+    await page.route('**/api/asap/staff/title-requests?*', failQueue);
+    await page.route('**/api/asap/staff/additional-copies?*', failQueue);
+    await page.locator('[data-view="queue"]').click();
+    await page.waitForFunction(() => new URL(location.href).searchParams.get('scope') === 'all');
+    await page.locator('#app-status').filter({ hasText: 'Forced unavailable queue' }).waitFor();
+    assert.equal(await page.locator('#request-grid .grid-open').count(), 0);
+    for (const selector of ['#library-scope', '#additional-copy-library-scope', '#operations-scope']) {
+      assert.equal(await page.locator(`${selector} option[value="2"]`).count(), 0);
+    }
+    await page.locator('#new-suggestion').click();
+    await page.locator('#staff-suggestion-dialog[open]').waitFor();
+    assert.equal(await page.getByLabel('Servicing library', { exact: true }).locator('option[value="2"]').count(), 0);
+    await page.keyboard.press('Escape');
+    await page.locator('#staff-suggestion-dialog').waitFor({ state: 'hidden' });
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'operational-catalog-deactivated-unavailable');
+    await page.locator('[data-view="additional-copies"]').click();
+    await page.locator('#app-status').filter({ hasText: 'Forced unavailable queue' }).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get('scope'), 'all');
+    assert.equal(await page.locator('#additional-copy-grid .grid-open').count(), 0);
+    await page.unroute('**/api/asap/staff/title-requests?*', failQueue);
+    await page.unroute('**/api/asap/staff/additional-copies?*', failQueue);
+    await page.locator('[data-view="settings"]').click();
+    await page.getByRole('tab', { name: 'Staff access', exact: true }).click();
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: `Activate ${library.name}`, exact: true }).click();
+    await page.locator('#settings-message').filter({ hasText: `${library.name} activated.` }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy'));
+    await page.locator('[data-view="queue"]').click();
+    await page.locator('#library-scope option[value="2"]').waitFor({ state: 'attached' });
+    await page.locator('#library-scope').selectOption('2');
+    await page.getByRole('button', { name: `Open request ${title.id}`, exact: true }).waitFor();
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'operational-catalog-reactivated');
+    assert.deepEqual(errors, [], 'Operational catalog commits raised browser errors');
+    assert.equal(traffic.externalRequests, 0, 'Operational catalog commits requested external assets');
+  } finally { await context.close(); }
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
   await fs.mkdir(args.artifactRoot, { recursive: true });
@@ -3449,6 +3694,7 @@ async function main() {
     await runAnonymous(browser, args, axeSource, report);
     await runDraftRoutingJourneys(browser, args, axeSource, report);
     await runNavigationSupport(browser, args, axeSource, report);
+    await runOwnershipTransfers(browser, args, axeSource, report);
     await runSettingsUnconfirmedSessionCase(browser, args);
     await runProfileSessionReplacement(browser, args);
     await runSuperAdmin(browser, args, axeSource, report);
@@ -3462,8 +3708,10 @@ async function main() {
     await runScopedBlocked(browser, args, axeSource, report);
     await runStaffSuggestion(browser, args, axeSource, report);
     await runClosedDeletionControls(browser, args, axeSource, report);
+    await runCurrentStaffPreferenceRevisions(browser, args, axeSource, report);
     await runSettingsLayout(browser, args, axeSource, report);
-    assert.equal(report.states.length, 50, 'Expected fifty major staff browser states');
+    await runOperationalCatalogCommits(browser, args, axeSource, report);
+    assert.equal(report.states.length, 58, 'Expected fifty-eight major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),

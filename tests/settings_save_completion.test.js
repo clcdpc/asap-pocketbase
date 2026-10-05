@@ -112,6 +112,7 @@ async function flush() {
     let committedCount = 0;
     const savingRefreshes = [];
     const committedMessages = [];
+    const configurationCommits = [];
     let settingsRequests = 0;
     let formatRows = [];
     let formatDeleteCount = 0;
@@ -162,6 +163,7 @@ async function flush() {
         committedCount += 1;
         committedMessages.push(message);
       },
+      onConfigurationCommitted: (owner, scope) => configurationCommits.push(scope),
       onRefreshed: () => {
         if (!document.getElementById('settings-form').inert) return;
         savingRefreshes.push({
@@ -235,6 +237,7 @@ async function flush() {
     for (let attempt = 0; attempt < 20 && saveCount < 2; attempt++) await flush();
     for (let attempt = 0; attempt < 20; attempt++) await flush();
     assert.strictEqual(committedCount, 2);
+    assert.deepStrictEqual(configurationCommits, ['2', '2'], 'source commit invalidates configuration even when presentation refresh fails');
     assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Saved; reload needed');
     assert.strictEqual(document.getElementById('settings-save').disabled, true);
     assert.match(document.getElementById('settings-message').textContent, /Settings saved, but/);
@@ -289,6 +292,7 @@ async function flush() {
     assert.strictEqual(formatDeleteCount, 2);
     assert.match(committedMessages.at(-2), /Format deletions confirmed: 0 of 2/);
     assert.match(committedMessages.at(-1), /Format deletions confirmed: 1 of 2/);
+    assert.equal(configurationCommits.length, 5, 'Settings and each confirmed format deletion invalidate before a partial follow-up failure');
     assert.match(document.getElementById('settings-message').textContent,
       /Settings saved\. Format deletions confirmed: 1 of 2\. A follow-up action failed/);
     assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Saved; reload needed');

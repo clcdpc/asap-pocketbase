@@ -142,6 +142,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       organizationId: 1
     };
     let revokeStaffRefresh = false;
+    let holdRoster = false, releaseRoster, loseProfileResponse = false, failRoster = false;
     const committedMessages = [];
     let refreshedCount = 0;
     const { dom, controller } = await setupController(
@@ -157,14 +158,16 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         if (requestUrl.includes('/api/asap/staff/settings?orgId=')) return response(200, settingsData('system'));
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
           return response(200, [
-            { id: 1, name: 'System', active: true, version: 'org-v1' },
-            { id: 2, name: 'Library Two', active: true, version: 'org-v2' },
-            { id: 3, name: 'Library Three', active: true, version: 'org-v3' }
+            { id: 1, name: 'System', isActive: true, version: 'org-v1' },
+            { id: 2, name: 'Library Two', isActive: true, version: 'org-v2' },
+            { id: 3, name: 'Library Three', isActive: true, version: 'org-v3' }
           ]);
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
         if (requestUrl === '/api/asap/staff/users' && (options.method || 'GET') === 'GET') {
           if (revokeStaffRefresh) return response(401, { code: 'staff_session_invalid' });
+          if (failRoster) return response(503, { message: 'Roster unavailable' });
+          if (holdRoster) return new Promise(resolve => { releaseRoster = () => resolve(response(200, { canAssignSuperAdmin: true, users })); });
           return response(200, { canAssignSuperAdmin: true, users });
         }
         if (requestUrl === '/api/asap/staff/audit?limit=50') {
@@ -201,6 +204,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
           });
         }
         if (requestUrl === '/api/asap/staff/users/20' && options.method === 'PATCH') {
+          if (loseProfileResponse) throw new Error('Lost staff profile response');
           patchBody = JSON.parse(options.body);
           return response(200, {
             user: { ...users[0], userPrincipalName: patchBody.email, version: 'patched-20' },
@@ -241,7 +245,43 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.strictEqual(document.getElementById('staff-add-object-id'), null);
     assert.strictEqual(document.getElementById('staff-add-display-name'), null);
     assert.strictEqual(document.getElementById('staff-add-notification-email'), null);
+    const initialRow = [...document.querySelectorAll('.settings-staff-row')]
+      .find(row => row.textContent.includes('Ada Admin'));
+    const initialEmail = initialRow.querySelector('input[type="email"]');
+    const originalEmail = initialEmail.value;
+    initialEmail.value = 'unsaved@example.org';
+    assert.equal(controller.isDirty(), true, 'staff profile edits participate in departure and unload guards');
+    const beforeCompetingAction = requests.length;
+    [...initialRow.querySelectorAll('button')].find(button => button.textContent === 'Update access').click();
+    await flush();
+    assert.equal(requests.length, beforeCompetingAction, 'access changes cannot consume a profile draft');
+    assert.equal(initialEmail.value, 'unsaved@example.org');
+    initialEmail.value = originalEmail;
+    assert.equal(controller.isDirty(), false, 'returning a roster draft exactly to baseline makes it clean');
+
+    holdRoster = true;
+    document.getElementById('staff-refresh').click();
+    await waitFor(() => releaseRoster);
+    initialEmail.value = 'edited-during-read@example.org';
+    releaseRoster(); holdRoster = false;
+    await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Edits changed'));
+    assert.equal(initialEmail.isConnected, true, 'late roster read cannot replace edits made while it was pending');
+    assert.equal(initialEmail.value, 'edited-during-read@example.org');
+    controller.setStaff({ ...superStaff, version: 'new-preference-revision' });
+    assert.equal(initialEmail.isConnected, true, 'same actor preference revision retains the staff draft owner');
+    const beforeRejectedRefresh = requests.length;
+    window.confirm = () => false;
+    document.getElementById('staff-refresh').click();
+    await flush();
+    assert.equal(requests.length, beforeRejectedRefresh, 'declined roster discard performs no read or mutation');
+    window.confirm = () => true;
+    initialEmail.value = originalEmail;
+
     document.getElementById('staff-add-email').value = 'created@example.org';
+    assert.equal(controller.isDirty(), true, 'new staff user is a separately owned draft');
+    [...initialRow.querySelectorAll('button')].find(button => button.textContent === 'Deactivate').click();
+    await flush();
+    assert.equal(deleteBody, undefined, 'a lifecycle command cannot discard the new-user draft');
     document.getElementById('staff-add-role').value = 'staff';
     document.getElementById('staff-add-organization').value = '2';
     document.getElementById('staff-add-submit').click();
@@ -253,19 +293,34 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     });
     await waitFor(() => document.getElementById('staff-access-status').textContent.includes('2 auto-claim rules deactivated'));
 
-    const activeRow = [...document.querySelectorAll('.settings-staff-row')]
+    let activeRow = [...document.querySelectorAll('.settings-staff-row')]
       .find(row => row.textContent.includes('Ada Admin'));
     activeRow.querySelector('input[type="email"]').value = 'ada.updated@example.org';
+    const accessRole = activeRow.querySelector('select[aria-label^="Role"]');
+    const baselineRole = accessRole.value;
+    accessRole.value = 'staff';
+    [...activeRow.querySelectorAll('button')].find(button => button.textContent === 'Save profile').click();
+    await flush();
+    assert.equal(patchBody, undefined, 'saving metadata cannot silently discard the same row access draft');
+    accessRole.value = baselineRole;
     [...activeRow.querySelectorAll('button')].find(button => button.textContent === 'Save profile').click();
     await waitFor(() => Boolean(patchBody));
     assert.strictEqual(patchBody.version, 'user-version-20');
     assert.strictEqual(patchBody.email, 'ada.updated@example.org');
+    await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff profile saved.'));
 
+    const retiredRow = activeRow;
+    [...retiredRow.querySelectorAll('button')].find(button => button.textContent === 'Update access').click();
+    await flush();
+    assert.equal(roleBody, undefined, 'retired roster controls cannot submit their old version');
+    activeRow = [...document.querySelectorAll('.settings-staff-row')].find(row => row.textContent.includes('Ada Admin'));
     activeRow.querySelector('select[aria-label^="Role"]').value = 'staff';
     [...activeRow.querySelectorAll('button')].find(button => button.textContent === 'Update access').click();
     await waitFor(() => Boolean(roleBody));
     assert.deepStrictEqual(roleBody, { version: 'user-version-20', role: 'staff', organizationId: 2 });
+    await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff access updated.'));
 
+    activeRow = [...document.querySelectorAll('.settings-staff-row')].find(row => row.textContent.includes('Ada Admin'));
     [...activeRow.querySelectorAll('button')].find(button => button.textContent === 'Deactivate').click();
     await waitFor(() => Boolean(deleteBody));
     assert.strictEqual(deleteBody.version, 'user-version-20');
@@ -278,6 +333,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     [...inactiveRow.querySelectorAll('button')].find(button => button.textContent === 'Reactivate').click();
     await waitFor(() => postBodies.length === 2);
     assert.strictEqual(postBodies[1].email, 'staff21@example.org');
+    await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff user reactivated.'));
 
     const refreshedBeforeRevocation = refreshedCount;
     revokeStaffRefresh = true;
@@ -291,6 +347,30 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.match(committedMessages.at(-1), /Staff access updated.*auto-claim rules deactivated/);
     assert.strictEqual(refreshedCount, refreshedBeforeRevocation,
       'failed follow-up refresh must retain the committed result');
+
+    const beforeStaleRetry = requests.length;
+    [...currentAdaRow.querySelectorAll('button')].find(button => button.textContent === 'Update access').click();
+    await flush();
+    assert.equal(requests.length, beforeStaleRetry, 'confirmed staff commit with failed refresh cannot resubmit the stale roster');
+    assert.equal(controller.hasUnconfirmedOutcome(), false, 'failed review does not make the confirmed commit uncertain');
+    assert.equal(controller.inspectDeparture().blocked, false, 'a confirmed commit permits navigation');
+    revokeStaffRefresh = false;
+    document.getElementById('staff-refresh').click();
+    await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff access loaded'));
+    loseProfileResponse = true; failRoster = true;
+    controller.discardDraft();
+    const uncertainRow = [...document.querySelectorAll('.settings-staff-row')].find(row => row.textContent.includes('Ada Admin'));
+    uncertainRow.querySelector('input[type="email"]').value = 'uncertain@example.org';
+    [...uncertainRow.querySelectorAll('button')].find(button => button.textContent === 'Save profile').click();
+    await waitFor(() => controller.hasUnconfirmedOutcome() && !controller.hasPendingMutation());
+    const priorSettingsReads = requests.filter(url => url.includes('/settings?')).length;
+    document.getElementById('settings-refresh').click();
+    await waitFor(() => requests.filter(url => url.includes('/settings?')).length > priorSettingsReads);
+    await flush(); await flush();
+    assert.equal(controller.hasUnconfirmedOutcome(), true, 'main settings read cannot verify an uncertain staff command when roster review fails');
+    failRoster = false;
+    document.getElementById('staff-refresh').click();
+    await waitFor(() => !controller.hasUnconfirmedOutcome());
 
     dom.window.close();
 
@@ -308,7 +388,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         const requestUrl = String(url);
         adminRequests.push(requestUrl);
         if (requestUrl.includes('/api/asap/staff/settings?orgId=')) return response(200, settingsData('2'));
-        if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, [{ id: 2, name: 'Library Two', active: true, version: 'org-v2' }]);
+        if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, [{ id: 2, name: 'Library Two', isActive: true, version: 'org-v2' }]);
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
         if (requestUrl === '/api/asap/staff/users?orgId=2') return response(200, { canAssignSuperAdmin: false, users: [staffUser(22)] });
         if (requestUrl === '/api/asap/staff/audit?limit=50&organizationId=2') return response(200, { code: 'ok', data: [] });

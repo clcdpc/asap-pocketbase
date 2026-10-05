@@ -55,7 +55,28 @@ const { pathToFileURL } = require('node:url');
     assert.equal(invalidations, 1);
     assert.equal(requests.filter(item => item.url === '/api/asap/staff/test-mutation').length, 0,
       'the old account must be invalidated before any mutation is sent');
-    console.log('Staff mutation preflight rejects a replaced account before submission');
+    for (const [component, change] of [['email', { authenticationEmail: 'replacement@example.org' }],
+      ['role', { role: 'admin' }], ['organization', { organizationId: 3 }]]) {
+      const scopedHttp = await import(pathToFileURL(path.join(temporary, 'staff/js/http.js')).href + `?${component}`);
+      const captured = { id: '20', tenantId: 'actor-tenant', authenticationEmail: 'original@example.org', role: 'staff', organizationId: 2 };
+      let staff = captured, posted = 0, invalidated = 0;
+      global.fetch = async (url, options = {}) => {
+        if (url.endsWith('/session')) return { ok: true, status: 200, json: async () => ({ authenticated: true,
+          accessAllowed: true, staff, antiforgeryToken: 'token' }) };
+        assert.equal(options.method, 'POST'); posted++;
+        return { ok: true, status: 200, json: async () => ({ committed: true }) };
+      };
+      scopedHttp.onSessionInvalid(() => { invalidated++; }); await scopedHttp.loadStaffSession();
+      staff = { ...captured, displayName: 'Revised', version: 'v2', purchaseReminderDefault: true };
+      await scopedHttp.authorizedJson('/api/asap/staff/test-mutation', { method: 'POST', body: { version: 'captured' } });
+      assert.equal(posted, 1, 'ordinary preferences preserve the actor preflight');
+      staff = { ...staff, ...change };
+      await assert.rejects(scopedHttp.authorizedJson('/api/asap/staff/test-mutation', { method: 'POST' }),
+        error => error.status === 401 && error.response?.code === 'staff_session_changed');
+      assert.equal(posted, 1, `${component} replacement cannot submit an old actor command`);
+      assert.equal(invalidated, 1);
+    }
+    console.log('Staff HTTP preflight: replaced account and three same-ID identity boundaries reject dispatch; preferences preserve it');
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }

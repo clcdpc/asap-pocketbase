@@ -38,8 +38,7 @@ async function runJourney(scenario) {
   fs.cpSync(path.join(source, 'staff'), path.join(temporary, 'staff'), { recursive: true });
   fs.cpSync(path.join(source, 'shared'), path.join(temporary, 'shared'), { recursive: true });
   fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}');
-  const grids = [];
-  let dom;
+  let dom, app;
   try {
     dom = new JSDOM(fs.readFileSync(path.join(source, 'staff', 'index.html'), 'utf8'), {
       url: `https://localhost/staff/${titleRequest ? '' : '?stage=additional_copies'}`,
@@ -57,13 +56,6 @@ async function runJourney(scenario) {
     const gridModule = path.join(source, 'vendor/gridjs/6.2.0/gridjs.umd.js');
     delete require.cache[require.resolve(gridModule)];
     dom.window.gridjs = require(gridModule);
-    const Grid = dom.window.gridjs.Grid;
-    dom.window.gridjs.Grid = class extends Grid {
-      constructor(configuration) {
-        super(configuration);
-        grids.push(this);
-      }
-    };
 
     const staff = { id: '20', role: scenario === 'library-navigation' ? 'super_admin' : 'staff',
       organizationId: scenario === 'library-navigation' ? '1' : '2', displayName: 'Library staff' };
@@ -101,7 +93,8 @@ async function runJourney(scenario) {
       throw new Error(`Unexpected request ${url}`);
     };
     const workflow = await import(pathToFileURL(path.join(temporary, 'staff/js/workflow.js')).href);
-    await workflow.createWorkflowApp().start();
+    app = workflow.createWorkflowApp();
+    await app.start();
     const opener = (id = '91') => document.querySelector(`[aria-label="${openerLabel} ${id}"]`);
     const claimLabel = () => opener()?.closest('tr').querySelector('.claim-label');
     await until(() => opener() && opener('92') && opener('93'), 'The real Grid.js must render the initial tasks');
@@ -203,7 +196,9 @@ async function runJourney(scenario) {
     if (scenario === 'library-navigation') assert.strictEqual(document.getElementById('additional-copy-library-scope').value, '3');
     console.log(`Staff delayed Grid.js dialog focus passed: ${scenario}`);
   } finally {
-    for (const grid of grids) grid.destroy();
+    // Drain the released render before retiring the app that owns its grids.
+    if (dom) await settleGridWork(dom.window);
+    app?.dispose();
     if (dom) await settleGridWork(dom.window);
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });
