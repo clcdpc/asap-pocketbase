@@ -126,8 +126,10 @@ scope admission, including uncached entry, failed history targets and duplicate
 Suggestion opening. The caller audit also removed the destructive Settings
 scope setter, staged Copy replacement, fenced retired grid/email callbacks and
 configuration caches, and made command review completion depend on whether a
-replacement actually committed. Controller tests cover Title/Copy replacement and late
-read/event/focus work, and exact Operations review, retry and body/version
+replacement actually committed. A committed Settings scope explicitly refreshes
+its active Staff roster under the accepted scope. Controller tests cover
+Title/Copy replacement and late read/event/focus work, and exact Operations
+review, retry and body/version
 authority. Real SQL/Kestrel browser checks additionally scan Profile and
 Settings after failed detail transfer and uncertain same-session Sign Out.
 
@@ -375,7 +377,7 @@ accessibility, layout, image, page-error and external-traffic guards.
 ## Closure validation contract
 
 Issue #365's execution-state evidence records actual final-SHA results and CI.
-Closure requires all 49 current frontend files (including 227 navigation/draft
+Closure requires all 49 current frontend files (including 228 navigation/draft
 journeys and nine genuine Grid focus cases), a zero-warning Release build,
 the unchanged 784-test non-browser minimum and all three real-SQL Kestrel
 browser journeys with zero skips. The .NET gates include migration import,

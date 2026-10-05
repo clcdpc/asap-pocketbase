@@ -2521,6 +2521,30 @@ for (const view of ['queue', 'additional-copies']) {
   }
 }
 
+test('ownership transfer: committed Settings scope refreshes the active Staff roster', () =>
+  fixture('?stage=settings&settingsScope=system', async ui => {
+    let complete;
+    ui.setApi(({ pathname, parsed }) => {
+      if (pathname.endsWith('/users')) return response(200, { data: { canAssignSuperAdmin: true, users: [{
+        id: '21', version: 'staff-v1', userPrincipalName: 'staff@example.org', role: 'staff', organizationId: 2, active: true,
+        displayName: parsed.searchParams.get('orgId') === '2' ? 'Library staff' : 'System staff' }] } });
+      if (pathname.endsWith('/audit')) return response(200, { data: [] });
+      if (pathname.endsWith('/settings') && parsed.searchParams.get('orgId') === '2') return new Promise(resolve => { complete = resolve; });
+    });
+    ui.get('[data-settings-panel="staff"]').click(); await until(() => ui.get('[aria-label="Display name for System staff"]'), 'source roster ready');
+    ui.edit('[aria-label="Display name for System staff"]', 'Exact roster draft'); ui.allowDiscard();
+    const url = ui.dom.window.location.href;
+    ui.get('#settings-scope').value = '2'; ui.get('#settings-scope').dispatchEvent(new ui.dom.window.Event('change'));
+    await until(() => complete, 'scope target pending');
+    assert.equal(ui.get('[aria-label="Display name for System staff"]').value, 'Exact roster draft');
+    assert.equal(ui.dom.window.location.href, url); assert.equal(protectedUnload(ui), true);
+    complete(response(200, { orgId: '2', version: 'target-v1', stored: {}, effective: {} }));
+    await until(() => ui.get('[aria-label="Display name for Library staff"]'), 'committed scope automatically reviews its active roster');
+    assert.equal(ui.params().get('settingsScope'), '2'); assert.equal(protectedUnload(ui), false);
+    assert.ok(ui.calls.some(call => call.url.includes('/users?orgId=2')));
+    assert.ok(ui.calls.some(call => call.url.includes('/audit?limit=50&organizationId=2')));
+  }));
+
 for (const failure of ['failed load', 'changed draft']) {
   test(`ownership transfer: Settings scope ${failure} retains source until commit`, () =>
     fixture('?stage=settings&settingsScope=system', async ui => {

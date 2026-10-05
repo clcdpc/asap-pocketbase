@@ -1948,6 +1948,7 @@ export function createSettingsController({
     const target = await prepareScope(next);
     if (!target?.isCurrent() || !departure.commit()) return false;
     target.accept(); onScopeChange?.(next);
+    if (state.activePanel === 'staff') await loadStaffAccess({ silent: true });
     return true;
   }
 
