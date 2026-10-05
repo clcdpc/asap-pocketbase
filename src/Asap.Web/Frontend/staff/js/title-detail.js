@@ -13,7 +13,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   request: send = authorizedJson }) {
   const reads = createLatestLoad(), configurations = new Map();
   let lease = null, actor = null, current = null, returnFocus = null, activeAttempt = null;
-  let drafts = createDraftScope(), renderRevision = null, editor = null, workflows = null, copyParent = null, disposed = false;
+  let drafts = createDraftScope(), renderRevision = null, editor = null, workflows = null, copyParent = null, disposed = false, targetGeneration = 0;
 
   function isPresentationCurrent(mounted, owner) {
     return !disposed && mounted?.isCurrent() && sessionIdentity.isCurrent(owner);
@@ -30,9 +30,9 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     }
     return admission.allowed;
   }
-  function detailPath(id, scope = getScope()) {
+  function detailPath(id, scope = getScope(), owner = actor) {
     const path = `/api/asap/staff/title-requests/${encodeURIComponent(id)}`;
-    return actor?.role === 'super_admin' ? `${path}?scope=${encodeURIComponent(scope)}` : path;
+    return owner?.role === 'super_admin' ? `${path}?scope=${encodeURIComponent(scope)}` : path;
   }
   async function configurationFor(library, signal, owner) {
     const key = String(library);
@@ -53,7 +53,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     if (key === 'system' || key === '1') configurations.clear();
     else configurations.delete(key);
   }
-  function invalidate() { reads.begin('detail').abort(); editor?.invalidate(); workflows?.invalidate(); if (copyParent) copyCreation.invalidate(copyParent); }
+  function invalidate() { targetGeneration++; reads.begin('detail-target').abort(); reads.begin('detail').abort(); editor?.invalidate(); workflows?.invalidate(); if (copyParent) copyCreation.invalidate(copyParent); }
   function closeCopy(options) { return !copyParent || copyCreation.close(options, copyParent); }
   function disposeChildren() {
     renderRevision = null;
@@ -64,42 +64,66 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   function disposeMounted() {
     invalidate(); disposeChildren(); lease = null; actor = null; current = null; returnFocus = null; activeAttempt = null;
   }
-  async function open(id, opener = null, options = {}) {
-    if (disposed || !sessionIdentity.actor()) return false;
-    const ticket = beforeOpen(options);
-    if (ticket === false || ticket === null || !closeCopy({ navigation: true })) return false;
-    const owner = sessionIdentity.preferences(), priorTitle = current?.title || `Request ${id}`;
+  async function prepare(id, options = {}) {
+    const owner = sessionIdentity.preferences();
+    if (disposed || !owner) return null;
+    const load = reads.begin('detail-target'), ticket = ++targetGeneration;
+    const live = () => !disposed && !load.signal.aborted && ticket === targetGeneration && sessionIdentity.isCurrent(owner);
+    try {
+      const scope = options.scope ?? (owner.role === 'super_admin' && (options.align || options.fromRecent) ? 'all' : getScope());
+      const request = await send(detailPath(id, scope, owner), { signal: load.signal });
+      if (!live()) return null;
+      const configuration = await configurationFor(request.libraryOrgId, load.signal, owner);
+      const ready = () => live() && configurations.get(String(request.libraryOrgId))?.value === configuration;
+      return ready() ? { request, configuration, scope, owner, isCurrent: ready } : null;
+    } finally { reads.finish('detail-target', load.token); }
+  }
+
+  function present(target, opener, options, ticket) {
+    if (disposed || !sessionIdentity.isCurrent(target.owner) || !isNavigationCurrent(ticket)) return false;
+    const { request, configuration, owner } = target;
     const mounted = host.acquire({ dispose: disposeMounted, onClose: close,
       onEscape: () => { if (!hasPendingMutation() && workflows?.escape()) return; close(); } });
-    lease = mounted; actor = owner; current = Object.freeze({ id: String(id), version: null });
+    lease = mounted; actor = owner;
     returnFocus = opener || document.activeElement; drafts = createDraftScope();
-    for (const name of ['input', 'change']) mounted.content.addEventListener(name, () => drafts.touch());
-    const load = reads.begin('detail');
-    const live = () => load.isCurrent() && isPresentationCurrent(mounted, owner) && isNavigationCurrent(ticket);
+    for (const name of ['input', 'change']) mounted.content.addEventListener(name, event => {
+      if (isPresentationCurrent(mounted, owner) && mounted.content.contains(event.target)) drafts.touch();
+    });
+    onOpened(request, options); renderRequest(request, configuration); mounted.show();
+    announce(`Opened ${request.title}.`); rememberOpened(request.id); return true;
+  }
+
+  async function open(id, opener = null, options = {}) {
+    if (disposed || !sessionIdentity.actor()) return false;
+    const departure = beforeOpen(options);
+    if (!departure) return false;
+    const owner = sessionIdentity.preferences(), priorTitle = current?.title || `Request ${id}`;
     announce('Loading request details...');
     try {
-      const scope = owner.role === 'super_admin' && (options.align || options.fromRecent) ? 'all' : getScope();
-      let request = await send(detailPath(id, scope), { signal: load.signal });
-      if (!live()) return false;
-      const configuration = await configurationFor(request.libraryOrgId, load.signal, owner);
-      if (!live() || !await onAlign(request, options, owner, ticket) || !live()) return false;
-      if (owner.role === 'super_admin' && scope !== getScope()) {
-        request = await send(detailPath(id), { signal: load.signal });
-        if (!live() || !await onAlign(request, { ...options, reloaded: true }, owner, ticket) || !live()) return false;
+      let target = await prepare(id, options);
+      if (!target?.isCurrent() || !departure.isCurrent()) return false;
+      let alignment = await onAlign(target.request, options, owner, departure);
+      if (!alignment || !target.isCurrent() || !departure.isCurrent()) return false;
+      if (owner.role === 'super_admin' && target.scope !== alignment.scope) {
+        target = await prepare(id, { ...options, scope: alignment.scope });
+        if (!target?.isCurrent() || !departure.isCurrent()) return false;
+        alignment = await onAlign(target.request, { ...options, reloaded: true }, owner, departure);
       }
-      onOpened(request, options); renderRequest(request, configuration); mounted.show();
-      announce(`Opened ${request.title}.`); rememberOpened(request.id); return true;
+      if (!alignment || !target.isCurrent() || !departure.isCurrent()) return false;
+      const ticket = alignment.commit();
+      return ticket !== false && present(target, opener, options, ticket);
     } catch (error) {
-      if (live() && !isAbortError(error) && error.status !== 401) {
-        if (options.authoritativeRefresh) {
-          mounted.heading(priorTitle, `Request ${id}`);
-          mounted.content.replaceChildren(element('p', { text: 'Current details could not refresh. Reload this request before performing another action.' })); mounted.show();
+      if (departure.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
+        if (options.authoritativeRefresh && lease?.isCurrent()) {
+          disposeChildren(); current = Object.freeze({ id: String(id), version: null });
+          lease.heading(priorTitle, `Request ${id}`);
+          lease.content.replaceChildren(element('p', { text: 'Current details could not refresh. Reload this request before performing another action.' })); lease.show();
         }
         announce(error.status === 404 ? 'That request is no longer available.' : error.message, 'error');
         if (options.fromRecent && error.status === 404) forgetUnavailable(String(id));
       }
       return false;
-    } finally { reads.finish('detail', load.token); }
+    }
   }
   function close(options = {}) {
     if (hasPendingMutation() && !options.force && !options.preserveMutation) {
@@ -123,7 +147,8 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         const detailLoaded = await open(snapshot.id, target, { authoritativeRefresh: true });
         const replacement = lease;
         return { queueRefreshed, detailLoaded,
-          isCurrent: () => isNavigationCurrent(generation + 1) && isPresentationCurrent(replacement, owner) && current?.id === snapshot.id };
+          isCurrent: () => isNavigationCurrent(generation + (detailLoaded ? 1 : 0)) &&
+            (detailLoaded || replacement === mounted) && isPresentationCurrent(replacement, owner) && current?.id === snapshot.id };
       }
     });
     return copyCreation.preview(copyParent, opener);
@@ -149,7 +174,8 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     const detailLoaded = await open(attempt.snapshot.id, null, { authoritativeRefresh: true });
     const replacement = lease;
     return { refreshed, detailLoaded,
-      isCurrent: () => isPresentationCurrent(replacement, attempt.owner) && isNavigationCurrent(attempt.generation + 1) && current?.id === attempt.snapshot.id };
+      isCurrent: () => isPresentationCurrent(replacement, attempt.owner) && (detailLoaded || replacement === attempt.mounted) &&
+        isNavigationCurrent(attempt.generation + (detailLoaded ? 1 : 0)) && current?.id === attempt.snapshot.id };
   }
   async function deleteTitleRequest(snapshot) {
     if (!allowRequestMutation(snapshot, { consumes: null })) return;
@@ -433,9 +459,9 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     return section;
   }
 
-  return { open, close, invalidate, invalidateConfiguration,
+  return { open, prepare, present, close, invalidate, invalidateConfiguration,
     isDirty: () => Boolean(lease?.isCurrent() && drafts.isDirty()), hasPendingMutation,
-    inspectDeparture: () => ({ dirty: Boolean(lease?.isCurrent() && drafts.isDirty()), stamp: drafts.stamp(), blocked: hasPendingMutation(),
+    inspectDeparture: () => ({ owner: renderRevision || lease, dirty: Boolean(lease?.isCurrent() && drafts.isDirty()), stamp: drafts.stamp(), blocked: disposed || hasPendingMutation(),
       message: 'The workflow action is in progress. Wait for its authoritative result before navigating away.',
       confirmMessage: 'Discard unsaved request changes and navigate away?' }),
     setStaff() { configurations.clear(); },

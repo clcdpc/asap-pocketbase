@@ -13,7 +13,7 @@ const requestA = { id: '9223372036854775807', version: 'v1', title: 'A', library
     const host = createDetailHost({ root: get('#request-dialog') });
     const receipts = [], notices = [], posted = []; let complete;
     const options = { host, sessionIdentity: session, announce: message => notices.push(message),
-      beforeOpen: () => 1, isNavigationCurrent: () => true, onAlign: async () => true,
+      beforeOpen: () => ({ isCurrent: () => true }), isNavigationCurrent: () => true, onAlign: async () => ({ commit: () => 1 }),
       onOpened() {}, beforeClose: () => true, onClosed() {}, getFocusReturn: () => null,
       refreshQueue: async () => true, onReceipt: (...args) => receipts.push(args), clearReceipt() {},
       request: async (path, init = {}) => {
@@ -43,9 +43,9 @@ const requestA = { id: '9223372036854775807', version: 'v1', title: 'A', library
     let generation = 1, finishRefresh, deleteOptions;
     const notices = [], receipts = [];
     const controller = createCopyDetailController({ host, sessionIdentity: session,
-      announce: message => notices.push(message), beforeOpen: () => generation,
+      announce: message => notices.push(message), beforeOpen: () => ({ isCurrent: () => true }),
       isNavigationCurrent: ticket => ticket === generation, getNavigationGeneration: () => generation,
-      onAlign: async () => true, onOpened() {}, beforeClose: () => true, onClosed() {}, getFocusReturn: () => null,
+      onAlign: async () => ({ commit: () => generation }), onOpened() {}, beforeClose: () => true, onClosed() {}, getFocusReturn: () => null,
       refreshQueue: () => new Promise(resolve => { finishRefresh = resolve; }),
       onReceipt: (...args) => receipts.push(args), clearReceipt() {},
       request: async (path, init = {}) => { if (init.method) { deleteOptions = init; return { deleted: true }; } return requestA; } });

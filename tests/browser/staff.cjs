@@ -2764,6 +2764,57 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
   }
 }
 
+async function runOwnershipTransfers(browser, args, axeSource, report) {
+  const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const page = await context.newPage(), errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const protectedUnload = () => page.evaluate(() => {
+    const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented;
+  });
+  try {
+    for (const source of ['profile', 'settings']) {
+      await page.goto(`${args.baseOrigin}/staff/?stage=suggestion&scope=2&request=${args.primaryRequestId}`, { waitUntil: 'networkidle' });
+      await page.locator('#request-dialog[open]').waitFor();
+      await page.getByRole('button', { name: 'Close request details' }).click();
+      await page.waitForFunction(() => !new URL(location.href).searchParams.has('request'));
+      await page.locator(`[data-view="${source}"]`).click();
+      await page.locator(`#${source}-view`).waitFor({ state: 'visible' });
+      if (source === 'settings') {
+        await page.locator('#settings-form').waitFor({ state: 'visible' });
+        await page.locator('[data-settings-panel="patron"]').click();
+      }
+      const field = page.locator(source === 'profile' ? '#weekly-email' : '#patron-login-note');
+      const draft = source === 'profile' ? 'transfer-draft@example.org' : 'Exact Settings transfer draft';
+      await field.fill(draft); const sourceUrl = page.url();
+      const detailPath = `**/api/asap/staff/title-requests/${args.primaryRequestId}*`;
+      await page.route(detailPath, route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'Transfer target unavailable' }) }));
+      await page.locator('#recent-work summary').click();
+      page.once('dialog', dialog => dialog.accept());
+      await page.locator('#recent-request-list button').first().click();
+      await page.locator('#app-status').filter({ hasText: 'Transfer target unavailable' }).waitFor();
+      assert.equal(await field.inputValue(), draft); assert.equal(page.url(), sourceUrl);
+      assert.equal(await page.locator(`#${source}-view`).isVisible(), true);
+      assert.equal(await page.locator('#request-dialog').isVisible(), false); assert.equal(await protectedUnload(), true);
+      await scan(page, axeSource, args.artifactRoot, report, 'desktop', `${source}-failed-transfer-retains-draft`);
+      await page.unroute(detailPath);
+      const signOutPath = '**/api/asap/staff/sign-out';
+      await page.route(signOutPath, route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ message: 'Sign Out response lost' }) }));
+      page.once('dialog', dialog => dialog.accept()); await page.locator('#sign-out').click();
+      await page.locator('#app-status').filter({ hasText: 'Your staff session is still active' }).waitFor();
+      assert.equal(await field.inputValue(), draft); assert.equal(page.url(), sourceUrl);
+      assert.equal(await page.locator(`#${source}-view`).isVisible(), true); assert.equal(await protectedUnload(), true);
+      await scan(page, axeSource, args.artifactRoot, report, 'desktop', `${source}-unconfirmed-sign-out-retains-draft`);
+      await page.unroute(signOutPath);
+      await page.locator('#recent-work summary').click();
+      page.once('dialog', dialog => dialog.accept()); await page.locator('#recent-request-list button').first().click();
+      await page.locator('#request-dialog[open]').waitFor();
+      assert.equal(new URL(page.url()).searchParams.get('request'), args.primaryRequestId);
+      assert.equal(await page.locator(`#${source}-view`).isVisible(), false); assert.equal(await protectedUnload(), false);
+    }
+    assert.deepEqual(errors, []); assert.equal(traffic.externalRequests, 0);
+  } finally { await context.close(); }
+}
+
 async function runNavigationSupport(browser, args, axeSource, report) {
   const { context, traffic } = await createContext(
     browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
@@ -3636,6 +3687,7 @@ async function main() {
     await runAnonymous(browser, args, axeSource, report);
     await runDraftRoutingJourneys(browser, args, axeSource, report);
     await runNavigationSupport(browser, args, axeSource, report);
+    await runOwnershipTransfers(browser, args, axeSource, report);
     await runSettingsUnconfirmedSessionCase(browser, args);
     await runProfileSessionReplacement(browser, args);
     await runSuperAdmin(browser, args, axeSource, report);
@@ -3652,7 +3704,7 @@ async function main() {
     await runCurrentStaffPreferenceRevisions(browser, args, axeSource, report);
     await runSettingsLayout(browser, args, axeSource, report);
     await runOperationalCatalogCommits(browser, args, axeSource, report);
-    assert.equal(report.states.length, 54, 'Expected fifty-four major staff browser states');
+    assert.equal(report.states.length, 58, 'Expected fifty-eight major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),

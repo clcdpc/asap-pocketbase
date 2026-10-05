@@ -55,7 +55,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     let releaseOld, dirty = true, lost = 0, workspaces = 0;
     const features = [{ inspectDeparture: () => ({ dirty }), signedOut() { lost += 1; }, setStaff() {} }];
     const shell = { showWorkspace() { workspaces += 1; }, announce() {}, showSignedOut() {} };
-    const navigation = { invalidate() {}, allow: () => true, navigateFromUrl: async () => true };
+    const navigation = { invalidate() {}, prepareDeparture: () => ({}), navigateFromUrl: async () => true };
     const first = createSessionCoordinator({ identity, shell, navigation, getFeatures: () => features, onAccepted() {}, onPreferencesChanged() {},
       sessionRequest: () => new Promise(resolve => { releaseOld = resolve; }) });
     const oldStart = first.start(); first.dispose();
@@ -88,7 +88,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
         getContext: () => ({ activeView: 'queue', scope: 'all' }), settingsScope: () => 'system', operationsScope: () => 'all',
         findTitle: () => null, openRecentTitle() {}, onViewIntent() {}, onSignOutIntent() {}, request: async () => ({}) });
       const coordinator = createSessionCoordinator({ identity, shell,
-        navigation: { invalidate() {}, allow: () => true, navigateFromUrl: async () => true },
+        navigation: { invalidate() {}, prepareDeparture: () => ({}), navigateFromUrl: async () => true },
         getFeatures: () => [{ signedOut() { cleanups++; } }], onAccepted() {}, onPreferencesChanged() {},
         request: async (path, options) => {
           assert.equal(path, '/api/asap/staff/sign-out');
@@ -139,7 +139,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
         getContext: () => ({ activeView: 'queue', scope: 'all' }), settingsScope: () => 'system', operationsScope: () => 'all',
         findTitle: () => null, openRecentTitle() {}, onViewIntent() {}, onSignOutIntent() {}, request: async () => ({}) });
       const coordinator = createSessionCoordinator({ identity, shell,
-        navigation: { invalidate() {}, allow: () => true, navigateFromUrl: async () => true }, getFeatures: () => [],
+        navigation: { invalidate() {}, prepareDeparture: () => ({}), navigateFromUrl: async () => true }, getFeatures: () => [],
         onAccepted() {}, onPreferencesChanged() {},
         request: () => new Promise((resolve, reject) => { failCommand = reject; }),
         sessionRequest: async ({ signal }) => {
@@ -184,7 +184,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
         weeklyActionSummaryEnabled: true, weeklyActionSummaryEmail: 'weekly@example.org', purchaseReminderDefault: true };
       if (boundary !== 'preferences' && boundary !== 'access') next[boundary] = boundary === 'organizationId' ? 2 : `${actorA[boundary]}-changed`;
       const coordinator = createSessionCoordinator({ identity, shell,
-        navigation: { invalidate() {}, allow: () => true, navigateFromUrl: async () => true },
+        navigation: { invalidate() {}, prepareDeparture: () => ({}), navigateFromUrl: async () => true },
         getFeatures: () => [{ signedOut() { losses++; } }], onAccepted() {}, onPreferencesChanged() { preferenceUpdates++; },
         sessionRequest: async ({ signal }) => {
           assert.ok(signal); reads++;

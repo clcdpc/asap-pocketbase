@@ -10,6 +10,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   const events = new window.AbortController();
   let active = false;
   let disposed = false;
+  let libraries = [], staffOwner = null, projection = null;
   const dom = {
     operationsScopeField: root.querySelector('#operations-scope-field'),
     operationsScope: root.querySelector('#operations-scope'),
@@ -25,6 +26,9 @@ export function createOperationsController({ root, sessionIdentity, announce, on
 
   function setLibraries(organizations) {
       if (disposed) return;
+      libraries = organizations || [];
+      const retained = state.operationMutation;
+      if (retained?.scope !== 'all' && !libraries.some(item => String(item.id) === retained?.scope)) clearReview(retained);
       const operationScope = sessionIdentity.preferences()?.role === 'super_admin'
         ? state.operationsScope
         : String(sessionIdentity.preferences()?.organizationId);
@@ -45,6 +49,10 @@ export function createOperationsController({ root, sessionIdentity, announce, on
 
   function setStaff(staff) {
     if (disposed) return;
+    if (staff && sessionIdentity.sameSession(staffOwner, staff) && sessionIdentity.isCurrent(staff)) {
+      staffOwner = staff; updateOperationControls(); return;
+    }
+    staffOwner = staff;
     reads.begin('operations').abort();
     state.operationMutation = null;
     state.operationsScope = staff?.role === 'super_admin' ? 'all' : String(staff?.organizationId || 'all');
@@ -61,7 +69,8 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         if (supportedOperation(retained) &&
             (!retained.actorKey || retained.actorKey === sessionIdentity.actor()?.key) &&
             /^\/api\/asap\/staff\/(workflow\/(run-now|weekly-summary\/run-now\?force=(true|false))|email-operations\/(test|[1-9]\d*\/retry))$/.test(retained.path)) {
-          state.operationMutation = { ...retained, storageKey: key, uncertain: true, reviewed: false };
+          state.operationMutation = captureOperation({ ...retained, storageKey: key, actorKey: sessionIdentity.actor().key });
+          state.operationMutation.uncertain = true;
         }
       } catch { /* Invalid recovery cannot authorize dispatch. */ }
     }
@@ -70,6 +79,28 @@ export function createOperationsController({ root, sessionIdentity, announce, on
 
   function operationsQuery(scope = state.operationsScope) {
     return scope && scope !== 'all' ? `?organizationId=${encodeURIComponent(scope)}` : '';
+  }
+
+  function captureOperation(value) {
+    const operation = { uncertain: false, reviewed: false, outcome: 'pending' };
+    for (const key of ['path', 'message', 'scope', 'operationId', 'storageKey', 'actorKey']) {
+      Object.defineProperty(operation, key, { value: value[key], enumerable: true });
+    }
+    Object.defineProperty(operation, 'body', { value: value.body ? Object.freeze({ ...value.body }) : value.body, enumerable: true });
+    Object.defineProperty(operation, 'owner', { value: sessionIdentity.preferences() });
+    Object.defineProperty(operation, 'reviewEvidence', { value: null, writable: true });
+    return operation;
+  }
+
+  function clearReview(operation) {
+    if (!operation) return;
+    operation.reviewed = false; operation.reviewEvidence = null;
+  }
+
+  function canRetry(operation) {
+    const evidence = operation?.reviewEvidence;
+    return operation?.uncertain && evidence?.operation === operation && evidence.scope === operation.scope &&
+      evidence.actorKey === operation.actorKey && sessionIdentity.isCurrent(operation.owner) && sessionIdentity.isCurrent(evidence.owner);
   }
 
   function supportedOperation(value) {
@@ -107,7 +138,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     notice.replaceChildren();
     if (!operation?.uncertain) return;
     notice.append(element('p', { text: `${operation.message} outcome is unconfirmed. Refresh Operations to review current work before retrying this same operation. A new operation remains blocked.` }));
-    if (operation.reviewed) {
+    if (canRetry(operation)) {
       notice.append(commandButton('Retry same operation', 'refresh', () =>
         runOperation(operation.path, operation.message, operation)));
     }
@@ -137,6 +168,8 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   }
 
   function renderOperations(data) {
+    const rendered = { owner: sessionIdentity.preferences(), scope: state.operationsScope };
+    projection = rendered;
     renderOperationsTable(
       dom.queueProgressTable,
       [
@@ -166,7 +199,9 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         { label: 'Error', render: row => element('span', { text: row.lastErrorCode || row.suppressionReason || 'None' }) },
         { label: 'Action', render: row => {
           if (row.status !== 'failed') return element('span', { text: 'No action' });
-          return commandButton('Retry', 'refresh', () => retryEmail(row), 'secondary-button');
+          return commandButton('Retry', 'refresh', () => {
+            if (active && projection === rendered && sessionIdentity.isCurrent(rendered.owner) && rendered.scope === state.operationsScope) void retryEmail(row);
+          }, 'secondary-button');
         } }
       ],
       data.email?.items || [],
@@ -179,6 +214,8 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     const owner = sessionIdentity.preferences();
     const load = reads.begin('operations');
     const requestedScope = state.operationsScope;
+    const retained = state.operationMutation;
+    if (retained?.uncertain) { clearReview(retained); updateOperationControls(); }
     dom.refreshOperations.disabled = true;
     if (!options.silent) announce('Loading workflow operations...');
     try {
@@ -197,7 +234,23 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         if (requestedScope !== state.operationsScope) return loadOperations(options);
       }
       renderOperations({ queue, email });
-      if (state.operationMutation?.uncertain) state.operationMutation.reviewed = true;
+      // Visible scope is only presentation. Retry requires reads under the
+      // retained command's exact authority, including a currently active library.
+      if (retained?.uncertain && state.operationMutation === retained && sessionIdentity.isCurrent(retained.owner) &&
+          retained.actorKey === sessionIdentity.actor().key &&
+          (owner.role === 'super_admin' ? retained.scope === 'all' || libraries.some(item => String(item.id) === retained.scope)
+            : retained.scope === String(owner.organizationId))) {
+        if (retained.scope !== requestedScope) {
+          const exactQuery = operationsQuery(retained.scope);
+          await Promise.all([
+            request(`/api/asap/staff/workflow/queues${exactQuery}`, { signal: load.signal }),
+            request(`/api/asap/staff/email-operations${exactQuery}`, { signal: load.signal })
+          ]);
+        }
+        if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || state.operationMutation !== retained) return false;
+        retained.reviewEvidence = Object.freeze({ operation: retained, owner, scope: retained.scope, actorKey: retained.actorKey });
+        retained.reviewed = true;
+      }
       updateOperationControls();
       if (!options.silent) announce('Workflow operations loaded.');
       return true;
@@ -214,17 +267,17 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   }
 
   async function runOperation(path, message, retry = null, body = undefined) {
-    if (disposed || !['admin', 'super_admin'].includes(sessionIdentity.preferences()?.role) || state.operationMutation &&
-        (retry !== state.operationMutation || !retry.uncertain || !retry.reviewed)) return;
+    if (disposed || !active || !['admin', 'super_admin'].includes(sessionIdentity.preferences()?.role)) return;
+    if (retry ? retry !== state.operationMutation || !canRetry(retry) : state.operationMutation) return;
     const owner = sessionIdentity.preferences();
-    const operation = retry || { path, message, scope: state.operationsScope,
+    const operation = retry || captureOperation({ path, message, scope: state.operationsScope,
       operationId: window.crypto.randomUUID(), storageKey: operationStorageKey(), actorKey: sessionIdentity.actor().key,
-      body: body ? Object.freeze({ ...body }) : body };
+      body });
     if (!supportedOperation(operation)) return;
     path = operation.path;
     message = operation.message;
     operation.uncertain = false;
-    operation.reviewed = false;
+    clearReview(operation);
     state.operationMutation = operation;
     // Persist before dispatch: reload/session loss is never evidence that a POST rolled back.
     if (!storeOperation(operation)) {
@@ -299,16 +352,19 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     setStaff, setLibraries, currentScope: () => state.operationsScope,
     retireCatalog() {
       if (disposed) return;
-      reads.begin('operations').abort();
+      reads.begin('operations').abort(); projection = null;
+      clearReview(state.operationMutation);
       dom.refreshOperations.disabled = false;
       setLibraries([]);
       dom.queueProgressTable.replaceChildren(element('p', { text: 'Queue progress unavailable. Refresh Operations to review current work.' }));
       dom.emailOperationsTable.replaceChildren(element('p', { text: 'Email operations unavailable. Refresh Operations to review current work.' }));
+      updateOperationControls();
     },
     activate() { active = true; },
-    deactivate() { active = false; reads.begin('operations').abort(); },
+    deactivate() { active = false; projection = null; reads.begin('operations').abort(); },
+    invalidate() { projection = null; reads.begin('operations').abort(); },
     refresh: loadOperations, run: runOperation,
-    inspectDeparture: () => ({ blocked: false, dirty: false }),
+    inspectDeparture: () => ({ owner: active ? state.operationsScope : null, blocked: disposed, dirty: false }),
     signedOut() { active = false; setStaff(null); },
     dispose() { disposed = true; active = false; events.abort(); reads.begin('operations').abort(); }
   };

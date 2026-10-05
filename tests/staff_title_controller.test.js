@@ -19,9 +19,9 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
           : snapshot;
       const options = { host, sessionIdentity: session, polarisLookup: { close() {}, invalidate() {} },
         copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
-        announce: message => notices.push(message), beforeOpen: () => ++generation,
+        announce: message => notices.push(message), beforeOpen: () => ({ isCurrent: () => true }),
         isNavigationCurrent: ticket => ticket === generation, getNavigationGeneration: () => generation,
-        getScope: () => '2', onAlign: async () => true, onOpened() {}, beforeClose: () => true, onClosed() {},
+        getScope: () => '2', onAlign: async () => ({ scope: '2', commit: () => ++generation }), onOpened() {}, beforeClose: () => true, onClosed() {},
         getFocusReturn: () => null, refreshQueue: async () => true, queueSequence: () => 1,
         rememberOpened() {}, forgetUnavailable() {}, onReceipt: (...args) => receipts.push(args), clearReceipt() {},
         request: async (path, init = {}) => {
@@ -86,8 +86,8 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
       const configurationReads = new Map();
       const controller = createTitleDetailController({ host, sessionIdentity: session,
         polarisLookup: { close() {}, invalidate() {} }, copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
-        announce() {}, beforeOpen: () => ++generation, isNavigationCurrent: ticket => ticket === generation,
-        getNavigationGeneration: () => generation, getScope: () => 'all', onAlign: async () => true, onOpened() {},
+        announce() {}, beforeOpen: () => ({ isCurrent: () => true }), isNavigationCurrent: ticket => ticket === generation,
+        getNavigationGeneration: () => generation, getScope: () => 'all', onAlign: async () => ({ scope: 'all', commit: () => ++generation }), onOpened() {},
         beforeClose: () => true, onClosed() {}, getFocusReturn: () => null, refreshQueue: async () => true,
         queueSequence: () => 1, rememberOpened() {}, forgetUnavailable() {}, onReceipt() {}, clearReceipt() {},
         request: async path => {

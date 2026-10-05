@@ -2304,6 +2304,245 @@ test('authoritative projections: system save participation retires the selected 
     assert.equal(ui.get('#request-grid .grid-open'), null);
   }));
 
+for (const outcome of ['failed load', 'changed draft decline', 'changed draft accept']) {
+  test(`ownership transfer: initial Settings entry ${outcome}`, () =>
+    fixture('?stage=profile&marker=keep#anchor', async ui => {
+      ui.edit('#weekly-email', 'Profile source draft'); ui.allowDiscard();
+      const url = ui.dom.window.location.href; let complete;
+      ui.setApi(({ pathname }) => pathname.endsWith('/settings')
+        ? new Promise(resolve => { complete = resolve; }) : undefined);
+      ui.get('[data-view="settings"]').click(); await until(() => complete, 'Settings target pending');
+      assert.equal(ui.get('#profile-view').hidden, false);
+      assert.equal(ui.get('#weekly-email').value, 'Profile source draft'); assert.equal(protectedUnload(ui), true);
+      if (outcome === 'failed load') {
+        complete(response(500, { message: 'Settings target unavailable' }));
+        await until(() => /Settings target unavailable/.test(ui.get('#app-status').textContent), 'Settings failure announced');
+        assert.equal(ui.get('#profile-view').hidden, false); assert.equal(ui.dom.window.location.href, url);
+        assert.equal(ui.get('#weekly-email').value, 'Profile source draft'); assert.equal(protectedUnload(ui), true);
+        ui.setApi(null); ui.get('[data-view="settings"]').click();
+        await until(() => !ui.get('#settings-view').hidden && !ui.get('#settings-form').hidden, 'later Settings success commits');
+        assert.equal(protectedUnload(ui), false);
+      } else {
+        ui.edit('#weekly-email', 'New Profile draft'); const initial = ui.confirms.length, accept = outcome.endsWith('accept');
+        ui.dom.window.confirm = message => { ui.confirms.push(message); return accept; };
+        complete(response(200, { orgId: 'system', version: 'settings-v1', stored: {}, effective: {} }));
+        await until(() => ui.confirms.length === initial + 1, 'Settings load requires fresh consent'); await settle();
+        assert.equal(ui.get('#profile-view').hidden, accept);
+        if (!accept) {
+          assert.equal(ui.get('#weekly-email').value, 'New Profile draft'); assert.equal(ui.dom.window.location.href, url);
+          assert.equal(protectedUnload(ui), true);
+        } else assert.equal(ui.params().get('stage'), 'settings');
+      }
+    }));
+}
+
+for (const type of ['title', 'copy']) {
+  for (const failure of ['detail', 'queue']) {
+    test(`ownership transfer: history ${type} failed ${failure} restores the source`, () =>
+      fixture(type === 'title' ? `?stage=suggestion&scope=2&request=${id}` : '?stage=additional_copies&scope=2&request=71', async ui => {
+        await until(() => ui.get('#request-dialog').open, 'initial detail ready');
+        ui.get('[data-view="profile"]').click(); ui.edit('#weekly-email', 'History source draft'); ui.allowDiscard();
+        const url = ui.dom.window.location.href;
+        const path = type === 'title' ? '/title-requests' : '/additional-copies';
+        ui.setApi(({ pathname }) => pathname.endsWith(failure === 'detail' ? `${path}/${type === 'title' ? id : '71'}` : path)
+          ? response(500, { message: 'History target unavailable' }) : undefined);
+        await ui.back(); await until(() => ui.dom.window.location.href === url, 'accepted source history restored');
+        assert.equal(ui.get('#profile-view').hidden, false); assert.equal(ui.get('#weekly-email').value, 'History source draft');
+        assert.equal(ui.get('#request-dialog').open, false); assert.equal(protectedUnload(ui), true);
+        ui.setApi(null); await ui.back(); await until(() => ui.get('#request-dialog').open, 'successful traversal commits');
+        assert.equal(ui.get('#profile-view').hidden, true); assert.equal(protectedUnload(ui), false);
+      }, { copyRequest: {} }));
+  }
+}
+
+test('ownership transfer: duplicate target failure retains the Suggestion owner', () =>
+  fixture('?stage=suggestion&scope=2', async ui => {
+    ui.get('#new-suggestion').click();
+    const scope = ui.get('[aria-label="Servicing library"]');
+    scope.value = '3'; scope.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+    ui.edit('[aria-label="Patron barcode or name"]', '20000000000001');
+    ui.get('#staff-suggestion-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+    await until(() => ui.get('.staff-suggestion-fields'), 'Suggestion editor ready');
+    const field = '.staff-suggestion-fields input[maxlength="500"]'; ui.edit(field, 'Exact duplicate draft');
+    ui.get('#staff-suggestion-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+    await until(() => ui.get('.staff-suggestion-conflict button'), 'duplicate conflict ready');
+    const url = ui.dom.window.location.href; ui.allowDiscard();
+    ui.setApi(({ pathname }) => pathname.endsWith(`/title-requests/${id}`)
+      ? response(500, { message: 'Duplicate target unavailable' }) : undefined);
+    ui.get('.staff-suggestion-conflict button').click();
+    await until(() => /Duplicate target unavailable/.test(ui.get('#app-status').textContent), 'duplicate failure announced');
+    assert.equal(ui.get('#staff-suggestion-dialog').open, true); assert.equal(ui.get(field).value, 'Exact duplicate draft');
+    assert.equal(ui.get('#request-dialog').open, false); assert.equal(ui.dom.window.location.href, url);
+    assert.equal(protectedUnload(ui), true);
+    ui.setApi(null); ui.get('.staff-suggestion-conflict button').click();
+    await until(() => ui.get('#request-dialog').open, 'duplicate retry commits');
+    assert.equal(ui.get('#staff-suggestion-dialog').open, false); assert.equal(protectedUnload(ui), false);
+  }, { requestLibrary: 3 }));
+
+for (const source of ['profile', 'settings']) {
+  for (const failure of ['server', 'transport', 'missing']) {
+    test(`ownership transfer: ${source} Recent Request ${failure} preserves the source`, () =>
+      fixture('?stage=suggestion&scope=2&marker=keep#anchor', async ui => {
+        await ui.open(); ui.get('#close-request').click(); await settle();
+        ui.get(`[data-view="${source}"]`).click();
+        if (source === 'settings') await until(() => !ui.get('#settings-form').hidden, 'Settings ready');
+        const field = source === 'profile' ? '#weekly-email' : '#patron-login-note';
+        ui.edit(field, 'Exact unsaved draft'); ui.allowDiscard();
+        const url = ui.dom.window.location.href;
+        ui.setApi(({ pathname }) => {
+          if (!pathname.endsWith(`/title-requests/${id}`)) return;
+          if (failure === 'transport') throw new Error('Target transport failed');
+          return response(failure === 'missing' ? 404 : 500, { message: 'Target unavailable' });
+        });
+        ui.get('#recent-request-list button').click();
+        await until(() => /unavailable|no longer available|transport failed/i.test(ui.get('#app-status').textContent), 'target error retained');
+        assert.equal(ui.get(field).value, 'Exact unsaved draft');
+        assert.equal(ui.get(`#${source}-view`).hidden, false);
+        assert.equal(ui.dom.window.location.href, url); assert.equal(protectedUnload(ui), true);
+        assert.equal(ui.get('#request-dialog').open, false);
+        if (failure === 'missing') assert.equal(ui.get('#recent-request-list button'), null, '404 forgets only the recent target');
+        else {
+          ui.setApi(null); ui.get('#recent-request-list button').click();
+          await until(() => ui.get('#request-dialog').open, 'successful retry commits');
+          assert.equal(ui.get(`#${source}-view`).hidden, true);
+          assert.equal(ui.params().get('request'), id); assert.equal(protectedUnload(ui), false);
+        }
+      }, { staff: { ...actorA, ...profileStaff, authenticationEmail: 'staff@example.org' } }));
+  }
+  for (const accept of [false, true]) {
+    test(`ownership transfer: ${source} Recent Request changed draft second consent ${accept}`, () =>
+      fixture('?stage=suggestion&scope=2', async ui => {
+        await ui.open(); ui.get('#close-request').click(); await settle();
+        ui.get(`[data-view="${source}"]`).click();
+        if (source === 'settings') await until(() => !ui.get('#settings-form').hidden, 'Settings ready');
+        const field = source === 'profile' ? '#weekly-email' : '#patron-login-note';
+        ui.edit(field, 'First draft'); ui.allowDiscard();
+        const url = ui.dom.window.location.href; let complete;
+        ui.setApi(({ pathname, parsed }) => pathname.endsWith(`/title-requests/${id}`) && parsed.searchParams.get('scope') === 'all'
+          ? new Promise(resolve => { complete = resolve; }) : undefined);
+        ui.get('#recent-request-list button').click(); await until(() => complete, 'target pending');
+        assert.equal(ui.get(field).value, 'First draft'); assert.equal(ui.get('#request-dialog').open, false);
+        ui.edit(field, 'Newer draft'); const initial = ui.confirms.length;
+        ui.dom.window.confirm = message => { ui.confirms.push(message); return accept; };
+        complete(response(200, ui.readRequest()));
+        await until(() => ui.confirms.length === initial + 1, 'fresh consent requested'); await settle();
+        assert.equal(ui.get('#request-dialog').open, accept);
+        assert.equal(ui.get(`#${source}-view`).hidden, accept);
+        if (!accept) {
+          assert.equal(ui.get(field).value, 'Newer draft'); assert.equal(ui.dom.window.location.href, url);
+          assert.equal(protectedUnload(ui), true);
+        } else assert.equal(ui.params().get('request'), id);
+      }, { staff: { ...actorA, ...profileStaff, authenticationEmail: 'staff@example.org' } }));
+  }
+  test(`ownership transfer: ${source} uncertain Sign Out retains exact draft and permits deliberate retry`, () =>
+    fixture(source === 'profile' ? '?stage=profile' : '?stage=settings&settingsScope=system', async ui => {
+      if (source === 'settings') await until(() => !ui.get('#settings-form').hidden, 'Settings ready');
+      const field = source === 'profile' ? '#weekly-email' : '#patron-login-note';
+      ui.edit(field, 'Exact Sign Out draft'); ui.allowDiscard();
+      const url = ui.dom.window.location.href;
+      ui.setApi(({ pathname }) => pathname.endsWith('/sign-out') ? response(503, { message: 'Response lost' }) : undefined);
+      ui.get('#sign-out').click();
+      await until(() => /not confirmed.*session is still active/.test(ui.get('#app-status').textContent), 'authoritative same-session review');
+      assert.equal(ui.get(field).value, 'Exact Sign Out draft'); assert.equal(ui.get(`#${source}-view`).hidden, false);
+      assert.equal(ui.get('#workspace').hidden, false); assert.equal(ui.dom.window.location.href, url);
+      assert.equal(protectedUnload(ui), true);
+      ui.setApi(null); ui.get('#sign-out').click();
+      await until(() => ui.get('#workspace').hidden, 'confirmed retry revokes source');
+      assert.equal(protectedUnload(ui), false);
+      assert.ok(ui.calls.filter(call => call.url.endsWith('/sign-out')).every(call => call.init.signal === undefined));
+    }));
+}
+
+for (const source of ['profile', 'settings']) {
+  for (const review of ['unauthenticated', 'access unavailable', 'malformed', 'unavailable']) {
+    test(`ownership transfer: dirty ${source} Sign Out ${review} revokes conservatively`, () =>
+      fixture(source === 'profile' ? '?stage=profile' : '?stage=settings&settingsScope=system', async ui => {
+        const field = source === 'profile' ? '#weekly-email' : '#patron-login-note';
+        ui.edit(field, 'Revoked draft'); ui.allowDiscard();
+        ui.setApi(({ pathname }) => {
+          if (pathname.endsWith('/sign-out')) return response(503, { message: 'Sign Out response lost' });
+          if (!pathname.endsWith('/session')) return;
+          if (review === 'unavailable') throw new Error('Session unavailable');
+          return response(200, review === 'malformed' ? {} : review === 'unauthenticated'
+            ? { authenticated: false, accessAllowed: false }
+            : { authenticated: true, accessAllowed: false });
+        });
+        ui.get('#sign-out').click(); await until(() => ui.get('#workspace').hidden, 'source revoked after session review');
+        assert.equal(protectedUnload(ui), false);
+        if (source === 'settings') assert.equal(ui.get('#settings-form').hidden, true, 'revoked Settings owner is retired');
+        else assert.notEqual(ui.get(field).value, 'Revoked draft', 'revoked Profile owner is retired');
+        assert.match(ui.get('#signed-out-message').textContent, review === 'unauthenticated' ? /signed out/
+          : review === 'access unavailable' ? /access is not currently available/ : /could not be confirmed/);
+      }));
+  }
+}
+
+for (const view of ['queue', 'additional-copies']) {
+  for (const outcome of ['failure then retry', 'changed draft decline', 'changed draft accept']) {
+    test(`ownership transfer: stale catalog ${view} ${outcome}`, () =>
+      fixture('?stage=settings&settingsScope=system', async ui => {
+        let retired = false, available = true, complete;
+        ui.setApi(({ pathname }) => {
+          if (pathname.endsWith('/organizations/sync')) { retired = true; return response(200, { data: { received: 2 } }); }
+          if (pathname.endsWith('/organizations') && retired && !available) return response(503, { message: 'Catalog unavailable' });
+        });
+        ui.get('#btn-sync-organizations').click();
+        await until(() => retired && !ui.get('#settings-form').hasAttribute('aria-busy'), 'catalog retired');
+        available = false;
+        ui.edit('#patron-login-note', 'Exact catalog draft'); ui.allowDiscard();
+        const url = ui.dom.window.location.href, before = ui.calls.length;
+        if (outcome !== 'failure then retry') {
+          ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
+            ? new Promise(resolve => { complete = resolve; }) : undefined);
+        }
+        ui.get(`[data-view="${view}"]`).click();
+        if (outcome === 'failure then retry') {
+          await until(() => /Operational libraries could not be reviewed/.test(ui.get('#app-status').textContent), 'failed catalog review');
+          assert.equal(ui.get('#patron-login-note').value, 'Exact catalog draft');
+          assert.equal(ui.get('#settings-view').hidden, false); assert.equal(ui.dom.window.location.href, url);
+          assert.equal(protectedUnload(ui), true);
+          assert.equal(ui.calls.slice(before).filter(call => /\/(title-requests|additional-copies)\?/.test(call.url)).length, 0);
+          available = true; ui.get(`[data-view="${view}"]`).click();
+          await until(() => !ui.get(view === 'queue' ? '#queue-view' : '#additional-copy-view').hidden, 'later catalog success commits');
+          assert.equal(protectedUnload(ui), false);
+        } else {
+          await until(() => complete, 'catalog pending'); ui.edit('#patron-login-note', 'New catalog draft');
+          const initial = ui.confirms.length, accept = outcome.endsWith('accept');
+          ui.dom.window.confirm = message => { ui.confirms.push(message); return accept; };
+          complete(response(200, { data: [{ id: 2, name: 'A', isActive: true }] }));
+          await until(() => ui.confirms.length === initial + 1, 'catalog requires second consent'); await settle();
+          assert.equal(ui.get('#settings-view').hidden, accept);
+          if (!accept) {
+            assert.equal(ui.get('#patron-login-note').value, 'New catalog draft'); assert.equal(ui.dom.window.location.href, url);
+            assert.equal(protectedUnload(ui), true);
+          }
+        }
+      }));
+  }
+}
+
+for (const failure of ['failed load', 'changed draft']) {
+  test(`ownership transfer: Settings scope ${failure} retains source until commit`, () =>
+    fixture('?stage=settings&settingsScope=system', async ui => {
+      ui.edit('#patron-login-note', 'Scope source draft'); ui.allowDiscard();
+      const url = ui.dom.window.location.href; let complete;
+      ui.setApi(({ pathname, parsed }) => pathname.endsWith('/settings') && parsed.searchParams.get('orgId') === '2'
+        ? new Promise(resolve => { complete = resolve; }) : undefined);
+      ui.get('#settings-scope').value = '2'; ui.get('#settings-scope').dispatchEvent(new ui.dom.window.Event('change'));
+      await until(() => complete, 'scope target pending');
+      assert.equal(ui.get('#settings-form').hidden, false); assert.equal(ui.get('#patron-login-note').value, 'Scope source draft');
+      if (failure === 'failed load') complete(response(500, { message: 'Scope unavailable' }));
+      else {
+        ui.edit('#patron-login-note', 'New scope draft'); ui.dom.window.confirm = () => false;
+        complete(response(200, { orgId: '2', version: 'target-v1', stored: {}, effective: {} }));
+      }
+      await settle();
+      assert.equal(ui.get('#patron-login-note').value, failure === 'failed load' ? 'Scope source draft' : 'New scope draft');
+      assert.equal(ui.get('#settings-scope').value, 'system'); assert.equal(ui.dom.window.location.href, url);
+      assert.equal(protectedUnload(ui), true);
+    }));
+}
+
 test('authoritative projections: email readiness refresh survives failed Settings review', () =>
   fixture('?stage=settings&settingsScope=system', async ui => {
     let committed = false, readinessReads = 0;
@@ -2330,7 +2569,7 @@ test('authoritative projections: email readiness refresh survives failed Setting
   assert.ok(selected.length, 'the requested journey filter must discover tests');
   for (const item of selected) {
     try { await item.body(); console.log(`PASS ${item.name}`); }
-    catch (error) { failed += 1; console.error(`FAIL ${item.name}: ${error.message}`); }
+    catch (error) { failed += 1; console.error(`FAIL ${item.name}: ${error.stack}`); }
   }
   assert.equal(failed, 0, `${failed}/${selected.length} navigation/draft journeys failed`);
   console.log(`${selected.length} staff navigation/draft journeys passed.`);

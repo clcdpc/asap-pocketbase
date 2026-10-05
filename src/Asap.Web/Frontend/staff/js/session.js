@@ -11,6 +11,8 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
     if (disposed) return;
     reads.begin('session').abort(); navigation.invalidate();
     let featureMessage = null;
+    // Authoritative session loss retires all owners even if draft/context stamps
+    // changed during Sign Out. It is revocation, not discard consent for a target.
     for (const feature of getFeatures()) {
       const result = feature.signedOut?.(); if (typeof result === 'string') featureMessage = result;
     }
@@ -36,8 +38,10 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
     } finally { reads.finish('session', load.token); }
   }
   async function signOut() {
-    if (disposed || signOutAttempt?.pending || !admission.admit({ consumes: null }).allowed || !navigation.allow()) return;
-    const attempt = { owner: identity.preferences(), pending: true, outcome: 'pending' }; signOutAttempt = attempt;
+    if (disposed || signOutAttempt?.pending || !admission.admit({ consumes: null }).allowed) return;
+    const departure = navigation.prepareDeparture();
+    if (!departure) return;
+    const attempt = { owner: identity.preferences(), departure, pending: true, outcome: 'pending' }; signOutAttempt = attempt;
     try {
       await request('/api/asap/staff/sign-out', { method: 'POST' });
       attempt.outcome = 'committed';
@@ -95,6 +99,9 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
     } finally { reads.finish('session', load.token); }
   }
   return { signOut, updatePreferences, refreshCurrentStaff, lose, accessUnavailable,
+    inspectDeparture: () => ({ blocked: Boolean(signOutAttempt?.pending &&
+      (identity.isCurrent(signOutAttempt.owner) || !signOutAttempt.owner && shell.isPresentationOwner(null))),
+      message: 'Wait for the Sign out result and session review before navigating away.' }),
     async start() {
       if (disposed || started) return; started = true;
       unsubscribeInvalid = onSessionInvalid(() => lose('Your staff session ended or no longer has access. Sign in again.'));

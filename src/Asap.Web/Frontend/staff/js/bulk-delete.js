@@ -206,7 +206,7 @@ export function createBulkDeleteController({ root, titleTrigger, copyTrigger, se
   }, { signal: events.signal });
   dom.execute.addEventListener('click', execute, { signal: events.signal });
   return { open, close, contextChanged, interrupt,
-    inspectDeparture: () => ({ blocked: Boolean(runner?.submitting), message: 'Deletion is in progress. Wait for the complete ledger before navigating away.' }),
+    inspectDeparture: () => ({ owner: ui, blocked: disposed || Boolean(runner?.submitting), message: 'Deletion is in progress. Wait for the complete ledger before navigating away.' }),
     hasPendingMutation: () => Boolean(runner?.submitting),
     signedOut() { if (!disposed) { interrupt(); close({ force: true, navigation: true }); } },
     dispose() { if (disposed) return; interrupt(); close({ force: true, navigation: true }); disposed = true; reads.begin('preview').abort(); admission.dispose(); events.abort(); }

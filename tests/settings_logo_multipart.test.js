@@ -130,6 +130,7 @@ async function flush() {
     };
 
     const controller = settingsModule.createSettingsController({
+      prepareDeparture: () => ({ commit: () => true }),
       root: document.getElementById('settings-view'),
       tab: document.getElementById('settings-view-tab'),
       announce: () => {},

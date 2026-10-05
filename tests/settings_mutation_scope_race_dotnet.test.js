@@ -156,6 +156,7 @@ async function flush() {
       };
 
       const controller = settingsModule.createSettingsController({
+        prepareDeparture: () => ({ commit: () => true }),
         root: document.getElementById('settings-view'),
         tab: document.getElementById('settings-view-tab'),
         announce: (message, kind) => announcements.push({ message, kind }),
@@ -286,6 +287,7 @@ async function flush() {
         throw new Error('Unexpected request: ' + requestUrl);
       };
       const controller = settingsModule.createSettingsController({
+        prepareDeparture: () => ({ commit: () => true }),
         root: document.getElementById('settings-view'),
         tab: document.getElementById('settings-view-tab'),
         announce: () => {},
@@ -419,6 +421,7 @@ async function flush() {
         throw new Error('Unexpected request: ' + requestUrl);
       };
       const controller = settingsModule.createSettingsController({
+        prepareDeparture: () => ({ commit: () => true }),
         root: document.getElementById('settings-view'),
         tab: document.getElementById('settings-view-tab'),
         announce: () => {},
@@ -438,14 +441,18 @@ async function flush() {
       scope.value = '3';
       scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
       await flush();
-      assert.strictEqual(form.hidden, true, 'prior library values must be hidden while the new scope loads');
-      assert.strictEqual(controller.isDirty(), false, 'prior library draft must not remain actionable');
+      assert.strictEqual(form.hidden, false, 'the source stays mounted until the replacement is ready');
+      assert.strictEqual(scope.value, '2', 'the source scope stays authoritative during target loading');
+      assert.strictEqual(document.getElementById('branding-alt').value, 'Two logo');
+      assert.strictEqual(controller.isDirty(), false, 'the unchanged source remains clean');
       releaseFailedScope();
       await flush();
-      assert.strictEqual(form.hidden, true, 'failed scope load must not reveal prior library values');
+      assert.strictEqual(form.hidden, false, 'failed scope load retains the source owner');
+      assert.strictEqual(scope.value, '2');
+      assert.strictEqual(document.getElementById('branding-alt').value, 'Two logo');
       assert.strictEqual(document.getElementById('settings-refresh').disabled, false);
       allowThree = true;
-      document.getElementById('settings-refresh').click();
+      scope.value = '3'; scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
       await flush();
       assert.strictEqual(form.hidden, false);
       assert.strictEqual(document.getElementById('branding-alt').value, 'Three logo');

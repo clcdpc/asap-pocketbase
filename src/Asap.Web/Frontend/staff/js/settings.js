@@ -75,7 +75,7 @@ const POLARIS_FIELDS = [
   ['systemPolarisUserId', 'polaris-system-user-id']
 ];
 
-const SETTINGS_OPERATION_SLOTS = ['administration-settings', 'administration-staff-access', 'administration-polaris-test'];
+const SETTINGS_OPERATION_SLOTS = ['administration-settings', 'administration-staff-access', 'administration-polaris-test', 'administration-scope'];
 
 const TEMPLATE_FIELDS = [
   ['suggestion_submitted', 'submit', 'email-submit-subject', 'email-submit-body'],
@@ -237,6 +237,7 @@ export function createSettingsController({
   announce,
   onPanelChange,
   onScopeChange,
+  prepareDeparture,
   onCommitted = () => {},
   onConfigurationCommitted = () => {},
   onStaffAccessCommitted = () => {},
@@ -323,7 +324,7 @@ export function createSettingsController({
     bound: false
   };
   const reads = createLatestLoad(), events = new window.AbortController();
-  let disposed = false, contextGeneration = 0, drafts = createDraftScope();
+  let disposed = false, contextGeneration = 0, drafts = createDraftScope(), scopePreparation = null;
   let settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
   let staffCreateDraft = null;
   let polarisTest = null;
@@ -574,6 +575,7 @@ export function createSettingsController({
   }
 
   function cancelSettingsOperations() {
+    scopePreparation = null;
     cancelPolarisTest();
     contextGeneration += 1; drafts.dispose(); drafts = createDraftScope();
     settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
@@ -1940,25 +1942,51 @@ export function createSettingsController({
       notify('Reload current settings to verify the uncertain change before switching scope.', 'warning');
       return;
     }
-    if (isDirty() && !window.confirm('Discard unsaved settings changes and switch scope?')) {
-      dom.scope.value = state.scope;
-      return;
-    }
-    cancelSettingsOperations();
-    releaseLogoDraft();
-    copyGeneration += 1;
-    state.scope = next;
-    state.awaitingReload = false; state.awaitingReloadMutation = null;
-    state.data = null;
-    dom.form.hidden = true;
-    onScopeChange?.(next);
-    state.staffUsers = [];
-    state.staffAudit = [];
-    state.staffAccessLoaded = false;
-    state.lastStaffCleanup = null;
-    renderStaffUsers();
-    renderStaffAudit();
-    await load();
+    dom.scope.value = state.scope;
+    const departure = prepareDeparture();
+    if (!departure) return false;
+    const target = await prepareScope(next);
+    if (!target?.isCurrent() || !departure.commit()) return false;
+    target.accept(); onScopeChange?.(next);
+    return true;
+  }
+
+  // Loading another scope must leave the current form, logo and roster owned
+  // until Navigation commits consent for the still-current source drafts.
+  async function prepareScope(scope) {
+    if (disposed || !state.staff || state.staff.role === 'staff') return null;
+    const operation = beginSettingsOperation('administration-scope');
+    const current = () => !operation.signal.aborted && isSettingsContextCurrent(operation.context) &&
+      scopePreparation === operation;
+    scopePreparation = operation;
+    try {
+      const query = encodeURIComponent(scope);
+      const [response, organizationsResponse, codesResponse] = await Promise.all([
+        authorizedJson(`/api/asap/staff/settings?orgId=${query}`, { signal: operation.signal }),
+        authorizedJson('/api/asap/staff/organizations', { signal: operation.signal }),
+        authorizedJson(`/api/asap/staff/polaris/patron-codes?orgId=${query}`, { signal: operation.signal }).catch(error => {
+          if (isAbortError(error) || error.status === 401) throw error;
+          return null;
+        })
+      ]);
+      if (!current()) return null;
+      const data = response?.data && response.version === undefined ? response.data : response;
+      return { isCurrent: current, accept() {
+        const staffReview = scope === state.scope && state.awaitingReloadMutation?.slot === 'administration-staff-mutation';
+        cancelSettingsOperations(); releaseLogoDraft(); copyGeneration++;
+        state.scope = scope;
+        if (!staffReview) { state.awaitingReload = false; state.awaitingReloadMutation = null; }
+        state.organizations = organizationsResponse?.data ?? organizationsResponse ?? [];
+        state.staffUsers = []; state.staffAudit = []; state.staffAccessLoaded = false; state.lastStaffCleanup = null;
+        populateScopeOptions();
+        populate({ ...data, patronCodeChoices: codesResponse?.data ?? codesResponse ?? [] });
+        renderStaffUsers(); renderStaffAudit(); dom.form.hidden = false; dom.form.inert = state.awaitingReload; dom.refresh.disabled = false;
+        onRefreshed(operation.context.owner, { kind: 'settings', scope });
+      } };
+    } catch (error) {
+      if (current() && !isAbortError(error) && error.status !== 401) notify(error.message || 'Settings could not be loaded.', 'error');
+      return null;
+    } finally { reads.finish('administration-scope', operation.token); }
   }
 
   function activatePanel(name, updateUrl = false) {
@@ -2199,20 +2227,6 @@ export function createSettingsController({
     return true;
   }
 
-  function setScopeFromUrl(scope) {
-    if (disposed) return false;
-    if (state.pendingMutation || state.outcomeUncertain) return false;
-    if (state.scope !== scope) {
-      cancelSettingsOperations();
-      state.awaitingReload = false; state.awaitingReloadMutation = null;
-      state.data = null;
-      dom.form.hidden = true;
-      dom.staffOrganization.value = '';
-    }
-    state.scope = scope;
-    return true;
-  }
-
   function discardDraft() {
     if (disposed) return false;
     if (state.pendingMutation || state.outcomeUncertain) return false;
@@ -2228,19 +2242,20 @@ export function createSettingsController({
     activate,
     activatePanel,
     suspend,
-    setScopeFromUrl,
+    prepareScope,
     discardDraft,
     load,
     isDirty,
     hasPendingMutation: () => Boolean(state.pendingMutation),
     hasUnconfirmedOutcome: () => state.outcomeUncertain,
-    inspectDeparture: () => ({ dirty: isDirty(), blocked: Boolean(state.pendingMutation || state.outcomeUncertain),
+    inspectDeparture: () => ({ owner: drafts, dirty: isDirty(), blocked: disposed || Boolean(state.pendingMutation || state.outcomeUncertain),
       stamp: drafts.stamp(),
       message: state.outcomeUncertain
         ? 'Reload current settings to verify the uncertain change before navigating away.'
         : 'Wait for the settings change to finish before navigating away.',
       confirmMessage: 'Discard unsaved settings changes and navigate away?' }),
     currentScope: () => state.scope,
+    isReady: () => Boolean(state.data && String(state.data.orgId) === String(state.scope) && !state.awaitingReload),
     currentPanel: () => state.activePanel
   };
 }

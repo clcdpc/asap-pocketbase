@@ -33,7 +33,7 @@ export function createWorkflowApp() {
     present: shell.presentView,
     onInvalidate: () => {
       titleDetail.invalidate(); copyDetail.invalidate(); titleQueue.invalidate(); copyQueue.invalidate();
-      suggestion.invalidate(); operations.deactivate();
+      suggestion.invalidate(); operations.invalidate();
     },
     closeTransient: () => {
       if (detailHost.isOpen()) detailHost.requestClose({ navigation: true, guarded: true });
@@ -44,6 +44,9 @@ export function createWorkflowApp() {
       bulk.contextChanged(next); shell.contextChanged(next, previous);
     },
     getFeatures: () => [
+      { key: 'session', inspectDeparture: session.inspectDeparture },
+      { key: 'operations', inspectDeparture: operations.inspectDeparture },
+      { key: 'analytics', inspectDeparture: analytics.inspectDeparture },
       { key: 'bulk', inspectDeparture: bulk.inspectDeparture, discardDeparture: () => bulk.close({ navigation: true }) },
       { key: 'profile', inspectDeparture: profile.inspectDeparture, discardDeparture: () => { if (profile.isDirty()) profile.discardDraft(); } },
       { key: 'settings', inspectDeparture: settings.inspectDeparture, discardDeparture: () => { if (settings.isDirty()) settings.discardDraft(); } },
@@ -55,6 +58,9 @@ export function createWorkflowApp() {
       queue: {
         activate: options => titleQueue.activate(options), deactivate: () => titleQueue.deactivate(),
         refresh: options => titleQueue.refresh(options), render: () => titleQueue.render(),
+        prepare: context => titleQueue.prepare(context),
+        isReady: context => titleQueue.isReady(context),
+        prepareDetail: (id, options) => titleDetail.prepare(id, options), presentDetail: (target, options, ticket) => titleDetail.present(target, null, options, ticket),
         refreshOnEntry: options => titleQueue.refreshOnEntry(options), setLibraries: libraries => populateScopes(libraries),
         find: id => titleQueue.find(id), libraryScope: id => titleQueue.libraryScope(id),
         resetFilters: () => titleQueue.resetFilters(),
@@ -64,13 +70,18 @@ export function createWorkflowApp() {
       'additional-copies': {
         activate: options => copyQueue.activate(options), deactivate: () => copyQueue.deactivate(),
         refresh: options => copyQueue.refresh(options), render: () => copyQueue.render(),
+        prepare: context => copyQueue.prepare(context),
+        isReady: context => copyQueue.isReady(context),
+        prepareDetail: id => copyDetail.prepare(id), presentDetail: (target, options, ticket) => copyDetail.present(target, null, options, ticket),
         refreshOnEntry: options => copyQueue.refreshOnEntry(options), setLibraries: libraries => populateScopes(libraries),
         resetFilters: () => copyQueue.resetFilters(),
         openDetail: id => copyDetail.open(id, null, { fromDeepLink: true }),
         closeOverlay: () => detailHost.isOpen() ? detailHost.requestClose() : suggestion.isOpen() ? suggestion.close() : null
       },
       settings: { activate: options => { void settings.activate(options.panel); }, deactivate: () => settings.suspend(),
-        currentScope: () => settings.currentScope(), currentPanel: () => settings.currentPanel(), setScopeFromUrl: scope => settings.setScopeFromUrl(scope) },
+        prepare: scope => settings.prepareScope(scope),
+        isReady: () => settings.isReady(),
+        currentScope: () => settings.currentScope(), currentPanel: () => settings.currentPanel() },
       operations: { activate: () => operations.activate(), deactivate: () => operations.deactivate(),
         refresh: options => operations.refresh(options), refreshOnEntry: () => operations.refresh() },
       profile: { activate: () => profile.activate(), deactivate: () => profile.deactivate() },
@@ -142,6 +153,7 @@ export function createWorkflowApp() {
     onSessionLost: message => session.lose(message), onAccessUnavailable: () => session.accessUnavailable()
   });
   const settings = createSettingsController({ root: get('#settings-view'), tab: get('#settings-view-tab'), announce,
+    prepareDeparture: navigation.prepareDeparture,
     onPanelChange: navigation.settingsPanelChanged,
     onScopeChange: scope => { navigation.settingsScopeChanged(scope); void shell.refreshReadiness(); },
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner),

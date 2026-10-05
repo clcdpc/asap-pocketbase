@@ -9,14 +9,14 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
   getNavigationGeneration = () => 0, refreshCurrentStaff = async () => null, request: send = authorizedJson }) {
   const reads = createLatestLoad();
   let lease = null, current = null, actor = null, returnFocus = null, activeAttempt = null;
-  let drafts = createDraftScope(), forms = new WeakMap(), disposed = false;
+  let drafts = createDraftScope(), forms = new WeakMap(), disposed = false, targetGeneration = 0;
 
   function isPresentationCurrent(mounted, owner) { return !disposed && mounted?.isCurrent() && sessionIdentity.isCurrent(owner); }
   function isCurrentDialogSelection(request) {
     return isPresentationCurrent(lease, actor) && host.isOpen() && current?.id === request.id;
   }
   function isCurrentDialogRequest(request) { return isCurrentDialogSelection(request) && current.version === request.version; }
-  function invalidate() { reads.begin('detail').abort(); reads.begin('assignment-candidates').abort(); }
+  function invalidate() { targetGeneration++; reads.begin('detail-target').abort(); reads.begin('detail').abort(); reads.begin('assignment-candidates').abort(); }
   function resetDrafts() {
     reads.begin('assignment-candidates').abort(); drafts.dispose(); drafts = createDraftScope(); forms = new WeakMap();
   }
@@ -24,39 +24,56 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
     invalidate(); drafts.dispose(); current = null; actor = null; returnFocus = null; activeAttempt = null; lease = null;
   }
 
-  async function open(id, opener = null, options = {}) {
-    if (disposed || !sessionIdentity.actor()) return false;
-    const ticket = beforeOpen(options);
-    if (ticket === false || ticket === null) return false;
+  async function prepare(id) {
     const owner = sessionIdentity.preferences();
-    const prior = current;
+    if (disposed || !owner) return null;
+    const load = reads.begin('detail-target'), ticket = ++targetGeneration;
+    const live = () => !disposed && !load.signal.aborted && ticket === targetGeneration && sessionIdentity.isCurrent(owner);
+    try {
+      const request = await send(`/api/asap/staff/additional-copies/${encodeURIComponent(id)}`, { signal: load.signal });
+      return live() ? { request, owner, isCurrent: live } : null;
+    } finally { reads.finish('detail-target', load.token); }
+  }
+
+  function present(target, opener, options, ticket) {
+    if (disposed || !sessionIdentity.isCurrent(target.owner) || !isNavigationCurrent(ticket)) return false;
+    const { request, owner } = target;
     const mounted = host.acquire({ dispose: disposeMounted, onClose: close });
     lease = mounted; actor = owner; current = null; returnFocus = opener || document.activeElement;
     drafts = createDraftScope();
-    const load = reads.begin('detail');
+    onOpened(request, options);
+    renderAdditionalCopy(request); mounted.show();
+    for (const name of ['input', 'change']) mounted.content.addEventListener(name, event => {
+      if (isPresentationCurrent(mounted, owner) && mounted.content.contains(event.target)) drafts.touch();
+    });
+    announce(`Opened additional-copy task ${request.id}.`); return true;
+  }
+
+  async function open(id, opener = null, options = {}) {
+    if (disposed || !sessionIdentity.actor()) return false;
+    const departure = beforeOpen(options);
+    if (!departure) return false;
+    const owner = sessionIdentity.preferences(), prior = current;
     announce('Loading additional-copy details...');
     try {
-      const result = await send(`/api/asap/staff/additional-copies/${encodeURIComponent(id)}`, { signal: load.signal });
-      if (!load.isCurrent() || !isPresentationCurrent(mounted, owner) || !isNavigationCurrent(ticket)) return false;
-      if (!await onAlign(result, options, owner, ticket)) return false;
-      if (!load.isCurrent() || !isPresentationCurrent(mounted, owner) || !isNavigationCurrent(ticket)) return false;
-      onOpened(result, options);
-      renderAdditionalCopy(result); mounted.show();
-      mounted.content.addEventListener('input', () => drafts.touch());
-      mounted.content.addEventListener('change', () => drafts.touch());
-      announce(`Opened additional-copy task ${result.id}.`);
-      return true;
+      const target = await prepare(id);
+      if (!target?.isCurrent() || !departure.isCurrent()) return false;
+      const alignment = await onAlign(target.request, options, owner, departure);
+      if (!alignment || !target.isCurrent() || !departure.isCurrent()) return false;
+      const ticket = alignment.commit();
+      return ticket !== false && present(target, opener, options, ticket);
     } catch (error) {
-      if (load.isCurrent() && isPresentationCurrent(mounted, owner) && isNavigationCurrent(ticket) && !isAbortError(error) && error.status !== 401) {
-        if (options.authoritativeRefresh) {
+      if (departure.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
+        if (options.authoritativeRefresh && lease?.isCurrent()) {
+          resetDrafts();
           current = Object.freeze({ id: String(id), version: null });
-          mounted.heading(prior?.title || `Additional copy ${id}`, `Additional copy ${id}`);
-          mounted.content.replaceChildren(element('p', { text: 'Current details could not refresh. Reload this task before performing another action.' })); mounted.show();
+          lease.heading(prior?.title || `Additional copy ${id}`, `Additional copy ${id}`);
+          lease.content.replaceChildren(element('p', { text: 'Current details could not refresh. Reload this task before performing another action.' })); lease.show();
         }
         announce(error.status === 404 ? 'That additional-copy task is no longer available.' : error.message, 'error');
       }
       return false;
-    } finally { reads.finish('detail', load.token); }
+    }
   }
 
   function allowRequestMutation(request, declaration) {
@@ -308,10 +325,10 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
     }
   }
 
-  return { open, close, mutate: mutateAdditionalCopy, invalidate,
+  return { open, prepare, present, close, mutate: mutateAdditionalCopy, invalidate,
     isDirty: () => Boolean(lease?.isCurrent() && drafts.isDirty()),
-    inspectDeparture: () => ({ dirty: Boolean(lease?.isCurrent() && drafts.isDirty()), stamp: drafts.stamp(),
-      blocked: Boolean(activeAttempt && sessionIdentity.isCurrent(activeAttempt.owner)),
+    inspectDeparture: () => ({ owner: current || lease, dirty: Boolean(lease?.isCurrent() && drafts.isDirty()), stamp: drafts.stamp(),
+      blocked: disposed || Boolean(activeAttempt && sessionIdentity.isCurrent(activeAttempt.owner)),
       message: 'The workflow action is in progress. Wait for its authoritative result before navigating away.',
       confirmMessage: 'Discard unsaved request changes and navigate away?' }),
     signedOut() { lease?.release({ navigation: true }); invalidate(); },

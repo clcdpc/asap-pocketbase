@@ -16,9 +16,9 @@ const { fixture } = require('./helpers/staff-controller.cjs');
     const navigation = createNavigationController({ router, sessionIdentity: session, announce() {},
       present() { presented += 1; }, closeTransient() { disposed += 1; }, onInvalidate() {}, onContextChanged() {},
       views: { queue, 'additional-copies': queue, settings: { currentScope: () => 'system' } },
-      getFeatures: () => [{ key: 'request', inspectDeparture: () => ({ stamp, blocked, dirty,
-        message: 'Pending', confirmMessage: 'Discard?' }) }],
+      getFeatures: () => [{ key: 'request', inspectDeparture }],
       request: () => new Promise(resolve => { finish = resolve; }) });
+    function inspectDeparture() { return { stamp, blocked, dirty, message: 'Pending', confirmMessage: 'Discard?' }; }
     navigation.start();
     router.pushStage('suggestion', { scope: '2' }); router.remember();
     const accepted = router.snapshot().href;

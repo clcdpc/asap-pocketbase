@@ -61,6 +61,76 @@ It contains no endpoints, forms, recovery serialization, mutation error
 classification, history mechanics or feature reset inventory. There is no
 replacement global feature store, event bus, framework or import cycle.
 
+## Ownership transfer and command authority (#367)
+
+Navigation owns a single-use prepared departure. `prepareDeparture` inspects
+applicable owners and obtains consent without discarding state. Its opaque
+handle captures the actor epoch, source context, intent revision, owner
+lifetimes and dirty stamps. `revalidate` inspects again, rejects changed owners
+or contexts and pending commands, and obtains fresh consent for new or changed
+drafts. `commit` repeats that check and discards each applicable source once.
+Repeated commits are rejected. A newer intent supersedes an older prepared
+departure without destroying its source. Preference revisions of the same
+actor do not replace the actor epoch.
+
+Any target that needs authority validation is prepared before departure
+commits. Catalog admission, initial Settings entry, Settings scope replacement,
+history traversal and Title/Copy detail loading retain the current source
+through failed, unavailable, cancelled or superseded reads. Target detail and
+configuration reads do not acquire a host lease. Queue projections needed for
+detail alignment are staged independently, then accepted only at commit.
+Router alone accepts the resulting route. Cached, already-authoritative views
+and synchronous close/context intents can commit immediately; subsequent list
+refreshes populate those admitted owners without changing command authority.
+
+Owner replacement is transactional. After successful admission, the previous
+owner is retired before its replacement mounts, exactly once. Mounted leases,
+render revisions, connected roots and disposable read tickets fence late DOM,
+draft registration, event and focus work. Failed authoritative command review
+can retire an already-invalid actionable snapshot while preserving the
+captured command outcome and an explicit unavailable-review presentation.
+That command consequence is distinct from cancelling an uncommitted transfer.
+
+Sign Out captures a departure without discarding drafts or attaching a read
+AbortSignal to its POST. Its pending command and session review protect unload
+and navigation. Authoritative review of the same active actor retains the
+current source and exact draft, reports uncertainty and permits deliberate
+retry. Confirmed loss of session/access, identity replacement or unavailable
+or malformed review uses Session Coordinator's existing revocation fan-out.
+Revocation retires owners regardless of old discard consent; late results
+cannot revoke a replacement actor.
+
+Operations captures immutable actor, tenant-bound storage key, scope, path,
+body/version and operation identity before dispatch. Its outcome and retry
+evidence are separate mutable records. Retained storage keeps the existing
+supported flat format and actor-key/legacy-key reader; restoration always
+requires fresh review. Retry evidence belongs to the exact retained object,
+captured actor and scope. A visible all-library projection may additionally
+review a still-active captured library under its exact scope; broad reads alone
+do not authorize that narrower command. Inactive or unavailable captured
+authority leaves Retry blocked and retains the recovery record for later
+authoritative review. No automatic broadening or speculative retirement occurs.
+
+Projection invalidation retires choices, tables and their callbacks. Catalog
+retirement clears review evidence, while retaining command identity, body,
+scope and outcome. Same-actor preference refresh preserves valid evidence;
+actor replacement cannot use it. Reads can be cancelled or superseded by their
+owner. Submitted commands never inherit those read signals, and their outcomes
+and receipts remain authoritative until explicitly resolved under the captured
+identity.
+
+Small contract tests cover preparation, fresh consent, blocked/stale/disposed
+owners, actor versus preference changes, supersession and exactly-once commit.
+Application journeys cover catalog, Recent Requests, Sign Out and Settings
+scope admission, including uncached entry, failed history targets and duplicate
+Suggestion opening. The caller audit also removed the destructive Settings
+scope setter, staged Copy replacement, fenced retired grid/email callbacks and
+configuration caches, and made command review completion depend on whether a
+replacement actually committed. Controller tests cover Title/Copy replacement and late
+read/event/focus work, and exact Operations review, retry and body/version
+authority. Real SQL/Kestrel browser checks additionally scan Profile and
+Settings after failed detail transfer and uncertain same-session Sign Out.
+
 ## Closure audit (#365)
 
 The audit started from #364 completion
@@ -305,7 +375,7 @@ accessibility, layout, image, page-error and external-traffic guards.
 ## Closure validation contract
 
 Issue #365's execution-state evidence records actual final-SHA results and CI.
-Closure requires all 47 current frontend files (including 191 navigation/draft
+Closure requires all 49 current frontend files (including 227 navigation/draft
 journeys and nine genuine Grid focus cases), a zero-warning Release build,
 the unchanged 784-test non-browser minimum and all three real-SQL Kestrel
 browser journeys with zero skips. The .NET gates include migration import,

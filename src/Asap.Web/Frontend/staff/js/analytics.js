@@ -324,6 +324,7 @@ export function createAnalyticsController({ root: container, sessionIdentity }) 
     });
   }
   return {
+    inspectDeparture: () => ({ owner: active ? JSON.stringify([analyticsScope, analyticsRange]) : null, blocked: disposed, dirty: false }),
     activate() { if (!disposed) active = true; },
     refresh: () => loadAnalytics(),
     deactivate() { active = false; reads.begin('analytics').abort(); },

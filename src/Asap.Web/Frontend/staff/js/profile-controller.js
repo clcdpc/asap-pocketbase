@@ -197,6 +197,7 @@ export function createProfileController({ root, sessionIdentity, announce,
   }
 
   dom.profile.addEventListener('submit', saveProfile, { signal: events.signal });
+  for (const name of ['input', 'change']) dom.profile.addEventListener(name, () => drafts.touch(), { signal: events.signal });
   dom.profileRefresh.addEventListener('click', refreshUnconfirmedProfile, { signal: events.signal });
   return {
     activate() { updateProfileControls(); },
@@ -206,8 +207,8 @@ export function createProfileController({ root, sessionIdentity, announce,
     isDirty: hasProfileDraft,
     hasPendingMutation: () => Boolean(state.profileMutation),
     inspectDeparture() {
-      return { dirty: hasProfileDraft(), blocked: Boolean(state.profileMutation),
-        stamp: JSON.stringify(profileValues()),
+      return { owner: drafts, dirty: hasProfileDraft(), blocked: disposed || Boolean(state.profileMutation),
+        stamp: JSON.stringify({ revision: drafts.revision(), values: profileValues() }),
         confirmMessage: 'Discard unsaved Profile changes and navigate away?',
         message: state.profileMutation?.outcomeUnconfirmed
           ? 'Reload Profile to review the uncertain save before navigating away.'

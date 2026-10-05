@@ -531,7 +531,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
           element('strong', { text: pickupChanged ? 'Pickup changed; existing suggestion found' : 'Existing suggestion found' }),
           element('span', { text: `Request ${duplicateId} already matches this patron by ${match}.` }),
           element('button', { type: 'button', className: 'secondary-button', onclick: async () => {
-            if (!panel.isConnected || !isCurrent(current) || !closeStaffSuggestion({ focusButton: false })) return;
+            if (!panel.isConnected || !isCurrent(current)) return;
             await openExistingTitle(Object.freeze({ id: duplicateId, owner, opener: trigger }));
           } }, 'Open existing request')
         ]);
@@ -558,8 +558,8 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
   return { open, close: closeStaffSuggestion, invalidate,
     isOpen: () => root.open,
     isDirty: () => Boolean(root.open && drafts.isDirty()),
-    inspectDeparture: () => ({ dirty: Boolean(root.open && drafts.isDirty()), stamp: drafts.stamp(),
-      blocked: !disposed && Boolean(activeAttempt?.pending && sessionIdentity.isCurrent(activeAttempt.owner) || suggestion?.outcomeUnconfirmed),
+    inspectDeparture: () => ({ owner: suggestion, dirty: Boolean(root.open && drafts.isDirty()), stamp: drafts.stamp(),
+      blocked: disposed || Boolean(activeAttempt?.pending && sessionIdentity.isCurrent(activeAttempt.owner) || suggestion?.outcomeUnconfirmed),
       message: 'Creation is in progress or unconfirmed. Review its authoritative result before leaving.',
       confirmMessage: 'Discard the unsaved new suggestion and navigate away?' }),
     reportBlocked: message => setStaffSuggestionStatus(message, 'error'),
