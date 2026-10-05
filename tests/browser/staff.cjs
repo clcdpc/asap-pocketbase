@@ -3302,6 +3302,114 @@ async function runSettingsUnconfirmedSessionCase(browser, args) {
   }
 }
 
+async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, report) {
+  const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const external = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const page = await context.newPage(), errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const original = (await session(context, args.baseOrigin)).staff;
+  async function reviseStaff(displayName, notificationEmail) {
+    const current = await session(external.context, args.baseOrigin);
+    const result = await external.context.request.patch(`${args.baseOrigin}/api/asap/staff/users/${original.id}`, {
+      headers: { 'X-ASAP-Antiforgery': current.antiforgeryToken },
+      data: { version: current.staff.version, email: original.authenticationEmail, displayName, notificationEmail }
+    });
+    assert.equal(result.status(), 200, await result.text());
+    return (await session(external.context, args.baseOrigin)).staff;
+  }
+  try {
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=system#settings-staff`, { waitUntil: 'networkidle' });
+    await page.locator('#settings-form').waitFor({ state: 'visible' });
+    await page.locator('#settings-nav-staff').click();
+    const row = page.locator('.settings-staff-row').filter({ has: page.getByLabel(`Authentication email for ${original.displayName || original.userPrincipalName}`, { exact: true }) });
+    await row.waitFor();
+    await row.getByLabel(/^Display name/).fill('Authoritative browser actor');
+    await row.getByLabel(/^Notification email/).fill('actor-revision@example.org');
+    await row.getByRole('button', { name: 'Save profile', exact: true }).click();
+    await page.locator('#staff-access-status').filter({ hasText: /Staff profile saved/ }).waitFor();
+    await page.waitForFunction(() => !document.getElementById('settings-form').inert);
+    const revised = (await session(context, args.baseOrigin)).staff;
+    assert.notEqual(revised.version, original.version, 'real SQL Staff Access metadata write advances rowversion');
+    for (const key of ['id', 'tenantId', 'authenticationEmail', 'role', 'organizationId']) assert.equal(revised[key], original[key]);
+    assert.equal(await page.locator('#staff-identity').textContent(), revised.displayName);
+    await page.getByRole('button', { name: 'Profile', exact: true }).click();
+    assert.equal(await page.locator('#notification-email').inputValue(), revised.notificationEmail);
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'staff-access-current-preferences');
+
+    for (const kind of ['Title', 'Additional Copy']) {
+      const copy = kind === 'Additional Copy', id = copy ? args.staleCopyBId : args.staleTitleAId;
+      const detailPath = `/api/asap/staff/${copy ? 'additional-copies' : 'title-requests'}/${id}`;
+      const deletePath = `/api/asap/staff/${copy ? 'additional-copies' : 'requests'}/${id}`;
+      const source = await context.request.get(args.baseOrigin + detailPath);
+      assert.equal(source.status(), 200, await source.text());
+      const snapshot = await source.json();
+      const detailRoute = route => route.fulfill({ status: 200, contentType: 'application/json',
+        json: { ...snapshot, status: 'closed', capabilities: { ...snapshot.capabilities, canDelete: true } } });
+      await page.route(args.baseOrigin + detailPath + '*', detailRoute);
+      const versions = [];
+      let latest = (await session(context, args.baseOrigin)).staff;
+      const deleteRoute = async route => {
+        versions.push(route.request().postDataJSON().actorVersion);
+        if (versions.length === 2) {
+          const result = await route.fetch();
+          assert.equal(result.status(), 409, await result.text());
+          assert.equal((await result.json()).code, 'actor_changed_since_preview', 'real backend rejects externally revised actor');
+          await route.fulfill({ response: result });
+        } else {
+          assert.equal(versions.at(-1), latest.version, `${kind} deletion uses accepted authoritative staff rowversion`);
+          await route.fulfill({ status: 200, json: { deleted: true } });
+        }
+      };
+      await page.route(args.baseOrigin + deletePath, deleteRoute);
+      const view = copy ? 'Additional copies' : 'Requests';
+      const stage = copy ? '[data-copy-status="closed"]' : '[data-status="closed"]';
+      await page.getByRole('button', { name: view, exact: true }).click();
+      await page.locator(stage).click();
+      // The real list may contain the source in another stage; the named route intent still opens its authoritative detail.
+      await page.evaluate(({ id, copy }) => {
+        const url = new URL(location.href); url.searchParams.set('request', id);
+        url.searchParams.set('stage', copy ? 'additional_copies' : 'closed');
+        if (copy) url.searchParams.set('copyStatus', 'closed');
+        history.pushState({}, '', url); dispatchEvent(new PopStateEvent('popstate'));
+      }, { id, copy });
+      await page.locator('#request-dialog[open]').waitFor();
+      const remove = async () => {
+        page.once('dialog', dialog => dialog.accept());
+        await page.getByRole('button', { name: copy ? 'Permanently delete task' : 'Permanently delete request', exact: true }).click();
+      };
+      await remove(); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+      assert.equal(versions.length, 1, `${kind} uses the Staff Access revision on its first deliberate delete`);
+      await page.evaluate(({ id }) => {
+        const url = new URL(location.href); url.searchParams.set('request', id);
+        history.pushState({}, '', url); dispatchEvent(new PopStateEvent('popstate'));
+      }, { id });
+      await page.locator('#request-dialog[open]').waitFor();
+      latest = await reviseStaff(`External browser ${kind}`, 'external-revision@example.org');
+      await remove();
+      await page.locator('#app-status').filter({ hasText: /changed.*Reload|no longer actionable/i }).waitFor();
+      assert.equal(versions.length, 2, 'authoritative conflict cannot automatically replay deletion');
+      assert.equal(await page.locator('#staff-identity').textContent(), latest.displayName);
+      await remove(); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+      assert.equal(versions.length, 3); assert.equal(versions[2], latest.version);
+      await page.unroute(args.baseOrigin + detailPath + '*', detailRoute);
+      await page.unroute(args.baseOrigin + deletePath, deleteRoute);
+    }
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.locator('#settings-nav-polaris').click();
+    await page.route('**/api/asap/staff/polaris/test', route => route.fulfill({ status: 502, json: { code: 'polaris_unavailable' } }));
+    await page.locator('#btn-test-polaris').click();
+    await page.locator('#polaris-test-result').filter({ hasText: 'Polaris is unavailable.' }).waitFor();
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'No changes');
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'polaris-diagnostic-unavailable');
+    await page.getByRole('button', { name: 'Profile', exact: true }).click();
+    await page.locator('#profile-view').waitFor({ state: 'visible' });
+    assert.deepEqual(errors, []); assert.equal(traffic.externalRequests + external.traffic.externalRequests, 0);
+  } finally {
+    await reviseStaff(original.displayName, original.notificationEmail);
+    await context.close(); await external.context.close();
+  }
+}
+
 async function runSettingsLayout(browser, args, axeSource, report) {
   const sections = [
     { name: 'start', pairs: [['leap-bib-url-pattern', 'leap-patron-url-pattern']], wide: ['system-staff-url', 'format-icon-url-pattern'] },
@@ -3467,8 +3575,9 @@ async function main() {
     await runScopedBlocked(browser, args, axeSource, report);
     await runStaffSuggestion(browser, args, axeSource, report);
     await runClosedDeletionControls(browser, args, axeSource, report);
+    await runCurrentStaffPreferenceRevisions(browser, args, axeSource, report);
     await runSettingsLayout(browser, args, axeSource, report);
-    assert.equal(report.states.length, 50, 'Expected fifty major staff browser states');
+    assert.equal(report.states.length, 52, 'Expected fifty-two major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),

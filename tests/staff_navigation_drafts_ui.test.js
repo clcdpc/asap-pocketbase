@@ -1653,6 +1653,163 @@ test('staff roster review preserves the cached Title configuration', () =>
     assert.match(ui.get('[aria-label="Format"]').textContent, /Cached configuration/);
   }));
 
+for (const commit of ['library save', 'system save', 'library reset']) {
+  test(`confirmed ${commit} invalidates Title configuration even when Settings refresh fails`, () =>
+    fixture(`?stage=settings&settingsScope=${commit === 'system save' ? 'system' : '2'}`, async ui => {
+      let committed = false, failRefresh = true, configurationReads = 0, reloads = 0;
+      ui.setApi(({ pathname, init }) => {
+        if (pathname === '/api/asap/config') {
+          configurationReads++;
+          return response(200, { availableFormats: ['book'], formatLabels: { book: committed ? 'Configuration B' : 'Configuration A' } });
+        }
+        if ((pathname.endsWith('/settings') || pathname.endsWith('/settings/reset')) && init.method === 'POST') {
+          committed = true; return response(200, { data: { version: 'settings-v2' } });
+        }
+        if (pathname.endsWith('/settings') && committed) {
+          reloads++;
+          if (failRefresh) return response(503, { message: 'Forced post-commit reload failure' });
+        }
+      });
+      await until(() => !ui.get('#settings-form').hidden, 'Settings cached before the Title configuration');
+      ui.get('[data-view="queue"]').click(); await ui.open();
+      assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration A/);
+      ui.get('#close-request').click(); await settle();
+      ui.get('[data-view="settings"]').click(); await settle();
+      ui.allowDiscard();
+      if (commit === 'library reset') ui.get('#settings-reset').click();
+      else {
+        if (commit === 'library save') {
+          const override = ui.get('[data-setting-key="loginNote"] .settings-override-toggle');
+          override.checked = true; override.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+        }
+        ui.edit('#patron-login-note', 'Configuration B note');
+        ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+      }
+      await until(() => /could not be refreshed/.test(ui.get('#settings-message').textContent), 'confirmed commit and failed presentation refresh');
+      assert.equal(committed, true); assert.equal(ui.get('#settings-save-title').textContent, 'Saved; reload needed');
+      const staleControlsInert = ui.get('#settings-form').inert;
+      const posts = ui.calls.filter(call => call.init.method === 'POST').length;
+      ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+      await settle(); assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, posts);
+      ui.get('[data-view="queue"]').click(); await ui.open();
+      assert.equal(configurationReads, 2, 'confirmed source change forces a configuration fetch despite failed refresh');
+      assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration B/);
+      assert.equal(staleControlsInert, true, 'stale Settings controls cannot be edited as authoritative');
+      ui.get('#close-request').click(); await settle();
+      const beforeReturn = reloads; failRefresh = false;
+      ui.get('[data-view="settings"]').click();
+      await until(() => reloads > beforeReturn && !ui.get('#settings-form').inert, 'returning to Settings reviews the confirmed commit');
+      assert.equal(ui.get('#settings-save-title').textContent, 'No changes');
+    }));
+}
+
+for (const kind of ['Title', 'Additional Copy']) {
+  test(`own Staff Access metadata revision reaches shell/Profile and subsequent ${kind} delete`, () =>
+    fixture('?stage=settings&settingsScope=2', async ui => {
+      let configurationReads = 0, deletes = 0, saved = false;
+      ui.setApi(({ pathname, init }) => {
+        const current = ui.readStaff();
+        if (pathname.endsWith('/users') && init.method === 'GET') return response(200, { users: [{ ...current, active: true, userPrincipalName: current.authenticationEmail }] });
+        if (pathname.endsWith('/audit')) return response(200, { data: [] });
+        if (pathname.endsWith('/users/20') && init.method === 'PATCH') {
+          const body = JSON.parse(init.body);
+          assert.equal(body.email, current.authenticationEmail); assert.equal(body.version, 'actor-v1');
+          ui.setStaff({ displayName: body.displayName, notificationEmail: body.notificationEmail, version: 'actor-v2' });
+          saved = true; return response(200, { user: { ...ui.readStaff(), active: true } });
+        }
+        if (pathname === '/api/asap/config') { configurationReads++; return response(200, { availableFormats: ['book'], formatLabels: { book: 'Cached configuration' } }); }
+        if (init.method === 'DELETE') {
+          assert.equal(JSON.parse(init.body).actorVersion, 'actor-v2'); deletes++;
+          return response(200, { deleted: true });
+        }
+      });
+      ui.get('[data-view="queue"]').click(); ui.get('[data-status="closed"]').click(); await ui.open();
+      ui.get('#close-request').click(); await settle();
+      ui.get('[data-view="settings"]').click(); await settle();
+      ui.get('[data-settings-panel="staff"]').click();
+      await until(() => ui.get('.settings-staff-row'), 'own admin roster row');
+      ui.edit('.settings-staff-row input[aria-label^="Display name"]', 'New authoritative name');
+      ui.edit('.settings-staff-row input[aria-label^="Notification email"]', 'new-notification@example.org');
+      [...ui.get('.settings-staff-row').querySelectorAll('button')].find(button => button.textContent === 'Save profile').click();
+      await until(() => saved && /Staff profile saved/.test(ui.get('#staff-access-status').textContent) && !ui.get('#settings-form').inert, 'metadata committed and authoritative session/roster accepted');
+      assert.equal(ui.get('#workspace').hidden, false); assert.equal(ui.get('#staff-identity').textContent, 'New authoritative name');
+      assert.equal(ui.get('#notification-email').value, 'new-notification@example.org');
+      ui.get('[data-view="profile"]').click(); await settle();
+      assert.equal(ui.get('#notification-email').value, 'new-notification@example.org');
+      ui.get('[data-view="queue"]').click(); await ui.open();
+      assert.equal(configurationReads, 1, 'staff roster mutation preserves the Title configuration cache');
+      if (kind === 'Additional Copy') {
+        ui.get('#close-request').click(); await settle();
+        ui.get('[data-view="additional-copies"]').click();
+        ui.get('[data-copy-status="closed"]').click();
+        await until(() => ui.get('#additional-copy-grid .grid-open'), 'closed Copy queue opener');
+        ui.get('#additional-copy-grid .grid-open').click();
+        await until(() => ui.get('#request-dialog').open, 'Copy opened');
+      }
+      ui.allowDiscard();
+      [...ui.get('.action-bar').querySelectorAll('button')].find(button => button.textContent.includes('Permanently delete')).click();
+      await until(() => deletes === 1 && !ui.get('#request-dialog').open, 'explicit delete with accepted actorVersion');
+    }, { role: 'admin', staff: { tenantId: 'same-actor', authenticationEmail: 'admin@example.org', organizationId: 2 }, status: 'closed',
+      copyRequest: { status: 'closed', capabilities: { canDelete: true } } }));
+
+  test(`external same-actor rowversion conflict refreshes ${kind} actorVersion without replay`, () =>
+    fixture(kind === 'Title' ? `?stage=closed&scope=2&request=${id}` : '?stage=additional_copies&scope=2&copyStatus=closed&request=71', async ui => {
+      const versions = [];
+      ui.setApi(({ init }) => {
+        if (init.method === 'DELETE') {
+          versions.push(JSON.parse(init.body).actorVersion);
+          if (versions.length === 1) return response(409, { code: 'actor_changed_since_preview', message: 'Actor changed since preview. Review before retrying.' });
+          return response(200, { deleted: true });
+        }
+      });
+      await until(() => ui.get('#request-dialog').open, 'closed detail');
+      ui.setStaff({ version: 'external-v2', displayName: 'External metadata', notificationEmail: 'external@example.org' });
+      ui.allowDiscard();
+      const remove = () => [...ui.get('.action-bar').querySelectorAll('button')].find(button => button.textContent.includes('Permanently delete')).click();
+      remove();
+      await until(() => /Actor changed since preview/.test(ui.get('#app-status').textContent), 'authoritative conflict reviewed');
+      assert.deepEqual(versions, ['actor-v1'], 'no destructive replay after accepting a new preference revision');
+      assert.equal(ui.get('#staff-identity').textContent, 'External metadata'); assert.equal(ui.get('#notification-email').value, 'external@example.org');
+      remove(); await until(() => versions.length === 2 && !ui.get('#request-dialog').open, 'deliberate retry');
+      assert.deepEqual(versions, ['actor-v1', 'external-v2']);
+    }, { staff: { tenantId: 'external-revision', authenticationEmail: 'admin@example.org' }, status: 'closed',
+      copyRequest: { status: 'closed', capabilities: { canDelete: true } } }));
+}
+
+for (const boundary of ['authenticationEmail', 'role', 'organizationId']) {
+  test(`own Staff Access ${boundary} change follows the global identity/access boundary`, () =>
+    fixture('?stage=settings&settingsScope=system', async ui => {
+      ui.setApi(({ pathname, init }) => {
+        const current = ui.readStaff();
+        if (pathname.endsWith('/users') && init.method === 'GET') return response(200, { users: [{ ...current, active: true, userPrincipalName: current.authenticationEmail }] });
+        if (pathname.endsWith('/audit')) return response(200, { data: [] });
+        if (pathname.endsWith(boundary === 'authenticationEmail' ? '/users/20' : '/users/20/role') && ['PATCH', 'POST'].includes(init.method)) {
+          ui.setStaff(boundary === 'authenticationEmail' ? { authenticationEmail: 'changed@example.org', version: 'access-v2' }
+            : boundary === 'role' ? { role: 'staff', version: 'access-v2' } : { organizationId: 2, version: 'access-v2' });
+          return response(200, { user: ui.readStaff() });
+        }
+      });
+      ui.get('[data-settings-panel="staff"]').click(); await until(() => ui.get('.settings-staff-row'), 'own roster');
+      if (boundary === 'authenticationEmail') ui.edit('.settings-staff-row input[aria-label^="Authentication email"]', 'changed@example.org');
+      else {
+        const role = ui.get('.settings-staff-row select[aria-label^="Role"]'); role.value = 'staff';
+        role.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+      }
+      [...ui.get('.settings-staff-row').querySelectorAll('button')].find(button => button.textContent === (boundary === 'authenticationEmail' ? 'Save profile' : 'Update access')).click();
+      await until(() => ui.get('#workspace').hidden, 'identity boundary revokes the workspace');
+      assert.match(ui.get('#signed-out-message').textContent, /Staff (profile saved|access updated)/, 'confirmed commit receipt survives access loss');
+    }, { staff: { tenantId: 'access-boundary', authenticationEmail: 'admin@example.org' } }));
+}
+
+for (const status of [401, 403]) {
+  test(`Polaris diagnostic ${status} follows the global session/access boundary`, () =>
+    fixture('?stage=settings&settingsScope=system#settings-polaris', async ui => {
+      ui.setApi(({ pathname }) => pathname.endsWith('/polaris/test') ? response(status, { code: 'staff_session_invalid', accessAllowed: false }) : undefined);
+      ui.get('#btn-test-polaris').click(); await until(() => ui.get('#workspace').hidden, 'diagnostic access loss');
+      assert.doesNotMatch(ui.get('#signed-out-message').textContent, /Settings change outcome is uncertain/);
+    }, { staff: { tenantId: 'polaris-boundary', authenticationEmail: 'admin@example.org' } }));
+}
+
 test('programmatic Settings domain changes advance navigation consent without dirtying baseline population', () =>
   fixture('?stage=suggestion&scope=2', async ui => {
     ui.get('[data-view="settings"]').click();

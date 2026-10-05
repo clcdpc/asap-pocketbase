@@ -71,12 +71,30 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
     } finally { reads.finish('session', load.token); }
   }
   function updatePreferences(staff, owner) {
-    if (disposed) return false;
+    if (disposed || !identity.isCurrent(owner)) return false;
     const preferences = identity.updatePreferences(staff, owner);
     if (!preferences) { lose('The staff account or access changed. Reload this page to continue.'); return false; }
+    shell.preferencesChanged?.(preferences);
     onPreferencesChanged(preferences); return true;
   }
-  return { signOut, updatePreferences, lose, accessUnavailable,
+  async function refreshCurrentStaff(owner) {
+    if (disposed || !identity.isCurrent(owner)) return null;
+    const load = reads.begin('session');
+    try {
+      const session = await sessionRequest({ signal: load.signal });
+      if (disposed || !load.isCurrent() || !identity.isCurrent(owner)) return null;
+      if (!session.authenticated) { lose('Your staff session ended. Sign in again.'); return null; }
+      if (session.accessAllowed === false) { accessUnavailable(); return null; }
+      return updatePreferences(session.staff, owner) ? identity.preferences() : null;
+    } catch (error) {
+      if (!disposed && load.isCurrent() && identity.isCurrent(owner)) {
+        if (error.status === 401) lose('Your staff session ended or no longer has access. Sign in again.');
+        else if (error.status === 403 && error.response?.accessAllowed === false) accessUnavailable();
+      }
+      throw error;
+    } finally { reads.finish('session', load.token); }
+  }
+  return { signOut, updatePreferences, refreshCurrentStaff, lose, accessUnavailable,
     async start() {
       if (disposed || started) return; started = true;
       unsubscribeInvalid = onSessionInvalid(() => lose('Your staff session ended or no longer has access. Sign in again.'));

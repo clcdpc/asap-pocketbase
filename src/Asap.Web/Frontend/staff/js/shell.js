@@ -120,13 +120,17 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
     renderRecent();
   }
 
+  function preferencesChanged(staff) {
+    if (disposed || !sessionIdentity.isCurrent(staff)) return;
+    dom.identity.textContent = staff.displayName || staff.userPrincipalName || 'Staff user';
+    dom.identity.title = `${statusLabel(staff.role)} · ${staff.organizationName}`;
+  }
   function showWorkspace(staff) {
     if (disposed) return;
     if (!sessionIdentity.sameSession(lastOwner, staff)) receipts.clear();
     lastOwner = staff; recentKey = recentStorageKey(staff); renderRecent();
     dom.signedOut.hidden = true; dom.workspace.hidden = false; dom.actions.hidden = false;
-    dom.identity.textContent = staff.displayName || staff.userPrincipalName || 'Staff user';
-    dom.identity.title = `${statusLabel(staff.role)} · ${staff.organizationName}`;
+    preferencesChanged(staff);
     get('#operations-view-tab').hidden = !['admin', 'super_admin'].includes(staff.role);
     void refreshReadiness();
   }
@@ -143,7 +147,7 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
 
   for (const tab of tabs) tab.addEventListener('click', () => onViewIntent(tab.dataset.view), { signal: events.signal });
   get('#sign-out').addEventListener('click', () => onSignOutIntent(), { signal: events.signal });
-  return { announce, presentView, showWorkspace, showSignedOut, recordReceipt, clearReceipt, settingsRefreshed, queueRefreshed,
+  return { announce, presentView, showWorkspace, showSignedOut, preferencesChanged, recordReceipt, clearReceipt, settingsRefreshed, queueRefreshed,
     rememberOpened, forgetUnavailable, renderRecent, refreshReadiness,
     isPresentationOwner,
     signOutFailed(owner, message = 'Sign out did not complete. Please try again.') {

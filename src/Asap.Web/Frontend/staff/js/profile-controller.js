@@ -202,6 +202,7 @@ export function createProfileController({ root, sessionIdentity, announce,
     activate() { updateProfileControls(); },
     deactivate() {},
     setStaff: populateProfile,
+    preferencesChanged(staff) { if (sessionIdentity.isCurrent(staff) && !state.profileMutation && !hasProfileDraft()) populateProfile(staff); },
     isDirty: hasProfileDraft,
     hasPendingMutation: () => Boolean(state.profileMutation),
     inspectDeparture() {

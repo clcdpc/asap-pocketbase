@@ -170,5 +170,66 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       } finally { coordinator.dispose(); shell.dispose(); }
     });
   }
-  console.log('Session startup/disposal, authoritative uncertain Sign Out, actor-bound receipt and shell recreation checks passed');
+  for (const boundary of ['preferences', 'tenantId', 'id', 'authenticationEmail', 'role', 'organizationId', 'access']) {
+    await fixture(async ({ load, get }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createSessionCoordinator } = await load('session');
+      const { createStaffShell } = await load('shell');
+      const identity = createSessionIdentity();
+      const shell = createStaffShell({ root: document, sessionIdentity: identity,
+        getContext: () => ({ activeView: 'queue', scope: 'all' }), settingsScope: () => 'system', operationsScope: () => 'all',
+        findTitle: () => null, openRecentTitle() {}, onViewIntent() {}, onSignOutIntent() {}, request: async () => ({}) });
+      let reads = 0, preferenceUpdates = 0, losses = 0;
+      const next = { ...actorA, version: 'a-v2', displayName: 'Authoritative name', notificationEmail: 'new@example.org',
+        weeklyActionSummaryEnabled: true, weeklyActionSummaryEmail: 'weekly@example.org', purchaseReminderDefault: true };
+      if (boundary !== 'preferences' && boundary !== 'access') next[boundary] = boundary === 'organizationId' ? 2 : `${actorA[boundary]}-changed`;
+      const coordinator = createSessionCoordinator({ identity, shell,
+        navigation: { invalidate() {}, allow: () => true, navigateFromUrl: async () => true },
+        getFeatures: () => [{ signedOut() { losses++; } }], onAccepted() {}, onPreferencesChanged() { preferenceUpdates++; },
+        sessionRequest: async ({ signal }) => {
+          assert.ok(signal); reads++;
+          return { authenticated: true, accessAllowed: reads === 1 || boundary !== 'access', staff: reads === 1 ? actorA : next };
+        } });
+      try {
+        await coordinator.start();
+        const owner = identity.preferences(), epoch = identity.actor().epoch, revision = identity.revision();
+        shell.recordReceipt('Same-session receipt survives preferences.', owner, {});
+        const refreshed = await coordinator.refreshCurrentStaff(owner);
+        if (boundary === 'preferences') {
+          assert.deepEqual(refreshed, next);
+          assert.equal(identity.actor().epoch, epoch);
+          assert.equal(identity.revision(), revision + 1);
+          assert.equal(identity.isCurrent(owner), true);
+          assert.equal(get('#staff-identity').textContent, next.displayName);
+          assert.equal(preferenceUpdates, 1); assert.equal(losses, 0);
+          shell.showSignedOut('Ended.');
+          assert.equal(get('#signed-out-message').textContent, 'Same-session receipt survives preferences.');
+        } else {
+          assert.equal(refreshed, null); assert.equal(identity.actor(), null);
+          assert.equal(preferenceUpdates, 0); assert.equal(losses, 1);
+          assert.equal(get('#workspace').hidden, true);
+        }
+      } finally { coordinator.dispose(); shell.dispose(); }
+    });
+  }
+  await fixture(async ({ load }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createSessionCoordinator } = await load('session');
+    const identity = createSessionIdentity();
+    let release, updates = 0, losses = 0;
+    const coordinator = createSessionCoordinator({ identity,
+      shell: { showSignedOut() { losses++; } }, navigation: { invalidate() {} }, getFeatures: () => [],
+      onAccepted() {}, onPreferencesChanged() { updates++; },
+      sessionRequest: () => new Promise(resolve => { release = resolve; }) });
+    try {
+      const retired = identity.accept(actorA);
+      const reviewing = coordinator.refreshCurrentStaff(retired);
+      identity.clear(); identity.accept(actorB);
+      release({ authenticated: true, accessAllowed: true, staff: { ...actorA, version: 'late-v2' } });
+      assert.equal(await reviewing, null);
+      assert.equal(coordinator.updatePreferences({ ...actorA, version: 'late-v3' }, retired), false);
+      assert.equal(identity.preferences().id, actorB.id); assert.equal(updates, 0); assert.equal(losses, 0);
+    } finally { coordinator.dispose(); }
+  });
+  console.log('Session refresh/boundaries, startup/disposal, uncertain Sign Out, actor-bound receipt and shell recreation checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

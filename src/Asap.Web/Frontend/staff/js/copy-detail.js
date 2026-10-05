@@ -6,7 +6,7 @@ import { element, icon, commandButton, statusLabel, dateTime, timeoutLabel, addD
 
 export function createCopyDetailController({ host, sessionIdentity, announce, beforeOpen, isNavigationCurrent,
   onAlign, onOpened, onUpdated = () => {}, beforeClose, onClosed, getFocusReturn, refreshQueue, onReceipt, clearReceipt,
-  getNavigationGeneration = () => 0, request: send = authorizedJson }) {
+  getNavigationGeneration = () => 0, refreshCurrentStaff = async () => null, request: send = authorizedJson }) {
   const reads = createLatestLoad();
   let lease = null, current = null, actor = null, returnFocus = null, activeAttempt = null;
   let drafts = createDraftScope(), forms = new WeakMap(), disposed = false;
@@ -147,6 +147,11 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
         : error.message || 'The task changed. Review the refreshed version before trying again.';
       if (uncertain) onReceipt(`${message} Sign in again to check the authoritative result before retrying.`, owner, attempt);
       if (!isPresentationCurrent(mounted, owner)) return;
+      if (error.response?.code === 'actor_changed_since_preview') {
+        try { await refreshCurrentStaff(owner); }
+        catch { if (isPresentationCurrent(mounted, owner)) announce('The current staff session could not be refreshed. Review it before retrying deletion.', 'error'); return; }
+        if (!isPresentationCurrent(mounted, owner) || !isNavigationCurrent(generation)) return;
+      }
       if (error.status === 409 || uncertain) {
         const refreshed = await refreshQueue({ silent: true });
         if (!isPresentationCurrent(mounted, owner)) return;

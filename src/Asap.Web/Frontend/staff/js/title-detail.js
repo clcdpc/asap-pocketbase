@@ -9,6 +9,7 @@ import { element, icon, statusLabel, dateTime, text, closeReasonLabel, timeoutLa
 export function createTitleDetailController({ host, sessionIdentity, polarisLookup, copyCreation, announce,
   beforeOpen, isNavigationCurrent, getNavigationGeneration, getScope, onAlign, onOpened, onUpdated = () => {}, beforeClose, onClosed,
   getFocusReturn, refreshQueue, queueSequence, rememberOpened, forgetUnavailable, onReceipt, clearReceipt,
+  refreshCurrentStaff = async () => null,
   request: send = authorizedJson }) {
   const reads = createLatestLoad(), configurations = new Map();
   let lease = null, actor = null, current = null, returnFocus = null, activeAttempt = null;
@@ -172,6 +173,11 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       attempt.outcome = uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
       if (uncertain) recordReceipt(attempt, 'Title-request deletion could not be confirmed. Sign in again and refresh Closed work before retrying.');
       if (!attempt.isCurrent() || error.status === 401) return;
+      if (error.response?.code === 'actor_changed_since_preview') {
+        try { await refreshCurrentStaff(attempt.owner); }
+        catch { if (attempt.isCurrent()) announce('The current staff session could not be refreshed. Review it before retrying deletion.', 'error'); return; }
+        if (!attempt.isCurrent()) return;
+      }
       await refreshQueue({ skipDeepLink: true, silent: true });
       if (attempt.isCurrent()) announce(uncertain ? 'Title-request deletion could not be confirmed. Review Closed work before retrying.'
         : error.message || 'The title request was not deleted. Review its current state.', uncertain ? 'warning' : 'error');

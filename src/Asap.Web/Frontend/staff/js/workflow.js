@@ -101,7 +101,8 @@ export function createWorkflowApp() {
     onUpdated: request => navigation.detailUpdated(request, true),
     beforeClose: () => navigation.allow({ settings: false, suggestion: false }),
     onClosed: options => navigation.detailClosed(true, options),
-    getFocusReturn: (id, opener) => copyQueue.focusReturn(id, opener), refreshQueue: options => copyQueue.refresh(options)
+    getFocusReturn: (id, opener) => copyQueue.focusReturn(id, opener), refreshQueue: options => copyQueue.refresh(options),
+    refreshCurrentStaff: owner => session.refreshCurrentStaff(owner)
   });
   const copyQueue = createCopyQueue({ root: get('#additional-copy-view'), sessionIdentity, announce,
     getContext: navigation.context, onOpen: (id, opener) => copyDetail.open(id, opener, { history: 'push' }),
@@ -119,7 +120,8 @@ export function createWorkflowApp() {
     onUpdated: navigation.detailUpdated,
     beforeClose: () => navigation.allow({ settings: false, suggestion: false }), onClosed: options => navigation.detailClosed(false, options),
     getFocusReturn: (id, opener) => titleQueue.focusReturn(id, opener), refreshQueue: options => titleQueue.refresh(options), queueSequence: titleQueue.sequence,
-    rememberOpened: shell.rememberOpened, forgetUnavailable: shell.forgetUnavailable
+    rememberOpened: shell.rememberOpened, forgetUnavailable: shell.forgetUnavailable,
+    refreshCurrentStaff: owner => session.refreshCurrentStaff(owner)
   });
   const suggestion = createSuggestionController({ root: get('#staff-suggestion-dialog'), trigger: get('#new-suggestion'), sessionIdentity, polarisLookup, announce,
     getLibraries: titleQueue.libraries, beforeOpen: navigation.prepareSuggestion, beforeClose: () => navigation.allow({ settings: false, request: false }),
@@ -140,6 +142,8 @@ export function createWorkflowApp() {
   const settings = createSettingsController({ root: get('#settings-view'), tab: get('#settings-view-tab'), announce,
     onPanelChange: navigation.settingsPanelChanged,
     onScopeChange: scope => { navigation.settingsScopeChanged(scope); void shell.refreshReadiness(); },
+    refreshCurrentStaff: owner => session.refreshCurrentStaff(owner),
+    onConfigurationCommitted: (owner, scope) => { if (sessionIdentity.isCurrent(owner)) titleDetail.invalidateConfiguration(scope); },
     onCommitted: (message, owner, attempt) => shell.recordReceipt(`${message} Sign in again to review the current values.`, owner, attempt, { feature: 'settings' }),
     onUnconfirmed: (message, owner, attempt) => shell.recordReceipt(`${message} Sign in again and check saved values before retrying.`, owner, attempt, { feature: 'settings' }),
     onRefreshed: (owner, review) => {
@@ -151,7 +155,9 @@ export function createWorkflowApp() {
     operations, titleQueue, copyQueue, profile, settings, analytics];
   const session = createSessionCoordinator({ identity: sessionIdentity, shell, navigation, getFeatures: () => features,
     onAccepted: staff => navigation.align({ scope: staff.role === 'super_admin' ? 'all' : String(staff.organizationId) }),
-    onPreferencesChanged: () => { titleQueue.preferencesChanged(); copyQueue.preferencesChanged(); }
+    onPreferencesChanged: staff => {
+      titleQueue.preferencesChanged(); copyQueue.preferencesChanged(); profile.preferencesChanged(staff); settings.setStaff(staff);
+    }
   });
   function populateScopes(libraries) { operations.setLibraries(libraries); titleQueue.setLibraries(libraries); copyQueue.setLibraries(libraries); }
   let started = false, disposed = false;

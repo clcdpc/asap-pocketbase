@@ -119,14 +119,14 @@ that fixture-lifetime correction.
 | 18. Bulk ledger | Frozen exact-string snapshot, sequential dispatch, attempted/unresolved/not-attempted outcomes, access loss and no replay tests. |
 | 19. Independent Settings | Own local reads/drafts/commands, scoped overrides/domain editors and dedicated Settings suites. |
 | 20. Independent Analytics | Local factory and scope/range/route replacement tests. Ordinary view deactivation cancels reads while preserving session selections; loss/replacement resets them. |
-| 21. Epoch versus revision | Session identity WeakMap snapshots, Profile updates, Copy actor-version and retained Operations tests. |
+| 21. Epoch versus revision | Session identity WeakMap snapshots, coordinator-owned authoritative staff refresh, Profile/Staff Access revisions, both typed deletion conflicts and retained Operations tests. Metadata refresh preserves the epoch and receipts; identity/access changes and retired owners cannot update preferences. |
 | 22. Stale completion isolation | Per-controller current-read/actor/context gates; old startup/read/command/recreation and Settings edit-during-read tests. Deferred Polaris navigation consent, invalidated in-flight Title configuration, reactivated Analytics and late Sign Out review are covered. |
 | 23. Live focus targets | Host lease/current/connected checks, owned child return focus and nine genuine delayed Grid.js focus cases. |
 | 24. Accessibility | Browser journeys enforce axe severity, keyboard/dialog behavior, overflow, missing images, page errors and external request restrictions. |
 | 25. Exact bigint strings | Maximum and above-safe-integer controller, route, activity, bulk, recent and browser fixtures; numeric conversions limited to native Int32 library/Polaris values. |
 | 26. No import cycles | Frontend entry-point dependency walk checks all relative ES module imports. |
 | 27. No peer state writes | Feature import guard, repository imports/DOM searches and injected lifecycle contracts reviewed. Research helper imports are stateless. |
-| 28. Narrow coordination | Named detail, scope, created/existing/recent, Closed-review, preference and receipt ports at composition. Settings configuration review calls Title's scoped `invalidateConfiguration` port; staff roster review does not. |
+| 28. Narrow coordination | Named detail, scope, created/existing/recent, Closed-review, preference and receipt ports at composition. Confirmed Settings configuration commits call Title's scoped `invalidateConfiguration` port before presentation refresh; successful configuration review remains a second invalidation. Staff roster review does not invalidate configuration. |
 | 29. No global read singleton | Repository search plus structure guard; `createLatestLoad()` exists only inside disposable owners. |
 | 30. Actual composition root | Structure guard rejects endpoints, history, serialization, draft machinery and shared feature state in `workflow.js`. |
 
@@ -191,10 +191,72 @@ Final completion SHA, local gate results, exact package identity/digests and
 the final PR CI run are recorded on reopened #365 and parent #351 only after
 the complete gate and final re-review pass.
 
+## Second reopened closure remediation (2026-10-05)
+
+The independent review of `e146d959f5f8bdb9195f13d688bd919ab7717187`
+found three remaining ownership gaps. #365 and parent #351 were reopened on
+the existing branch and draft PR #366. The earlier closure conclusion is
+superseded until the complete gate and final review pass.
+
+- Session Coordinator now exposes `refreshCurrentStaff(owner)`. A committed
+  Staff Access command that affects the current user reconciles the authoritative
+  session before accepting roster review. Same actor metadata updates advance
+  the preference revision, including rowversion and all DTO preferences, update
+  shell identity and a clean Profile, and preserve actor-bound receipts. A dirty
+  Profile remains owned by its draft. Both single Title and Additional Copy
+  destructive paths call this port after `actor_changed_since_preview`; only a
+  subsequent deliberate retry submits the new actorVersion. Actual access/key
+  changes retain the session-loss path. A retired owner cannot update or revoke
+  a replacement actor, including a late direct preference completion or a raw
+  session-review 401/403.
+- Settings emits `onConfigurationCommitted(owner, scope)` as soon as each
+  configuration-changing write confirms. Library saves, reset and format
+  deletion invalidate their library; system writes invalidate every library.
+  Failed presentation refresh and partial format follow-up cannot preserve a
+  valid stale cache. The confirmed-but-unreviewed form remains inert, cannot
+  submit old values, and permits navigation. Re-entry performs authoritative
+  review instead of reusing the stale snapshot. Staff-only commands/reviews
+  preserve the Title cache.
+- Test Polaris retains its POST API contract but uses an owned, single-flight
+  cancellable diagnostic read. Consent must precede discarding/reloading dirty
+  Settings, and a failed reload cannot start the test. Connected, HTTP 502
+  unavailable and transport-failure outcomes do not create mutation receipts,
+  uncertainty, awaiting-reload state or departure guards. Session/access checks
+  remain active; suspended/replaced contexts reject late diagnostic results.
+
+The same-root source/caller audit inspected every StaffUser write, persistent
+frontend cache, read-like POST and confirmed command follow-up. Staff roster,
+logo, organization sync and participation writes now retain their confirmed
+review obligation after a failed refresh; stale controls cannot submit another
+command, and each review clears only its owning domain. Logo commits invalidate
+their configuration scope, organization synchronization invalidates all scopes,
+and participation invalidates the affected organization. Profile already reviews
+its authoritative session; startup accepts sign-in/bootstrap revisions. Bulk
+Delete captures a fresh authoritative actor version for each new preview and
+stops its frozen ledger on actor conflict. Research and patron lookup POSTs
+already use disposable reads; provider/Operations/Suggestion commands retain
+their committing semantics. Mounted child configuration and queue/detail
+refresh paths already retire stale actionable snapshots. No additional
+architecture redesign or backend/provider/schema change was needed.
+
+Regression evidence includes twelve new application journeys, eight session
+refresh/boundary cases, a Profile revision/draft case, four diagnostic cases,
+and extended format partial-success and stale-roster assertions. The new
+real-SQL/Kestrel browser flow edits the current actor's metadata through Staff
+Access, observes the actual advanced rowversion and unchanged identity key,
+and checks both typed deletes. Separate-session SQL metadata writes cause real
+backend actor conflicts; explicit retries use the newly accepted version without
+replay. Two new browser states retain accessibility/layout/image/error/traffic
+guards. The three configuration-commit failure journeys, metadata presentation
+and diagnostic-unavailable tests fail against the independently audited baseline.
+
+Final completion SHA, gate results, exact artifact identity/digests and PR CI
+are recorded on #365/#351 only after the full gate and fresh re-review pass.
+
 ## Closure validation contract
 
 Issue #365's execution-state evidence records actual final-SHA results and CI.
-Closure requires all 46 current frontend files (including 148 navigation/draft
+Closure requires all 47 current frontend files (including 160 navigation/draft
 journeys and nine genuine Grid focus cases), a zero-warning Release build,
 the unchanged 784-test non-browser minimum and all three real-SQL Kestrel
 browser journeys with zero skips. The .NET gates include migration import,

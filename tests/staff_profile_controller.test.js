@@ -66,5 +66,26 @@ const event = { preventDefault() {} };
       controller.dispose();
     });
   }
-  console.log('Profile controller disposal, replacement, single flight and actor-bound outcome receipts passed');
+  await fixture(async ({ load, get }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createProfileController } = await load('profile-controller');
+    const session = createSessionIdentity(); const original = session.accept(staff);
+    const controller = createProfileController({ root: get('#profile-view'), sessionIdentity: session,
+      announce() {}, onReceipt() {}, clearReceipt() {}, onPreferences() {}, onSessionLost() {}, onAccessUnavailable() {} });
+    try {
+      controller.setStaff(original);
+      const current = session.updatePreferences({ ...staff, version: 'v2', notificationEmail: 'authoritative@example.org' }, original);
+      controller.preferencesChanged(current);
+      assert.equal(get('#notification-email').value, 'authoritative@example.org'); assert.equal(controller.isDirty(), false);
+      get('#weekly-email').value = 'unsaved@example.org';
+      const newer = session.updatePreferences({ ...current, version: 'v3', weeklyActionSummaryEmail: 'external@example.org' }, current);
+      controller.preferencesChanged(newer);
+      assert.equal(get('#weekly-email').value, 'unsaved@example.org', 'an accepted preference refresh preserves the current Profile draft');
+      controller.discardDraft(); assert.equal(get('#weekly-email').value, 'external@example.org');
+      session.clear(); const replacement = session.accept({ ...staff, id: '21', notificationEmail: 'replacement@example.org' });
+      controller.setStaff(replacement); controller.preferencesChanged(newer);
+      assert.equal(get('#notification-email').value, 'replacement@example.org', 'retired preferences cannot populate a replacement Profile');
+    } finally { controller.dispose(); }
+  });
+  console.log('Profile controller preferences, drafts, disposal, replacement, single flight and actor-bound outcome receipts passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

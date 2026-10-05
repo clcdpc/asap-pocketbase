@@ -348,7 +348,16 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.strictEqual(refreshedCount, refreshedBeforeRevocation,
       'failed follow-up refresh must retain the committed result');
 
-    revokeStaffRefresh = false; loseProfileResponse = true; failRoster = true;
+    const beforeStaleRetry = requests.length;
+    [...currentAdaRow.querySelectorAll('button')].find(button => button.textContent === 'Update access').click();
+    await flush();
+    assert.equal(requests.length, beforeStaleRetry, 'confirmed staff commit with failed refresh cannot resubmit the stale roster');
+    assert.equal(controller.hasUnconfirmedOutcome(), false, 'failed review does not make the confirmed commit uncertain');
+    assert.equal(controller.inspectDeparture().blocked, false, 'a confirmed commit permits navigation');
+    revokeStaffRefresh = false;
+    document.getElementById('staff-refresh').click();
+    await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff access loaded'));
+    loseProfileResponse = true; failRoster = true;
     controller.discardDraft();
     const uncertainRow = [...document.querySelectorAll('.settings-staff-row')].find(row => row.textContent.includes('Ada Admin'));
     uncertainRow.querySelector('input[type="email"]').value = 'uncertain@example.org';
