@@ -21,6 +21,12 @@ public sealed partial class PatronJourneyTests
     [DataRow(3483, "ambiguous")]
     [DataRow(3482, "cancel")]
     [DataRow(3483, "cancel")]
+    [DataRow(3482, "cancel_oce")]
+    [DataRow(3483, "cancel_oce")]
+    [DataRow(3482, "cancel_failure")]
+    [DataRow(3483, "cancel_failure")]
+    [DataRow(3482, "cancel_generic")]
+    [DataRow(3483, "cancel_generic")]
     public async Task PickupJournalRecoversObservedEffectsWithoutRepeatingWrites(int organizationId, string failure)
     {
         var provider = new PickupJournalProvider(organizationId);
@@ -47,11 +53,24 @@ public sealed partial class PatronJourneyTests
                 {
                     cancelled.Cancel();
                 }
+                if (failure.StartsWith("cancel_", StringComparison.Ordinal))
+                {
+                    cancelled.Cancel();
+                    if (failure == "cancel_oce")
+                    {
+                        throw new OperationCanceledException("The provider observed cancellation after its external effect.", token);
+                    }
+                    if (failure == "cancel_failure")
+                    {
+                        throw new PolarisOperationalException("testing_uncertain_pickup", "The provider failed after cancellation and effect.");
+                    }
+                    throw new InvalidOperationException("The provider failed after cancellation and effect.");
+                }
             };
             var service = scoped.Services.GetRequiredService<StaffPickupService>();
             var input = new PickupPreferenceInput(StaffVersion.Encode(request.RowVersion), provider.SecondBranch,
                 provider.FirstBranch, true);
-            if (failure == "cancel")
+            if (failure.StartsWith("cancel", StringComparison.Ordinal))
             {
                 await Assert.ThrowsAsync<OperationCanceledException>(() =>
                     service.UpdateAsync(actor, request.Id, input, cancelled.Token));
@@ -88,6 +107,78 @@ public sealed partial class PatronJourneyTests
                 (await verify.TitleRequests.SingleAsync(x => x.Id == request.Id)).PreferredPickupBranchId);
             Assert.AreEqual(1, await verify.TitleRequestEvents.CountAsync(x => x.TitleRequestId == request.Id &&
                 x.EventType == (failure == "conflict" ? "pickup_preference_changed" : "pickup_preference_reconciled")));
+        }
+        finally
+        {
+            await CleanupPickupJournalLibraryAsync(organizationId);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("return_cancelled")]
+    [DataRow("operation_cancelled")]
+    [DataRow("failure_cancelled")]
+    [DataRow("generic_cancelled")]
+    [DataRow("failure_uncancelled")]
+    public async Task StaffPickupPreIntentCancellationStopsBeforeJournalOrRequestMutation(string providerMode)
+    {
+        const int organizationId = 3484;
+        var provider = new PickupJournalProvider(organizationId);
+        await using var scoped = CreatePickupJournalFactory(provider);
+        var contexts = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var request = await SeedPickupJournalRequestAsync(contexts, provider);
+        using var cancellation = new CancellationTokenSource();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        provider.AfterRefresh = token =>
+        {
+            switch (providerMode)
+            {
+                case "return_cancelled":
+                    cancellation.Cancel();
+                    return Task.CompletedTask;
+                case "operation_cancelled":
+                    cancellation.Cancel();
+                    throw new OperationCanceledException("Refresh returned cancellation after caller cancellation.", token);
+                case "failure_cancelled":
+                    cancellation.Cancel();
+                    throw new PolarisOperationalException("testing_pickup_refresh", "Refresh failed after cancellation.");
+                case "generic_cancelled":
+                    cancellation.Cancel();
+                    throw new InvalidOperationException("Refresh failed after cancellation.");
+                case "failure_uncancelled":
+                    throw new PolarisOperationalException("testing_pickup_refresh", "Refresh failed without cancellation.");
+                default:
+                    throw new AssertFailedException($"Unknown pickup provider mode {providerMode}.");
+            }
+        };
+
+        try
+        {
+            var service = scoped.Services.GetRequiredService<StaffPickupService>();
+            var input = new PickupPreferenceInput(StaffVersion.Encode(request.RowVersion), provider.SecondBranch,
+                provider.FirstBranch, true);
+            if (providerMode == "failure_uncancelled")
+            {
+                Assert.AreEqual("pickup_provider_error", (await service.UpdateAsync(
+                    actor, request.Id, input, cancellation.Token)).Code);
+                Assert.IsFalse(cancellation.IsCancellationRequested);
+            }
+            else
+            {
+                await Assert.ThrowsAsync<OperationCanceledException>(() => service.UpdateAsync(
+                    actor, request.Id, input, cancellation.Token));
+                Assert.IsTrue(cancellation.IsCancellationRequested);
+            }
+
+            Assert.AreEqual(1, provider.Reads);
+            Assert.AreEqual(0, provider.Writes);
+            Assert.AreEqual(0, await PickupJournalCountAsync(provider.Barcode, state: null));
+            await using var verify = await contexts.CreateDbContextAsync();
+            var after = await verify.TitleRequests.SingleAsync(item => item.Id == request.Id);
+            Assert.AreEqual("pending_hold", after.Status);
+            Assert.AreEqual(provider.FirstBranch, after.PreferredPickupBranchId);
+            CollectionAssert.AreEqual(request.RowVersion, after.RowVersion);
+            Assert.AreEqual(0, await verify.TitleRequestEvents.CountAsync(item => item.TitleRequestId == request.Id));
         }
         finally
         {
@@ -195,6 +286,94 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(provider.FirstBranch, reader.GetInt32(1), "Resolution must preserve actual observed state.");
             Assert.AreEqual(actor.Id, reader.GetInt64(2));
             Assert.IsTrue(reader.GetBoolean(3));
+        }
+        finally
+        {
+            await CleanupPickupJournalLibraryAsync(organizationId);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("return_cancelled")]
+    [DataRow("operation_cancelled")]
+    [DataRow("failure_cancelled")]
+    [DataRow("generic_cancelled")]
+    [DataRow("failure_uncancelled")]
+    public async Task OperatorPickupRecoveryCancellationPreservesJournalForRetry(string providerMode)
+    {
+        const int organizationId = 3485;
+        var provider = new PickupJournalProvider(organizationId) { FailBeforeEffect = true };
+        await using var scoped = CreatePickupJournalFactory(provider);
+        var contexts = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var request = await SeedPickupJournalRequestAsync(contexts, provider);
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var actor = await ReadConfiguredSuperAdminAsync();
+            var service = scoped.Services.GetRequiredService<StaffPickupService>();
+            var version = StaffVersion.Encode(request.RowVersion);
+            var attempted = await service.UpdateAsync(actor, request.Id,
+                new(version, provider.SecondBranch, provider.FirstBranch, true), CancellationToken.None);
+            Assert.AreEqual("pickup_outcome_unconfirmed", attempted.Code);
+            Assert.IsNotNull(attempted.OperationId);
+            Assert.AreEqual(1, await PickupJournalCountAsync(provider.Barcode, state: 1));
+
+            provider.AfterRefresh = token =>
+            {
+                switch (providerMode)
+                {
+                    case "return_cancelled":
+                        cancellation.Cancel();
+                        return Task.CompletedTask;
+                    case "operation_cancelled":
+                        cancellation.Cancel();
+                        throw new OperationCanceledException("Recovery read returned cancellation after caller cancellation.", token);
+                    case "failure_cancelled":
+                        cancellation.Cancel();
+                        throw new PolarisOperationalException("testing_pickup_recovery", "Recovery read failed after cancellation.");
+                    case "generic_cancelled":
+                        cancellation.Cancel();
+                        throw new InvalidOperationException("Recovery read failed after cancellation.");
+                    case "failure_uncancelled":
+                        throw new PolarisOperationalException("testing_pickup_recovery", "Recovery read failed without cancellation.");
+                    default:
+                        throw new AssertFailedException($"Unknown pickup recovery mode {providerMode}.");
+                }
+            };
+            var reconciliation = new PickupReconciliationInput(version, provider.FirstBranch, true, true);
+            if (providerMode == "failure_uncancelled")
+            {
+                Assert.AreEqual("pickup_provider_error", (await service.ReconcileAsync(
+                    actor, attempted.OperationId.Value, reconciliation, cancellation.Token)).Code);
+                Assert.IsFalse(cancellation.IsCancellationRequested);
+            }
+            else
+            {
+                await Assert.ThrowsAsync<OperationCanceledException>(() => service.ReconcileAsync(
+                    actor, attempted.OperationId.Value, reconciliation, cancellation.Token));
+                Assert.IsTrue(cancellation.IsCancellationRequested);
+            }
+
+            Assert.AreEqual(1, provider.Writes, "Recovery must only read the provider and never repeat its original PUT.");
+            Assert.AreEqual(1, await PickupJournalCountAsync(provider.Barcode, state: 1));
+            await using (var verify = await contexts.CreateDbContextAsync())
+            {
+                var after = await verify.TitleRequests.SingleAsync(item => item.Id == request.Id);
+                Assert.AreEqual("pending_hold", after.Status);
+                Assert.AreEqual(provider.FirstBranch, after.PreferredPickupBranchId);
+                CollectionAssert.AreEqual(request.RowVersion, after.RowVersion);
+                Assert.AreEqual(0, await verify.TitleRequestEvents.CountAsync(item => item.TitleRequestId == request.Id));
+            }
+
+            provider.AfterRefresh = null;
+            var recovered = await service.ReconcileAsync(actor, attempted.OperationId.Value,
+                reconciliation, CancellationToken.None);
+            Assert.AreEqual("updated", recovered.Code);
+            Assert.AreEqual(1, provider.Writes, "Retry must not dispatch another preference write.");
+            Assert.AreEqual(1, await PickupJournalCountAsync(provider.Barcode, state: 3));
+            await using var verifyRecovery = await contexts.CreateDbContextAsync();
+            Assert.AreEqual(1, await verifyRecovery.TitleRequestEvents.CountAsync(item =>
+                item.TitleRequestId == request.Id && item.EventType == "pickup_preference_reconciled"));
         }
         finally
         {

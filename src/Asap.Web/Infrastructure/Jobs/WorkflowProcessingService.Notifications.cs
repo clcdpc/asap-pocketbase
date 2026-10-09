@@ -122,12 +122,19 @@ public sealed partial class WorkflowProcessingService
             try
             {
                 readiness = await emailSender.CheckReadinessAsync(authorizationOrganizationId, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 logger.LogWarning("Weekly summary readiness failed ({FailureType}).", exception.GetType().Name);
                 return new WorkflowRunResult("operational_failure", visited, createdCount, visited - createdCount, manualRunId);
+            }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw;
             }
             var businessKey = manualRunId is null
                 ? $"weekly-summary:{recipientSnapshot.Id}:{periodStart:yyyyMMdd}-{periodEnd:yyyyMMdd}"
@@ -212,10 +219,11 @@ public sealed partial class WorkflowProcessingService
                 await context.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 createdCount++;
-                DispatchCommittedOutbox(outbox);
+                DispatchCommittedOutbox(outbox, cancellationToken);
             }
             catch (DbUpdateException exception) when (exception.InnerException is DbException)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 logger.LogInformation(exception, "Weekly summary duplicate or concurrent recipient mutation was ignored.");
             }
         }
@@ -243,12 +251,19 @@ public sealed partial class WorkflowProcessingService
                 try
                 {
                     readiness = await emailSender.CheckReadinessAsync(candidate.LibraryOrganizationId, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     logger.LogWarning("Timeout email readiness failed ({FailureType}).", exception.GetType().Name);
                     return new WorkflowItemResult("operational_failure", Stop: true);
+                }
+                catch (Exception) when (cancellationToken.IsCancellationRequested)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw;
                 }
             }
         }
@@ -330,12 +345,12 @@ public sealed partial class WorkflowProcessingService
             cancellationToken);
         if (result.LocalCommit)
         {
-            DispatchCommittedOutbox(pendingOutbox);
+            DispatchCommittedOutbox(pendingOutbox, cancellationToken);
         }
         return result;
     }
 
-    private void DispatchCommittedOutbox(EmailOutbox? outbox)
+    private void DispatchCommittedOutbox(EmailOutbox? outbox, CancellationToken cancellationToken)
     {
         if (outbox?.Status != "pending")
         {
@@ -344,10 +359,12 @@ public sealed partial class WorkflowProcessingService
         try
         {
             outboxDispatcher.Enqueue(outbox.Id);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         // Local state and the outbox are committed; the scheduled sweep retries delivery after any dispatch failure.
         catch (Exception exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             logger.LogWarning("Email outbox {OutboxId} awaits the scheduled sweep after dispatch failure ({FailureType}).",
                 outbox.Id, exception.GetType().Name);
         }

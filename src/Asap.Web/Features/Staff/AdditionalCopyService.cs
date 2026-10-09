@@ -235,11 +235,18 @@ public sealed class AdditionalCopyService(
             readiness = input.EmailPurchaseReminder
                 ? await emailSender.CheckReadinessAsync(snapshot.LibraryOrganizationId, cancellationToken)
                 : EmailTransportReadiness.NotConfigured;
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new AdditionalCopyMutationResult("notification_dependency_unavailable");
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var locked = await LockRelationshipContextAsync(
@@ -354,11 +361,12 @@ public sealed class AdditionalCopyService(
             (input.EmailPurchaseReminder && outbox is null ? "recipient_missing" : null);
         try
         {
-            Dispatch(outbox);
+            Dispatch(outbox, cancellationToken);
         }
         // The accepted task and outbox are durable; return the dispatch outcome without misreporting a rollback.
         catch (Exception exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             logger.LogError(exception, "Additional-copy reminder dispatch failed after task {RequestId} committed", request.Id);
             notificationStatus = "dispatch_failed";
             notificationReason = "queue_unavailable";
@@ -446,11 +454,18 @@ public sealed class AdditionalCopyService(
             readiness = assigneeId.HasValue
                 ? await emailSender.CheckReadinessAsync(snapshot.LibraryOrganizationId, cancellationToken)
                 : EmailTransportReadiness.NotConfigured;
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new AdditionalCopyMutationResult("notification_dependency_unavailable");
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var targetId = assigneeId ?? actor.Id;
@@ -537,11 +552,12 @@ public sealed class AdditionalCopyService(
             (assigneeId.HasValue && outbox is null ? "recipient_missing" : null);
         try
         {
-            Dispatch(outbox);
+            Dispatch(outbox, cancellationToken);
         }
         // The accepted task and outbox are durable; return the dispatch outcome without misreporting a rollback.
         catch (Exception exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             logger.LogError(exception, "Additional-copy assignment dispatch failed after task {RequestId} committed", request.Id);
             notificationStatus = "dispatch_failed";
             notificationReason = "queue_unavailable";
@@ -829,11 +845,12 @@ public sealed class AdditionalCopyService(
         return outbox;
     }
 
-    private void Dispatch(EmailOutbox? outbox)
+    private void Dispatch(EmailOutbox? outbox, CancellationToken cancellationToken)
     {
         if (outbox?.Status == "pending")
         {
             outboxDispatcher.Enqueue(outbox.Id);
+            cancellationToken.ThrowIfCancellationRequested();
         }
     }
 

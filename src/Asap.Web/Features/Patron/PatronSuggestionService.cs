@@ -179,6 +179,7 @@ public sealed partial class PatronSuggestionService(
         try
         {
             patron = await patronProvider.RefreshAsync(session.Barcode, session.EffectiveOrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (session.NativePatronId <= 0 || patron.PatronId != session.NativePatronId ||
                 !patron.KnownBarcodeAliases.Contains(session.Barcode, StringComparer.OrdinalIgnoreCase))
             {
@@ -186,6 +187,7 @@ public sealed partial class PatronSuggestionService(
                     new { code = "patron_session_invalid" });
             }
             pickupBranches = await patronProvider.GetPickupBranchesAsync(patron, session.EffectiveOrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (PatronFlowException)
         {
@@ -194,10 +196,16 @@ public sealed partial class PatronSuggestionService(
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw new PatronFlowException(
                 502,
                 "Current patron information could not be loaded from Polaris. Please try again.",
                 innerException: exception);
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
 
         EnforcePatronCodeEligibility(configuration, patron);
@@ -215,12 +223,19 @@ public sealed partial class PatronSuggestionService(
             emailTransportReadiness = await emailSender.CheckReadinessAsync(
                 configuration.OrganizationId,
                 cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw new PatronFlowException(502, "Email readiness could not be checked. Please try again.",
                 new { code = "notification_dependency_unavailable" }, exception);
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
         var pickupReceipt = await ChangePickupForSuggestionAsync(patron, configuration.OrganizationId,
             selectedBranch, pickupBranches, "patron_suggestion", null,
@@ -239,6 +254,7 @@ public sealed partial class PatronSuggestionService(
                 // recheck policy under SQL locks in InsertAsync. If pickup already changed,
                 // failures here must retain that accepted external effect as partial truth.
                 patron = await patronProvider.RefreshAsync(session.Barcode, session.EffectiveOrganizationId, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (patron.PatronId != session.NativePatronId ||
                     !patron.KnownBarcodeAliases.Contains(session.Barcode, StringComparer.OrdinalIgnoreCase))
                 {
@@ -253,9 +269,15 @@ public sealed partial class PatronSuggestionService(
             catch (Exception exception) when (exception is PolarisOperationalException ||
                 exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 throw new PatronFlowException(502,
                     "Current patron information could not be loaded from Polaris. Please try again.",
                     new { code = "patron_identity_unavailable" }, exception);
+            }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw;
             }
 
             for (var attempt = 1; attempt <= 5; attempt++)
@@ -284,10 +306,12 @@ public sealed partial class PatronSuggestionService(
                 }
                 catch (AutoClaimCandidateChangedException) when (attempt < 5)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     continue;
                 }
                 catch (AutoClaimCandidateChangedException exception)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     throw new PatronFlowException(
                         409,
                         "The automatic assignment changed while the suggestion was submitted. Please try again.",
@@ -299,6 +323,7 @@ public sealed partial class PatronSuggestionService(
         catch (Exception exception) when (pickupReceipt is not null &&
                                          exception is PatronFlowException or SqlException or PickupMutationException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw PickupChangedCreationFailure(exception, pickupReceipt, statusCodeOverride: 409);
         }
 
@@ -307,10 +332,12 @@ public sealed partial class PatronSuggestionService(
             try
             {
                 outboxDispatcher.Enqueue(outboxId.Value);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             // The request/outbox are committed; the sweeper recovers immediate enqueue failures.
             catch (Exception exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 logger.LogWarning(
                     exception,
                     "Submission email outbox {OutboxId} will be recovered by the sweeper.",
@@ -328,6 +355,7 @@ public sealed partial class PatronSuggestionService(
                     configuration.OrganizationId,
                     expectedRowVersion,
                     cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -444,12 +472,19 @@ public sealed partial class PatronSuggestionService(
                 emailReadiness = input.EmailPatronConfirmation
                     ? await emailSender.CheckReadinessAsync(organizationId, cancellationToken)
                     : EmailTransportReadiness.NotConfigured;
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 throw new PatronFlowException(502, "Email readiness could not be checked. Please try again.",
                     new { code = "notification_dependency_unavailable" }, exception);
+            }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw;
             }
 
             var creationActor = new CreationActor(
@@ -485,10 +520,12 @@ public sealed partial class PatronSuggestionService(
                 }
                 catch (AutoClaimCandidateChangedException) when (attempt < 5)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     continue;
                 }
                 catch (AutoClaimCandidateChangedException exception)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     throw new PatronFlowException(
                         409,
                         "The automatic assignment changed while the suggestion was submitted. Please try again.",
@@ -498,6 +535,11 @@ public sealed partial class PatronSuggestionService(
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            throw;
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
         catch (Exception exception) when (pickupUpdated && !cancellationToken.IsCancellationRequested &&
@@ -511,10 +553,12 @@ public sealed partial class PatronSuggestionService(
             try
             {
                 outboxDispatcher.Enqueue(outboxId.Value);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             // Preserve the committed suggestion and durable outbox; the sweeper owns dispatch recovery.
             catch (Exception exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 logger.LogWarning(
                     exception,
                     "Staff-created submission email outbox {OutboxId} will be recovered by the sweeper.",
@@ -532,6 +576,7 @@ public sealed partial class PatronSuggestionService(
                     organizationId,
                     expectedRowVersion,
                     cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -540,6 +585,7 @@ public sealed partial class PatronSuggestionService(
             // Suggestion acceptance is committed; recurring identifier processing recovers this optional follow-up.
             catch (Exception exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 logger.LogWarning(
                     exception,
                     "Staff-created suggestion {TitleRequestId} was saved, but immediate identifier processing did not complete.",
@@ -563,12 +609,15 @@ public sealed partial class PatronSuggestionService(
     {
         try
         {
-            return await pickupMutations.ChangeAsync(patron, organizationId, selected,
+            var receipt = await pickupMutations.ChangeAsync(patron, organizationId, selected,
                 branches.SingleOrDefault(branch => branch.Id == patron.PreferredPickupBranchId)?.Label,
                 origin, null, actorId, validateIntentAsync, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return receipt;
         }
         catch (PickupMutationException exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw new PatronFlowException(409,
                 "The pickup outcome is durably recorded. Reload the patron's live preference before retrying; an uncertain write will not be repeated.",
                 new { exception.Code, exception.OperationId, exception.PickupPreferenceChanged,
@@ -576,6 +625,7 @@ public sealed partial class PatronSuggestionService(
         }
         catch (PickupMutationBlockedException exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw new PatronFlowException(409, "A patron write is already in progress. Reload before continuing.",
                 new { exception.Code }, exception);
         }
@@ -723,11 +773,14 @@ public sealed partial class PatronSuggestionService(
     {
         try
         {
-            return await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
+            var patron = await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return patron;
         }
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (exception is PolarisOperationalException { Code: "polaris_patron_not_found" or "polaris_patron_invalid_barcode" })
             {
                 throw new PatronFlowException(
@@ -743,8 +796,9 @@ public sealed partial class PatronSuggestionService(
                 new { code = "polaris_unavailable" },
                 exception);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
     }
@@ -755,19 +809,23 @@ public sealed partial class PatronSuggestionService(
     {
         try
         {
-            return await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
+            var branches = await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return branches;
         }
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw new PatronFlowException(
                 502,
                 "Eligible pickup locations could not be loaded from Polaris.",
                 new { code = "pickup_branches_unavailable" },
                 exception);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
     }
@@ -798,21 +856,23 @@ public sealed partial class PatronSuggestionService(
         try
         {
             result = await staffPolaris.ValidateBibAsync(bibId.Value, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw new PatronFlowException(
                 502,
                 "Catalog lookup is temporarily unavailable.",
                 new { code = "bib_validation_unavailable" },
                 exception);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
-
         if (!result.IsValid)
         {
             throw new PatronFlowException(

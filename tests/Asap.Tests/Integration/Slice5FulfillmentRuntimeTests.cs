@@ -22,7 +22,9 @@ public sealed partial class PatronJourneyTests
         await using var workflowFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
+                services.RemoveAll<IPatronProvider>();
                 services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(provider);
                 services.AddSingleton<IStaffPolarisProvider>(provider);
             }));
 
@@ -62,7 +64,9 @@ public sealed partial class PatronJourneyTests
         await using var workflowFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
+                services.RemoveAll<IPatronProvider>();
                 services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(provider);
                 services.AddSingleton<IStaffPolarisProvider>(provider);
             }));
 
@@ -102,7 +106,9 @@ public sealed partial class PatronJourneyTests
         await using var workflowFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
+                services.RemoveAll<IPatronProvider>();
                 services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(provider);
                 services.AddSingleton<IStaffPolarisProvider>(provider);
             }));
 
@@ -150,7 +156,9 @@ public sealed partial class PatronJourneyTests
         await using var workflowFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
+                services.RemoveAll<IPatronProvider>();
                 services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(provider);
                 services.AddSingleton<IStaffPolarisProvider>(provider);
             }));
 
@@ -186,7 +194,9 @@ public sealed partial class PatronJourneyTests
         await using var workflowFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
+                services.RemoveAll<IPatronProvider>();
                 services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(provider);
                 services.AddSingleton<IStaffPolarisProvider>(provider);
             }));
 
@@ -222,7 +232,9 @@ public sealed partial class PatronJourneyTests
         await using var workflowFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
+                services.RemoveAll<IPatronProvider>();
                 services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(provider);
                 services.AddSingleton<IStaffPolarisProvider>(provider);
             }));
 

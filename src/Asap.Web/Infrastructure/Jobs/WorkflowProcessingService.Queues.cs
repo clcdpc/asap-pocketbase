@@ -94,6 +94,7 @@ public sealed partial class WorkflowProcessingService
                 }
                 catch (Exception exception) when (exception is DbUpdateException or DbException)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     logger.LogWarning(exception, "SQL failure stopped {QueueName} at copy {CopyRequestId}.", queue, candidate.Id);
                     return new WorkflowRunResult("sql_failure", visited, changed, visited - changed);
                 }
@@ -116,6 +117,7 @@ public sealed partial class WorkflowProcessingService
                 }
                 catch (Exception exception) when (exception is DbUpdateException or DbException)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     logger.LogWarning(exception, "SQL failure stopped {QueueName} at copy checkpoint {CopyRequestId}.", queue, candidate.Id);
                     return new WorkflowRunResult("sql_failure", visited, changed, visited - changed);
                 }
@@ -193,6 +195,7 @@ public sealed partial class WorkflowProcessingService
                 }
                 catch (Exception exception) when (exception is DbUpdateException or DbException)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     logger.LogWarning(exception, "SQL failure stopped {QueueName} at request {RequestId}.", queue, candidate.Id);
                     return new WorkflowRunResult("sql_failure", visited, changed, visited - changed);
                 }
@@ -215,6 +218,7 @@ public sealed partial class WorkflowProcessingService
                 }
                 catch (Exception exception) when (exception is DbUpdateException or DbException)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     logger.LogWarning(exception, "SQL failure stopped {QueueName} at checkpoint {RequestId}.", queue, candidate.Id);
                     return new WorkflowRunResult("sql_failure", visited, changed, visited - changed);
                 }
@@ -289,6 +293,7 @@ public sealed partial class WorkflowProcessingService
                 }
                 catch (Exception exception) when (exception is DbUpdateException or DbException)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     logger.LogWarning(exception, "SQL failure stopped hold recovery at operation {OperationId}.", operation.Id);
                     return new WorkflowRunResult("sql_failure", visited, changed, visited - changed);
                 }
@@ -310,6 +315,7 @@ public sealed partial class WorkflowProcessingService
                 }
                 catch (Exception exception) when (exception is DbUpdateException or DbException)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     logger.LogWarning(exception, "SQL failure stopped hold recovery at checkpoint {OperationId}.", operation.Id);
                     return new WorkflowRunResult("sql_failure", visited, changed, visited - changed);
                 }
@@ -387,6 +393,7 @@ public sealed partial class WorkflowProcessingService
         }
         catch (DbUpdateConcurrencyException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new WorkflowCycleState(row, FenceLost: true);
         }
         return new WorkflowCycleState(row);
@@ -474,6 +481,7 @@ public sealed partial class WorkflowProcessingService
         }
         catch (DbUpdateConcurrencyException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return [];
         }
     }
@@ -636,6 +644,7 @@ public sealed partial class WorkflowProcessingService
         }
         catch (DbUpdateConcurrencyException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new WorkflowItemResult("stale_progress_fence", FenceLost: true);
         }
     }
@@ -671,6 +680,7 @@ public sealed partial class WorkflowProcessingService
         }
         catch (DbUpdateConcurrencyException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return null;
         }
     }

@@ -215,6 +215,7 @@ public sealed class PickupPreferenceMutationService(
                 }
                 catch (SqlException exception) when (exception.Number is 2601 or 2627)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     await transaction.RollbackAsync(cancellationToken);
                     var concurrent = await ReadPendingAsync(patron, cancellationToken);
                     throw new PickupMutationException("pickup_reconciliation_required",
@@ -227,22 +228,31 @@ public sealed class PickupPreferenceMutationService(
             {
                 await provider.UpdatePreferredPickupBranchAsync(patron.Barcode, selected.Id,
                     organizationId, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch (PolarisMutationNotDispatchedException exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 await RecordNoEffectAsync(receipt.OperationId, "local_not_dispatched", cancellationToken);
                 exception.RethrowCause();
                 throw;
             }
             catch (PolarisPickupRejectedException exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 await RecordNoEffectAsync(receipt.OperationId, $"documented_rejection_{exception.PapiErrorCode}", cancellationToken);
                 throw;
             }
             catch (PolarisOperationalException exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 // A transport/provider failure does not prove the write had no effect.
                 throw new PickupMutationException("pickup_outcome_unconfirmed", receipt.OperationId, false, exception);
+            }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw;
             }
             finally
             {
@@ -253,6 +263,7 @@ public sealed class PickupPreferenceMutationService(
             }
             if (!dispatchFinishedRecorded)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 throw new PickupMutationException("pickup_changed_request_not_updated", receipt.OperationId, true);
             }
             try
@@ -261,6 +272,7 @@ public sealed class PickupPreferenceMutationService(
             }
             catch (SqlException exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 throw new PickupMutationException("pickup_changed_request_not_updated", receipt.OperationId, true, exception);
             }
             return receipt;

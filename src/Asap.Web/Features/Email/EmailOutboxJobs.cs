@@ -75,19 +75,17 @@ public sealed class EmailOutboxJobs(
         try
         {
             readiness = await emailSender.CheckReadinessAsync(claim.OrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            try
-            {
-                await ReleasePreSendFailureAsync(claim, "pre_send_cancelled", CancellationToken.None);
-            }
-            // Preserve caller cancellation; a failed release leaves the durable lease available to recovery.
-            catch (Exception exception)
-            {
-                logger.LogWarning("Email outbox {OutboxId} could not release a cancelled pre-send claim ({FailureType}).",
-                    claim.Id, exception.GetType().Name);
-            }
+            await ReleaseCancelledPreSendClaimAsync(claim);
+            throw;
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            await ReleaseCancelledPreSendClaimAsync(claim);
+            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
@@ -433,6 +431,20 @@ public sealed class EmailOutboxJobs(
             """,
             "mail_not_configured",
             cancellationToken);
+
+    private async Task ReleaseCancelledPreSendClaimAsync(ClaimedEmail claim)
+    {
+        try
+        {
+            await ReleasePreSendFailureAsync(claim, "pre_send_cancelled", CancellationToken.None);
+        }
+        // Preserve caller cancellation; a failed release leaves the durable lease available to recovery.
+        catch (Exception exception)
+        {
+            logger.LogWarning("Email outbox {OutboxId} could not release a cancelled pre-send claim ({FailureType}).",
+                claim.Id, exception.GetType().Name);
+        }
+    }
 
     private async Task ReleasePreSendFailureAsync(
         ClaimedEmail claim,

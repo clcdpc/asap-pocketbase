@@ -78,8 +78,11 @@ system row. The source row has no message column; message text comes from a
 `patronFormatRules` entry when present. That JSON object replaces the whole
 runtime rules set: omitted built-in codes use per-code defaults, and an
 unlisted custom code uses the exact `book` rule when present or the legacy book
-defaults otherwise. Rule code keys and member names are case-sensitive; unknown
-mode or message-behavior strings use the pinned per-code default. The importer
+defaults otherwise. An explicit `null` format entry behaves like an empty rule
+object and uses those same defaults; a `null` `customFields` member means the
+format has no custom-field rules, so each field is hidden by default. Rule code
+keys and member names are case-sensitive; unknown mode or message-behavior
+strings use the pinned per-code default. The importer
 projects those effective values into target format rows/overrides, and both
 import reconciliation and read-only report recovery independently verify the
 projection.
@@ -135,8 +138,54 @@ duplicate-looking keys remains text.
 For a disabled custom field the pinned source behavior is `hidden`; an enabled
 select with no enabled options and an incoming `required` rule is imported as
 `optional`, preserving the definitions and option identities.
+Custom-field definitions and option sort orders use `(source array index + 1) * 10`
+when `sortOrder` is omitted; explicit JSON `null` maps to `0`, and an explicit
+integer is preserved. The independent oracle checks all three cases.
 Custom-field format-rule members are exact-case `mode` and `label`; unknown
 mode strings normalize to `hidden`, and `labelOverride` is not a source field.
+For current custom-field definition/option text and current material-format rule
+values, normalization uses the pinned ECMAScript `String.trim` whitespace set:
+U+FEFF is trimmed and U+0085 is retained. The same rule is used independently
+when reconciling and checking report counts. U+0085-wrapped type names therefore
+remain unsupported instead of being invented as a valid `select` type. Exact
+raw rule-map property keys are not normalized, and historical request snapshot
+field identities and values are retained and compared semantically without
+applying today's definition or option normalization.
+
+`commonAuthorsList` is split on line feed only, then each line is trimmed using
+the same ECMAScript whitespace rule; commas inside a creator name are data.
+`allowedPatronCodeIds` is split on commas only. Each token must be the same
+canonical positive Int32 identity the target stores; newline-separated,
+leading-zero, or otherwise lossy tokens are rejected before SQL writes.
+Duplicate-status override JSON preserves the effective raw label text. Modern
+overrides use the legacy nonblank-label activation rule, and a wholly blank
+modern object inherits system values while its record still suppresses retired
+legacy fallback. Active values that are blank to the target, including NEL-only
+labels, are rejected rather than silently changed; legacy direct label objects
+have the same target-representation boundary.
+
+Publication options trim the outer source text, option labels, and explicit IDs
+with ECMAScript whitespace semantics. JSON alias selection preserves source
+truthiness before trimming; a selected whitespace-only alias is refused before
+SQL because the target cannot represent the pinned skipped-row behavior. An
+empty label can still fall through to a valid name/value alias. Explicit IDs
+retain their trimmed spelling, missing IDs use the pinned label-derived slug,
+and newline input is split into lines rather than comma-delimited values.
+System empty/numeric-only fallback uses the existing canonical seeded option
+IDs; the equivalent library fallback inherits the effective system list.
+In typed publication-option objects, an explicit JSON `null` for `enabled`
+uses the source default `true`, and a `null` `sortOrder` uses the source ordinal
+default `(index + 1) * 10`. These publication rules are separate from custom
+field sort order, where explicit `null` remains `0`; the current API's own null
+validation is unchanged.
+
+The protected Postmark credential remains presence-only. Every import report
+records one bounded `email_provider_token` operator-provisioning transformation
+for system organization 1, including imports with no SMTP rows. Its boolean
+records only whether an operator supplied a token; it does not contain the
+token, ciphertext, or any secret-derived hash. Reconciliation and report
+recovery check that bit against the target credential's presence, independently
+of the SMTP source population.
 
 Operational integer overrides follow the pinned legacy `parseInt` prefix rule
 and are bounded only after parsing, including values outside signed Int32.
@@ -166,6 +215,85 @@ report fingerprint alone cannot authorize recovery. If SQL does not contain a
 complete, matching import, report recovery fails closed.
 An exception returned by SQL Server during commit has an ambiguous outcome; do
 not assume rollback or retry until the target is inspected.
+
+The final semantic check independently derives source-owned projections for
+organizations, formats and sparse overrides, custom definitions/options/rules,
+system and library settings, workflow sets/providers, template lineage,
+staff, requests/copies, claims, tags, branding, deleted audit, request events,
+and email-delivery history. It checks exact target row populations, each mapped
+identity/relationship, source-owned SQL field, and authorized transformation;
+refreshing a pending report fingerprint does not bless semantic drift. This
+projection reads the immutable package and SQL directly and does not call the
+importer, its settings resolvers, or reconciliation code to decide expected
+values. Protected Polaris credentials and the target provider token are
+presence-only/operator-provisioned boundaries: the oracle does not compare or
+report plaintext, ciphertext, hashes, or fingerprints for them. The full
+source-family/field and exception matrix is maintained in the PR review's
+contract evidence.
+
+The report always carries one typed `email_provider_token` transformation
+containing only organization `1` and a `postmarkTokenProvisioned` boolean. It
+exists even when the source has no SMTP row, because the target Postmark token
+is supplied by the operator rather than migrated from PocketBase. If the
+source-SMTP audit transformation is present, its presence bit must agree. The
+oracle checks token presence against this boundary on every reconcile and
+report recovery; it never compares or emits token plaintext, ciphertext,
+ciphertext hashes, or per-secret fingerprints. The current unshipped report
+version remains version 6; this bounded field is part of that contract.
+
+All imported timestamps target `datetime2(7)` with explicit seven-digit
+parameter precision and exact source/manifest UTC ticks. The embed-origin
+preflight validates raw authority and numeric port range before SQL while
+preserving pinned legacy normalization. Ordinary origins allow only an
+optional trailing slash; wildcard origins are HTTPS-only ASCII DNS suffixes
+with at least one dot and no path. Authorities reject user info, malformed
+DNS/IPv6, empty/nondecimal ports and numeric ports outside 0–65535, queries,
+fragments, and other paths. An explicit port is preserved as supplied,
+including `:443`; this does not equate omitted and explicit port text for the
+target CSP contract. Template
+lineage must remain editable in the target: system templates
+cannot declare override parents; ordinary library overrides preserve the
+system template key; rejection overrides inherit only from system rejection
+templates; and workflow timeout choices reference rejection-template rows in
+system or the selected library scope. Legacy ordinary-email lookup ignored an
+explicit parent ID for effective selection, so an explicit parent/key mismatch
+is refused as an unsupported target lineage shape instead of being rewritten.
+Ordinary source templates whose key begins with the target-reserved
+`rejection:` prefix are also refused: target rejection policy classifies by
+that prefix, while the pinned source keeps ordinary and rejection templates
+in separate collections. SQL template keys are case-insensitive, so imports
+refuse case-only collisions with the seeded `suggestion_submitted` template,
+case-only implicit ordinary-template parent matches, and rejection-key
+collisions that would collapse separate source identities. Noncolliding
+source key casing is preserved. Workflow-tag codes retain their exact source
+case except for the four pinned display-label aliases; case-only collisions
+with another source tag or a static seed are refused before SQL. Numeric
+`libraryOrganization` fallback references follow the importer's integer
+syntax (including a leading `+`), and still require a code-2 library row.
+
+Publication option arrays and newline lists use the pinned source normalizer.
+An empty System list, or more than three labels where over half consist only
+of ASCII digits, resolves to the canonical seeded options
+`already_published`, `coming_soon`, and `published_a_while_back`; the numeric
+safety rule applies to both JSON arrays and newline lists. The same fallback
+in a library means inherit the current System set, so it creates no library
+set or option rows. A zero or omitted option order uses its original array
+index times ten; effective options are stored in stable numeric order. Explicit
+IDs are trimmed and missing IDs use the legacy label slug, including its
+`İ`-to-`i` mapping. A truly empty label alias falls through to `name`/`value`,
+but a selected whitespace-only alias is rejected before SQL because the source
+would skip that item. This source-import normalization is separate from the
+target settings API, where an explicit empty list is authoritative.
+
+Current custom-field definition keys and option IDs follow the pinned source
+normalizer, including label-derived identities and the array-index default for
+omitted sort order; explicit null sort order remains zero. Invalid or colliding
+normalized identities are refused before writes. Historical request snapshots
+retain their historical keys, labels, types, and values without current
+definition normalization; comparison uses validated semantic JSON equality,
+not byte-for-byte serialization. Mapping source keys and entity types are
+checked with ordinal identity comparisons even though target SQL lookups use a
+case-insensitive collation.
 
 Claims are mapped before eligibility is evaluated. Eligible open claims are
 preserved, invalid open claims are cleared only in their mutable fields, and
@@ -197,6 +325,13 @@ branding bytes, and blocks missing, unsupported, or invalid assets. It never
 rewrites the old database or storage. Existing blank system settings and
 missing-record initialization follow their distinct pinned PocketBase
 environment precedence; the frozen artifact records the selected provenance.
+
+Branding `UpdatedUtc` follows the linked current `ui_settings.logoAlt.updated`
+timestamp when that non-null alt-text row is imported. When an asset has no
+linked imported UI alt-text value, the branding timestamp is the immutable
+package export time: the branding asset package record has no source update
+timestamp of its own. Dormant legacy `library_settings` logo fields do not
+provide a timestamp or override this rule.
 
 Legacy SMTP transport fields, PocketBase auth/session state, and scheduler
 runtime state are intentionally excluded. Source Polaris credentials needed by

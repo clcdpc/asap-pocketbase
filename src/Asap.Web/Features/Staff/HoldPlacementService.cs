@@ -460,11 +460,18 @@ public sealed class HoldPlacementService(
             {
                 patron = await TryRefreshPatronAsync(preOperation.PatronBarcodeSnapshot, preRequest.LibraryOrganizationId, cancellationToken);
                 readiness = await emailSender.CheckReadinessAsync(preRequest.LibraryOrganizationId, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 return new HoldPlacementResult("hold_resolution_dependency_unavailable", operationId);
+            }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw;
             }
         }
 
@@ -689,7 +696,7 @@ public sealed class HoldPlacementService(
         var notificationStatus = pendingOutbox is null ? "not_applicable" :
             pendingOutbox.Status == "pending" ? "queued" : "suppressed";
         var notificationReason = pendingOutbox?.SuppressionReason;
-        if (outboxId.HasValue && !DispatchCommittedOutbox(outboxId.Value, request.Id))
+        if (outboxId.HasValue && !DispatchCommittedOutbox(outboxId.Value, request.Id, cancellationToken))
         {
             notificationStatus = "dispatch_failed";
             notificationReason = "queue_unavailable";
@@ -793,6 +800,7 @@ public sealed class HoldPlacementService(
         }
         catch (DbUpdateConcurrencyException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new HoldPlacementResult("stale_version", operationId);
         }
         await transaction.CommitAsync(cancellationToken);
@@ -829,6 +837,7 @@ public sealed class HoldPlacementService(
             {
                 verifiedPatron = await patronProvider.RefreshAsync(
                     snapshot.Barcode, snapshot.LibraryOrganizationId, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -836,7 +845,13 @@ public sealed class HoldPlacementService(
             }
             catch (PolarisOperationalException)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 return new AcquisitionResult("hold_provider_error");
+            }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw;
             }
 
             barcodeAliases = verifiedPatron.KnownBarcodeAliases;
@@ -1083,21 +1098,30 @@ public sealed class HoldPlacementService(
         try
         {
             patron = await CallWithLeaseAsync(owner, token => patronProvider.RefreshAsync(operation.PatronBarcodeSnapshot, organizationId, token), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (operation.PatronIdSnapshot is > 0 && patron.PatronId != operation.PatronIdSnapshot.Value)
             {
                 await RequireOperatorAsync(owner, "patron_identity_changed", cancellationToken);
                 return new HoldPlacementResult("patron_identity_changed", owner.Id);
             }
             holds = await CallWithLeaseAsync(owner, token => staffPolarisProvider.GetPatronHoldsAsync(operation.PatronBarcodeSnapshot, organizationId, token), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OwnershipLostException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new HoldPlacementResult("operation_ownership_lost", owner.Id);
         }
         catch (Exception exception) when (exception is PolarisOperationalException or ProviderCallTimeoutException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             await FinishWithoutDispatchAsync(owner, "failed", "provider_precheck_failed", exception is ProviderCallTimeoutException ? "provider_timeout" : "provider_read_error", cancellationToken);
             return new HoldPlacementResult("hold_provider_error", owner.Id);
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
 
         var activeSameBib = ActiveSameBibHolds(holds, operation.BibIdSnapshot);
@@ -1125,6 +1149,7 @@ public sealed class HoldPlacementService(
                 owner,
                 token => patronProvider.RefreshAsync(operation.PatronBarcodeSnapshot, organizationId, token),
                 cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (patron.PatronId <= 0 ||
                 operation.PatronIdSnapshot is > 0 && patron.PatronId != operation.PatronIdSnapshot.Value)
             {
@@ -1135,16 +1160,24 @@ public sealed class HoldPlacementService(
                 owner,
                 token => patronProvider.GetPickupBranchesAsync(patron, organizationId, token),
                 cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OwnershipLostException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new HoldPlacementResult("operation_ownership_lost", owner.Id);
         }
         catch (Exception exception) when (exception is PolarisOperationalException or ProviderCallTimeoutException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             await FinishWithoutDispatchAsync(owner, "failed", "provider_precheck_failed",
                 exception is ProviderCallTimeoutException ? "provider_timeout" : "provider_read_error", cancellationToken);
             return new HoldPlacementResult("hold_provider_error", owner.Id);
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
 
         var pickup = ResolveHoldPickup(patron, eligiblePickupBranches);
@@ -1194,22 +1227,32 @@ public sealed class HoldPlacementService(
                     settings.SystemPolarisUserId.Value), token),
                 cancellationToken,
                 markerRenewedLease: true);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OwnershipLostException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new HoldPlacementResult("operation_ownership_lost", owner.Id);
         }
         catch (ProviderCallTimeoutException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             createResult = AmbiguousResult("create_provider_timeout", "provider_timeout");
         }
         catch (PolarisMutationNotDispatchedException exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return await FinishLocalFailureAsync(owner, exception, cancellationToken);
         }
         catch (PolarisOperationalException exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             createResult = AmbiguousResult("create_provider_exception", SafeProviderErrorCode(exception));
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
 
         var persisted = await PersistCreateResultAsync(owner, createResult, cancellationToken);
@@ -1285,13 +1328,16 @@ public sealed class HoldPlacementService(
                     operation.RequestingOrganizationIdSnapshot.Value), token),
                 cancellationToken,
                 markerRenewedLease: true);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OwnershipLostException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new HoldPlacementResult("operation_ownership_lost", owner.Id);
         }
         catch (ProviderCallTimeoutException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             replyResult = AmbiguousResult("reply_provider_timeout", "provider_timeout") with
             {
                 RequestGuid = operation.PolarisRequestGuid,
@@ -1301,6 +1347,7 @@ public sealed class HoldPlacementService(
         }
         catch (PolarisOperationalException exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             replyResult = AmbiguousResult("reply_provider_exception", SafeProviderErrorCode(exception)) with
             {
                 RequestGuid = operation.PolarisRequestGuid,
@@ -1310,7 +1357,13 @@ public sealed class HoldPlacementService(
         }
         catch (PolarisMutationNotDispatchedException exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return await FinishLocalFailureAsync(owner, exception, cancellationToken);
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
 
         if (!await PersistReplyResultAsync(owner, replyResult, cancellationToken))
@@ -1656,17 +1709,24 @@ public sealed class HoldPlacementService(
         {
             return new HoldPlacementResult("not_found", owner.Id, ProviderOutcomeRecorded: true);
         }
-        patron ??= await TryRefreshPatronAsync(snapshot.PatronBarcodeSnapshot, requestSnapshot.LibraryOrganizationId, cancellationToken);
+            patron ??= await TryRefreshPatronAsync(snapshot.PatronBarcodeSnapshot, requestSnapshot.LibraryOrganizationId, cancellationToken);
         EmailTransportReadiness readiness;
         try
         {
             readiness = await emailSender.CheckReadinessAsync(requestSnapshot.LibraryOrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new HoldPlacementResult("hold_resolution_dependency_unavailable", owner.Id,
                 ProviderOutcomeRecorded: true);
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         if (!await LockAuthorityOrganizationsAsync(
@@ -1783,7 +1843,7 @@ public sealed class HoldPlacementService(
         var notificationStatus = outbox is null ? "not_applicable" :
             outbox.Status == "pending" ? "queued" : "suppressed";
         var notificationReason = outbox?.SuppressionReason;
-        if (outboxId.HasValue && !DispatchCommittedOutbox(outboxId.Value, request.Id))
+        if (outboxId.HasValue && !DispatchCommittedOutbox(outboxId.Value, request.Id, cancellationToken))
         {
             notificationStatus = "dispatch_failed";
             notificationReason = "queue_unavailable";
@@ -1792,16 +1852,18 @@ public sealed class HoldPlacementService(
             notificationStatus, notificationReason);
     }
 
-    private bool DispatchCommittedOutbox(long outboxId, long requestId)
+    private bool DispatchCommittedOutbox(long outboxId, long requestId, CancellationToken cancellationToken)
     {
         try
         {
             outboxDispatcher.Enqueue(outboxId);
+            cancellationToken.ThrowIfCancellationRequested();
             return true;
         }
         // Hold completion and its outbox are committed; delivery is recoverable by the scheduled sweep.
         catch (Exception exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             logger.LogError(exception, "Hold notification dispatch failed after request {RequestId} committed", requestId);
             return false;
         }
@@ -2029,11 +2091,19 @@ public sealed class HoldPlacementService(
     {
         try
         {
-            return await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
+            var patron = await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return patron;
         }
         catch (PolarisOperationalException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return null;
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
     }
 

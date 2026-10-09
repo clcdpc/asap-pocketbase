@@ -240,6 +240,8 @@ public sealed partial class PolarisPatronProvider(
             using var document = JsonDocument.Parse(rawContent);
             var root = document.RootElement;
             if (!TryGetUniqueProperty(root, "PatronBasicData", out var rawPatron) ||
+                rawPatron.ValueKind != JsonValueKind.Object ||
+                HasDuplicateProperties(root) || HasDuplicateProperties(rawPatron) ||
                 !TryGetUniqueProperty(rawPatron, "PatronID", out var rawPatronId) ||
                 !TryReadPositiveInt32(rawPatronId, out var patronId) ||
                 result.PatronBasicData is null || result.PatronBasicData.PatronID != patronId)
@@ -247,6 +249,55 @@ public sealed partial class PolarisPatronProvider(
                 throw new PolarisOperationalException(
                     "polaris_patron_id_protocol_failed",
                     "Polaris returned an incomplete patron identity.");
+            }
+
+            var requestedBarcode = barcode.Trim();
+            var hasCurrentBarcode = rawPatron.EnumerateObject().Any(property =>
+                string.Equals(property.Name, "Barcode", StringComparison.OrdinalIgnoreCase));
+            var hasFormerBarcode = rawPatron.EnumerateObject().Any(property =>
+                string.Equals(property.Name, "FormerID", StringComparison.OrdinalIgnoreCase));
+            string? currentBarcode = null;
+            string? formerBarcode = null;
+            if (hasCurrentBarcode)
+            {
+                if (!TryGetUniqueProperty(rawPatron, "Barcode", out var rawBarcode) ||
+                    rawBarcode.ValueKind != JsonValueKind.String ||
+                    Clean(rawBarcode.GetString()) is not { Length: > 0 and <= 50 } parsedBarcode ||
+                    !string.Equals(parsedBarcode, Clean(result.PatronBasicData.Barcode), StringComparison.Ordinal))
+                {
+                    throw new PolarisOperationalException(
+                        "polaris_patron_id_protocol_failed",
+                        "Polaris returned an invalid patron barcode alias.");
+                }
+                currentBarcode = parsedBarcode;
+            }
+            if (hasFormerBarcode)
+            {
+                if (!TryGetUniqueProperty(rawPatron, "FormerID", out var rawFormerBarcode) ||
+                    rawFormerBarcode.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                {
+                    throw new PolarisOperationalException(
+                        "polaris_patron_id_protocol_failed",
+                        "Polaris returned an invalid former patron barcode alias.");
+                }
+                formerBarcode = rawFormerBarcode.ValueKind == JsonValueKind.String
+                    ? Clean(rawFormerBarcode.GetString())
+                    : null;
+                if (formerBarcode is { Length: > 50 } ||
+                    !string.Equals(formerBarcode, Clean(result.PatronBasicData.FormerID), StringComparison.Ordinal))
+                {
+                    throw new PolarisOperationalException(
+                        "polaris_patron_id_protocol_failed",
+                        "Polaris returned an invalid former patron barcode alias.");
+                }
+            }
+            if ((currentBarcode is not null || formerBarcode is not null) &&
+                !string.Equals(requestedBarcode, currentBarcode, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(requestedBarcode, formerBarcode, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_id_protocol_failed",
+                    "Polaris returned a different patron for the requested barcode.");
             }
 
             return patronId;
@@ -996,8 +1047,8 @@ public sealed partial class PolarisPatronProvider(
         if (patron is null || !TryReadPatronIdentity(rawContent, patron, out var patronId,
                 out var patronOrganizationId, out var patronCodeId, out var currentBarcode, out var formerBarcode) ||
             expectedPatronId.HasValue && patronId != expectedPatronId.Value ||
-            requireBarcodeAlias && !string.Equals(barcode.Trim(), currentBarcode, StringComparison.Ordinal) &&
-            !string.Equals(barcode.Trim(), formerBarcode, StringComparison.Ordinal))
+            requireBarcodeAlias && !string.Equals(barcode.Trim(), currentBarcode, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(barcode.Trim(), formerBarcode, StringComparison.OrdinalIgnoreCase))
         {
             throw new PolarisOperationalException(
                 "polaris_patron_protocol_failed",

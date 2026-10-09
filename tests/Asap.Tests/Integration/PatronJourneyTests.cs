@@ -1030,7 +1030,8 @@ public sealed partial class PatronJourneyTests
                     ([OrganizationId], [Origin], [NormalizedOrigin], [CreatedUtc])
                 VALUES
                     (1, N'https://*.plain.example.org', N'https://*.plain.example.org', SYSUTCDATETIME()),
-                    (1, N'https://*.ported.example.org:8443', N'https://*.ported.example.org:8443', SYSUTCDATETIME());
+                    (1, N'https://*.ported.example.org:8443', N'https://*.ported.example.org:8443', SYSUTCDATETIME()),
+                    (1, N'https://*.legacy.example.org:443', N'https://*.legacy.example.org:443', SYSUTCDATETIME());
                 """;
             await seed.ExecuteNonQueryAsync();
         }
@@ -1039,7 +1040,7 @@ public sealed partial class PatronJourneyTests
         {
             using var client = factory!.CreateClient();
             const string storedDirective =
-                "'self' https://*.plain.example.org https://*.ported.example.org:8443";
+                "'self' https://*.legacy.example.org:443 https://*.plain.example.org https://*.ported.example.org:8443";
             var cases = new[]
             {
                 new
@@ -1061,15 +1062,47 @@ public sealed partial class PatronJourneyTests
                 {
                     Referer = "https://child.ported.example.org/path",
                     Expected = storedDirective
+                },
+                new
+                {
+                    Referer = "https://child.legacy.example.org:443/path",
+                    Expected = $"{storedDirective} https://child.legacy.example.org:443"
+                },
+                new
+                {
+                    Referer = "https://child.legacy.example.org/path",
+                    Expected = storedDirective
+                },
+                new
+                {
+                    Referer = "https://child.legacy.example.org:444/path",
+                    Expected = storedDirective
                 }
             };
 
             foreach (var item in cases)
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, "/patron/");
-                Assert.IsTrue(request.Headers.TryAddWithoutValidation("Referer", item.Referer));
-                using var response = await client.SendAsync(request);
-                Assert.AreEqual(item.Expected, FrameAncestorsDirective(response), item.Referer);
+                if (item.Referer == "https://child.legacy.example.org:443/path")
+                {
+                    var context = await factory.Server.SendAsync(context =>
+                    {
+                        context.Request.Method = "GET";
+                        context.Request.Path = "/patron/";
+                        context.Request.Headers["Referer"] = item.Referer;
+                    });
+                    Assert.AreEqual((int)HttpStatusCode.OK, context.Response.StatusCode);
+                    var policy = context.Response.Headers["Content-Security-Policy"].ToString();
+                    var directive = Regex.Match(policy, @"frame-ancestors ([^;]+);");
+                    Assert.IsTrue(directive.Success, policy);
+                    Assert.AreEqual(item.Expected, directive.Groups[1].Value, item.Referer);
+                }
+                else
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, "/patron/");
+                    Assert.IsTrue(request.Headers.TryAddWithoutValidation("Referer", item.Referer));
+                    using var response = await client.SendAsync(request);
+                    Assert.AreEqual(item.Expected, FrameAncestorsDirective(response), item.Referer);
+                }
             }
         }
         finally

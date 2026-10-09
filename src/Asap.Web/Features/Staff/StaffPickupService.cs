@@ -147,11 +147,13 @@ public sealed partial class StaffPickupService(
         try
         {
             patron = await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!MatchesRequestIdentity(barcode, requestPatronId, patron))
             {
                 return new StaffPickupResult("pickup_changed_since_load");
             }
             var branches = await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             selectedBranch = branches.SingleOrDefault(item => item.Id == input.PreferredPickupBranchId.Value)
                 ?? throw new InvalidPickupSelectionException();
             var liveCurrentId = patron.PreferredPickupBranchId;
@@ -175,24 +177,34 @@ public sealed partial class StaffPickupService(
                     contextFactory, actor, requestId, expectedVersion, organizationId, barcode, patron.PatronId,
                     connection, transaction, token),
                 cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             pickupChanged = receipt is not null;
             oldName = receipt?.FromBranchName ?? oldName;
         }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
+        }
         catch (InvalidPickupSelectionException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new StaffPickupResult("invalid_pickup");
         }
         catch (PolarisOperationalException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new StaffPickupResult("pickup_provider_error");
         }
         catch (PickupMutationException exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new StaffPickupResult(exception.Code, PickupChanged: exception.PickupPreferenceChanged,
                 OperationId: exception.OperationId);
         }
         catch (PickupMutationBlockedException exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new StaffPickupResult(exception.Code);
         }
 
@@ -274,6 +286,7 @@ public sealed partial class StaffPickupService(
         {
             // The pre-dispatch journal remains pending if this local transaction
             // rolls back. Cancellation propagates, also leaving that durable intent.
+            cancellationToken.ThrowIfCancellationRequested();
             return LocalFailure("local_persistence_failed", receipt);
         }
     }

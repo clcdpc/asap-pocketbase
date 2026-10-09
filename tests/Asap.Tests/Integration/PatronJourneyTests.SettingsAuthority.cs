@@ -1592,7 +1592,21 @@ public sealed partial class PatronJourneyTests
                      {
                          "https://*.domain.example/path",
                          "https://*.domain.example?query",
+                         "https://*.domain.example?",
                          "https://*.domain.example#fragment",
+                         "https://*.domain.example#",
+                         "https://*.domain.example/.",
+                         "https://*.domain.example/",
+                         "https://*.domain.example:",
+                         "https://*.domain.example:abc",
+                         "https://*.domain.example:65536",
+                         "https://*.127.0.0.1",
+                         "https://*.localhost",
+                         "https://*.example",
+                         "https://*..domain.example",
+                         "https://*.domain..example",
+                         "https://*.domain.example..",
+                         "https://*.[2001:db8::1]",
                          "http://*.domain.example"
                      })
             {
@@ -1620,6 +1634,148 @@ public sealed partial class PatronJourneyTests
                     WHERE [OrganizationId] = 1 AND [Origin] = N'https://*.domain.example' AND
                           [NormalizedOrigin] = N'https://*.domain.example';
                     """));
+            }
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync("""
+                UPDATE [asap].[SystemSettings]
+                SET [StaffApplicationUrl] = @staffUrl, [UpdatedUtc] = SYSUTCDATETIME()
+                WHERE [OrganizationId] = 1;
+                DELETE FROM [asap].[AdministrativeAudit] WHERE [Id] > @auditBefore;
+                """, ("@staffUrl", (object?)originalStaffUrl ?? DBNull.Value), ("@auditBefore", auditBefore));
+            await RestoreSystemOriginRowsAsync(originalOrigins);
+        }
+    }
+
+    [TestMethod]
+    public async Task OrdinaryEmbedOriginsRejectCredentialsAndRawAuthorityNormalizationAtomically()
+    {
+        var originalOrigins = await ReadSystemOriginRowsAsync();
+        var originalStaffUrl = await ReadSystemStaffUrlAsync();
+        var auditBefore = await ReadAuditHighWatermarkAsync();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        using var client = factory!.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        var acceptedStaffUrl = $"https://origin-control-{Guid.NewGuid():N}.example.org";
+        var rejectedStaffUrl = $"https://origin-rejected-{Guid.NewGuid():N}.example.org";
+        var acceptedOrigins = new[]
+        {
+            " https://EXAMPLE.COM:443 ",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://[::1]:5173",
+            "https://*.DOMAIN.EXAMPLE",
+            "https://*.xn--bcher-kva.example",
+            "https://*.PORTED.EXAMPLE:8443",
+            "https://*.DEFAULT-PORT.EXAMPLE:443",
+            "https://*.PORT-ZERO.EXAMPLE:0",
+            "https://[2001:DB8::1]:8443",
+            "https://root-path.example/",
+            "https://example.com:0",
+            "https://example.com:65535"
+        };
+        var normalizedOrigins = new[]
+        {
+            "http://127.0.0.1:5173",
+            "http://[::1]:5173",
+            "http://localhost:5173",
+            "https://*.default-port.example",
+            "https://*.domain.example",
+            "https://*.port-zero.example:0",
+            "https://*.ported.example:8443",
+            "https://*.xn--bcher-kva.example",
+            "https://[2001:db8::1]:8443",
+            "https://example.com",
+            "https://example.com:0",
+            "https://example.com:65535",
+            "https://root-path.example"
+        };
+        var expectedOrigins = normalizedOrigins.OrderBy(item => item, StringComparer.Ordinal).ToArray();
+        try
+        {
+            using var before = await ReadSettingsDocumentAsync(client, "system");
+            using (var accepted = await PostSettingsJsonAsync(client, JsonSerializer.Serialize(new
+                   {
+                       orgId = "system",
+                       version = before.RootElement.GetProperty("version").GetString(),
+                       systemSettings = new
+                       {
+                           staffUrl = acceptedStaffUrl,
+                           patronEmbedAllowedOrigins = acceptedOrigins
+                       }
+                   })))
+            {
+                Assert.AreEqual(HttpStatusCode.OK, accepted.StatusCode, await accepted.Content.ReadAsStringAsync());
+            }
+
+            using var acceptedSettings = await ReadSettingsDocumentAsync(client, "system");
+            var acceptedVersion = acceptedSettings.RootElement.GetProperty("version").GetString()!;
+            var acceptedSystem = acceptedSettings.RootElement.GetProperty("stored").GetProperty("systemSettings");
+            Assert.AreEqual(acceptedStaffUrl, acceptedSystem.GetProperty("staffUrl").GetString());
+            CollectionAssert.AreEqual(expectedOrigins,
+                acceptedSystem.GetProperty("patronEmbedAllowedOrigins").EnumerateArray()
+                    .Select(item => item.GetString()).OrderBy(item => item, StringComparer.Ordinal).ToArray());
+
+            var acceptedOriginRows = await ReadSystemOriginRowsAsync();
+            CollectionAssert.AreEqual(expectedOrigins,
+                acceptedOriginRows.Select(item => item.Origin).OrderBy(item => item, StringComparer.Ordinal).ToArray());
+            CollectionAssert.AreEqual(expectedOrigins,
+                acceptedOriginRows.Select(item => item.NormalizedOrigin)
+                    .OrderBy(item => item, StringComparer.Ordinal).ToArray());
+            var auditAfterAccepted = await ReadAuditHighWatermarkAsync();
+            var eventsAfterAccepted = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[TitleRequestEvent];");
+            var sessionsAfterAccepted = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PatronSession];");
+            var activeSessionsAfterAccepted = await ReadCountAsync(
+                "SELECT COUNT(*) FROM [asap].[PatronSession] WHERE [RevokedUtc] IS NULL;");
+            var outboxAfterAccepted = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];");
+
+            foreach (var invalidOrigin in new[]
+                     {
+                         "https://user@example.com",
+                         "https://@example.com",
+                         "https://example.com\\",
+                         "https://exa mple.com",
+                         "https://example.com/.",
+                         "https://example.com?",
+                         "https://example.com#",
+                         "https://example.com:",
+                         "https://example.com:abc",
+                         "https://example.com:65536",
+                         "https://[2001:db8::1"
+                     })
+            {
+                using var rejected = await PostSettingsJsonAsync(client, JsonSerializer.Serialize(new
+                {
+                    orgId = "system",
+                    version = acceptedVersion,
+                    systemSettings = new
+                    {
+                        staffUrl = rejectedStaffUrl,
+                        patronEmbedAllowedOrigins = new[] { invalidOrigin }
+                    }
+                }));
+                Assert.AreEqual(HttpStatusCode.BadRequest, rejected.StatusCode,
+                    $"Ordinary origin {invalidOrigin} was accepted: {await rejected.Content.ReadAsStringAsync()}");
+
+                using var afterRejected = await ReadSettingsDocumentAsync(client, "system");
+                Assert.AreEqual(acceptedVersion, afterRejected.RootElement.GetProperty("version").GetString());
+                var afterSystem = afterRejected.RootElement.GetProperty("stored").GetProperty("systemSettings");
+                Assert.AreEqual(acceptedStaffUrl, afterSystem.GetProperty("staffUrl").GetString());
+                CollectionAssert.AreEqual(expectedOrigins,
+                    afterSystem.GetProperty("patronEmbedAllowedOrigins").EnumerateArray()
+                        .Select(item => item.GetString()).OrderBy(item => item, StringComparer.Ordinal).ToArray());
+                CollectionAssert.AreEqual(expectedOrigins,
+                    (await ReadSystemOriginRowsAsync()).Select(item => item.Origin)
+                        .OrderBy(item => item, StringComparer.Ordinal).ToArray());
+                Assert.AreEqual(auditAfterAccepted, await ReadAuditHighWatermarkAsync());
+                Assert.AreEqual(eventsAfterAccepted,
+                    await ReadCountAsync("SELECT COUNT(*) FROM [asap].[TitleRequestEvent];"));
+                Assert.AreEqual(sessionsAfterAccepted, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PatronSession];"));
+                Assert.AreEqual(activeSessionsAfterAccepted,
+                    await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PatronSession] WHERE [RevokedUtc] IS NULL;"));
+                Assert.AreEqual(outboxAfterAccepted, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];"));
             }
         }
         finally

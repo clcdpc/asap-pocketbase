@@ -76,14 +76,17 @@ public sealed class StaffSuggestionService(
         try
         {
             candidates = await polaris.SearchPatronsAsync(query!, scope.OrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw ProviderFailure(exception);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
 
@@ -192,6 +195,7 @@ public sealed class StaffSuggestionService(
         }
         catch (PatronFlowException exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw new StaffSuggestionException(
                 exception.StatusCode,
                 exception.Response is PatronSuggestionPickupChangedFailure partial
@@ -295,11 +299,14 @@ public sealed class StaffSuggestionService(
     {
         try
         {
-            return await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
+            var patron = await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return patron;
         }
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (exception is PolarisOperationalException { Code: "polaris_patron_not_found" or "polaris_patron_invalid_barcode" })
             {
                 throw new StaffSuggestionException(
@@ -312,8 +319,9 @@ public sealed class StaffSuggestionService(
 
             throw ProviderFailure(exception);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
     }
@@ -414,19 +422,23 @@ public sealed class StaffSuggestionService(
     {
         try
         {
-            return await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
+            var branches = await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return branches;
         }
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw new StaffSuggestionException(
                 StatusCodes.Status502BadGateway,
                 "pickup_branches_unavailable",
                 "Eligible pickup locations could not be loaded from Polaris.",
                 innerException: exception);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
     }

@@ -1342,9 +1342,19 @@ public sealed class MigrationCliTests
                     [updated] TEXT
                 );
                 INSERT INTO [material_formats] VALUES
-                    ('fmt-book', 'system', NULL, 'book', 'Printed Book', 1, 7, 'none',
+                    ('fmt-book', 'system', NULL, '0', 'Printed Book', 1, 7, 'none',
                      'required', 'Work title', 'required', 'Creator', 'optional', 'ISBN',
-                     'required', 'Publication timing', '2029-01-01T00:00:00Z', '2029-02-01T00:00:00Z');
+                     'required', 'Publication timing', '2029-01-01T00:00:00.7891234Z', '2029-02-01T00:00:00.1234567Z'),
+                    ('fmt-a-book-other-override', 'library', 'pb-org-3', '0', 'Other Library Book', 1, 12, 'none',
+                     'required', 'Title', 'required', 'Author', 'optional', 'Identifier number',
+                     'required', 'Publication Timing', '2029-01-01T00:00:00Z', '2029-02-01T00:00:00Z'),
+                    ('fmt-b-book-library-override', 'library', '+2', '0', 'Local Book', 1, 11, 'none',
+                     'required', 'Title', 'required', 'Author', 'optional', 'Identifier number',
+                     'required', 'Publication Timing', '2029-01-01T00:00:00Z', '2029-02-01T00:00:00Z'),
+                    ('fmt-other-library', 'library', 'pb-org-3', 'other-library', 'Other Library Format', 1, 20, 'none',
+                     'required', 'Title', 'required', 'Author', 'optional', 'Identifier',
+                     'optional', 'Publication', '2029-01-01T00:00:00Z', '2029-02-01T00:00:00Z');
+                INSERT INTO [polaris_organizations] VALUES ('pb-org-3', '3', 'Other Library', 'OTHER', 1, 2, 1);
                 INSERT INTO [staff_users] VALUES
                     ('pb-staff-2', 'selector@example.org', 'selector', 'Library Selector',
                      'staff', 1, '2', 0, NULL, 0, 1, 0);
@@ -1359,8 +1369,8 @@ public sealed class MigrationCliTests
                     [updated] TEXT
                 );
                 INSERT INTO [format_claim_rules] VALUES
-                    ('pb-rule-1', '2', 'book', 'pb-staff-2', 1,
-                     '2029-02-01T00:00:00Z', '2029-02-02T00:00:00Z');
+                    ('pb-rule-1', '2', '0', 'pb-staff-2', 1,
+                     '2029-02-01T00:00:00.7654321Z', '2029-02-02T00:00:00.1234567Z');
                 CREATE TABLE [workflow_tags]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY,
@@ -1369,7 +1379,8 @@ public sealed class MigrationCliTests
                     [description] TEXT
                 );
                 INSERT INTO [workflow_tags] VALUES
-                    ('tag-found', 'Identifier found', 'Identifier found', 'Found in Polaris');
+                    ('tag-found', 'Identifier found', 'Identifier found', 'Found in Polaris'),
+                    ('tag-case', 'Custom_Case_Tag', 'Custom case tag', 'Preserve exact source case');
                 CREATE TABLE [title_requests]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY,
@@ -1399,12 +1410,16 @@ public sealed class MigrationCliTests
                     [updated] TEXT NOT NULL
                 );
                 INSERT INTO [title_requests] VALUES
-                    ('pb-request-1', '2', 'fmt-book', 'A20000000000001', 'patron@example.org',
+                    ('pb-request-1', '2', 'fmt-b-book-library-override', 'A20000000000001', 'patron@example.org',
                      'Ada', 'Reader', 'The Found Book', 'A. Writer', '9780000000001',
-                     'Coming soon', 1, 'suggestion', '09001', 'found', 'one match', 2,
-                     '2029-03-02T12:00:00Z', 'pb-staff-2', 'Library Selector',
-                     '2029-03-01T12:01:00Z', 'automatic_format_rule', 'pb-rule-1',
-                     '2029-03-01T12:00:00Z', '2029-03-02T12:00:00Z');
+                    'Coming soon', 1, 'suggestion', '09001', 'found', 'one match', 2,
+                     '2029-03-02T12:00:00.1234567Z', 'pb-staff-2', 'Library Selector',
+                     '2029-03-01T12:01:00.9876543Z', 'automatic_format_rule', 'pb-rule-1',
+                     '2029-03-01T12:00:00.7891234Z', '2029-03-02T12:00:00.1234567Z');
+                ALTER TABLE [title_requests] ADD COLUMN [notes] TEXT;
+                UPDATE [title_requests] SET [notes] = 'Source request note.' WHERE [id] = 'pb-request-1';
+                ALTER TABLE [title_requests] ADD COLUMN [customFields] TEXT;
+                UPDATE [title_requests] SET [customFields] = '{" İ Audience Name ":{"label":"Historical key","type":"text","value":"keep"}}' WHERE [id] = 'pb-request-1';
                 CREATE TABLE [title_request_tags]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY,
@@ -1429,7 +1444,7 @@ public sealed class MigrationCliTests
                 INSERT INTO [title_request_events] VALUES
                     ('event-placed', 'pb-request-1', 'status_changed', 'pending_hold', 'hold_placed',
                      NULL, 'staff', 'Library Selector', 'Existing hold adopted.',
-                     '{"bibId":"9001"}', '2029-03-01T13:00:00Z');
+                     '{"bibId":"9001"}', '2029-03-01T13:00:00.2345678Z');
                 CREATE TABLE [email_templates]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY,
@@ -1439,11 +1454,31 @@ public sealed class MigrationCliTests
                     [name] TEXT,
                     [subject] TEXT,
                     [body] TEXT,
-                    [enabled] INTEGER NOT NULL
+                    [enabled] INTEGER NOT NULL,
+                    [sourceTemplateId] TEXT
                 );
                 INSERT INTO [email_templates] VALUES
                     ('template-submitted', 'system', NULL, 'suggestion_submitted', 'Submission receipt',
-                     'Received: {{title}}', '<p>Hello {{name}}</p><p>{{title}} by {{author}}</p>', 1);
+                     'Received: {{title}}', '<p>Hello {{name}}</p><p>{{title}} by {{author}}</p>', 1, NULL),
+                    ('z-system-case', 'System', NULL, 'Custom_Case_Override', 'System case template',
+                     'System subject', '<p>System body</p>', 1, NULL),
+                    ('a-library-case', 'library', 'pb-org-2', 'Custom_Case_Override', 'Library case template',
+                     'Library subject', '<p>Library body</p>', 1, 'z-system-case');
+                CREATE TABLE [rejection_templates]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY,
+                    [scope] TEXT NOT NULL,
+                    [libraryOrganization] TEXT,
+                    [name] TEXT,
+                    [subject] TEXT,
+                    [body] TEXT,
+                    [enabled] INTEGER NOT NULL,
+                    [sortOrder] INTEGER,
+                    [sourceTemplateId] TEXT
+                );
+                INSERT INTO [rejection_templates] VALUES
+                    ('z-system-reject', 'System', NULL, 'System rejection', 'System declined', '<p>System declined.</p>', 1, 10, NULL),
+                    ('a-library-reject', 'library', 'pb-org-2', 'Library rejection', NULL, NULL, 1, 20, 'z-system-reject');
                 CREATE TABLE [email_delivery_events]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY,
@@ -1473,7 +1508,7 @@ public sealed class MigrationCliTests
                 INSERT INTO [system_settings] VALUES
                     ('settings0000001', 'https://staff.example.org/staff/', 'https://leap.example/bib/{{bibId}}',
                      'https://leap.example/patron/{{barcode}}', 'https://icons.example/{{code}}.png',
-                     'HTTPS://*.Library.Example.Invalid:443, http://LOCALHOST:1234/, https://Exact.Example.Invalid/');
+                     'HTTPS://*.Library.Example.Invalid:443, http://LOCALHOST:1234/, https://Exact.Example.Invalid/, HTTPS://Exact-Port.Example.Invalid:443, HTTP://[::1]:1234/');
                 CREATE TABLE [polaris_settings]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY,
@@ -1536,18 +1571,21 @@ public sealed class MigrationCliTests
                 INSERT INTO [workflow_settings] VALUES
                     ('workflow-system', 'system', NULL, 6, 'Try after {{next_available_date}}.',
                      1, 31, 0, 1, 15, 1, 16, 1, 17, 0,
-                     1, 'Octavia Butler,Ursula Le Guin', 'Collected creators', 'Check first.', 'Already collected.',
-                     1, 0, 1, '7, 9', 'Card not eligible.',
+                     1, char(65279) || 'Butler, Octavia' || char(65279) || char(10) || 'Le Guin, Ursula', 'Collected creators', 'Check first.', 'Already collected.',
+                     1, 0, 1, char(65279) || '7' || char(65279) || ', ' || char(65279) || '9' || char(65279), 'Card not eligible.',
                      1, 'Search Catalog', 'https://catalog.example/search?q={{title}}',
                      0, 'Search Two', 'https://two.example/{{title}}',
                      1, 'Search Three', 'https://three.example/{{title}}',
                      0, '', '', '2029-01-01T00:00:00Z', '2029-02-01T00:00:00Z'),
-                    ('workflow-library', 'library', 'pb-org-2', 8, 'Local weekly limit.',
+                    ('workflow-library', 'library', '+2', 8, 'Local weekly limit.',
                      0, NULL, 0, 0, NULL, 0, NULL, 0, NULL, 1,
                      0, '', NULL, NULL, NULL, 0, 1, 0, '', NULL,
                      0, 'Local Catalog', 'https://local.example/{{title}}',
                      NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
                      '2029-01-01T00:00:00Z', '2029-02-01T00:00:00Z');
+                ALTER TABLE [workflow_settings] ADD COLUMN [outstandingTimeoutRejectionTemplate] TEXT;
+                UPDATE [workflow_settings] SET [outstandingTimeoutRejectionTemplate] = 'z-system-reject' WHERE [id] = 'workflow-system';
+                UPDATE [workflow_settings] SET [outstandingTimeoutRejectionTemplate] = 'a-library-reject' WHERE [id] = 'workflow-library';
                 CREATE TABLE [_collections] ([id] TEXT NOT NULL PRIMARY KEY, [name] TEXT NOT NULL);
                 INSERT INTO [_collections] VALUES ('pbc_ui_settings', 'ui_settings');
                 CREATE TABLE [ui_settings]
@@ -1576,15 +1614,13 @@ public sealed class MigrationCliTests
                     [updated] TEXT
                 );
                 INSERT INTO [ui_settings] VALUES
-                    ('ui-system', 'system', NULL, 'Suggest an Item', 'Card number', 'PIN',
+                    ('ui-system', 'System', NULL, 'Suggest an Item', 'Card number', 'PIN',
                      '<p>Sign in to suggest.</p>', '<p>Have your card ready.</p>', '<p>One title per form.</p>',
                      '<p>Add an email for updates.</p>', 'Thank you', '<p>Received.</p>',
                      '<p>Already received {{duplicate_date}}.</p>', '<p>Use Libby.</p>', '<p>Use Libby audio.</p>',
                      'Received locally',
-                     'Already published
-                     Coming soon
-                     Published a while back',
-                     '{{library}} is paused.', 'migration_logo.png', 'Consortium logo',
+                    '[]',
+                     '   ', 'migration_logo.png', 'Consortium logo',
                      '2029-01-01T00:00:00Z', '2029-02-01T00:00:00Z');
                 CREATE TABLE [patron_settings_overrides]
                 (
@@ -1600,11 +1636,15 @@ public sealed class MigrationCliTests
                     [updated] TEXT
                 );
                 INSERT INTO [patron_settings_overrides] VALUES
-                    ('patron-override-2', '2', '{"suggestion":"Local received"}',
-                     '[{"id":"local_preorder","label":"Local preorder","enabled":true,"sortOrder":10}]',
-                     '{"book":{"customFields":{"audience":{"mode":"required","label":"Who is it for?"},"audience-empty":{"mode":"required"},"audience-disabled":{"mode":"required"}}}}',
-                     '[{"key":"audience","label":"Audience","type":"select","enabled":true,"sortOrder":10,"options":[{"id":"adult","label":"Adult","enabled":true,"sortOrder":10}]},{"key":"audience-empty","label":"Audience without enabled options","type":"select","enabled":true,"sortOrder":20,"options":[{"id":"retired","label":"Retired","enabled":false,"sortOrder":10}]},{"key":"audience-disabled","label":"Disabled audience","type":"select","enabled":false,"sortOrder":30}]',
+                    ('patron-override-2', '2', '{"suggestion":"  Local received  ","Silently Closed":"  Local silent label  "}',
+                    char(65279) || '[{"label":"","name":"\uFEFFİ Name\uFEFF","enabled":null,"sortOrder":0},{"id":"\uFEFFlocal_preorder\uFEFF","label":"\uFEFFLocal preorder\uFEFF","enabled":true,"sortOrder":null},{"id":"third_option","label":"Third\u0085 option","enabled":true,"sortOrder":10}]' || char(65279),
+                     '{"0":{"messageBehavior":"\uFEFFmessage\uFEFF","message":"\uFEFFFormat message\uFEFF","fields":{"author":{"mode":"\u0085hidden\u0085","label":"\u0085Creator\u0085"},"identifier":{"mode":"\uFEFFhidden\uFEFF","label":"\uFEFFISBN\uFEFF"},"title":null},"customFields":{"audience":{"mode":"\uFEFFrequired\uFEFF","label":"\uFEFFWho is it for?\uFEFF"},"audience-empty":{"mode":"required"},"audience_empty":{"mode":"\uFEFFrequired\uFEFF","label":"\uFEFF"},"audience-disabled":{"mode":"required"},"i_audience_name":{"mode":"required","label":"Who is it for?"},"İ Audience Name":{"mode":"hidden","label":"Wrong raw-key match"}}},"book":{"fields":{"author":{"label":"Book fallback"}},"customFields":{"audience":{"mode":"hidden"}}},"audiobook_cd":{"fields":null,"customFields":{"audience-empty":{"mode":"required"},"audience_empty":{"mode":"\u0085required\u0085","label":"\u0085Not trimmed\u0085"}}},"dvd":null,"music_cd":{"customFields":null},"ebook":{"customFields":{"i_audience_name":null}}}',
+                     '[{"key":"\uFEFF audience \uFEFF","label":"\uFEFFAudience\uFEFF","type":" \uFEFFselect\uFEFF ","helpText":"\uFEFFChoose\u0085 the intended audience.\uFEFF","enabled":true,"sortOrder":10,"options":[{"id":"\uFEFFadult\uFEFF","label":"\uFEFFAdult\uFEFF","enabled":true,"sortOrder":10},{"id":"teen","label":"Teen\u0085 Option","enabled":true}]},{"key":"\uFEFFaudience-empty\uFEFF","label":"\u0085Audience without enabled options\u0085","type":"\uFEFFselect\uFEFF","enabled":true,"sortOrder":null,"options":[{"id":"retired","label":"Retired","enabled":false,"sortOrder":null}]},{"key":"audience-disabled","label":"Disabled audience","type":"select","enabled":false},{"label":"İ Audience Name","type":"select","options":[{"name":"İ Adult Option","enabled":true},{"value":"Teen Option","enabled":true}]},{"key":"text-ignores-options","label":"Text ignores options","type":" text ","options":[{"id":"ignored-option","label":"Ignored option"}]}]',
                      NULL, NULL, '2029-01-01T00:00:00Z', '2029-02-01T00:00:00Z');
+                INSERT INTO [patron_settings_overrides] VALUES
+                    ('numeric-fallback-override-3', '3', NULL,
+                     char(65279) || '1' || char(65279) || char(10) || char(65279) || '2' || char(65279) || char(10) || char(65279) || '3' || char(65279) || char(10) || char(65279) || '4' || char(65279),
+                     NULL, NULL, NULL, NULL, '2029-01-01T00:00:00Z', '2029-02-01T00:00:00Z');
                 CREATE TABLE [smtp_settings]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY,
@@ -1624,7 +1664,8 @@ public sealed class MigrationCliTests
                     File.Copy(
                         Path.Combine(FindRepositoryRoot(), "src", "Asap.Web", "Frontend", "jpl.png"),
                         Path.Combine(directory, "migration_logo.png"));
-                });
+                },
+                "2030-01-02T03:04:05.1234567Z");
             var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
             var report = Path.Combine(root, "import-report.json");
             var secondReport = Path.Combine(root, "second-import-report.json");
@@ -1634,29 +1675,11 @@ public sealed class MigrationCliTests
             Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
             Environment.SetEnvironmentVariable(secondConnectionEnvironmentName, secondTarget);
             using var error = new StringWriter();
-            var exitCode = MigrationCli.Run(
-                [
-                    "import", "--package", package,
-                    "--connection-string-env", connectionEnvironmentName,
-                    "--allowed-tenant-ids", tenantId.ToString(),
-                    "--report", report,
-                    "--external-config", ExternalConfigurationPath(package)
-                ],
-                TextWriter.Null,
-                error);
+            var exitCode = RunImport(package, report, connectionEnvironmentName, tenantId, error);
             Assert.AreEqual(0, exitCode, error.ToString());
 
             using var secondError = new StringWriter();
-            Assert.AreEqual(0, MigrationCli.Run(
-                [
-                    "import", "--package", package,
-                    "--connection-string-env", secondConnectionEnvironmentName,
-                    "--allowed-tenant-ids", tenantId.ToString(),
-                    "--report", secondReport,
-                    "--external-config", ExternalConfigurationPath(package)
-                ],
-                TextWriter.Null,
-                secondError), secondError.ToString());
+            Assert.AreEqual(0, RunImport(package, secondReport, secondConnectionEnvironmentName, tenantId, secondError), secondError.ToString());
             AssertEquivalentReportsExceptTargetBinding(
                 report,
                 target,
@@ -1672,6 +1695,13 @@ public sealed class MigrationCliTests
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[PocketBaseId] = N'pb-request-1' AND m.[NewId] = r.[Id] WHERE r.[LegacyId] IS NULL AND r.[LibraryOrganizationId] = 2 AND r.[Status] = N'suggestion' AND r.[IsbnCheckStatus] = N'found' AND r.[BibId] = 9001 AND r.[Title] = N'The Found Book';"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[TitleRequest] r " +
+                "JOIN [asap].[LegacyPocketBaseMapping] rm ON rm.[EntityType] = N'title_request' AND rm.[PocketBaseId] = N'pb-request-1' AND rm.[NewId] = r.[Id] " +
+                "JOIN [asap].[LegacyPocketBaseMapping] fm ON fm.[EntityType] = N'material_format_override' AND fm.[PocketBaseId] = N'fmt-b-book-library-override' " +
+                "JOIN [asap].[MaterialFormatOverride] o ON o.[Id] = fm.[NewId] " +
+                "WHERE r.[MaterialFormatId] = o.[MaterialFormatId] AND o.[MaterialFormatId] = (SELECT [Id] FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book') AND o.[Id] <> o.[MaterialFormatId];"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [BibId] = 9001 AND [BibIdStaffVerified] = 0;"));
@@ -1702,6 +1732,11 @@ public sealed class MigrationCliTests
                     .Single(item => item.GetProperty("entity").GetString() == "polaris_settings");
                 Assert.AreEqual("7", polarisTransform.GetProperty("retiredRequestingOrganizationSource").GetString());
                 Assert.AreEqual("3", polarisTransform.GetProperty("retiredPickupOrganizationSource").GetString());
+                var customFieldTransform = authorityReport.RootElement.GetProperty("transformations").EnumerateArray()
+                    .Single(item => item.GetProperty("entity").GetString() == "patron_custom_fields" && item.GetProperty("organizationId").GetInt32() == 2);
+                Assert.AreEqual(5, customFieldTransform.GetProperty("fields").GetInt32());
+                Assert.AreEqual(30, customFieldTransform.GetProperty("formatRules").GetInt32());
+                Assert.AreEqual(1, customFieldTransform.GetProperty("downgradedRequiredSelectRules").GetInt32());
             }
             Assert.AreEqual(0, await ScalarAsync(connection,
                 "SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID(N'asap.PolarisSettings') AND name IN (N'OrganizationIdForRequests', N'PickupOrganizationId');"));
@@ -1718,26 +1753,71 @@ public sealed class MigrationCliTests
                 "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'status_changed' AND [Status] = N'hold_placed' AND [ActorType] = N'staff';"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
-                "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'status_changed' AND [CreatedUtc] = '2029-03-01T13:00:00';"));
+                "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'status_changed' AND [CreatedUtc] = '2029-03-01T13:00:00.2345678';"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
-                "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND [CreatedUtc] = '2030-01-02T03:04:05' AND JSON_VALUE([MetadataJson], '$.legacyBibProtection') = N'true' AND JSON_VALUE([MetadataJson], '$.bibId') = N'9001' AND JSON_VALUE([MetadataJson], '$.transform') = N'placed_bib_protection_v1';"));
+                "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book' AND [CreatedUtc] = '2029-01-01T00:00:00.7891234' AND [UpdatedUtc] = '2029-02-01T00:00:00.1234567';"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[FormatAutoClaimRule] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'format_auto_claim_rule' AND m.[PocketBaseId] = N'pb-rule-1' AND m.[NewId] = c.[Id] WHERE c.[CreatedUtc] = '2029-02-01T00:00:00.7654321' AND c.[DeactivatedUtc] IS NULL;"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[PocketBaseId] = N'pb-request-1' AND m.[NewId] = r.[Id] WHERE r.[CreatedUtc] = '2029-03-01T12:00:00.7891234' AND r.[UpdatedUtc] = '2029-03-02T12:00:00.1234567' AND r.[ClaimedAtUtc] = '2029-03-01T12:01:00.9876543';"),
+                "Request history timestamps retain their seven-digit source precision.");
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [UpdatedUtc] = '2029-02-01T00:00:00';"),
+                "System settings preserve the UI source timestamp instead of the manifest fallback.");
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND [CreatedUtc] = '2030-01-02T03:04:05.1234567' AND JSON_VALUE([MetadataJson], '$.legacyBibProtection') = N'true' AND JSON_VALUE([MetadataJson], '$.bibId') = N'9001' AND JSON_VALUE([MetadataJson], '$.transform') = N'placed_bib_protection_v1';"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted' AND [SubjectTemplate] = N'Received: {{title}}' AND [BodyTemplate] LIKE N'%{{name}}%';"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] childMap " +
+                "JOIN [asap].[EmailTemplate] child ON child.[Id] = childMap.[NewId] " +
+                "JOIN [asap].[LegacyPocketBaseMapping] sourceMap ON sourceMap.[EntityType] = N'email_template' AND sourceMap.[PocketBaseId] = N'z-system-case' " +
+                "WHERE childMap.[EntityType] = N'email_template' AND childMap.[PocketBaseId] = N'a-library-case' " +
+                "AND child.[OrganizationId] = 2 AND child.[TemplateKey] COLLATE Latin1_General_100_BIN2 = N'Custom_Case_Override' COLLATE Latin1_General_100_BIN2 AND child.[SourceTemplateId] = sourceMap.[NewId] AND child.[IsCustom] = 0;"));
+            Assert.AreEqual(1, await ScalarAsync(connection,
+                "SELECT COUNT(*) FROM [asap].[WorkflowTag] WHERE [Code] COLLATE Latin1_General_100_BIN2 = N'Custom_Case_Tag' COLLATE Latin1_General_100_BIN2 AND [Label] = N'Custom case tag';"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] childMap " +
+                "JOIN [asap].[EmailTemplate] child ON child.[Id] = childMap.[NewId] " +
+                "JOIN [asap].[LegacyPocketBaseMapping] sourceMap ON sourceMap.[EntityType] = N'email_template' AND sourceMap.[PocketBaseId] = N'z-system-reject' " +
+                "JOIN [asap].[EmailTemplate] sourceTemplate ON sourceTemplate.[Id] = sourceMap.[NewId] " +
+                "WHERE childMap.[EntityType] = N'email_template' AND childMap.[PocketBaseId] = N'a-library-reject' " +
+                "AND child.[OrganizationId] = 2 AND child.[TemplateKey] = N'rejection:z-system-reject' AND child.[SourceTemplateId] = sourceTemplate.[Id] AND child.[IsCustom] = 0 AND child.[SubjectTemplate] IS NULL AND child.[BodyTemplate] IS NULL " +
+                "AND sourceTemplate.[OrganizationId] = 1 AND sourceTemplate.[TemplateKey] = N'rejection:z-system-reject' AND sourceTemplate.[SubjectTemplate] = N'System declined' AND sourceTemplate.[BodyTemplate] = N'<p>System declined.</p>';"),
+                "The library rejection row preserves null source content and links to the matching system template that supplies effective content.");
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[WorkflowSettings] w JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'email_template' AND m.[PocketBaseId] = N'a-library-reject' AND m.[NewId] = w.[OutstandingTimeoutRejectionTemplateId] WHERE w.[OrganizationId] = 2;"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[WorkflowSettings] w JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'email_template' AND m.[PocketBaseId] = N'z-system-reject' AND m.[NewId] = w.[OutstandingTimeoutRejectionTemplateId] WHERE w.[OrganizationId] = 1;"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IS NULL AND [EventType] = N'sent' AND JSON_VALUE([MetadataJson], '$.sourceRecordId') = N'mail-history-1' AND JSON_VALUE([MetadataJson], '$.recipient') = N'patron@example.org';"));
             Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[EmailOutbox];"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
-                "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [StaffApplicationUrl] = N'https://staff.example.org/staff/' AND [SystemNotEnabledMessage] = N'{{library}} is paused.';"));
-            Assert.AreEqual(3, await ScalarAsync(
+                "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [StaffApplicationUrl] = N'https://staff.example.org/staff/' AND [SystemNotEnabledMessage] = N'   ';"));
+            Assert.AreEqual(5, await ScalarAsync(
                 connection,
-                "SELECT COUNT(*) FROM [asap].[PatronEmbedAllowedOrigin] WHERE [NormalizedOrigin] IN (N'https://*.library.example.invalid:443', N'http://localhost:1234', N'https://exact.example.invalid');"));
+                "SELECT COUNT(*) FROM [asap].[PatronEmbedAllowedOrigin] WHERE [NormalizedOrigin] IN (N'https://*.library.example.invalid:443', N'http://localhost:1234', N'https://exact.example.invalid', N'https://exact-port.example.invalid:443', N'http://[::1]:1234');"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 2 AND [SuggestionLimit] = 8 AND [AutoPromote] = 1 AND [AllowPatronAutoholdOptOut] = 0;"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 2 AND [SilentStatusLabel] = N'  Local silent label  ' AND DATALENGTH([SilentStatusLabel]) = 44;"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 2 AND [SuggestionStatusLabel] = N'  Local received  ' AND DATALENGTH([SuggestionStatusLabel]) = 36;"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1 AND [ProtectedServerToken] IS NULL AND [FromAddress] = N'notices@example.org' AND [FromName] = N'ASAP Notices';"));
@@ -1746,27 +1826,103 @@ public sealed class MigrationCliTests
                 "SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 2 AND [OptionKey] = N'local_preorder' AND [Label] = N'Local preorder';"));
             Assert.AreEqual(3, await ScalarAsync(
                 connection,
-                "SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 1 AND [OptionKey] IN (N'already-published', N'coming-soon', N'published-a-while-back');"));
+                "SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 2 AND (([OptionKey] = N'i-name' AND [Label] = N'İ Name' AND [IsEnabled] = 1 AND [SortOrder] = 10) OR ([OptionKey] = N'local_preorder' AND [Label] = N'Local preorder' AND [IsEnabled] = 1 AND [SortOrder] = 20) OR ([OptionKey] = N'third_option' AND [Label] = N'Third' + NCHAR(133) + N' option' AND [IsEnabled] = 1 AND [SortOrder] = 10));"));
+            var publicationOptionOrder = new List<string>();
+            await using (var orderCommand = connection.CreateCommand())
+            {
+                orderCommand.CommandText = "SELECT [OptionKey] FROM [asap].[PublicationOption] WHERE [OrganizationId] = 2 ORDER BY [SortOrder], [Id];";
+                await using var orderReader = await orderCommand.ExecuteReaderAsync();
+                while (await orderReader.ReadAsync())
+                {
+                    publicationOptionOrder.Add(orderReader.GetString(0));
+                }
+            }
+            CollectionAssert.AreEqual(new[] { "i-name", "third_option", "local_preorder" }, publicationOptionOrder,
+                "Null and zero publication sort orders use their source ordinal, with stable source order for ties; null enabled defaults to true.");
+            Assert.AreEqual(3, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 1 AND (([OptionKey] = N'already_published' AND [Label] = N'Already published' AND [IsEnabled] = 1 AND [SortOrder] = 10) OR ([OptionKey] = N'coming_soon' AND [Label] = N'Coming soon' AND [IsEnabled] = 1 AND [SortOrder] = 20) OR ([OptionKey] = N'published_a_while_back' AND [Label] = N'Published a while back' AND [IsEnabled] = 1 AND [SortOrder] = 30));"));
+            Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = 3;"),
+                "A source numeric-only library list must inherit the current system publication set.");
+            Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 3;"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[ExternalSearchProviderOverride] o JOIN [asap].[ExternalSearchProvider] p ON p.[Id] = o.[ExternalSearchProviderId] WHERE o.[LibraryOrganizationId] = 2 AND p.[ProviderKey] = N'external_search_1' AND o.[IsEnabled] = 0 AND o.[Label] = N'Local Catalog';"));
             Assert.AreEqual(2, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] = 1;"));
+            var creatorValues = new List<string>();
+            await using (var creatorCommand = connection.CreateCommand())
+            {
+                creatorCommand.CommandText = "SELECT [Value] FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] = 1 ORDER BY [SortOrder], [Id];";
+                await using var creatorReader = await creatorCommand.ExecuteReaderAsync();
+                while (await creatorReader.ReadAsync())
+                {
+                    creatorValues.Add(creatorReader.GetString(0));
+                }
+            }
+            CollectionAssert.AreEqual(new[] { "Butler, Octavia", "Le Guin, Ursula" }, creatorValues,
+                "Legacy creator configuration splits on LF only and preserves commas inside names.");
             Assert.AreEqual(2, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = 1;"));
+            Assert.AreEqual(2, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = 1 AND [PatronCodeId] IN (7, 9);"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND r.[Mode] = N'required' AND r.[LabelOverride] = N'Who is it for?';"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
-                "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience-empty' AND r.[Mode] = N'optional';"));
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'book' AND o.[MessageBehavior] = N'message' AND o.[Message] = N'Format message' AND o.[AuthorMode] = N'optional' AND o.[AuthorLabel] = NCHAR(133) + N'Creator' + NCHAR(133) AND o.[TitleLabel] = N'Title' AND o.[IdentifierMode] = N'hidden' AND o.[IdentifierLabel] IS NULL AND COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]) = N'ISBN';"),
+                "The raw source format identity keeps only values differing from its mapped base, while current effective labels remain intact.");
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience_empty' AND m.[Code] = N'book' AND r.[Mode] = N'optional' AND r.[LabelOverride] IS NULL;"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND m.[Code] = N'book' AND r.[Mode] = N'required' AND r.[LabelOverride] = N'Who is it for?';"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience_empty' AND m.[Code] = N'audiobook_cd' AND r.[Mode] = N'hidden' AND r.[LabelOverride] = NCHAR(133) + N'Not trimmed' + NCHAR(133);"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience' AND [HelpText] = N'Choose' + NCHAR(133) + N' the intended audience.';"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND m.[Code] = N'ebook' AND r.[Mode] = N'hidden' AND r.[LabelOverride] IS NULL;"));
+            Assert.AreEqual(5, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND (([FieldKey] = N'audience' AND [SortOrder] = 10 AND [Label] = N'Audience') OR ([FieldKey] = N'audience_empty' AND [SortOrder] = 0 AND [Label] = NCHAR(133) + N'Audience without enabled options' + NCHAR(133)) OR ([FieldKey] = N'audience_disabled' AND [SortOrder] = 30 AND [Label] = N'Disabled audience') OR ([FieldKey] = N'i_audience_name' AND [SortOrder] = 40 AND [Label] = N'İ Audience Name') OR ([FieldKey] = N'text_ignores_options' AND [FieldType] = N'text' AND [SortOrder] = 50 AND [Label] = N'Text ignores options'));"));
+            Assert.AreEqual(5, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2;"));
+            Assert.AreEqual(5, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND ((f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult' AND o.[SortOrder] = 10) OR (f.[FieldKey] = N'audience' AND o.[OptionKey] = N'teen' AND o.[Label] = N'Teen' + NCHAR(133) + N' Option' AND o.[SortOrder] = 20) OR (f.[FieldKey] = N'audience_empty' AND o.[OptionKey] = N'retired' AND o.[Label] = N'Retired' AND o.[SortOrder] = 0) OR (f.[FieldKey] = N'i_audience_name' AND o.[OptionKey] = N'i_adult_option' AND o.[Label] = N'İ Adult Option' AND o.[SortOrder] = 10) OR (f.[FieldKey] = N'i_audience_name' AND o.[OptionKey] = N'teen_option' AND o.[SortOrder] = 20));"));
+            Assert.AreEqual(5, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2;"));
+            Assert.AreEqual(30, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] = 2;"));
+            Assert.AreEqual(0, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'text_ignores_options';"));
+            Assert.AreEqual(6, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'text_ignores_options' AND r.[Mode] = N'hidden' AND r.[LabelOverride] IS NULL;"));
+            Assert.AreEqual(2, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND m.[OwnerOrganizationId] = 1 AND m.[Code] IN (N'dvd', N'music_cd') AND r.[Mode] = N'hidden' AND r.[LabelOverride] IS NULL;"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND m.[Code] = N'ebook' AND r.[Mode] = N'hidden' AND r.[LabelOverride] IS NULL;"));
             var disabledAudienceRules = new Dictionary<string, string>(StringComparer.Ordinal);
             await using (var disabledAudienceCommand = connection.CreateCommand())
             {
                 disabledAudienceCommand.CommandText =
-                    "SELECT f.[Code], r.[Mode] FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] c ON c.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] f ON f.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND c.[FieldKey] = N'audience-disabled' ORDER BY f.[Code];";
+                    "SELECT f.[Code], r.[Mode] FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] c ON c.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] f ON f.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND c.[FieldKey] = N'audience_disabled' ORDER BY f.[Code];";
                 await using var disabledAudienceReader = await disabledAudienceCommand.ExecuteReaderAsync();
                 while (await disabledAudienceReader.ReadAsync())
                 {
@@ -1779,24 +1935,130 @@ public sealed class MigrationCliTests
             Assert.IsTrue(disabledAudienceRules.Values.All(mode => mode == "hidden"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
-                "SELECT COUNT(*) FROM [asap].[Branding] WHERE [OrganizationId] = 1 AND [LogoContentType] = N'image/png' AND [LogoFileName] = N'migration_logo.png' AND DATALENGTH([LogoData]) > 1000 AND [LogoAltText] = N'Consortium logo';"));
+                "SELECT COUNT(*) FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[PocketBaseId] = N'pb-request-1' AND m.[NewId] = r.[Id] WHERE r.[LegacyId] IS NULL AND r.[CustomFieldsJson] = N'{\" İ Audience Name \":{\"label\":\"Historical key\",\"type\":\"text\",\"value\":\"keep\"}}';"),
+                "The mapping locates the request while its historical field snapshot retains the original identity and values.");
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[Branding] WHERE [OrganizationId] = 1 AND [LogoContentType] = N'image/png' AND [LogoFileName] = N'migration_logo.png' AND DATALENGTH([LogoData]) > 1000 AND [LogoAltText] = N'Consortium logo' AND [UpdatedUtc] = '2029-02-01T00:00:00.0000000';"));
+
+            var customFieldDriftCases = new (string Name, string DriftSql, string DriftAssertionSql, string RestoreSql, string RestoredAssertionSql, int RestoredCount)[]
+            {
+                ("custom field label", "UPDATE [asap].[PatronCustomField] SET [Label] = N'Changed audience' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience' AND [Label] = N'Changed audience';", "UPDATE [asap].[PatronCustomField] SET [Label] = N'Audience' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience' AND [Label] = N'Audience';", 1),
+                ("custom field help text", "UPDATE [asap].[PatronCustomField] SET [HelpText] = N'Changed help.' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience' AND [HelpText] = N'Changed help.';", "UPDATE [asap].[PatronCustomField] SET [HelpText] = N'Choose' + NCHAR(133) + N' the intended audience.' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience' AND [HelpText] = N'Choose' + NCHAR(133) + N' the intended audience.';", 1),
+                ("custom field type", "UPDATE [asap].[PatronCustomField] SET [FieldType] = N'text' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience' AND [FieldType] = N'text';", "UPDATE [asap].[PatronCustomField] SET [FieldType] = N'select' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience' AND [FieldType] = N'select';", 1),
+                ("custom field enabled state", "UPDATE [asap].[PatronCustomField] SET [IsEnabled] = 0 WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience' AND [IsEnabled] = 0;", "UPDATE [asap].[PatronCustomField] SET [IsEnabled] = 1 WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience' AND [IsEnabled] = 1;", 1),
+                ("custom field order", "UPDATE [asap].[PatronCustomField] SET [SortOrder] = 31 WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience_disabled';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience_disabled' AND [SortOrder] = 31;", "UPDATE [asap].[PatronCustomField] SET [SortOrder] = 30 WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience_disabled';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience_disabled' AND [SortOrder] = 30;", 1),
+                ("custom field explicit order", "UPDATE [asap].[PatronCustomField] SET [SortOrder] = 11 WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience' AND [SortOrder] = 11;", "UPDATE [asap].[PatronCustomField] SET [SortOrder] = 10 WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience' AND [SortOrder] = 10;", 1),
+                ("custom field key case only", "UPDATE [asap].[PatronCustomField] SET [FieldKey] = N'Audience' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] COLLATE Latin1_General_100_BIN2 = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] COLLATE Latin1_General_100_BIN2 = N'Audience';", "UPDATE [asap].[PatronCustomField] SET [FieldKey] = N'audience' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] COLLATE Latin1_General_100_BIN2 = N'Audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] COLLATE Latin1_General_100_BIN2 = N'audience';", 1),
+                ("custom field key", "UPDATE [asap].[PatronCustomField] SET [FieldKey] = N'audience-drift' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience-drift';", "UPDATE [asap].[PatronCustomField] SET [FieldKey] = N'audience' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience-drift';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", 1),
+                ("custom-field option identity", "UPDATE o SET [OptionKey] = N'adult-drift' FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult-drift';", "UPDATE o SET [OptionKey] = N'adult' FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult-drift';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult';", 1),
+                ("custom-field option label", "UPDATE o SET [Label] = N'Changed adult' FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult' AND o.[Label] = N'Changed adult';", "UPDATE o SET [Label] = N'Adult' FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult' AND o.[Label] = N'Adult';", 1),
+                ("custom-field option enabled state", "UPDATE o SET [IsEnabled] = 0 FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult' AND o.[IsEnabled] = 0;", "UPDATE o SET [IsEnabled] = 1 FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult' AND o.[IsEnabled] = 1;", 1),
+                ("custom-field option order", "UPDATE o SET [SortOrder] = 11 FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult' AND o.[SortOrder] = 11;", "UPDATE o SET [SortOrder] = 10 FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'adult' AND o.[SortOrder] = 10;", 1),
+                ("extra custom-field option", "INSERT INTO [asap].[PatronCustomFieldOption] ([PatronCustomFieldId], [OptionKey], [Label], [IsEnabled], [SortOrder]) SELECT [Id], N'unmapped-option', N'Unmapped option', 1, 99 FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'unmapped-option';", "DELETE o FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'unmapped-option';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND o.[OptionKey] = N'unmapped-option';", 0),
+                ("extra custom-field definition", "INSERT INTO [asap].[PatronCustomField] ([LibraryOrganizationId], [FieldKey], [FieldType], [Label], [IsEnabled], [SortOrder]) VALUES (2, N'unmapped-field', N'text', N'Unmapped field', 1, 99);", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'unmapped-field';", "DELETE FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'unmapped-field';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'unmapped-field';", 0),
+                ("extra custom-field format rule", "INSERT INTO [asap].[MaterialFormatCustomFieldRule] ([LibraryOrganizationId], [MaterialFormatId], [PatronCustomFieldId], [Mode]) SELECT 3, m.[Id], f.[Id], N'optional' FROM [asap].[MaterialFormat] m CROSS JOIN [asap].[PatronCustomField] f WHERE m.[OwnerOrganizationId] = 1 AND m.[Code] = N'book' AND f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] WHERE r.[LibraryOrganizationId] = 3 AND m.[OwnerOrganizationId] = 1 AND m.[Code] = N'book' AND f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience';", "DELETE r FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] WHERE r.[LibraryOrganizationId] = 3 AND m.[OwnerOrganizationId] = 1 AND m.[Code] = N'book' AND f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience';", "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] WHERE r.[LibraryOrganizationId] = 3 AND m.[OwnerOrganizationId] = 1 AND m.[Code] = N'book' AND f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience';", 0)
+            };
+            foreach (var drift in customFieldDriftCases)
+            {
+                await AssertFingerprintRefreshedSourceOwnedDriftRejectedAsync(
+                    connection, target, package, report, connectionEnvironmentName,
+                    drift.Name, drift.DriftSql, drift.DriftAssertionSql, 1,
+                    drift.RestoreSql, drift.RestoredAssertionSql, drift.RestoredCount);
+            }
+
+            var normalizedCustomFieldDriftCases = new (string Name, string DriftSql, string DriftAssertionSql, string RestoreSql, string RestoredAssertionSql)[]
+            {
+                ("normalized custom-field key", "UPDATE [asap].[PatronCustomField] SET [FieldKey] = N'i_audience_name_drift' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'i_audience_name';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'i_audience_name_drift';", "UPDATE [asap].[PatronCustomField] SET [FieldKey] = N'i_audience_name' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'i_audience_name_drift';", "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'i_audience_name';"),
+                ("normalized custom-field option ID", "UPDATE o SET [OptionKey] = N'i_adult_option_drift' FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND o.[OptionKey] = N'i_adult_option';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND o.[OptionKey] = N'i_adult_option_drift';", "UPDATE o SET [OptionKey] = N'i_adult_option' FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND o.[OptionKey] = N'i_adult_option_drift';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND o.[OptionKey] = N'i_adult_option';"),
+                ("name-alias option label", "UPDATE o SET [Label] = N'Drifted Unicode option' FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND o.[OptionKey] = N'i_adult_option';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND o.[OptionKey] = N'i_adult_option' AND o.[Label] = N'Drifted Unicode option';", "UPDATE o SET [Label] = N'İ Adult Option' FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND o.[OptionKey] = N'i_adult_option';", "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] o JOIN [asap].[PatronCustomField] f ON f.[Id] = o.[PatronCustomFieldId] WHERE f.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND o.[OptionKey] = N'i_adult_option' AND o.[Label] = N'İ Adult Option';"),
+                ("sparse-null custom-field rule", "UPDATE r SET [Mode] = N'optional' FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND m.[Code] = N'ebook';", "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND m.[Code] = N'ebook' AND r.[Mode] = N'optional';", "UPDATE r SET [Mode] = N'hidden' FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND m.[Code] = N'ebook';", "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'i_audience_name' AND m.[Code] = N'ebook' AND r.[Mode] = N'hidden';"),
+                ("sparse-null format rule", "UPDATE r SET [Mode] = N'optional' FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND m.[Code] = N'dvd';", "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND m.[Code] = N'dvd' AND r.[Mode] = N'optional';", "UPDATE r SET [Mode] = N'hidden' FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND m.[Code] = N'dvd';", "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND m.[Code] = N'dvd' AND r.[Mode] = N'hidden';")
+            };
+            foreach (var drift in normalizedCustomFieldDriftCases)
+            {
+                await AssertFingerprintRefreshedSourceOwnedDriftRejectedAsync(
+                    connection, target, package, report, connectionEnvironmentName,
+                    drift.Name, drift.DriftSql, drift.DriftAssertionSql, 1,
+                    drift.RestoreSql, drift.RestoredAssertionSql, 1);
+            }
+            await AssertFingerprintRefreshedSourceOwnedDriftRejectedAsync(
+                connection, target, package, report, connectionEnvironmentName,
+                "sparse-null fields object default",
+                "UPDATE [asap].[MaterialFormat] SET [AuthorLabel] = N'Drifted sparse default' WHERE [OwnerOrganizationId] = 1 AND [Code] = N'audiobook_cd';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'audiobook_cd' AND [AuthorLabel] = N'Drifted sparse default';",
+                1,
+                "UPDATE [asap].[MaterialFormat] SET [AuthorLabel] = N'Author' WHERE [OwnerOrganizationId] = 1 AND [Code] = N'audiobook_cd';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'audiobook_cd' AND [AuthorLabel] = N'Author';",
+                1);
+            await AssertFingerprintRefreshedSourceOwnedDriftRejectedAsync(
+                connection, target, package, report, connectionEnvironmentName,
+                "sparse-null individual field default",
+                "UPDATE o SET [TitleLabel] = N'Drifted individual null' FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'book';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'book' AND o.[TitleLabel] = N'Drifted individual null';",
+                1,
+                "UPDATE o SET [TitleLabel] = N'Title' FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'book';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'book' AND o.[TitleLabel] = N'Title';",
+                1);
+
+            var configurationAndHistoryDriftCases = new (string Name, string DriftSql, string DriftAssertionSql, string RestoreSql, string RestoredAssertionSql)[]
+            {
+                ("system settings update timestamp", "UPDATE [asap].[SystemSettings] SET [UpdatedUtc] = '2029-02-02T00:00:00' WHERE [OrganizationId] = 1;", "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [UpdatedUtc] = '2029-02-02T00:00:00';", "UPDATE [asap].[SystemSettings] SET [UpdatedUtc] = '2029-02-01T00:00:00' WHERE [OrganizationId] = 1;", "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [UpdatedUtc] = '2029-02-01T00:00:00';"),
+                ("system not-enabled message", "UPDATE [asap].[SystemSettings] SET [SystemNotEnabledMessage] = N'Drifted availability message.' WHERE [OrganizationId] = 1;", "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [SystemNotEnabledMessage] = N'Drifted availability message.';", "UPDATE [asap].[SystemSettings] SET [SystemNotEnabledMessage] = N'   ' WHERE [OrganizationId] = 1;", "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [SystemNotEnabledMessage] = N'   ' ;"),
+                ("seeded misconfigured message", "UPDATE [asap].[SystemSettings] SET [MisconfiguredMessage] = N'Drifted misconfigured message.' WHERE [OrganizationId] = 1;", "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [MisconfiguredMessage] = N'Drifted misconfigured message.';", "UPDATE [asap].[SystemSettings] SET [MisconfiguredMessage] = N'The {{library}} suggestion system is currently misconfigured. Please contact staff.' WHERE [OrganizationId] = 1;", "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [MisconfiguredMessage] = N'The {{library}} suggestion system is currently misconfigured. Please contact staff.';"),
+                ("target-only material seed label", "UPDATE [asap].[MaterialFormat] SET [AuthorLabel] = N'Drifted DVD creator' WHERE [OwnerOrganizationId] = 1 AND [Code] = N'dvd';", "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'dvd' AND [AuthorLabel] = N'Drifted DVD creator';", "UPDATE [asap].[MaterialFormat] SET [AuthorLabel] = N'Director/Actors/Producer' WHERE [OwnerOrganizationId] = 1 AND [Code] = N'dvd';", "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'dvd' AND [AuthorLabel] = N'Director/Actors/Producer';"),
+                ("source-absent material seed key case only", "UPDATE [asap].[MaterialFormat] SET [Code] = N'DVD' WHERE [OwnerOrganizationId] = 1 AND [Code] COLLATE Latin1_General_100_BIN2 = N'dvd';", "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] COLLATE Latin1_General_100_BIN2 = N'DVD';", "UPDATE [asap].[MaterialFormat] SET [Code] = N'dvd' WHERE [OwnerOrganizationId] = 1 AND [Code] COLLATE Latin1_General_100_BIN2 = N'DVD';", "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] COLLATE Latin1_General_100_BIN2 = N'dvd';"),
+                ("material format message field", "UPDATE [asap].[MaterialFormat] SET [Message] = N'Drifted format message' WHERE [OwnerOrganizationId] = 1 AND [Code] = N'ebook';", "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'ebook' AND [Message] = N'Drifted format message';", "UPDATE [asap].[MaterialFormat] SET [Message] = NULL WHERE [OwnerOrganizationId] = 1 AND [Code] = N'ebook';", "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'ebook' AND [Message] IS NULL;"),
+                ("organization display name", "UPDATE [asap].[Organization] SET [DisplayName] = N'Drifted Library' WHERE [Id] = 2;", "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] = 2 AND [DisplayName] = N'Drifted Library';", "UPDATE [asap].[Organization] SET [DisplayName] = N'Test Library' WHERE [Id] = 2;", "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] = 2 AND [DisplayName] = N'Test Library';"),
+                ("organization mapping source key case only", "UPDATE [asap].[LegacyPocketBaseMapping] SET [PocketBaseId] = N'PB-ORG-2' WHERE [EntityType] COLLATE Latin1_General_100_BIN2 = N'organization' AND [PocketBaseId] COLLATE Latin1_General_100_BIN2 = N'pb-org-2';", "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] COLLATE Latin1_General_100_BIN2 = N'organization' AND [PocketBaseId] COLLATE Latin1_General_100_BIN2 = N'PB-ORG-2';", "UPDATE [asap].[LegacyPocketBaseMapping] SET [PocketBaseId] = N'pb-org-2' WHERE [EntityType] COLLATE Latin1_General_100_BIN2 = N'organization' AND [PocketBaseId] COLLATE Latin1_General_100_BIN2 = N'PB-ORG-2';", "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] COLLATE Latin1_General_100_BIN2 = N'organization' AND [PocketBaseId] COLLATE Latin1_General_100_BIN2 = N'pb-org-2';"),
+                ("staff mapping entity type case only", "UPDATE [asap].[LegacyPocketBaseMapping] SET [EntityType] = N'STAFF_USER' WHERE [EntityType] COLLATE Latin1_General_100_BIN2 = N'staff_user' AND [PocketBaseId] COLLATE Latin1_General_100_BIN2 = N'pb-staff-2';", "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] COLLATE Latin1_General_100_BIN2 = N'STAFF_USER' AND [PocketBaseId] COLLATE Latin1_General_100_BIN2 = N'pb-staff-2';", "UPDATE [asap].[LegacyPocketBaseMapping] SET [EntityType] = N'staff_user' WHERE [EntityType] COLLATE Latin1_General_100_BIN2 = N'STAFF_USER' AND [PocketBaseId] COLLATE Latin1_General_100_BIN2 = N'pb-staff-2';", "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] COLLATE Latin1_General_100_BIN2 = N'staff_user' AND [PocketBaseId] COLLATE Latin1_General_100_BIN2 = N'pb-staff-2';"),
+                ("system URL configuration", "UPDATE [asap].[SystemSettings] SET [LeapBibUrlPattern] = N'https://drift.example/bib/{{bibId}}' WHERE [OrganizationId] = 1;", "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [LeapBibUrlPattern] = N'https://drift.example/bib/{{bibId}}';", "UPDATE [asap].[SystemSettings] SET [LeapBibUrlPattern] = N'https://leap.example/bib/{{bibId}}' WHERE [OrganizationId] = 1;", "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [LeapBibUrlPattern] = N'https://leap.example/bib/{{bibId}}';"),
+                ("workflow configuration", "UPDATE [asap].[WorkflowSettings] SET [SuggestionLimit] = 9 WHERE [OrganizationId] = 2;", "SELECT COUNT(*) FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 2 AND [SuggestionLimit] = 9;", "UPDATE [asap].[WorkflowSettings] SET [SuggestionLimit] = 8 WHERE [OrganizationId] = 2;", "SELECT COUNT(*) FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 2 AND [SuggestionLimit] = 8;"),
+                ("common creator source order", "UPDATE [asap].[CommonCreatorTerm] SET [SortOrder] = 11 WHERE [OrganizationId] = 1 AND [Value] = N'Butler, Octavia';", "SELECT COUNT(*) FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] = 1 AND [Value] = N'Butler, Octavia' AND [SortOrder] = 11;", "UPDATE [asap].[CommonCreatorTerm] SET [SortOrder] = 10 WHERE [OrganizationId] = 1 AND [Value] = N'Butler, Octavia';", "SELECT COUNT(*) FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] = 1 AND [Value] = N'Butler, Octavia' AND [SortOrder] = 10;"),
+                ("patron configuration", "UPDATE [asap].[PatronSettings] SET [PageTitle] = N'Drifted title' WHERE [OrganizationId] = 1;", "SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 1 AND [PageTitle] = N'Drifted title';", "UPDATE [asap].[PatronSettings] SET [PageTitle] = N'Suggest an Item' WHERE [OrganizationId] = 1;", "SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 1 AND [PageTitle] = N'Suggest an Item';"),
+                ("email template configuration", "UPDATE [asap].[EmailTemplate] SET [SubjectTemplate] = N'Drifted: {{title}}' WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted';", "SELECT COUNT(*) FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted' AND [SubjectTemplate] = N'Drifted: {{title}}';", "UPDATE [asap].[EmailTemplate] SET [SubjectTemplate] = N'Received: {{title}}' WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted';", "SELECT COUNT(*) FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted' AND [SubjectTemplate] = N'Received: {{title}}';"),
+                ("branding configuration", "UPDATE [asap].[Branding] SET [LogoAltText] = N'Drifted branding' WHERE [OrganizationId] = 1;", "SELECT COUNT(*) FROM [asap].[Branding] WHERE [OrganizationId] = 1 AND [LogoAltText] = N'Drifted branding';", "UPDATE [asap].[Branding] SET [LogoAltText] = N'Consortium logo' WHERE [OrganizationId] = 1;", "SELECT COUNT(*) FROM [asap].[Branding] WHERE [OrganizationId] = 1 AND [LogoAltText] = N'Consortium logo';"),
+                ("external-search provider override", "UPDATE o SET [Label] = N'Drifted catalog' FROM [asap].[ExternalSearchProviderOverride] o JOIN [asap].[ExternalSearchProvider] p ON p.[Id] = o.[ExternalSearchProviderId] WHERE o.[LibraryOrganizationId] = 2 AND p.[ProviderKey] = N'external_search_1';", "SELECT COUNT(*) FROM [asap].[ExternalSearchProviderOverride] o JOIN [asap].[ExternalSearchProvider] p ON p.[Id] = o.[ExternalSearchProviderId] WHERE o.[LibraryOrganizationId] = 2 AND p.[ProviderKey] = N'external_search_1' AND o.[Label] = N'Drifted catalog';", "UPDATE o SET [Label] = N'Local Catalog' FROM [asap].[ExternalSearchProviderOverride] o JOIN [asap].[ExternalSearchProvider] p ON p.[Id] = o.[ExternalSearchProviderId] WHERE o.[LibraryOrganizationId] = 2 AND p.[ProviderKey] = N'external_search_1';", "SELECT COUNT(*) FROM [asap].[ExternalSearchProviderOverride] o JOIN [asap].[ExternalSearchProvider] p ON p.[Id] = o.[ExternalSearchProviderId] WHERE o.[LibraryOrganizationId] = 2 AND p.[ProviderKey] = N'external_search_1' AND o.[Label] = N'Local Catalog';"),
+                ("publication option configuration", "UPDATE [asap].[PublicationOption] SET [Label] = N'Drifted preorder' WHERE [OrganizationId] = 2 AND [OptionKey] = N'local_preorder';", "SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 2 AND [OptionKey] = N'local_preorder' AND [Label] = N'Drifted preorder';", "UPDATE [asap].[PublicationOption] SET [Label] = N'Local preorder' WHERE [OrganizationId] = 2 AND [OptionKey] = N'local_preorder';", "SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 2 AND [OptionKey] = N'local_preorder' AND [Label] = N'Local preorder';"),
+                ("title request history", "UPDATE r SET [Notes] = N'Drifted request note.' FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[NewId] = r.[Id] WHERE m.[PocketBaseId] = N'pb-request-1';", "SELECT COUNT(*) FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[NewId] = r.[Id] WHERE m.[PocketBaseId] = N'pb-request-1' AND r.[Notes] = N'Drifted request note.';", "UPDATE r SET [Notes] = N'Source request note.' FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[NewId] = r.[Id] WHERE m.[PocketBaseId] = N'pb-request-1';", "SELECT COUNT(*) FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[NewId] = r.[Id] WHERE m.[PocketBaseId] = N'pb-request-1' AND r.[Notes] = N'Source request note.';"),
+                ("title request claim history", "UPDATE r SET [ClaimedByDisplayName] = N'Drifted claimant' FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[NewId] = r.[Id] WHERE m.[PocketBaseId] = N'pb-request-1';", "SELECT COUNT(*) FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[NewId] = r.[Id] WHERE m.[PocketBaseId] = N'pb-request-1' AND r.[ClaimedByDisplayName] = N'Drifted claimant';", "UPDATE r SET [ClaimedByDisplayName] = N'Library Selector' FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[NewId] = r.[Id] WHERE m.[PocketBaseId] = N'pb-request-1';", "SELECT COUNT(*) FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[NewId] = r.[Id] WHERE m.[PocketBaseId] = N'pb-request-1' AND r.[ClaimedByDisplayName] = N'Library Selector';"),
+                ("title-request event history", "UPDATE e SET [Message] = N'Drifted event history.' FROM [asap].[TitleRequestEvent] e JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request_event' AND m.[NewId] = e.[Id] WHERE m.[PocketBaseId] = N'event-placed';", "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request_event' AND m.[NewId] = e.[Id] WHERE m.[PocketBaseId] = N'event-placed' AND e.[Message] = N'Drifted event history.';", "UPDATE e SET [Message] = N'Existing hold adopted.' FROM [asap].[TitleRequestEvent] e JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request_event' AND m.[NewId] = e.[Id] WHERE m.[PocketBaseId] = N'event-placed';", "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request_event' AND m.[NewId] = e.[Id] WHERE m.[PocketBaseId] = N'event-placed' AND e.[Message] = N'Existing hold adopted.'"),
+                ("email delivery history", "UPDATE e SET [MetadataJson] = JSON_MODIFY(e.[MetadataJson], '$.recipient', N'drift@example.org') FROM [asap].[EmailDeliveryEvent] e JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'email_delivery_event' AND m.[NewId] = e.[Id] WHERE m.[PocketBaseId] = N'mail-history-1';", "SELECT COUNT(*) FROM [asap].[EmailDeliveryEvent] e JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'email_delivery_event' AND m.[NewId] = e.[Id] WHERE m.[PocketBaseId] = N'mail-history-1' AND JSON_VALUE(e.[MetadataJson], '$.recipient') = N'drift@example.org';", "UPDATE e SET [MetadataJson] = JSON_MODIFY(e.[MetadataJson], '$.recipient', N'patron@example.org') FROM [asap].[EmailDeliveryEvent] e JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'email_delivery_event' AND m.[NewId] = e.[Id] WHERE m.[PocketBaseId] = N'mail-history-1';", "SELECT COUNT(*) FROM [asap].[EmailDeliveryEvent] e JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'email_delivery_event' AND m.[NewId] = e.[Id] WHERE m.[PocketBaseId] = N'mail-history-1' AND JSON_VALUE(e.[MetadataJson], '$.recipient') = N'patron@example.org';")
+            };
+            foreach (var drift in configurationAndHistoryDriftCases)
+            {
+                await AssertFingerprintRefreshedSourceOwnedDriftRejectedAsync(
+                    connection, target, package, report, connectionEnvironmentName,
+                    drift.Name, drift.DriftSql, drift.DriftAssertionSql, 1,
+                    drift.RestoreSql, drift.RestoredAssertionSql, 1);
+            }
 
             await using (var requiredSelectDrift = connection.CreateCommand())
             {
                 requiredSelectDrift.CommandText =
-                    "UPDATE r SET [Mode] = N'required' FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience-empty' AND m.[Code] = N'book';";
+                    "UPDATE r SET [Mode] = N'required' FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience_empty' AND m.[Code] = N'book';";
                 Assert.AreEqual(1, await requiredSelectDrift.ExecuteNonQueryAsync());
             }
             RefreshReportFingerprint(report, target);
+            var requiredSelectDriftFingerprint = ComputeTargetFingerprintForTest(target);
+            var requiredSelectDriftReportBytes = await File.ReadAllBytesAsync(report);
             using (var normalizationDriftError = new StringWriter())
             {
                 Assert.AreEqual(1, RunReconcile(package, report, connectionEnvironmentName, normalizationDriftError));
-                StringAssert.Contains(normalizationDriftError.ToString(), "independently derived source normalization");
+                StringAssert.Contains(normalizationDriftError.ToString(), "Imported custom field format mode and label override differs from the immutable source package.");
             }
+            Assert.AreEqual(requiredSelectDriftFingerprint, ComputeTargetFingerprintForTest(target),
+                "Reconciliation must not repair source-inconsistent custom-field rules.");
+            CollectionAssert.AreEqual(requiredSelectDriftReportBytes, await File.ReadAllBytesAsync(report),
+                "Failed reconciliation must not rewrite the refreshed report.");
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience_empty' AND m.[Code] = N'book' AND r.[Mode] = N'required';"),
+                "The rejected required-select drift remains present until explicitly restored.");
             await using (var restoreRule = connection.CreateCommand())
             {
                 restoreRule.CommandText =
-                    "UPDATE r SET [Mode] = N'optional' FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience-empty' AND m.[Code] = N'book';";
+                    "UPDATE r SET [Mode] = N'optional' FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience_empty' AND m.[Code] = N'book';";
                 Assert.AreEqual(1, await restoreRule.ExecuteNonQueryAsync());
             }
             RefreshReportFingerprint(report, target);
@@ -1807,9 +2069,13 @@ public sealed class MigrationCliTests
 
             await using (var wrongAuthority = connection.CreateCommand())
             {
-                wrongAuthority.CommandText = "UPDATE [asap].[TitleRequest] SET [BibIdStaffVerified] = 1 WHERE [BibId] = 9001;";
-                await wrongAuthority.ExecuteNonQueryAsync();
+                wrongAuthority.CommandText =
+                    "UPDATE r SET [BibIdStaffVerified] = 1 FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[PocketBaseId] = N'pb-request-1' AND m.[NewId] = r.[Id] WHERE r.[BibId] = 9001;";
+                Assert.AreEqual(1, await wrongAuthority.ExecuteNonQueryAsync());
             }
+            RefreshReportFingerprint(report, target);
+            var wrongAuthorityFingerprint = ComputeTargetFingerprintForTest(target);
+            var wrongAuthorityReportBytes = await File.ReadAllBytesAsync(report);
             using var authorityDriftError = new StringWriter();
             Assert.AreEqual(1, MigrationCli.Run(
                 [
@@ -1821,6 +2087,23 @@ public sealed class MigrationCliTests
                 TextWriter.Null,
                 authorityDriftError));
             StringAssert.Contains(authorityDriftError.ToString(), "BIB authority fields differ from the immutable source classification inputs.");
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[PocketBaseId] = N'pb-request-1' AND m.[NewId] = r.[Id] WHERE r.[BibId] = 9001 AND r.[BibIdStaffVerified] = 1;"),
+                "Rejected BIB authority drift remains present until explicitly restored.");
+            Assert.AreEqual(wrongAuthorityFingerprint, ComputeTargetFingerprintForTest(target),
+                "Reconciliation must not repair source-inconsistent BIB authority.");
+            CollectionAssert.AreEqual(wrongAuthorityReportBytes, await File.ReadAllBytesAsync(report),
+                "Failed BIB-authority reconciliation must not rewrite the refreshed report.");
+            await using (var restoreAuthority = connection.CreateCommand())
+            {
+                restoreAuthority.CommandText =
+                    "UPDATE r SET [BibIdStaffVerified] = 0 FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[PocketBaseId] = N'pb-request-1' AND m.[NewId] = r.[Id] WHERE r.[BibId] = 9001;";
+                Assert.AreEqual(1, await restoreAuthority.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(report, target);
+            using var authorityRestored = new StringWriter();
+            Assert.AreEqual(0, RunReconcile(package, report, connectionEnvironmentName, authorityRestored), authorityRestored.ToString());
         }
         finally
         {
@@ -2386,7 +2669,7 @@ public sealed class MigrationCliTests
                 "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'eaudiobook' AND [IsEnabled] = 1;",
                 "UPDATE [asap].[MaterialFormat] SET [IsEnabled] = 0 WHERE [OwnerOrganizationId] = 1 AND [Code] = N'eaudiobook';",
                 "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'eaudiobook' AND [IsEnabled] = 0;",
-                "availability differs");
+                "Target system material format availability or empty message differs from the immutable source package and pinned target seed.");
 
             await using (var corrupt = connection.CreateCommand())
             {
@@ -2542,7 +2825,7 @@ public sealed class MigrationCliTests
                         Assert.AreEqual(1, RunReconcile(package, reportPath, environmentName, customFieldRuleReconcileError));
                         StringAssert.Contains(
                             customFieldRuleReconcileError.ToString(),
-                            "An imported custom-field rule differs from the independently derived source normalization.");
+                            "Imported custom field format mode and label override differs from the immutable source package.");
                     }
                     Assert.AreEqual(1, await ScalarAsync(
                         connection,
@@ -3036,7 +3319,7 @@ public sealed class MigrationCliTests
             using (var error = new StringWriter())
             {
                 Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
-                StringAssert.Contains(error.ToString(), "Target SQL state changed after the successful import reconciliation.");
+                StringAssert.Contains(error.ToString(), "Imported Polaris source fields, protected-secret presence and imported timestamp differs from the immutable source package.");
             }
             Assert.AreEqual(changedCiphertextFingerprint, ComputeTargetFingerprintForTest(target), "Report recovery must not rewrite protected values.");
             Assert.IsFalse(File.ReadAllText(pendingPath).Contains(originalCiphertext, StringComparison.Ordinal));
@@ -3141,7 +3424,7 @@ public sealed class MigrationCliTests
             using (var error = new StringWriter())
             {
                 Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
-                StringAssert.Contains(error.ToString(), "Target StaffUser population contains rows outside the source mapping and bootstrap transformation.");
+                StringAssert.Contains(error.ToString(), "Imported exact staff population including only the authorized bootstrap row differs from the immutable source package.");
             }
             Assert.AreEqual(extraStaffFingerprint, ComputeTargetFingerprintForTest(target), "Recovery must not remove an unmapped staff row.");
             Assert.IsTrue(File.Exists(pendingPath));
@@ -3170,7 +3453,7 @@ public sealed class MigrationCliTests
             using (var error = new StringWriter())
             {
                 Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
-                StringAssert.Contains(error.ToString(), "Mapped StaffUser identity or authorization differs from the immutable source package.");
+                StringAssert.Contains(error.ToString(), "Imported staff source fields and pinned authentication-email transform differs from the immutable source package.");
             }
             Assert.AreEqual(inactiveStaffFingerprint, ComputeTargetFingerprintForTest(target), "Recovery must not reactivate a source staff row.");
             Assert.IsTrue(File.Exists(pendingPath));
@@ -3193,7 +3476,7 @@ public sealed class MigrationCliTests
             using (var error = new StringWriter())
             {
                 Assert.AreEqual(1, RunRecoverReport(package, reportPath, rolledBackEnvironmentName, error));
-                StringAssert.Contains(error.ToString(), "No target mapping exists for source organization");
+                StringAssert.Contains(error.ToString(), "Target organization name, abbreviation, native type, parent, or synchronization timestamp differs from the source snapshot.");
             }
             Assert.AreEqual(rolledBackFingerprint, ComputeTargetFingerprintForTest(rolledBackTarget), "Recovery must not populate a rolled-back target.");
             await AssertFreshImportTargetAsync(rolledBackTarget);
@@ -3241,7 +3524,7 @@ public sealed class MigrationCliTests
             using (var error = new StringWriter())
             {
                 Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
-                StringAssert.Contains(error.ToString(), "No target mapping exists for source organization");
+                StringAssert.Contains(error.ToString(), "Organization source mapping keys or native identities differ from the immutable source package.");
             }
             Assert.AreEqual(partialFingerprint, ComputeTargetFingerprintForTest(target), "Failed recovery must not repair a partial target.");
             await using (var connection = new SqlConnection(target))
@@ -3278,8 +3561,84 @@ public sealed class MigrationCliTests
                 await remove.ExecuteNonQueryAsync();
             }
 
-            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
             Directory.Delete(reportPath);
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var drift = connection.CreateCommand();
+                drift.CommandText = "UPDATE [asap].[PatronCustomField] SET [Label] = N'Drifted recovery label' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';";
+                Assert.AreEqual(1, await drift.ExecuteNonQueryAsync());
+            }
+            var customFieldDriftFingerprint = ComputeTargetFingerprintForTest(target);
+            var customFieldDriftPending = JsonNode.Parse(validPending)!.AsObject();
+            customFieldDriftPending["targetFingerprintSha256"] = customFieldDriftFingerprint;
+            File.WriteAllText(pendingPath, customFieldDriftPending.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            var customFieldDriftPendingContents = await File.ReadAllTextAsync(pendingPath);
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "reconciliation_failed", "Recovery must reject source-configuration drift even when the pending report fingerprint is refreshed.");
+            }
+            Assert.AreEqual(customFieldDriftFingerprint, ComputeTargetFingerprintForTest(target), "Failed report recovery must not repair custom-field drift.");
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience' AND [Label] = N'Drifted recovery label';"));
+            }
+            Assert.IsTrue(File.Exists(pendingPath));
+            Assert.IsFalse(File.Exists(reportPath));
+            Assert.AreEqual(customFieldDriftPendingContents, await File.ReadAllTextAsync(pendingPath), "Failed recovery must not rewrite or promote the pending report.");
+            using (var pendingState = JsonDocument.Parse(await File.ReadAllTextAsync(pendingPath)))
+            using (var originalPendingState = JsonDocument.Parse(validPending))
+            {
+                Assert.AreEqual(
+                    originalPendingState.RootElement.GetProperty("reportState").GetString(),
+                    pendingState.RootElement.GetProperty("reportState").GetString());
+            }
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var restore = connection.CreateCommand();
+                restore.CommandText = "UPDATE [asap].[PatronCustomField] SET [Label] = N'Audience' WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'audience';";
+                Assert.AreEqual(1, await restore.ExecuteNonQueryAsync());
+            }
+
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+
+            var noTokenFingerprint = ComputeTargetFingerprintForTest(target);
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var addTokenPresence = connection.CreateCommand();
+                addTokenPresence.CommandText = "UPDATE [asap].[EmailSettings] SET [ProtectedServerToken] = N'migration-test-ciphertext' WHERE [OrganizationId] = 1 AND [ProtectedServerToken] IS NULL;";
+                Assert.AreEqual(1, await addTokenPresence.ExecuteNonQueryAsync(), "The zero-SMTP fixture must begin with no operator-provisioned token.");
+                Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1 AND [ProtectedServerToken] = N'migration-test-ciphertext';"));
+            }
+            var tokenPresenceDriftFingerprint = ComputeTargetFingerprintForTest(target);
+            var tokenPresenceDriftPending = JsonNode.Parse(validPending)!.AsObject();
+            tokenPresenceDriftPending["targetFingerprintSha256"] = tokenPresenceDriftFingerprint;
+            File.WriteAllText(pendingPath, tokenPresenceDriftPending.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            var tokenPresenceDriftPendingContents = await File.ReadAllTextAsync(pendingPath);
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error), "Recovery must reject a target-only token when the report records no token and the source has no SMTP row.");
+                StringAssert.Contains(error.ToString(), "reconciliation_failed");
+            }
+            Assert.AreEqual(tokenPresenceDriftFingerprint, ComputeTargetFingerprintForTest(target), "Failed recovery must not repair protected-token presence drift.");
+            Assert.IsTrue(File.Exists(pendingPath));
+            Assert.IsFalse(File.Exists(reportPath));
+            Assert.AreEqual(tokenPresenceDriftPendingContents, await File.ReadAllTextAsync(pendingPath), "Failed recovery must preserve the pending report bytes.");
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var restoreTokenPresence = connection.CreateCommand();
+                restoreTokenPresence.CommandText = "UPDATE [asap].[EmailSettings] SET [ProtectedServerToken] = NULL WHERE [OrganizationId] = 1 AND [ProtectedServerToken] = N'migration-test-ciphertext';";
+                Assert.AreEqual(1, await restoreTokenPresence.ExecuteNonQueryAsync());
+                Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1 AND [ProtectedServerToken] IS NOT NULL;"));
+            }
+            Assert.AreEqual(noTokenFingerprint, ComputeTargetFingerprintForTest(target), "Restoring the source-absent token state must restore the original SQL fingerprint.");
+
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
 
             var fingerprintBefore = ComputeTargetFingerprintForTest(target);
             using (var error = new StringWriter())
@@ -4193,6 +4552,7 @@ public sealed class MigrationCliTests
             DeployDacpac(master, databaseName);
             Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
             var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+            var initialTargetFingerprint = ComputeTargetFingerprintForTest(target);
 
             foreach (var origin in new[]
                      {
@@ -4200,7 +4560,17 @@ public sealed class MigrationCliTests
                          "https://user@example.org",
                          "https://example.org/path",
                          "https://example.org?query=1",
-                         "http://*.example.org"
+                         "http://*.example.org",
+                         "https://example.org:abc",
+                         "https://example.org:99999",
+                         "https://example.org:00099999",
+                         "https://example.org:999999999999999999999",
+                         "https://*.example.org:99999",
+                         "https://example.org:",
+                         "https://:443",
+                         "https://example.org\\path",
+                         "https://example.org[broken",
+                         "https://[2001:db8::zzz]"
                      })
             {
                 var packageRoot = Path.Combine(root, Guid.NewGuid().ToString("N"));
@@ -4215,6 +4585,7 @@ public sealed class MigrationCliTests
                     );
                     INSERT INTO [system_settings] VALUES ('settings0000001', '{{origin}}');
                     """);
+                var reportPath = Path.Combine(packageRoot, "report.json");
                 using var error = new StringWriter();
 
                 var exitCode = MigrationCli.Run(
@@ -4222,7 +4593,7 @@ public sealed class MigrationCliTests
                         "import", "--package", package,
                         "--connection-string-env", connectionEnvironmentName,
                         "--allowed-tenant-ids", tenantId.ToString(),
-                        "--report", Path.Combine(packageRoot, "report.json"),
+                        "--report", reportPath,
                         "--external-config", ExternalConfigurationPath(package)
                     ],
                     TextWriter.Null,
@@ -4230,10 +4601,696 @@ public sealed class MigrationCliTests
 
                 Assert.AreEqual(1, exitCode, origin);
                 StringAssert.Contains(error.ToString(), "patron_embed_origin_invalid", origin);
+                Assert.IsFalse(File.Exists(reportPath), $"An invalid origin must not publish a report: {origin}");
+                Assert.IsFalse(File.Exists(reportPath + ".pending"), $"An invalid origin must not leave a pending report: {origin}");
                 await using var connection = new SqlConnection(target);
                 await connection.OpenAsync();
                 Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] = 2;"), origin);
                 Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[PatronEmbedAllowedOrigin];"), origin);
+                Assert.AreEqual(initialTargetFingerprint, ComputeTargetFingerprintForTest(target), $"An invalid origin must leave SQL unchanged: {origin}");
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ImportRejectsCrossScopeTemplateReferencesBeforeTargetWrites()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-template-scope-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationTemplateScope_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var connectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        try
+        {
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
+            var initialFingerprint = ComputeTargetFingerprintForTest(target);
+            var invalidPackages = new[]
+            {
+                (
+                    Name: "library-template-lineage",
+                    ErrorCode: "email_template_source_scope_invalid",
+                    Sql: """
+                        INSERT INTO [polaris_organizations] VALUES ('pb-org-3', '3', 'Other Library', 'OTHER', 1, 2, 1);
+                        CREATE TABLE [email_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [templateKey] TEXT NOT NULL, [name] TEXT, [subject] TEXT, [body] TEXT,
+                            [enabled] INTEGER NOT NULL, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [email_templates] VALUES
+                            ('system-template', 'system', NULL, 'shared-template', 'System', 'System subject', 'System body', 1, NULL),
+                            ('foreign-template', 'library', 'pb-org-3', 'shared-template', 'Foreign', 'Foreign subject', 'Foreign body', 1, NULL),
+                            ('library-child', 'library', 'pb-org-2', 'shared-template', 'Child', 'Child subject', 'Child body', 1, 'foreign-template');
+                        """
+                ),
+                (
+                    Name: "ordinary-template-parent-key-mismatch",
+                    ErrorCode: "email_template_source_key_invalid",
+                    Sql: """
+                        CREATE TABLE [email_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [templateKey] TEXT NOT NULL, [name] TEXT, [subject] TEXT, [body] TEXT,
+                            [enabled] INTEGER NOT NULL, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [email_templates] VALUES
+                            ('system-parent', 'system', NULL, 'system-key', 'Parent', 'Parent subject', 'Parent body', 1, NULL),
+                            ('library-child', 'library', 'pb-org-2', 'different-key', 'Child', 'Child subject', 'Child body', 1, 'system-parent');
+                        """
+                ),
+                (
+                    Name: "rejection-template-parent-kind-mismatch",
+                    ErrorCode: "email_template_source_kind_invalid",
+                    Sql: """
+                        CREATE TABLE [email_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [templateKey] TEXT NOT NULL, [name] TEXT, [subject] TEXT, [body] TEXT,
+                            [enabled] INTEGER NOT NULL, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [email_templates] VALUES
+                            ('system-ordinary', 'system', NULL, 'system-ordinary-key', 'Ordinary', 'Subject', 'Body', 1, NULL);
+                        CREATE TABLE [rejection_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [name] TEXT, [subject] TEXT, [body] TEXT, [enabled] INTEGER NOT NULL,
+                            [sortOrder] INTEGER, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [rejection_templates] VALUES
+                            ('library-rejection', 'library', 'pb-org-2', 'Local rejection', 'Local subject', 'Local body', 1, 10, 'system-ordinary');
+                        """
+                ),
+                (
+                    Name: "system-ordinary-template-source-edge",
+                    ErrorCode: "email_template_source_scope_invalid",
+                    Sql: """
+                        CREATE TABLE [email_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [templateKey] TEXT NOT NULL, [name] TEXT, [subject] TEXT, [body] TEXT,
+                            [enabled] INTEGER NOT NULL, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [email_templates] VALUES
+                            ('system-child', 'system', NULL, 'same-key', 'System child', 'Subject', 'Body', 1, 'other-system-template');
+                        """
+                ),
+                (
+                    Name: "system-rejection-template-source-edge",
+                    ErrorCode: "email_template_source_scope_invalid",
+                    Sql: """
+                        CREATE TABLE [rejection_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [name] TEXT, [subject] TEXT, [body] TEXT, [enabled] INTEGER NOT NULL,
+                            [sortOrder] INTEGER, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [rejection_templates] VALUES
+                            ('system-rejection', 'system', NULL, 'Rejection', 'Subject', 'Body', 1, 10, 'other-template');
+                        """
+                ),
+                (
+                    Name: "workflow-selects-ordinary-email-template",
+                    ErrorCode: "workflow_template_kind_invalid",
+                    Sql: """
+                        CREATE TABLE [email_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [templateKey] TEXT NOT NULL, [name] TEXT, [subject] TEXT, [body] TEXT,
+                            [enabled] INTEGER NOT NULL, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [email_templates] VALUES
+                            ('ordinary-rejection-shaped', 'system', NULL, 'ordinary-template', 'Ordinary', 'Subject', 'Body', 1, NULL);
+                        CREATE TABLE [workflow_settings]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL,
+                            [libraryOrganization] TEXT, [outstandingTimeoutRejectionTemplate] TEXT
+                        );
+                        INSERT INTO [workflow_settings] VALUES
+                            ('system-workflow', 'system', NULL, 'ordinary-rejection-shaped');
+                        """
+                ),
+                (
+                    Name: "ordinary-template-reserved-rejection-prefix-without-collision",
+                    ErrorCode: "email_template_target_kind_invalid",
+                    Sql: """
+                        CREATE TABLE [email_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [templateKey] TEXT NOT NULL, [name] TEXT, [subject] TEXT, [body] TEXT,
+                            [enabled] INTEGER NOT NULL, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [email_templates] VALUES
+                            ('ordinary-reserved-kind', 'system', NULL, 'rejection:ordinary-only', 'Ordinary', 'Subject', 'Body', 1, NULL);
+                        """
+                ),
+                (
+                    Name: "foreign-workflow-rejection-template",
+                    ErrorCode: "workflow_template_scope_invalid",
+                    Sql: """
+                        INSERT INTO [polaris_organizations] VALUES ('pb-org-3', '3', 'Other Library', 'OTHER', 1, 2, 1);
+                        CREATE TABLE [rejection_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [name] TEXT, [subject] TEXT, [body] TEXT, [enabled] INTEGER NOT NULL,
+                            [sortOrder] INTEGER, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [rejection_templates] VALUES
+                            ('foreign-rejection', 'library', 'pb-org-3', 'Foreign rejection', 'Rejected', '<p>Rejected</p>', 1, 10, NULL);
+                        CREATE TABLE [workflow_settings]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL,
+                            [libraryOrganization] TEXT, [outstandingTimeoutRejectionTemplate] TEXT
+                        );
+                        INSERT INTO [workflow_settings] VALUES
+                            ('library-workflow', 'library', 'pb-org-2', 'foreign-rejection');
+                        """
+                ),
+                (
+                    Name: "system-email-template-seed-case-collision",
+                    ErrorCode: "email_template_seed_identity_collision",
+                    Sql: """
+                        CREATE TABLE [email_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [templateKey] TEXT NOT NULL, [name] TEXT, [subject] TEXT, [body] TEXT,
+                            [enabled] INTEGER NOT NULL, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [email_templates] VALUES
+                            ('system-seed-case', 'system', NULL, 'Suggestion_Submitted', 'Seed casing', 'Subject', 'Body', 1, NULL);
+                        """
+                ),
+                (
+                    Name: "library-email-template-seed-case-collision",
+                    ErrorCode: "email_template_seed_identity_collision",
+                    Sql: """
+                        CREATE TABLE [email_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [templateKey] TEXT NOT NULL, [name] TEXT, [subject] TEXT, [body] TEXT,
+                            [enabled] INTEGER NOT NULL, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [email_templates] VALUES
+                            ('library-seed-case', 'library', 'pb-org-2', 'Suggestion_Submitted', 'Seed casing', 'Subject', 'Body', 1, NULL);
+                        """
+                ),
+                (
+                    Name: "implicit-library-template-case-collision",
+                    ErrorCode: "email_template_sql_identity_collision",
+                    Sql: """
+                        CREATE TABLE [email_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [templateKey] TEXT NOT NULL, [name] TEXT, [subject] TEXT, [body] TEXT,
+                            [enabled] INTEGER NOT NULL, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [email_templates] VALUES
+                            ('system-case', 'system', NULL, 'Shared_Case_Key', 'System', 'Subject', 'Body', 1, NULL),
+                            ('library-case', 'library', 'pb-org-2', 'shared_case_key', 'Library', 'Subject', 'Body', 1, NULL);
+                        """
+                ),
+                (
+                    Name: "ordinary-rejection-target-key-collision",
+                    ErrorCode: "email_template_target_kind_invalid",
+                    Sql: """
+                        CREATE TABLE [email_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [templateKey] TEXT NOT NULL, [name] TEXT, [subject] TEXT, [body] TEXT,
+                            [enabled] INTEGER NOT NULL, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [email_templates] VALUES
+                            ('system-ordinary', 'system', NULL, 'rejection:system-rejection', 'Ordinary', 'Subject', 'Body', 1, NULL);
+                        CREATE TABLE [rejection_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [name] TEXT, [subject] TEXT, [body] TEXT, [enabled] INTEGER NOT NULL,
+                            [sortOrder] INTEGER, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [rejection_templates] VALUES
+                            ('system-rejection', 'system', NULL, 'Rejection', 'Rejected', 'Body', 1, 10, NULL);
+                        """
+                ),
+                (
+                    Name: "rejection-target-key-case-collision",
+                    ErrorCode: "email_template_sql_identity_collision",
+                    Sql: """
+                        CREATE TABLE [rejection_templates]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT,
+                            [name] TEXT, [subject] TEXT, [body] TEXT, [enabled] INTEGER NOT NULL,
+                            [sortOrder] INTEGER, [sourceTemplateId] TEXT
+                        );
+                        INSERT INTO [rejection_templates] VALUES
+                            ('System-Rejection', 'system', NULL, 'System one', 'One', 'Body', 1, 10, NULL),
+                            ('system-rejection', 'system', NULL, 'System two', 'Two', 'Body', 1, 20, NULL),
+                            ('library-rejection-one', 'library', 'pb-org-2', 'Library one', NULL, NULL, 1, 30, 'System-Rejection'),
+                            ('library-rejection-two', 'library', 'pb-org-2', 'Library two', NULL, NULL, 1, 40, 'system-rejection');
+                        """
+                )
+            };
+
+            foreach (var testCase in invalidPackages)
+            {
+                var packageRoot = Path.Combine(root, testCase.Name);
+                var package = CreateMinimalPackage(packageRoot, testCase.Sql);
+                var reportPath = Path.Combine(packageRoot, "report.json");
+                using var error = new StringWriter();
+
+                Assert.AreEqual(1, RunImport(package, reportPath, connectionEnvironmentName, tenantId, error), testCase.Name);
+                StringAssert.Contains(error.ToString(), testCase.ErrorCode, testCase.Name);
+                Assert.IsFalse(File.Exists(reportPath), $"An invalid source relationship must not publish a report: {testCase.Name}");
+                Assert.IsFalse(File.Exists(reportPath + ".pending"), $"An invalid source relationship must not leave a pending report: {testCase.Name}");
+                Assert.AreEqual(initialFingerprint, ComputeTargetFingerprintForTest(target), $"An invalid source relationship must leave SQL unchanged: {testCase.Name}");
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task ImportRejectsWorkflowTagIdentitiesLostByTargetSqlCollationBeforeWrites()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-workflow-tag-collation-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationTagCollation_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var connectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        try
+        {
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
+            var initialFingerprint = ComputeTargetFingerprintForTest(target);
+            var invalidSources = new[]
+            {
+                (
+                    Name: "seed-case-collision",
+                    ErrorCode: "workflow_tag_seed_identity_collision",
+                    Sql: """
+                        CREATE TABLE [workflow_tags]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [code] TEXT NOT NULL,
+                            [label] TEXT NOT NULL, [description] TEXT
+                        );
+                        INSERT INTO [workflow_tags] VALUES
+                            ('tag-seed-case', 'DUPLICATE_SUGGESTION', 'Duplicate suggestion', 'Case-only seed collision');
+                        """
+                ),
+                (
+                    Name: "source-case-collision",
+                    ErrorCode: "workflow_tag_sql_identity_collision",
+                    Sql: """
+                        CREATE TABLE [workflow_tags]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [code] TEXT NOT NULL,
+                            [label] TEXT NOT NULL, [description] TEXT
+                        );
+                        INSERT INTO [workflow_tags] VALUES
+                            ('tag-mixed-case', 'Custom_Tag', 'Custom tag', NULL),
+                            ('tag-lower-case', 'custom_tag', 'Other custom tag', NULL);
+                        """
+                )
+            };
+
+            foreach (var testCase in invalidSources)
+            {
+                var packageRoot = Path.Combine(root, testCase.Name);
+                var package = CreateMinimalPackage(packageRoot, testCase.Sql);
+                var reportPath = Path.Combine(packageRoot, "report.json");
+                using var error = new StringWriter();
+
+                Assert.AreEqual(1, RunImport(package, reportPath, connectionEnvironmentName, tenantId, error), testCase.Name);
+                StringAssert.Contains(error.ToString(), testCase.ErrorCode, testCase.Name);
+                Assert.IsFalse(File.Exists(reportPath), $"Unsupported source tag identity must not publish a report: {testCase.Name}");
+                Assert.IsFalse(File.Exists(reportPath + ".pending"), $"Unsupported source tag identity must not leave a pending report: {testCase.Name}");
+                Assert.AreEqual(initialFingerprint, ComputeTargetFingerprintForTest(target), $"Unsupported source tag identity must leave SQL unchanged: {testCase.Name}");
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task ImportUsesPinnedPublicationFallbacksAndSystemScopeAliases()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-publication-fallbacks-{Guid.NewGuid():N}");
+        var newlineDatabaseName = $"AsapMigrationPublicationNewline_{Guid.NewGuid():N}";
+        var customDatabaseName = $"AsapMigrationPublicationCustom_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var newlineTarget = new SqlConnectionStringBuilder(master) { InitialCatalog = newlineDatabaseName }.ConnectionString;
+        var customTarget = new SqlConnectionStringBuilder(master) { InitialCatalog = customDatabaseName }.ConnectionString;
+        var newlineEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var customEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var newlinePackage = CreateMinimalPackage(
+                Path.Combine(root, "numeric-newline"),
+                """
+                CREATE TABLE [ui_settings]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY,
+                    [scope] TEXT NOT NULL,
+                    [libraryOrganization] TEXT,
+                    [publicationOptions] TEXT
+                );
+                INSERT INTO [ui_settings] VALUES
+                    ('z-system', 'system', NULL, '1' || char(10) || '2' || char(10) || '3' || char(10) || '4');
+                CREATE TABLE [patron_settings_overrides]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY,
+                    [orgId] TEXT NOT NULL,
+                    [publicationOptions] TEXT
+                );
+                INSERT INTO [patron_settings_overrides] VALUES
+                    ('a-library', '2', '["1","2","3","4"]');
+                """);
+            var customPackage = CreateMinimalPackage(
+                Path.Combine(root, "capitalized-system"),
+                """
+                CREATE TABLE [ui_settings]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY,
+                    [scope] TEXT NOT NULL,
+                    [libraryOrganization] TEXT,
+                    [publicationOptions] TEXT
+                );
+                INSERT INTO [ui_settings] VALUES
+                    ('z-system', 'System', NULL,
+                     char(65279) || '[{"label":"","name":"\uFEFFSystem One\uFEFF","enabled":true,"sortOrder":20},{"label":"System Two","enabled":true,"sortOrder":10}]' || char(65279));
+                CREATE TABLE [patron_settings_overrides]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY,
+                    [orgId] TEXT NOT NULL,
+                    [publicationOptions] TEXT
+                );
+                INSERT INTO [patron_settings_overrides] VALUES
+                    ('a-library', '2', char(65279) || '1' || char(65279) || char(10) || char(65279) || '2' || char(65279) || char(10) || char(65279) || '3' || char(65279) || char(10) || char(65279) || '4' || char(65279));
+                """);
+
+            DeployDacpac(master, newlineDatabaseName);
+            DeployDacpac(master, customDatabaseName);
+            Environment.SetEnvironmentVariable(newlineEnvironmentName, newlineTarget);
+            Environment.SetEnvironmentVariable(customEnvironmentName, customTarget);
+            var newlineReport = Path.Combine(root, "numeric-newline-report.json");
+            var customReport = Path.Combine(root, "capitalized-system-report.json");
+            using (var importError = new StringWriter())
+            {
+                Assert.AreEqual(0, RunImport(newlinePackage, newlineReport, newlineEnvironmentName, tenantId, importError), importError.ToString());
+            }
+            using (var reportDocument = JsonDocument.Parse(await File.ReadAllTextAsync(newlineReport)))
+            {
+                Assert.AreEqual(0, reportDocument.RootElement.GetProperty("importedCounts").GetProperty("smtp_settings").GetInt32());
+                var tokenState = reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
+                    item.GetProperty("entity").GetString() == "email_provider_token");
+                Assert.AreEqual(1, tokenState.GetProperty("organizationId").GetInt32());
+                Assert.IsFalse(tokenState.GetProperty("postmarkTokenProvisioned").GetBoolean());
+            }
+            using (var importError = new StringWriter())
+            {
+                Assert.AreEqual(0, RunImport(customPackage, customReport, customEnvironmentName, tenantId, importError), importError.ToString());
+            }
+
+            await using (var connection = new SqlConnection(newlineTarget))
+            {
+                await connection.OpenAsync();
+                Assert.AreEqual(3, await ScalarAsync(connection,
+                    "SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 1 AND (([OptionKey] = N'already_published' AND [Label] = N'Already published' AND [SortOrder] = 10) OR ([OptionKey] = N'coming_soon' AND [Label] = N'Coming soon' AND [SortOrder] = 20) OR ([OptionKey] = N'published_a_while_back' AND [Label] = N'Published a while back' AND [SortOrder] = 30));"));
+                Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = 2;"));
+                Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 2;"));
+            }
+            await using (var connection = new SqlConnection(customTarget))
+            {
+                await connection.OpenAsync();
+                Assert.AreEqual(2, await ScalarAsync(connection,
+                    "SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 1 AND (([OptionKey] COLLATE Latin1_General_100_BIN2 = N'system-one' COLLATE Latin1_General_100_BIN2 AND [Label] = N'System One' AND [SortOrder] = 20) OR ([OptionKey] COLLATE Latin1_General_100_BIN2 = N'system-two' COLLATE Latin1_General_100_BIN2 AND [Label] = N'System Two' AND [SortOrder] = 10));"));
+                Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = 2;"));
+                Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 2;"));
+                foreach (var (package, report, environmentName) in new[]
+                         {
+                             (newlinePackage, newlineReport, newlineEnvironmentName),
+                             (customPackage, customReport, customEnvironmentName)
+                         })
+                {
+                    using var reconcileError = new StringWriter();
+                    Assert.AreEqual(0, RunReconcile(package, report, environmentName, reconcileError), reconcileError.ToString());
+                }
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(newlineEnvironmentName, null);
+            Environment.SetEnvironmentVariable(customEnvironmentName, null);
+            await DropDatabaseAsync(master, newlineDatabaseName);
+            await DropDatabaseAsync(master, customDatabaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task ImportRejectsUnrepresentableSourceConfigurationValuesBeforeWrites()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-publication-alias-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationPublicationAlias_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var connectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        try
+        {
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
+            var initialFingerprint = ComputeTargetFingerprintForTest(target);
+            var invalidSources = new[]
+            {
+                (
+                    Name: "system-selected-whitespace-label",
+                    ErrorCode: "publication_options_invalid",
+                    Sql: """
+                        CREATE TABLE [ui_settings]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY,
+                            [scope] TEXT NOT NULL,
+                            [libraryOrganization] TEXT,
+                            [publicationOptions] TEXT
+                        );
+                        INSERT INTO [ui_settings] VALUES
+                            ('ui-system', 'system', NULL, '[{"label":"   ","name":"Good"}]');
+                        """
+                ),
+                (
+                    Name: "library-selected-whitespace-name",
+                    ErrorCode: "publication_options_invalid",
+                    Sql: """
+                        CREATE TABLE [patron_settings_overrides]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY,
+                            [orgId] TEXT NOT NULL,
+                            [publicationOptions] TEXT
+                        );
+                        INSERT INTO [patron_settings_overrides] VALUES
+                            ('library-options', '2', '[{"name":"   ","value":"Good"}]');
+                        """
+                ),
+                (
+                    Name: "patron-code-leading-zero-alias",
+                    ErrorCode: "source_patron_code_invalid",
+                    Sql: """
+                        CREATE TABLE [workflow_settings]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY,
+                            [scope] TEXT NOT NULL,
+                            [libraryOrganization] TEXT,
+                            [allowedPatronCodeIds] TEXT
+                        );
+                        INSERT INTO [workflow_settings] VALUES ('workflow-system', 'system', NULL, '02');
+                        """
+                ),
+                (
+                    Name: "patron-code-newline-is-not-a-separator",
+                    ErrorCode: "source_patron_code_invalid",
+                    Sql: """
+                        CREATE TABLE [workflow_settings]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY,
+                            [scope] TEXT NOT NULL,
+                            [libraryOrganization] TEXT,
+                            [allowedPatronCodeIds] TEXT
+                        );
+                        INSERT INTO [workflow_settings] VALUES ('workflow-system', 'system', NULL, '2' || char(10) || '3');
+                        """
+                ),
+                (
+                    Name: "patron-code-nel-remains-part-of-identity",
+                    ErrorCode: "source_patron_code_invalid",
+                    Sql: """
+                        CREATE TABLE [workflow_settings]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY,
+                            [scope] TEXT NOT NULL,
+                            [libraryOrganization] TEXT,
+                            [allowedPatronCodeIds] TEXT
+                        );
+                        INSERT INTO [workflow_settings] VALUES ('workflow-system', 'system', NULL, char(133) || '2');
+                        """
+                ),
+                (
+                    Name: "modern-active-duplicate-label-with-blank-sibling",
+                    ErrorCode: "duplicate_labels_invalid",
+                    Sql: """
+                        CREATE TABLE [patron_settings_overrides]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY,
+                            [orgId] TEXT NOT NULL,
+                            [duplicateStatusLabels] TEXT
+                        );
+                        INSERT INTO [patron_settings_overrides] VALUES ('modern-labels', '2', '{"suggestion":"Valid","closed":"   "}');
+                        """
+                ),
+                (
+                    Name: "modern-nel-only-duplicate-label",
+                    ErrorCode: "duplicate_labels_invalid",
+                    Sql: """
+                        CREATE TABLE [patron_settings_overrides]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY,
+                            [orgId] TEXT NOT NULL,
+                            [duplicateStatusLabels] TEXT
+                        );
+                        INSERT INTO [patron_settings_overrides] VALUES ('modern-labels', '2', '{"suggestion":"\u0085"}');
+                        """
+                ),
+                (
+                    Name: "legacy-blank-duplicate-label",
+                    ErrorCode: "duplicate_labels_invalid",
+                    Sql: """
+                        CREATE TABLE [patron_library_settings]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY,
+                            [libraryOrganization] TEXT NOT NULL,
+                            [duplicateRequestStatusLabels] TEXT
+                        );
+                        INSERT INTO [patron_library_settings] VALUES ('legacy-labels', 'pb-org-2', '{"suggestion":"   "}');
+                        """
+                )
+            };
+
+            foreach (var testCase in invalidSources)
+            {
+                var packageRoot = Path.Combine(root, testCase.Name);
+                var package = CreateMinimalPackage(packageRoot, testCase.Sql);
+                var reportPath = Path.Combine(packageRoot, "report.json");
+                using var importError = new StringWriter();
+                Assert.AreEqual(1, RunImport(package, reportPath, connectionEnvironmentName, tenantId, importError), testCase.Name);
+                StringAssert.Contains(importError.ToString(), testCase.ErrorCode, testCase.Name);
+                Assert.IsFalse(File.Exists(reportPath), $"An unrepresentable source configuration value must not publish a report: {testCase.Name}");
+                Assert.IsFalse(File.Exists(reportPath + ".pending"), $"An unrepresentable source configuration value must not leave a pending report: {testCase.Name}");
+                Assert.AreEqual(initialFingerprint, ComputeTargetFingerprintForTest(target), $"An unrepresentable source configuration value must leave SQL unchanged: {testCase.Name}");
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task ImportRejectsCustomFieldIdentitiesLostByLegacyNormalizationBeforeWrites()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-custom-field-normalization-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationCustomFieldNormalization_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var connectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        try
+        {
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
+            var initialFingerprint = ComputeTargetFingerprintForTest(target);
+            var invalidDefinitions = new[]
+            {
+                (Name: "normalized-definition-key-collision", ErrorCode: "custom_fields_identity_invalid", Json: "[{\"key\":\"Audience-Name\",\"label\":\"First\",\"type\":\"text\"},{\"key\":\"audience name\",\"label\":\"Second\",\"type\":\"text\"}]"),
+                (Name: "normalized-option-id-collision", ErrorCode: "custom_fields_identity_invalid", Json: "[{\"key\":\"choice\",\"label\":\"Choice\",\"type\":\"select\",\"options\":[{\"id\":\"Option-One\",\"label\":\"One\"},{\"id\":\"option one\",\"label\":\"Another\"}]}]"),
+                (Name: "normalized-definition-key-empty", ErrorCode: "custom_fields_identity_invalid", Json: "[{\"key\":\"!!!\",\"label\":\"No normalized key\",\"type\":\"text\"}]"),
+                (Name: "legacy-nel-type-does-not-normalize-to-select", ErrorCode: "custom_fields_invalid", Json: "[{\"label\":\"Unsupported trim type\",\"type\":\"\\u0085select\\u0085\"}]")
+            };
+
+            foreach (var testCase in invalidDefinitions)
+            {
+                var packageRoot = Path.Combine(root, testCase.Name);
+                var package = CreateMinimalPackage(
+                    packageRoot,
+                    $$"""
+                    CREATE TABLE [patron_settings_overrides]
+                    (
+                        [id] TEXT NOT NULL PRIMARY KEY,
+                        [orgId] TEXT NOT NULL,
+                        [additionalFieldDefinitions] TEXT
+                    );
+                    INSERT INTO [patron_settings_overrides] VALUES
+                        ('invalid-fields', '2', '{{testCase.Json.Replace("'", "''", StringComparison.Ordinal)}}');
+                    """);
+                var reportPath = Path.Combine(packageRoot, "report.json");
+                using var error = new StringWriter();
+
+                Assert.AreEqual(1, RunImport(package, reportPath, connectionEnvironmentName, tenantId, error), testCase.Name);
+                StringAssert.Contains(error.ToString(), testCase.ErrorCode, testCase.Name);
+                Assert.IsFalse(File.Exists(reportPath), $"An unrepresentable custom-field source shape must not publish a report: {testCase.Name}");
+                Assert.IsFalse(File.Exists(reportPath + ".pending"), $"An unrepresentable custom-field source shape must not leave a pending report: {testCase.Name}");
+                Assert.AreEqual(initialFingerprint, ComputeTargetFingerprintForTest(target), $"An unrepresentable custom-field source shape must leave SQL unchanged: {testCase.Name}");
             }
         }
         finally
@@ -4286,7 +5343,7 @@ public sealed class MigrationCliTests
                     [updated] TEXT
                 );
                 INSERT INTO [patron_library_settings] VALUES
-                    ('legacy-2', 'pb-org-2', '{"suggestion":"Live legacy label"}', '2029-02-01T00:00:00Z'),
+                    ('legacy-2', 'pb-org-2', '{"suggestion":"  Live legacy label  "}', '2029-02-01T00:00:00Z'),
                     ('legacy-3', 'pb-org-3', '{"suggestion":"Ignored legacy label"}', '2029-02-01T00:00:00Z');
                 CREATE TABLE [patron_settings_overrides]
                 (
@@ -4296,7 +5353,7 @@ public sealed class MigrationCliTests
                     [updated] TEXT
                 );
                 INSERT INTO [patron_settings_overrides] VALUES
-                    ('modern-3', '3', '{}', '2029-03-01T00:00:00Z');
+                    ('modern-3', '3', '{"suggestion":"   "}', '2029-03-01T00:00:00Z');
                 CREATE TABLE [library_settings]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY,
@@ -4329,7 +5386,7 @@ public sealed class MigrationCliTests
             await connection.OpenAsync();
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
-                "SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 2 AND [SuggestionStatusLabel] = N'Live legacy label';"));
+                "SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 2 AND [SuggestionStatusLabel] = N'  Live legacy label  ' AND DATALENGTH([SuggestionStatusLabel]) = 42;"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 3 AND [SuggestionStatusLabel] IS NULL;"));
@@ -4470,6 +5527,22 @@ public sealed class MigrationCliTests
             Assert.IsTrue(reader.IsDBNull(7));
             Assert.IsTrue(reader.IsDBNull(8));
             await reader.DisposeAsync();
+
+            var additionalCopyDriftCases = new (string Name, string DriftSql, string DriftAssertionSql, string RestoreSql, string RestoredAssertionSql)[]
+            {
+                ("additional-copy title history", "UPDATE c SET [Title] = N'Drifted copy title' FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary';", "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary' AND c.[Title] = N'Drifted copy title';", "UPDATE c SET [Title] = N'Frozen title' FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary';", "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary' AND c.[Title] = N'Frozen title';"),
+                ("additional-copy notes history", "UPDATE c SET [Notes] = N'<p>Drifted copy notes</p>' FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary';", "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary' AND c.[Notes] = N'<p>Drifted copy notes</p>';", "UPDATE c SET [Notes] = N'<p>Frozen notes</p>' FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary';", "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary' AND c.[Notes] = N'<p>Frozen notes</p>';"),
+                ("additional-copy creator history", "UPDATE c SET [CreatedByDisplayName] = N'Drifted creator' FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary';", "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary' AND c.[CreatedByDisplayName] = N'Drifted creator';", "UPDATE c SET [CreatedByDisplayName] = N'Historical creator' FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary';", "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary' AND c.[CreatedByDisplayName] = N'Historical creator';"),
+                ("additional-copy close history", "UPDATE c SET [ClosedUtc] = '2030-01-04T06:07:08' FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary';", "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary' AND c.[ClosedUtc] = '2030-01-04T06:07:08';", "UPDATE c SET [ClosedUtc] = '2030-01-03T06:07:08' FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary';", "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary' AND c.[ClosedUtc] = '2030-01-03T06:07:08';"),
+                ("additional-copy created-time fallback", "UPDATE c SET [UpdatedUtc] = '2030-01-02T03:05:05' FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary';", "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary' AND c.[UpdatedUtc] = '2030-01-02T03:05:05';", "UPDATE c SET [UpdatedUtc] = '2030-01-02T03:04:05' FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary';", "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] c JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id] WHERE m.[PocketBaseId] = N'copy-boundary' AND c.[UpdatedUtc] = '2030-01-02T03:04:05';")
+            };
+            foreach (var drift in additionalCopyDriftCases)
+            {
+                await AssertFingerprintRefreshedSourceOwnedDriftRejectedAsync(
+                    connection, target, package, report, environmentName,
+                    drift.Name, drift.DriftSql, drift.DriftAssertionSql, 1,
+                    drift.RestoreSql, drift.RestoredAssertionSql, 1);
+            }
 
             var copyFormats = new Dictionary<string, (long? FormatId, int? OwnerOrganizationId, string? Code)>(StringComparer.Ordinal);
             await using (var formatQuery = connection.CreateCommand())
@@ -4694,11 +5767,6 @@ public sealed class MigrationCliTests
                 INSERT INTO [polaris_settings] VALUES
                     ('polaris-1', 'https://polaris.example.org', 'access', 'source-api-secret',
                      'EXAMPLE', 'service-user', 'source-admin-secret', '99', '42', '7', '3');
-                CREATE TABLE [smtp_settings]
-                (
-                    [id] TEXT NOT NULL PRIMARY KEY, [fromAddress] TEXT, [fromName] TEXT
-                );
-                INSERT INTO [smtp_settings] VALUES ('smtp-1', 'notices@example.org', 'ASAP');
                 """);
             DeployDacpac(master, databaseName);
 
@@ -4785,6 +5853,63 @@ public sealed class MigrationCliTests
                 new[] { "source-api-secret", "source-admin-secret", "target-postmark-secret" },
                 ciphertexts.Select(protector.Unprotect).ToArray());
             var reportText = await File.ReadAllTextAsync(report);
+            using (var reportDocument = JsonDocument.Parse(reportText))
+            {
+                Assert.AreEqual(0, reportDocument.RootElement.GetProperty("importedCounts").GetProperty("smtp_settings").GetInt32());
+                var tokenState = reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
+                    item.GetProperty("entity").GetString() == "email_provider_token");
+                Assert.AreEqual(1, tokenState.GetProperty("organizationId").GetInt32());
+                Assert.IsTrue(tokenState.GetProperty("postmarkTokenProvisioned").GetBoolean());
+            }
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1 AND [ProtectedServerToken] IS NOT NULL;"));
+            using (var reconcile = new StringWriter())
+            {
+                Assert.AreEqual(0, RunReconcile(package, report, connectionEnvironmentName, reconcile), reconcile.ToString());
+            }
+            await AssertFingerprintRefreshedSourceOwnedDriftRejectedAsync(
+                connection, target, package, report, connectionEnvironmentName,
+                "source-absent seeded email-template key case only",
+                "UPDATE [asap].[EmailTemplate] SET [TemplateKey] = N'Suggestion_Submitted' WHERE [OrganizationId] = 1 AND [TemplateKey] COLLATE Latin1_General_100_BIN2 = N'suggestion_submitted';",
+                "SELECT COUNT(*) FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] COLLATE Latin1_General_100_BIN2 = N'Suggestion_Submitted';",
+                1,
+                "UPDATE [asap].[EmailTemplate] SET [TemplateKey] = N'suggestion_submitted' WHERE [OrganizationId] = 1 AND [TemplateKey] COLLATE Latin1_General_100_BIN2 = N'Suggestion_Submitted';",
+                "SELECT COUNT(*) FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] COLLATE Latin1_General_100_BIN2 = N'suggestion_submitted';",
+                1);
+
+            string tokenCiphertext;
+            await using (var readToken = connection.CreateCommand())
+            {
+                readToken.CommandText = "SELECT [ProtectedServerToken] FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1;";
+                tokenCiphertext = (string)(await readToken.ExecuteScalarAsync() ?? throw new InvalidOperationException("The operator-provisioned token ciphertext is missing."));
+            }
+            await using (var removeToken = connection.CreateCommand())
+            {
+                removeToken.CommandText = "UPDATE [asap].[EmailSettings] SET [ProtectedServerToken] = NULL WHERE [OrganizationId] = 1 AND [ProtectedServerToken] IS NOT NULL;";
+                Assert.AreEqual(1, await removeToken.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(report, target);
+            var tokenRemovalFingerprint = ComputeTargetFingerprintForTest(target);
+            var tokenRemovalReport = await File.ReadAllTextAsync(report);
+            using (var reconcile = new StringWriter())
+            {
+                Assert.AreEqual(1, RunReconcile(package, report, connectionEnvironmentName, reconcile), "Reconciliation must reject removal of a target-only provisioned token when the source has no SMTP row.");
+                StringAssert.Contains(reconcile.ToString(), "reconciliation_failed");
+            }
+            Assert.AreEqual(tokenRemovalFingerprint, ComputeTargetFingerprintForTest(target), "Reconciliation must not repair protected-token presence drift.");
+            Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1 AND [ProtectedServerToken] IS NOT NULL;"));
+            Assert.AreEqual(tokenRemovalReport, await File.ReadAllTextAsync(report), "Failed reconciliation must not promote or rewrite the report.");
+            await using (var restoreToken = connection.CreateCommand())
+            {
+                restoreToken.CommandText = "UPDATE [asap].[EmailSettings] SET [ProtectedServerToken] = @token WHERE [OrganizationId] = 1 AND [ProtectedServerToken] IS NULL;";
+                restoreToken.Parameters.AddWithValue("@token", tokenCiphertext);
+                Assert.AreEqual(1, await restoreToken.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(report, target);
+            using (var reconcile = new StringWriter())
+            {
+                Assert.AreEqual(0, RunReconcile(package, report, connectionEnvironmentName, reconcile), reconcile.ToString());
+            }
+
             Assert.IsFalse(reportText.Contains("source-api-secret", StringComparison.Ordinal));
             Assert.IsFalse(reportText.Contains("source-admin-secret", StringComparison.Ordinal));
             Assert.IsFalse(reportText.Contains("target-postmark-secret", StringComparison.Ordinal));
@@ -5057,6 +6182,54 @@ public sealed class MigrationCliTests
         Assert.AreEqual(1, await ScalarAsync(connection, restoredAssertionSql));
     }
 
+    private static async Task AssertFingerprintRefreshedSourceOwnedDriftRejectedAsync(
+        SqlConnection connection,
+        string targetConnectionString,
+        string packagePath,
+        string reportPath,
+        string connectionEnvironmentName,
+        string subject,
+        string driftSql,
+        string driftAssertionSql,
+        int expectedDriftStateCount,
+        string restoreSql,
+        string restoredAssertionSql,
+        int expectedRestoredStateCount)
+    {
+        await using (var drift = connection.CreateCommand())
+        {
+            drift.CommandText = driftSql;
+            Assert.AreEqual(1, await drift.ExecuteNonQueryAsync(), $"The {subject} SQL mutation must change one target row.");
+        }
+
+        Assert.AreEqual(expectedDriftStateCount, await ScalarAsync(connection, driftAssertionSql), $"The {subject} drift must be present before reconciliation.");
+        RefreshReportFingerprint(reportPath, targetConnectionString);
+        var fingerprintWithDrift = ComputeTargetFingerprintForTest(targetConnectionString);
+        var reportWithRefreshedFingerprint = await File.ReadAllTextAsync(reportPath);
+        using (var error = new StringWriter())
+        {
+            Assert.AreEqual(1, RunReconcile(packagePath, reportPath, connectionEnvironmentName, error), $"Reconciliation accepted refreshed-fingerprint {subject} drift.");
+            StringAssert.Contains(error.ToString(), "reconciliation_failed", $"The {subject} drift must be rejected by the independent source oracle.");
+        }
+
+        Assert.AreEqual(fingerprintWithDrift, ComputeTargetFingerprintForTest(targetConnectionString), $"Reconciliation must not repair {subject} drift.");
+        Assert.AreEqual(expectedDriftStateCount, await ScalarAsync(connection, driftAssertionSql), $"The {subject} drift must remain present after failed verification.");
+        Assert.AreEqual(reportWithRefreshedFingerprint, await File.ReadAllTextAsync(reportPath), $"Failed verification must not change or promote the report for {subject} drift.");
+
+        await using (var restore = connection.CreateCommand())
+        {
+            restore.CommandText = restoreSql;
+            Assert.AreEqual(1, await restore.ExecuteNonQueryAsync(), $"The {subject} mutation must be restorable as one SQL row change.");
+        }
+
+        Assert.AreEqual(expectedRestoredStateCount, await ScalarAsync(connection, restoredAssertionSql), $"The {subject} source state must be restored before positive reconciliation.");
+        RefreshReportFingerprint(reportPath, targetConnectionString);
+        using (var restored = new StringWriter())
+        {
+            Assert.AreEqual(0, RunReconcile(packagePath, reportPath, connectionEnvironmentName, restored), $"Restored {subject} source state should reconcile: {restored}");
+        }
+    }
+
     private static void AssertEquivalentReportsExceptTargetBinding(
         string firstReportPath,
         string firstConnectionString,
@@ -5113,7 +6286,8 @@ public sealed class MigrationCliTests
     internal static string CreateMinimalPackage(
         string root,
         string additionalSql = "",
-        Action<string>? prepareStorage = null)
+        Action<string>? prepareStorage = null,
+        string exportedAtUtc = "2030-01-02T03:04:05Z")
     {
         var source = Path.Combine(root, "data.db");
         var storage = Path.Combine(root, "storage");
@@ -5178,7 +6352,7 @@ public sealed class MigrationCliTests
                 "--storage", storage,
                 "--output", package,
                 "--source-git-sha", MigrationContract.PocketBaseBaselineSha,
-                "--exported-at-utc", "2030-01-02T03:04:05Z",
+                "--exported-at-utc", exportedAtUtc,
                 "--confirm-source-stopped"
             ],
             TextWriter.Null,

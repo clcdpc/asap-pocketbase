@@ -114,11 +114,18 @@ public sealed class EmailOperationsService(
         try
         {
             readiness = await emailSender.CheckReadinessAsync(targetOrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new EmailOperationResult("email_transport_unavailable");
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
@@ -189,10 +196,12 @@ public sealed class EmailOperationsService(
             try
             {
                 dispatcher.Enqueue(outbox.Id);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             // The durable outbox is committed; preserve acceptance and recover through the scheduled sweep.
             catch (Exception exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 dispatchDelayed = true;
                 logger?.LogWarning("Email outbox {OutboxId} awaits the scheduled sweep after dispatch failure ({FailureType}).",
                     outbox.Id, exception.GetType().Name);
@@ -316,16 +325,19 @@ public sealed class EmailOperationsService(
         }
         catch (DbUpdateConcurrencyException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new EmailOperationResult("stale_version");
         }
         var dispatchDelayed = false;
         try
         {
             dispatcher.Enqueue(row.Id);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         // Retry state is committed; report delayed dispatch and retain the pending row for the sweep.
         catch (Exception exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             dispatchDelayed = true;
             logger?.LogWarning("Email outbox {OutboxId} awaits the scheduled sweep after dispatch failure ({FailureType}).",
                 row.Id, exception.GetType().Name);

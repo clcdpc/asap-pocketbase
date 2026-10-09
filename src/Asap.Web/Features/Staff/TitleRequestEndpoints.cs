@@ -221,6 +221,12 @@ public static class TitleRequestEndpoints
         await using var db = await contextFactory.CreateDbContextAsync(cancellationToken);
         var system = await db.SystemSettings.AsNoTracking()
             .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
+        var savedRequestIdentity = scope.Request is not null && requestId is { } scopedRequestId
+            ? await db.TitleRequests.AsNoTracking()
+                .Where(item => item.Id == scopedRequestId && item.LibraryOrganizationId == scope.OrganizationId)
+                .Select(item => new { item.PatronIdSnapshot })
+                .SingleOrDefaultAsync(cancellationToken)
+            : null;
         int? patronId = null;
         if (scope.Request is { Barcode.Length: > 0 } request &&
             HasUsablePatronResearchUrl(system.LeapPatronUrlPattern))
@@ -228,7 +234,9 @@ public static class TitleRequestEndpoints
             try
             {
                 var resolvedPatronId = await patrons.GetPatronIdAsync(request.Barcode, scope.OrganizationId, cancellationToken);
-                if (resolvedPatronId is > 0)
+                if (resolvedPatronId is > 0 && savedRequestIdentity is not null &&
+                    (!savedRequestIdentity.PatronIdSnapshot.HasValue ||
+                     savedRequestIdentity.PatronIdSnapshot.Value == resolvedPatronId.Value))
                 {
                     patronId = resolvedPatronId;
                 }

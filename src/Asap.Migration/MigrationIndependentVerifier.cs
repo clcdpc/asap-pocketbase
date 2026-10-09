@@ -6,17 +6,25 @@ namespace Asap.Migration;
 
 internal static class MigrationIndependentVerifier
 {
-    public static void Verify(string connectionString, ValidatedMigrationPackage package)
+    public static void Verify(
+        string connectionString,
+        ValidatedMigrationPackage package,
+        bool postmarkTokenProvisioned,
+        long? bootstrapTargetStaffUserId = null,
+        bool bootstrapInserted = false)
     {
         using var connection = new SqlConnection(connectionString);
         connection.Open();
-        Verify(connection, transaction: null, package);
+        Verify(connection, transaction: null, package, postmarkTokenProvisioned, bootstrapTargetStaffUserId, bootstrapInserted);
     }
 
     public static void Verify(
         SqlConnection connection,
         SqlTransaction? transaction,
-        ValidatedMigrationPackage package)
+        ValidatedMigrationPackage package,
+        bool postmarkTokenProvisioned,
+        long? bootstrapTargetStaffUserId = null,
+        bool bootstrapInserted = false)
     {
         var organizations = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations");
         var organizationsById = organizations.ToDictionary(
@@ -77,8 +85,14 @@ internal static class MigrationIndependentVerifier
             "EmailDeliveryEvent",
             "email_delivery_event",
             MigrationPackageReader.ReadRows(package, "email-delivery-events.json", "email_delivery_events").Count);
-        VerifyCustomFieldRuleNormalization(connection, transaction, package);
         VerifyTotalMappingPopulation(connection, transaction, package);
+        MigrationIndependentConfigurationVerifier.Verify(connection, transaction, package, postmarkTokenProvisioned);
+        MigrationIndependentEntityVerifier.Verify(
+            connection,
+            transaction,
+            package,
+            bootstrapTargetStaffUserId,
+            bootstrapInserted);
     }
 
     private static void VerifyOrganizations(
@@ -87,35 +101,62 @@ internal static class MigrationIndependentVerifier
         IReadOnlyList<SourceRow> rows)
     {
         var expectedTargetIds = new HashSet<int> { 1 };
+        var expectedMappings = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var row in rows)
         {
             var sourceId = row.RequiredString("id");
             var id = row.Int32("organizationId") ?? Fail<int>("A source organization has no native identity.");
             expectedTargetIds.Add(id);
-            var mapping = ReadMapping(connection, transaction, "organization", sourceId);
-            if (mapping != id)
+            if (!expectedMappings.TryAdd(sourceId, id))
             {
-                Fail("The organization source mapping changed its native identity.");
+                Fail("The immutable source package contains a duplicate organization mapping identity.");
             }
 
             using var command = new SqlCommand(
-                "SELECT [OrganizationCodeId], [ParentOrganizationId], [IsActive] FROM [asap].[Organization] WHERE [Id] = @id;",
+                "SELECT [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive], [LastSyncedUtc] FROM [asap].[Organization] WHERE [Id] = @id;",
                 connection,
                 transaction);
             command.Parameters.AddWithValue("@id", id);
             using var reader = command.ExecuteReader();
-            if (!reader.Read() || NullableInt(reader, 0) != ReadOptionalOrganizationIdentity(row, "organizationCodeId", "organization_code_id") ||
-                NullableInt(reader, 1) != ReadOptionalOrganizationIdentity(row, "parentOrganizationId", "parent_organization_id"))
+            if (!reader.Read() ||
+                NullableString(reader, 0) != (row.String("displayName") ?? row.String("name") ?? $"Organization {id}") ||
+                NullableString(reader, 1) != row.String("abbreviation") ||
+                NullableInt(reader, 2) != ReadOptionalOrganizationIdentity(row, "organizationCodeId", "organization_code_id") ||
+                NullableInt(reader, 3) != ReadOptionalOrganizationIdentity(row, "parentOrganizationId", "parent_organization_id") ||
+                NullableDateTime(reader, 5) != row.UtcDateTime("lastSynced"))
             {
-                Fail("Target organization type or parent identity differs from the source snapshot.");
+                Fail("Target organization name, abbreviation, native type, parent, or synchronization timestamp differs from the source snapshot.");
             }
 
             var code = ReadOptionalOrganizationIdentity(row, "organizationCodeId", "organization_code_id");
             var expectedActive = id == 1 || id > 1 && code == 2 && row.Bool("enabledForPatrons");
-            if (reader.GetBoolean(2) != expectedActive)
+            if (reader.GetBoolean(4) != expectedActive)
             {
                 Fail("Target organization activity differs from the pinned source transformation.");
             }
+        }
+
+        var actualMappings = new Dictionary<string, int>(StringComparer.Ordinal);
+        using (var mappings = new SqlCommand(
+                   "SELECT [EntityType], [PocketBaseId], [NewId] FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] = @entityType;",
+                   connection,
+                   transaction))
+        {
+            mappings.Parameters.AddWithValue("@entityType", "organization");
+            using var mappingReader = mappings.ExecuteReader();
+            while (mappingReader.Read())
+            {
+                if (!string.Equals(mappingReader.GetString(0), "organization", StringComparison.Ordinal) ||
+                    !actualMappings.TryAdd(mappingReader.GetString(1), Convert.ToInt32(mappingReader.GetValue(2), CultureInfo.InvariantCulture)))
+                {
+                    Fail("An organization source mapping changes its exact entity or source identity.");
+                }
+            }
+        }
+        if (actualMappings.Count != expectedMappings.Count ||
+            expectedMappings.Any(pair => !actualMappings.TryGetValue(pair.Key, out var targetId) || targetId != pair.Value))
+        {
+            Fail("Organization source mapping keys or native identities differ from the immutable source package.");
         }
 
         using var system = new SqlCommand(
@@ -199,6 +240,51 @@ internal static class MigrationIndependentVerifier
         }
 
         VerifyFormatPopulation(connection, transaction, package, rows, organizationsById, organizations);
+        VerifyFormatTimestamps(connection, transaction, package, rows);
+    }
+
+    private static void VerifyFormatTimestamps(
+        SqlConnection connection,
+        SqlTransaction? transaction,
+        ValidatedMigrationPackage package,
+        IReadOnlyList<SourceRow> rows)
+    {
+        var exportedAtUtc = package.Manifest.ExportedAtUtc.UtcDateTime;
+        var expectedByFormatId = new Dictionary<long, (DateTime CreatedUtc, DateTime UpdatedUtc)>();
+        foreach (var row in rows)
+        {
+            var mapping = ReadFormatMapping(connection, transaction, row.RequiredString("id"));
+            if (string.Equals(mapping.EntityType, "material_format", StringComparison.Ordinal))
+            {
+                expectedByFormatId.Add(
+                    mapping.FormatId,
+                    (row.UtcDateTime("created") ?? exportedAtUtc, row.UtcDateTime("updated") ?? exportedAtUtc));
+            }
+        }
+
+        using var command = new SqlCommand(
+            "SELECT [Id], [OwnerOrganizationId], [CreatedUtc], [UpdatedUtc] FROM [asap].[MaterialFormat];",
+            connection,
+            transaction);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var id = reader.GetInt64(0);
+            var ownerId = reader.GetInt32(1);
+            if (!expectedByFormatId.TryGetValue(id, out var expected))
+            {
+                if (ownerId != 1)
+                {
+                    Fail("A library-owned base material format has no exact source timestamp expectation.");
+                }
+                expected = (exportedAtUtc, exportedAtUtc);
+            }
+            if (reader.GetDateTime(2).Ticks != expected.CreatedUtc.Ticks ||
+                reader.GetDateTime(3).Ticks != expected.UpdatedUtc.Ticks)
+            {
+                Fail("A material format creation or update timestamp differs from its source record or pinned target seed.");
+            }
+        }
     }
 
     private static void VerifyMaterialFormatMetadata(
@@ -274,7 +360,7 @@ internal static class MigrationIndependentVerifier
 
             var mapping = ReadFormatMapping(connection, transaction, row.RequiredString("id"));
             using var command = new SqlCommand(
-                "SELECT COALESCE(o.[MessageBehavior], f.[MessageBehavior]), " +
+                "SELECT COALESCE(o.[MessageBehavior], f.[MessageBehavior]), COALESCE(o.[Message], f.[Message]), " +
                 "COALESCE(o.[TitleMode], f.[TitleMode]), COALESCE(o.[TitleLabel], f.[TitleLabel]), " +
                 "COALESCE(o.[AuthorMode], f.[AuthorMode]), COALESCE(o.[AuthorLabel], f.[AuthorLabel]), " +
                 "COALESCE(o.[IdentifierMode], f.[IdentifierMode]), COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]), " +
@@ -289,14 +375,15 @@ internal static class MigrationIndependentVerifier
             if (!reader.Read() ||
                 NullableString(reader, 0) != NormalizeLegacyMaterialEnum(
                     row.String("messageBehavior"), "none", ["none", "message", "ebookMessage", "eaudiobookMessage"]) ||
-                NullableString(reader, 1) != "required" ||
-                NullableString(reader, 2) != LegacyMaterialText(row.Text("titleLabel"), "Title") ||
-                NullableString(reader, 3) != NormalizeLegacyMaterialEnum(row.String("authorMode"), "required", ["required", "optional", "hidden"]) ||
-                NullableString(reader, 4) != LegacyMaterialText(row.Text("authorLabel"), "Author") ||
-                NullableString(reader, 5) != NormalizeLegacyMaterialEnum(row.String("identifierMode"), "optional", ["required", "optional", "hidden"]) ||
-                NullableString(reader, 6) != LegacyMaterialText(row.Text("identifierLabel"), "Identifier number") ||
-                NullableString(reader, 7) != NormalizeLegacyMaterialEnum(row.String("publicationMode"), "required", ["required", "optional", "hidden"]) ||
-                NullableString(reader, 8) != LegacyMaterialText(row.Text("publicationLabel"), "Publication Timing"))
+                !reader.IsDBNull(1) ||
+                NullableString(reader, 2) != "required" ||
+                NullableString(reader, 3) != LegacyMaterialText(row.Text("titleLabel"), "Title") ||
+                NullableString(reader, 4) != NormalizeLegacyMaterialEnum(row.String("authorMode"), "required", ["required", "optional", "hidden"]) ||
+                NullableString(reader, 5) != LegacyMaterialText(row.Text("authorLabel"), "Author") ||
+                NullableString(reader, 6) != NormalizeLegacyMaterialEnum(row.String("identifierMode"), "optional", ["required", "optional", "hidden"]) ||
+                NullableString(reader, 7) != LegacyMaterialText(row.Text("identifierLabel"), "Identifier number") ||
+                NullableString(reader, 8) != NormalizeLegacyMaterialEnum(row.String("publicationMode"), "required", ["required", "optional", "hidden"]) ||
+                NullableString(reader, 9) != LegacyMaterialText(row.Text("publicationLabel"), "Publication Timing"))
             {
                 Fail("A material format's effective source fields differ from the pinned legacy row defaults.");
             }
@@ -370,14 +457,26 @@ internal static class MigrationIndependentVerifier
             defaultsCode = "book";
         }
         var defaults = LegacyFormatDefaults(defaultsCode);
+        if (rule.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return defaults;
+        }
         if (rule.ValueKind != JsonValueKind.Object)
         {
-            return Fail<ExpectedFormatRule>("A source material format rule is not an object.");
+            return Fail<ExpectedFormatRule>("A source material format rule is neither an object nor null.");
         }
-        var fields = TryExactProperty(rule, "fields", out var incomingFields) &&
-                     incomingFields.ValueKind == JsonValueKind.Object
-            ? incomingFields
-            : default;
+        var fields = default(JsonElement);
+        if (TryExactProperty(rule, "fields", out var incomingFields))
+        {
+            if (incomingFields.ValueKind == JsonValueKind.Object)
+            {
+                fields = incomingFields;
+            }
+            else if (incomingFields.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+            {
+                return Fail<ExpectedFormatRule>("A source material format fields value is neither an object nor null.");
+            }
+        }
         var title = LegacyFormatField(fields, "title", defaults.TitleMode, defaults.TitleLabel, forceRequired: true);
         var author = LegacyFormatField(fields, "author", defaults.AuthorMode, defaults.AuthorLabel);
         var identifier = LegacyFormatField(fields, "identifier", defaults.IdentifierMode, defaults.IdentifierLabel);
@@ -406,9 +505,18 @@ internal static class MigrationIndependentVerifier
         string fallbackLabel,
         bool forceRequired = false)
     {
-        var field = TryExactProperty(fields, key, out var incoming) && incoming.ValueKind == JsonValueKind.Object
-            ? incoming
-            : default;
+        var field = default(JsonElement);
+        if (TryExactProperty(fields, key, out var incoming))
+        {
+            if (incoming.ValueKind == JsonValueKind.Object)
+            {
+                field = incoming;
+            }
+            else if (incoming.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+            {
+                return Fail<(string, string)>($"A source material format field {key} is neither an object nor null.");
+            }
+        }
         string[] allowedModes = ["required", "optional", "hidden"];
         var mode = NormalizeLegacyFormatRuleEnum(ReadLegacyRuleString(field, "mode", fallbackMode), fallbackMode, allowedModes);
         var label = ReadLegacyRuleString(field, "label", fallbackLabel);
@@ -425,8 +533,8 @@ internal static class MigrationIndependentVerifier
         {
             return Fail<string>($"Source format rule {property} is not a string.");
         }
-        var result = item.GetString()!.Trim();
-        return string.IsNullOrWhiteSpace(result) ? fallback : result;
+        var result = TrimLegacyFormatRuleText(item.GetString()!);
+        return result.Length == 0 ? fallback : result;
     }
 
     private static string ReadLegacyFormatMessage(JsonElement value, string fallback)
@@ -440,8 +548,8 @@ internal static class MigrationIndependentVerifier
             return Fail<string>("Source format rule message is not a string.");
         }
 
-        var message = item.GetString()!;
-        return message.Length == 0 ? fallback : message.Trim();
+        var message = TrimLegacyFormatRuleText(item.GetString()!);
+        return message.Length == 0 ? fallback : message;
     }
 
     private static string NormalizeLegacyFormatRuleEnum(string? value, string fallback, string[] allowed)
@@ -450,9 +558,30 @@ internal static class MigrationIndependentVerifier
         {
             return fallback;
         }
-        return allowed.FirstOrDefault(candidate => string.Equals(candidate, value.Trim(), StringComparison.Ordinal))
+        return allowed.FirstOrDefault(candidate => string.Equals(candidate, value, StringComparison.Ordinal))
             ?? fallback;
     }
+
+    private static string TrimLegacyFormatRuleText(string value)
+    {
+        var start = 0;
+        while (start < value.Length && IsLegacyFormatRuleWhitespace(value[start]))
+        {
+            start++;
+        }
+        var end = value.Length;
+        while (end > start && IsLegacyFormatRuleWhitespace(value[end - 1]))
+        {
+            end--;
+        }
+        return value[start..end];
+    }
+
+    private static bool IsLegacyFormatRuleWhitespace(char value) => value is
+        '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or
+        '\u1680' or '\u2000' or '\u2001' or '\u2002' or '\u2003' or '\u2004' or '\u2005' or
+        '\u2006' or '\u2007' or '\u2008' or '\u2009' or '\u200A' or '\u2028' or '\u2029' or
+        '\u202F' or '\u205F' or '\u3000' or '\uFEFF';
 
     private static bool TryExactProperty(JsonElement value, string propertyName, out JsonElement result)
     {
@@ -861,11 +990,12 @@ internal static class MigrationIndependentVerifier
         }
 
         using var formatsCommand = new SqlCommand(
-            "SELECT [OwnerOrganizationId], [Code], [IsEnabled] FROM [asap].[MaterialFormat];",
+            "SELECT [OwnerOrganizationId], [Code], [IsEnabled], [Message] FROM [asap].[MaterialFormat];",
             connection,
             transaction);
         var actualFormats = new HashSet<(int OwnerId, string Code)>();
         var actualSystemEnabled = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var actualSystemMessages = new Dictionary<string, string?>(StringComparer.Ordinal);
         using (var formatsReader = formatsCommand.ExecuteReader())
         {
             while (formatsReader.Read())
@@ -876,6 +1006,7 @@ internal static class MigrationIndependentVerifier
                 if (ownerId == 1)
                 {
                     actualSystemEnabled.Add(code, formatsReader.GetBoolean(2));
+                    actualSystemMessages.Add(code, NullableString(formatsReader, 3));
                 }
             }
         }
@@ -886,9 +1017,14 @@ internal static class MigrationIndependentVerifier
         foreach (var code in targetSystemCodes)
         {
             var expectedEnabled = systemSourceEnabled.TryGetValue(code, out var sourceEnabled) && sourceEnabled;
-            if (!actualSystemEnabled.TryGetValue(code, out var actualEnabled) || actualEnabled != expectedEnabled)
+            if (!actualSystemEnabled.TryGetValue(code, out var actualEnabled) || actualEnabled != expectedEnabled ||
+                !actualSystemMessages.TryGetValue(code, out var actualMessage) || actualMessage is not null)
             {
-                Fail("Target system material format availability differs from the immutable source package.");
+                Fail("Target system material format availability or empty message differs from the immutable source package and pinned target seed.");
+            }
+            if (!systemSourceEnabled.ContainsKey(code))
+            {
+                VerifyTargetSeedMaterialFormat(connection, transaction, code);
             }
         }
 
@@ -911,6 +1047,42 @@ internal static class MigrationIndependentVerifier
 
         VerifyMappingCount(connection, transaction, "material_format", rows.Count, "material_format_override");
     }
+
+    private static void VerifyTargetSeedMaterialFormat(SqlConnection connection, SqlTransaction? transaction, string code)
+    {
+        var expected = TargetSeedMaterialFormatIdentity(code);
+        var rules = TargetSeedMaterialFormatDefaults(code);
+        using var command = new SqlCommand(
+            "SELECT [Code], [Label], [SortOrder], [IsEnabled], [MessageBehavior], [Message], [TitleMode], [TitleLabel], " +
+            "[AuthorMode], [AuthorLabel], [IdentifierMode], [IdentifierLabel], [PublicationMode], [PublicationLabel] " +
+            "FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = @code;",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@code", code);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read() ||
+            !string.Equals(reader.GetString(0), code, StringComparison.Ordinal) ||
+            NullableString(reader, 1) != expected.Label || reader.GetInt32(2) != expected.SortOrder || reader.GetBoolean(3) ||
+            NullableString(reader, 4) != rules.MessageBehavior || !reader.IsDBNull(5) ||
+            NullableString(reader, 6) != rules.TitleMode || NullableString(reader, 7) != rules.TitleLabel ||
+            NullableString(reader, 8) != rules.AuthorMode || NullableString(reader, 9) != rules.AuthorLabel ||
+            NullableString(reader, 10) != rules.IdentifierMode || NullableString(reader, 11) != rules.IdentifierLabel ||
+            NullableString(reader, 12) != rules.PublicationMode || NullableString(reader, 13) != rules.PublicationLabel || reader.Read())
+        {
+            Fail("A source-absent system material format differs from its pinned target seed values.");
+        }
+    }
+
+    private static (string Label, int SortOrder) TargetSeedMaterialFormatIdentity(string code) => NormalizeCode(code) switch
+    {
+        "book" => ("Book", 10),
+        "audiobook_cd" => ("Audiobook (Physical CD)", 20),
+        "dvd" => ("DVD", 30),
+        "music_cd" => ("Music CD", 40),
+        "ebook" => ("eBook", 50),
+        "eaudiobook" => ("eAudiobook", 60),
+        _ => Fail<(string, int)>("A source-independent target seed expectation references a non-seed material format.")
+    };
 
     private static ExpectedFormatRule ExpectedLegacyMaterialFormatRule(SourceRow row) => new(
         NormalizeLegacyMaterialEnum(row.String("messageBehavior"), "none", ["none", "message", "ebookMessage", "eaudiobookMessage"]),
@@ -948,7 +1120,7 @@ internal static class MigrationIndependentVerifier
         !SameFormatValue(expected.PublicationLabel, baseline.PublicationLabel);
 
     private static bool SameFormatValue(string first, string second) =>
-        string.Equals(first.Trim(), second.Trim(), StringComparison.Ordinal);
+        string.Equals(first, second, StringComparison.Ordinal);
 
     private static void VerifyMappedTargetCount(
         SqlConnection connection,
@@ -1033,72 +1205,6 @@ internal static class MigrationIndependentVerifier
         }
     }
 
-    private static void VerifyCustomFieldRuleNormalization(
-        SqlConnection connection,
-        SqlTransaction? transaction,
-        ValidatedMigrationPackage package)
-    {
-        var overrides = MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_settings_overrides");
-        var formatRows = MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats");
-        var organizations = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations");
-        var organizationsById = organizations.ToDictionary(item => item.RequiredString("id"), StringComparer.Ordinal);
-        foreach (var row in overrides)
-        {
-            var libraryId = row.Int32("orgId") ?? Fail<int>("A source custom-field override has no library identity.");
-            var definitionsJson = row.JsonText("additionalFieldDefinitions");
-            if (definitionsJson is null)
-            {
-                continue;
-            }
-
-            using var definitionsDocument = JsonDocument.Parse(definitionsJson);
-            var definitions = definitionsDocument.RootElement;
-            if (definitions.ValueKind != JsonValueKind.Array)
-            {
-                Fail("A source custom-field definition is not an array.");
-            }
-
-            using var rulesDocument = row.JsonText("patronFormatRules") is { } rulesJson
-                ? JsonDocument.Parse(rulesJson)
-                : null;
-            var formats = ReadEffectiveFormats(connection, transaction, libraryId);
-            foreach (var definition in definitions.EnumerateArray())
-            {
-                var fieldKey = RequiredPropertyString(definition, "key");
-                var fieldType = RequiredPropertyString(definition, "type");
-                var fieldEnabled = OptionalPropertyBoolean(definition, "enabled", defaultValue: true);
-                var enabledOptionCount = ReadEnabledOptionCount(definition);
-                var fieldId = ReadCustomFieldId(connection, transaction, libraryId, fieldKey);
-                foreach (var format in formats)
-                {
-                    var sourceCode = EffectiveSourceFormatCode(formatRows, organizationsById, organizations, libraryId, format.Code);
-                    var expectedRule = ExpectedCustomFieldRule(
-                        rulesDocument?.RootElement,
-                        sourceCode,
-                        fieldKey,
-                        fieldType,
-                        fieldEnabled,
-                        enabledOptionCount);
-                    using var command = new SqlCommand(
-                        "SELECT [Mode], [LabelOverride] FROM [asap].[MaterialFormatCustomFieldRule] " +
-                        "WHERE [LibraryOrganizationId] = @libraryId AND [MaterialFormatId] = @formatId AND [PatronCustomFieldId] = @fieldId;",
-                        connection,
-                        transaction);
-                    command.Parameters.AddWithValue("@libraryId", libraryId);
-                    command.Parameters.AddWithValue("@formatId", format.Id);
-                    command.Parameters.AddWithValue("@fieldId", fieldId);
-                    using var reader = command.ExecuteReader();
-                    if (!reader.Read() ||
-                        !string.Equals(reader.GetString(0), expectedRule.Mode, StringComparison.Ordinal) ||
-                        (reader.IsDBNull(1) ? null : reader.GetString(1)) != expectedRule.LabelOverride)
-                    {
-                        Fail("An imported custom-field rule differs from the independently derived source normalization.");
-                    }
-                }
-            }
-        }
-    }
-
     private static IReadOnlyList<(long Id, string Code)> ReadEffectiveFormats(
         SqlConnection connection,
         SqlTransaction? transaction,
@@ -1125,111 +1231,6 @@ internal static class MigrationIndependentVerifier
             formats.Add((reader.GetInt64(0), reader.GetString(1)));
         }
         return formats;
-    }
-
-    private static long ReadCustomFieldId(
-        SqlConnection connection,
-        SqlTransaction? transaction,
-        int libraryId,
-        string fieldKey)
-    {
-        using var command = new SqlCommand(
-            "SELECT [Id] FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = @libraryId AND [FieldKey] = @fieldKey;",
-            connection,
-            transaction);
-        command.Parameters.AddWithValue("@libraryId", libraryId);
-        command.Parameters.AddWithValue("@fieldKey", fieldKey);
-        return command.ExecuteScalar() is { } value and not DBNull
-            ? Convert.ToInt64(value, CultureInfo.InvariantCulture)
-            : Fail<long>("An imported source custom field is missing from SQL.");
-    }
-
-    private static (string Mode, string? LabelOverride) ExpectedCustomFieldRule(
-        JsonElement? rules,
-        string formatCode,
-        string fieldKey,
-        string fieldType,
-        bool fieldEnabled,
-        int enabledOptionCount)
-    {
-        if (!fieldEnabled || rules is null)
-        {
-            return ("hidden", null);
-        }
-
-        if (!TryLegacyFormatRuleProperty(rules.Value, formatCode, out var format) &&
-            (IsLegacyBuiltinFormat(formatCode) || !TryLegacyFormatRuleProperty(rules.Value, "book", out format)))
-        {
-            return ("hidden", null);
-        }
-        if (format.ValueKind != JsonValueKind.Object ||
-            !TryExactProperty(format, "customFields", out var customFields) ||
-            customFields.ValueKind != JsonValueKind.Object ||
-            !TryExactProperty(customFields, fieldKey, out var rule))
-        {
-            return ("hidden", null);
-        }
-
-        var incomingMode = rule.ValueKind == JsonValueKind.Object && TryExactProperty(rule, "mode", out var modeValue) &&
-            modeValue.ValueKind == JsonValueKind.String
-                ? modeValue.GetString()!.Trim()
-                : string.Empty;
-        var mode = incomingMode is "required" or "optional" or "hidden" ? incomingMode : "hidden";
-        if (mode == "required" && fieldType == "select" && enabledOptionCount == 0)
-        {
-            mode = "optional";
-        }
-        var label = rule.ValueKind == JsonValueKind.Object && TryExactProperty(rule, "label", out var labelValue) &&
-                    labelValue.ValueKind == JsonValueKind.String
-            ? labelValue.GetString()!.Trim()
-            : string.Empty;
-        return (mode, label.Length == 0 ? null : label);
-    }
-
-    private static int ReadEnabledOptionCount(JsonElement definition)
-    {
-        if (!definition.TryGetProperty("options", out var options) || options.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-        {
-            return 0;
-        }
-        if (options.ValueKind != JsonValueKind.Array)
-        {
-            return Fail<int>("A source custom-field options value is not an array.");
-        }
-
-        var enabled = 0;
-        foreach (var option in options.EnumerateArray())
-        {
-            if (OptionalPropertyBoolean(option, "enabled", defaultValue: true))
-            {
-                enabled++;
-            }
-        }
-        return enabled;
-    }
-
-    private static string RequiredPropertyString(JsonElement value, string propertyName)
-    {
-        if (value.ValueKind == JsonValueKind.Object && value.TryGetProperty(propertyName, out var property) &&
-            property.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(property.GetString()))
-        {
-            return property.GetString()!;
-        }
-        return Fail<string>($"A source custom-field {propertyName} value is missing.");
-    }
-
-    private static bool OptionalPropertyBoolean(JsonElement value, string propertyName, bool defaultValue)
-    {
-        if (!value.TryGetProperty(propertyName, out var property) || property.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-        {
-            return defaultValue;
-        }
-        return property.ValueKind switch
-        {
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            _ => Fail<bool>($"A source custom-field {propertyName} value is not boolean.")
-        };
     }
 
     private static (string EntityType, long FormatId, int OwnerOrganizationId, string Code, int? OverrideLibraryId) ReadFormatMapping(
@@ -1320,7 +1321,7 @@ internal static class MigrationIndependentVerifier
             ? referenced
             : organizations.SingleOrDefault(row => row.Int32("organizationId")?.ToString(CultureInfo.InvariantCulture) == sourceReference);
         var id = organization?.Int32("organizationId") ??
-            (int.TryParse(sourceReference, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0);
+            (int.TryParse(sourceReference, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0);
         return IsSourceLibrary(id, organizations) ? id : Fail<int>("A source relation does not identify an authoritative library.");
     }
 

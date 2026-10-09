@@ -65,7 +65,9 @@ public sealed partial class PatronJourneyTests
         provider.BlockCheckoutRead();
         await using var scoped = factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
         {
+            services.RemoveAll<IPatronProvider>();
             services.RemoveAll<IStaffPolarisProvider>();
+            services.AddSingleton<IPatronProvider>(provider);
             services.AddSingleton<IStaffPolarisProvider>(provider);
         }));
         var contexts = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();

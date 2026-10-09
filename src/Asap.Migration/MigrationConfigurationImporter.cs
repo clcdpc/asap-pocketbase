@@ -1,3 +1,5 @@
+using System.Data;
+using System.Globalization;
 using Asap.Shared;
 using System.Text.Json;
 using System.Security.Cryptography;
@@ -18,6 +20,21 @@ internal static class MigrationConfigurationImporter
         string Label,
         bool Enabled,
         int SortOrder);
+
+    private sealed record NormalizedCustomFieldOption(
+        string Key,
+        string Label,
+        bool Enabled,
+        int SortOrder);
+
+    private sealed record NormalizedCustomFieldDefinition(
+        string Key,
+        string Type,
+        string Label,
+        string? HelpText,
+        bool Enabled,
+        int SortOrder,
+        IReadOnlyList<NormalizedCustomFieldOption> Options);
 
     private sealed record SenderCandidate(string SourceId, string? Value);
 
@@ -61,6 +78,8 @@ internal static class MigrationConfigurationImporter
         "duplicateLabelSilent"
     ];
 
+    private static readonly string[] SeededEmailTemplateKeys = ["suggestion_submitted"];
+
     public static void Import(
         SqlConnection connection,
         SqlTransaction transaction,
@@ -102,20 +121,20 @@ internal static class MigrationConfigurationImporter
             templateIds,
             exportedAtUtc,
             importedCounts);
+        ImportBranding(
+            connection,
+            transaction,
+            package,
+            organizationIds,
+            exportedAtUtc,
+            importedCounts,
+            transformations);
         ImportPatronConfiguration(
             connection,
             transaction,
             package,
             organizationIds,
             formatIds,
-            exportedAtUtc,
-            importedCounts,
-            transformations);
-        ImportBranding(
-            connection,
-            transaction,
-            package,
-            organizationIds,
             exportedAtUtc,
             importedCounts,
             transformations);
@@ -174,7 +193,7 @@ internal static class MigrationConfigurationImporter
             command.Parameters.AddWithValue("@contentType", contentType);
             command.Parameters.AddWithValue("@fileName", row.RequiredString("fileName"));
             command.Parameters.AddWithValue("@logoAlt", Db(row.Text("logoAlt")));
-            command.Parameters.AddWithValue("@updatedUtc", exportedAtUtc);
+            AddDateTime2Parameter(command, "@updatedUtc", exportedAtUtc);
             command.ExecuteNonQuery();
             transformations.Add(new
             {
@@ -189,12 +208,38 @@ internal static class MigrationConfigurationImporter
         importedCounts["branding"] = rows.Count;
     }
 
+    public static void ValidateEmbedOrigins(ValidatedMigrationPackage package)
+    {
+        var rows = MigrationPackageReader.ReadRows(package, "system-settings.json", "system_settings");
+        if (rows.Count > 1)
+        {
+            throw new MigrationOperationException(
+                "system_settings_ambiguous",
+                "More than one source system_settings row was exported.");
+        }
+        _ = SplitValues(rows.SingleOrDefault()?.String("patronEmbedAllowedOrigins"))
+            .Select(NormalizeEmbedOrigin)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    public static void ValidateSourcePackage(ValidatedMigrationPackage package)
+    {
+        ValidateConfigurationRows(package);
+        ValidateEmbedOrigins(package);
+    }
+
     private static void ValidateConfigurationRows(ValidatedMigrationPackage package)
     {
+        var workflowRows = MigrationPackageReader.ReadRows(package, "workflow-settings.json", "workflow_settings");
         ValidateUniqueScope(
-            MigrationPackageReader.ReadRows(package, "workflow-settings.json", "workflow_settings"),
+            workflowRows,
             "workflow settings",
             row => ScopedKey(row, "libraryOrganization"));
+        foreach (var row in workflowRows)
+        {
+            _ = ParsePatronCodeIds(row.Text("allowedPatronCodeIds"));
+        }
         ValidateUniqueScope(
             MigrationPackageReader.ReadRows(package, "patron-settings.json", "ui_settings"),
             "patron UI settings",
@@ -203,6 +248,21 @@ internal static class MigrationConfigurationImporter
             MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_settings_overrides"),
             "patron settings overrides",
             row => row.RequiredString("orgId"));
+        foreach (var row in MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_settings_overrides"))
+        {
+            if (row.JsonText("additionalFieldDefinitions") is not { } definitionsJson)
+            {
+                continue;
+            }
+            using var document = JsonDocument.Parse(definitionsJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                throw new MigrationOperationException(
+                    "custom_fields_invalid",
+                    "Additional field definitions must be a JSON array.");
+            }
+            _ = NormalizeCustomFieldDefinitions(document.RootElement);
+        }
         ValidateUniqueScope(
             MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_library_settings"),
             "legacy patron settings",
@@ -211,6 +271,29 @@ internal static class MigrationConfigurationImporter
             MigrationPackageReader.ReadRows(package, "patron-settings.json", "library_settings"),
             "legacy library settings",
             row => row.RequiredString("libraryOrganization"));
+
+        foreach (var row in MigrationPackageReader.ReadRows(package, "patron-settings.json", "ui_settings"))
+        {
+            var rawOptions = row.Text("publicationOptions");
+            if (string.Equals(row.RequiredString("scope").Trim(), "system", StringComparison.OrdinalIgnoreCase) &&
+                HasLegacyConfigurationText(rawOptions))
+            {
+                _ = ParsePublicationOptions(rawOptions!, isSystem: true);
+            }
+        }
+        foreach (var row in MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_settings_overrides"))
+        {
+            _ = ParseDuplicateLabelObject(row.JsonText("duplicateStatusLabels"), modernOverride: true);
+            var rawOptions = row.Text("publicationOptions");
+            if (HasLegacyConfigurationText(rawOptions))
+            {
+                _ = ParsePublicationOptions(rawOptions!, isSystem: false);
+            }
+        }
+        foreach (var row in MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_library_settings"))
+        {
+            _ = ParseDuplicateLabelObject(row.JsonText("duplicateRequestStatusLabels"), modernOverride: false);
+        }
 
         var emailRows = MigrationPackageReader.ReadRows(package, "email-templates.json", "email_templates");
         var rejectionRows = MigrationPackageReader.ReadRows(package, "email-templates.json", "rejection_templates");
@@ -233,11 +316,276 @@ internal static class MigrationConfigurationImporter
             }
         }
 
+        ValidateEmailTemplateSqlIdentity(package, emailRows, rejectionRows);
+
+        ValidateTemplateLineageAndWorkflowSelections(package, emailRows, rejectionRows);
+
         ValidateUniqueScope(
             MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats"),
             "material formats",
             row => $"{ScopedKey(row, "libraryOrganization")}|{row.RequiredString("code").Trim().ToLowerInvariant()}");
     }
+
+    private static void ValidateEmailTemplateSqlIdentity(
+        ValidatedMigrationPackage package,
+        IReadOnlyList<SourceRow> emailRows,
+        IReadOnlyList<SourceRow> rejectionRows)
+    {
+        foreach (var row in emailRows)
+        {
+            var key = row.RequiredString("templateKey");
+            if (key.StartsWith("rejection:", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new MigrationOperationException(
+                    "email_template_target_kind_invalid",
+                    $"Ordinary source email template {row.RequiredString("id")} uses the target-reserved rejection-template key prefix.");
+            }
+            if (SeededEmailTemplateKeys.Any(seed =>
+                    string.Equals(key, seed, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(key, seed, StringComparison.Ordinal)))
+            {
+                throw new MigrationOperationException(
+                    "email_template_seed_identity_collision",
+                    $"Email template {row.RequiredString("id")} changes the exact identity of a seeded system template.");
+            }
+        }
+
+        var systemKeys = emailRows
+            .Where(row => TemplateScope(row) == "system")
+            .Select(row => row.RequiredString("templateKey"))
+            .ToArray();
+        foreach (var row in emailRows.Where(row => TemplateScope(row) == "library" && row.String("sourceTemplateId") is null))
+        {
+            var key = row.RequiredString("templateKey");
+            if (systemKeys.Any(systemKey =>
+                    string.Equals(key, systemKey, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(key, systemKey, StringComparison.Ordinal)))
+            {
+                throw new MigrationOperationException(
+                    "email_template_sql_identity_collision",
+                    $"Library email template {row.RequiredString("id")} collides with a system template only under target SQL case-insensitive comparison.");
+            }
+        }
+
+        var organizations = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations")
+            .ToDictionary(
+                row => row.RequiredString("id"),
+                row => row.Int32("organizationId") ?? throw new MigrationOperationException(
+                    "settings_organization_unresolved",
+                    "A source organization has no native identity."),
+                StringComparer.Ordinal);
+        var targetIdentities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (row, isRejection) in emailRows.Select(row => (row, false)).Concat(rejectionRows.Select(row => (row, true))))
+        {
+            var scope = TemplateScope(row);
+            var organizationId = scope == "system"
+                ? 1
+                : ResolvePackageLibraryOrganization(row.RequiredString("libraryOrganization"), package, organizations);
+            var templateKey = isRejection
+                ? "rejection:" + (scope == "library" ? row.String("sourceTemplateId") ?? row.RequiredString("id") : row.RequiredString("id"))
+                : row.RequiredString("templateKey");
+            if (!targetIdentities.Add($"{organizationId.ToString(CultureInfo.InvariantCulture)}|{templateKey}"))
+            {
+                throw new MigrationOperationException(
+                    "email_template_sql_identity_collision",
+                    $"Email template {row.RequiredString("id")} collides with another source template in the target's case-insensitive organization/key identity.");
+            }
+        }
+    }
+
+    private static void ValidateTemplateLineageAndWorkflowSelections(
+        ValidatedMigrationPackage package,
+        IReadOnlyList<SourceRow> emailRows,
+        IReadOnlyList<SourceRow> rejectionRows)
+    {
+        var templates = emailRows.Select(row => new SourceTemplateInfo(row, false))
+            .Concat(rejectionRows.Select(row => new SourceTemplateInfo(row, true)))
+            .ToDictionary(item => item.Row.RequiredString("id"), StringComparer.Ordinal);
+        foreach (var template in templates.Values)
+        {
+            var scope = TemplateScope(template.Row);
+            var sourceTemplateId = template.Row.String("sourceTemplateId");
+            if (scope == "system")
+            {
+                if (sourceTemplateId is not null)
+                {
+                    throw new MigrationOperationException(
+                        "email_template_source_scope_invalid",
+                        "A system email template cannot declare library override lineage.");
+                }
+                continue;
+            }
+            if (scope != "library" || sourceTemplateId is null)
+            {
+                continue;
+            }
+            if (!templates.TryGetValue(sourceTemplateId, out var source) || TemplateScope(source.Row) != "system")
+            {
+                throw new MigrationOperationException(
+                    "email_template_source_scope_invalid",
+                    "A library email template may inherit only from a system template in the immutable source package.");
+            }
+            if (template.IsRejection != source.IsRejection)
+            {
+                throw new MigrationOperationException(
+                    "email_template_source_kind_invalid",
+                    "A rejection template may inherit only from a system rejection template, and an ordinary template only from an ordinary system template.");
+            }
+            if (!template.IsRejection && !string.Equals(
+                    template.Row.RequiredString("templateKey"),
+                    source.Row.RequiredString("templateKey"),
+                    StringComparison.Ordinal))
+            {
+                throw new MigrationOperationException(
+                    "email_template_source_key_invalid",
+                    "An ordinary library template's explicit system parent must have the same template key.");
+            }
+        }
+
+        var organizationIds = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations")
+            .ToDictionary(
+                row => row.RequiredString("id"),
+                row => row.Int32("organizationId") ?? throw new MigrationOperationException(
+                    "settings_organization_unresolved",
+                    "A source organization has no native identity."),
+                StringComparer.Ordinal);
+        foreach (var workflow in MigrationPackageReader.ReadRows(package, "workflow-settings.json", "workflow_settings"))
+        {
+            if (workflow.String("outstandingTimeoutRejectionTemplate") is not { } selectedSourceId)
+            {
+                continue;
+            }
+            if (!templates.TryGetValue(selectedSourceId, out var selected))
+            {
+                throw new MigrationOperationException(
+                    "workflow_template_unresolved",
+                    "A workflow rejection template reference cannot be resolved.");
+            }
+            if (!selected.IsRejection)
+            {
+                throw new MigrationOperationException(
+                    "workflow_template_kind_invalid",
+                    "A workflow timeout must reference the rejection_templates collection.");
+            }
+
+            var workflowScope = TemplateScope(workflow);
+            var workflowOrganizationId = workflowScope switch
+            {
+                "system" => 1,
+                "library" => ResolvePackageLibraryOrganization(workflow.RequiredString("libraryOrganization"), package, organizationIds),
+                _ => throw new MigrationOperationException("settings_scope_invalid", "A workflow setting has an unsupported scope.")
+            };
+            var selectedScope = TemplateScope(selected.Row);
+            var selectedOrganizationId = selectedScope switch
+            {
+                "system" => 1,
+                "library" => ResolvePackageLibraryOrganization(selected.Row.RequiredString("libraryOrganization"), package, organizationIds),
+                _ => throw new MigrationOperationException("email_template_scope_invalid", "An email template has an unsupported scope.")
+            };
+            if (selectedOrganizationId != 1 && selectedOrganizationId != workflowOrganizationId)
+            {
+                throw new MigrationOperationException(
+                    "workflow_template_scope_invalid",
+                    "A workflow can select only a system rejection template or one owned by its own library.");
+            }
+
+            var effective = ResolveEffectiveWorkflowTemplate(selected, workflowOrganizationId, templates.Values, package, organizationIds);
+            if (!GetTemplateKey(effective.Base).StartsWith("rejection:", StringComparison.OrdinalIgnoreCase) ||
+                effective.Hidden || string.IsNullOrWhiteSpace(effective.Subject) || string.IsNullOrWhiteSpace(effective.Body))
+            {
+                throw new MigrationOperationException(
+                    "workflow_template_invalid",
+                    "A workflow must select an enabled rejection template with complete effective content in its own scope.");
+            }
+        }
+    }
+
+    private static (SourceTemplateInfo Base, bool Hidden, string? Subject, string? Body) ResolveEffectiveWorkflowTemplate(
+        SourceTemplateInfo selected,
+        int workflowOrganizationId,
+        IEnumerable<SourceTemplateInfo> allTemplates,
+        ValidatedMigrationPackage package,
+        IReadOnlyDictionary<string, int> organizationIds)
+    {
+        var templates = allTemplates.ToArray();
+        SourceTemplateInfo baseTemplate;
+        SourceTemplateInfo? overrideTemplate = null;
+        if (TemplateScope(selected.Row) == "system")
+        {
+            baseTemplate = selected;
+            if (workflowOrganizationId != 1)
+            {
+                overrideTemplate = templates.SingleOrDefault(item =>
+                    TemplateScope(item.Row) == "library" &&
+                    ResolvePackageLibraryOrganization(item.Row.RequiredString("libraryOrganization"), package, organizationIds) == workflowOrganizationId &&
+                    (string.Equals(item.Row.String("sourceTemplateId"), selected.Row.RequiredString("id"), StringComparison.Ordinal) ||
+                     !item.IsRejection && string.Equals(GetTemplateKey(item), GetTemplateKey(selected), StringComparison.Ordinal)));
+            }
+        }
+        else
+        {
+            overrideTemplate = selected;
+            var sourceTemplateId = selected.Row.String("sourceTemplateId");
+            if (sourceTemplateId is not null)
+            {
+                baseTemplate = templates.Single(item => string.Equals(item.Row.RequiredString("id"), sourceTemplateId, StringComparison.Ordinal));
+            }
+            else if (!selected.IsRejection)
+            {
+                baseTemplate = templates.SingleOrDefault(item =>
+                    TemplateScope(item.Row) == "system" &&
+                    string.Equals(GetTemplateKey(item), GetTemplateKey(selected), StringComparison.Ordinal)) ?? selected;
+            }
+            else
+            {
+                baseTemplate = selected;
+            }
+            if (ReferenceEquals(baseTemplate, selected))
+            {
+                overrideTemplate = null;
+            }
+        }
+
+        var hidden = !baseTemplate.Row.Bool("enabled", true) ||
+            overrideTemplate is not null && !overrideTemplate.Row.Bool("enabled", true);
+        var subject = MeaningfulTemplateText(overrideTemplate?.Row.Text("subject")) ?? MeaningfulTemplateText(baseTemplate.Row.Text("subject"));
+        var body = MeaningfulTemplateText(overrideTemplate?.Row.Text("body")) ?? MeaningfulTemplateText(baseTemplate.Row.Text("body"));
+        return (baseTemplate, hidden, subject, body);
+    }
+
+    private static int ResolvePackageLibraryOrganization(
+        string sourceReference,
+        ValidatedMigrationPackage package,
+        IReadOnlyDictionary<string, int> organizationIds)
+    {
+        var organizationId = organizationIds.TryGetValue(sourceReference, out var mapped)
+            ? mapped
+            : int.TryParse(sourceReference, NumberStyles.Integer, CultureInfo.InvariantCulture, out var nativeId) && organizationIds.Values.Contains(nativeId)
+                ? nativeId
+                : throw new MigrationOperationException("settings_organization_unresolved", "A source library reference cannot be resolved.");
+        var row = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations")
+            .SingleOrDefault(item => item.Int32("organizationId") == organizationId);
+        var organizationCodeId = row is null
+            ? null
+            : row.HasValue("organizationCodeId") ? row.Int32("organizationCodeId") : row.Int32("organization_code_id");
+        if (organizationId <= 1 || organizationCodeId != 2)
+        {
+            throw new MigrationOperationException("settings_organization_unresolved", "A source organization reference is not a library.");
+        }
+        return organizationId;
+    }
+
+    private static string TemplateScope(SourceRow row) => row.RequiredString("scope").Trim().ToLowerInvariant();
+
+    private static string GetTemplateKey(SourceTemplateInfo template) => template.IsRejection
+        ? "rejection:" + (TemplateScope(template.Row) == "library"
+            ? template.Row.String("sourceTemplateId") ?? template.Row.RequiredString("id")
+            : template.Row.RequiredString("id"))
+        : template.Row.RequiredString("templateKey");
+
+    private static string? MeaningfulTemplateText(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private sealed record SourceTemplateInfo(SourceRow Row, bool IsRejection);
 
     private static void ValidateUniqueScope(
         IReadOnlyList<SourceRow> rows,
@@ -315,6 +663,11 @@ internal static class MigrationConfigurationImporter
                 "The frozen effective runtime configuration is incomplete.");
         }
 
+        var origins = SplitValues(row?.String("patronEmbedAllowedOrigins"))
+            .Select(NormalizeEmbedOrigin)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
         using (var command = new SqlCommand(
             """
             UPDATE [asap].[SystemSettings]
@@ -334,14 +687,10 @@ internal static class MigrationConfigurationImporter
             command.Parameters.AddWithValue("@bibPattern", Db(row?.String("leapBibUrlPattern")));
             command.Parameters.AddWithValue("@patronPattern", Db(row?.String("leapPatronUrlPattern")));
             command.Parameters.AddWithValue("@iconPattern", iconPattern);
-            command.Parameters.AddWithValue("@updatedUtc", row?.UtcDateTime("updated") ?? exportedAtUtc);
+            AddDateTime2Parameter(command, "@updatedUtc", row?.UtcDateTime("updated") ?? exportedAtUtc);
             command.ExecuteNonQuery();
         }
 
-        var origins = SplitValues(row?.String("patronEmbedAllowedOrigins"))
-            .Select(NormalizeEmbedOrigin)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
         foreach (var origin in origins)
         {
             using var insert = new SqlCommand(
@@ -350,7 +699,7 @@ internal static class MigrationConfigurationImporter
                 transaction);
             insert.Parameters.AddWithValue("@origin", origin);
             insert.Parameters.AddWithValue("@normalized", origin);
-            insert.Parameters.AddWithValue("@createdUtc", exportedAtUtc);
+            AddDateTime2Parameter(insert, "@createdUtc", exportedAtUtc);
             insert.ExecuteNonQuery();
         }
         importedCounts["system_settings"] = rows.Count;
@@ -380,11 +729,24 @@ internal static class MigrationConfigurationImporter
         if (wildcard.Success)
         {
             var scheme = wildcard.Groups[1].Value.ToLowerInvariant();
-            var host = wildcard.Groups[2].Value.ToLowerInvariant();
+            var authority = wildcard.Groups[2].Value;
+            var hostMatch = Regex.Match(
+                authority,
+                "^(?<host>[a-z0-9.-]+)(?::(?<port>[0-9]+))?$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            var host = authority.ToLowerInvariant();
             if (scheme != "https" ||
-                host.Contains('/') || host.Contains('?') || host.Contains('#') ||
-                host.Contains("..", StringComparison.Ordinal) || !host.Contains('.') ||
-                !Regex.IsMatch(host, "^[a-z0-9.-]+(?::[0-9]+)?$", RegexOptions.CultureInvariant))
+                !hostMatch.Success ||
+                !IsValidEmbedPort(hostMatch) ||
+                !IsDnsHostname(hostMatch.Groups["host"].Value) ||
+                !Uri.TryCreate($"https://{authority}", UriKind.Absolute, out var wildcardUri) ||
+                wildcardUri.HostNameType != UriHostNameType.Dns ||
+                !hostMatch.Groups["host"].Value.TrimEnd('.').Contains('.') ||
+                wildcardUri.AbsolutePath != "/" ||
+                !string.IsNullOrEmpty(wildcardUri.Query) ||
+                !string.IsNullOrEmpty(wildcardUri.Fragment) ||
+                !string.IsNullOrEmpty(wildcardUri.UserInfo) ||
+                wildcardUri.Port is < 0 or > 65535)
             {
                 throw InvalidEmbedOrigin();
             }
@@ -403,9 +765,26 @@ internal static class MigrationConfigurationImporter
 
         var protocol = plain.Groups[1].Value.ToLowerInvariant();
         var plainHost = plain.Groups[2].Value.ToLowerInvariant();
+        var authorityMatch = Regex.Match(
+            plainHost,
+            "^(?<host>[a-z0-9.-]+|\\[[0-9a-f:.]+\\])(?::(?<port>[0-9]+))?$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var rawAuthorityHost = authorityMatch.Success ? authorityMatch.Groups["host"].Value : string.Empty;
+        var hostForValidation = rawAuthorityHost.Trim('[', ']');
         if (plainHost.Length == 0 ||
             plainHost.Contains('@') ||
-            !Regex.IsMatch(plainHost, "^[a-z0-9.:[\\]-]+$", RegexOptions.CultureInvariant))
+            !authorityMatch.Success ||
+            !IsValidEmbedPort(authorityMatch) ||
+            !Uri.TryCreate(origin, UriKind.Absolute, out var parsedOrigin) ||
+            !string.IsNullOrEmpty(parsedOrigin.UserInfo) ||
+            parsedOrigin.Scheme != protocol ||
+            parsedOrigin.AbsolutePath != "/" ||
+            !string.IsNullOrEmpty(parsedOrigin.Query) ||
+            !string.IsNullOrEmpty(parsedOrigin.Fragment) ||
+            parsedOrigin.Port is < 0 or > 65535 ||
+            parsedOrigin.HostNameType == UriHostNameType.Unknown ||
+            (parsedOrigin.HostNameType == UriHostNameType.Dns && !IsDnsHostname(hostForValidation)) ||
+            (rawAuthorityHost.StartsWith("[", StringComparison.Ordinal) && parsedOrigin.HostNameType != UriHostNameType.IPv6))
         {
             throw InvalidEmbedOrigin();
         }
@@ -419,6 +798,31 @@ internal static class MigrationConfigurationImporter
 
         return $"{protocol}://{plainHost}";
     }
+
+    private static bool IsValidEmbedPort(Match authority)
+    {
+        if (!authority.Groups["port"].Success)
+        {
+            return true;
+        }
+        return int.TryParse(authority.Groups["port"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var port) &&
+            port is >= 0 and <= 65535;
+    }
+
+    private static bool IsDnsHostname(string host)
+    {
+        var value = host.EndsWith(".", StringComparison.Ordinal) ? host[..^1] : host;
+        if (value.Length is 0 or > 253)
+        {
+            return false;
+        }
+        return value.Split('.').All(label => label.Length is > 0 and <= 63 &&
+            IsAsciiAlphaNumeric(label[0]) && IsAsciiAlphaNumeric(label[^1]) &&
+            label.All(character => IsAsciiAlphaNumeric(character) || character == '-'));
+    }
+
+    private static bool IsAsciiAlphaNumeric(char value) =>
+        value is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9';
 
     private static MigrationOperationException InvalidEmbedOrigin() =>
         new(
@@ -468,7 +872,7 @@ internal static class MigrationConfigurationImporter
             command.Parameters.AddWithValue("@protectedAdminPassword", Db(adminPassword is null ? null : credentialProtector!.Protect(adminPassword)));
             command.Parameters.AddWithValue("@workstationId", Db(row.PositiveInt32("workstationId", "source_polaris_identity_invalid")));
             command.Parameters.AddWithValue("@userId", Db(row.PositiveInt32("userId", "source_polaris_identity_invalid")));
-            command.Parameters.AddWithValue("@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
+            AddDateTime2Parameter(command, "@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
             command.ExecuteNonQuery();
             transformations.Add(new
             {
@@ -506,6 +910,12 @@ internal static class MigrationConfigurationImporter
                 "credential_protection_not_configured",
                 "A target Postmark token requires the target Data Protection import inputs.");
         }
+        transformations.Add(new
+        {
+            entity = "email_provider_token",
+            organizationId = 1,
+            postmarkTokenProvisioned = postmarkToken is not null
+        });
         var templateRows = MigrationPackageReader.ReadRowsOrEmpty(
             package,
             "email-templates.json",
@@ -540,7 +950,7 @@ internal static class MigrationConfigurationImporter
                 Db(postmarkToken is null ? null : credentialProtector!.Protect(postmarkToken)));
             command.Parameters.AddWithValue("@fromAddress", Db(systemFromAddress));
             command.Parameters.AddWithValue("@fromName", Db(systemFromName));
-            command.Parameters.AddWithValue("@updatedUtc", rows.SingleOrDefault()?.UtcDateTime("updated") ?? exportedAtUtc);
+            AddDateTime2Parameter(command, "@updatedUtc", rows.SingleOrDefault()?.UtcDateTime("updated") ?? exportedAtUtc);
             command.ExecuteNonQuery();
             if (rows.Count > 0)
             {
@@ -593,7 +1003,7 @@ internal static class MigrationConfigurationImporter
             command.Parameters.AddWithValue("@organizationId", group.Key);
             command.Parameters.AddWithValue("@fromAddress", Db(fromAddress));
             command.Parameters.AddWithValue("@fromName", Db(fromName));
-            command.Parameters.AddWithValue("@updatedUtc", group.Select(row => row.UtcDateTime("updated"))
+            AddDateTime2Parameter(command, "@updatedUtc", group.Select(row => row.UtcDateTime("updated"))
                 .Where(value => value.HasValue)
                 .OrderBy(value => value)
                 .FirstOrDefault() ?? exportedAtUtc);
@@ -650,7 +1060,7 @@ internal static class MigrationConfigurationImporter
         IDictionary<string, int> importedCounts)
     {
         var rows = MigrationPackageReader.ReadRows(package, "workflow-settings.json", "workflow_settings");
-        foreach (var row in rows.OrderBy(item => item.RequiredString("scope") == "system" ? 0 : 1))
+        foreach (var row in rows.OrderBy(item => string.Equals(item.RequiredString("scope").Trim(), "system", StringComparison.OrdinalIgnoreCase) ? 0 : 1))
         {
             var organizationId = ResolveScopedOrganization(connection, transaction, row, organizationIds);
             var isSystem = organizationId == 1;
@@ -720,11 +1130,11 @@ internal static class MigrationConfigurationImporter
             command.Parameters.AddWithValue("@allowAnyCard", Db(Bool(row, "allowAnyRegisteredCardLogin", isSystem, false)));
             command.Parameters.AddWithValue("@patronCodeEnabled", Db(Bool(row, "patronCodeEligibilityEnabled", isSystem, false)));
             command.Parameters.AddWithValue("@patronCodeMessage", Db(ScopedText(row, "patronCodeEligibilityMessage", isSystem)));
-            command.Parameters.AddWithValue("@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
+            AddDateTime2Parameter(command, "@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
             command.ExecuteNonQuery();
 
-            ReplaceCommonCreators(connection, transaction, organizationId, row.String("commonAuthorsList"), isSystem);
-            ReplacePatronCodes(connection, transaction, organizationId, row.String("allowedPatronCodeIds"), isSystem);
+            ReplaceCommonCreators(connection, transaction, organizationId, row.Text("commonAuthorsList"), isSystem);
+            ReplacePatronCodes(connection, transaction, organizationId, row.Text("allowedPatronCodeIds"), isSystem);
             ImportExternalSearch(connection, transaction, organizationId, row, isSystem);
         }
         importedCounts["workflow_settings"] = rows.Count;
@@ -737,7 +1147,7 @@ internal static class MigrationConfigurationImporter
         string? sourceValue,
         bool isSystem)
     {
-        var values = SplitValues(sourceValue);
+        var values = SplitLegacyCommonCreatorLines(sourceValue);
         if (!isSystem && values.Count == 0)
         {
             return;
@@ -758,10 +1168,31 @@ internal static class MigrationConfigurationImporter
         }
     }
 
-    private static IReadOnlyList<int> ParsePatronCodeIds(string? value) =>
-        SplitValues(value).Select(item =>
-            SourceRow.ParsePositiveInt32(item, "allowedPatronCodeIds", "source_patron_code_invalid")!.Value)
-            .Distinct().Order().ToArray();
+    private static IReadOnlyList<int> ParsePatronCodeIds(string? value)
+    {
+        if (value is null)
+        {
+            return [];
+        }
+        var ids = new HashSet<int>();
+        foreach (var raw in value.Split(','))
+        {
+            var token = TrimLegacyConfigurationText(raw);
+            if (token.Length == 0)
+            {
+                continue;
+            }
+            if (!int.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id <= 0 ||
+                !string.Equals(token, id.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+            {
+                throw new MigrationOperationException(
+                    "source_patron_code_invalid",
+                    "Each allowed patron-code ID must be a canonical positive Int32 that the target can preserve exactly.");
+            }
+            ids.Add(id);
+        }
+        return ids.Order().ToArray();
+    }
 
     private static void ReplacePatronCodes(
         SqlConnection connection,
@@ -879,7 +1310,7 @@ internal static class MigrationConfigurationImporter
         ICollection<object> transformations)
     {
         var uiRows = MigrationPackageReader.ReadRows(package, "patron-settings.json", "ui_settings");
-        foreach (var row in uiRows.OrderBy(item => item.RequiredString("scope") == "system" ? 0 : 1))
+        foreach (var row in uiRows.OrderBy(item => string.Equals(item.RequiredString("scope").Trim(), "system", StringComparison.OrdinalIgnoreCase) ? 0 : 1))
         {
             var organizationId = ResolveScopedOrganization(connection, transaction, row, organizationIds);
             UpsertPatronSettings(connection, transaction, organizationId, row, exportedAtUtc);
@@ -909,7 +1340,7 @@ internal static class MigrationConfigurationImporter
                     connection,
                     transaction);
                 updateSystem.Parameters.AddWithValue("@message", Db(row.Text("systemNotEnabledMessage")));
-                updateSystem.Parameters.AddWithValue("@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
+                AddDateTime2Parameter(updateSystem, "@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
                 updateSystem.ExecuteNonQuery();
             }
             if (organizationId == 1)
@@ -1064,7 +1495,7 @@ internal static class MigrationConfigurationImporter
             .ToArray();
         reader.Close();
         using var originsCommand = new SqlCommand(
-            "SELECT [NormalizedOrigin] FROM [asap].[PatronEmbedAllowedOrigin] WHERE [OrganizationId] = 1 ORDER BY [NormalizedOrigin];",
+            "SELECT [NormalizedOrigin] FROM [asap].[PatronEmbedAllowedOrigin] WHERE [OrganizationId] = 1;",
             connection,
             transaction);
         using var originsReader = originsCommand.ExecuteReader();
@@ -1073,6 +1504,7 @@ internal static class MigrationConfigurationImporter
         {
             actualOrigins.Add(originsReader.GetString(0));
         }
+        actualOrigins.Sort(StringComparer.Ordinal);
 
         EnsureConfiguration(expectedOrigins.SequenceEqual(actualOrigins, StringComparer.Ordinal), "patron embed origins");
         counter.Fields += expectedOrigins.Length;
@@ -1240,8 +1672,8 @@ internal static class MigrationConfigurationImporter
             counter.Rows++;
             counter.Fields += 21;
 
-            ReconcileCommonCreatorSet(connection, transaction, organizationId, row.String("commonAuthorsList"), isSystem, counter);
-            ReconcilePatronCodeSet(connection, transaction, organizationId, row.String("allowedPatronCodeIds"), isSystem, counter);
+            ReconcileCommonCreatorSet(connection, transaction, organizationId, row.Text("commonAuthorsList"), isSystem, counter);
+            ReconcilePatronCodeSet(connection, transaction, organizationId, row.Text("allowedPatronCodeIds"), isSystem, counter);
             ReconcileExternalSearch(connection, transaction, organizationId, row, isSystem, counter);
         }
     }
@@ -1254,7 +1686,7 @@ internal static class MigrationConfigurationImporter
         bool isSystem,
         ReconciliationCounter counter)
     {
-        var expected = SplitValues(rawValue);
+        var expected = SplitLegacyCommonCreatorLines(rawValue);
         var expectedSet = isSystem || expected.Count > 0;
         using var setCommand = new SqlCommand(
             "SELECT COUNT(*) FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] = @organizationId;",
@@ -1543,14 +1975,14 @@ internal static class MigrationConfigurationImporter
     {
         values["EbookMessage"] = ScopedText(row, "ebookMessage", false);
         values["EaudiobookMessage"] = ScopedText(row, "eaudiobookMessage", false);
-        AddDuplicateLabelValues(values, row, ParseObject(row.JsonText("duplicateStatusLabels")));
+        AddDuplicateLabelValues(values, row, ParseDuplicateLabelObject(row.JsonText("duplicateStatusLabels"), modernOverride: true));
     }
 
     private static void AddLegacyDuplicateLabelValues(
         IDictionary<string, string?> values,
         string? rawLabels)
     {
-        AddDuplicateLabelValues(values, null, ParseObject(rawLabels));
+        AddDuplicateLabelValues(values, null, ParseDuplicateLabelObject(rawLabels, modernOverride: false));
     }
 
     private static void AddDuplicateLabelValues(
@@ -1560,7 +1992,8 @@ internal static class MigrationConfigurationImporter
     {
         foreach (var (source, target) in DuplicateLabelFields)
         {
-            var value = labels is not null && labels.TryGetValue(source, out var label)
+            var labelKey = source == "silent" ? "Silently Closed" : source;
+            var value = labels is not null && labels.TryGetValue(labelKey, out var label)
                 ? label
                 : row?.Text($"duplicateLabel{DuplicateLabelSuffix(source)}");
             values[target] = value;
@@ -1624,7 +2057,7 @@ internal static class MigrationConfigurationImporter
         string rawValue,
         ReconciliationCounter counter)
     {
-        var options = ParsePublicationOptions(rawValue);
+        var options = ParsePublicationOptions(rawValue, isSystem: organizationId == 1);
         var expectedSet = organizationId == 1 || options.Count > 0;
         using var setCommand = new SqlCommand(
             "SELECT COUNT(*) FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = @organizationId;",
@@ -1676,66 +2109,52 @@ internal static class MigrationConfigurationImporter
         {
             throw new MigrationOperationException("custom_fields_invalid", "Additional field definitions must be a JSON array.");
         }
-        var definitionItems = definitions.RootElement.EnumerateArray().ToArray();
+        var definitionItems = NormalizeCustomFieldDefinitions(definitions.RootElement);
         EnsureConfiguration(
-            Scalar(connection, transaction, "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = @organizationId;", organizationId) == definitionItems.Length,
+            Scalar(connection, transaction, "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = @organizationId;", organizationId) == definitionItems.Count,
             "custom fields");
         foreach (var definition in definitionItems)
         {
-            var key = RequiredJsonString(definition, "key", "custom_fields_invalid");
-            var type = RequiredJsonString(definition, "type", "custom_fields_invalid");
-            var label = RequiredJsonString(definition, "label", "custom_fields_invalid");
-            var help = JsonStringStrict(definition, "helpText", "custom_fields_invalid");
-            var enabled = JsonBool(definition, "enabled", true);
-            var sortOrder = JsonInt(definition, "sortOrder", 0);
             using var command = new SqlCommand(
                 "SELECT [Id], [FieldType], [Label], [HelpText], [IsEnabled], [SortOrder] FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = @organizationId AND [FieldKey] = @fieldKey;",
                 connection,
                 transaction);
             command.Parameters.AddWithValue("@organizationId", organizationId);
-            command.Parameters.AddWithValue("@fieldKey", key);
+            command.Parameters.AddWithValue("@fieldKey", definition.Key);
             using var reader = command.ExecuteReader();
             EnsureConfiguration(reader.Read(), "custom field");
             var fieldId = reader.GetInt64(0);
             EnsureConfiguration(
-                StringEquals(reader, 1, type) &&
-                StringEquals(reader, 2, label) &&
-                StringEquals(reader, 3, help) &&
-                reader.GetBoolean(4) == enabled &&
-                reader.GetInt32(5) == sortOrder,
+                StringEquals(reader, 1, definition.Type) &&
+                StringEquals(reader, 2, definition.Label) &&
+                StringEquals(reader, 3, definition.HelpText) &&
+                reader.GetBoolean(4) == definition.Enabled &&
+                reader.GetInt32(5) == definition.SortOrder,
                 "custom field");
             counter.Rows++;
             counter.Fields += 5;
             reader.Close();
 
-            var options = definition.TryGetProperty("options", out var optionElement) &&
-                          optionElement.ValueKind == JsonValueKind.Array
-                ? optionElement.EnumerateArray().ToArray()
-                : Array.Empty<JsonElement>();
             using var optionCount = new SqlCommand(
                 "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] WHERE [PatronCustomFieldId] = @fieldId;",
                 connection,
                 transaction);
             optionCount.Parameters.AddWithValue("@fieldId", fieldId);
-            EnsureConfiguration(Convert.ToInt32(optionCount.ExecuteScalar()) == options.Length, "custom field options");
-            foreach (var option in options)
+            EnsureConfiguration(Convert.ToInt32(optionCount.ExecuteScalar()) == definition.Options.Count, "custom field options");
+            foreach (var option in definition.Options)
             {
-                var optionKey = RequiredJsonString(option, "id", "custom_fields_invalid");
-                var optionLabel = RequiredJsonString(option, "label", "custom_fields_invalid");
-                var optionEnabled = JsonBool(option, "enabled", true);
-                var optionSortOrder = JsonInt(option, "sortOrder", 0);
                 using var optionCommand = new SqlCommand(
                     "SELECT [Label], [IsEnabled], [SortOrder] FROM [asap].[PatronCustomFieldOption] WHERE [PatronCustomFieldId] = @fieldId AND [OptionKey] = @optionKey;",
                     connection,
                     transaction);
                 optionCommand.Parameters.AddWithValue("@fieldId", fieldId);
-                optionCommand.Parameters.AddWithValue("@optionKey", optionKey);
+                optionCommand.Parameters.AddWithValue("@optionKey", option.Key);
                 using var optionReader = optionCommand.ExecuteReader();
                 EnsureConfiguration(optionReader.Read(), "custom field option");
                 EnsureConfiguration(
-                    StringEquals(optionReader, 0, optionLabel) &&
-                    optionReader.GetBoolean(1) == optionEnabled &&
-                    optionReader.GetInt32(2) == optionSortOrder,
+                    StringEquals(optionReader, 0, option.Label) &&
+                    optionReader.GetBoolean(1) == option.Enabled &&
+                    optionReader.GetInt32(2) == option.SortOrder,
                     "custom field option");
                 counter.Fields += 3;
                 counter.Relationships++;
@@ -1757,7 +2176,7 @@ internal static class MigrationConfigurationImporter
                 .ThenBy(format => format.Id)
                 .First())
             .ToArray();
-        var expectedRuleCount = effectiveFormats.Length * definitionItems.Length;
+        var expectedRuleCount = effectiveFormats.Length * definitionItems.Count;
         EnsureConfiguration(
             Scalar(connection, transaction, "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] = @organizationId;", organizationId) == expectedRuleCount,
             "custom field format rules");
@@ -1765,18 +2184,14 @@ internal static class MigrationConfigurationImporter
         {
             foreach (var definition in definitionItems)
             {
-                var fieldKey = RequiredJsonString(definition, "key", "custom_fields_invalid");
-                var fieldId = ReadCustomFieldId(connection, transaction, organizationId, fieldKey);
-                var enabledOptionCount = definition.TryGetProperty("options", out var optionElement) &&
-                    optionElement.ValueKind == JsonValueKind.Array
-                        ? optionElement.EnumerateArray().Count(option => JsonBool(option, "enabled", true))
-                        : 0;
+                var fieldId = ReadCustomFieldId(connection, transaction, organizationId, definition.Key);
+                var enabledOptionCount = definition.Options.Count(option => option.Enabled);
                 var expectedRule = ResolveCustomFieldRule(
                     formatRules,
                     effectiveSourceCodes.GetValueOrDefault(format.Code, format.Code),
-                    fieldKey,
-                    RequiredJsonString(definition, "type", "custom_fields_invalid"),
-                    JsonBool(definition, "enabled", true),
+                    definition.Key,
+                    definition.Type,
+                    definition.Enabled,
                     enabledOptionCount);
                 using var ruleCommand = new SqlCommand(
                     "SELECT [Mode], [LabelOverride] FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] = @organizationId AND [MaterialFormatId] = @formatId AND [PatronCustomFieldId] = @fieldId;",
@@ -2012,7 +2427,7 @@ internal static class MigrationConfigurationImporter
                 _ => throw new MigrationOperationException("email_template_scope_invalid", "An email template has an invalid scope.")
             };
             var templateKey = source.IsRejection
-                ? "rejection:" + (row.String("sourceTemplateId") ?? sourceId)
+                ? "rejection:" + (scope == "library" ? row.String("sourceTemplateId") ?? sourceId : sourceId)
                 : row.RequiredString("templateKey");
             var sourceTemplateId = scope == "library"
                 ? ResolveSourceTemplateId(connection, transaction, row, source.IsRejection, templateKey, templateIds)
@@ -2210,7 +2625,7 @@ internal static class MigrationConfigurationImporter
         command.Parameters.AddWithValue("@ebookMessage", Db(ScopedText(row, "ebookMessage", isSystem)));
         command.Parameters.AddWithValue("@eaudiobookMessage", Db(ScopedText(row, "eaudiobookMessage", isSystem)));
         AddDuplicateLabelParameters(command, isSystem ? row : null, null);
-        command.Parameters.AddWithValue("@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
+        AddDateTime2Parameter(command, "@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
         command.ExecuteNonQuery();
     }
 
@@ -2221,7 +2636,7 @@ internal static class MigrationConfigurationImporter
         SourceRow row,
         DateTime exportedAtUtc)
     {
-        var labels = ParseObject(row.JsonText("duplicateStatusLabels"));
+        var labels = ParseDuplicateLabelObject(row.JsonText("duplicateStatusLabels"), modernOverride: true);
         using var command = new SqlCommand(
             """
             UPDATE [asap].[PatronSettings]
@@ -2241,7 +2656,7 @@ internal static class MigrationConfigurationImporter
         command.Parameters.AddWithValue("@ebookMessage", Db(ScopedText(row, "ebookMessage", isSystem: false)));
         command.Parameters.AddWithValue("@eaudiobookMessage", Db(ScopedText(row, "eaudiobookMessage", isSystem: false)));
         AddDuplicateLabelParameters(command, row, labels);
-        command.Parameters.AddWithValue("@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
+        AddDateTime2Parameter(command, "@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
         command.ExecuteNonQuery();
     }
 
@@ -2271,7 +2686,7 @@ internal static class MigrationConfigurationImporter
         SourceRow row,
         DateTime exportedAtUtc)
     {
-        var labels = ParseObject(row.JsonText("duplicateRequestStatusLabels"));
+        var labels = ParseDuplicateLabelObject(row.JsonText("duplicateRequestStatusLabels"), modernOverride: false);
         using var command = new SqlCommand(
             """
             UPDATE [asap].[PatronSettings]
@@ -2288,7 +2703,7 @@ internal static class MigrationConfigurationImporter
             transaction);
         command.Parameters.AddWithValue("@organizationId", organizationId);
         AddDuplicateLabelParameters(command, null, labels);
-        command.Parameters.AddWithValue("@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
+        AddDateTime2Parameter(command, "@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
         command.ExecuteNonQuery();
     }
 
@@ -2303,7 +2718,7 @@ internal static class MigrationConfigurationImporter
             connection,
             transaction);
         command.Parameters.AddWithValue("@organizationId", organizationId);
-        command.Parameters.AddWithValue("@updatedUtc", updatedUtc);
+        AddDateTime2Parameter(command, "@updatedUtc", updatedUtc);
         command.ExecuteNonQuery();
     }
 
@@ -2313,11 +2728,11 @@ internal static class MigrationConfigurationImporter
         int organizationId,
         string? rawValue)
     {
-        if (string.IsNullOrWhiteSpace(rawValue))
+        if (rawValue is null || !HasLegacyConfigurationText(rawValue))
         {
             return;
         }
-        var options = ParsePublicationOptions(rawValue);
+        var options = ParsePublicationOptions(rawValue, isSystem: organizationId == 1);
         if (organizationId != 1 && options.Count == 0)
         {
             // An explicit empty whole-set value means "remove the replacement",
@@ -2342,10 +2757,10 @@ internal static class MigrationConfigurationImporter
         }
     }
 
-    private static IReadOnlyList<PublicationImportOption> ParsePublicationOptions(string rawValue)
+    private static IReadOnlyList<PublicationImportOption> ParsePublicationOptions(string rawValue, bool isSystem)
     {
         var rawOptions = new List<(string? Id, string Label, bool Enabled, int? SortOrder)>();
-        var trimmed = rawValue.Trim();
+        var trimmed = TrimLegacyConfigurationText(rawValue);
         if (trimmed.StartsWith("[", StringComparison.Ordinal))
         {
             try
@@ -2370,25 +2785,23 @@ internal static class MigrationConfigurationImporter
                             "publication_options_invalid",
                             "Publication options must contain only strings or objects.");
                     }
-                    var label = JsonStringStrict(item, "label", "publication_options_invalid") ??
-                                JsonStringStrict(item, "name", "publication_options_invalid") ??
-                                JsonStringStrict(item, "value", "publication_options_invalid") ??
-                                string.Empty;
+                    var label = ReadPublicationOptionLabel(item);
                     if (label.Length == 0)
                     {
                         throw new MigrationOperationException(
                             "publication_options_invalid",
                             "A publication option must have a nonblank label.");
                     }
-                    var sortOrder = item.TryGetProperty("sortOrder", out var sortElement)
-                        ? sortElement.ValueKind == JsonValueKind.Number && sortElement.TryGetInt32(out var parsedOrder)
-                            ? parsedOrder
-                            : throw new MigrationOperationException(
-                                "publication_options_invalid",
-                                "A publication option sortOrder must be an integer.")
-                        : (int?)null;
+                    var sortOrder = item.TryGetProperty("sortOrder", out var sortElement) &&
+                        sortElement.ValueKind != JsonValueKind.Null
+                            ? sortElement.ValueKind == JsonValueKind.Number && sortElement.TryGetInt32(out var parsedOrder)
+                                ? parsedOrder
+                                : throw new MigrationOperationException(
+                                    "publication_options_invalid",
+                                    "A publication option sortOrder must be an integer.")
+                            : (int?)null;
                     rawOptions.Add((
-                        JsonStringStrict(item, "id", "publication_options_invalid"),
+                        ReadPublicationOptionId(item),
                         label,
                         JsonBoolStrict(item, "enabled", true),
                         sortOrder));
@@ -2404,8 +2817,9 @@ internal static class MigrationConfigurationImporter
         else
         {
             rawOptions.AddRange(
-                trimmed
-                    .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                trimmed.Split('\n')
+                    .Select(TrimLegacyConfigurationText)
+                    .Where(label => label.Length > 0)
                     .Select(label => ((string?)null, label, true, (int?)null)));
         }
 
@@ -2415,16 +2829,16 @@ internal static class MigrationConfigurationImporter
         for (var index = 0; index < rawOptions.Count; index++)
         {
             var raw = rawOptions[index];
-            var label = raw.Label.Trim();
+            var label = TrimLegacyConfigurationText(raw.Label);
             if (label.Length == 0 || !seenLabels.Add(label))
             {
                 throw new MigrationOperationException(
                     "publication_options_conflict",
                     "Publication options contain a blank or duplicate label.");
             }
-            var key = string.IsNullOrWhiteSpace(raw.Id)
+            var key = raw.Id is null
                 ? OptionIdFromLabel(label, $"option_{index + 1}")
-                : raw.Id.Trim();
+                : raw.Id;
             if (key.Length == 0 || !seenIds.Add(key))
             {
                 throw new MigrationOperationException(
@@ -2435,14 +2849,81 @@ internal static class MigrationConfigurationImporter
                 key,
                 label,
                 raw.Enabled,
-                raw.SortOrder ?? (index + 1) * 10));
+                raw.SortOrder is null or 0 ? (index + 1) * 10 : raw.SortOrder.Value));
         }
-        return result;
+        if (result.Count == 0 || IsNumericLabelFallback(result))
+        {
+            return isSystem ? SystemPublicationOptionDefaults() : [];
+        }
+        return result.OrderBy(option => option.SortOrder).ToArray();
     }
+
+    private static string ReadPublicationOptionLabel(JsonElement item)
+    {
+        foreach (var name in new[] { "label", "name", "value" })
+        {
+            if (!item.TryGetProperty(name, out var property) || property.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            {
+                continue;
+            }
+            if (property.ValueKind != JsonValueKind.String)
+            {
+                throw new MigrationOperationException("publication_options_invalid", $"JSON property {name} must be a string.");
+            }
+            var value = property.GetString() ?? string.Empty;
+            if (value.Length == 0)
+            {
+                continue;
+            }
+            var label = TrimLegacyConfigurationText(value);
+            if (label.Length == 0)
+            {
+                throw new MigrationOperationException(
+                    "publication_options_invalid",
+                    "A publication option's first nonempty label alias contains only whitespace and is not representable by the target.");
+            }
+            return label;
+        }
+        return string.Empty;
+    }
+
+    private static string? ReadPublicationOptionId(JsonElement item)
+    {
+        if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("id", out var property) ||
+            property.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+        if (property.ValueKind != JsonValueKind.String)
+        {
+            throw new MigrationOperationException("publication_options_invalid", "JSON property id must be a string.");
+        }
+        var value = property.GetString()!;
+        if (value.Length == 0)
+        {
+            return null;
+        }
+        var normalized = TrimLegacyConfigurationText(value);
+        return normalized.Length == 0 ? null : normalized;
+    }
+
+    private static bool IsNumericLabelFallback(IReadOnlyList<PublicationImportOption> options) =>
+        options.Count > 3 && options.Count(option => option.Label.Length > 0 && option.Label.All(character => character is >= '0' and <= '9')) * 2 > options.Count;
+
+    private static IReadOnlyList<PublicationImportOption> SystemPublicationOptionDefaults() =>
+    [
+        new("already_published", "Already published", true, 10),
+        new("coming_soon", "Coming soon", true, 20),
+        new("published_a_while_back", "Published a while back", true, 30)
+    ];
 
     private static bool JsonBoolStrict(JsonElement value, string property, bool defaultValue)
     {
         if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(property, out var item))
+        {
+            return defaultValue;
+        }
+        if (item.ValueKind == JsonValueKind.Null)
         {
             return defaultValue;
         }
@@ -2473,7 +2954,7 @@ internal static class MigrationConfigurationImporter
     private static string OptionIdFromLabel(string label, string fallback)
     {
         var key = System.Text.RegularExpressions.Regex.Replace(
-            label.Trim().ToLowerInvariant(),
+            TrimLegacyConfigurationText(label).Replace("\u0130", "i\u0307", StringComparison.Ordinal).ToLowerInvariant(),
             "[^a-z0-9]+",
             "-").Trim('-');
         return key.Length == 0 ? fallback : key;
@@ -2544,22 +3025,10 @@ internal static class MigrationConfigurationImporter
         {
             throw new MigrationOperationException("custom_fields_invalid", "Additional field definitions must be a JSON array.");
         }
+        var definitionItems = NormalizeCustomFieldDefinitions(definitions.RootElement);
         var fields = new List<(long Id, string Key, string Type, bool Enabled, int EnabledOptionCount)>();
-        var fieldKeys = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var definition in definitions.RootElement.EnumerateArray())
+        foreach (var definition in definitionItems)
         {
-            var key = RequiredJsonString(definition, "key", "custom_fields_invalid");
-            var type = RequiredJsonString(definition, "type", "custom_fields_invalid");
-            if (!fieldKeys.Add(key))
-            {
-                throw new MigrationOperationException(
-                    "custom_fields_conflict",
-                    $"Library {organizationId} contains duplicate custom field key {key}.");
-            }
-            if (type is not ("text" or "textarea" or "select"))
-            {
-                throw new MigrationOperationException("custom_fields_invalid", $"Custom field {key} has an invalid type.");
-            }
             using var insert = new SqlCommand(
                 """
                 INSERT INTO [asap].[PatronCustomField]
@@ -2570,53 +3039,27 @@ internal static class MigrationConfigurationImporter
                 connection,
                 transaction);
             insert.Parameters.AddWithValue("@organizationId", organizationId);
-            insert.Parameters.AddWithValue("@key", key);
-            insert.Parameters.AddWithValue("@type", type);
-            insert.Parameters.AddWithValue("@label", RequiredJsonString(definition, "label", "custom_fields_invalid"));
-            insert.Parameters.AddWithValue("@help", Db(JsonStringStrict(definition, "helpText", "custom_fields_invalid")));
-            var enabled = JsonBool(definition, "enabled", true);
-            insert.Parameters.AddWithValue("@enabled", enabled);
-            insert.Parameters.AddWithValue("@sortOrder", JsonInt(definition, "sortOrder", 0));
+            insert.Parameters.AddWithValue("@key", definition.Key);
+            insert.Parameters.AddWithValue("@type", definition.Type);
+            insert.Parameters.AddWithValue("@label", definition.Label);
+            insert.Parameters.AddWithValue("@help", Db(definition.HelpText));
+            insert.Parameters.AddWithValue("@enabled", definition.Enabled);
+            insert.Parameters.AddWithValue("@sortOrder", definition.SortOrder);
             var fieldId = Convert.ToInt64(insert.ExecuteScalar());
-            var enabledOptionCount = 0;
-
-            if (definition.TryGetProperty("options", out var options) &&
-                options.ValueKind is not (JsonValueKind.Array or JsonValueKind.Null or JsonValueKind.Undefined))
+            foreach (var option in definition.Options)
             {
-                throw new MigrationOperationException(
-                    "custom_fields_invalid",
-                    $"Custom field {key} options must be an array.");
+                using var optionInsert = new SqlCommand(
+                    "INSERT INTO [asap].[PatronCustomFieldOption] ([PatronCustomFieldId], [OptionKey], [Label], [IsEnabled], [SortOrder]) VALUES (@fieldId, @key, @label, @enabled, @sortOrder);",
+                    connection,
+                    transaction);
+                optionInsert.Parameters.AddWithValue("@fieldId", fieldId);
+                optionInsert.Parameters.AddWithValue("@key", option.Key);
+                optionInsert.Parameters.AddWithValue("@label", option.Label);
+                optionInsert.Parameters.AddWithValue("@enabled", option.Enabled);
+                optionInsert.Parameters.AddWithValue("@sortOrder", option.SortOrder);
+                optionInsert.ExecuteNonQuery();
             }
-            if (definition.TryGetProperty("options", out options) && options.ValueKind == JsonValueKind.Array)
-            {
-                var optionKeys = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var option in options.EnumerateArray())
-                {
-                    var optionKey = RequiredJsonString(option, "id", "custom_fields_invalid");
-                    if (!optionKeys.Add(optionKey))
-                    {
-                        throw new MigrationOperationException(
-                            "custom_fields_conflict",
-                            $"Custom field {key} contains duplicate option key {optionKey}.");
-                    }
-                    using var optionInsert = new SqlCommand(
-                        "INSERT INTO [asap].[PatronCustomFieldOption] ([PatronCustomFieldId], [OptionKey], [Label], [IsEnabled], [SortOrder]) VALUES (@fieldId, @key, @label, @enabled, @sortOrder);",
-                        connection,
-                        transaction);
-                    optionInsert.Parameters.AddWithValue("@fieldId", fieldId);
-                    optionInsert.Parameters.AddWithValue("@key", optionKey);
-                    optionInsert.Parameters.AddWithValue("@label", RequiredJsonString(option, "label", "custom_fields_invalid"));
-                    var optionEnabled = JsonBool(option, "enabled", true);
-                    optionInsert.Parameters.AddWithValue("@enabled", optionEnabled);
-                    optionInsert.Parameters.AddWithValue("@sortOrder", JsonInt(option, "sortOrder", 0));
-                    optionInsert.ExecuteNonQuery();
-                    if (optionEnabled)
-                    {
-                        enabledOptionCount++;
-                    }
-                }
-            }
-            fields.Add((fieldId, key, type, enabled, enabledOptionCount));
+            fields.Add((fieldId, definition.Key, definition.Type, definition.Enabled, definition.Options.Count(option => option.Enabled)));
         }
 
         var effectiveFormats = scopedFormats
@@ -2740,12 +3183,42 @@ internal static class MigrationConfigurationImporter
     {
         if (!fieldEnabled || formatRules is null ||
             !TryGetCustomFieldRuleFormat(formatRules.Value, formatCode, out var format) ||
-            !format.TryGetProperty("customFields", out var customFields) ||
-            !customFields.TryGetProperty(fieldKey, out var rule))
+            format.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
         {
             return ("hidden", null, false);
         }
-        var incomingMode = JsonStringStrict(rule, "mode", "custom_field_rule_invalid");
+        if (format.ValueKind != JsonValueKind.Object)
+        {
+            throw new MigrationOperationException(
+                "custom_field_rule_invalid",
+                $"Material format {formatCode} custom-field rules must be an object.");
+        }
+        if (!format.TryGetProperty("customFields", out var customFields) ||
+            customFields.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return ("hidden", null, false);
+        }
+        if (customFields.ValueKind != JsonValueKind.Object)
+        {
+            throw new MigrationOperationException(
+                "custom_field_rule_invalid",
+                $"Material format {formatCode} customFields must be an object.");
+        }
+        if (!customFields.TryGetProperty(fieldKey, out var rule))
+        {
+            return ("hidden", null, false);
+        }
+        if (rule.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return ("hidden", null, false);
+        }
+        if (rule.ValueKind != JsonValueKind.Object)
+        {
+            throw new MigrationOperationException(
+                "custom_field_rule_invalid",
+                $"Custom-field rule for {fieldKey} must be an object or null.");
+        }
+        var incomingMode = LegacyConfigurationJsonString(rule, "mode", "custom_field_rule_invalid");
         var mode = incomingMode is "required" or "optional" or "hidden" ? incomingMode : "hidden";
         var downgradedRequiredSelect = fieldEnabled && fieldType == "select" &&
             enabledOptionCount == 0 && mode == "required";
@@ -2755,7 +3228,7 @@ internal static class MigrationConfigurationImporter
         }
         return (
             mode,
-            JsonStringStrict(rule, "label", "custom_field_rule_invalid"),
+            LegacyConfigurationJsonString(rule, "label", "custom_field_rule_invalid"),
             downgradedRequiredSelect);
     }
 
@@ -2951,11 +3424,21 @@ internal static class MigrationConfigurationImporter
         value.PublicationMode is null && value.PublicationLabel is null;
 
     private static bool Different(string value, string baseline) =>
-        !string.Equals(value.Trim(), baseline.Trim(), StringComparison.Ordinal);
+        !string.Equals(value, baseline, StringComparison.Ordinal);
 
     private static NormalizedFormatRule NormalizeFormatRule(JsonElement format, string formatCode)
     {
         var defaults = DefaultFormatRule(formatCode);
+        if (format.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return defaults;
+        }
+        if (format.ValueKind != JsonValueKind.Object)
+        {
+            throw new MigrationOperationException(
+                "format_rule_invalid",
+                $"Material format {formatCode} rule must be an object or null.");
+        }
         var fields = format.TryGetProperty("fields", out var incomingFields)
             ? incomingFields.ValueKind is JsonValueKind.Object or JsonValueKind.Null or JsonValueKind.Undefined
                 ? incomingFields
@@ -2968,7 +3451,7 @@ internal static class MigrationConfigurationImporter
         var identifier = NormalizeFormatField(fields, "identifier", defaults.IdentifierMode, defaults.IdentifierLabel, forceRequired: false);
         var publication = NormalizeFormatField(fields, "publication", defaults.PublicationMode, defaults.PublicationLabel, forceRequired: false);
         var behavior = NormalizeFormatEnum(
-            JsonStringStrict(format, "messageBehavior", "format_message_behavior_invalid"),
+            LegacyConfigurationJsonString(format, "messageBehavior", "format_message_behavior_invalid"),
             defaults.MessageBehavior,
             ["none", "message", "ebookMessage", "eaudiobookMessage"],
             "format_message_behavior_invalid");
@@ -3000,13 +3483,13 @@ internal static class MigrationConfigurationImporter
                     $"Material format field {key} must be an object.")
             : default;
         var mode = NormalizeFormatEnum(
-            JsonStringStrict(field, "mode", "format_field_mode_invalid"),
+            LegacyConfigurationJsonString(field, "mode", "format_field_mode_invalid"),
             defaultMode,
             ["required", "optional", "hidden"],
             "format_field_mode_invalid");
         return (
             forceRequired ? "required" : mode,
-            JsonStringStrict(field, "label", "format_field_label_invalid") ?? defaultLabel);
+            LegacyConfigurationJsonString(field, "label", "format_field_label_invalid") ?? defaultLabel);
     }
 
     private static string NormalizeFormatEnum(
@@ -3020,14 +3503,15 @@ internal static class MigrationConfigurationImporter
             return fallback;
         }
 
-        var normalized = value.Trim();
+        var normalized = TrimLegacyConfigurationText(value);
         var canonical = allowed.FirstOrDefault(item => string.Equals(item, normalized, StringComparison.Ordinal));
         return canonical ?? fallback;
     }
 
     private static string NormalizeLegacyFormatMessage(JsonElement format, string fallback)
     {
-        if (!format.TryGetProperty("message", out var message) ||
+        if (format.ValueKind != JsonValueKind.Object ||
+            !format.TryGetProperty("message", out var message) ||
             message.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
         {
             return fallback;
@@ -3037,8 +3521,8 @@ internal static class MigrationConfigurationImporter
             throw new MigrationOperationException("format_message_invalid", "JSON property message must be a string.");
         }
 
-        var value = message.GetString()!;
-        return value.Length == 0 ? fallback : value.Trim();
+        var value = TrimLegacyConfigurationText(message.GetString()!);
+        return value.Length == 0 ? fallback : value;
     }
 
     private static bool IsLegacyBuiltInFormatCode(string formatCode) =>
@@ -3146,7 +3630,7 @@ internal static class MigrationConfigurationImporter
             transaction);
         command.Parameters.AddWithValue("@organizationId", organizationId);
         command.Parameters.AddWithValue("@alt", alt);
-        command.Parameters.AddWithValue("@updatedUtc", updatedUtc);
+        AddDateTime2Parameter(command, "@updatedUtc", updatedUtc);
         command.ExecuteNonQuery();
     }
 
@@ -3235,7 +3719,18 @@ internal static class MigrationConfigurationImporter
                 .Where(value => value.Length > 0)
                 .ToArray();
 
-    private static IReadOnlyDictionary<string, string> ParseObject(string? json)
+    private static IReadOnlyList<string> SplitLegacyCommonCreatorLines(string? source) =>
+        source is null
+            ? []
+            : source.Split('\n')
+                .Select(TrimLegacyConfigurationText)
+                .Where(value => value.Length > 0)
+                .ToArray();
+
+    private static bool HasLegacyConfigurationText(string? value) =>
+        value is not null && TrimLegacyConfigurationText(value).Length > 0;
+
+    private static IReadOnlyDictionary<string, string> ParseDuplicateLabelObject(string? json, bool modernOverride)
     {
         if (json is null)
         {
@@ -3256,14 +3751,30 @@ internal static class MigrationConfigurationImporter
                     "settings_json_invalid",
                     $"Settings JSON property {property.Name} must be a string.");
             }
-            var value = property.Value.ValueKind == JsonValueKind.String
-                ? property.Value.GetString()?.Trim()
-                : null;
-            if (!string.IsNullOrWhiteSpace(value) && !result.TryAdd(property.Name, value))
+            if (property.Value.ValueKind == JsonValueKind.Null)
+            {
+                continue;
+            }
+            var value = property.Value.GetString()!;
+            if (!result.TryAdd(property.Name, value))
             {
                 throw new MigrationOperationException(
                     "settings_json_invalid",
                     $"Settings JSON contains duplicate property {property.Name}.");
+            }
+        }
+        var hasAnyOverrideLabel = result.Values.Any(value => TrimLegacyConfigurationText(value).Length > 0);
+        if (modernOverride && !hasAnyOverrideLabel)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+        foreach (var value in result.Values)
+        {
+            if (TrimLegacyConfigurationText(value).Length == 0 || string.IsNullOrWhiteSpace(value))
+            {
+                throw new MigrationOperationException(
+                    "duplicate_labels_invalid",
+                    "Duplicate-status label whitespace cannot be represented with the target's scoped fallback behavior.");
             }
         }
         return result;
@@ -3315,6 +3826,213 @@ internal static class MigrationConfigurationImporter
                     "custom_fields_invalid",
                     $"JSON property {property} must be an integer.");
 
+    private static int CustomFieldSortOrder(JsonElement value, int index) =>
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty("sortOrder", out var item) &&
+        item.ValueKind == JsonValueKind.Null
+            ? 0
+            : JsonInt(value, "sortOrder", checked((index + 1) * 10));
+
+    private static IReadOnlyList<NormalizedCustomFieldDefinition> NormalizeCustomFieldDefinitions(JsonElement definitions)
+    {
+        if (definitions.ValueKind != JsonValueKind.Array)
+        {
+            throw new MigrationOperationException("custom_fields_invalid", "Additional field definitions must be a JSON array.");
+        }
+
+        var normalized = new List<NormalizedCustomFieldDefinition>();
+        var definitionKeys = new HashSet<string>(StringComparer.Ordinal);
+        var definitionIndex = 0;
+        foreach (var definition in definitions.EnumerateArray())
+        {
+            if (definition.ValueKind != JsonValueKind.Object)
+            {
+                throw new MigrationOperationException("custom_fields_invalid", "A custom-field definition must be an object.");
+            }
+
+            var label = RequiredLegacyCustomFieldString(definition, "label");
+            var type = RequiredLegacyCustomFieldString(definition, "type");
+            if (type is not ("text" or "textarea" or "select"))
+            {
+                throw new MigrationOperationException("custom_fields_invalid", "A custom-field type is unsupported.");
+            }
+
+            var rawKey = OptionalCustomFieldIdentity(definition, "key");
+            var key = NormalizeCustomFieldIdentity(rawKey ?? label);
+            if (key.Length == 0 || !definitionKeys.Add(key))
+            {
+                throw new MigrationOperationException(
+                    "custom_fields_identity_invalid",
+                    "Custom-field definition keys must remain unique and nonempty after legacy normalization.");
+            }
+
+            var options = type == "select"
+                ? NormalizeCustomFieldOptions(definition)
+                : Array.Empty<NormalizedCustomFieldOption>();
+            normalized.Add(new(
+                key,
+                type,
+                label,
+                OptionalCustomFieldText(definition, "helpText"),
+                JsonBool(definition, "enabled", defaultValue: true),
+                CustomFieldSortOrder(definition, definitionIndex),
+                options));
+            definitionIndex++;
+        }
+
+        return normalized
+            .OrderBy(item => item.SortOrder)
+            .ThenBy(item => item.Label, StringComparer.CurrentCulture)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<NormalizedCustomFieldOption> NormalizeCustomFieldOptions(JsonElement definition)
+    {
+        if (!definition.TryGetProperty("options", out var options) || options.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return Array.Empty<NormalizedCustomFieldOption>();
+        }
+        if (options.ValueKind != JsonValueKind.Array)
+        {
+            throw new MigrationOperationException("custom_fields_invalid", "A select custom-field options value must be an array or null.");
+        }
+
+        var normalized = new List<NormalizedCustomFieldOption>();
+        var optionKeys = new HashSet<string>(StringComparer.Ordinal);
+        var optionIndex = 0;
+        foreach (var option in options.EnumerateArray())
+        {
+            if (option.ValueKind != JsonValueKind.Object)
+            {
+                throw new MigrationOperationException("custom_fields_invalid", "A select custom-field option must be an object.");
+            }
+
+            var label = CustomFieldOptionLabel(option);
+            var rawKey = OptionalCustomFieldIdentity(option, "id");
+            var key = NormalizeCustomFieldIdentity(rawKey ?? label);
+            if (key.Length == 0 || !optionKeys.Add(key))
+            {
+                throw new MigrationOperationException(
+                    "custom_fields_identity_invalid",
+                    "Custom-field option IDs must remain unique and nonempty after legacy normalization.");
+            }
+
+            normalized.Add(new(
+                key,
+                label,
+                JsonBool(option, "enabled", defaultValue: true),
+                CustomFieldSortOrder(option, optionIndex)));
+            optionIndex++;
+        }
+
+        return normalized
+            .OrderBy(item => item.SortOrder)
+            .ThenBy(item => item.Label, StringComparer.CurrentCulture)
+            .ToArray();
+    }
+
+    private static string CustomFieldOptionLabel(JsonElement option)
+    {
+        foreach (var property in new[] { "label", "name", "value" })
+        {
+            if (!option.TryGetProperty(property, out var item) || item.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            {
+                continue;
+            }
+            if (item.ValueKind != JsonValueKind.String)
+            {
+                throw new MigrationOperationException("custom_fields_invalid", $"Custom-field option {property} must be a string.");
+            }
+            if (item.GetString() is { Length: > 0 } text)
+            {
+                var label = TrimLegacyConfigurationText(text);
+                if (label.Length > 0)
+                {
+                    return label;
+                }
+                throw new MigrationOperationException("custom_fields_invalid", "A custom-field option label must not be blank.");
+            }
+        }
+
+        throw new MigrationOperationException("custom_fields_invalid", "A custom-field option must have a label, name, or value.");
+    }
+
+    private static string? OptionalCustomFieldIdentity(JsonElement value, string property)
+    {
+        if (!value.TryGetProperty(property, out var item) || item.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+        if (item.ValueKind != JsonValueKind.String)
+        {
+            throw new MigrationOperationException("custom_fields_invalid", $"Custom-field {property} must be a string.");
+        }
+        var text = item.GetString()!;
+        return text.Length == 0 ? null : text;
+    }
+
+    private static string? OptionalCustomFieldText(JsonElement value, string property)
+    {
+        if (!value.TryGetProperty(property, out var item) || item.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+        if (item.ValueKind != JsonValueKind.String)
+        {
+            throw new MigrationOperationException("custom_fields_invalid", $"Custom-field {property} must be a string.");
+        }
+        var text = TrimLegacyConfigurationText(item.GetString()!);
+        return text.Length == 0 ? null : text;
+    }
+
+    private static string NormalizeCustomFieldIdentity(string value) =>
+        Regex.Replace(
+            TrimLegacyConfigurationText(value).Replace("\u0130", "i\u0307", StringComparison.Ordinal).ToLowerInvariant(),
+            "[^a-z0-9]+",
+            "_",
+            RegexOptions.CultureInvariant).Trim('_');
+
+    private static string RequiredLegacyCustomFieldString(JsonElement value, string property) =>
+        LegacyConfigurationJsonString(value, property, "custom_fields_invalid") is { Length: > 0 } result
+            ? result
+            : throw new MigrationOperationException("custom_fields_invalid", $"Required JSON property {property} is missing.");
+
+    private static string? LegacyConfigurationJsonString(JsonElement value, string property, string errorCode)
+    {
+        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(property, out var item) ||
+            item.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+        if (item.ValueKind != JsonValueKind.String)
+        {
+            throw new MigrationOperationException(errorCode, $"JSON property {property} must be a string.");
+        }
+
+        var result = TrimLegacyConfigurationText(item.GetString()!);
+        return result.Length > 0 ? result : null;
+    }
+
+    private static string TrimLegacyConfigurationText(string value)
+    {
+        var start = 0;
+        while (start < value.Length && IsLegacyConfigurationWhitespace(value[start]))
+        {
+            start++;
+        }
+        var end = value.Length;
+        while (end > start && IsLegacyConfigurationWhitespace(value[end - 1]))
+        {
+            end--;
+        }
+        return value[start..end];
+    }
+
+    private static bool IsLegacyConfigurationWhitespace(char value) => value is
+        '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or
+        '\u1680' or '\u2000' or '\u2001' or '\u2002' or '\u2003' or '\u2004' or '\u2005' or
+        '\u2006' or '\u2007' or '\u2008' or '\u2009' or '\u200A' or '\u2028' or '\u2029' or
+        '\u202F' or '\u205F' or '\u3000' or '\uFEFF';
+
     private static int Scalar(
         SqlConnection connection,
         SqlTransaction transaction,
@@ -3324,6 +4042,13 @@ internal static class MigrationConfigurationImporter
         using var command = new SqlCommand(sql, connection, transaction);
         command.Parameters.AddWithValue("@organizationId", organizationId);
         return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    private static void AddDateTime2Parameter(SqlCommand command, string name, DateTime? value)
+    {
+        var parameter = command.Parameters.Add(name, SqlDbType.DateTime2);
+        parameter.Scale = 7;
+        parameter.Value = (object?)value ?? DBNull.Value;
     }
 
     private static bool StringEquals(SqlDataReader reader, int ordinal, string? expected) =>

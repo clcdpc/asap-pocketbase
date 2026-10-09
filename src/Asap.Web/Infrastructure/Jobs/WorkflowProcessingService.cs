@@ -40,6 +40,7 @@ public sealed partial class WorkflowProcessingService(
     HoldPlacementService holdPlacement,
     PatronSuggestionService suggestionService,
     IStaffPolarisProvider polaris,
+    IPatronProvider patronProvider,
     IPolarisReferenceProvider referenceProvider,
     ExternalConfiguration configuration,
     WorkflowProcessingGuard workflowGuard,
@@ -77,6 +78,7 @@ public sealed partial class WorkflowProcessingService(
         }
         catch (Exception exception) when (exception is DbUpdateException or DbException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             logger.LogError(exception, "SQL failure stopped identifier processing.");
             return new WorkflowRunResult("sql_failure");
         }
@@ -129,6 +131,7 @@ public sealed partial class WorkflowProcessingService(
             }
             catch (Exception exception) when (exception is DbUpdateException or DbException)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 logger.LogError(exception, "SQL failure stopped workflow processing.");
                 phaseResult = new WorkflowRunResult("sql_failure");
             }
@@ -327,8 +330,14 @@ public sealed partial class WorkflowProcessingService(
                 LocalCommit: lookup.QueueProgressVersion is not null,
                 ProgressVersion: lookup.QueueProgressVersion);
         }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
+        }
         catch (PolarisOperationalException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return new WorkflowItemResult("operational_failure", Stop: true);
         }
     }
@@ -557,7 +566,11 @@ public sealed partial class WorkflowProcessingService(
     private static async Task<bool> SaveWithConcurrencyAsync(AsapDbContext context, CancellationToken cancellationToken)
     {
         try { await context.SaveChangesAsync(cancellationToken); return true; }
-        catch (DbUpdateConcurrencyException) { return false; }
+        catch (DbUpdateConcurrencyException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return false;
+        }
     }
     private static bool StopsWorkflow(string code) =>
         code is "sql_failure" or "stale_progress_fence" or "operational_failure";

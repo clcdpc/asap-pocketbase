@@ -73,6 +73,7 @@ public sealed partial class PatronSuggestionService
         try
         {
             result = await patronProvider.LookupIdentifierAsync(identifier, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -81,6 +82,7 @@ public sealed partial class PatronSuggestionService
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             logger.LogWarning(
                 exception,
                 "Immediate identifier lookup failed for title request {TitleRequestId}.",
@@ -88,6 +90,11 @@ public sealed partial class PatronSuggestionService
             result = new IdentifierLookupResult(
                 IdentifierLookupOutcome.OperationalFailure,
                 ErrorCode: "polaris_identifier_lookup_failed");
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
 
         if (result.Outcome == IdentifierLookupOutcome.OperationalFailure)

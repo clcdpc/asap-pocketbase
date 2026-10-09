@@ -149,6 +149,10 @@ All staff may see analytics for their own library; super-admin may see all or se
 
 Only super-admins manage allowed origins. Library admins may see the effective embedding state/warning but cannot alter this security boundary.
 
+The Settings API trims outer whitespace, then accepts strict origin authorities only: HTTPS DNS names, IPv4, and bracketed IPv6; HTTP is limited to `localhost`, `127.0.0.1`, and `[::1]`. An optional port must contain decimal digits and be in the inclusive `0`–`65535` range. User information, paths other than `/` on ordinary origins, queries, fragments, whitespace within the origin, and malformed authority syntax are rejected. HTTPS wildcard entries use `https://*.` followed by a multi-label ASCII/Punycode DNS name and carry no path; wildcard IPs and single-label suffixes are invalid.
+
+Settings writes lowercase the scheme and host and remove an explicit default port such as `:443`, while retaining non-default numeric ports. Legacy migration keeps the literal port text in imported rows, including `:443`; the patron CSP middleware deliberately matches a wildcard's explicit port text. Thus an imported `https://*.legacy.example:443` expands the `frame-ancestors` header for `https://child.legacy.example:443`, but not for the same host with the port omitted or changed. Do not replace this text-sensitive compatibility rule with URI default-port equivalence.
+
 Serve other frontend assets statically.
 
 ## 14.1 Staff profile preferences

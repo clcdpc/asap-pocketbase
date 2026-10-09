@@ -1,3 +1,4 @@
+using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Jobs;
 using Asap.Web.Features.Staff;
@@ -21,7 +22,9 @@ public sealed partial class PatronJourneyTests
         await using var evidenceFactory = workflowFactory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
+                services.RemoveAll<IPatronProvider>();
                 services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(provider);
                 services.AddSingleton<IStaffPolarisProvider>(provider);
             }));
         var contextFactory = evidenceFactory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();

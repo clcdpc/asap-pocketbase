@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -2419,23 +2422,33 @@ public sealed partial class AdministrationService
     private static string NormalizeOrigin(string value)
     {
         var normalized = Clean(value) ?? throw new AdministrationInputException("Embed origins cannot be blank.");
-        if (normalized.StartsWith("https://*.", StringComparison.OrdinalIgnoreCase))
+        if (normalized.Any(char.IsWhiteSpace) || normalized.Contains('@') || normalized.Contains('\\') ||
+            normalized.Any(character => character is '"' or '\'' or '`' or ';'))
         {
-            var wildcardHost = normalized[10..];
-            if (wildcardHost.Contains('/', StringComparison.Ordinal) || wildcardHost.Contains('?', StringComparison.Ordinal) ||
-                wildcardHost.Contains('#', StringComparison.Ordinal) || wildcardHost.Contains('@', StringComparison.Ordinal) ||
-                wildcardHost.Contains('\\', StringComparison.Ordinal) ||
+            throw new AdministrationInputException("Embed origins cannot contain credentials or invalid authority characters.");
+        }
+        if (!TryGetRawOriginAuthority(normalized, out var scheme, out var authority, out var suffix))
+        {
+            throw new AdministrationInputException("Embed origins must contain a valid HTTP or HTTPS authority.");
+        }
+        if (scheme.Equals("https", StringComparison.OrdinalIgnoreCase) &&
+            authority.StartsWith("*.", StringComparison.Ordinal) &&
+            normalized.StartsWith("https://*.", StringComparison.OrdinalIgnoreCase))
+        {
+            var wildcardHost = authority[2..];
+            if (suffix.Length != 0 || !HasValidRawOriginAuthority(authority, allowWildcardHost: true) ||
                 !Uri.TryCreate($"https://{wildcardHost}", UriKind.Absolute, out var wildcardUri) ||
                 !string.IsNullOrEmpty(wildcardUri.UserInfo) || wildcardUri.AbsolutePath != "/" ||
                 !string.IsNullOrEmpty(wildcardUri.Query) || !string.IsNullOrEmpty(wildcardUri.Fragment) ||
-                Uri.CheckHostName(wildcardUri.Host) == UriHostNameType.Unknown)
+                Uri.CheckHostName(wildcardUri.Host) != UriHostNameType.Dns)
             {
                 throw new AdministrationInputException("Wildcard embed origins may not include a path or query.");
             }
             var wildcardPort = wildcardUri.IsDefaultPort ? string.Empty : $":{wildcardUri.Port}";
             return $"https://*.{wildcardUri.IdnHost.ToLowerInvariant()}{wildcardPort}";
         }
-        if (!Uri.TryCreate(normalized, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") ||
+        if (suffix is not ("" or "/") || !HasValidRawOriginAuthority(authority, allowWildcardHost: false) ||
+            !Uri.TryCreate(normalized, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") ||
             uri.AbsolutePath != "/" || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment) ||
             (uri.Scheme == "http" && uri.Host is not ("localhost" or "127.0.0.1" or "[::1]")))
         {
@@ -2443,6 +2456,113 @@ public sealed partial class AdministrationService
         }
         var port = uri.IsDefaultPort ? string.Empty : $":{uri.Port}";
         return $"{uri.Scheme.ToLowerInvariant()}://{uri.Host.ToLowerInvariant()}{port}";
+    }
+
+    private static bool TryGetRawOriginAuthority(
+        string value, out string scheme, out string authority, out string suffix)
+    {
+        scheme = string.Empty;
+        authority = string.Empty;
+        suffix = string.Empty;
+        var separator = value.IndexOf("://", StringComparison.Ordinal);
+        if (separator <= 0)
+        {
+            return false;
+        }
+
+        scheme = value[..separator];
+        if (!scheme.Equals("https", StringComparison.OrdinalIgnoreCase) &&
+            !scheme.Equals("http", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var authorityStart = separator + 3;
+        var authorityEnd = value.IndexOfAny(['/', '?', '#'], authorityStart);
+        if (authorityEnd < 0)
+        {
+            authorityEnd = value.Length;
+        }
+        authority = value[authorityStart..authorityEnd];
+        suffix = value[authorityEnd..];
+        return authority.Length > 0;
+    }
+
+    private static bool HasValidRawOriginAuthority(string authority, bool allowWildcardHost)
+    {
+        var wildcard = authority.StartsWith("*.", StringComparison.Ordinal);
+        if (wildcard && !allowWildcardHost)
+        {
+            return false;
+        }
+        if (allowWildcardHost && !wildcard)
+        {
+            return false;
+        }
+
+        var hostAndPort = wildcard ? authority[2..] : authority;
+        var host = hostAndPort;
+        if (hostAndPort.Length > 0 && hostAndPort[0] == '[')
+        {
+            if (wildcard)
+            {
+                return false;
+            }
+
+            var closingBracket = hostAndPort.IndexOf(']');
+            if (closingBracket <= 1 || hostAndPort.IndexOf(']', closingBracket + 1) >= 0 ||
+                hostAndPort[1..closingBracket].Contains('%') ||
+                !IPAddress.TryParse(hostAndPort[1..closingBracket], out var address) ||
+                address.AddressFamily != AddressFamily.InterNetworkV6)
+            {
+                return false;
+            }
+
+            var suffix = hostAndPort[(closingBracket + 1)..];
+            return suffix.Length == 0 || suffix[0] == ':' && IsValidRawPort(suffix[1..]);
+        }
+
+        var firstColon = hostAndPort.IndexOf(':');
+        var lastColon = hostAndPort.LastIndexOf(':');
+        if (firstColon != lastColon)
+        {
+            return false;
+        }
+        if (lastColon >= 0)
+        {
+            host = hostAndPort[..lastColon];
+            if (!IsValidRawPort(hostAndPort[(lastColon + 1)..]))
+            {
+                return false;
+            }
+        }
+
+        return IsValidAsciiDnsHost(host, requireMultipleLabels: wildcard) &&
+               (!wildcard || !IPAddress.TryParse(host, out var wildcardAddress) ||
+                wildcardAddress.AddressFamily != AddressFamily.InterNetwork);
+    }
+
+    private static bool IsValidRawPort(string value) =>
+        value.Length > 0 && value.All(char.IsAsciiDigit) &&
+        int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var port) &&
+        port is >= 0 and <= 65535;
+
+    private static bool IsValidAsciiDnsHost(string value, bool requireMultipleLabels)
+    {
+        if (value.EndsWith(".", StringComparison.Ordinal))
+        {
+            value = value[..^1];
+        }
+        if (value.Length is 0 or > 253)
+        {
+            return false;
+        }
+
+        var labels = value.Split('.');
+        return (!requireMultipleLabels || labels.Length > 1) && labels.All(label =>
+            label.Length is > 0 and <= 63 &&
+            char.IsAsciiLetterOrDigit(label[0]) && char.IsAsciiLetterOrDigit(label[^1]) &&
+            label.All(character => char.IsAsciiLetterOrDigit(character) || character == '-'));
     }
 
     private static string OptionKey(string label, int index) =>

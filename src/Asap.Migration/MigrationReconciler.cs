@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 
 namespace Asap.Migration;
@@ -164,7 +165,38 @@ public static class MigrationReconciler
                 "The reconciliation report belongs to a different SQL Server database target.");
         }
 
-        MigrationIndependentVerifier.Verify(connectionString, package);
+        var tokenTransformations = report.GetProperty("transformations").EnumerateArray()
+            .Where(item => item.GetProperty("entity").GetString() == "email_provider_token")
+            .ToArray();
+        if (tokenTransformations.Length != 1 ||
+            !HasPositiveInt32(tokenTransformations[0], "organizationId") ||
+            tokenTransformations[0].GetProperty("organizationId").GetInt32() != 1 ||
+            !HasBoolean(tokenTransformations[0], "postmarkTokenProvisioned"))
+        {
+            throw new MigrationOperationException(
+                "reconciliation_report_mismatch",
+                "The report does not identify the bounded system Postmark-token presence state.");
+        }
+        var postmarkTokenProvisioned = tokenTransformations[0].GetProperty("postmarkTokenProvisioned").GetBoolean();
+
+        var bootstrapTransformations = report.GetProperty("transformations").EnumerateArray()
+            .Where(item => item.GetProperty("entity").GetString() == "migration_bootstrap_super_admin")
+            .ToArray();
+        long? bootstrapTargetStaffUserId = null;
+        var bootstrapInserted = false;
+        if (bootstrapTransformations.Length == 1)
+        {
+            var bootstrap = bootstrapTransformations[0];
+            bootstrapTargetStaffUserId = bootstrap.GetProperty("targetStaffUserId").GetInt64();
+            bootstrapInserted = bootstrap.GetProperty("action").GetString() == "inserted";
+        }
+
+        MigrationIndependentVerifier.Verify(
+            connectionString,
+            package,
+            postmarkTokenProvisioned,
+            bootstrapTargetStaffUserId,
+            bootstrapInserted);
         var expectedQueueProgress = report.GetProperty("targetCounts").GetProperty("queue_progress").GetInt32();
         var actualQueueProgress = ReadQueueProgressCount(connectionString);
         if (actualQueueProgress != expectedQueueProgress)
@@ -302,6 +334,8 @@ public static class MigrationReconciler
                 HasBoolean(item, "newlyWeeklyEligible") && HasBoolean(item, "targetHasNotificationEmail") && HasBoolean(item, "targetHasWeeklyRecipient"),
             "email_settings" => HasExactProperties(item, "entity", "sourceId", "transport", "targetTransport", "postmarkTokenProvisioned") &&
                 HasString(item, "sourceId") && HasString(item, "transport") && HasString(item, "targetTransport") && HasBoolean(item, "postmarkTokenProvisioned"),
+            "email_provider_token" => HasExactProperties(item, "entity", "organizationId", "postmarkTokenProvisioned") &&
+                HasPositiveInt32(item, "organizationId") && HasBoolean(item, "postmarkTokenProvisioned"),
             "email_template_sender" => HasExactProperties(item, "entity", "sourceIds", "organizationId", "fromAddress", "fromName", "disposition") &&
                 HasStringArray(item, "sourceIds") && HasPositiveInt32(item, "organizationId") && HasNullableString(item, "fromAddress") &&
                 HasNullableString(item, "fromName") && HasString(item, "disposition"),
@@ -696,6 +730,7 @@ public static class MigrationReconciler
             ["polaris_settings"] = sourceCounts["polaris_settings"],
             ["staff_user"] = sourceCounts["staff_users"],
             ["email_settings"] = sourceCounts["smtp_settings"],
+            ["email_provider_token"] = 1,
             ["email_template_sender"] = ExpectedLibrarySenderTransformCount(emailRows, package),
             ["patron_duplicate_labels"] = ExpectedPatronDuplicateLabelTransformCount(package),
             ["system_material_format_availability"] = 1,
@@ -727,6 +762,18 @@ public static class MigrationReconciler
             {
                 throw ReportMismatch($"Transformation entries for {expected.Key} do not match the immutable source population.");
             }
+        }
+        var tokenTransformation = transformationsByEntity["email_provider_token"].Single();
+        if (tokenTransformation.GetProperty("organizationId").GetInt32() != 1)
+        {
+            throw ReportMismatch("The Postmark-token presence boundary must describe only system organization 1.");
+        }
+        var emailSettingsTransformations = transformationsByEntity.GetValueOrDefault("email_settings") ?? [];
+        if (emailSettingsTransformations.Length > 0 &&
+            emailSettingsTransformations.Single().GetProperty("postmarkTokenProvisioned").GetBoolean() !=
+            tokenTransformation.GetProperty("postmarkTokenProvisioned").GetBoolean())
+        {
+            throw ReportMismatch("The source email-settings audit disagrees with the operator Postmark-token boundary.");
         }
         var systemSeedCodes = new[] { "book", "audiobook_cd", "dvd", "music_cd", "ebook", "eaudiobook" };
         var sourceSystemFormatCodes = sourceFieldRows["material_formats"]
@@ -1038,7 +1085,7 @@ public static class MigrationReconciler
             StringComparer.Ordinal);
         int ResolveLibrary(string reference) => organizationIds.TryGetValue(reference, out var id)
             ? id
-            : int.TryParse(reference, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && organizationIds.Values.Contains(parsed)
+            : int.TryParse(reference, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && organizationIds.Values.Contains(parsed)
                 ? parsed
                 : throw ReportMismatch("A template sender scope does not identify a source organization.");
 
@@ -1067,6 +1114,84 @@ public static class MigrationReconciler
     private static int ExpectedEffectiveFormatCount(ValidatedMigrationPackage package, int libraryId)
         => ExpectedEffectiveFormatCodes(package, libraryId).Count;
 
+    private static string AuditCustomFieldType(JsonElement definition)
+    {
+        if (definition.ValueKind != JsonValueKind.Object ||
+            !definition.TryGetProperty("type", out var type) ||
+            type.ValueKind != JsonValueKind.String)
+        {
+            throw ReportMismatch("A source custom-field type is invalid.");
+        }
+
+        var normalized = TrimAuditConfigurationText(type.GetString()!);
+        if (normalized is not ("text" or "textarea" or "select"))
+        {
+            throw ReportMismatch("A source custom-field type is unsupported.");
+        }
+
+        return normalized;
+    }
+
+    private static string AuditCustomFieldIdentity(JsonElement definition)
+    {
+        string? identity = null;
+        if (definition.TryGetProperty("key", out var key) && key.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+        {
+            if (key.ValueKind != JsonValueKind.String)
+            {
+                throw ReportMismatch("A source custom-field key is invalid.");
+            }
+
+            var sourceKey = key.GetString()!;
+            if (sourceKey.Length > 0)
+            {
+                identity = sourceKey;
+            }
+        }
+
+        if (identity is null)
+        {
+            if (!definition.TryGetProperty("label", out var label) ||
+                label.ValueKind != JsonValueKind.String ||
+                TrimAuditConfigurationText(label.GetString()!).Length == 0)
+            {
+                throw ReportMismatch("A source custom-field label is invalid.");
+            }
+
+            identity = label.GetString()!;
+        }
+
+        var normalized = Regex.Replace(
+            TrimAuditConfigurationText(identity).Replace("\u0130", "i\u0307", StringComparison.Ordinal).ToLowerInvariant(),
+            "[^a-z0-9]+",
+            "_",
+            RegexOptions.CultureInvariant).Trim('_');
+        return normalized.Length > 0
+            ? normalized
+            : throw ReportMismatch("A source custom-field key normalizes to an empty identity.");
+    }
+
+    private static string TrimAuditConfigurationText(string value)
+    {
+        var start = 0;
+        while (start < value.Length && IsAuditConfigurationWhitespace(value[start]))
+        {
+            start++;
+        }
+        var end = value.Length;
+        while (end > start && IsAuditConfigurationWhitespace(value[end - 1]))
+        {
+            end--;
+        }
+        return value[start..end];
+    }
+
+    private static bool IsAuditConfigurationWhitespace(char value) => value is
+        '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or
+        '\u1680' or '\u2000' or '\u2001' or '\u2002' or '\u2003' or '\u2004' or '\u2005' or
+        '\u2006' or '\u2007' or '\u2008' or '\u2009' or '\u200A' or '\u2028' or '\u2029' or
+        '\u202F' or '\u205F' or '\u3000' or '\uFEFF';
+
     private static int ExpectedRequiredSelectDowngradeCount(
         ValidatedMigrationPackage package,
         SourceRow sourceRow,
@@ -1078,7 +1203,7 @@ public static class MigrationReconciler
         var count = 0;
         foreach (var definition in definitions.RootElement.EnumerateArray())
         {
-            if (definition.GetProperty("type").GetString() != "select" ||
+            if (AuditCustomFieldType(definition) != "select" ||
                 definition.TryGetProperty("enabled", out var enabled) && enabled.ValueKind == JsonValueKind.False)
             {
                 continue;
@@ -1090,7 +1215,7 @@ public static class MigrationReconciler
             {
                 continue;
             }
-            var fieldKey = definition.GetProperty("key").GetString()!;
+            var fieldKey = AuditCustomFieldIdentity(definition);
             foreach (var formatCode in formatCodes)
             {
                 var sourceFormatCode = ResolveAuditSourceFormatCode(package, libraryId, formatCode);
@@ -1102,7 +1227,7 @@ public static class MigrationReconciler
                     fieldRule.ValueKind != JsonValueKind.Object ||
                     !fieldRule.TryGetProperty("mode", out var mode) ||
                     mode.ValueKind != JsonValueKind.String ||
-                    !string.Equals(mode.GetString()!.Trim(), "required", StringComparison.Ordinal))
+                    !string.Equals(TrimAuditConfigurationText(mode.GetString()!), "required", StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -1171,7 +1296,7 @@ public static class MigrationReconciler
         {
             return nativeId;
         }
-        return int.TryParse(reference, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) &&
+        return int.TryParse(reference, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) &&
                organizations.Any(row => row.Int32("organizationId") == parsed)
             ? parsed
             : throw ReportMismatch("A source material format scope does not identify a source organization.");
@@ -1556,11 +1681,8 @@ public static class MigrationReconciler
         var relationships = 0;
         foreach (var row in workflowRows)
         {
-            fields += 21 + AuditSplitValues(row.String("commonAuthorsList")).Count() +
-                AuditSplitValues(row.String("allowedPatronCodeIds"))
-                    .Select(value => SourceRow.ParsePositiveInt32(value, "allowedPatronCodeIds", "source_patron_code_invalid")!.Value)
-                    .Distinct()
-                    .Count();
+            fields += 21 + AuditCommonCreatorLines(row.Text("commonAuthorsList")).Length +
+                AuditPatronCodeIds(row.Text("allowedPatronCodeIds")).Length;
             relationships += 2;
 
             var isSystem = row.RequiredString("scope").Equals("system", StringComparison.OrdinalIgnoreCase);
@@ -1613,16 +1735,16 @@ public static class MigrationReconciler
         var publicationRows = new Dictionary<int, string>();
         foreach (var row in uiRows)
         {
-            var value = row.String("publicationOptions");
-            if (!string.IsNullOrWhiteSpace(value) && AuditSettingsOrganizationId(package, row, "scope", "libraryOrganization") == 1)
+            var value = row.Text("publicationOptions");
+            if (value is not null && HasAuditConfigurationText(value) && AuditSettingsOrganizationId(package, row, "scope", "libraryOrganization") == 1)
             {
                 publicationRows[1] = value;
             }
         }
         foreach (var row in overrides)
         {
-            var value = row.String("publicationOptions");
-            if (!string.IsNullOrWhiteSpace(value))
+            var value = row.Text("publicationOptions");
+            if (value is not null && HasAuditConfigurationText(value))
             {
                 publicationRows[row.Int32("orgId")!.Value] = value;
             }
@@ -1639,7 +1761,8 @@ public static class MigrationReconciler
                 var effectiveFormatCount = ExpectedEffectiveFormatCodes(package, row.Int32("orgId")!.Value).Count;
                 foreach (var definition in definitionItems)
                 {
-                    var optionCount = definition.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Array
+                    var optionCount = AuditCustomFieldType(definition) == "select" &&
+                        definition.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Array
                         ? options.GetArrayLength()
                         : 0;
                     fields += 5 + optionCount * 3 + effectiveFormatCount * 2;
@@ -1659,7 +1782,7 @@ public static class MigrationReconciler
             }
         }
 
-        fields += publicationRows.Values.Sum(AuditPublicationOptionCount) * 4;
+        fields += publicationRows.Sum(item => AuditPublicationOptionCount(item.Value, isSystem: item.Key == 1)) * 4;
         relationships += publicationRows.Count;
 
         var exactSystemSourceCodes = formatRows
@@ -1728,7 +1851,7 @@ public static class MigrationReconciler
         {
             return sourceId;
         }
-        return int.TryParse(reference, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) &&
+        return int.TryParse(reference, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) &&
                organizations.Any(row => row.Int32("organizationId") == parsed)
             ? parsed
             : throw ReportMismatch("A settings or email scope does not identify a source organization.");
@@ -1741,32 +1864,196 @@ public static class MigrationReconciler
                 .Where(value => value.Length > 0)
                 .ToArray();
 
-    private static int AuditPublicationOptionCount(string rawValue)
+    private static string[] AuditCommonCreatorLines(string? source) =>
+        source is null
+            ? []
+            : source.Split('\n')
+                .Select(TrimAuditConfigurationText)
+                .Where(value => value.Length > 0)
+                .ToArray();
+
+    private static bool HasAuditConfigurationText(string? value) =>
+        value is not null && TrimAuditConfigurationText(value).Length > 0;
+
+    private static int[] AuditPatronCodeIds(string? source)
     {
-        var trimmed = rawValue.Trim();
+        if (source is null)
+        {
+            return [];
+        }
+        var ids = new HashSet<int>();
+        foreach (var raw in source.Split(','))
+        {
+            var value = TrimAuditConfigurationText(raw);
+            if (value.Length == 0)
+            {
+                continue;
+            }
+            if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id <= 0 ||
+                !string.Equals(value, id.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+            {
+                throw ReportMismatch("A source patron-code identity cannot be represented exactly by the target.");
+            }
+            ids.Add(id);
+        }
+        return ids.Order().ToArray();
+    }
+
+    private static int AuditPublicationOptionCount(string rawValue, bool isSystem)
+    {
+        var trimmed = TrimAuditConfigurationText(rawValue);
+        string[] labels;
         if (trimmed.StartsWith("[", StringComparison.Ordinal))
         {
             using var document = JsonDocument.Parse(trimmed);
-            return document.RootElement.ValueKind == JsonValueKind.Array
-                ? document.RootElement.GetArrayLength()
-                : throw ReportMismatch("Publication options are not an array.");
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                throw ReportMismatch("Publication options are not an array.");
+            }
+            labels = document.RootElement.EnumerateArray()
+                .Select(item => item.ValueKind switch
+                {
+                    JsonValueKind.String => item.GetString() ?? string.Empty,
+                    JsonValueKind.Object => AuditPublicationOptionLabel(item),
+                    _ => throw ReportMismatch("A publication option has an unsupported source type.")
+                })
+                .Select(TrimAuditConfigurationText)
+                .ToArray();
         }
-        return trimmed.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length;
+        else
+        {
+            labels = trimmed.Split('\n')
+                .Select(TrimAuditConfigurationText)
+                .Where(label => label.Length > 0)
+                .ToArray();
+        }
+
+        if (labels.Length == 0 || labels.Length > 3 && labels.Count(label => label.Length > 0 && label.All(character => character is >= '0' and <= '9')) * 2 > labels.Length)
+        {
+            return isSystem ? 3 : 0;
+        }
+        return labels.Length;
+    }
+
+    private static string AuditPublicationOptionLabel(JsonElement item)
+    {
+        foreach (var name in new[] { "label", "name", "value" })
+        {
+            if (!item.TryGetProperty(name, out var property) || property.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            {
+                continue;
+            }
+            if (property.ValueKind != JsonValueKind.String)
+            {
+                throw ReportMismatch("A publication-option label alias has an unsupported source type.");
+            }
+            var value = property.GetString() ?? string.Empty;
+            if (value.Length == 0)
+            {
+                continue;
+            }
+            if (TrimAuditConfigurationText(value).Length == 0)
+            {
+                throw ReportMismatch("A publication-option selected label alias is blank after normalization.");
+            }
+            return TrimAuditConfigurationText(value);
+        }
+        return string.Empty;
     }
 
     private static string NormalizeAuditEmbedOrigin(string value)
     {
         var origin = value.Trim();
-        var wildcard = System.Text.RegularExpressions.Regex.Match(origin, "^(https?)://\\*\\.(.+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if (origin.Length == 0 || origin.Any(char.IsWhiteSpace) ||
+            origin.IndexOfAny(['"', '\'', '`', ';', '\\']) >= 0)
+        {
+            throw ReportMismatch("A source patron embed origin is invalid.");
+        }
+
+        var wildcard = System.Text.RegularExpressions.Regex.Match(
+            origin,
+            "^(https?)://\\*\\.(.+)$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
         if (wildcard.Success)
         {
-            return $"{wildcard.Groups[1].Value.ToLowerInvariant()}://*.{wildcard.Groups[2].Value.ToLowerInvariant()}";
+            var wildcardAuthority = wildcard.Groups[2].Value;
+            var authorityMatch = System.Text.RegularExpressions.Regex.Match(
+                wildcardAuthority,
+                "^(?<host>[a-z0-9.-]+)(?::(?<port>[0-9]+))?$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            var host = authorityMatch.Groups["host"].Value;
+            if (!string.Equals(wildcard.Groups[1].Value, "https", StringComparison.OrdinalIgnoreCase) ||
+                !authorityMatch.Success || !ValidAuditPort(authorityMatch) || !IsAuditDnsHostname(host) ||
+                !host.TrimEnd('.').Contains('.') ||
+                !Uri.TryCreate($"https://{wildcardAuthority}", UriKind.Absolute, out var wildcardUri) ||
+                wildcardUri.HostNameType != UriHostNameType.Dns || wildcardUri.AbsolutePath != "/" ||
+                !string.IsNullOrEmpty(wildcardUri.Query) || !string.IsNullOrEmpty(wildcardUri.Fragment) ||
+                !string.IsNullOrEmpty(wildcardUri.UserInfo) || wildcardUri.Port is < 0 or > 65535)
+            {
+                throw ReportMismatch("A source patron embed wildcard origin is invalid.");
+            }
+            return $"https://*.{wildcardAuthority.ToLowerInvariant()}";
         }
-        var plain = System.Text.RegularExpressions.Regex.Match(origin, "^(https?)://([^/?#]+)(.*)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-        return plain.Success
-            ? $"{plain.Groups[1].Value.ToLowerInvariant()}://{plain.Groups[2].Value.ToLowerInvariant()}"
-            : origin;
+
+        var plain = System.Text.RegularExpressions.Regex.Match(
+            origin,
+            "^(https?)://([^/?#]+)(.*)$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if (!plain.Success || plain.Groups[3].Value.Length > 0 && plain.Groups[3].Value != "/")
+        {
+            throw ReportMismatch("A source patron embed origin is invalid.");
+        }
+        var protocol = plain.Groups[1].Value.ToLowerInvariant();
+        var authority = plain.Groups[2].Value;
+        var authorityMatchPlain = System.Text.RegularExpressions.Regex.Match(
+            authority,
+            "^(?<host>[a-z0-9.-]+|\\[[0-9a-f:.]+\\])(?::(?<port>[0-9]+))?$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        var rawHost = authorityMatchPlain.Success ? authorityMatchPlain.Groups["host"].Value : string.Empty;
+        var ipv6Authority = rawHost.StartsWith("[", StringComparison.Ordinal);
+        var unbracketedHost = ipv6Authority ? rawHost[1..^1] : rawHost;
+        if (!authorityMatchPlain.Success || !ValidAuditPort(authorityMatchPlain) ||
+            !Uri.TryCreate(origin, UriKind.Absolute, out var uri) || !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.Equals(uri.Scheme, protocol, StringComparison.Ordinal) || uri.AbsolutePath != "/" ||
+            !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment) || uri.Port is < 0 or > 65535 ||
+            (ipv6Authority && uri.HostNameType != UriHostNameType.IPv6) ||
+            (!ipv6Authority && (uri.HostNameType is not (UriHostNameType.Dns or UriHostNameType.IPv4) ||
+                uri.HostNameType == UriHostNameType.Dns && !IsAuditDnsHostname(unbracketedHost))))
+        {
+            throw ReportMismatch("A source patron embed origin authority is invalid.");
+        }
+        var local = unbracketedHost.ToLowerInvariant() is "localhost" or "127.0.0.1" or "::1";
+        if (protocol != "https" && !(protocol == "http" && local))
+        {
+            throw ReportMismatch("Only HTTPS or local HTTP embed origins are allowed.");
+        }
+        return $"{protocol}://{authority.ToLowerInvariant()}";
     }
+
+    private static bool ValidAuditPort(System.Text.RegularExpressions.Match authority)
+    {
+        if (!authority.Groups["port"].Success)
+        {
+            return true;
+        }
+        return int.TryParse(authority.Groups["port"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var port) &&
+            port is >= 0 and <= 65535;
+    }
+
+    private static bool IsAuditDnsHostname(string host)
+    {
+        var value = host.EndsWith(".", StringComparison.Ordinal) ? host[..^1] : host;
+        if (value.Length is 0 or > 253)
+        {
+            return false;
+        }
+        return value.Split('.').All(label => label.Length is > 0 and <= 63 &&
+            IsAuditAsciiAlphaNumeric(label[0]) && IsAuditAsciiAlphaNumeric(label[^1]) &&
+            label.All(character => IsAuditAsciiAlphaNumeric(character) || character == '-'));
+    }
+
+    private static bool IsAuditAsciiAlphaNumeric(char value) =>
+        value is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9';
 
     private static int ExpectedConfigurationRowsChecked(ValidatedMigrationPackage package)
     {
@@ -1781,7 +2068,7 @@ public static class MigrationReconciler
             {
                 return nativeId;
             }
-            return int.TryParse(reference, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) &&
+            return int.TryParse(reference, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) &&
                    organizationBySourceId.Values.Contains(parsed)
                 ? parsed
                 : throw ReportMismatch("A configuration audit scope does not identify a source organization.");

@@ -1,3 +1,4 @@
+using System.Data;
 using System.Net.Mail;
 using System.Security.Cryptography;
 using System.Text;
@@ -20,6 +21,14 @@ public sealed record MigrationImportResult(
 
 public static class MigrationImporter
 {
+    private static readonly string[] SeededWorkflowTagCodes =
+    [
+        "duplicate_suggestion",
+        "polaris_bib_found",
+        "polaris_bib_not_found",
+        "polaris_multiple_matches"
+    ];
+
     private static readonly IReadOnlySet<string> HoldTerminalReasons = new HashSet<string>(
         ["hold_completed", "hold_not_picked_up", "hold_unclaimed", "hold_cancelled", "hold_expired"],
         StringComparer.Ordinal);
@@ -291,7 +300,13 @@ public static class MigrationImporter
                 bootstrapMutatedStaffUserId,
                 configurationReconciliation,
                 placementTransformations);
-            MigrationIndependentVerifier.Verify(connection, transaction, package);
+            MigrationIndependentVerifier.Verify(
+                connection,
+                transaction,
+                package,
+                postmarkToken is not null,
+                bootstrapMutatedStaffUserId,
+                importedCounts.GetValueOrDefault("migration_bootstrap_staff_users") == 1);
             VerifyUsableSuperAdministrator(
                 connection,
                 transaction,
@@ -368,6 +383,7 @@ public static class MigrationImporter
 
     private static IReadOnlyList<object> ValidateConfigurationSourceFields(ValidatedMigrationPackage package)
     {
+        MigrationConfigurationImporter.ValidateSourcePackage(package);
         var definitions = new[]
         {
             new ConfigurationSourceFields(
@@ -468,7 +484,7 @@ public static class MigrationImporter
                 "email_templates",
                 Fields(
                     "id", "created", "updated", "scope", "libraryOrganization", "templateKey", "name",
-                    "subject", "body", "fromAddress", "fromName", "enabled"),
+                    "subject", "body", "fromAddress", "fromName", "enabled", "sourceTemplateId"),
                 Fields("created", "updated")),
             new ConfigurationSourceFields(
                 "email-templates.json",
@@ -552,6 +568,8 @@ public static class MigrationImporter
             }
         }
 
+        ValidateWorkflowTagSqlIdentity(package);
+
         var brandingIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var row in MigrationPackageReader.ReadRowsOrEmpty(package, "branding.json", "branding"))
         {
@@ -563,6 +581,31 @@ public static class MigrationImporter
             }
         }
 
+    }
+
+    private static void ValidateWorkflowTagSqlIdentity(ValidatedMigrationPackage package)
+    {
+        var sourceCodes = MigrationPackageReader.ReadRowsOrEmpty(package, "workflow-tags.json", "workflow_tags")
+            .Select(row => (Row: row, Code: NormalizeWorkflowTagCode(row.RequiredString("code"))))
+            .ToArray();
+        var targetCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (row, code) in sourceCodes)
+        {
+            if (!targetCodes.Add(code))
+            {
+                throw new MigrationOperationException(
+                    "workflow_tag_sql_identity_collision",
+                    $"Workflow tag {row.RequiredString("id")} differs from another source identity only under target SQL case-insensitive comparison.");
+            }
+            if (SeededWorkflowTagCodes.Any(seed =>
+                    string.Equals(code, seed, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(code, seed, StringComparison.Ordinal)))
+            {
+                throw new MigrationOperationException(
+                    "workflow_tag_seed_identity_collision",
+                    $"Workflow tag {row.RequiredString("id")} changes the exact identity of a seeded workflow tag.");
+            }
+        }
     }
 
     private static HashSet<string> Fields(params string[] names) =>
@@ -726,7 +769,7 @@ public static class MigrationImporter
             """,
             connection,
             transaction);
-        command.Parameters.AddWithValue("@exportedAtUtc", exportedAtUtc);
+        AddDateTime2Parameter(command, "@exportedAtUtc", exportedAtUtc);
         command.ExecuteNonQuery();
     }
 
@@ -779,7 +822,7 @@ public static class MigrationImporter
                 command.Parameters.AddWithValue("@organizationCodeId", DbValue(organizationCodeId));
                 command.Parameters.AddWithValue("@parentOrganizationId", DbValue(parentOrganizationId));
                 command.Parameters.AddWithValue("@isActive", organizationId > 1 && organizationCodeId == 2 && row.Bool("enabledForPatrons"));
-                command.Parameters.AddWithValue("@lastSyncedUtc", (object?)row.UtcDateTime("lastSynced") ?? DBNull.Value);
+                AddDateTime2Parameter(command, "@lastSyncedUtc", row.UtcDateTime("lastSynced"));
                 command.ExecuteNonQuery();
             }
             InsertMapping(connection, transaction, "organization", sourceId, organizationId);
@@ -889,7 +932,7 @@ public static class MigrationImporter
             command.Parameters.AddWithValue("@purchaseDefault", row.Bool("purchase_reminder_default"));
             command.Parameters.AddWithValue("@additionalCopyDefault", row.Bool("additional_copy_reminder_default"));
             command.Parameters.AddWithValue("@mineDefault", row.Bool("default_mine_unclaimed_filter"));
-            command.Parameters.AddWithValue("@lastLoginUtc", (object?)row.UtcDateTime("lastLogin") ?? DBNull.Value);
+            AddDateTime2Parameter(command, "@lastLoginUtc", row.UtcDateTime("lastLogin"));
             var targetId = Convert.ToInt64(command.ExecuteScalar());
             mapped.Add(sourceId, targetId);
             InsertMapping(connection, transaction, "staff_user", sourceId, targetId);
@@ -1020,7 +1063,7 @@ public static class MigrationImporter
     {
         var sourceRows = emailRows.Select(row => new SourceTemplate(row, false))
             .Concat(rejectionRows.Select(row => new SourceTemplate(row, true)))
-            .OrderBy(item => string.Equals(item.Row.String("scope"), "system", StringComparison.Ordinal) ? 0 : 1)
+            .OrderBy(item => string.Equals(item.Row.String("scope"), "system", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ThenBy(item => item.Row.RequiredString("id"), StringComparer.Ordinal)
             .ToArray();
         var mapped = new Dictionary<string, long>(StringComparer.Ordinal);
@@ -1040,7 +1083,7 @@ public static class MigrationImporter
                 throw new MigrationOperationException("email_template_scope_invalid", $"Email template {sourceId} has system ownership in library scope.");
             }
             var templateKey = source.IsRejection
-                ? "rejection:" + (row.String("sourceTemplateId") ?? sourceId)
+                ? "rejection:" + (scope == "library" ? row.String("sourceTemplateId") ?? sourceId : sourceId)
                 : row.RequiredString("templateKey");
             var sourceTemplateId = scope == "library"
                 ? ResolveSourceTemplateId(connection, transaction, row, source.IsRejection, templateKey, mapped)
@@ -1363,8 +1406,8 @@ public static class MigrationImporter
         command.Parameters.AddWithValue("@publicationLabel", DbString(LegacyFormatTextOrDefault(row.Text("publicationLabel"), "Publication Timing")));
         if (includeOwnerAndDates)
         {
-            command.Parameters.AddWithValue("@createdUtc", row.UtcDateTime("created") ?? exportedAtUtc);
-            command.Parameters.AddWithValue("@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
+            AddDateTime2Parameter(command, "@createdUtc", row.UtcDateTime("created") ?? exportedAtUtc);
+            AddDateTime2Parameter(command, "@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
         }
     }
 
@@ -1494,8 +1537,8 @@ public static class MigrationImporter
             command.Parameters.AddWithValue("@formatId", formatId);
             command.Parameters.AddWithValue("@staffId", DbValue(staffId));
             command.Parameters.AddWithValue("@active", active);
-            command.Parameters.AddWithValue("@createdUtc", row.UtcDateTime("created") ?? exportedAtUtc);
-            command.Parameters.AddWithValue("@deactivatedUtc", DbValue(deactivatedUtc));
+            AddDateTime2Parameter(command, "@createdUtc", row.UtcDateTime("created") ?? exportedAtUtc);
+            AddDateTime2Parameter(command, "@deactivatedUtc", deactivatedUtc);
             var targetId = Convert.ToInt64(command.ExecuteScalar());
             mapped.Add(sourceId, targetId);
             InsertMapping(connection, transaction, "format_auto_claim_rule", sourceId, targetId);
@@ -1630,17 +1673,17 @@ public static class MigrationImporter
             command.Parameters.AddWithValue("@notes", DbString(row.Text("notes")));
             command.Parameters.AddWithValue("@claimedById", DbValue(claim.StaffUserId));
             command.Parameters.AddWithValue("@claimedDisplay", DbString(claim.DisplayName));
-            command.Parameters.AddWithValue("@claimedAt", DbValue(claim.ClaimedAtUtc));
+            AddDateTime2Parameter(command, "@claimedAt", claim.ClaimedAtUtc);
             command.Parameters.AddWithValue("@claimType", DbString(claim.ClaimType));
             command.Parameters.AddWithValue("@claimRuleId", DbValue(claim.ClaimRuleId));
-            command.Parameters.AddWithValue("@lastPromoterCheck", DbValue(row.UtcDateTime("lastPromoterCheck")));
+            AddDateTime2Parameter(command, "@lastPromoterCheck", row.UtcDateTime("lastPromoterCheck"));
             command.Parameters.AddWithValue("@isbnStatus", DbString(targetIsbnStatus));
             command.Parameters.AddWithValue("@isbnResult", DbString(row.Text("isbnCheckResult")));
             command.Parameters.AddWithValue("@retryCount", retryCount);
             command.Parameters.AddWithValue("@lastErrorCode", DbString(targetIsbnStatus == "error_max_retries" ? "legacy_retry_exhausted" : null));
-            command.Parameters.AddWithValue("@lastChecked", DbValue(row.UtcDateTime("lastChecked")));
-            command.Parameters.AddWithValue("@createdUtc", row.UtcDateTime("created") ?? throw new MigrationOperationException("request_created_missing", $"Title request {sourceId} has no creation timestamp."));
-            command.Parameters.AddWithValue("@updatedUtc", row.UtcDateTime("updated") ?? throw new MigrationOperationException("request_updated_missing", $"Title request {sourceId} has no update timestamp."));
+            AddDateTime2Parameter(command, "@lastChecked", row.UtcDateTime("lastChecked"));
+            AddDateTime2Parameter(command, "@createdUtc", row.UtcDateTime("created") ?? throw new MigrationOperationException("request_created_missing", $"Title request {sourceId} has no creation timestamp."));
+            AddDateTime2Parameter(command, "@updatedUtc", row.UtcDateTime("updated") ?? throw new MigrationOperationException("request_updated_missing", $"Title request {sourceId} has no update timestamp."));
             var targetId = Convert.ToInt64(command.ExecuteScalar());
             mapped.Add(sourceId, targetId);
             InsertMapping(connection, transaction, "title_request", sourceId, targetId);
@@ -1809,11 +1852,11 @@ public static class MigrationImporter
                     "additional_copy_creator_reference_invalid",
                     "additional-copy creator staff")));
             command.Parameters.AddWithValue("@createdByDisplayName", DbString(row.String("createdByUsername")));
-            command.Parameters.AddWithValue("@createdUtc", createdUtc);
-            command.Parameters.AddWithValue("@updatedUtc", updatedUtc);
+            AddDateTime2Parameter(command, "@createdUtc", createdUtc);
+            AddDateTime2Parameter(command, "@updatedUtc", updatedUtc);
             command.Parameters.AddWithValue("@claimedByStaffUserId", DbValue(claim.StaffUserId));
             command.Parameters.AddWithValue("@claimedByDisplayName", DbString(claim.DisplayName));
-            command.Parameters.AddWithValue("@claimedAtUtc", DbValue(claim.ClaimedAtUtc));
+            AddDateTime2Parameter(command, "@claimedAtUtc", claim.ClaimedAtUtc);
             command.Parameters.AddWithValue(
                 "@closedByStaffUserId",
                 DbValue(ResolveRequiredMapping(
@@ -1822,7 +1865,7 @@ public static class MigrationImporter
                     "additional_copy_closer_reference_invalid",
                     "additional-copy closer staff")));
             command.Parameters.AddWithValue("@closedByDisplayName", DbString(closedDisplayName));
-            command.Parameters.AddWithValue("@closedUtc", DbValue(closedUtc));
+            AddDateTime2Parameter(command, "@closedUtc", closedUtc);
             var targetId = Convert.ToInt64(command.ExecuteScalar());
             mapped.Add(sourceId, targetId);
             InsertMapping(connection, transaction, "additional_copy", sourceId, targetId);
@@ -1931,8 +1974,8 @@ public static class MigrationImporter
             command.Parameters.AddWithValue("@status", DbString(status));
             command.Parameters.AddWithValue("@closeReason", DbString(closeReason));
             command.Parameters.AddWithValue("@maskedBarcode", DbString(MaskBarcode(barcode)));
-            command.Parameters.AddWithValue("@createdUtc", DbValue(createdUtc));
-            command.Parameters.AddWithValue("@deletedUtc", row.UtcDateTime("deletedAt") ?? throw new MigrationOperationException(
+            AddDateTime2Parameter(command, "@createdUtc", createdUtc);
+            AddDateTime2Parameter(command, "@deletedUtc", row.UtcDateTime("deletedAt") ?? throw new MigrationOperationException(
                 "deleted_request_timestamp_missing",
                 $"Deleted-request audit {sourceId} has no deletion timestamp."));
             command.Parameters.AddWithValue(
@@ -2112,7 +2155,7 @@ public static class MigrationImporter
             transaction);
         command.Parameters.AddWithValue("@requestId", targetRequestId);
         command.Parameters.AddWithValue("@metadata", metadata);
-        command.Parameters.AddWithValue("@createdUtc", exportedAtUtc);
+            AddDateTime2Parameter(command, "@createdUtc", exportedAtUtc);
         command.ExecuteNonQuery();
     }
 
@@ -2200,7 +2243,7 @@ public static class MigrationImporter
             command.Parameters.AddWithValue("@actorName", DbString(row.Text("actorName")));
             command.Parameters.AddWithValue("@message", DbString(row.Text("message")));
             command.Parameters.AddWithValue("@metadata", metadata);
-            command.Parameters.AddWithValue("@createdUtc", row.UtcDateTime("created") ?? throw new MigrationOperationException("request_event_created_missing", $"Title request event {sourceId} has no creation timestamp."));
+            AddDateTime2Parameter(command, "@createdUtc", row.UtcDateTime("created") ?? throw new MigrationOperationException("request_event_created_missing", $"Title request event {sourceId} has no creation timestamp."));
             var targetId = Convert.ToInt64(command.ExecuteScalar());
             InsertMapping(connection, transaction, "title_request_event", sourceId, targetId);
 
@@ -2439,7 +2482,7 @@ public static class MigrationImporter
                 transaction);
             marker.Parameters.AddWithValue("@requestId", requestIds[sourceRequestId]);
             marker.Parameters.AddWithValue("@metadata", markerMetadata);
-            marker.Parameters.AddWithValue("@createdUtc", exportedAtUtc);
+            AddDateTime2Parameter(marker, "@createdUtc", exportedAtUtc);
             marker.ExecuteNonQuery();
             markerCount++;
             placementTransformations.Add(new(
@@ -2647,7 +2690,7 @@ public static class MigrationImporter
                 connection,
                 transaction);
             command.Parameters.AddWithValue("@eventType", eventType);
-            command.Parameters.AddWithValue("@receivedUtc", row.UtcDateTime("created") ?? throw new MigrationOperationException("email_delivery_created_missing", $"Email delivery event {sourceId} has no creation timestamp."));
+            AddDateTime2Parameter(command, "@receivedUtc", row.UtcDateTime("created") ?? throw new MigrationOperationException("email_delivery_created_missing", $"Email delivery event {sourceId} has no creation timestamp."));
             command.Parameters.AddWithValue("@metadata", metadata);
             var targetId = Convert.ToInt64(command.ExecuteScalar());
             InsertMapping(connection, transaction, "email_delivery_event", sourceId, targetId);
@@ -3166,9 +3209,12 @@ public static class MigrationImporter
         var brandingRows = MigrationPackageReader.ReadRows(package, "branding.json", "branding");
         foreach (var row in brandingRows)
         {
-            var organizationId = row.RequiredString("scope") == "system"
+            var scope = row.RequiredString("scope").Trim();
+            var organizationId = string.Equals(scope, "system", StringComparison.OrdinalIgnoreCase)
                 ? 1
-                : ResolveOrganizationId(connection, transaction, row, "libraryOrganization", organizationIds);
+                : string.Equals(scope, "library", StringComparison.OrdinalIgnoreCase)
+                    ? ResolveOrganizationId(connection, transaction, row, "libraryOrganization", organizationIds)
+                    : throw new MigrationOperationException("branding_scope_invalid", "A branding row has an unsupported scope.");
             using var command = new SqlCommand(
                 "SELECT [LogoData], [LogoContentType], [LogoFileName], [LogoAltText] FROM [asap].[Branding] WHERE [OrganizationId] = @id;",
                 connection,
@@ -4826,6 +4872,13 @@ public static class MigrationImporter
     {
         using var command = new SqlCommand(sql, connection, transaction);
         return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    private static void AddDateTime2Parameter(SqlCommand command, string name, DateTime? value)
+    {
+        var parameter = command.Parameters.Add(name, SqlDbType.DateTime2);
+        parameter.Scale = 7;
+        parameter.Value = (object?)value ?? DBNull.Value;
     }
 
     private static int ScalarWithAllowedTenants(

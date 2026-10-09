@@ -159,6 +159,8 @@ public sealed partial class PatronJourneyTests
             }.ToCommand(), CancellationToken.None)).Code);
         using var cancellation = new CancellationTokenSource();
         patronProvider.BeforeRefresh = _ => cancellation.Cancel();
+        patronProvider.AfterRefreshFailure = new PolarisOperationalException(
+            "polaris_patron_refresh_failed", "Patron lookup failed after caller cancellation.");
         await Assert.ThrowsAsync<OperationCanceledException>(async () =>
             await mutations.ActionAsync(actor, cancelledPurchase.Id,
                 new TitleRequestActionInput
@@ -166,6 +168,7 @@ public sealed partial class PatronJourneyTests
                     Version = Convert.ToBase64String(cancelledPurchase.RowVersion), Action = "purchase"
                 }.ToCommand(), cancellation.Token));
         patronProvider.BeforeRefresh = null;
+        patronProvider.AfterRefreshFailure = null;
 
         await using var verify = await contexts.CreateDbContextAsync();
         var approved = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
@@ -241,10 +244,15 @@ public sealed partial class PatronJourneyTests
         public string? UnavailableBarcode { get; set; }
         public HashSet<string> UnavailableBarcodes { get; } = [];
         public Action<CancellationToken>? BeforeRefresh { get; set; }
+        public Exception? AfterRefreshFailure { get; set; }
 
         public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken)
         {
             BeforeRefresh?.Invoke(cancellationToken);
+            if (AfterRefreshFailure is { } failure)
+            {
+                throw failure;
+            }
             cancellationToken.ThrowIfCancellationRequested();
             if (barcode == UnavailableBarcode || UnavailableBarcodes.Contains(barcode))
             {

@@ -493,6 +493,12 @@ public sealed partial class AdministrationService(
         try
         {
             snapshots = await polarisProvider.GetOrganizationsAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
         catch (PolarisOperationalException)
         {
@@ -1121,6 +1127,7 @@ public sealed partial class AdministrationService(
         try
         {
             choices = await polarisProvider.GetPatronCodesAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1128,9 +1135,15 @@ public sealed partial class AdministrationService(
         }
         catch (PolarisOperationalException exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return (null, new AdministrationResult(
                 "patron_codes_unavailable",
                 Message: exception.Message));
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
 
         var known = choices.Where(item => item.Id > 0).Select(item => item.Id).ToHashSet();

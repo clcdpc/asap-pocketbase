@@ -118,11 +118,15 @@ public sealed partial class PatronJourneyTests
         const int bibId = 9909;
         const int organizationId = 3898;
         var barcode = $"2000000000{Random.Shared.Next(100000, 999999)}";
-        var handler = new WorkflowCheckoutProtocolHandler(checkoutContent.Replace("9909", bibId.ToString(), StringComparison.Ordinal));
+        var handler = new WorkflowCheckoutProtocolHandler(
+            checkoutContent.Replace("9909", bibId.ToString(), StringComparison.Ordinal),
+            barcode);
         var provider = await CreatePolarisProviderAsync(handler, "checkout-workflow-" + Guid.NewGuid().ToString("N"));
         await using var scoped = factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
         {
+            services.RemoveAll<IPatronProvider>();
             services.RemoveAll<IStaffPolarisProvider>();
+            services.AddSingleton<IPatronProvider>(provider);
             services.AddSingleton<IStaffPolarisProvider>(provider);
         }));
         var contexts = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
@@ -513,7 +517,7 @@ public sealed partial class PatronJourneyTests
         }
     }
 
-    private sealed class WorkflowCheckoutProtocolHandler(string checkoutContent) : HttpMessageHandler
+    private sealed class WorkflowCheckoutProtocolHandler(string checkoutContent, string barcode) : HttpMessageHandler
     {
         public int CheckoutCalls { get; private set; }
         public int HoldCalls { get; private set; }
@@ -524,7 +528,11 @@ public sealed partial class PatronJourneyTests
             var path = request.RequestUri!.AbsolutePath;
             var content = path.Contains("/authenticator/staff", StringComparison.Ordinal)
                 ? "{\"PAPIErrorCode\":0,\"AccessToken\":\"checkout-token\",\"AccessSecret\":\"checkout-secret\",\"AuthExpDate\":\"2030-01-01T00:00:00Z\"}"
-                : path.Contains("/itemsout/", StringComparison.Ordinal)
+                : path.EndsWith("/basicdata", StringComparison.Ordinal)
+                    ? "{\"PAPIErrorCode\":0,\"PatronBasicData\":{\"PatronID\":810090,\"Barcode\":\"" + barcode + "\",\"PatronOrgID\":3494,\"PatronCodeID\":1}}"
+                    : path.Contains("/organizations/", StringComparison.Ordinal)
+                        ? "{\"PAPIErrorCode\":0,\"OrganizationsGetRows\":[{\"OrganizationID\":1,\"OrganizationCodeID\":1,\"ParentOrganizationID\":null},{\"OrganizationID\":3494,\"OrganizationCodeID\":2,\"ParentOrganizationID\":1,\"Name\":\"Strict checkout library\"}]}"
+                        : path.Contains("/itemsout/", StringComparison.Ordinal)
                     ? CheckoutResponse()
                     : path.Contains("/holdrequests/", StringComparison.Ordinal)
                         ? HoldResponse()
