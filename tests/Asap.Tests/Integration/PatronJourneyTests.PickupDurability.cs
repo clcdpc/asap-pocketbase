@@ -221,7 +221,8 @@ public sealed partial class PatronJourneyTests
             var failure = await Assert.ThrowsAsync<PickupMutationException>(() =>
                 scoped.Services.GetRequiredService<PickupPreferenceMutationService>().ChangeAsync(
                     patron, organizationId, new(provider.SecondBranch, "Second"), "First", origin,
-                    origin == "request" ? request.Id : null, actor.Id, CancellationToken.None));
+                    origin == "request" ? request.Id : null, actor.Id,
+                    static (_, _, _) => Task.CompletedTask, CancellationToken.None));
             // Simulate a restart after durable intent, with no finish marker.
             await ExecuteNonQueryAsync("""
                 UPDATE [asap].[PickupPreferenceOperation] SET [DispatchFinishedUtc] = NULL WHERE [Id] = @id;
@@ -357,8 +358,7 @@ public sealed partial class PatronJourneyTests
         await using var scoped = CreatePickupJournalFactory(provider);
         var contexts = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await SeedPickupJournalRequestAsync(contexts, provider);
-        var session = new PatronSessionContext(1, provider.Barcode, organizationId, organizationId,
-            organizationId, timeProvider!.GetUtcNow().AddHours(1).UtcDateTime);
+        var session = await IssueTestPatronSessionAsync(provider.Barcode, organizationId, provider.OrganizationId * 10);
         var suggestions = scoped.Services.GetRequiredService<PatronSuggestionService>();
         try
         {
@@ -379,6 +379,7 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
+            await DeleteTestPatronSessionAsync(session.Id);
             await CleanupPickupJournalLibraryAsync(organizationId);
         }
     }
@@ -406,8 +407,21 @@ public sealed partial class PatronJourneyTests
         IDbContextFactory<AsapDbContext> contexts, PickupJournalProvider provider)
     {
         await using var context = await contexts.CreateDbContextAsync();
-        context.Organizations.Add(new Organization { Id = provider.OrganizationId, DisplayName = "Pickup library", IsActive = true });
-        context.Organizations.Add(new Organization { Id = provider.FirstBranch, DisplayName = "Pickup registered branch", IsActive = false });
+        context.Organizations.Add(new Organization
+        {
+            Id = provider.OrganizationId,
+            DisplayName = "Pickup library",
+            OrganizationCodeId = OrganizationAuthority.LibraryOrganizationCodeId,
+            IsActive = true
+        });
+        context.Organizations.Add(new Organization
+        {
+            Id = provider.FirstBranch,
+            DisplayName = "Pickup registered branch",
+            OrganizationCodeId = 3,
+            ParentOrganizationId = provider.OrganizationId,
+            IsActive = false
+        });
         var request = new TitleRequest {
             LibraryOrganizationId = provider.OrganizationId, PatronOrganizationId = provider.FirstBranch,
             Barcode = provider.Barcode, Title = "Pickup request " + Guid.NewGuid(), AutoHold = true,
@@ -438,6 +452,7 @@ public sealed partial class PatronJourneyTests
     {
         await ExecuteNonQueryAsync("""
             DELETE FROM [asap].[PickupPreferenceOperation] WHERE [LibraryOrganizationId] = @org;
+            DELETE FROM [asap].[PatronSession] WHERE [EffectiveOrganizationId] = @org;
             DELETE FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] IN
                 (SELECT [Id] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = @org);
             DELETE FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = @org;
@@ -445,34 +460,75 @@ public sealed partial class PatronJourneyTests
             """, ("@org", organizationId));
     }
 
-    private sealed class PickupJournalProvider(int organizationId) : IPatronProvider
+    private sealed class PickupJournalProvider : IPatronProvider
     {
-        public int OrganizationId => organizationId;
-        public string Barcode => "2000000000" + organizationId;
-        public int FirstBranch => organizationId * 100 + 1;
+        public PickupJournalProvider(int organizationId)
+        {
+            OrganizationId = organizationId;
+            PatronId = organizationId * 10;
+            HomeLibraryOrganizationId = organizationId;
+            Current = organizationId * 100 + 1;
+        }
+
+        public int OrganizationId { get; }
+        public string Barcode => "2000000000" + OrganizationId;
+        public string CurrentBarcodeOverride { get; set; } = "";
+        public string? FormerBarcode { get; set; }
+        public string? RequestedBarcode { get; set; }
+        private string CurrentBarcode => string.IsNullOrEmpty(CurrentBarcodeOverride)
+            ? Barcode
+            : CurrentBarcodeOverride;
+        public int FirstBranch => OrganizationId * 100 + 1;
         public int SecondBranch => FirstBranch + 1;
-        public int? Current { get; set; } = organizationId * 100 + 1;
+        public int PatronId { get; set; }
+        public int HomeLibraryOrganizationId { get; set; }
+        public int? Current { get; set; }
         public int Writes { get; private set; }
         public int Reads { get; private set; }
+        public bool AllowAuthentication { get; set; }
         public bool FailBeforeEffect { get; set; }
         public Exception? NoEffectFailure { get; set; }
         public Func<CancellationToken, Task>? AfterEffect { get; set; }
-        public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken token) =>
-            throw new InvalidOperationException("Authentication is not part of this scenario.");
-        public Task<IdentifierLookupResult> LookupIdentifierAsync(string identifier, int context, CancellationToken token) =>
-            throw new InvalidOperationException("Identifier lookup is not part of this scenario.");
+        public Func<CancellationToken, Task>? AfterRefresh { get; set; }
+        public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken token)
+        {
+            if (!AllowAuthentication)
+            {
+                throw new InvalidOperationException("Authentication is not part of this scenario.");
+            }
+            Check(barcode, OrganizationId, token);
+            return Task.FromResult(new PatronSnapshot(PatronId, CurrentBarcode, "pickup@example.org",
+                "Pickup", "Patron", 1, "Adult", FirstBranch, HomeLibraryOrganizationId, "Pickup library", Current,
+                FormerBarcode, RequestedBarcode));
+        }
+        public Task<IdentifierLookupResult> LookupIdentifierAsync(string identifier, int context, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            Assert.AreEqual(OrganizationId, context);
+            return Task.FromResult(new IdentifierLookupResult(IdentifierLookupOutcome.TransientFailure));
+        }
         private void Check(string barcode, int context, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            Assert.AreEqual(Barcode, barcode);
-            Assert.AreEqual(organizationId, context);
+            Assert.IsTrue(new[] { Barcode, CurrentBarcode, FormerBarcode }
+                .Where(item => item is not null)
+                .Contains(barcode, StringComparer.OrdinalIgnoreCase),
+                $"Unexpected verified barcode alias {barcode}.");
+            Assert.AreEqual(OrganizationId, context);
         }
-        public Task<PatronSnapshot> RefreshAsync(string barcode, int context, CancellationToken token)
+        public async Task<PatronSnapshot> RefreshAsync(string barcode, int context, CancellationToken token)
         {
             Check(barcode, context, token);
             Reads++;
-            return Task.FromResult(new PatronSnapshot(organizationId * 10, Barcode, "pickup@example.org",
-                "Pickup", "Patron", 1, "Adult", FirstBranch, organizationId, "Pickup library", Current));
+            if (AfterRefresh is { } afterRefresh)
+            {
+                await afterRefresh(token);
+            }
+            var requestedBarcode = RequestedBarcode ??
+                (!string.Equals(barcode, CurrentBarcode, StringComparison.OrdinalIgnoreCase) ? barcode : null);
+            return new PatronSnapshot(PatronId, CurrentBarcode, "pickup@example.org",
+                "Pickup", "Patron", 1, "Adult", FirstBranch, HomeLibraryOrganizationId, "Pickup library", Current,
+                FormerBarcode, requestedBarcode);
         }
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, int context, CancellationToken token)
         {

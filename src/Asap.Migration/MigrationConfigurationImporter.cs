@@ -133,7 +133,7 @@ internal static class MigrationConfigurationImporter
         var rows = MigrationPackageReader.ReadRows(package, "branding.json", "branding");
         foreach (var row in rows.OrderBy(item => item.RequiredString("sourceRecordId"), StringComparer.Ordinal))
         {
-            var organizationId = ResolveScopedOrganization(row, organizationIds);
+            var organizationId = ResolveScopedOrganization(connection, transaction, row, organizationIds);
             var assetPath = row.RequiredString("assetPath");
             var fullPath = ResolvePackagePath(package.RootPath, assetPath);
             var data = File.ReadAllBytes(fullPath);
@@ -560,7 +560,7 @@ internal static class MigrationConfigurationImporter
         // importing the legacy SMTP transport fields.
         foreach (var group in templateRows
                      .Where(item => string.Equals(item.String("scope"), "library", StringComparison.OrdinalIgnoreCase))
-                     .GroupBy(row => ResolveScopedOrganization(row, organizationIds)))
+                     .GroupBy(row => ResolveScopedOrganization(connection, transaction, row, organizationIds)))
         {
             var fromAddress = ResolveSenderValue(
                 $"library:{group.Key}",
@@ -652,7 +652,7 @@ internal static class MigrationConfigurationImporter
         var rows = MigrationPackageReader.ReadRows(package, "workflow-settings.json", "workflow_settings");
         foreach (var row in rows.OrderBy(item => item.RequiredString("scope") == "system" ? 0 : 1))
         {
-            var organizationId = ResolveScopedOrganization(row, organizationIds);
+            var organizationId = ResolveScopedOrganization(connection, transaction, row, organizationIds);
             var isSystem = organizationId == 1;
             var timeoutTemplate = row.String("outstandingTimeoutRejectionTemplate");
             long? timeoutTemplateId = timeoutTemplate is null
@@ -881,7 +881,7 @@ internal static class MigrationConfigurationImporter
         var uiRows = MigrationPackageReader.ReadRows(package, "patron-settings.json", "ui_settings");
         foreach (var row in uiRows.OrderBy(item => item.RequiredString("scope") == "system" ? 0 : 1))
         {
-            var organizationId = ResolveScopedOrganization(row, organizationIds);
+            var organizationId = ResolveScopedOrganization(connection, transaction, row, organizationIds);
             UpsertPatronSettings(connection, transaction, organizationId, row, exportedAtUtc);
             if (organizationId != 1)
             {
@@ -924,7 +924,9 @@ internal static class MigrationConfigurationImporter
         foreach (var row in overrides.OrderBy(item => item.RequiredString("orgId"), StringComparer.Ordinal))
         {
             var organizationId = row.Int32("orgId") ?? throw new MigrationOperationException("patron_override_org_invalid", "A patron settings override has no organization.");
-            if (organizationId == 1 || !organizationIds.Values.Contains(organizationId))
+            if (organizationId == 1 ||
+                !organizationIds.Values.Contains(organizationId) ||
+                !OrganizationIsLibrary(connection, transaction, organizationId))
             {
                 throw new MigrationOperationException(
                     "patron_override_org_invalid",
@@ -934,7 +936,7 @@ internal static class MigrationConfigurationImporter
             EnsurePatronSettings(connection, transaction, organizationId, row.UtcDateTime("updated") ?? exportedAtUtc);
             ApplyPatronOverride(connection, transaction, organizationId, row, exportedAtUtc);
             ReplacePublicationOptions(connection, transaction, organizationId, row.Text("publicationOptions"));
-            ImportCustomFields(connection, transaction, organizationId, row, transformations);
+            ImportCustomFields(connection, transaction, package, organizationId, row, organizationIds, transformations);
         }
 
         var legacyPatronRows = MigrationPackageReader.ReadRows(
@@ -943,7 +945,7 @@ internal static class MigrationConfigurationImporter
             "patron_library_settings");
         foreach (var row in legacyPatronRows.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
         {
-            var organizationId = ResolveLibraryOrganization(row, "libraryOrganization", organizationIds);
+            var organizationId = ResolveLibraryOrganization(connection, transaction, row, "libraryOrganization", organizationIds);
             var modernOverridePresent = modernOverrideOrganizations.Contains(organizationId);
             if (!modernOverridePresent)
             {
@@ -969,7 +971,7 @@ internal static class MigrationConfigurationImporter
             "library_settings");
         foreach (var row in dormantLibrarySettings.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
         {
-            var organizationId = ResolveLibraryOrganization(row, "libraryOrganization", organizationIds);
+            var organizationId = ResolveLibraryOrganization(connection, transaction, row, "libraryOrganization", organizationIds);
             transformations.Add(new
             {
                 entity = "legacy_library_branding",
@@ -1150,7 +1152,7 @@ internal static class MigrationConfigurationImporter
 
         foreach (var group in templateRows
                      .Where(row => string.Equals(row.String("scope"), "library", StringComparison.OrdinalIgnoreCase))
-                     .GroupBy(row => ResolveScopedOrganization(row, organizationIds)))
+                     .GroupBy(row => ResolveScopedOrganization(connection, transaction, row, organizationIds)))
         {
             var expectedAddressForLibrary = ResolveSenderValue(
                 $"library:{group.Key}",
@@ -1192,7 +1194,7 @@ internal static class MigrationConfigurationImporter
         var rows = MigrationPackageReader.ReadRows(package, "workflow-settings.json", "workflow_settings");
         foreach (var row in rows.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
         {
-            var organizationId = ResolveScopedOrganization(row, organizationIds);
+            var organizationId = ResolveScopedOrganization(connection, transaction, row, organizationIds);
             var isSystem = organizationId == 1;
             var sourceTemplate = row.String("outstandingTimeoutRejectionTemplate");
             long? expectedTemplateId = sourceTemplate is null
@@ -1372,7 +1374,7 @@ internal static class MigrationConfigurationImporter
         var uiRows = MigrationPackageReader.ReadRows(package, "patron-settings.json", "ui_settings");
         foreach (var row in uiRows)
         {
-            var organizationId = ResolveScopedOrganization(row, organizationIds);
+            var organizationId = ResolveScopedOrganization(connection, transaction, row, organizationIds);
             var values = GetExpectedPatronValues(expected, organizationId);
             AddPatronUiValues(values, row, organizationId == 1);
             if (organizationId == 1 && row.HasValue("systemNotEnabledMessage"))
@@ -1392,7 +1394,7 @@ internal static class MigrationConfigurationImporter
         {
             var raw = row.Text("publicationOptions");
             if (!string.IsNullOrWhiteSpace(raw) &&
-                ResolveScopedOrganization(row, organizationIds) == 1)
+                ResolveScopedOrganization(connection, transaction, row, organizationIds) == 1)
             {
                 publicationRows[1] = raw;
             }
@@ -1405,7 +1407,9 @@ internal static class MigrationConfigurationImporter
             var organizationId = row.Int32("orgId") ?? throw new MigrationOperationException(
                 "patron_override_org_invalid",
                 "A patron settings override has no organization.");
-            if (organizationId == 1 || !organizationIds.Values.Contains(organizationId))
+            if (organizationId == 1 ||
+                !organizationIds.Values.Contains(organizationId) ||
+                !OrganizationIsLibrary(connection, transaction, organizationId))
             {
                 throw new MigrationOperationException(
                     "patron_override_org_invalid",
@@ -1429,6 +1433,8 @@ internal static class MigrationConfigurationImporter
             ReconcileFormatRules(
                 connection,
                 transaction,
+                package,
+                organizationIds,
                 organizationId,
                 row,
                 counter);
@@ -1436,7 +1442,7 @@ internal static class MigrationConfigurationImporter
 
         foreach (var row in MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_library_settings"))
         {
-            var organizationId = ResolveLibraryOrganization(row, "libraryOrganization", organizationIds);
+            var organizationId = ResolveLibraryOrganization(connection, transaction, row, "libraryOrganization", organizationIds);
             if (modernOverrideOrganizations.Contains(organizationId))
             {
                 continue;
@@ -1750,7 +1756,17 @@ internal static class MigrationConfigurationImporter
             {
                 var fieldKey = RequiredJsonString(definition, "key", "custom_fields_invalid");
                 var fieldId = ReadCustomFieldId(connection, transaction, organizationId, fieldKey);
-                var expectedRule = ResolveCustomFieldRule(formatRules, format.Code, fieldKey, JsonBool(definition, "enabled", true));
+                var enabledOptionCount = definition.TryGetProperty("options", out var optionElement) &&
+                    optionElement.ValueKind == JsonValueKind.Array
+                        ? optionElement.EnumerateArray().Count(option => JsonBool(option, "enabled", true))
+                        : 0;
+                var expectedRule = ResolveCustomFieldRule(
+                    formatRules,
+                    format.Code,
+                    fieldKey,
+                    RequiredJsonString(definition, "type", "custom_fields_invalid"),
+                    JsonBool(definition, "enabled", true),
+                    enabledOptionCount);
                 using var ruleCommand = new SqlCommand(
                     "SELECT [Mode], [LabelOverride] FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] = @organizationId AND [MaterialFormatId] = @formatId AND [PatronCustomFieldId] = @fieldId;",
                     connection,
@@ -1773,6 +1789,8 @@ internal static class MigrationConfigurationImporter
     private static void ReconcileFormatRules(
         SqlConnection connection,
         SqlTransaction transaction,
+        ValidatedMigrationPackage package,
+        IReadOnlyDictionary<string, int> organizationIds,
         int organizationId,
         SourceRow row,
         ReconciliationCounter counter)
@@ -1784,20 +1802,34 @@ internal static class MigrationConfigurationImporter
         }
 
         var scopedFormats = ReadScopedFormats(connection, transaction, organizationId);
+        var effectiveSourceCodes = ReadEffectiveSourceFormatCodes(
+            connection,
+            transaction,
+            package,
+            organizationId,
+            organizationIds,
+            scopedFormats);
+        var effectiveCodes = effectiveSourceCodes.Values.ToHashSet(StringComparer.Ordinal);
+        var rulesByCode = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var property in formatRules.Value.EnumerateObject())
         {
-            var target = scopedFormats
-                .Where(format => string.Equals(format.Code, property.Name, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(format => format.OwnerOrganizationId == organizationId ? 0 : 1)
-                .ThenBy(format => format.Id)
-                .FirstOrDefault();
-            if (target is null)
+            var sourceCode = property.Name;
+            if (!effectiveCodes.Contains(sourceCode) && !string.Equals(sourceCode, "book", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            if (!rulesByCode.TryAdd(sourceCode, property.Value))
             {
                 throw new MigrationOperationException(
-                    "format_rule_format_unresolved",
-                    $"The patron format rule for {property.Name} has no system or same-library material format.");
+                    "format_rule_format_ambiguous",
+                    $"More than one patron format rule resolves to {sourceCode}.");
             }
-            var expected = NormalizeFormatRule(property.Value, target.Code);
+        }
+
+        foreach (var target in EffectiveScopedFormats(scopedFormats, organizationId))
+        {
+            var sourceCode = effectiveSourceCodes.GetValueOrDefault(target.Code, target.Code);
+            var expected = ResolveEffectiveFormatRule(sourceCode, rulesByCode);
             using var command = new SqlCommand(
                 "SELECT COALESCE(o.[MessageBehavior], f.[MessageBehavior]), COALESCE(o.[Message], f.[Message]), COALESCE(o.[TitleMode], f.[TitleMode]), COALESCE(o.[TitleLabel], f.[TitleLabel]), COALESCE(o.[AuthorMode], f.[AuthorMode]), COALESCE(o.[AuthorLabel], f.[AuthorLabel]), COALESCE(o.[IdentifierMode], f.[IdentifierMode]), COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]), COALESCE(o.[PublicationMode], f.[PublicationMode]), COALESCE(o.[PublicationLabel], f.[PublicationLabel]) FROM [asap].[MaterialFormat] f LEFT JOIN [asap].[MaterialFormatOverride] o ON o.[MaterialFormatId] = f.[Id] AND o.[LibraryOrganizationId] = @organizationId WHERE f.[Id] = @formatId;",
                 connection,
@@ -1807,8 +1839,8 @@ internal static class MigrationConfigurationImporter
             using var reader = command.ExecuteReader();
             EnsureConfiguration(reader.Read(), "material format rule");
             EnsureConfiguration(
-                StringEquals(reader, 0, EmptyAsNull(expected.MessageBehavior)) &&
-                StringEquals(reader, 1, EmptyAsNull(expected.Message)) &&
+                StringEquals(reader, 0, expected.MessageBehavior) &&
+                (StringEquals(reader, 1, expected.Message) || expected.Message.Length == 0 && reader.IsDBNull(1)) &&
                 StringEquals(reader, 2, expected.TitleMode) &&
                 StringEquals(reader, 3, expected.TitleLabel) &&
                 StringEquals(reader, 4, expected.AuthorMode) &&
@@ -1842,25 +1874,37 @@ internal static class MigrationConfigurationImporter
     }
 
     private static int ResolveOrganizationId(
+        SqlConnection connection,
+        SqlTransaction transaction,
         SourceRow row,
         string field,
         IReadOnlyDictionary<string, int> organizationIds)
     {
         var sourceValue = row.RequiredString(field);
+        int organizationId;
         if (organizationIds.TryGetValue(sourceValue, out var mapped) && mapped != 1)
         {
-            return mapped;
+            organizationId = mapped;
         }
-
-        if (int.TryParse(sourceValue, out var organizationId) &&
-            organizationId != 1 &&
-            organizationIds.Values.Contains(organizationId))
+        else if (int.TryParse(sourceValue, out organizationId) &&
+                 organizationId != 1 &&
+                 organizationIds.Values.Contains(organizationId))
         {
-            return organizationId;
+            // The native Organization row below determines whether the reference is a library.
         }
-        throw new MigrationOperationException(
-            "settings_organization_unresolved",
-            $"Source organization reference {sourceValue} cannot be resolved.");
+        else
+        {
+            throw new MigrationOperationException(
+                "settings_organization_unresolved",
+                $"Source organization reference {sourceValue} cannot be resolved.");
+        }
+        if (!OrganizationIsLibrary(connection, transaction, organizationId))
+        {
+            throw new MigrationOperationException(
+                "settings_organization_unresolved",
+                $"Source organization reference {sourceValue} is not a library.");
+        }
+        return organizationId;
     }
 
     private static long? ResolveSourceTemplateId(
@@ -1953,7 +1997,7 @@ internal static class MigrationConfigurationImporter
             var organizationId = scope switch
             {
                 "system" => 1,
-                "library" => ResolveOrganizationId(row, "libraryOrganization", organizationIds),
+                "library" => ResolveOrganizationId(connection, transaction, row, "libraryOrganization", organizationIds),
                 _ => throw new MigrationOperationException("email_template_scope_invalid", "An email template has an invalid scope.")
             };
             var templateKey = source.IsRejection
@@ -1997,6 +2041,12 @@ internal static class MigrationConfigurationImporter
         ReconciliationCounter counter)
     {
         var rows = MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats");
+        var librariesWithRuleOverrides = MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_settings_overrides")
+            .Where(row => row.JsonText("patronFormatRules") is not null)
+            .Select(row => row.Int32("orgId") ?? throw new MigrationOperationException(
+                "patron_override_org_invalid",
+                "A patron format rule snapshot has no library identity."))
+            .ToHashSet();
         foreach (var row in rows.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
         {
             var sourceId = row.RequiredString("id");
@@ -2004,7 +2054,7 @@ internal static class MigrationConfigurationImporter
             var ownerId = scope switch
             {
                 "system" => 1,
-                "library" => ResolveOrganizationId(row, "libraryOrganization", organizationIds),
+                "library" => ResolveOrganizationId(connection, transaction, row, "libraryOrganization", organizationIds),
                 _ => throw new MigrationOperationException("format_scope_invalid", "A material format has an invalid scope.")
             };
             if (!formatIds.TryGetValue(sourceId, out var formatId))
@@ -2012,7 +2062,7 @@ internal static class MigrationConfigurationImporter
                 throw new MigrationOperationException("reconciliation_failed", "An imported material format has no target identity.");
             }
             using var command = new SqlCommand(
-                "SELECT f.[OwnerOrganizationId], f.[Code], COALESCE(o.[Label], f.[Label]), COALESCE(o.[SortOrder], f.[SortOrder]), COALESCE(o.[IsEnabled], f.[IsEnabled]), COALESCE(o.[MessageBehavior], f.[MessageBehavior]), COALESCE(o.[Message], f.[Message]), COALESCE(o.[TitleMode], f.[TitleMode]), COALESCE(o.[TitleLabel], f.[TitleLabel]), COALESCE(o.[AuthorMode], f.[AuthorMode]), COALESCE(o.[AuthorLabel], f.[AuthorLabel]), COALESCE(o.[IdentifierMode], f.[IdentifierMode]), COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]), COALESCE(o.[PublicationMode], f.[PublicationMode]), COALESCE(o.[PublicationLabel], f.[PublicationLabel]), f.[CreatedUtc], f.[UpdatedUtc] FROM [asap].[MaterialFormat] f LEFT JOIN [asap].[MaterialFormatOverride] o ON o.[MaterialFormatId] = f.[Id] AND o.[LibraryOrganizationId] = @organizationId WHERE f.[Id] = @formatId;",
+                "SELECT f.[OwnerOrganizationId], f.[Code], COALESCE(o.[Label], f.[Label]), COALESCE(o.[SortOrder], f.[SortOrder]), COALESCE(o.[IsEnabled], f.[IsEnabled]), COALESCE(o.[MessageBehavior], f.[MessageBehavior]), COALESCE(o.[Message], f.[Message]), COALESCE(o.[TitleMode], f.[TitleMode]), COALESCE(o.[TitleLabel], f.[TitleLabel]), COALESCE(o.[AuthorMode], f.[AuthorMode]), COALESCE(o.[AuthorLabel], f.[AuthorLabel]), COALESCE(o.[IdentifierMode], f.[IdentifierMode]), COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]), COALESCE(o.[PublicationMode], f.[PublicationMode]), COALESCE(o.[PublicationLabel], f.[PublicationLabel]), f.[CreatedUtc], f.[UpdatedUtc], o.[Label], o.[SortOrder], o.[IsEnabled] FROM [asap].[MaterialFormat] f LEFT JOIN [asap].[MaterialFormatOverride] o ON o.[MaterialFormatId] = f.[Id] AND o.[LibraryOrganizationId] = @organizationId WHERE f.[Id] = @formatId;",
                 connection,
                 transaction);
             command.Parameters.AddWithValue("@organizationId", ownerId);
@@ -2021,6 +2071,7 @@ internal static class MigrationConfigurationImporter
             EnsureConfiguration(reader.Read(), "material format");
             var targetOwnerId = reader.GetInt32(0);
             var sparseOverride = scope == "library" && targetOwnerId == 1;
+            var ruleOverridePresent = scope == "library" && librariesWithRuleOverrides.Contains(ownerId);
             EnsureConfiguration(
                 sparseOverride || targetOwnerId == ownerId,
                 "material format ownership");
@@ -2028,41 +2079,30 @@ internal static class MigrationConfigurationImporter
             var fields = 2;
             if (!sparseOverride)
             {
-                EnsureConfiguration(
-                    StringEquals(reader, 2, row.RequiredText("label")) &&
+                var metadataMatches = StringEquals(reader, 2, LegacyMaterialFormatText(row.Text("label"), row.RequiredString("code"))) &&
                     IntEquals(reader, 3, row.Int32("sortOrder") ?? 0) &&
-                    BoolEquals(reader, 4, row.Bool("enabled", true)) &&
-                    StringEquals(reader, 5, NormalizeOptionalEnum(row.String("messageBehavior"), ["none", "message", "ebookMessage", "eaudiobookMessage"], "format_message_behavior_invalid")) &&
-                    StringEquals(reader, 6, row.Text("message")) &&
-                    StringEquals(reader, 7, NormalizeOptionalEnum(row.String("titleMode"), ["required"], "format_title_mode_invalid") ?? "required") &&
-                    StringEquals(reader, 8, row.Text("titleLabel")) &&
-                    StringEquals(reader, 9, NormalizeOptionalEnum(row.String("authorMode"), ["required", "optional", "hidden"], "format_author_mode_invalid")) &&
-                    StringEquals(reader, 10, row.Text("authorLabel")) &&
-                    StringEquals(reader, 11, NormalizeOptionalEnum(row.String("identifierMode"), ["required", "optional", "hidden"], "format_identifier_mode_invalid")) &&
-                    StringEquals(reader, 12, row.Text("identifierLabel")) &&
-                    StringEquals(reader, 13, NormalizeOptionalEnum(row.String("publicationMode"), ["required", "optional", "hidden"], "format_publication_mode_invalid")) &&
-                    StringEquals(reader, 14, row.Text("publicationLabel")) &&
+                    BoolEquals(reader, 4, row.Bool("enabled", false)) &&
                     DateEquals(reader, 15, row.UtcDateTime("created") ?? exportedAtUtc) &&
-                    DateEquals(reader, 16, row.UtcDateTime("updated") ?? exportedAtUtc),
-                    "material format");
-                fields += 15;
+                    DateEquals(reader, 16, row.UtcDateTime("updated") ?? exportedAtUtc);
+                var formatRulesMatch = ruleOverridePresent || MatchesLegacyMaterialFormatRules(reader, 5, row);
+                EnsureConfiguration(metadataMatches && formatRulesMatch, "material format");
+                fields += ruleOverridePresent ? 5 : 14;
             }
             else
             {
-                EnsureSparseFormatValue(reader, 2, row, "label", value => value, "material format label");
-                EnsureSparseFormatValue(reader, 3, row, "sortOrder", value => value.Int32("sortOrder"), "material format sort order");
-                EnsureSparseFormatValue(reader, 4, row, "enabled", value => value.NullableBool("enabled"), "material format enabled");
-                EnsureSparseFormatValue(reader, 5, row, "messageBehavior", value => NormalizeOptionalEnum(value.String("messageBehavior"), ["none", "message", "ebookMessage", "eaudiobookMessage"], "format_message_behavior_invalid"), "material format message behavior");
-                EnsureSparseFormatValue(reader, 6, row, "message", value => value.String("message"), "material format message");
-                EnsureSparseFormatValue(reader, 7, row, "titleMode", value => NormalizeOptionalEnum(value.String("titleMode"), ["required"], "format_title_mode_invalid"), "material format title mode");
-                EnsureSparseFormatValue(reader, 8, row, "titleLabel", value => value.String("titleLabel"), "material format title label");
-                EnsureSparseFormatValue(reader, 9, row, "authorMode", value => NormalizeOptionalEnum(value.String("authorMode"), ["required", "optional", "hidden"], "format_author_mode_invalid"), "material format author mode");
-                EnsureSparseFormatValue(reader, 10, row, "authorLabel", value => value.String("authorLabel"), "material format author label");
-                EnsureSparseFormatValue(reader, 11, row, "identifierMode", value => NormalizeOptionalEnum(value.String("identifierMode"), ["required", "optional", "hidden"], "format_identifier_mode_invalid"), "material format identifier mode");
-                EnsureSparseFormatValue(reader, 12, row, "identifierLabel", value => value.String("identifierLabel"), "material format identifier label");
-                EnsureSparseFormatValue(reader, 13, row, "publicationMode", value => NormalizeOptionalEnum(value.String("publicationMode"), ["required", "optional", "hidden"], "format_publication_mode_invalid"), "material format publication mode");
-                EnsureSparseFormatValue(reader, 14, row, "publicationLabel", value => value.String("publicationLabel"), "material format publication label");
-                fields += row.Names.Count(name => name is "label" or "sortOrder" or "enabled" or "messageBehavior" or "message" or "titleMode" or "titleLabel" or "authorMode" or "authorLabel" or "identifierMode" or "identifierLabel" or "publicationMode" or "publicationLabel");
+                EnsureSparseFormatValue(reader, 17, row, value =>
+                {
+                    var label = value.Text("label");
+                    return string.IsNullOrEmpty(label) ? null : label;
+                }, "material format label");
+                EnsureSparseFormatValue(reader, 18, row, value => value.Int32("sortOrder") ?? 0, "material format sort order");
+                EnsureSparseFormatValue(reader, 19, row, value => value.Bool("enabled", false), "material format enabled");
+                if (!ruleOverridePresent)
+                {
+                    EnsureConfiguration(MatchesLegacyMaterialFormatRules(reader, 5, row), "material format defaults");
+                }
+                var explicitMetadataFields = row.Names.Count(name => name is "label" or "sortOrder" or "enabled");
+                fields += explicitMetadataFields + (ruleOverridePresent ? 0 : 9);
             }
             counter.Rows++;
             counter.Fields += fields;
@@ -2074,15 +2114,9 @@ internal static class MigrationConfigurationImporter
         SqlDataReader reader,
         int ordinal,
         SourceRow row,
-        string sourceField,
         Func<SourceRow, object?> expectedValue,
         string entity)
     {
-        if (!row.HasValue(sourceField))
-        {
-            return;
-        }
-
         var expected = expectedValue(row);
         var matches = expected switch
         {
@@ -2093,6 +2127,35 @@ internal static class MigrationConfigurationImporter
         };
         EnsureConfiguration(matches, entity);
     }
+
+    private static bool MatchesLegacyMaterialFormatRules(
+        SqlDataReader reader,
+        int start,
+        SourceRow row) =>
+        StringEquals(reader, start, NormalizeOptionalEnum(
+            row.String("messageBehavior"),
+            ["none", "message", "ebookMessage", "eaudiobookMessage"],
+            "format_message_behavior_invalid") ?? "none") &&
+        StringEquals(reader, start + 2, LegacyMaterialFormatTitleMode(row.String("titleMode"))) &&
+        StringEquals(reader, start + 3, LegacyMaterialFormatText(row.Text("titleLabel"), "Title")) &&
+        StringEquals(reader, start + 4, NormalizeOptionalEnum(
+            row.String("authorMode"), ["required", "optional", "hidden"], "format_author_mode_invalid") ?? "required") &&
+        StringEquals(reader, start + 5, LegacyMaterialFormatText(row.Text("authorLabel"), "Author")) &&
+        StringEquals(reader, start + 6, NormalizeOptionalEnum(
+            row.String("identifierMode"), ["required", "optional", "hidden"], "format_identifier_mode_invalid") ?? "optional") &&
+        StringEquals(reader, start + 7, LegacyMaterialFormatText(row.Text("identifierLabel"), "Identifier number")) &&
+        StringEquals(reader, start + 8, NormalizeOptionalEnum(
+            row.String("publicationMode"), ["required", "optional", "hidden"], "format_publication_mode_invalid") ?? "required") &&
+        StringEquals(reader, start + 9, LegacyMaterialFormatText(row.Text("publicationLabel"), "Publication Timing"));
+
+    private static string LegacyMaterialFormatTitleMode(string? value)
+    {
+        _ = NormalizeOptionalEnum(value, ["required", "optional", "hidden"], "format_title_mode_invalid");
+        return "required";
+    }
+
+    private static string LegacyMaterialFormatText(string? value, string fallback) =>
+        string.IsNullOrEmpty(value) ? fallback : value;
 
     private static void UpsertPatronSettings(
         SqlConnection connection,
@@ -2408,33 +2471,45 @@ internal static class MigrationConfigurationImporter
     private static void ImportCustomFields(
         SqlConnection connection,
         SqlTransaction transaction,
+        ValidatedMigrationPackage package,
         int organizationId,
         SourceRow row,
+        IReadOnlyDictionary<string, int> organizationIds,
         ICollection<object> transformations)
     {
         var formatRules = ParseRootObject(row.JsonText("patronFormatRules"));
         var scopedFormats = ReadScopedFormats(connection, transaction, organizationId);
+        var effectiveSourceCodes = ReadEffectiveSourceFormatCodes(
+            connection,
+            transaction,
+            package,
+            organizationId,
+            organizationIds,
+            scopedFormats);
         if (formatRules is not null)
         {
+            var rulesByCode = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            var effectiveCodes = effectiveSourceCodes.Values.ToHashSet(StringComparer.Ordinal);
             foreach (var ruleProperty in formatRules.Value.EnumerateObject())
             {
-                var target = scopedFormats
-                    .Where(format => string.Equals(format.Code, ruleProperty.Name, StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(format => format.OwnerOrganizationId == organizationId ? 0 : 1)
-                    .ThenBy(format => format.Id)
-                    .FirstOrDefault();
-                if (target is null)
+                var sourceCode = ruleProperty.Name;
+                if (!effectiveCodes.Contains(sourceCode) && !string.Equals(sourceCode, "book", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                if (!rulesByCode.TryAdd(sourceCode, ruleProperty.Value))
                 {
                     throw new MigrationOperationException(
-                        "format_rule_format_unresolved",
-                        $"The patron format rule for {ruleProperty.Name} has no system or same-library material format.");
+                        "format_rule_format_ambiguous",
+                        $"More than one patron format rule resolves to {sourceCode}.");
                 }
-                ApplyFormatFieldRules(
-                    connection,
-                    transaction,
-                    organizationId,
-                    target,
-                    ruleProperty.Value);
+            }
+
+            foreach (var target in EffectiveScopedFormats(scopedFormats, organizationId))
+            {
+                var sourceCode = effectiveSourceCodes.GetValueOrDefault(target.Code, target.Code);
+                var normalized = ResolveEffectiveFormatRule(sourceCode, rulesByCode);
+                ApplyFormatFieldRules(connection, transaction, organizationId, target, normalized);
             }
         }
 
@@ -2458,7 +2533,7 @@ internal static class MigrationConfigurationImporter
         {
             throw new MigrationOperationException("custom_fields_invalid", "Additional field definitions must be a JSON array.");
         }
-        var fields = new List<(long Id, string Key, bool Enabled)>();
+        var fields = new List<(long Id, string Key, string Type, bool Enabled, int EnabledOptionCount)>();
         var fieldKeys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var definition in definitions.RootElement.EnumerateArray())
         {
@@ -2492,7 +2567,7 @@ internal static class MigrationConfigurationImporter
             insert.Parameters.AddWithValue("@enabled", enabled);
             insert.Parameters.AddWithValue("@sortOrder", JsonInt(definition, "sortOrder", 0));
             var fieldId = Convert.ToInt64(insert.ExecuteScalar());
-            fields.Add((fieldId, key, enabled));
+            var enabledOptionCount = 0;
 
             if (definition.TryGetProperty("options", out var options) &&
                 options.ValueKind is not (JsonValueKind.Array or JsonValueKind.Null or JsonValueKind.Undefined))
@@ -2520,11 +2595,17 @@ internal static class MigrationConfigurationImporter
                     optionInsert.Parameters.AddWithValue("@fieldId", fieldId);
                     optionInsert.Parameters.AddWithValue("@key", optionKey);
                     optionInsert.Parameters.AddWithValue("@label", RequiredJsonString(option, "label", "custom_fields_invalid"));
-                    optionInsert.Parameters.AddWithValue("@enabled", JsonBool(option, "enabled", true));
+                    var optionEnabled = JsonBool(option, "enabled", true);
+                    optionInsert.Parameters.AddWithValue("@enabled", optionEnabled);
                     optionInsert.Parameters.AddWithValue("@sortOrder", JsonInt(option, "sortOrder", 0));
                     optionInsert.ExecuteNonQuery();
+                    if (optionEnabled)
+                    {
+                        enabledOptionCount++;
+                    }
                 }
             }
+            fields.Add((fieldId, key, type, enabled, enabledOptionCount));
         }
 
         var effectiveFormats = scopedFormats
@@ -2535,11 +2616,22 @@ internal static class MigrationConfigurationImporter
                 .First())
             .OrderBy(format => format.Id)
             .ToArray();
+        var downgradedRequiredSelectRules = 0;
         foreach (var format in effectiveFormats)
         {
             foreach (var field in fields)
             {
-                var (mode, labelOverride) = ResolveCustomFieldRule(formatRules, format.Code, field.Key, field.Enabled);
+                var (mode, labelOverride, downgradedRequiredSelect) = ResolveCustomFieldRule(
+                    formatRules,
+                    effectiveSourceCodes.GetValueOrDefault(format.Code, format.Code),
+                    field.Key,
+                    field.Type,
+                    field.Enabled,
+                    field.EnabledOptionCount);
+                if (downgradedRequiredSelect)
+                {
+                    downgradedRequiredSelectRules++;
+                }
                 using var ruleInsert = new SqlCommand(
                     """
                     INSERT INTO [asap].[MaterialFormatCustomFieldRule]
@@ -2562,7 +2654,9 @@ internal static class MigrationConfigurationImporter
             organizationId,
             fields = fields.Count,
             formatRules = effectiveFormats.Length * fields.Count,
-            absentOrDisabledRule = "hidden"
+            absentOrDisabledRule = "hidden",
+            requiredSelectWithoutEnabledOptions = "optional",
+            downgradedRequiredSelectRules
         });
     }
 
@@ -2585,28 +2679,73 @@ internal static class MigrationConfigurationImporter
         return result;
     }
 
-    private static (string Mode, string? LabelOverride) ResolveCustomFieldRule(
+    private static Dictionary<string, string> ReadEffectiveSourceFormatCodes(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        ValidatedMigrationPackage package,
+        int organizationId,
+        IReadOnlyDictionary<string, int> organizationIds,
+        IReadOnlyList<ScopedFormat> scopedFormats)
+    {
+        var systemCodes = new Dictionary<string, string>(StringComparer.Ordinal);
+        var libraryCodes = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var row in MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats"))
+        {
+            var scope = row.RequiredString("scope");
+            var code = row.RequiredString("code");
+            var normalizedCode = NormalizeFormatCode(code);
+            var ownerId = scope.Equals("system", StringComparison.OrdinalIgnoreCase)
+                ? 1
+                : scope.Equals("library", StringComparison.OrdinalIgnoreCase)
+                    ? ResolveLibraryOrganization(connection, transaction, row, "libraryOrganization", organizationIds)
+                    : throw new MigrationOperationException("format_scope_invalid", "A source material format has an unknown scope.");
+            if (ownerId == organizationId)
+            {
+                libraryCodes[normalizedCode] = code;
+            }
+            else if (ownerId == 1)
+            {
+                systemCodes[normalizedCode] = code;
+            }
+        }
+
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var format in EffectiveScopedFormats(scopedFormats, organizationId))
+        {
+            result[format.Code] = libraryCodes.TryGetValue(format.Code, out var localCode)
+                ? localCode
+                : systemCodes.GetValueOrDefault(format.Code, format.Code);
+        }
+        return result;
+    }
+
+    private static (string Mode, string? LabelOverride, bool DowngradedRequiredSelect) ResolveCustomFieldRule(
         JsonElement? formatRules,
         string formatCode,
         string fieldKey,
-        bool fieldEnabled)
+        string fieldType,
+        bool fieldEnabled,
+        int enabledOptionCount)
     {
         if (!fieldEnabled || formatRules is null ||
-            !formatRules.Value.TryGetProperty(formatCode, out var format) ||
+            !TryGetCustomFieldRuleFormat(formatRules.Value, formatCode, out var format) ||
             !format.TryGetProperty("customFields", out var customFields) ||
             !customFields.TryGetProperty(fieldKey, out var rule))
         {
-            return ("hidden", null);
+            return ("hidden", null, false);
         }
-        var mode = (JsonStringStrict(rule, "mode", "custom_field_rule_invalid") ?? "hidden").ToLowerInvariant();
-        if (mode is not ("required" or "optional" or "hidden"))
+        var incomingMode = JsonStringStrict(rule, "mode", "custom_field_rule_invalid");
+        var mode = incomingMode is "required" or "optional" or "hidden" ? incomingMode : "hidden";
+        var downgradedRequiredSelect = fieldEnabled && fieldType == "select" &&
+            enabledOptionCount == 0 && mode == "required";
+        if (downgradedRequiredSelect)
         {
-            throw new MigrationOperationException("custom_field_rule_invalid", $"Custom field {fieldKey} has an invalid mode.");
+            mode = "optional";
         }
         return (
             mode,
-            JsonStringStrict(rule, "labelOverride", "custom_field_rule_invalid") ??
-            JsonStringStrict(rule, "label", "custom_field_rule_invalid"));
+            JsonStringStrict(rule, "label", "custom_field_rule_invalid"),
+            downgradedRequiredSelect);
     }
 
     private static void ApplyFormatFieldRules(
@@ -2614,14 +2753,16 @@ internal static class MigrationConfigurationImporter
         SqlTransaction transaction,
         int organizationId,
         ScopedFormat target,
-        JsonElement format)
-    {
-        if (format.ValueKind != JsonValueKind.Object)
-        {
-            return;
-        }
+        NormalizedFormatRule normalized) =>
+        ApplyNormalizedFormatFieldRules(connection, transaction, organizationId, target, normalized);
 
-        var normalized = NormalizeFormatRule(format, target.Code);
+    private static void ApplyNormalizedFormatFieldRules(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int organizationId,
+        ScopedFormat target,
+        NormalizedFormatRule normalized)
+    {
         if (target.OwnerOrganizationId == organizationId || organizationId == 1)
         {
             UpdateOwnedFormat(connection, transaction, target, normalized);
@@ -2638,7 +2779,7 @@ internal static class MigrationConfigurationImporter
         var baseColumns = ReadFormatColumns(connection, transaction, target.Id);
         var differences = new StoredFormatColumns(
             Different(normalized.MessageBehavior, baseColumns.MessageBehavior ?? "none") ? normalized.MessageBehavior : null,
-            Different(normalized.Message, baseColumns.Message ?? string.Empty) ? EmptyAsNull(normalized.Message) : null,
+            Different(normalized.Message, baseColumns.Message ?? string.Empty) ? normalized.Message : null,
             Different(normalized.TitleMode, baseColumns.TitleMode ?? "required") ? normalized.TitleMode : null,
             Different(normalized.TitleLabel, baseColumns.TitleLabel ?? "Title") ? normalized.TitleLabel : null,
             Different(normalized.AuthorMode, baseColumns.AuthorMode ?? "optional") ? normalized.AuthorMode : null,
@@ -2762,7 +2903,7 @@ internal static class MigrationConfigurationImporter
     private static void AddNormalizedFormatParameters(SqlCommand command, NormalizedFormatRule value)
     {
         command.Parameters.AddWithValue("@messageBehavior", value.MessageBehavior);
-        command.Parameters.AddWithValue("@message", EmptyAsNull(value.Message) is { } message ? message : DBNull.Value);
+        command.Parameters.AddWithValue("@message", value.Message);
         command.Parameters.AddWithValue("@titleMode", value.TitleMode);
         command.Parameters.AddWithValue("@titleLabel", value.TitleLabel);
         command.Parameters.AddWithValue("@authorMode", value.AuthorMode);
@@ -2801,9 +2942,6 @@ internal static class MigrationConfigurationImporter
     private static bool Different(string value, string baseline) =>
         !string.Equals(value.Trim(), baseline.Trim(), StringComparison.Ordinal);
 
-    private static string? EmptyAsNull(string value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
     private static NormalizedFormatRule NormalizeFormatRule(JsonElement format, string formatCode)
     {
         var defaults = DefaultFormatRule(formatCode);
@@ -2825,7 +2963,7 @@ internal static class MigrationConfigurationImporter
             "format_message_behavior_invalid");
         return new NormalizedFormatRule(
             behavior,
-            JsonStringStrict(format, "message", "format_message_invalid") ?? defaults.Message,
+            NormalizeLegacyFormatMessage(format, defaults.Message),
             title.Mode,
             title.Label,
             author.Mode,
@@ -2872,15 +3010,99 @@ internal static class MigrationConfigurationImporter
         }
 
         var normalized = value.Trim();
-        var canonical = allowed.FirstOrDefault(
-            item => string.Equals(item, normalized, StringComparison.OrdinalIgnoreCase));
-        return canonical ?? throw new MigrationOperationException(
-            errorCode,
-            $"Unknown material-format value: {value}");
+        var canonical = allowed.FirstOrDefault(item => string.Equals(item, normalized, StringComparison.Ordinal));
+        return canonical ?? fallback;
+    }
+
+    private static string NormalizeLegacyFormatMessage(JsonElement format, string fallback)
+    {
+        if (!format.TryGetProperty("message", out var message) ||
+            message.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return fallback;
+        }
+        if (message.ValueKind != JsonValueKind.String)
+        {
+            throw new MigrationOperationException("format_message_invalid", "JSON property message must be a string.");
+        }
+
+        var value = message.GetString()!;
+        return value.Length == 0 ? fallback : value.Trim();
+    }
+
+    private static bool IsLegacyBuiltInFormatCode(string formatCode) =>
+        formatCode is "book" or "audiobook_cd" or "dvd" or "music_cd" or "ebook" or "eaudiobook";
+
+    private static bool TryGetCustomFieldRuleFormat(
+        JsonElement rules,
+        string formatCode,
+        out JsonElement format)
+    {
+        if (rules.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in rules.EnumerateObject())
+            {
+                if (string.Equals(property.Name, formatCode, StringComparison.Ordinal))
+                {
+                    format = property.Value;
+                    return true;
+                }
+            }
+        }
+        if (!IsLegacyBuiltInFormatCode(formatCode))
+        {
+            return TryGetExactProperty(rules, "book", out format);
+        }
+
+        format = default;
+        return false;
+    }
+
+    private static bool TryGetExactProperty(JsonElement value, string propertyName, out JsonElement property)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var item in value.EnumerateObject())
+            {
+                if (string.Equals(item.Name, propertyName, StringComparison.Ordinal))
+                {
+                    property = item.Value;
+                    return true;
+                }
+            }
+        }
+        property = default;
+        return false;
+    }
+
+    private static IReadOnlyList<ScopedFormat> EffectiveScopedFormats(
+        IReadOnlyList<ScopedFormat> formats,
+        int organizationId) => formats
+            .GroupBy(format => format.Code, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderBy(format => format.OwnerOrganizationId == organizationId ? 0 : 1)
+                .ThenBy(format => format.Id)
+                .First())
+            .OrderBy(format => format.Id)
+            .ToArray();
+
+    private static NormalizedFormatRule ResolveEffectiveFormatRule(
+        string sourceFormatCode,
+        IReadOnlyDictionary<string, JsonElement> rulesByCode)
+    {
+        if (rulesByCode.TryGetValue(sourceFormatCode, out var directRule))
+        {
+            return NormalizeFormatRule(directRule, sourceFormatCode);
+        }
+        if (!IsLegacyBuiltInFormatCode(sourceFormatCode) && rulesByCode.TryGetValue("book", out var bookRule))
+        {
+            return NormalizeFormatRule(bookRule, "book");
+        }
+        return DefaultFormatRule(IsLegacyBuiltInFormatCode(sourceFormatCode) ? sourceFormatCode : "book");
     }
 
     private static NormalizedFormatRule DefaultFormatRule(string formatCode) =>
-        formatCode.ToLowerInvariant() switch
+        formatCode switch
         {
             "book" or "audiobook_cd" => new("none", string.Empty, "required", "Title", "required", "Author", "optional", "Identifier number", "required", "Publication Timing"),
             "dvd" => new("none", string.Empty, "required", "Title", "required", "Director/Actors/Producer", "hidden", "UPC", "required", "Publication Timing"),
@@ -2917,7 +3139,11 @@ internal static class MigrationConfigurationImporter
         command.ExecuteNonQuery();
     }
 
-    private static int ResolveScopedOrganization(SourceRow row, IReadOnlyDictionary<string, int> organizationIds)
+    private static int ResolveScopedOrganization(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        SourceRow row,
+        IReadOnlyDictionary<string, int> organizationIds)
     {
         var scope = row.RequiredString("scope").ToLowerInvariant();
         if (scope == "system")
@@ -2930,40 +3156,30 @@ internal static class MigrationConfigurationImporter
             throw new MigrationOperationException("settings_scope_invalid", "A settings row has an invalid scope.");
         }
 
-        var sourceOrganization = row.RequiredString("libraryOrganization");
-        if (organizationIds.TryGetValue(sourceOrganization, out var organizationId) && organizationId != 1)
-        {
-            return organizationId;
-        }
+        return ResolveOrganizationId(connection, transaction, row, "libraryOrganization", organizationIds);
+    }
 
-        if (int.TryParse(sourceOrganization, out organizationId) &&
-            organizationId != 1 &&
-            organizationIds.Values.Contains(organizationId))
-        {
-            return organizationId;
-        }
-        throw new MigrationOperationException("settings_organization_unresolved", "A library settings row has an unresolved organization.");
+    private static bool OrganizationIsLibrary(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int organizationId)
+    {
+        using var command = new SqlCommand(
+            "SELECT CASE WHEN [Id] > 1 AND [OrganizationCodeId] = 2 THEN 1 ELSE 0 END FROM [asap].[Organization] WHERE [Id] = @id;",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@id", organizationId);
+        return command.ExecuteScalar() is { } value and not DBNull && Convert.ToInt32(value) == 1;
     }
 
     private static int ResolveLibraryOrganization(
+        SqlConnection connection,
+        SqlTransaction transaction,
         SourceRow row,
         string field,
         IReadOnlyDictionary<string, int> organizationIds)
     {
-        var sourceOrganization = row.RequiredString(field);
-        if (organizationIds.TryGetValue(sourceOrganization, out var organizationId) && organizationId != 1)
-        {
-            return organizationId;
-        }
-        if (int.TryParse(sourceOrganization, out organizationId) &&
-            organizationId != 1 &&
-            organizationIds.Values.Contains(organizationId))
-        {
-            return organizationId;
-        }
-        throw new MigrationOperationException(
-            "settings_organization_unresolved",
-            "A library settings row has an unresolved organization.");
+        return ResolveOrganizationId(connection, transaction, row, field, organizationIds);
     }
 
     private static void EnsureSet(SqlConnection connection, SqlTransaction transaction, string table, int organizationId)

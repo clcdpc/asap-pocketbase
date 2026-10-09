@@ -117,6 +117,10 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         {
             return null;
         }
+        if (organizationId != LibraryScope.SystemOrganizationId && !OrganizationAuthority.IsLibrary(organization))
+        {
+            return null;
+        }
 
         var systemWorkflow = await context.WorkflowSettings.AsNoTracking()
             .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
@@ -133,8 +137,8 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         var systemSettings = await context.SystemSettings.AsNoTracking()
             .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
 
-        var formats = await LoadFormatsAsync(context, organizationId, cancellationToken);
         var customFields = await LoadCustomFieldsAsync(context, organizationId, cancellationToken);
+        var formats = await LoadFormatsAsync(context, organizationId, customFields, cancellationToken);
         var publicationOptions = await LoadPublicationOptionsAsync(context, organizationId, cancellationToken);
         var creators = await LoadCommonCreatorsAsync(context, organizationId, cancellationToken);
         var patronCodes = await LoadPatronCodesAsync(context, organizationId, cancellationToken);
@@ -222,7 +226,8 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var organization = await context.Organizations.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == organizationId, cancellationToken);
-        return organization is null
+        return organization is null || organizationId != LibraryScope.SystemOrganizationId &&
+            !OrganizationAuthority.IsLibrary(organization)
             ? null
             : await LoadBrandingAsync(context, organizationId, organization.DisplayName, cancellationToken);
     }
@@ -230,6 +235,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
     private static async Task<IReadOnlyList<EffectiveFormatRule>> LoadFormatsAsync(
         AsapDbContext context,
         int organizationId,
+        IReadOnlyList<EffectiveCustomField> customFields,
         CancellationToken cancellationToken)
     {
         var formats = await context.MaterialFormats.AsNoTracking()
@@ -267,6 +273,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
                     })
                 .ToListAsync(cancellationToken);
 
+        var fieldsByKey = customFields.ToDictionary(item => item.Key, StringComparer.Ordinal);
         return formats.Select(format =>
             {
                 overrideByFormat.TryGetValue(format.Id, out var value);
@@ -284,10 +291,16 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
                     Field(value?.PublicationMode ?? format.PublicationMode ?? "optional", value?.PublicationLabel ?? format.PublicationLabel, "Publication Timing"),
                     customRules
                         .Where(item => item.MaterialFormatId == format.Id)
-                        .ToDictionary(
-                            item => item.FieldKey,
-                            item => new EffectiveCustomFieldRule(item.Mode, item.LabelOverride),
-                            StringComparer.Ordinal));
+                        .Where(item => fieldsByKey.ContainsKey(item.FieldKey))
+                        .ToDictionary(item => item.FieldKey, item =>
+                        {
+                            var mode = item.Mode;
+                            if (mode == "required" && fieldsByKey[item.FieldKey] is { Type: "select", Options.Count: 0 })
+                            {
+                                mode = "optional";
+                            }
+                            return new EffectiveCustomFieldRule(mode, item.LabelOverride);
+                        }, StringComparer.Ordinal));
             })
             .OrderBy(item => item.SortOrder)
             .ThenBy(item => item.Id)

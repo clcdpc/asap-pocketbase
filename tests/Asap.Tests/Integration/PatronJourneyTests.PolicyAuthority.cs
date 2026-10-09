@@ -232,6 +232,7 @@ public sealed partial class PatronJourneyTests
         factory.Services.GetRequiredService<DeterministicTestingPatronProvider>().AddPatron(
             new PatronSnapshot(7001, barcode, "claim@example.org", "Claim", "Patron", 1, "Adult", 101, 2, "Test Library", 101),
             [new PickupBranch(101, "Main Library")], 2);
+        var session = await IssueTestPatronSessionAsync(barcode);
         try
         {
             await using (var connection = new SqlConnection(databaseConnectionString))
@@ -243,20 +244,21 @@ public sealed partial class PatronJourneyTests
                 change.Parameters.AddWithValue("@id", seed.StaffId);
                 await change.ExecuteNonQueryAsync();
             }
-            var result = await factory.Services.GetRequiredService<PatronSuggestionService>().CreateAsync(
-                new PatronSessionContext(0, barcode, 2, 2, 2, timeProvider!.GetUtcNow().UtcDateTime.AddHours(1)),
+            var result = await factory!.Services.GetRequiredService<PatronSuggestionService>().CreateAsync(
+                session,
                 new PatronSuggestionInput("book", "Invalid claimant", "Policy author", null, "Coming soon", 101, true,
                     new Dictionary<string, string?>()), CancellationToken.None);
-            await using var context = await factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+            await using var context = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
                 .CreateDbContextAsync();
             var request = await context.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == result.Id);
             Assert.IsNull(request.ClaimedByStaffUserId);
-            Assert.AreEqual(timeProvider.GetUtcNow().UtcDateTime, request.CreatedUtc);
+            Assert.AreEqual(timeProvider!.GetUtcNow().UtcDateTime, request.CreatedUtc);
             Assert.IsTrue(await context.TitleRequestEvents.AnyAsync(item =>
                 item.TitleRequestId == result.Id && item.EventType == "claim_auto_skipped"));
         }
         finally
         {
+            await DeleteTestPatronSessionAsync(session.Id);
             await using var connection = new SqlConnection(databaseConnectionString);
             await connection.OpenAsync();
             await using var cleanup = new SqlCommand(

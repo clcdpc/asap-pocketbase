@@ -22,10 +22,14 @@ async function diagnosticFixture(journey) {
       if (path.includes('/settings?')) {
         settingsReads++;
         return response(200, { orgId: 'system', version: 'settings-v1',
-          stored: { configuredSystem: { patron: { loginNote: 'Saved' } }, systemSettings: {}, polaris: {} },
+          stored: { configuredSystem: { patron: { loginNote: 'Saved' } },
+            systemSettings: { enabledLibraryOrgIds: [2], libraryOrgIds: [2] }, polaris: {} },
           effective: {}, ui_text: { loginNote: 'Saved' }, emails: {}, workflow: {} });
       }
-      if (path.endsWith('/organizations')) return response(200, { data: [{ id: 2, name: 'Library', isActive: true }] });
+      if (path.endsWith('/organizations')) return response(200, { code: 'ok', data: [
+        { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-1' },
+        { id: 2, name: 'Library', abbreviation: 'LIB', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-2' }
+      ] });
       if (path.includes('/patron-codes')) return response(200, { data: [] });
       throw new Error(`Unexpected diagnostic fixture path: ${path}`);
     };

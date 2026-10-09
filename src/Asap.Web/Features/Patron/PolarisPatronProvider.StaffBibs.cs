@@ -320,7 +320,7 @@ public sealed partial class PolarisPatronProvider
                         "Polaris returned an invalid holdings location.");
                 }
 
-                var owner = ResolveHomeLibrary(organizations, locationId)?.OrganizationID ?? locationId;
+                var owner = ResolveHomeLibrary(organizations, locationId)?.Id ?? locationId;
                 var canHold = row.Holdable?.Trim().ToLowerInvariant() is "true" or "1" or "yes" or "y";
                 if (owner == organizationId)
                 {

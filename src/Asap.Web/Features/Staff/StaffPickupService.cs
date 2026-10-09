@@ -1,5 +1,6 @@
 using System.Data;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
@@ -16,7 +17,7 @@ public sealed record PickupPreferenceInput(
     bool? CurrentPreferredPickupBranchObservedAtLoad = null);
 
 public sealed record StaffPickupOptions(
-    long RequestId,
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString)] long RequestId,
     string Version,
     string Status,
     bool ReadOnly,
@@ -39,7 +40,7 @@ public sealed record StaffPickupResult(
     bool SnapshotChanged = false,
     Guid? OperationId = null,
     string? LocalFailureCode = null,
-    long? RequestId = null,
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString)] long? RequestId = null,
     string? FinalStatus = null);
 
 public sealed partial class StaffPickupService(
@@ -63,7 +64,9 @@ public sealed partial class StaffPickupService(
             return new StaffPickupResult("not_found");
         }
         if (!await context.Organizations.AsNoTracking()
-                .AnyAsync(item => item.Id == request.LibraryOrganizationId && item.IsActive, cancellationToken))
+                .AnyAsync(item => item.Id == request.LibraryOrganizationId && item.Id > 1 &&
+                                  item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId &&
+                                  item.IsActive, cancellationToken))
         {
             return new StaffPickupResult("organization_inactive");
         }
@@ -75,6 +78,10 @@ public sealed partial class StaffPickupService(
         try
         {
             var patron = await patronProvider.RefreshAsync(request.Barcode, request.LibraryOrganizationId, cancellationToken);
+            if (!MatchesRequestIdentity(request.Barcode, request.PatronIdSnapshot, patron))
+            {
+                return new StaffPickupResult("pickup_changed_since_load");
+            }
             var branches = await patronProvider.GetPickupBranchesAsync(patron, request.LibraryOrganizationId, cancellationToken);
             var options = BuildOptions(request, patron, branches, timeProvider.GetUtcNow());
             return new StaffPickupResult("loaded", options);
@@ -99,6 +106,7 @@ public sealed partial class StaffPickupService(
 
         string barcode;
         int organizationId;
+        int? requestPatronId;
         await using (var context = await contextFactory.CreateDbContextAsync(cancellationToken))
         await using (var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken))
         {
@@ -127,6 +135,7 @@ public sealed partial class StaffPickupService(
             }
             barcode = request.Barcode;
             organizationId = request.LibraryOrganizationId;
+            requestPatronId = request.PatronIdSnapshot;
             await transaction.CommitAsync(cancellationToken);
         }
 
@@ -138,6 +147,10 @@ public sealed partial class StaffPickupService(
         try
         {
             patron = await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
+            if (!MatchesRequestIdentity(barcode, requestPatronId, patron))
+            {
+                return new StaffPickupResult("pickup_changed_since_load");
+            }
             var branches = await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
             selectedBranch = branches.SingleOrDefault(item => item.Id == input.PreferredPickupBranchId.Value)
                 ?? throw new InvalidPickupSelectionException();
@@ -151,13 +164,17 @@ public sealed partial class StaffPickupService(
             }
             oldName = branches.SingleOrDefault(item => item.Id == liveCurrentId)?.Label;
             var dispatchGate = await RevalidateDispatchAsync(actor, requestId, expectedVersion,
-                organizationId, barcode, cancellationToken);
+                organizationId, barcode, patron.PatronId, cancellationToken);
             if (dispatchGate != "allowed")
             {
                 return new StaffPickupResult(dispatchGate);
             }
             receipt = await pickupMutations.ChangeAsync(patron, organizationId, selectedBranch,
-                oldName, "request", requestId, actor.Id, cancellationToken);
+                oldName, "request", requestId, actor.Id,
+                (connection, transaction, token) => ValidatePickupIntentAsync(
+                    contextFactory, actor, requestId, expectedVersion, organizationId, barcode, patron.PatronId,
+                    connection, transaction, token),
+                cancellationToken);
             pickupChanged = receipt is not null;
             oldName = receipt?.FromBranchName ?? oldName;
         }
@@ -193,6 +210,10 @@ public sealed partial class StaffPickupService(
                 if (!request.RowVersion.SequenceEqual(expectedVersion))
                 {
                     return LocalFailure("stale_version", receipt);
+                }
+                if (request.PatronIdSnapshot is > 0 && request.PatronIdSnapshot != patron.PatronId)
+                {
+                    return LocalFailure("pickup_changed_since_load", receipt);
                 }
                 if (request.Status is RequestStatus.HoldPlaced or RequestStatus.Closed)
                 {
@@ -242,7 +263,7 @@ public sealed partial class StaffPickupService(
                 await context.SaveChangesAsync(cancellationToken);
                 await PickupPreferenceMutationService.CompleteAsync(
                     (SqlConnection)context.Database.GetDbConnection(), (SqlTransaction)transaction.GetDbTransaction(),
-                    receipt, request.Id, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
+                    receipt, request.Id, patron.PatronId, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return new StaffPickupResult("updated", PickupChanged: pickupChanged, SnapshotChanged: snapshotChanged,
                     OperationId: receipt?.OperationId);
@@ -264,6 +285,7 @@ public sealed partial class StaffPickupService(
 
     private async Task<string> RevalidateDispatchAsync(
         CurrentStaff actor, long requestId, byte[] expectedVersion, int organizationId, string barcode,
+        int verifiedPatronId,
         CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -275,7 +297,8 @@ public sealed partial class StaffPickupService(
         }
         var request = locked.Request!;
         if (!request.RowVersion.SequenceEqual(expectedVersion) || request.LibraryOrganizationId != organizationId ||
-            request.Barcode != barcode)
+            request.Barcode != barcode ||
+            request.PatronIdSnapshot is > 0 && request.PatronIdSnapshot != verifiedPatronId)
         {
             return "stale_version";
         }
@@ -290,6 +313,45 @@ public sealed partial class StaffPickupService(
         }
         await transaction.CommitAsync(cancellationToken);
         return "allowed";
+    }
+
+    private async Task ValidatePickupIntentAsync(
+        IDbContextFactory<AsapDbContext> contextFactory,
+        CurrentStaff actor,
+        long requestId,
+        byte[] expectedVersion,
+        int organizationId,
+        string barcode,
+        int verifiedPatronId,
+        SqlConnection connection,
+        SqlTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var context = await PickupPreferenceMutationService.BindContextAsync(
+            contextFactory, connection, transaction, cancellationToken);
+        var locked = await LockAsync(context, actor, requestId, cancellationToken);
+        if (locked.Code != "locked")
+        {
+            throw new PickupMutationBlockedException(locked.Code);
+        }
+
+        var request = locked.Request!;
+        if (!request.RowVersion.SequenceEqual(expectedVersion) ||
+            request.LibraryOrganizationId != organizationId || request.Barcode != barcode ||
+            request.PatronIdSnapshot is > 0 && request.PatronIdSnapshot != verifiedPatronId)
+        {
+            throw new PickupMutationBlockedException("stale_version");
+        }
+        if (request.Status is RequestStatus.HoldPlaced or RequestStatus.Closed)
+        {
+            throw new PickupMutationBlockedException("pickup_read_only");
+        }
+        if (await context.HoldPlacementOperations.AnyAsync(
+                item => item.TitleRequestId == requestId && item.CompletedUtc == null,
+                cancellationToken))
+        {
+            throw new PickupMutationBlockedException("hold_operation_incomplete");
+        }
     }
 
     private StaffPickupOptions BuildOptions(
@@ -317,6 +379,11 @@ public sealed partial class StaffPickupService(
             branches.Count == 0);
     }
 
+    private static bool MatchesRequestIdentity(string requestBarcode, int? requestPatronId, PatronSnapshot patron) =>
+        patron.PatronId > 0 &&
+        (requestPatronId is not > 0 || requestPatronId == patron.PatronId) &&
+        patron.KnownBarcodeAliases.Contains(requestBarcode, StringComparer.OrdinalIgnoreCase);
+
     private async Task<LockedPickup> LockAsync(
         AsapDbContext context,
         CurrentStaff actor,
@@ -335,7 +402,7 @@ public sealed partial class StaffPickupService(
             return new LockedPickup("organization_inactive");
         }
         var organization = context.Organizations.Local.Single(item => item.Id == snapshot.LibraryOrganizationId);
-        if (organization?.IsActive != true)
+        if (!OrganizationAuthority.IsActiveLibrary(organization))
         {
             return new LockedPickup("organization_inactive");
         }

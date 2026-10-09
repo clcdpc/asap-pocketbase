@@ -5,6 +5,7 @@ using Microsoft.SqlServer.Dac;
 using Microsoft.AspNetCore.DataProtection;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -26,7 +27,8 @@ public sealed class MigrationCliTests
         StringAssert.Contains(output.ToString(), "export --source");
         StringAssert.Contains(output.ToString(), "import --package");
         StringAssert.Contains(output.ToString(), "reconcile --package");
-        StringAssert.Contains(output.ToString(), "Import validates a fresh target and writes a deterministic reconciliation report.");
+        StringAssert.Contains(output.ToString(), "recover-report --package");
+        StringAssert.Contains(output.ToString(), "a committed import with a report-promotion failure can be recovered without retrying import");
         Assert.IsFalse(output.ToString().Contains("staff-identity-map", StringComparison.Ordinal));
     }
 
@@ -43,7 +45,7 @@ public sealed class MigrationCliTests
         Assert.AreEqual(
             "structured-policy-v4",
             contract.RootElement.GetProperty("contractVersion").GetString());
-        Assert.AreEqual(10, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
+        Assert.AreEqual(12, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
         Assert.AreEqual(
             "CLC.ASAP",
             contract.RootElement.GetProperty("dataProtectionApplicationName").GetString());
@@ -73,6 +75,148 @@ public sealed class MigrationCliTests
 
         Assert.AreEqual(2, exitCode);
         StringAssert.Contains(error.ToString(), "Unknown argument");
+    }
+
+    [TestMethod]
+    public void PackageValidationRejectsDuplicateJsonPropertiesButPreservesJsonLookingText()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-duplicate-json-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var nestedPackage = CreateMinimalPackage(Path.Combine(root, "nested"));
+            var manifestPath = Path.Combine(nestedPackage, "manifest.json");
+            var manifest = File.ReadAllText(manifestPath);
+            File.WriteAllText(
+                manifestPath,
+                manifest.Replace("\"sourceDatabase\": {", "\"sourceDatabase\": {\"duplicate\": {\"name\": 1, \"name\": 2},", StringComparison.Ordinal),
+                new UTF8Encoding(false));
+            AssertPackageValidationCode(nestedPackage, "package_manifest_invalid");
+
+            var directPackage = CreateMinimalPackage(Path.Combine(root, "direct"));
+            var directOrganizationsPath = Path.Combine(directPackage, "organizations.json");
+            var directOrganizations = File.ReadAllText(directOrganizationsPath);
+            const string directProperty = "\"organizationId\": \"1\",";
+            Assert.IsTrue(directOrganizations.Contains(directProperty, StringComparison.Ordinal));
+            File.WriteAllText(
+                directOrganizationsPath,
+                directOrganizations.Replace(directProperty, directProperty + " \"organizationId\": \"1\",", StringComparison.Ordinal),
+                new UTF8Encoding(false));
+            UpdateManifestEntry(directPackage, "organizations.json");
+            AssertPackageValidationCode(directPackage, "package_domain_invalid");
+
+            var ordinaryTextPackage = CreateMinimalPackage(Path.Combine(root, "ordinary-text"));
+            var organizationsPath = Path.Combine(ordinaryTextPackage, "organizations.json");
+            var organizations = JsonNode.Parse(File.ReadAllText(organizationsPath))!.AsObject();
+            organizations["collections"]!["polaris_organizations"]![0]!["displayName"] = "{\"retired\":{\"key\":1,\"key\":2}}";
+            File.WriteAllText(
+                organizationsPath,
+                organizations.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n",
+                new UTF8Encoding(false));
+            UpdateManifestEntry(ordinaryTextPackage, "organizations.json");
+            Assert.AreEqual(0, MigrationCli.Run(
+                ["validate", "--package", ordinaryTextPackage],
+                TextWriter.Null,
+                TextWriter.Null));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public void ExportedOperationalLimitsClampSignedOverflowLikeLegacyParseInt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-overflow-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var overrides = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["ASAP_JOB_PAGE_SIZE"] = "+2147483648trailing",
+            ["ASAP_JOB_MAX_PER_RUN"] = "-2147483649trailing",
+            ["ASAP_TIMEOUT_PAGE_SIZE"] = "\uFEFF-2147483649tail",
+            ["ASAP_TIMEOUT_MAX_PER_RUN"] = " 2147483648tail",
+            ["ASAP_PENDING_SUGGESTION_ISBN_CHECKS_PAGE_SIZE"] = "-2147483649signed-overflow",
+            ["ASAP_PENDING_SUGGESTION_ISBN_CHECKS_MAX_PER_RUN"] = "+2147483648signed-overflow",
+            ["ASAP_OUTSTANDING_PURCHASES_PAGE_SIZE"] = "-2147483649signed-overflow",
+            ["ASAP_OUTSTANDING_PURCHASES_MAX_PER_RUN"] = "+2147483648signed-overflow",
+            ["ASAP_PENDING_HOLDS_PAGE_SIZE"] = "2147483648suffix",
+            ["ASAP_PENDING_HOLDS_MAX_PER_RUN"] = "-2147483649suffix",
+            ["ASAP_CHECKED_OUT_PAGE_SIZE"] = "-2147483649signed-overflow",
+            ["ASAP_CHECKED_OUT_MAX_PER_RUN"] = "+2147483648signed-overflow",
+            ["ASAP_OUTSTANDING_TIMEOUT_PAGE_SIZE"] = "+2147483648signed-overflow",
+            ["ASAP_OUTSTANDING_TIMEOUT_MAX_PER_RUN"] = "-2147483649signed-overflow",
+            ["ASAP_PENDING_HOLD_TIMEOUT_PAGE_SIZE"] = "-2147483649signed-overflow",
+            ["ASAP_PENDING_HOLD_TIMEOUT_MAX_PER_RUN"] = "+2147483648signed-overflow",
+            ["ASAP_HOLD_PICKUP_TIMEOUT_PAGE_SIZE"] = "+2147483648signed-overflow",
+            ["ASAP_HOLD_PICKUP_TIMEOUT_MAX_PER_RUN"] = "-2147483649signed-overflow",
+            ["ASAP_ADDITIONAL_COPY_TIMEOUT_PAGE_SIZE"] = "-2147483649signed-overflow",
+            ["ASAP_ADDITIONAL_COPY_TIMEOUT_MAX_PER_RUN"] = "+2147483648signed-overflow",
+            ["ASAP_PENDING_ISBN_CHECKS_PAGE_SIZE"] = "\u0085",
+            ["ASAP_PENDING_ISBN_CHECKS_MAX_PER_RUN"] = "-2147483649"
+        };
+        var previous = overrides.Keys.ToDictionary(name => name, Environment.GetEnvironmentVariable, StringComparer.Ordinal);
+        try
+        {
+            foreach (var value in overrides)
+            {
+                Environment.SetEnvironmentVariable(value.Key, value.Value);
+            }
+
+            var package = CreateMinimalPackage(root);
+            using var operational = JsonDocument.Parse(File.ReadAllText(
+                Path.Combine(package, "effective-legacy-operational-config.json")));
+            var limits = operational.RootElement.GetProperty("processingLimits");
+            Assert.AreEqual(500, limits.GetProperty("global").GetProperty("pageSize").GetProperty("value").GetInt32());
+            Assert.AreEqual(1, limits.GetProperty("global").GetProperty("maxPerRun").GetProperty("value").GetInt32());
+            Assert.AreEqual(1, limits.GetProperty("timeouts").GetProperty("pageSize").GetProperty("value").GetInt32());
+            Assert.AreEqual(5000, limits.GetProperty("timeouts").GetProperty("maxPerRun").GetProperty("value").GetInt32());
+            var holdQueue = limits.GetProperty("effectiveQueues").GetProperty("pending_holds");
+            Assert.AreEqual(500, holdQueue.GetProperty("pageSize").GetProperty("value").GetInt32());
+            Assert.AreEqual(1, holdQueue.GetProperty("maxPerRun").GetProperty("value").GetInt32());
+            var obsolete = limits.GetProperty("obsoletePathOverrides").GetProperty("pending_isbn_checks");
+            Assert.AreEqual(1, obsolete.GetProperty("pageSize").GetProperty("value").GetInt32());
+            Assert.AreEqual(1, obsolete.GetProperty("maxPerRun").GetProperty("value").GetInt32());
+            var configuredObsolete = limits.GetProperty("configuredQueueOverrides").GetProperty("pending_isbn_checks");
+            Assert.AreEqual(1, configuredObsolete.GetProperty("pageSize").GetInt32());
+            Assert.AreEqual(1, configuredObsolete.GetProperty("maxPerRun").GetInt32());
+            var queueExpectations = new Dictionary<string, (int PageSize, int MaxPerRun)>(StringComparer.Ordinal)
+            {
+                ["pending_suggestion_isbn_checks"] = (1, 5000),
+                ["outstanding_purchases"] = (1, 5000),
+                ["pending_holds"] = (500, 1),
+                ["checked_out"] = (1, 5000),
+                ["outstanding_timeout"] = (500, 1),
+                ["pending_hold_timeout"] = (1, 5000),
+                ["hold_pickup_timeout"] = (500, 1),
+                ["additional_copy_timeout"] = (1, 5000)
+            };
+            var effectiveQueues = limits.GetProperty("effectiveQueues");
+            foreach (var (queueName, expected) in queueExpectations)
+            {
+                var queue = effectiveQueues.GetProperty(queueName);
+                Assert.AreEqual(expected.PageSize, queue.GetProperty("pageSize").GetProperty("value").GetInt32(), queueName);
+                Assert.AreEqual(expected.MaxPerRun, queue.GetProperty("maxPerRun").GetProperty("value").GetInt32(), queueName);
+            }
+
+            Environment.SetEnvironmentVariable("ASAP_JOB_PAGE_SIZE", "\u0085");
+            var pureNelPackage = CreateMinimalPackage(Path.Combine(root, "pure-nel-required"));
+            using var pureNelOperational = JsonDocument.Parse(File.ReadAllText(
+                Path.Combine(pureNelPackage, "effective-legacy-operational-config.json")));
+            var pureNelRequired = pureNelOperational.RootElement.GetProperty("processingLimits")
+                .GetProperty("global").GetProperty("pageSize");
+            Assert.AreEqual(50, pureNelRequired.GetProperty("value").GetInt32());
+            Assert.AreEqual("environment_override", pureNelRequired.GetProperty("provenance").GetString());
+        }
+        finally
+        {
+            foreach (var name in overrides.Keys)
+            {
+                Environment.SetEnvironmentVariable(name, previous[name]);
+            }
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [TestMethod]
@@ -106,12 +250,14 @@ public sealed class MigrationCliTests
                         [displayName] TEXT,
                         [abbreviation] TEXT,
                         [enabledForPatrons] INTEGER NOT NULL,
-                        [lastSynced] TEXT
+                        [lastSynced] TEXT,
+                        [organizationCodeId] INTEGER,
+                        [parentOrganizationId] INTEGER
                     );
                     INSERT INTO [polaris_organizations]
-                        ([id], [organizationId], [displayName], [abbreviation], [enabledForPatrons], [lastSynced])
+                        ([id], [organizationId], [displayName], [abbreviation], [enabledForPatrons], [lastSynced], [organizationCodeId], [parentOrganizationId])
                     VALUES
-                        ('pb-org-2', '2', 'Test Library', 'TEST', 1, '2030-01-02 03:04:05.000Z');
+                        ('pb-org-2', '2', 'Test Library', 'TEST', 1, '2030-01-02 03:04:05.000Z', 2, 1);
                     """;
                 command.ExecuteNonQuery();
                 CreatePinnedSourceSchemaFixtureTables(connection);
@@ -162,6 +308,21 @@ public sealed class MigrationCliTests
             var files = manifest.RootElement.GetProperty("files").EnumerateArray().ToArray();
             Assert.IsTrue(files.Any(file => file.GetProperty("path").GetString() == "organizations.json"));
             Assert.IsTrue(files.All(file => file.GetProperty("sha256").GetString()!.Length == 64));
+
+            var compatibleSha = "abcdef0123456789abcdef0123456789abcdef01";
+            var compatiblePackage = Path.Combine(root, "compatible-package");
+            using var compatibleError = new StringWriter();
+            Assert.AreEqual(0, MigrationCli.Run(
+                [
+                    "export", "--source", source, "--storage", storage, "--output", compatiblePackage,
+                    "--source-git-sha", compatibleSha, "--exported-at-utc", "2030-01-02T03:04:05Z",
+                    "--confirm-source-stopped"
+                ],
+                TextWriter.Null,
+                compatibleError), compatibleError.ToString());
+            using var compatibleManifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(compatiblePackage, "manifest.json")));
+            Assert.AreEqual(compatibleSha, compatibleManifest.RootElement.GetProperty("pocketBaseSourceGitSha").GetString());
+            Assert.AreEqual(0, MigrationCli.Run(["validate", "--package", compatiblePackage], TextWriter.Null, TextWriter.Null));
         }
         finally
         {
@@ -232,14 +393,12 @@ public sealed class MigrationCliTests
 
             using var firstOrganizations = JsonDocument.Parse(File.ReadAllText(Path.Combine(firstPackage, "organizations.json")));
             using var secondOrganizations = JsonDocument.Parse(File.ReadAllText(Path.Combine(secondPackage, "organizations.json")));
-            Assert.AreEqual(
-                "WAL snapshot one",
-                firstOrganizations.RootElement.GetProperty("collections").GetProperty("polaris_organizations")[0]
-                    .GetProperty("displayName").GetString());
-            Assert.AreEqual(
-                "WAL snapshot two",
-                secondOrganizations.RootElement.GetProperty("collections").GetProperty("polaris_organizations")[0]
-                    .GetProperty("displayName").GetString());
+            var firstLibrary = firstOrganizations.RootElement.GetProperty("collections").GetProperty("polaris_organizations")
+                .EnumerateArray().Single(row => row.GetProperty("organizationId").GetString() == "2");
+            var secondLibrary = secondOrganizations.RootElement.GetProperty("collections").GetProperty("polaris_organizations")
+                .EnumerateArray().Single(row => row.GetProperty("organizationId").GetString() == "2");
+            Assert.AreEqual("WAL snapshot one", firstLibrary.GetProperty("displayName").GetString());
+            Assert.AreEqual("WAL snapshot two", secondLibrary.GetProperty("displayName").GetString());
             Assert.AreEqual(
                 0,
                 MigrationCli.Run(["validate", "--package", firstPackage], TextWriter.Null, TextWriter.Null));
@@ -416,7 +575,7 @@ public sealed class MigrationCliTests
                 Environment.SetEnvironmentVariable(item.Key, item.Value);
             }
 
-            var package = CreateMinimalPackage(
+                var package = CreateMinimalPackage(
                 root,
                 """
                 CREATE TABLE [system_settings]
@@ -987,7 +1146,9 @@ public sealed class MigrationCliTests
             await connection.OpenAsync();
             Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] = 2 AND [DisplayName] = N'Test Library' AND [IsActive] = 1;"));
             Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[StaffUser] WHERE [UserPrincipalName] = N'source-admin@example.org' AND [NormalizedUserPrincipalName] = N'SOURCE-ADMIN@EXAMPLE.ORG' AND [EntraTenantId] IS NULL AND [EntraObjectId] IS NULL AND [Role] = N'super_admin' AND [OrganizationId] = 1 AND [IsActive] = 1;"));
-            Assert.AreEqual(2, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] IN (N'organization', N'staff_user');"));
+                Assert.AreEqual(4, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] IN (N'organization', N'staff_user');"));
+                Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] = 1 AND [IsActive] = 1;"));
+                Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] = 20 AND [OrganizationCodeId] = 3 AND [ParentOrganizationId] = 2 AND [IsActive] = 0;"));
             Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[PatronSession];"));
             Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[EmailOutbox];"));
             Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[QueueProgress];"));
@@ -1086,10 +1247,12 @@ public sealed class MigrationCliTests
                 ],
                 TextWriter.Null,
                 secondError), secondError.ToString());
-            Assert.AreEqual(
-                await File.ReadAllTextAsync(report),
-                await File.ReadAllTextAsync(secondReport),
-                "Equivalent fresh targets must produce the same restricted reconciliation report.");
+            AssertEquivalentReportsExceptTargetBinding(
+                report,
+                target,
+                secondReport,
+                secondTarget,
+                "Equivalent fresh targets must produce the same restricted reconciliation report apart from target-specific hashes.");
 
             var differentPackageRoot = Path.Combine(root, "different-package");
             Directory.CreateDirectory(differentPackageRoot);
@@ -1439,8 +1602,8 @@ public sealed class MigrationCliTests
                 INSERT INTO [patron_settings_overrides] VALUES
                     ('patron-override-2', '2', '{"suggestion":"Local received"}',
                      '[{"id":"local_preorder","label":"Local preorder","enabled":true,"sortOrder":10}]',
-                     '{"book":{"customFields":{"audience":{"mode":"required","labelOverride":"Who is it for?"}}}}',
-                     '[{"key":"audience","label":"Audience","type":"select","enabled":true,"sortOrder":10,"options":[{"id":"adult","label":"Adult","enabled":true,"sortOrder":10}]}]',
+                     '{"book":{"customFields":{"audience":{"mode":"required","label":"Who is it for?"},"audience-empty":{"mode":"required"},"audience-disabled":{"mode":"required"}}}}',
+                     '[{"key":"audience","label":"Audience","type":"select","enabled":true,"sortOrder":10,"options":[{"id":"adult","label":"Adult","enabled":true,"sortOrder":10}]},{"key":"audience-empty","label":"Audience without enabled options","type":"select","enabled":true,"sortOrder":20,"options":[{"id":"retired","label":"Retired","enabled":false,"sortOrder":10}]},{"key":"audience-disabled","label":"Disabled audience","type":"select","enabled":false,"sortOrder":30}]',
                      NULL, NULL, '2029-01-01T00:00:00Z', '2029-02-01T00:00:00Z');
                 CREATE TABLE [smtp_settings]
                 (
@@ -1494,10 +1657,12 @@ public sealed class MigrationCliTests
                 ],
                 TextWriter.Null,
                 secondError), secondError.ToString());
-            Assert.AreEqual(
-                await File.ReadAllTextAsync(report),
-                await File.ReadAllTextAsync(secondReport),
-                "Equivalent fresh targets must produce the same BIB-authority classification and report.");
+            AssertEquivalentReportsExceptTargetBinding(
+                report,
+                target,
+                secondReport,
+                secondTarget,
+                "Equivalent fresh targets must produce the same BIB-authority classification apart from target-specific hashes.");
 
             await using var connection = new SqlConnection(target);
             await connection.OpenAsync();
@@ -1524,6 +1689,11 @@ public sealed class MigrationCliTests
                 Assert.AreEqual(1, authority.GetProperty("automationDerivedBibs").GetInt32());
                 Assert.AreEqual(0, authority.GetProperty("staffAuthoritativeBibs").GetInt32());
                 Assert.AreEqual(0, authority.GetProperty("ambiguousBibsImportedWithoutStaffAuthority").GetInt32());
+                var placementTransform = authorityReport.RootElement.GetProperty("transformations").EnumerateArray()
+                    .Single(item => item.GetProperty("entity").GetString() == "placed_bib_protection");
+                Assert.AreEqual("inserted", placementTransform.GetProperty("action").GetString());
+                Assert.AreEqual(JsonValueKind.Array, placementTransform.GetProperty("hints").ValueKind);
+                Assert.AreEqual(JsonValueKind.Array, placementTransform.GetProperty("bibSources").ValueKind);
                 var authorityTransform = authorityReport.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
                     item.GetProperty("entity").GetString() == "title_request_bib_authority");
                 Assert.AreEqual("automation_derived", authorityTransform.GetProperty("classification").GetString());
@@ -1591,7 +1761,49 @@ public sealed class MigrationCliTests
                 "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience' AND r.[Mode] = N'required' AND r.[LabelOverride] = N'Who is it for?';"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience-empty' AND r.[Mode] = N'optional';"));
+            var disabledAudienceRules = new Dictionary<string, string>(StringComparer.Ordinal);
+            await using (var disabledAudienceCommand = connection.CreateCommand())
+            {
+                disabledAudienceCommand.CommandText =
+                    "SELECT f.[Code], r.[Mode] FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] c ON c.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] f ON f.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND c.[FieldKey] = N'audience-disabled' ORDER BY f.[Code];";
+                await using var disabledAudienceReader = await disabledAudienceCommand.ExecuteReaderAsync();
+                while (await disabledAudienceReader.ReadAsync())
+                {
+                    disabledAudienceRules.Add(disabledAudienceReader.GetString(0), disabledAudienceReader.GetString(1));
+                }
+            }
+            CollectionAssert.AreEqual(
+                new[] { "audiobook_cd", "book", "dvd", "eaudiobook", "ebook", "music_cd" },
+                disabledAudienceRules.Keys.OrderBy(code => code, StringComparer.Ordinal).ToArray());
+            Assert.IsTrue(disabledAudienceRules.Values.All(mode => mode == "hidden"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
                 "SELECT COUNT(*) FROM [asap].[Branding] WHERE [OrganizationId] = 1 AND [LogoContentType] = N'image/png' AND [LogoFileName] = N'migration_logo.png' AND DATALENGTH([LogoData]) > 1000 AND [LogoAltText] = N'Consortium logo';"));
+
+            await using (var requiredSelectDrift = connection.CreateCommand())
+            {
+                requiredSelectDrift.CommandText =
+                    "UPDATE r SET [Mode] = N'required' FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience-empty' AND m.[Code] = N'book';";
+                Assert.AreEqual(1, await requiredSelectDrift.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(report, target);
+            using (var normalizationDriftError = new StringWriter())
+            {
+                Assert.AreEqual(1, RunReconcile(package, report, connectionEnvironmentName, normalizationDriftError));
+                StringAssert.Contains(normalizationDriftError.ToString(), "independently derived source normalization");
+            }
+            await using (var restoreRule = connection.CreateCommand())
+            {
+                restoreRule.CommandText =
+                    "UPDATE r SET [Mode] = N'optional' FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND f.[FieldKey] = N'audience-empty' AND m.[Code] = N'book';";
+                Assert.AreEqual(1, await restoreRule.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(report, target);
+            using (var normalizationRestored = new StringWriter())
+            {
+                Assert.AreEqual(0, RunReconcile(package, report, connectionEnvironmentName, normalizationRestored), normalizationRestored.ToString());
+            }
 
             await using (var wrongAuthority = connection.CreateCommand())
             {
@@ -1608,7 +1820,7 @@ public sealed class MigrationCliTests
                 ],
                 TextWriter.Null,
                 authorityDriftError));
-            StringAssert.Contains(authorityDriftError.ToString(), "Target SQL state changed after the successful import reconciliation.");
+            StringAssert.Contains(authorityDriftError.ToString(), "BIB authority fields differ from the immutable source classification inputs.");
         }
         finally
         {
@@ -1616,6 +1828,1518 @@ public sealed class MigrationCliTests
             Environment.SetEnvironmentVariable(secondConnectionEnvironmentName, null);
             await DropDatabaseAsync(master, databaseName);
             await DropDatabaseAsync(master, secondDatabaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ImportRejectsForeignRelationshipsAndIndependentlyDetectsTargetDrift()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-owner-oracle-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationOwnerOracle_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var connectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        try
+        {
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
+
+            var foreignFormatRoot = Path.Combine(root, "foreign-format");
+            var foreignFormatPackage = CreateMinimalPackage(
+                foreignFormatRoot,
+                """
+                INSERT INTO [polaris_organizations] VALUES ('pb-org-3', '3', 'Other Library', 'OTHER', 1, 2, 1);
+                CREATE TABLE [material_formats]
+                (
+                    [id] TEXT PRIMARY KEY, [scope] TEXT, [libraryOrganization] TEXT,
+                    [code] TEXT, [label] TEXT, [enabled] INTEGER, [sortOrder] INTEGER
+                );
+                INSERT INTO [material_formats] VALUES
+                    ('fmt-book', 'system', NULL, 'book', 'Book', 1, 10),
+                    ('fmt-foreign', 'library', '3', 'foreign', 'Foreign Book', 1, 10);
+                CREATE TABLE [title_requests]
+                (
+                    [id] TEXT PRIMARY KEY, [libraryOrgId] TEXT, [formatRef] TEXT, [barcode] TEXT,
+                    [title] TEXT, [autohold] INTEGER, [status] TEXT, [created] TEXT, [updated] TEXT
+                );
+                INSERT INTO [title_requests] VALUES
+                    ('request-foreign-format', '2', 'fmt-foreign', 'A20000000000021', 'Foreign format',
+                     0, 'suggestion', '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                """);
+            var foreignFormatReport = Path.Combine(foreignFormatRoot, "report.json");
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunImport(foreignFormatPackage, foreignFormatReport, connectionEnvironmentName, tenantId, error));
+                StringAssert.Contains(error.ToString(), "request_format_owner_invalid");
+            }
+            Assert.IsFalse(File.Exists(foreignFormatReport + ".pending"));
+            await AssertFreshImportTargetAsync(target);
+
+            var foreignCopyRoot = Path.Combine(root, "foreign-copy");
+            var foreignCopyPackage = CreateMinimalPackage(
+                foreignCopyRoot,
+                """
+                INSERT INTO [polaris_organizations] VALUES ('pb-org-3', '3', 'Other Library', 'OTHER', 1, 2, 1);
+                CREATE TABLE [material_formats]
+                (
+                    [id] TEXT PRIMARY KEY, [scope] TEXT, [libraryOrganization] TEXT,
+                    [code] TEXT, [label] TEXT, [enabled] INTEGER, [sortOrder] INTEGER
+                );
+                INSERT INTO [material_formats] VALUES ('fmt-book', 'system', NULL, 'book', 'Book', 1, 10);
+                CREATE TABLE [title_requests]
+                (
+                    [id] TEXT PRIMARY KEY, [libraryOrgId] TEXT, [formatRef] TEXT, [barcode] TEXT,
+                    [title] TEXT, [autohold] INTEGER, [status] TEXT, [created] TEXT, [updated] TEXT
+                );
+                INSERT INTO [title_requests] VALUES
+                    ('request-owning-library', '2', 'fmt-book', 'A20000000000022', 'Source request',
+                     0, 'suggestion', '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                CREATE TABLE [additional_copy_requests]
+                (
+                    [id] TEXT PRIMARY KEY, [libraryOrgId] TEXT, [sourceTitleRequest] TEXT,
+                    [bibid] TEXT, [title] TEXT, [status] TEXT, [created] TEXT, [updated] TEXT
+                );
+                INSERT INTO [additional_copy_requests] VALUES
+                    ('copy-foreign-library', '3', 'request-owning-library', '9001', 'Copy', 'open',
+                     '2029-01-03T00:00:00Z', '2029-01-04T00:00:00Z');
+                """);
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunImport(foreignCopyPackage, Path.Combine(foreignCopyRoot, "report.json"), connectionEnvironmentName, tenantId, error));
+                StringAssert.Contains(error.ToString(), "additional_copy_request_library_mismatch");
+            }
+            await AssertFreshImportTargetAsync(target);
+
+            foreach (var (name, snapshot) in new[]
+            {
+                ("array-snapshot", "[]"),
+                ("unsupported-snapshot", "{\"retired\":{\"label\":\"Old\",\"type\":\"text\",\"value\":\"keep\",\"future\":true}}"),
+                ("duplicate-snapshot", "{\"retired\":{\"label\":\"Old\",\"type\":\"text\",\"value\":\"keep\",\"label\":\"duplicate\"}}")
+            })
+            {
+                var caseRoot = Path.Combine(root, name);
+                var package = CreateMinimalPackage(
+                    caseRoot,
+                    $$"""
+                    CREATE TABLE [material_formats]
+                    (
+                        [id] TEXT PRIMARY KEY, [scope] TEXT, [libraryOrganization] TEXT,
+                        [code] TEXT, [label] TEXT, [enabled] INTEGER, [sortOrder] INTEGER
+                    );
+                    INSERT INTO [material_formats] VALUES ('fmt-book', 'system', NULL, 'book', 'Book', 1, 10);
+                    CREATE TABLE [title_requests]
+                    (
+                        [id] TEXT PRIMARY KEY, [libraryOrgId] TEXT, [formatRef] TEXT, [barcode] TEXT,
+                        [title] TEXT, [autohold] INTEGER, [status] TEXT, [customFields] TEXT,
+                        [created] TEXT, [updated] TEXT
+                    );
+                    INSERT INTO [title_requests] VALUES
+                        ('request-invalid-snapshot', '2', 'fmt-book', 'A20000000000023', 'Invalid snapshot',
+                         0, 'suggestion', '{{snapshot.Replace("'", "''", StringComparison.Ordinal)}}',
+                         '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                    """);
+                using var error = new StringWriter();
+                Assert.AreEqual(1, RunImport(package, Path.Combine(caseRoot, "report.json"), connectionEnvironmentName, tenantId, error), name);
+                StringAssert.Contains(error.ToString(), "custom_fields_snapshot_invalid", name);
+                await AssertFreshImportTargetAsync(target);
+            }
+
+            var validRoot = Path.Combine(root, "valid");
+            var validPackage = CreateMinimalPackage(
+                validRoot,
+                """
+                INSERT INTO [polaris_organizations] VALUES ('pb-org-3', '3', 'Other Library', 'OTHER', 1, 2, 1);
+                CREATE TABLE [material_formats]
+                (
+                    [id] TEXT PRIMARY KEY, [scope] TEXT, [libraryOrganization] TEXT,
+                    [code] TEXT, [label] TEXT, [enabled] INTEGER, [sortOrder] INTEGER
+                );
+                INSERT INTO [material_formats] VALUES
+                    ('fmt-book', 'system', NULL, 'book', 'Book', 1, 10),
+                    ('fmt-foreign', 'library', '3', 'foreign', 'Foreign Book', 1, 10);
+                CREATE TABLE [title_requests]
+                (
+                    [id] TEXT PRIMARY KEY, [libraryOrgId] TEXT, [formatRef] TEXT, [barcode] TEXT,
+                    [title] TEXT, [autohold] INTEGER, [status] TEXT, [customFields] TEXT,
+                    [created] TEXT, [updated] TEXT
+                );
+                INSERT INTO [title_requests] VALUES
+                    ('request-1', '2', 'fmt-book', 'A20000000000024', '{"a":1,"a":2}',
+                     0, 'suggestion', '{"retired":{"label":"Old","type":"text","value":"Preserve me"}}',
+                     '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                """);
+            const string alternateSourceSha = "abcdef0123456789abcdef0123456789abcdef01";
+            SetPackageSourceGitSha(validPackage, alternateSourceSha);
+            var reportPath = Path.Combine(validRoot, "report.json");
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(0, RunImport(validPackage, reportPath, connectionEnvironmentName, tenantId, error), error.ToString());
+            }
+
+            using (var importedReport = JsonDocument.Parse(File.ReadAllText(reportPath)))
+            {
+                var placementTransform = importedReport.RootElement.GetProperty("transformations").EnumerateArray()
+                    .Single(item => item.GetProperty("entity").GetString() == "placed_bib_protection");
+                Assert.AreEqual("no_placement_evidence", placementTransform.GetProperty("action").GetString());
+                Assert.AreEqual(JsonValueKind.Array, placementTransform.GetProperty("hints").ValueKind);
+                Assert.AreEqual(JsonValueKind.Array, placementTransform.GetProperty("bibSources").ValueKind);
+            }
+
+            long requestId;
+            long systemFormatId;
+            long foreignFormatId;
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                requestId = await ReadLongAsync(connection,
+                    "SELECT [NewId] FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] = N'title_request' AND [PocketBaseId] = N'request-1';");
+                systemFormatId = await ReadLongAsync(connection,
+                    "SELECT [NewId] FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] = N'material_format' AND [PocketBaseId] = N'fmt-book';");
+                foreignFormatId = await ReadLongAsync(connection,
+                    "SELECT [Id] FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 3 AND [Code] = N'foreign';");
+                Assert.AreEqual(1, await ScalarAsync(connection,
+                    "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [Id] = " + requestId.ToString(System.Globalization.CultureInfo.InvariantCulture) + " AND [Title] = N'{\"a\":1,\"a\":2}' AND [CustomFieldsJson] = N'{\"retired\":{\"label\":\"Old\",\"type\":\"text\",\"value\":\"Preserve me\"}}' AND [PatronIdSnapshot] IS NULL;"));
+                await using var mutate = connection.CreateCommand();
+                mutate.CommandText = "UPDATE [asap].[TitleRequest] SET [MaterialFormatId] = @formatId WHERE [Id] = @requestId;";
+                mutate.Parameters.AddWithValue("@formatId", foreignFormatId);
+                mutate.Parameters.AddWithValue("@requestId", requestId);
+                await mutate.ExecuteNonQueryAsync();
+            }
+            RefreshReportFingerprint(reportPath, target);
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunReconcile(validPackage, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "target title request lost its source library or format relationship");
+            }
+
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var mutate = connection.CreateCommand();
+                mutate.CommandText = "UPDATE [asap].[TitleRequest] SET [MaterialFormatId] = @formatId WHERE [Id] = @requestId;";
+                mutate.Parameters.AddWithValue("@formatId", systemFormatId);
+                mutate.Parameters.AddWithValue("@requestId", requestId);
+                await mutate.ExecuteNonQueryAsync();
+            }
+            RefreshReportFingerprint(reportPath, target);
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var fabricateSnapshot = connection.CreateCommand();
+                fabricateSnapshot.CommandText = "UPDATE [asap].[TitleRequest] SET [PatronIdSnapshot] = 12345 WHERE [Id] = @requestId;";
+                fabricateSnapshot.Parameters.AddWithValue("@requestId", requestId);
+                Assert.AreEqual(1, await fabricateSnapshot.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(reportPath, target);
+            var patronSnapshotFingerprint = ComputeTargetFingerprintForTest(target);
+            using (var patronIdDriftError = new StringWriter())
+            {
+                Assert.AreEqual(1, RunReconcile(validPackage, reportPath, connectionEnvironmentName, patronIdDriftError));
+                StringAssert.Contains(patronIdDriftError.ToString(), "legacy title request has a fabricated native patron ID snapshot");
+            }
+            Assert.AreEqual(patronSnapshotFingerprint, ComputeTargetFingerprintForTest(target), "Reconciliation must not clear an invented patron identity.");
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var restoreSnapshot = connection.CreateCommand();
+                restoreSnapshot.CommandText = "UPDATE [asap].[TitleRequest] SET [PatronIdSnapshot] = NULL WHERE [Id] = @requestId;";
+                restoreSnapshot.Parameters.AddWithValue("@requestId", requestId);
+                Assert.AreEqual(1, await restoreSnapshot.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(reportPath, target);
+            using (var legacyIdentityRestored = new StringWriter())
+            {
+                Assert.AreEqual(0, RunReconcile(validPackage, reportPath, connectionEnvironmentName, legacyIdentityRestored), legacyIdentityRestored.ToString());
+            }
+
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                try
+                {
+                    await using (var disableConstraint = connection.CreateCommand())
+                    {
+                        disableConstraint.CommandText = "ALTER TABLE [asap].[Organization] NOCHECK CONSTRAINT [CK_Organization_SystemActive];";
+                        await disableConstraint.ExecuteNonQueryAsync();
+                    }
+                    await using (var deactivateSystem = connection.CreateCommand())
+                    {
+                        deactivateSystem.CommandText = "UPDATE [asap].[Organization] SET [IsActive] = 0 WHERE [Id] = 1;";
+                        await deactivateSystem.ExecuteNonQueryAsync();
+                    }
+                    RefreshReportFingerprint(reportPath, target);
+                    var inactiveFingerprint = ComputeTargetFingerprintForTest(target);
+                    using var inactiveError = new StringWriter();
+                    Assert.AreEqual(1, RunReconcile(validPackage, reportPath, connectionEnvironmentName, inactiveError));
+                    StringAssert.Contains(inactiveError.ToString(), "Target organization activity differs from the pinned source transformation.");
+                    Assert.AreEqual(inactiveFingerprint, ComputeTargetFingerprintForTest(target), "Reconciliation must not reactivate the system organization.");
+                }
+                finally
+                {
+                    await using (var reactivateSystem = connection.CreateCommand())
+                    {
+                        reactivateSystem.CommandText = "UPDATE [asap].[Organization] SET [IsActive] = 1 WHERE [Id] = 1;";
+                        await reactivateSystem.ExecuteNonQueryAsync();
+                    }
+                    await using (var reenableConstraint = connection.CreateCommand())
+                    {
+                        reenableConstraint.CommandText = "ALTER TABLE [asap].[Organization] WITH CHECK CHECK CONSTRAINT [CK_Organization_SystemActive];";
+                        await reenableConstraint.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            RefreshReportFingerprint(reportPath, target);
+
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var corruptSnapshot = connection.CreateCommand();
+                corruptSnapshot.CommandText = "UPDATE [asap].[TitleRequest] SET [CustomFieldsJson] = N'[]' WHERE [Id] = @requestId;";
+                corruptSnapshot.Parameters.AddWithValue("@requestId", requestId);
+                await corruptSnapshot.ExecuteNonQueryAsync();
+            }
+            RefreshReportFingerprint(reportPath, target);
+            using (var snapshotDriftError = new StringWriter())
+            {
+                Assert.AreEqual(1, RunReconcile(validPackage, reportPath, connectionEnvironmentName, snapshotDriftError));
+                StringAssert.Contains(snapshotDriftError.ToString(), "custom_fields_snapshot_invalid");
+            }
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var restoreSnapshot = connection.CreateCommand();
+                restoreSnapshot.CommandText = "UPDATE [asap].[TitleRequest] SET [CustomFieldsJson] = N'{\"retired\":{\"label\":\"Old\",\"type\":\"text\",\"value\":\"Preserve me\"}}' WHERE [Id] = @requestId;";
+                restoreSnapshot.Parameters.AddWithValue("@requestId", requestId);
+                await restoreSnapshot.ExecuteNonQueryAsync();
+            }
+            RefreshReportFingerprint(reportPath, target);
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(0, RunReconcile(validPackage, reportPath, connectionEnvironmentName, error), error.ToString());
+            }
+
+            using (var committedReport = JsonDocument.Parse(File.ReadAllText(reportPath)))
+            {
+                Assert.AreEqual(alternateSourceSha, committedReport.RootElement.GetProperty("sourceGitSha").GetString());
+            }
+
+            var report = JsonNode.Parse(File.ReadAllText(reportPath))!.AsObject();
+            report["sourceGitSha"] = "ffffffffffffffffffffffffffffffffffffffff";
+            File.WriteAllText(reportPath, report.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunReconcile(validPackage, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "reconciliation_report_mismatch");
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task ImportMaterialFormatsProcessesSystemBeforeSameCodeLibraryOverrides()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-format-order-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationFormatOrder_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var package = CreateMinimalPackage(
+                root,
+                """
+                INSERT INTO [polaris_organizations] VALUES
+                    ('pb-org-3', '3', 'Partial Rules Library', 'PART', 1, 2, 1),
+                    ('pb-org-4', '4', 'Empty Rules Library', 'EMPTY', 1, 2, 1),
+                    ('pb-org-5', '5', 'Book Fallback Library', 'BOOK', 1, 2, 1),
+                    ('pb-org-6', '6', 'Uppercase Rule Key Library', 'UPPER', 1, 2, 1),
+                    ('pb-org-7', '7', 'Uppercase Rule Member Library', 'MEMBER', 1, 2, 1),
+                    ('pb-org-8', '8', 'Uppercase Rule Field Library', 'FIELD', 1, 2, 1);
+                CREATE TABLE [material_formats]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL,
+                    [libraryOrganization] TEXT, [code] TEXT NOT NULL, [label] TEXT NOT NULL,
+                    [enabled] INTEGER NOT NULL, [sortOrder] INTEGER NOT NULL,
+                    [messageBehavior] TEXT, [titleMode] TEXT, [titleLabel] TEXT,
+                    [authorMode] TEXT, [authorLabel] TEXT, [identifierMode] TEXT, [identifierLabel] TEXT,
+                    [publicationMode] TEXT, [publicationLabel] TEXT
+                );
+                INSERT INTO [material_formats] VALUES
+                    ('a-local', 'library', 'pb-org-2', 'same-new-code', '  Library Format  ', 1, 20,
+                     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+                    ('z-system', 'system', NULL, 'same-new-code', 'System Format', 1, 10,
+                     'none', 'required', 'Title', 'hidden', 'System Custom Author', 'optional', 'System Identifier', 'optional', 'System Publication'),
+                    ('system-book', 'system', NULL, 'book', 'Book', 1, 10,
+                     'none', 'required', 'Title', 'hidden', 'System Book Author', 'optional', 'System Identifier', 'optional', 'System Timing'),
+                    ('system-audiobook', 'system', NULL, 'audiobook_cd', 'Audiobook CD', 1, 20,
+                     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+                    ('system-dvd', 'system', NULL, 'dvd', 'DVD', 1, 30,
+                     'none', 'optional', 'Title', 'hidden', 'System Director', 'optional', 'System UPC', 'optional', 'System Timing'),
+                    ('system-music', 'system', NULL, 'music_cd', 'Music CD', 1, 35,
+                     'none', 'hidden', 'Title', 'optional', 'System Artist', 'optional', 'System UPC', 'optional', 'System Timing'),
+                    ('system-ebook', 'system', NULL, 'ebook', 'eBook', 1, 38,
+                     'ebookMessage', 'required', 'Title', 'required', 'Author', 'optional', 'Identifier number', 'required', 'Publication Timing'),
+                    ('library-ebook', 'library', 'pb-org-2', 'ebook', '', 1, 40,
+                     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+                    ('owned-library-format', 'library', 'pb-org-2', 'local-special', 'Local Special', 1, 50,
+                     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+                CREATE TABLE [patron_settings_overrides]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY, [orgId] TEXT NOT NULL,
+                    [patronFormatRules] TEXT, [additionalFieldDefinitions] TEXT,
+                    [created] TEXT, [updated] TEXT
+                );
+                INSERT INTO [patron_settings_overrides] VALUES
+                    ('partial-rules-3', '3', '{"dvd":{"messageBehavior":"message","message":"   ","fields":{"title":{"mode":"hidden"}},"customFields":{"audience":{"mode":"REQUIRED","labelOverride":"Wrong Label","label":"  DVD Audience  "}}},"book":{"messageBehavior":"RETIRED_BEHAVIOR","fields":{"author":{"mode":"HIDDEN","label":"  Book Author  "}}}}', '[{"key":"audience","type":"text","label":"Audience"}]', '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('empty-rules-4', '4', '{}', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('book-fallback-5', '5', '{"book":{"messageBehavior":"message","message":"  Explicit Book Rule Message  ","fields":{"title":{"mode":"optional"},"author":{"mode":"hidden","label":"  Explicit Book Author  "}}}}', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('uppercase-key-6', '6', '{"BOOK":{"fields":{"author":{"mode":"hidden"}}}}', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('uppercase-member-7', '7', '{"book":{"Fields":{"author":{"mode":"hidden"}}}}', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('uppercase-field-8', '8', '{"book":{"MESSAGEBEHAVIOR":"message","fields":{"author":{"MODE":"hidden"}}}}', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                """);
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(environmentName, target);
+            var reportPath = Path.Combine(root, "report.json");
+            using var error = new StringWriter();
+            var exitCode = MigrationCli.Run(
+                [
+                    "import", "--package", package,
+                    "--connection-string-env", environmentName,
+                    "--allowed-tenant-ids", tenantId.ToString(),
+                    "--report", reportPath,
+                    "--external-config", ExternalConfigurationPath(package)
+                ],
+                TextWriter.Null,
+                error);
+            Assert.AreEqual(0, exitCode, error.ToString());
+
+            await using var connection = new SqlConnection(target);
+            await connection.OpenAsync();
+            await using var format = connection.CreateCommand();
+            format.CommandText = "SELECT [Id], [Label] FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'same-new-code';";
+            long formatId;
+            await using (var reader = await format.ExecuteReaderAsync())
+            {
+                Assert.IsTrue(await reader.ReadAsync());
+                formatId = reader.GetInt64(0);
+                Assert.AreEqual("System Format", reader.GetString(1));
+                Assert.IsFalse(await reader.ReadAsync());
+            }
+            Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 2 AND [Code] = N'same-new-code';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] = 2 AND [MaterialFormatId] = " + formatId + " AND [Label] = N'  Library Format  ' AND [SortOrder] = 20 AND [IsEnabled] = 1 AND [MessageBehavior] = N'none' AND [AuthorMode] = N'required' AND [AuthorLabel] = N'Author' AND [PublicationMode] = N'required' AND [PublicationLabel] = N'Publication Timing';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special' AND [Label] = N'Local Special' AND [SortOrder] = 50 AND [IsEnabled] = 1;"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormat] f JOIN [asap].[LegacyPocketBaseMapping] m ON m.[NewId] = f.[Id] AND m.[EntityType] = N'material_format' WHERE f.[OwnerOrganizationId] = 2 AND f.[Code] = N'local-special' AND m.[PocketBaseId] = N'owned-library-format';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] = N'material_format' AND [PocketBaseId] = N'z-system' AND [NewId] = " + formatId + ";"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] = N'material_format_override' AND [PocketBaseId] = N'a-local';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book' AND [AuthorMode] = N'hidden' AND [AuthorLabel] = N'System Book Author';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'audiobook_cd' AND [MessageBehavior] = N'none' AND [TitleMode] = N'required' AND [TitleLabel] = N'Title' AND [AuthorMode] = N'required' AND [AuthorLabel] = N'Author' AND [IdentifierMode] = N'optional' AND [IdentifierLabel] = N'Identifier number' AND [PublicationMode] = N'required' AND [PublicationLabel] = N'Publication Timing';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'dvd' AND [TitleMode] = N'required';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'music_cd' AND [TitleMode] = N'required';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'ebook' AND [MessageBehavior] = N'ebookMessage' AND [Message] IS NULL;"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'eaudiobook' AND [MessageBehavior] = N'eaudiobookMessage' AND [Message] IS NULL;"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'same-new-code' AND [IsEnabled] = 1;"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'eaudiobook' AND [IsEnabled] = 0;"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'ebook' AND o.[Label] IS NULL;"));
+            using (var importedReport = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath)))
+            {
+                var unavailableSeeds = importedReport.RootElement.GetProperty("transformations")
+                    .EnumerateArray()
+                    .Single(item => item.GetProperty("entity").GetString() == "system_material_format_availability")
+                    .GetProperty("unavailableSeedCodes")
+                    .EnumerateArray()
+                    .Select(item => item.GetString())
+                    .ToArray();
+                CollectionAssert.AreEqual(new[] { "eaudiobook" }, unavailableSeeds);
+            }
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'ebook' AND COALESCE(o.[MessageBehavior], f.[MessageBehavior]) = N'none' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Author' AND COALESCE(o.[PublicationMode], f.[PublicationMode]) = N'required' AND COALESCE(o.[PublicationLabel], f.[PublicationLabel]) = N'Publication Timing';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 3 AND f.[Code] = N'book' AND COALESCE(o.[MessageBehavior], f.[MessageBehavior]) = N'none' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Book Author' AND COALESCE(o.[PublicationMode], f.[PublicationMode]) = N'required' AND COALESCE(o.[PublicationLabel], f.[PublicationLabel]) = N'Publication Timing';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 3 AND f.[Code] = N'dvd' AND COALESCE(o.[MessageBehavior], f.[MessageBehavior]) = N'message' AND COALESCE(o.[Message], f.[Message], N'') = N'' AND COALESCE(o.[TitleMode], f.[TitleMode]) = N'required' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Director/Actors/Producer' AND COALESCE(o.[IdentifierMode], f.[IdentifierMode]) = N'hidden' AND COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]) = N'UPC' AND COALESCE(o.[PublicationMode], f.[PublicationMode]) = N'required';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 3 AND f.[Code] = N'music_cd' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Artist' AND COALESCE(o.[IdentifierMode], f.[IdentifierMode]) = N'hidden' AND COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]) = N'UPC' AND COALESCE(o.[PublicationMode], f.[PublicationMode]) = N'required';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 3 AND f.[Code] = N'ebook' AND COALESCE(o.[MessageBehavior], f.[MessageBehavior]) = N'message' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required' AND COALESCE(o.[PublicationMode], f.[PublicationMode]) = N'required';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 3 AND f.[Code] = N'eaudiobook' AND COALESCE(o.[MessageBehavior], f.[MessageBehavior]) = N'message' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Author' AND COALESCE(o.[PublicationMode], f.[PublicationMode]) = N'required';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 3 AND f.[Code] = N'same-new-code' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Book Author';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 4 AND f.[Code] = N'book' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Author';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 4 AND f.[Code] = N'same-new-code' AND COALESCE(o.[MessageBehavior], f.[MessageBehavior]) = N'none' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Author' AND COALESCE(o.[IdentifierMode], f.[IdentifierMode]) = N'optional' AND COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]) = N'Identifier number' AND COALESCE(o.[PublicationMode], f.[PublicationMode]) = N'required' AND COALESCE(o.[PublicationLabel], f.[PublicationLabel]) = N'Publication Timing';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 5 AND f.[Code] = N'same-new-code' AND COALESCE(o.[MessageBehavior], f.[MessageBehavior]) = N'message' AND COALESCE(o.[Message], f.[Message]) = N'Explicit Book Rule Message' AND COALESCE(o.[TitleMode], f.[TitleMode]) = N'required' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'hidden' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Explicit Book Author';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 6 AND f.[Code] = N'book' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 7 AND f.[Code] = N'book' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 8 AND f.[Code] = N'book' AND COALESCE(o.[MessageBehavior], f.[MessageBehavior]) = N'none' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required';"));
+            await using (var customFieldRule = connection.CreateCommand())
+            {
+                customFieldRule.CommandText = "SELECT r.[Mode], r.[LabelOverride] FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] c ON c.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] f ON f.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 3 AND c.[FieldKey] = N'audience' AND f.[Code] = N'dvd';";
+                await using var customFieldReader = await customFieldRule.ExecuteReaderAsync();
+                Assert.IsTrue(await customFieldReader.ReadAsync());
+                Assert.AreEqual("hidden", customFieldReader.GetString(0));
+                Assert.AreEqual("DVD Audience", customFieldReader.GetString(1));
+                Assert.IsFalse(await customFieldReader.ReadAsync());
+            }
+            await using (var ebookMessage = connection.CreateCommand())
+            {
+                ebookMessage.CommandText = "SELECT COALESCE(o.[Message], f.[Message]) FROM [asap].[MaterialFormat] f LEFT JOIN [asap].[MaterialFormatOverride] o ON o.[MaterialFormatId] = f.[Id] AND o.[LibraryOrganizationId] = 3 WHERE f.[OwnerOrganizationId] = 1 AND f.[Code] = N'ebook';";
+                Assert.AreEqual(
+                    "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+                    await ebookMessage.ExecuteScalarAsync());
+            }
+            await using (var eaudiobookMessage = connection.CreateCommand())
+            {
+                eaudiobookMessage.CommandText = "SELECT COALESCE(o.[Message], f.[Message]) FROM [asap].[MaterialFormat] f LEFT JOIN [asap].[MaterialFormatOverride] o ON o.[MaterialFormatId] = f.[Id] AND o.[LibraryOrganizationId] = 3 WHERE f.[OwnerOrganizationId] = 1 AND f.[Code] = N'eaudiobook';";
+                Assert.AreEqual(
+                    "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+                    await eaudiobookMessage.ExecuteScalarAsync());
+            }
+
+            await using (var corruptSparseDefault = connection.CreateCommand())
+            {
+                corruptSparseDefault.CommandText = "UPDATE o SET [AuthorMode] = N'optional' FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'ebook';";
+                Assert.AreEqual(1, await corruptSparseDefault.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(reportPath, target);
+            using (var sparseReconcileError = new StringWriter())
+            {
+                Assert.AreEqual(1, RunReconcile(package, reportPath, environmentName, sparseReconcileError));
+                StringAssert.Contains(sparseReconcileError.ToString(), "reconciliation_failed");
+            }
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'ebook' AND o.[AuthorMode] = N'optional';"));
+            await using (var restoreSparseDefault = connection.CreateCommand())
+            {
+                restoreSparseDefault.CommandText = "UPDATE o SET [AuthorMode] = N'required' FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'ebook';";
+                Assert.AreEqual(1, await restoreSparseDefault.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(reportPath, target);
+            using (var validReconcileError = new StringWriter())
+            {
+                Assert.AreEqual(0, RunReconcile(package, reportPath, environmentName, validReconcileError), validReconcileError.ToString());
+            }
+
+            await AssertFingerprintRefreshedFormatDriftRejectedAsync(
+                connection,
+                target,
+                package,
+                reportPath,
+                environmentName,
+                "UPDATE [asap].[MaterialFormat] SET [Label] = N'Changed Label' WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special' AND [Label] = N'Changed Label';",
+                "UPDATE [asap].[MaterialFormat] SET [Label] = N'Local Special' WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special' AND [Label] = N'Local Special';",
+                "source record");
+            await AssertFingerprintRefreshedFormatDriftRejectedAsync(
+                connection,
+                target,
+                package,
+                reportPath,
+                environmentName,
+                "UPDATE [asap].[MaterialFormat] SET [SortOrder] = 51 WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special' AND [SortOrder] = 51;",
+                "UPDATE [asap].[MaterialFormat] SET [SortOrder] = 50 WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special' AND [SortOrder] = 50;",
+                "source record");
+            await AssertFingerprintRefreshedFormatDriftRejectedAsync(
+                connection,
+                target,
+                package,
+                reportPath,
+                environmentName,
+                "UPDATE [asap].[MaterialFormat] SET [IsEnabled] = 0 WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special' AND [IsEnabled] = 0;",
+                "UPDATE [asap].[MaterialFormat] SET [IsEnabled] = 1 WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 2 AND [Code] = N'local-special' AND [IsEnabled] = 1;",
+                "source record");
+            await AssertFingerprintRefreshedFormatDriftRejectedAsync(
+                connection,
+                target,
+                package,
+                reportPath,
+                environmentName,
+                "UPDATE o SET [Label] = N'eBook' FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'ebook';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'ebook' AND o.[Label] = N'eBook';",
+                "UPDATE o SET [Label] = NULL FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'ebook';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'ebook' AND o.[Label] IS NULL;",
+                "source record");
+            await AssertFingerprintRefreshedFormatDriftRejectedAsync(
+                connection,
+                target,
+                package,
+                reportPath,
+                environmentName,
+                "UPDATE [asap].[MaterialFormat] SET [IsEnabled] = 1 WHERE [OwnerOrganizationId] = 1 AND [Code] = N'eaudiobook';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'eaudiobook' AND [IsEnabled] = 1;",
+                "UPDATE [asap].[MaterialFormat] SET [IsEnabled] = 0 WHERE [OwnerOrganizationId] = 1 AND [Code] = N'eaudiobook';",
+                "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'eaudiobook' AND [IsEnabled] = 0;",
+                "availability differs");
+
+            await using (var corrupt = connection.CreateCommand())
+            {
+                corrupt.CommandText = "UPDATE o SET [AuthorMode] = N'optional' FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 3 AND f.[Code] = N'book';";
+                Assert.AreEqual(1, await corrupt.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(Path.Combine(root, "report.json"), target);
+            using (var reconcileError = new StringWriter())
+            {
+                Assert.AreEqual(1, RunReconcile(package, Path.Combine(root, "report.json"), environmentName, reconcileError));
+                StringAssert.Contains(reconcileError.ToString(), "reconciliation_failed");
+            }
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 3 AND f.[Code] = N'book' AND o.[AuthorMode] = N'optional';"));
+
+            await AssertFormatMappingKindDriftRejectedAsync(root, master, tenantId);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(environmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task ImportFormatRuleDefaultsUseTheRawLegacyCodeBeforeTargetNormalization()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-format-raw-code-{Guid.NewGuid():N}");
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        Directory.CreateDirectory(root);
+        try
+        {
+            foreach (var sourceCode in new[] { "0", "Book" })
+            {
+                var caseName = sourceCode == "0" ? "zero" : "capital-book";
+                var caseRoot = Path.Combine(root, caseName);
+                var databaseName = $"AsapMigrationRawFormat_{Guid.NewGuid():N}";
+                var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+                Directory.CreateDirectory(caseRoot);
+                try
+                {
+                    var directRules = JsonSerializer.Serialize(new Dictionary<string, object?>
+                    {
+                        [sourceCode] = new Dictionary<string, object?>()
+                    });
+                    const string bookFallbackRules = """{"book":{}}""";
+                    var package = CreateMinimalPackage(
+                        caseRoot,
+                        $$"""
+                        INSERT INTO [polaris_organizations] VALUES
+                            ('pb-org-3', '3', 'Book Fallback Library', 'FALLBACK', 1, 2, 1);
+                        CREATE TABLE [material_formats]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL,
+                            [libraryOrganization] TEXT, [code] TEXT NOT NULL, [label] TEXT NOT NULL,
+                            [enabled] INTEGER NOT NULL, [sortOrder] INTEGER NOT NULL,
+                            [messageBehavior] TEXT, [titleMode] TEXT, [titleLabel] TEXT,
+                            [authorMode] TEXT, [authorLabel] TEXT, [identifierMode] TEXT, [identifierLabel] TEXT,
+                            [publicationMode] TEXT, [publicationLabel] TEXT
+                        );
+                        INSERT INTO [material_formats] VALUES
+                            ('format-alias', 'system', NULL, '{{sourceCode}}', 'Legacy Alias', 1, 10,
+                             'none', NULL, NULL, 'hidden', 'Legacy Author', NULL, NULL, NULL, NULL);
+                        CREATE TABLE [patron_settings_overrides]
+                        (
+                            [id] TEXT NOT NULL PRIMARY KEY, [orgId] TEXT NOT NULL,
+                            [patronFormatRules] TEXT, [additionalFieldDefinitions] TEXT,
+                            [created] TEXT, [updated] TEXT
+                        );
+                        INSERT INTO [patron_settings_overrides] VALUES
+                            ('direct-rule', '2', '{{directRules}}', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                            ('book-fallback', '3', '{{bookFallbackRules}}', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                        """);
+                    DeployDacpac(master, databaseName);
+                    Environment.SetEnvironmentVariable(environmentName, target);
+                    var reportPath = Path.Combine(caseRoot, "report.json");
+                    using (var importError = new StringWriter())
+                    {
+                        Assert.AreEqual(0, RunImport(package, reportPath, environmentName, tenantId, importError), importError.ToString());
+                    }
+
+                    await using var connection = new SqlConnection(target);
+                    await connection.OpenAsync();
+                    Assert.AreEqual(1, await ScalarAsync(
+                        connection,
+                        "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'book' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'optional' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Author' AND COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]) = N'Identifier' AND COALESCE(o.[PublicationMode], f.[PublicationMode]) = N'optional' AND COALESCE(o.[PublicationLabel], f.[PublicationLabel]) = N'Publication';"));
+                    Assert.AreEqual(1, await ScalarAsync(
+                        connection,
+                        "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 3 AND f.[Code] = N'book' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Author' AND COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]) = N'Identifier number' AND COALESCE(o.[PublicationMode], f.[PublicationMode]) = N'required' AND COALESCE(o.[PublicationLabel], f.[PublicationLabel]) = N'Publication Timing';"));
+
+                    await using (var corruptRule = connection.CreateCommand())
+                    {
+                        corruptRule.CommandText = "UPDATE o SET [AuthorMode] = N'required' FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'book';";
+                        Assert.AreEqual(1, await corruptRule.ExecuteNonQueryAsync());
+                    }
+                    RefreshReportFingerprint(reportPath, target);
+                    using (var reconcileError = new StringWriter())
+                    {
+                        Assert.AreEqual(1, RunReconcile(package, reportPath, environmentName, reconcileError));
+                        StringAssert.Contains(reconcileError.ToString(), "reconciliation_failed");
+                    }
+                    Assert.AreEqual(1, await ScalarAsync(
+                        connection,
+                        "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'book' AND o.[AuthorMode] = N'required';"));
+
+                    await using (var restoreRule = connection.CreateCommand())
+                    {
+                        restoreRule.CommandText = "UPDATE o SET [AuthorMode] = N'optional' FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'book';";
+                        Assert.AreEqual(1, await restoreRule.ExecuteNonQueryAsync());
+                    }
+                    RefreshReportFingerprint(reportPath, target);
+                    using var validReconcileError = new StringWriter();
+                    Assert.AreEqual(0, RunReconcile(package, reportPath, environmentName, validReconcileError), validReconcileError.ToString());
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable(environmentName, null);
+                    await DropDatabaseAsync(master, databaseName);
+                }
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(environmentName, null);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task ImportRejectsLibraryOnlyFormatsThatCanonicalizeToReservedSystemSeeds()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-library-seed-format-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationLibrarySeedFormat_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        try
+        {
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(environmentName, target);
+            foreach (var (caseName, sourceCode) in new[]
+                     {
+                         ("canonical-book", "book"),
+                         ("numeric-book", "0"),
+                         ("case-alias-book", "Book")
+                     })
+            {
+                var caseRoot = Path.Combine(root, caseName);
+                Directory.CreateDirectory(caseRoot);
+                var package = CreateMinimalPackage(
+                    caseRoot,
+                    $$"""
+                    CREATE TABLE [material_formats]
+                    (
+                        [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL,
+                        [libraryOrganization] TEXT, [code] TEXT NOT NULL, [label] TEXT NOT NULL,
+                        [enabled] INTEGER NOT NULL, [sortOrder] INTEGER NOT NULL
+                    );
+                    INSERT INTO [material_formats] VALUES
+                        ('library-format', 'library', 'pb-org-2', '{{sourceCode}}', 'Library-owned format', 1, 20);
+                    """);
+                var reportPath = Path.Combine(caseRoot, "report.json");
+                using var error = new StringWriter();
+                Assert.AreEqual(1, RunImport(package, reportPath, environmentName, tenantId, error));
+                StringAssert.Contains(error.ToString(), "format_library_seed_unsupported");
+                Assert.IsFalse(File.Exists(reportPath));
+                Assert.IsFalse(File.Exists(reportPath + ".pending"));
+                await AssertFreshImportTargetAsync(target);
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(environmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task ImportRejectsCrossScopeMaterialFormatAliasesThatChangeLegacyIdentity()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-format-cross-scope-alias-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationFormatCrossScopeAlias_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var package = CreateMinimalPackage(
+                root,
+                """
+                CREATE TABLE [material_formats]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL,
+                    [libraryOrganization] TEXT, [code] TEXT NOT NULL, [label] TEXT NOT NULL,
+                    [enabled] INTEGER NOT NULL, [sortOrder] INTEGER NOT NULL,
+                    UNIQUE ([scope], [libraryOrganization], [code])
+                );
+                INSERT INTO [material_formats] VALUES
+                    ('system-book', 'system', NULL, 'book', 'System Book', 1, 10),
+                    ('library-zero', 'library', 'pb-org-2', '0', 'Library Numeric Alias', 1, 20);
+                """);
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(environmentName, target);
+            var reportPath = Path.Combine(root, "report.json");
+            using var error = new StringWriter();
+            Assert.AreEqual(1, RunImport(package, reportPath, environmentName, tenantId, error));
+            StringAssert.Contains(error.ToString(), "format_code_conflict");
+            Assert.IsFalse(File.Exists(reportPath));
+            Assert.IsFalse(File.Exists(reportPath + ".pending"));
+            await AssertFreshImportTargetAsync(target);
+
+            var reverseRoot = Path.Combine(root, "reverse");
+            var reversePackage = CreateMinimalPackage(
+                reverseRoot,
+                """
+                CREATE TABLE [material_formats]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL,
+                    [libraryOrganization] TEXT, [code] TEXT NOT NULL, [label] TEXT NOT NULL,
+                    [enabled] INTEGER NOT NULL, [sortOrder] INTEGER NOT NULL,
+                    UNIQUE ([scope], [libraryOrganization], [code])
+                );
+                INSERT INTO [material_formats] VALUES
+                    ('system-zero', 'system', NULL, '0', 'System Numeric Alias', 1, 10),
+                    ('library-book', 'library', 'pb-org-2', 'book', 'Library Book', 1, 20);
+                """);
+            AssertPackageValidationCode(reversePackage, "format_code_conflict");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(environmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task ImportRejectsMaterialFormatAliasesThatCollapseWithinOneSourceOwner()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-format-alias-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationFormatAlias_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var package = CreateMinimalPackage(
+                root,
+                """
+                CREATE TABLE [material_formats]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL,
+                    [libraryOrganization] TEXT, [code] TEXT NOT NULL, [label] TEXT NOT NULL,
+                    [enabled] INTEGER NOT NULL, [sortOrder] INTEGER NOT NULL,
+                    UNIQUE ([scope], [libraryOrganization], [code])
+                );
+                INSERT INTO [material_formats] VALUES
+                    ('fmt-book', 'system', NULL, 'book', 'Book', 1, 10),
+                    ('fmt-zero', 'system', NULL, '0', 'Numeric Book Alias', 1, 20);
+                """);
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(environmentName, target);
+            var reportPath = Path.Combine(root, "report.json");
+            using var error = new StringWriter();
+            Assert.AreEqual(1, RunImport(package, reportPath, environmentName, tenantId, error));
+            StringAssert.Contains(error.ToString(), "format_code_conflict");
+            Assert.IsFalse(File.Exists(reportPath));
+            Assert.IsFalse(File.Exists(reportPath + ".pending"));
+            await AssertFreshImportTargetAsync(target);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(environmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task CommittedImportWithFailedReportPromotionRecoversReadOnlyAndIdempotently()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-report-recovery-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationReportRecovery_{Guid.NewGuid():N}";
+        var rolledBackDatabaseName = $"AsapMigrationReportRolledBack_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var connectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var rolledBackEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var rolledBackTarget = new SqlConnectionStringBuilder(master) { InitialCatalog = rolledBackDatabaseName }.ConnectionString;
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        try
+        {
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
+            var package = CreateMinimalPackage(
+                Path.Combine(root, "package-source"),
+                """
+                INSERT INTO [polaris_organizations] VALUES
+                    ('pb-org-3', '3', 'Audit Format Library', 'AUDIT', 1, 2, 1);
+                CREATE TABLE [title_requests]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY, [libraryOrgId] TEXT NOT NULL, [formatRef] TEXT,
+                    [format] TEXT, [barcode] TEXT NOT NULL, [title] TEXT NOT NULL, [autohold] INTEGER NOT NULL,
+                    [status] TEXT NOT NULL, [claimedByStaffUserId] TEXT, [claimedByDisplayName] TEXT,
+                    [claimedAt] TEXT, [claimType] TEXT, [claimRuleId] TEXT, [bibid] INTEGER,
+                    [isbnCheckStatus] TEXT, [identifier] TEXT, [lastChecked] TEXT,
+                    [created] TEXT NOT NULL, [updated] TEXT NOT NULL
+                );
+                INSERT INTO [title_requests] VALUES
+                    ('request-recovery-claim', '2', NULL, 'book', 'A20000000000999', 'Recovery claim', 0,
+                     'suggestion', 'pb-staff-1', 'Source Administrator', '2029-03-01T10:00:00Z', 'manual', NULL,
+                     9001, 'found', '9780000000001', '2029-03-02T00:00:00Z',
+                     '2029-03-01T00:00:00Z', '2029-03-02T00:00:00Z');
+                CREATE TABLE [patron_settings_overrides]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY, [orgId] TEXT NOT NULL,
+                    [patronFormatRules] TEXT, [additionalFieldDefinitions] TEXT,
+                    [created] TEXT, [updated] TEXT
+                );
+                INSERT INTO [patron_settings_overrides] VALUES
+                    ('fields-override', '2', '{"book":{"customFields":{"audience":{"mode":"optional","label":"Audience rule"}}}}',
+                     '[{"key":"audience","type":"text","label":"Audience","enabled":true,"sortOrder":10}]',
+                     '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('format-override', '3', '{"book":{"fields":{"author":{"mode":"hidden"}}}}', NULL,
+                     '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                """);
+            var precommitReportPath = Path.Combine(root, "precommit-report.json");
+            Directory.CreateDirectory(precommitReportPath + ".pending");
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunImport(package, precommitReportPath, connectionEnvironmentName, tenantId, error));
+                StringAssert.Contains(error.ToString(), "import_report_prepare_failed");
+            }
+            Assert.IsFalse(File.Exists(precommitReportPath));
+            Assert.IsFalse(File.Exists(precommitReportPath + ".pending.tmp"));
+            await AssertFreshImportTargetAsync(target);
+            Directory.Delete(precommitReportPath + ".pending");
+
+            var reportPath = Path.Combine(root, "blocked-report-path");
+            Directory.CreateDirectory(reportPath);
+
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunImport(package, reportPath, connectionEnvironmentName, tenantId, error));
+                StringAssert.Contains(error.ToString(), "import_committed_report_failed");
+                StringAssert.Contains(error.ToString(), "SQL import committed");
+            }
+
+            var pendingPath = reportPath + ".pending";
+            Assert.IsTrue(File.Exists(pendingPath));
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                Assert.AreEqual(3, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[Organization] WHERE [OrganizationCodeId] IS NOT NULL;"));
+                Assert.AreEqual(4, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] = N'organization';"));
+            }
+
+            var validPending = File.ReadAllText(pendingPath);
+            var tamperedPending = JsonNode.Parse(validPending)!.AsObject();
+            tamperedPending["packageIdentitySha256"] = new string('0', 64);
+            File.WriteAllText(pendingPath, tamperedPending.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "reconciliation_report_mismatch");
+            }
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+
+            var targetIdentityTamper = JsonNode.Parse(validPending)!.AsObject();
+            targetIdentityTamper["targetIdentitySha256"] = new string('0', 64);
+            File.WriteAllText(pendingPath, targetIdentityTamper.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "reconciliation_report_target_mismatch");
+            }
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+
+            var missingVersion = JsonNode.Parse(validPending)!.AsObject();
+            missingVersion.Remove("reportVersion");
+            var wrongCountShape = JsonNode.Parse(validPending)!.AsObject();
+            wrongCountShape["targetCounts"] = "not-an-object";
+            foreach (var malformedReport in new[] { "{", missingVersion.ToJsonString(), wrongCountShape.ToJsonString() })
+            {
+                File.WriteAllText(pendingPath, malformedReport, new UTF8Encoding(false));
+                var unchangedSqlFingerprint = ComputeTargetFingerprintForTest(target);
+                using var error = new StringWriter();
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "reconciliation_report_invalid");
+                Assert.AreEqual(unchangedSqlFingerprint, ComputeTargetFingerprintForTest(target), "Malformed reports must be rejected before target verification or mutation.");
+                Assert.IsTrue(File.Exists(pendingPath));
+            }
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+
+            var requiredAuditSections = new[]
+            {
+                "claimReconciliation", "placementReconciliation", "bibAuthorityReconciliation", "sourceToTargetReconciliation"
+            };
+            foreach (var section in requiredAuditSections)
+            {
+                var missingSection = JsonNode.Parse(validPending)!.AsObject();
+                missingSection.Remove(section);
+                var wrongKindSection = JsonNode.Parse(validPending)!.AsObject();
+                wrongKindSection[section] = "missing-audit-object";
+                foreach (var altered in new[] { missingSection, wrongKindSection })
+                {
+                    File.WriteAllText(pendingPath, altered.ToJsonString(), new UTF8Encoding(false));
+                    var unchangedSqlFingerprint = ComputeTargetFingerprintForTest(target);
+                    using var error = new StringWriter();
+                    Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                    StringAssert.Contains(error.ToString(), "reconciliation_report_invalid");
+                    Assert.AreEqual(unchangedSqlFingerprint, ComputeTargetFingerprintForTest(target));
+                    Assert.IsTrue(File.Exists(pendingPath));
+                    Assert.IsFalse(File.Exists(reportPath));
+                }
+            }
+
+            var falseSourceAudit = JsonNode.Parse(validPending)!.AsObject();
+            falseSourceAudit["sourceToTargetReconciliation"]!["passed"] = false;
+            var changedConfigurationFieldCount = JsonNode.Parse(validPending)!.AsObject();
+            changedConfigurationFieldCount["sourceToTargetReconciliation"]!["configurationFieldsChecked"] = 999999;
+            var changedConfigurationRelationshipCount = JsonNode.Parse(validPending)!.AsObject();
+            changedConfigurationRelationshipCount["sourceToTargetReconciliation"]!["configurationRelationshipsChecked"] = 999999;
+            var contradictorySourceCount = JsonNode.Parse(validPending)!.AsObject();
+            contradictorySourceCount["sourceToTargetReconciliation"]!["titleRequests"] = 999;
+            var contradictoryPlacementCount = JsonNode.Parse(validPending)!.AsObject();
+            contradictoryPlacementCount["placementReconciliation"]!["protectedRequests"] = 999;
+            var clearedTransformations = JsonNode.Parse(validPending)!.AsObject();
+            clearedTransformations["transformations"] = new JsonArray();
+            var changedImportedSourceCount = JsonNode.Parse(validPending)!.AsObject();
+            changedImportedSourceCount["importedCounts"]!["staff_users"] = 0;
+            var missingDerivedImportedCount = JsonNode.Parse(validPending)!.AsObject();
+            missingDerivedImportedCount["importedCounts"]!.AsObject().Remove("title_request_bib_authority_automation_derived");
+            var missingSourceAuditCount = JsonNode.Parse(validPending)!.AsObject();
+            missingSourceAuditCount["sourceToTargetReconciliation"]!.AsObject().Remove("titleRequests");
+            foreach (var altered in new[]
+                     {
+                         falseSourceAudit, changedConfigurationFieldCount, changedConfigurationRelationshipCount,
+                         contradictorySourceCount, contradictoryPlacementCount,
+                         clearedTransformations, changedImportedSourceCount, missingDerivedImportedCount, missingSourceAuditCount
+                     })
+            {
+                File.WriteAllText(pendingPath, altered.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+                var unchangedSqlFingerprint = ComputeTargetFingerprintForTest(target);
+                using var error = new StringWriter();
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "reconciliation_report_");
+                Assert.AreEqual(unchangedSqlFingerprint, ComputeTargetFingerprintForTest(target));
+                Assert.IsTrue(File.Exists(pendingPath));
+                Assert.IsFalse(File.Exists(reportPath));
+            }
+
+            var malformedTransformationCases = new[]
+            {
+                (Entity: "staff_user", Property: "targetWeeklyEligible", WrongKind: "string"),
+                (Entity: "title_request_bib_authority", Property: "classification", WrongKind: "number"),
+                (Entity: "patron_custom_fields", Property: "downgradedRequiredSelectRules", WrongKind: "string"),
+                (Entity: "patron_format_rules", Property: "formats", WrongKind: "string"),
+                (Entity: "title_request_isbn_status", Property: "targetStatus", WrongKind: "number"),
+                (Entity: "placed_bib_protection", Property: "hints", WrongKind: "string"),
+                (Entity: "placed_bib_protection", Property: "bibSources", WrongKind: "string")
+            };
+            foreach (var (entity, property, wrongKind) in malformedTransformationCases)
+            {
+                foreach (var removeProperty in new[] { true, false })
+                {
+                    var altered = JsonNode.Parse(validPending)!.AsObject();
+                    var transformation = altered["transformations"]!.AsArray()
+                        .Single(item => item!["entity"]!.GetValue<string>() == entity)!.AsObject();
+                    if (removeProperty)
+                    {
+                        transformation.Remove(property);
+                    }
+                    else if (wrongKind == "string")
+                    {
+                        transformation[property] = "wrong-kind";
+                    }
+                    else if (wrongKind == "number")
+                    {
+                        transformation[property] = JsonValue.Create(17);
+                    }
+                    else
+                    {
+                        Assert.Fail($"Unsupported wrong-kind fixture for {entity}.{property}.");
+                    }
+
+                    File.WriteAllText(pendingPath, altered.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+                    var unchangedSqlFingerprint = ComputeTargetFingerprintForTest(target);
+                    using var error = new StringWriter();
+                    Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                    StringAssert.Contains(error.ToString(), "reconciliation_report_invalid");
+                    Assert.AreEqual(unchangedSqlFingerprint, ComputeTargetFingerprintForTest(target));
+                    Assert.IsTrue(File.Exists(pendingPath));
+                    Assert.IsFalse(File.Exists(reportPath));
+                }
+            }
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+
+            var wrongClaimLibrary = JsonNode.Parse(validPending)!.AsObject();
+            wrongClaimLibrary["claimReconciliation"]!["titleRequests"]![0]!["libraryOrganizationId"] = 20;
+            var wrongClaimStatus = JsonNode.Parse(validPending)!.AsObject();
+            wrongClaimStatus["claimReconciliation"]!["titleRequests"]![0]!["status"] = "outstanding_purchase";
+            foreach (var altered in new[] { wrongClaimLibrary, wrongClaimStatus })
+            {
+                File.WriteAllText(pendingPath, altered.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+                var unchangedSqlFingerprint = ComputeTargetFingerprintForTest(target);
+                using var error = new StringWriter();
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "Claim-reconciliation groups differ from source library, status, and attribution inputs.");
+                Assert.AreEqual(unchangedSqlFingerprint, ComputeTargetFingerprintForTest(target));
+                Assert.IsTrue(File.Exists(pendingPath));
+                Assert.IsFalse(File.Exists(reportPath));
+            }
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+
+            const string originalCiphertext = "migration-fingerprint-ciphertext-original";
+            const string changedCiphertext = "migration-fingerprint-ciphertext-changed";
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var set = connection.CreateCommand();
+                set.CommandText = "UPDATE [asap].[PolarisSettings] SET [ProtectedApiKey] = @ciphertext WHERE [OrganizationId] = 1;";
+                set.Parameters.AddWithValue("@ciphertext", originalCiphertext);
+                Assert.AreEqual(1, await set.ExecuteNonQueryAsync());
+            }
+            var ciphertextFingerprint = ComputeTargetFingerprintForTest(target);
+            var ciphertextPending = JsonNode.Parse(validPending)!.AsObject();
+            ciphertextPending["targetFingerprintSha256"] = ciphertextFingerprint;
+            File.WriteAllText(pendingPath, ciphertextPending.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var mutate = connection.CreateCommand();
+                mutate.CommandText = "UPDATE [asap].[PolarisSettings] SET [ProtectedApiKey] = @ciphertext WHERE [OrganizationId] = 1;";
+                mutate.Parameters.AddWithValue("@ciphertext", changedCiphertext);
+                Assert.AreEqual(1, await mutate.ExecuteNonQueryAsync());
+            }
+            var changedCiphertextFingerprint = ComputeTargetFingerprintForTest(target);
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "Target SQL state changed after the successful import reconciliation.");
+            }
+            Assert.AreEqual(changedCiphertextFingerprint, ComputeTargetFingerprintForTest(target), "Report recovery must not rewrite protected values.");
+            Assert.IsFalse(File.ReadAllText(pendingPath).Contains(originalCiphertext, StringComparison.Ordinal));
+            Assert.IsFalse(File.ReadAllText(pendingPath).Contains(changedCiphertext, StringComparison.Ordinal));
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var restore = connection.CreateCommand();
+                restore.CommandText = "UPDATE [asap].[PolarisSettings] SET [ProtectedApiKey] = NULL WHERE [OrganizationId] = 1;";
+                Assert.AreEqual(1, await restore.ExecuteNonQueryAsync());
+            }
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var insert = connection.CreateCommand();
+                insert.CommandText = "INSERT INTO [asap].[QueueProgress] ([QueueName], [ScopeOrganizationId]) VALUES (N'IdentifierProcessing', 1);";
+                await insert.ExecuteNonQueryAsync();
+            }
+            var queuedFingerprint = ComputeTargetFingerprintForTest(target);
+            var queuedPending = JsonNode.Parse(validPending)!.AsObject();
+            queuedPending["targetCounts"]!["queue_progress"] = 1;
+            queuedPending["targetFingerprintSha256"] = queuedFingerprint;
+            File.WriteAllText(pendingPath, queuedPending.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "target count queue_progress differs from source-derived expectations");
+            }
+            Assert.AreEqual(queuedFingerprint, ComputeTargetFingerprintForTest(target), "Recovery must reject importer-excluded queue state without mutating it.");
+            Assert.IsTrue(File.Exists(pendingPath));
+            Assert.IsFalse(File.Exists(reportPath));
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var remove = connection.CreateCommand();
+                remove.CommandText = "DELETE FROM [asap].[QueueProgress] WHERE [QueueName] = N'IdentifierProcessing' AND [ScopeOrganizationId] = 1;";
+                Assert.AreEqual(1, await remove.ExecuteNonQueryAsync());
+            }
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+
+            long extraRequestId;
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var insert = connection.CreateCommand();
+                insert.CommandText = """
+                    DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book');
+                    DECLARE @now datetime2(7) = SYSUTCDATETIME();
+                    INSERT INTO [asap].[TitleRequest]
+                        ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [CreatedUtc], [UpdatedUtc])
+                    OUTPUT inserted.[Id]
+                    VALUES (2, N'recovery-extra-request', N'Unmapped recovery row', 0, @formatId, N'suggestion', @now, @now);
+                    """;
+                extraRequestId = Convert.ToInt64(await insert.ExecuteScalarAsync());
+            }
+            var extraRequestFingerprint = ComputeTargetFingerprintForTest(target);
+            var extraRequestPending = JsonNode.Parse(validPending)!.AsObject();
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                extraRequestPending["targetCounts"]!["title_requests"] = await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest];");
+            }
+            extraRequestPending["targetFingerprintSha256"] = extraRequestFingerprint;
+            File.WriteAllText(pendingPath, extraRequestPending.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "Target TitleRequest population contains rows outside the immutable source package.");
+            }
+            Assert.AreEqual(extraRequestFingerprint, ComputeTargetFingerprintForTest(target), "Recovery must not delete an unmapped ordinary request.");
+            Assert.IsTrue(File.Exists(pendingPath));
+            Assert.IsFalse(File.Exists(reportPath));
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var remove = connection.CreateCommand();
+                remove.CommandText = "DELETE FROM [asap].[TitleRequest] WHERE [Id] = @id;";
+                remove.Parameters.AddWithValue("@id", extraRequestId);
+                Assert.AreEqual(1, await remove.ExecuteNonQueryAsync());
+            }
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+
+            long extraStaffUserId;
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var insert = connection.CreateCommand();
+                insert.CommandText = "INSERT INTO [asap].[StaffUser] ([UserPrincipalName], [NormalizedUserPrincipalName], [Role], [OrganizationId], [IsActive]) OUTPUT inserted.[Id] VALUES (N'extra-recovery@example.org', N'EXTRA-RECOVERY@EXAMPLE.ORG', N'staff', 2, 0);";
+                extraStaffUserId = Convert.ToInt64(await insert.ExecuteScalarAsync());
+            }
+            var extraStaffFingerprint = ComputeTargetFingerprintForTest(target);
+            var extraStaffPending = JsonNode.Parse(validPending)!.AsObject();
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                extraStaffPending["targetCounts"]!["staff_users"] = await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[StaffUser];");
+            }
+            extraStaffPending["targetFingerprintSha256"] = extraStaffFingerprint;
+            File.WriteAllText(pendingPath, extraStaffPending.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "Target StaffUser population contains rows outside the source mapping and bootstrap transformation.");
+            }
+            Assert.AreEqual(extraStaffFingerprint, ComputeTargetFingerprintForTest(target), "Recovery must not remove an unmapped staff row.");
+            Assert.IsTrue(File.Exists(pendingPath));
+            Assert.IsFalse(File.Exists(reportPath));
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var remove = connection.CreateCommand();
+                remove.CommandText = "DELETE FROM [asap].[StaffUser] WHERE [Id] = @id;";
+                remove.Parameters.AddWithValue("@id", extraStaffUserId);
+                Assert.AreEqual(1, await remove.ExecuteNonQueryAsync());
+            }
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var inactivate = connection.CreateCommand();
+                inactivate.CommandText = "UPDATE [asap].[StaffUser] SET [IsActive] = 0 WHERE [NormalizedUserPrincipalName] = N'SOURCE-ADMIN@EXAMPLE.ORG';";
+                Assert.AreEqual(1, await inactivate.ExecuteNonQueryAsync());
+            }
+            var inactiveStaffFingerprint = ComputeTargetFingerprintForTest(target);
+            var inactiveStaffPending = JsonNode.Parse(validPending)!.AsObject();
+            inactiveStaffPending["targetFingerprintSha256"] = inactiveStaffFingerprint;
+            File.WriteAllText(pendingPath, inactiveStaffPending.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "Mapped StaffUser identity or authorization differs from the immutable source package.");
+            }
+            Assert.AreEqual(inactiveStaffFingerprint, ComputeTargetFingerprintForTest(target), "Recovery must not reactivate a source staff row.");
+            Assert.IsTrue(File.Exists(pendingPath));
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var reactivate = connection.CreateCommand();
+                reactivate.CommandText = "UPDATE [asap].[StaffUser] SET [IsActive] = 1 WHERE [NormalizedUserPrincipalName] = N'SOURCE-ADMIN@EXAMPLE.ORG';";
+                Assert.AreEqual(1, await reactivate.ExecuteNonQueryAsync());
+            }
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+
+            DeployDacpac(master, rolledBackDatabaseName);
+            Environment.SetEnvironmentVariable(rolledBackEnvironmentName, rolledBackTarget);
+            var rolledBackFingerprint = ComputeTargetFingerprintForTest(rolledBackTarget);
+            var rollbackPending = JsonNode.Parse(validPending)!.AsObject();
+            rollbackPending["targetFingerprintSha256"] = rolledBackFingerprint;
+            rollbackPending["targetIdentitySha256"] = ComputeTargetIdentityForTest(rolledBackTarget);
+            File.WriteAllText(pendingPath, rollbackPending.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, rolledBackEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "No target mapping exists for source organization");
+            }
+            Assert.AreEqual(rolledBackFingerprint, ComputeTargetFingerprintForTest(rolledBackTarget), "Recovery must not populate a rolled-back target.");
+            await AssertFreshImportTargetAsync(rolledBackTarget);
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var corrupt = connection.CreateCommand();
+                corrupt.CommandText = "UPDATE [asap].[Organization] SET [IsActive] = 0 WHERE [Id] = 2;";
+                await corrupt.ExecuteNonQueryAsync();
+            }
+            var corruptFingerprint = ComputeTargetFingerprintForTest(target);
+            var corruptPending = JsonNode.Parse(validPending)!.AsObject();
+            corruptPending["targetFingerprintSha256"] = corruptFingerprint;
+            File.WriteAllText(pendingPath, corruptPending.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "Target organization activity differs");
+            }
+            Assert.AreEqual(corruptFingerprint, ComputeTargetFingerprintForTest(target), "Failed recovery must not change the corrupt target.");
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var restore = connection.CreateCommand();
+                restore.CommandText = "UPDATE [asap].[Organization] SET [IsActive] = 1 WHERE [Id] = 2;";
+                await restore.ExecuteNonQueryAsync();
+            }
+
+            long branchMappingId;
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                branchMappingId = await ReadLongAsync(connection,
+                    "SELECT [NewId] FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] = N'organization' AND [PocketBaseId] = N'pb-org-20';");
+                await using var remove = connection.CreateCommand();
+                remove.CommandText = "DELETE FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] = N'organization' AND [PocketBaseId] = N'pb-org-20';";
+                await remove.ExecuteNonQueryAsync();
+            }
+            var partialFingerprint = ComputeTargetFingerprintForTest(target);
+            var partialPending = JsonNode.Parse(validPending)!.AsObject();
+            partialPending["targetFingerprintSha256"] = partialFingerprint;
+            File.WriteAllText(pendingPath, partialPending.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "No target mapping exists for source organization");
+            }
+            Assert.AreEqual(partialFingerprint, ComputeTargetFingerprintForTest(target), "Failed recovery must not repair a partial target.");
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var restore = connection.CreateCommand();
+                restore.CommandText = "INSERT INTO [asap].[LegacyPocketBaseMapping] ([EntityType], [PocketBaseId], [NewId]) VALUES (N'organization', N'pb-org-20', @id);";
+                restore.Parameters.AddWithValue("@id", branchMappingId);
+                await restore.ExecuteNonQueryAsync();
+            }
+
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var insert = connection.CreateCommand();
+                insert.CommandText = "INSERT INTO [asap].[Organization] ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive]) VALUES (21, N'Unmapped branch', 3, 2, 0);";
+                await insert.ExecuteNonQueryAsync();
+            }
+            var extraOrganizationFingerprint = ComputeTargetFingerprintForTest(target);
+            var extraOrganizationPending = JsonNode.Parse(validPending)!.AsObject();
+            extraOrganizationPending["targetFingerprintSha256"] = extraOrganizationFingerprint;
+            File.WriteAllText(pendingPath, extraOrganizationPending.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
+                StringAssert.Contains(error.ToString(), "Target organization population includes rows outside the system seed and source native identities.");
+            }
+            Assert.AreEqual(extraOrganizationFingerprint, ComputeTargetFingerprintForTest(target), "Recovery must not remove an unmapped organization row.");
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                await using var remove = connection.CreateCommand();
+                remove.CommandText = "DELETE FROM [asap].[Organization] WHERE [Id] = 21;";
+                await remove.ExecuteNonQueryAsync();
+            }
+
+            File.WriteAllText(pendingPath, validPending, new UTF8Encoding(false));
+            Directory.Delete(reportPath);
+
+            var fingerprintBefore = ComputeTargetFingerprintForTest(target);
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(0, RunRecoverReport(package, reportPath, connectionEnvironmentName, error), error.ToString());
+            }
+            Assert.IsTrue(File.Exists(reportPath));
+            Assert.IsFalse(File.Exists(pendingPath));
+            using (var report = JsonDocument.Parse(File.ReadAllText(reportPath)))
+            {
+                Assert.AreEqual("recovered", report.RootElement.GetProperty("reportState").GetString());
+                Assert.IsTrue(report.RootElement.GetProperty("reconciliationPassed").GetBoolean());
+                Assert.AreEqual(1, report.RootElement.GetProperty("importedCounts").GetProperty("staff_users").GetInt32());
+                var staffUserTransformations = report.RootElement.GetProperty("transformations").EnumerateArray()
+                    .Where(item => item.GetProperty("entity").GetString() == "staff_user")
+                    .ToArray();
+                Assert.AreEqual(1, staffUserTransformations.Length);
+                Assert.AreEqual("pb-staff-1", staffUserTransformations[0].GetProperty("sourceId").GetString());
+            }
+            Assert.AreEqual(fingerprintBefore, ComputeTargetFingerprintForTest(target), "Recovery must not mutate SQL state.");
+
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(0, RunRecoverReport(package, reportPath, connectionEnvironmentName, error), error.ToString());
+            }
+            Assert.AreEqual(fingerprintBefore, ComputeTargetFingerprintForTest(target), "Repeated recovery must remain read-only.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            Environment.SetEnvironmentVariable(rolledBackEnvironmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            await DropDatabaseAsync(master, rolledBackDatabaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ImportReportsCommittedWhenPostCommitSqlVerificationFailsAndRecoversReadOnly()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-postcommit-sql-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationPostCommitSql_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var connectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        var databaseOffline = false;
+        try
+        {
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
+            var package = CreateMinimalPackage(Path.Combine(root, "package-source"));
+            var reportPath = Path.Combine(root, "report.json");
+            var options = new MigrationImportOptions(
+                package,
+                target,
+                new HashSet<Guid> { tenantId },
+                reportPath,
+                ExternalConfigurationPath(package));
+            var importWithCommitHook = typeof(MigrationImporter).GetMethod(
+                "Import",
+                BindingFlags.NonPublic | BindingFlags.Static,
+                binder: null,
+                types: [typeof(MigrationImportOptions), typeof(Action)],
+                modifiers: null) ?? throw new InvalidOperationException("The post-commit regression hook is missing.");
+            TargetInvocationException? invocationError = null;
+            try
+            {
+                importWithCommitHook.Invoke(null,
+                [
+                    options,
+                    (Action)(() =>
+                    {
+                        SetDatabaseOnline(master, databaseName, online: false);
+                        databaseOffline = true;
+                    })
+                ]);
+            }
+            catch (TargetInvocationException exception)
+            {
+                invocationError = exception;
+            }
+            finally
+            {
+                if (databaseOffline)
+                {
+                    SetDatabaseOnline(master, databaseName, online: true);
+                    databaseOffline = false;
+                }
+            }
+
+            Assert.IsNotNull(invocationError, "The post-commit verifier should fail while the target database is offline.");
+            var committedError = invocationError?.InnerException as MigrationOperationException;
+            Assert.IsNotNull(committedError);
+            Assert.AreEqual("import_committed_report_failed", committedError!.Code);
+            Assert.IsFalse(File.Exists(reportPath));
+            var pendingPath = reportPath + ".pending";
+            Assert.IsTrue(File.Exists(pendingPath));
+            await using (var connection = new SqlConnection(target))
+            {
+                await connection.OpenAsync();
+                Assert.AreEqual(2, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[Organization] WHERE [OrganizationCodeId] IS NOT NULL;"));
+                Assert.AreEqual(3, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] = N'organization';"));
+            }
+
+            var fingerprintBeforeRecovery = ComputeTargetFingerprintForTest(target);
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(0, RunRecoverReport(package, reportPath, connectionEnvironmentName, error), error.ToString());
+            }
+            Assert.AreEqual(fingerprintBeforeRecovery, ComputeTargetFingerprintForTest(target), "Report recovery must not mutate committed SQL state.");
+            using var report = JsonDocument.Parse(File.ReadAllText(reportPath));
+            Assert.AreEqual("recovered", report.RootElement.GetProperty("reportState").GetString());
+            Assert.IsTrue(report.RootElement.GetProperty("reconciliationPassed").GetBoolean());
+        }
+        finally
+        {
+            if (databaseOffline)
+            {
+                SetDatabaseOnline(master, databaseName, online: true);
+            }
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            await DropDatabaseAsync(master, databaseName);
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1848,7 +3572,7 @@ public sealed class MigrationCliTests
                 }
             }
             cases.Add(("event", """{"bibId":"9001","bibId":"9002"}""", "source_json_invalid"));
-            cases.Add(("event", """{"bibId":"9001","BibID":"9002"}""", "placed_bib_conflict"));
+            cases.Add(("event", """{"bibId":"9001","BibID":"9002"}""", "source_json_invalid"));
             foreach (var (boundary, bib, expectedError) in cases)
             {
                 var caseRoot = Path.Combine(root, $"case-{cases.IndexOf((boundary, bib, expectedError))}");
@@ -1948,7 +3672,7 @@ public sealed class MigrationCliTests
                 root,
                 """
                 UPDATE [polaris_organizations] SET [enabledForPatrons] = 0 WHERE [id] = 'pb-org-2';
-                INSERT INTO [polaris_organizations] VALUES ('pb-org-3', '3', 'Other Library', 'OTHER', 1);
+                INSERT INTO [polaris_organizations] VALUES ('pb-org-3', '3', 'Other Library', 'OTHER', 1, 2, 1);
                 INSERT INTO [staff_users] VALUES
                     ('pb-staff-same', 'same@example.org', 'same', 'Same Library', 'staff', 1, '2', 0, NULL, 0, 0, 0),
                     ('pb-staff-inactive', 'foreign@staff.asap.local', 'inactive', 'Inactive Selector', 'staff', 0, '2', 0, NULL, 0, 0, 0),
@@ -2470,7 +4194,7 @@ public sealed class MigrationCliTests
             var package = CreateMinimalPackage(
                 root,
                 """
-                INSERT INTO [polaris_organizations] VALUES ('pb-org-3', '3', 'Modern Blank Library', 'MBL', 1);
+                INSERT INTO [polaris_organizations] VALUES ('pb-org-3', '3', 'Modern Blank Library', 'MBL', 1, 2, 1);
                 CREATE TABLE [_collections] ([id] TEXT NOT NULL PRIMARY KEY, [name] TEXT NOT NULL);
                 INSERT INTO [_collections] VALUES
                     ('pbc-ui-settings', 'ui_settings'),
@@ -2589,6 +4313,7 @@ public sealed class MigrationCliTests
             var package = CreateMinimalPackage(
                 root,
                 $$"""
+                INSERT INTO [polaris_organizations] VALUES ('pb-org-3', '3', 'Other Library', 'OTHER', 1, 2, 1);
                 CREATE TABLE [additional_copy_requests]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY,
@@ -2614,11 +4339,30 @@ public sealed class MigrationCliTests
                     [claimedByDisplayName] TEXT,
                     [claimedAt] TEXT
                 );
+                CREATE TABLE [material_formats]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY,
+                    [scope] TEXT NOT NULL,
+                    [libraryOrganization] TEXT,
+                    [code] TEXT NOT NULL,
+                    [label] TEXT NOT NULL,
+                    [enabled] INTEGER NOT NULL,
+                    [sortOrder] INTEGER NOT NULL
+                );
+                INSERT INTO [material_formats] VALUES
+                    ('fmt-local', 'library', 'pb-org-2', 'local', 'Local format', 1, 20),
+                    ('fmt-foreign', 'library', 'pb-org-3', 'foreign', 'Foreign format', 1, 30);
                 INSERT INTO [additional_copy_requests] VALUES
                     ('copy-boundary', '', '2', 'Frozen library', '{{bibId}}', 'Frozen title', 'Frozen author',
                      'book', 'COPY-BOUNDARY', '{{publication}}', 'closed', '<p>Frozen notes</p>',
                      'pb-staff-1', 'Historical creator', '', '', '2030-01-03T06:07:08Z',
-                     '2030-01-02T03:04:05Z', NULL, '', '', '');
+                     '2030-01-02T03:04:05Z', NULL, '', '', ''),
+                    ('copy-no-format', NULL, '2', 'Frozen library', '7001', 'No format', NULL,
+                     NULL, NULL, NULL, 'open', NULL, NULL, NULL, NULL, NULL, NULL,
+                     '2030-01-05T00:00:00Z', '2030-01-05T00:00:00Z', NULL, NULL, NULL),
+                    ('copy-library-format', NULL, '2', 'Frozen library', '7002', 'Library format', NULL,
+                     'local', NULL, NULL, 'open', NULL, NULL, NULL, NULL, NULL, NULL,
+                     '2030-01-06T00:00:00Z', '2030-01-06T00:00:00Z', NULL, NULL, NULL);
                 """);
             DeployDacpac(master, databaseName);
             var report = Path.Combine(root, "report.json");
@@ -2658,10 +4402,85 @@ public sealed class MigrationCliTests
             Assert.IsTrue(reader.IsDBNull(8));
             await reader.DisposeAsync();
 
+            var copyFormats = new Dictionary<string, (long? FormatId, int? OwnerOrganizationId, string? Code)>(StringComparer.Ordinal);
+            await using (var formatQuery = connection.CreateCommand())
+            {
+                formatQuery.CommandText =
+                    "SELECT m.[PocketBaseId], c.[MaterialFormatId], f.[OwnerOrganizationId], f.[Code] " +
+                    "FROM [asap].[LegacyPocketBaseMapping] m JOIN [asap].[AdditionalCopyRequest] c ON c.[Id] = m.[NewId] " +
+                    "LEFT JOIN [asap].[MaterialFormat] f ON f.[Id] = c.[MaterialFormatId] " +
+                    "WHERE m.[EntityType] = N'additional_copy';";
+                await using var formatReader = await formatQuery.ExecuteReaderAsync();
+                while (await formatReader.ReadAsync())
+                {
+                    copyFormats.Add(
+                        formatReader.GetString(0),
+                        (formatReader.IsDBNull(1) ? null : formatReader.GetInt64(1),
+                         formatReader.IsDBNull(2) ? null : formatReader.GetInt32(2),
+                         formatReader.IsDBNull(3) ? null : formatReader.GetString(3)));
+                }
+            }
+            Assert.AreEqual(3, copyFormats.Count);
+            var systemFormat = copyFormats["copy-boundary"];
+            Assert.AreEqual(1, systemFormat.OwnerOrganizationId);
+            Assert.AreEqual("book", systemFormat.Code);
+            Assert.IsNull(copyFormats["copy-no-format"].FormatId);
+            Assert.IsNull(copyFormats["copy-no-format"].OwnerOrganizationId);
+            Assert.AreEqual(2, copyFormats["copy-library-format"].OwnerOrganizationId);
+            Assert.AreEqual("local", copyFormats["copy-library-format"].Code);
+            Assert.AreEqual(1, await ScalarAsync(connection, """
+                SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] m
+                JOIN [asap].[MaterialFormat] f ON f.[Id] = m.[NewId]
+                WHERE m.[EntityType] = N'material_format' AND m.[PocketBaseId] = N'fmt-local'
+                  AND f.[OwnerOrganizationId] = 2 AND f.[Code] = N'local';
+                """));
+
+            var foreignFormatId = await ReadLongAsync(connection,
+                "SELECT [NewId] FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] = N'material_format' AND [PocketBaseId] = N'fmt-foreign';");
+            Assert.IsTrue(foreignFormatId > 0);
+            Assert.AreEqual(1, await ScalarAsync(connection,
+                "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [Id] = " + foreignFormatId.ToString(System.Globalization.CultureInfo.InvariantCulture) + " AND [OwnerOrganizationId] = 3 AND [Code] = N'foreign';"));
+            await using (var attachForeignFormat = connection.CreateCommand())
+            {
+                attachForeignFormat.CommandText = """
+                    UPDATE c SET [MaterialFormatId] = @formatId
+                    FROM [asap].[AdditionalCopyRequest] c
+                    JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id]
+                    WHERE m.[PocketBaseId] = N'copy-boundary';
+                    """;
+                attachForeignFormat.Parameters.AddWithValue("@formatId", foreignFormatId);
+                Assert.AreEqual(1, await attachForeignFormat.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(report, target);
+            var foreignFormatFingerprint = ComputeTargetFingerprintForTest(target);
+            using (var reconcileError = new StringWriter())
+            {
+                Assert.AreEqual(1, RunReconcile(package, report, environmentName, reconcileError));
+                StringAssert.Contains(reconcileError.ToString(), "target additional-copy request does not preserve its source relation, format identity, and library ownership");
+            }
+            Assert.AreEqual(foreignFormatFingerprint, ComputeTargetFingerprintForTest(target), "Reconciliation must not repair a foreign format relationship.");
+            await using (var restoreFormat = connection.CreateCommand())
+            {
+                restoreFormat.CommandText = """
+                    UPDATE c SET [MaterialFormatId] = @expectedFormatId
+                    FROM [asap].[AdditionalCopyRequest] c
+                    JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'additional_copy' AND m.[NewId] = c.[Id]
+                    WHERE m.[PocketBaseId] = N'copy-boundary';
+                    """;
+                restoreFormat.Parameters.AddWithValue("@expectedFormatId", systemFormat.FormatId!.Value);
+                await restoreFormat.ExecuteNonQueryAsync();
+            }
+            RefreshReportFingerprint(report, target);
+            using (var reconcileRestored = new StringWriter())
+            {
+                Assert.AreEqual(0, RunReconcile(package, report, environmentName, reconcileRestored), reconcileRestored.ToString());
+            }
+
             using var reportDocument = JsonDocument.Parse(await File.ReadAllTextAsync(report));
-            Assert.AreEqual(5, reportDocument.RootElement.GetProperty("reportVersion").GetInt32());
-            Assert.AreEqual(1, reportDocument.RootElement.GetProperty("importedCounts")
+            Assert.AreEqual(6, reportDocument.RootElement.GetProperty("reportVersion").GetInt32());
+            Assert.AreEqual(3, reportDocument.RootElement.GetProperty("importedCounts")
                 .GetProperty("additional_copy_requests").GetInt32());
+            Assert.AreEqual(ComputeTargetIdentityForTest(target), reportDocument.RootElement.GetProperty("targetIdentitySha256").GetString());
             Assert.IsTrue(reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Any(item =>
                 item.GetProperty("entity").GetString() == "additional_copy_updated_timestamp" &&
                 item.GetProperty("reason").GetString() == "missing_updated_uses_created"));
@@ -2965,7 +4784,264 @@ public sealed class MigrationCliTests
         }
     }
 
-    private static string CreateMinimalPackage(
+    private static int RunImport(
+        string package,
+        string report,
+        string connectionEnvironmentName,
+        Guid tenantId,
+        StringWriter error)
+    {
+        var exitCode = MigrationCli.Run(
+            [
+                "import", "--package", package,
+                "--connection-string-env", connectionEnvironmentName,
+                "--allowed-tenant-ids", tenantId.ToString(),
+                "--report", report,
+                "--external-config", ExternalConfigurationPath(package)
+            ],
+            TextWriter.Null,
+            error);
+        if (exitCode != 0 &&
+            error.ToString().Contains("import_committed_report_failed", StringComparison.Ordinal) &&
+            File.Exists(report + ".pending"))
+        {
+            using var recoveryError = new StringWriter();
+            var recoveryExitCode = RunRecoverReport(package, report, connectionEnvironmentName, recoveryError);
+            error.WriteLine($"Pending-report recovery diagnostic (exit {recoveryExitCode}): {recoveryError.ToString().Trim()}");
+        }
+
+        return exitCode;
+    }
+
+    private static int RunReconcile(
+        string package,
+        string report,
+        string connectionEnvironmentName,
+        StringWriter error) =>
+        MigrationCli.Run(
+            [
+                "reconcile", "--package", package,
+                "--connection-string-env", connectionEnvironmentName,
+                "--report", report,
+                "--external-config", ExternalConfigurationPath(package)
+            ],
+            TextWriter.Null,
+            error);
+
+    private static int RunRecoverReport(
+        string package,
+        string report,
+        string connectionEnvironmentName,
+        StringWriter error) =>
+        MigrationCli.Run(
+            [
+                "recover-report", "--package", package,
+                "--connection-string-env", connectionEnvironmentName,
+                "--report", report,
+                "--external-config", ExternalConfigurationPath(package)
+            ],
+            TextWriter.Null,
+            error);
+
+    private static async Task AssertFreshImportTargetAsync(string connectionString)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] = 1;"));
+        Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] > 1;"));
+        Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[StaffUser];"));
+        Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping];"));
+        Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest];"));
+        Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest];"));
+    }
+
+    private static async Task<long> ReadLongAsync(SqlConnection connection, string sql)
+    {
+        await using var command = new SqlCommand(sql, connection);
+        return Convert.ToInt64(await command.ExecuteScalarAsync());
+    }
+
+    private static void RefreshReportFingerprint(string reportPath, string connectionString)
+    {
+        var fingerprint = ComputeTargetFingerprintForTest(connectionString);
+        var report = JsonNode.Parse(File.ReadAllText(reportPath))!.AsObject();
+        report["targetFingerprintSha256"] = fingerprint;
+        File.WriteAllText(
+            reportPath,
+            report.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n",
+            new UTF8Encoding(false));
+    }
+
+    private static async Task AssertFormatMappingKindDriftRejectedAsync(
+        string root,
+        string master,
+        Guid tenantId)
+    {
+        var scenarioRoot = Path.Combine(root, "format-mapping-kind");
+        Directory.CreateDirectory(scenarioRoot);
+        var databaseName = $"AsapMigrationFormatMappingKind_{Guid.NewGuid():N}";
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        try
+        {
+            var package = CreateMinimalPackage(
+                scenarioRoot,
+                """
+                CREATE TABLE [material_formats]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL,
+                    [libraryOrganization] TEXT, [code] TEXT NOT NULL, [label] TEXT NOT NULL,
+                    [enabled] INTEGER NOT NULL, [sortOrder] INTEGER NOT NULL
+                );
+                INSERT INTO [material_formats] VALUES
+                    ('library-owned-format', 'library', 'pb-org-2', 'mapping-proof', 'Mapping Proof', 1, 20);
+                """);
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(environmentName, target);
+            var reportPath = Path.Combine(scenarioRoot, "report.json");
+            using (var importError = new StringWriter())
+            {
+                Assert.AreEqual(0, RunImport(package, reportPath, environmentName, tenantId, importError), importError.ToString());
+            }
+
+            await using var connection = new SqlConnection(target);
+            await connection.OpenAsync();
+            var formatId = await ReadLongAsync(
+                connection,
+                "SELECT [NewId] FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] = N'material_format' AND [PocketBaseId] = N'library-owned-format';");
+            Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] WHERE [Id] = " + formatId + ";"));
+            await using (var changeMappingKind = connection.CreateCommand())
+            {
+                changeMappingKind.CommandText = "UPDATE [asap].[LegacyPocketBaseMapping] SET [EntityType] = N'material_format_override' WHERE [EntityType] = N'material_format' AND [PocketBaseId] = N'library-owned-format';";
+                Assert.AreEqual(1, await changeMappingKind.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(reportPath, target);
+            var refreshedReport = await File.ReadAllTextAsync(reportPath);
+            using (var reconcileError = new StringWriter())
+            {
+                Assert.AreEqual(1, RunReconcile(package, reportPath, environmentName, reconcileError));
+                StringAssert.Contains(reconcileError.ToString(), "reconciliation_failed");
+            }
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] = N'material_format_override' AND [PocketBaseId] = N'library-owned-format' AND [NewId] = " + formatId + ";"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [Id] = " + formatId + " AND [OwnerOrganizationId] = 2 AND [Code] = N'mapping-proof' AND [Label] = N'Mapping Proof';"));
+            Assert.AreEqual(refreshedReport, await File.ReadAllTextAsync(reportPath));
+
+            await using (var restoreMappingKind = connection.CreateCommand())
+            {
+                restoreMappingKind.CommandText = "UPDATE [asap].[LegacyPocketBaseMapping] SET [EntityType] = N'material_format' WHERE [EntityType] = N'material_format_override' AND [PocketBaseId] = N'library-owned-format';";
+                Assert.AreEqual(1, await restoreMappingKind.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(reportPath, target);
+            using (var validReconcileError = new StringWriter())
+            {
+                Assert.AreEqual(0, RunReconcile(package, reportPath, environmentName, validReconcileError), validReconcileError.ToString());
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(environmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            if (Directory.Exists(scenarioRoot))
+            {
+                Directory.Delete(scenarioRoot, recursive: true);
+            }
+        }
+    }
+
+    private static async Task AssertFingerprintRefreshedFormatDriftRejectedAsync(
+        SqlConnection connection,
+        string targetConnectionString,
+        string packagePath,
+        string reportPath,
+        string connectionEnvironmentName,
+        string driftSql,
+        string driftAssertionSql,
+        string restoreSql,
+        string restoredAssertionSql,
+        string expectedDiagnostic)
+    {
+        await using (var drift = connection.CreateCommand())
+        {
+            drift.CommandText = driftSql;
+            Assert.AreEqual(1, await drift.ExecuteNonQueryAsync());
+        }
+        RefreshReportFingerprint(reportPath, targetConnectionString);
+        var reportWithRefreshedFingerprint = await File.ReadAllTextAsync(reportPath);
+        using (var error = new StringWriter())
+        {
+            Assert.AreEqual(1, RunReconcile(packagePath, reportPath, connectionEnvironmentName, error));
+            StringAssert.Contains(error.ToString(), expectedDiagnostic);
+        }
+        Assert.AreEqual(1, await ScalarAsync(connection, driftAssertionSql));
+        Assert.AreEqual(reportWithRefreshedFingerprint, await File.ReadAllTextAsync(reportPath));
+
+        await using (var restore = connection.CreateCommand())
+        {
+            restore.CommandText = restoreSql;
+            Assert.AreEqual(1, await restore.ExecuteNonQueryAsync());
+        }
+        RefreshReportFingerprint(reportPath, targetConnectionString);
+        using (var valid = new StringWriter())
+        {
+            Assert.AreEqual(0, RunReconcile(packagePath, reportPath, connectionEnvironmentName, valid), valid.ToString());
+        }
+        Assert.AreEqual(1, await ScalarAsync(connection, restoredAssertionSql));
+    }
+
+    private static void AssertEquivalentReportsExceptTargetBinding(
+        string firstReportPath,
+        string firstConnectionString,
+        string secondReportPath,
+        string secondConnectionString,
+        string message)
+    {
+        var first = JsonNode.Parse(File.ReadAllText(firstReportPath))!.AsObject();
+        var second = JsonNode.Parse(File.ReadAllText(secondReportPath))!.AsObject();
+        var firstFingerprint = first["targetFingerprintSha256"]!.GetValue<string>();
+        var secondFingerprint = second["targetFingerprintSha256"]!.GetValue<string>();
+        var firstIdentity = first["targetIdentitySha256"]!.GetValue<string>();
+        var secondIdentity = second["targetIdentitySha256"]!.GetValue<string>();
+        Assert.IsTrue(IsSha256(firstFingerprint));
+        Assert.IsTrue(IsSha256(secondFingerprint));
+        Assert.IsTrue(IsSha256(firstIdentity));
+        Assert.IsTrue(IsSha256(secondIdentity));
+        Assert.AreEqual(ComputeTargetFingerprintForTest(firstConnectionString), firstFingerprint);
+        Assert.AreEqual(ComputeTargetFingerprintForTest(secondConnectionString), secondFingerprint);
+        Assert.AreEqual(ComputeTargetIdentityForTest(firstConnectionString), firstIdentity);
+        Assert.AreEqual(ComputeTargetIdentityForTest(secondConnectionString), secondIdentity);
+
+        first["targetFingerprintSha256"] = "target-fingerprint";
+        first["targetIdentitySha256"] = "target-identity";
+        second["targetFingerprintSha256"] = "target-fingerprint";
+        second["targetIdentitySha256"] = "target-identity";
+        Assert.AreEqual(first.ToJsonString(), second.ToJsonString(), message);
+    }
+
+    private static bool IsSha256(string value) =>
+        value.Length == 64 && value.All(Uri.IsHexDigit);
+
+    private static string ComputeTargetFingerprintForTest(string connectionString)
+    {
+        var method = typeof(MigrationReconciler)
+            .GetMethods(BindingFlags.Static | BindingFlags.NonPublic)
+            .Single(item => item.Name == "ComputeTargetFingerprint" &&
+                            item.GetParameters().Length == 1 &&
+                            item.GetParameters()[0].ParameterType == typeof(string));
+        return (string)method.Invoke(null, [connectionString])!;
+    }
+
+    private static string ComputeTargetIdentityForTest(string connectionString)
+    {
+        var method = typeof(MigrationReconciler).GetMethod(
+            "ComputeTargetIdentitySha256",
+            BindingFlags.Static | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(string)],
+            modifiers: null) ?? throw new InvalidOperationException("The target identity helper is missing.");
+        return (string)method.Invoke(null, [connectionString])!;
+    }
+
+    internal static string CreateMinimalPackage(
         string root,
         string additionalSql = "",
         Action<string>? prepareStorage = null)
@@ -2993,9 +5069,14 @@ public sealed class MigrationCliTests
                     [organizationId] TEXT NOT NULL,
                     [displayName] TEXT,
                     [abbreviation] TEXT,
-                    [enabledForPatrons] INTEGER NOT NULL
+                    [enabledForPatrons] INTEGER NOT NULL,
+                    [organizationCodeId] INTEGER,
+                    [parentOrganizationId] INTEGER
                 );
-                INSERT INTO [polaris_organizations] VALUES ('pb-org-2', '2', 'Test Library', 'TEST', 1);
+                INSERT INTO [polaris_organizations] VALUES
+                    ('pb-org-1', '1', 'ASAP System', 'ASAP', 0, NULL, NULL),
+                    ('pb-org-2', '2', 'Test Library', 'TEST', 1, 2, 1),
+                    ('pb-org-20', '20', 'Test Branch', 'BR', 1, 3, 2);
                 CREATE TABLE [staff_users]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY,
@@ -3141,6 +5222,39 @@ public sealed class MigrationCliTests
         entry["length"] = data.LongLength;
         entry["sha256"] = Convert.ToHexStringLower(SHA256.HashData(data));
         File.WriteAllText(manifestPath, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+    }
+
+    private static void SetPackageSourceGitSha(string package, string sourceGitSha)
+    {
+        var manifestPath = Path.Combine(package, "manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        manifest["pocketBaseSourceGitSha"] = sourceGitSha;
+        File.WriteAllText(manifestPath, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+        foreach (var relativePath in new[]
+        {
+            "effective-legacy-runtime-config.json",
+            "effective-legacy-operational-config.json"
+        })
+        {
+            var path = Path.Combine(package, relativePath);
+            var metadata = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+            metadata["capturedFromPocketBaseSha"] = sourceGitSha;
+            File.WriteAllText(path, metadata.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+            UpdateManifestEntry(package, relativePath);
+        }
+    }
+
+    private static void SetDatabaseOnline(string masterConnectionString, string databaseName, bool online)
+    {
+        using var connection = new SqlConnection(masterConnectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        var quotedName = new SqlCommandBuilder().QuoteIdentifier(databaseName);
+        command.CommandText = online
+            ? $"ALTER DATABASE {quotedName} SET ONLINE;"
+            : $"ALTER DATABASE {quotedName} SET OFFLINE WITH ROLLBACK IMMEDIATE;";
+        command.ExecuteNonQuery();
+        SqlConnection.ClearAllPools();
     }
 
     private static void AddManifestFile(string package, string relativePath, byte[] data)

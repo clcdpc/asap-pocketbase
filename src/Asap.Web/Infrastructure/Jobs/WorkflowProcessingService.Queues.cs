@@ -582,7 +582,10 @@ public sealed partial class WorkflowProcessingService
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         return await context.Organizations.AsNoTracking().AnyAsync(
-            item => item.Id == scope && item.IsActive,
+            item => item.Id == scope && item.IsActive &&
+                    (item.Id == LibraryScope.SystemOrganizationId ||
+                     item.Id > LibraryScope.SystemOrganizationId &&
+                     item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId),
             cancellationToken);
     }
 

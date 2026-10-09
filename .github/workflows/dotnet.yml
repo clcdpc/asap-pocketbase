@@ -94,9 +94,9 @@ jobs:
       - name: Run .NET and real SQL tests (non-browser partition)
         run: >-
           dotnet test --project tests/Asap.Tests/Asap.Tests.csproj
-          --configuration Release --no-build --minimum-expected-tests 784
+          --configuration Release --no-build --minimum-expected-tests 910
           --filter
-          'FullyQualifiedName!~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport&FullyQualifiedName!~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers&FullyQualifiedName!~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures'
+          'FullyQualifiedName!~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport&FullyQualifiedName!~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers&FullyQualifiedName!~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures&FullyQualifiedName!~PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses&FullyQualifiedName!~StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp&FullyQualifiedName!~SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp'
 
       - name: Run legacy/frontend unit tests
         run: npm test
@@ -222,7 +222,7 @@ jobs:
             versionOrLabel = $env:DEPLOYMENT_LABEL
             commitSha = $env:GITHUB_SHA
             buildUtc = $buildUtc
-            applicationSchemaVersion = 10
+            applicationSchemaVersion = 12
             hangfireSchemaVersion = 9
             dacpacSha256 = $dacpacHash
             webPayloadSha256 = $webIdentityHash

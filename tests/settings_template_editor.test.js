@@ -31,39 +31,67 @@ const { JSDOM } = require('jsdom');
       isCustom: false,
       version: 'system-version'
     };
+    const emptySet = { exists: false, values: [] };
+    const completeSystem = {
+      publicationOptions: emptySet,
+      commonCreators: emptySet,
+      allowedPatronCodeIds: emptySet,
+      providers: [],
+      formats: [],
+      templates: [systemTemplate]
+    };
+    const storedTemplates = [
+      systemTemplate,
+      {
+        id: '21',
+        organizationId: '2',
+        sourceTemplateId: systemTemplate.id,
+        templateKey: systemTemplate.templateKey,
+        displayName: null,
+        subject: null,
+        body: 'Library body',
+        enabled: true,
+        isCustom: false,
+        version: 'library-version'
+      },
+      {
+        id: '22',
+        organizationId: '2',
+        templateKey: 'rejection:library-custom',
+        displayName: 'Library custom',
+        subject: 'Custom subject',
+        body: 'Custom body',
+        enabled: true,
+        isCustom: true,
+        version: 'custom-version'
+      }
+    ];
     const data = {
       orgId: '2',
       stored: {
-        configuredSystem: { templates: [systemTemplate] },
-        templates: [
-          systemTemplate,
-          {
-            id: '21',
-            organizationId: '2',
-            sourceTemplateId: systemTemplate.id,
-            templateKey: systemTemplate.templateKey,
-            displayName: null,
-            subject: null,
-            body: 'Library body',
-            enabled: true,
-            isCustom: false,
-            version: 'library-version'
-          },
-          {
-            id: '22',
-            organizationId: '2',
-            templateKey: 'rejection:library-custom',
-            displayName: 'Library custom',
-            subject: 'Custom subject',
-            body: 'Custom body',
-            enabled: true,
-            isCustom: true,
-            version: 'custom-version'
-          }
-        ],
-        libraryOverride: {}
+        configuredSystem: completeSystem,
+        libraryOverride: {
+          publicationOptions: emptySet,
+          commonCreators: emptySet,
+          allowedPatronCodeIds: emptySet,
+          providers: [],
+          formats: [],
+          templates: []
+        },
+        origins: [],
+        providers: [],
+        formats: [],
+        customFields: [],
+        formatRules: [],
+        autoClaimRules: [],
+        publicationOptions: [],
+        commonCreators: [],
+        allowedPatronCodeIds: [],
+        templates: storedTemplates
       },
-      effective: { formats: [], externalSearchProviders: [], customFields: [] }
+      effective: { formats: [], externalSearchProviders: [], customFields: [] },
+      patronCodeChoices: [],
+      autoClaimStaff: []
     };
     const root = document.getElementById('settings-view');
     const editors = module.createSettingsDomainEditors({ root });
@@ -87,8 +115,20 @@ const { JSDOM } = require('jsdom');
     const systemEditors = module.createSettingsDomainEditors({ root: systemRoot });
     systemEditors.populate({
       orgId: 'system',
-      stored: { configuredSystem: { templates: [systemTemplate] }, libraryOverride: {} },
-      effective: { formats: [], externalSearchProviders: [], customFields: [] }
+      stored: {
+        configuredSystem: completeSystem,
+        libraryOverride: {},
+        origins: [],
+        providers: [],
+        formats: [],
+        customFields: [],
+        formatRules: [],
+        autoClaimRules: [],
+        templates: [systemTemplate]
+      },
+      effective: { formats: [], externalSearchProviders: [], customFields: [] },
+      patronCodeChoices: [],
+      autoClaimStaff: []
     }, true);
     assert.strictEqual(document.querySelectorAll('#email-templates-editor [data-domain-row]').length, 1);
     assert.strictEqual(document.getElementById('add-email-template').hidden, false);

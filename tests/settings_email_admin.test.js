@@ -34,6 +34,12 @@ async function flush() {
     let version = 1;
     let fromName = 'System';
     let hasToken = true;
+    const organizations = [
+      { id: 1, name: 'System', organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-system-v1' },
+      { id: 2, name: 'Library Two', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-two-v1' },
+      { id: 3, name: 'Library Three', organizationCodeId: 2, parentOrganizationId: 1, isActive: false, version: 'org-three-v1' }
+    ];
+    let organizationResponse = { code: 'ok', data: organizations };
     const saved = [];
     const template = {
       id: '9007199254740993', organizationId: '1', templateKey: 'suggestion_submitted',
@@ -44,7 +50,7 @@ async function flush() {
       orgId: 'system', version: `v${version}`,
       organization: { id: 1, name: 'System', active: true },
       stored: {
-        systemSettings: {}, polaris: {},
+        systemSettings: { staffUrl: 'https://staff.example.org', enabledLibraryOrgIds: [2], libraryOrgIds: [2, 3] }, polaris: {},
         configuredSystem: {
           workflow: {}, patron: {}, email: { fromAddress: 'system@example.org', fromName, hasPostmarkToken: hasToken },
           publicationOptions: emptySet, commonCreators: emptySet, allowedPatronCodeIds: emptySet,
@@ -52,12 +58,15 @@ async function flush() {
         },
         libraryOverride: null, workflow: {}, patron: {}, email: {}, origins: [],
         publicationOptions: [], commonCreators: [], allowedPatronCodeIds: [], providers: [], formats: [],
+        customFields: [], formatRules: [],
         templates: [template], autoClaimRules: [], branding: {}
       },
       effective: { allowedPatronCodeIds: [], publicationOptions: [], commonCreators: [],
         externalSearchProviders: [], formats: [], customFields: [] },
       workflow: {}, ui_text: {},
       emails: { fromAddress: 'system@example.org', fromName, templates: [template] },
+      patronCodeChoices: [],
+      autoClaimStaff: [],
       templatePlaceholders: ['name', 'title']
     });
     global.fetch = async (url, options = {}) => {
@@ -66,7 +75,7 @@ async function flush() {
         return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
       }
       if (requestUrl.includes('/api/asap/staff/settings?orgId=system')) return response(200, data());
-      if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, []);
+      if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, organizationResponse);
       if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
       if (requestUrl.endsWith('/api/asap/staff/settings')) {
         const payload = JSON.parse(options.body);
@@ -111,10 +120,13 @@ async function flush() {
     document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     for (let i = 0; i < 15 && saved.length < 1; i++) await flush();
-    assert.strictEqual(saved.length, 1, 'a duplicate submit must not send a second settings mutation');
+    assert.strictEqual(saved.length, 1,
+      `a duplicate submit must not send a second settings mutation (${document.getElementById('settings-message').textContent})`);
     assert.strictEqual(saved[0].email.postmarkToken, undefined);
     assert.strictEqual(saved[0].email.clearPostmarkToken, undefined);
     assert.deepStrictEqual(saved[0].templates, []);
+    assert.strictEqual(Object.hasOwn(saved[0].systemSettings, 'enabledLibraryOrgIds'), false,
+      'An unrelated system settings save must omit participation replacement data.');
 
     for (let i = 0; i < 15 && document.getElementById('settings-version').value !== 'v2'; i++) await flush();
     const clear = document.getElementById('email-clear-postmark-token');
@@ -124,6 +136,30 @@ async function flush() {
     for (let i = 0; i < 15 && saved.length < 2; i++) await flush();
     assert.strictEqual(saved[1].email.clearPostmarkToken, true);
     assert.strictEqual(saved[1].email.postmarkToken, undefined);
+
+    organizationResponse = { code: 'ok', data: [] };
+    assert.strictEqual(await controller.load({ silent: true }), false, 'A noncomplete organization catalog must not load as empty.');
+    assert.strictEqual(document.getElementById('settings-save').disabled, true);
+    const staffUrl = document.getElementById('system-staff-url');
+    staffUrl.value = 'https://must-not-save.example.org';
+    staffUrl.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    assert.strictEqual(saved.length, 2, 'A system settings submission must remain blocked after a failed catalog load.');
+
+    organizationResponse = { code: 'ok', data: organizations.filter(item => item.id !== 3) };
+    assert.strictEqual(await controller.load({ silent: true }), false, 'A partial library catalog must not be accepted.');
+    assert.strictEqual(document.getElementById('settings-save').disabled, true);
+
+    organizationResponse = { code: 'ok', data: organizations };
+    assert.strictEqual(await controller.load({ silent: true }), true, 'A complete organization catalog should restore editing.');
+    staffUrl.value = 'https://complete-catalog-edit.example.org';
+    staffUrl.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    for (let i = 0; i < 15 && saved.length < 3; i++) await flush();
+    assert.strictEqual(saved.length, 3);
+    assert.strictEqual(saved[2].systemSettings.staffUrl, 'https://complete-catalog-edit.example.org');
+    assert.strictEqual(Object.hasOwn(saved[2].systemSettings, 'enabledLibraryOrgIds'), false);
 
     dom.window.close();
     console.log('System token intents, placeholder caret insertion, and unchanged template text passed');

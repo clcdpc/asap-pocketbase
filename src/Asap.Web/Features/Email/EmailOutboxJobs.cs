@@ -337,8 +337,10 @@ public sealed class EmailOutboxJobs(
             FROM [asap].[StaffUser] AS staff
             INNER JOIN [asap].[Organization] AS target
                 ON target.[Id] = @authorizationOrganizationId AND target.[IsActive] = 1
+                AND (target.[Id] = 1 OR target.[Id] > 1 AND target.[OrganizationCodeId] = 2)
             INNER JOIN [asap].[Organization] AS owner
                 ON owner.[Id] = staff.[OrganizationId] AND owner.[IsActive] = 1
+                AND (owner.[Id] = 1 OR owner.[Id] > 1 AND owner.[OrganizationCodeId] = 2)
             WHERE staff.[Id] = @staffUserId;
             """,
             connection);

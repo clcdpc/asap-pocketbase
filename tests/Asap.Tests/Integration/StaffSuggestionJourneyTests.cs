@@ -1226,9 +1226,10 @@ public sealed partial class PatronJourneyTests
         }
 
         var publicService = CreatePatronSuggestionService(["example.org"], new RecordingOutboxDispatcher());
+        var patronSession = await IssueTestPatronSessionAsync(barcode);
         var rejected = await Assert.ThrowsExactlyAsync<PatronFlowException>(async () =>
             await publicService.CreateAsync(
-                new PatronSessionContext(7004, barcode, 2, 2, 2, timeProvider!.GetUtcNow().UtcDateTime.AddHours(1)),
+                patronSession,
                 Suggestion($"Patron informational ebook {Guid.NewGuid():N}") with
                 {
                     Format = "ebook",
@@ -1236,6 +1237,7 @@ public sealed partial class PatronJourneyTests
                 },
                 CancellationToken.None));
         Assert.AreEqual(400, rejected.StatusCode);
+        await DeleteTestPatronSessionAsync(patronSession.Id);
     }
 
     [TestMethod]
@@ -1342,15 +1344,17 @@ public sealed partial class PatronJourneyTests
             existingId = existing.Id;
         }
 
+        PatronSessionContext? patronSession = null;
         try
         {
             var actor = await ReadConfiguredSuperAdminAsync();
             var publicService = CreatePatronSuggestionService(
                 ["example.org"],
                 new RecordingOutboxDispatcher());
+            patronSession = await IssueTestPatronSessionAsync(barcode);
             var publicFailure = await Assert.ThrowsExactlyAsync<PatronFlowException>(async () =>
                 await publicService.CreateAsync(
-                    new PatronSessionContext(7004, barcode, 2, 2, 2, timeProvider!.GetUtcNow().UtcDateTime.AddHours(1)),
+                    patronSession,
                     Suggestion(title),
                     CancellationToken.None));
             Assert.AreEqual(406, publicFailure.StatusCode);
@@ -1398,6 +1402,10 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
+            if (patronSession is not null)
+            {
+                await DeleteTestPatronSessionAsync(patronSession.Id);
+            }
             await using var context = await contextFactory.CreateDbContextAsync();
             var workflow = await context.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
             if (workflow is not null && hadWorkflow)
@@ -1446,6 +1454,7 @@ public sealed partial class PatronJourneyTests
             await setup.SaveChangesAsync();
         }
 
+        PatronSessionContext? patronSession = null;
         try
         {
             var actor = await ReadConfiguredSuperAdminAsync();
@@ -1481,8 +1490,9 @@ public sealed partial class PatronJourneyTests
             var publicService = CreatePatronSuggestionService(
                 ["example.org"],
                 new RecordingOutboxDispatcher());
+            patronSession = await IssueTestPatronSessionAsync(barcode);
             var patronResult = await publicService.CreateAsync(
-                new PatronSessionContext(0, barcode, 2, 2, 2, timeProvider!.GetUtcNow().UtcDateTime.AddHours(1)),
+                patronSession,
                 Suggestion($"{prefix} patron") with { Autohold = false },
                 CancellationToken.None);
 
@@ -1497,6 +1507,10 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
+            if (patronSession is not null)
+            {
+                await DeleteTestPatronSessionAsync(patronSession.Id);
+            }
             await using var restore = await contextFactory.CreateDbContextAsync();
             var workflow = await restore.WorkflowSettings.SingleAsync(item => item.OrganizationId == 2);
             if (hadWorkflow)
@@ -1994,6 +2008,8 @@ public sealed partial class PatronJourneyTests
                 Id = 333,
                 DisplayName = "Other Library",
                 Abbreviation = "OTHER",
+                OrganizationCodeId = 2,
+                ParentOrganizationId = 1,
                 IsActive = true
             });
             var formatId = await setup.MaterialFormats

@@ -223,7 +223,7 @@ public sealed partial class WorkflowProcessingService
                 .SingleOrDefaultAsync(cancellationToken);
         var code = "skipped";
         var changed = false;
-        if (organization?.IsActive == true && request is not null &&
+        if (organization is not null && OrganizationAuthority.IsActiveLibrary(organization) && request is not null &&
             request.LibraryOrganizationId == candidate.LibraryOrganizationId &&
             request.RowVersion.SequenceEqual(candidate.RowVersion) &&
             request.Status == RequestStatus.HoldPlaced &&

@@ -3,6 +3,8 @@ CREATE TABLE [asap].[Organization]
     [Id] int NOT NULL CONSTRAINT [PK_Organization] PRIMARY KEY,
     [DisplayName] nvarchar(256) NOT NULL,
     [Abbreviation] nvarchar(64) NULL,
+    [OrganizationCodeId] int NULL,
+    [ParentOrganizationId] int NULL,
     [IsActive] bit NOT NULL CONSTRAINT [DF_Organization_IsActive] DEFAULT (0),
     [LastSyncedUtc] datetime2(7) NULL,
     [RowVersion] rowversion NOT NULL,

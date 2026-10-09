@@ -566,7 +566,8 @@ public sealed partial class PatronJourneyTests
             .GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync();
         context.Organizations.Add(new Organization
         {
-            Id = 3494, DisplayName = "Isolated fulfillment library", IsActive = true
+            Id = 3494, DisplayName = "Isolated fulfillment library",
+            OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
         });
         await context.SaveChangesAsync();
         return 3494;

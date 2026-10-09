@@ -18,6 +18,10 @@ public sealed record SystemSettingsView
     public string? MisconfiguredMessage { get; init; }
     [JsonPropertyName("patronEmbedAllowedOrigins")]
     public IReadOnlyList<string> PatronEmbedAllowedOrigins { get; init; } = [];
+    [JsonPropertyName("enabledLibraryOrgIds")]
+    public IReadOnlyList<int> EnabledLibraryOrgIds { get; init; } = [];
+    [JsonPropertyName("libraryOrgIds")]
+    public IReadOnlyList<int> LibraryOrgIds { get; init; } = [];
     [JsonPropertyName("version")]
     public string Version { get; init; } = string.Empty;
 }

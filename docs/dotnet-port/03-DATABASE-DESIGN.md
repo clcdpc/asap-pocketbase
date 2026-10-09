@@ -30,7 +30,7 @@ UpdatedUtc datetime2 NOT NULL
 
 The integer changes only for contract-affecting schema changes. Application startup compares the expected build value with SQL. Mismatch keeps liveness healthy but readiness unhealthy and blocks normal application functions. It is not used to decide whether a DACPAC needs deployment.
 
-Schema 7 is the pre-release reset boundary for native Polaris identities; current schema 10 upgrades native schema-7/8/9 targets in place and adds the pickup operation journal. Recreate pre-7 databases from the current DACPAC; no string-to-number upgrade or compatibility columns are retained. Run the DACPAC's embedded pre-deployment script before plan generation: it rejects unidentified/pre-7/newer targets, retires only the two obsolete global requesting/pickup columns, and clears nonpositive integration IDs to NULL. Valid credentials, identity and native business data survive. Publish retains normal data-loss protection and preserves unowned objects; the post-deployment script advances compatible schema 7/8/9 to 10. Fresh import parses numeric source identities, and repeat deployment preserves existing native data.
+Schema 7 is the pre-release reset boundary for native Polaris identities; current schema 12 upgrades native schema-7/8/9/10/11 targets in place and adds nullable native organization type, parent and patron identity snapshots. Recreate pre-7 databases from the current DACPAC; no string-to-number upgrade or compatibility columns are retained. Run the DACPAC's embedded pre-deployment script before plan generation: it rejects unidentified/pre-7/newer targets, retires only the two obsolete global requesting/pickup columns, clears nonpositive integration IDs and the former system pickup reference to NULL, and preserves valid credentials, identity and native business data. Newly added organization type/parent values remain unclassified on old rows until trusted synchronization supplies them, so unknown rows do not gain library authority from their existing active flag. Nullable patron ID snapshots remain unknown on preexisting rows; no barcode-based identity backfill occurs. Publish retains normal data-loss protection and preserves unowned objects; the post-deployment script advances compatible schema 7/8/9/10/11 to 12. Fresh import parses numeric source identities, and repeat deployment preserves existing native data.
 
 ### `[asap].[DeploymentState]`
 
@@ -216,7 +216,7 @@ CommonCreatorTerm:
   UNIQUE (OrganizationId, SortOrder)
 ```
 
-System set at Organization `1` is seeded. No library set means inherit system; a library set means complete replacement. To preserve current behavior, clearing all terms removes the library set and resumes inheritance.
+System set at Organization `1` is seeded. No library set means inherit system; a library set means complete replacement, including a set with zero terms. In target settings writes, an omitted collection property makes no edit, `null` at library scope removes the library set and resumes inheritance, and `[]` stores an intentional empty set. At system scope, both `null` and `[]` clear common creators to an empty system set. This whole-set behavior is distinct from ordinary blank library text, which may normalize to no override.
 
 ### `[asap].[PatronCodeEligibilitySet]` / `[asap].[PatronCodeEligibilityMember]`
 
@@ -231,7 +231,7 @@ PatronCodeEligibilityMember:
   PRIMARY KEY (OrganizationId, PatronCodeId)
 ```
 
-Patron codes remain Polaris reference data rather than durable lookup rows. Validate configured IDs against current reference data when practical. Set-row presence marks a meaningful replacement. At library scope, clearing all IDs removes the set and resumes inheritance.
+Patron codes remain Polaris reference data rather than durable lookup rows. Validate configured IDs against current reference data when practical. Set-row presence marks a replacement even when it has no members. At library scope, an explicit reset removes the set and resumes inheritance; an empty replacement retains the set row with no members. An empty system member list is represented by the system set row with no members; system `null` is rejected, so use `[]` to clear the system set.
 
 ### `[asap].[PatronSettings]`
 
@@ -330,7 +330,7 @@ PublicationOption:
   UNIQUE (OrganizationId, SortOrder)
 ```
 
-`OptionKey` preserves the current normalized publication-option ID. Organization `1` owns the system list. No library set means inherit the full system list; a library set is the entire replacement list. At library scope, clearing the list removes the set and resumes inheritance. Reset deletes the library set and children.
+`OptionKey` preserves the current normalized publication-option ID. Organization `1` owns the system list. No library set means inherit the full system list; a library set is the entire replacement list, including an empty list. Target settings writes distinguish omitted (no edit), library `null` (reset/inherit), and `[]` (empty replacement set). At system scope, both `null` and `[]` store an empty system list. Reset deletes the library set and children.
 
 ### `[asap].[PatronCustomField]` / `[asap].[PatronCustomFieldOption]`
 

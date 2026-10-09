@@ -54,7 +54,10 @@ public sealed class EmailOperationsService(
         {
             await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
             var active = await context.Organizations.AsNoTracking()
-                .Where(item => item.Id == organizationId)
+                .Where(item => item.Id == organizationId &&
+                               (item.Id == LibraryScope.SystemOrganizationId ||
+                                item.Id > LibraryScope.SystemOrganizationId &&
+                                item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId))
                 .Select(item => item.IsActive)
                 .SingleOrDefaultAsync(cancellationToken);
             if (!active)
@@ -99,7 +102,7 @@ public sealed class EmailOperationsService(
         {
             var organization = await preflight.Organizations.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.Id == targetOrganizationId, cancellationToken);
-            if (organization?.IsActive != true)
+            if (organization is null || !OrganizationAuthority.IsActiveScope(organization))
             {
                 return new EmailOperationResult("organization_inactive");
             }

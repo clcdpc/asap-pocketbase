@@ -79,6 +79,11 @@ public sealed class MigrationPackageFile
 
 public static class MigrationPackageValidator
 {
+    private static readonly HashSet<string> ReservedSystemFormatCodes = new(StringComparer.Ordinal)
+    {
+        "book", "audiobook_cd", "dvd", "music_cd", "ebook", "eaudiobook"
+    };
+
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -241,8 +246,91 @@ public static class MigrationPackageValidator
             throw new MigrationOperationException("package_count_mismatch", "Manifest entity counts do not match domain files.");
         }
 
-        return new ValidatedMigrationPackage(root, manifest);
+        var package = new ValidatedMigrationPackage(root, manifest);
+        ValidateMaterialFormatCanonicalIdentities(package);
+        return package;
     }
+
+    private static void ValidateMaterialFormatCanonicalIdentities(ValidatedMigrationPackage package)
+    {
+        var organizations = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations");
+        var organizationsById = organizations.ToDictionary(row => row.RequiredString("id"), StringComparer.Ordinal);
+        var rows = MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats");
+        var exactSystemSourceCodes = rows
+            .Where(row => row.RequiredString("scope").Trim().Equals("system", StringComparison.OrdinalIgnoreCase))
+            .Select(row => row.RequiredString("code"))
+            .ToHashSet(StringComparer.Ordinal);
+        var systemCanonicalSourceCodes = exactSystemSourceCodes
+            .Select(NormalizeFormatCode)
+            .ToHashSet(StringComparer.Ordinal);
+        var identitiesByTargetCode = new Dictionary<string, List<(string Scope, string Owner, string SourceCode)>>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            var scope = row.RequiredString("scope").Trim().ToLowerInvariant();
+            if (scope is not ("system" or "library"))
+            {
+                continue;
+            }
+
+            var owner = scope == "system"
+                ? "1"
+                : ResolveSourceLibraryIdentity(row.RequiredString("libraryOrganization"), organizationsById, organizations);
+            var sourceCode = row.RequiredString("code");
+            var code = NormalizeFormatCode(sourceCode);
+            if (!identitiesByTargetCode.TryGetValue(code, out var existingIdentities))
+            {
+                existingIdentities = [];
+                identitiesByTargetCode.Add(code, existingIdentities);
+            }
+
+            if (existingIdentities.Any(existing =>
+                    string.Equals(existing.Scope, scope, StringComparison.Ordinal) &&
+                    string.Equals(existing.Owner, owner, StringComparison.Ordinal) ||
+                    !string.Equals(existing.Scope, scope, StringComparison.Ordinal) &&
+                    !string.Equals(existing.SourceCode, sourceCode, StringComparison.Ordinal)))
+            {
+                throw new MigrationOperationException(
+                    "format_code_conflict",
+                    "Distinct legacy material format identities would collapse into the same target code or override.");
+            }
+
+            if (scope == "library" &&
+                ReservedSystemFormatCodes.Contains(code) &&
+                !exactSystemSourceCodes.Contains(sourceCode) &&
+                !systemCanonicalSourceCodes.Contains(code))
+            {
+                throw new MigrationOperationException(
+                    "format_library_seed_unsupported",
+                    $"Library material format {row.RequiredString("id")} normalizes to reserved system format '{code}' without an exact matching system source row; the current target settings/editor contract cannot preserve it as a library-owned editable format.");
+            }
+
+            existingIdentities.Add((scope, owner, sourceCode));
+        }
+    }
+
+    private static string ResolveSourceLibraryIdentity(
+        string sourceReference,
+        IReadOnlyDictionary<string, SourceRow> organizationsById,
+        IReadOnlyList<SourceRow> organizations)
+    {
+        var organization = organizationsById.TryGetValue(sourceReference, out var referenced)
+            ? referenced
+            : organizations.SingleOrDefault(row =>
+                row.Int32("organizationId")?.ToString(System.Globalization.CultureInfo.InvariantCulture) == sourceReference);
+        return organization?.Int32("organizationId")?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? sourceReference;
+    }
+
+    private static string NormalizeFormatCode(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "0" => "book",
+        "1" => "ebook",
+        "2" => "audiobook_cd",
+        "3" => "eaudiobook",
+        "4" => "dvd",
+        "5" => "music_cd",
+        var code when !string.IsNullOrWhiteSpace(code) => code,
+        _ => throw new MigrationOperationException("format_code_invalid", "Material format code is blank.")
+    };
 
     internal static string ComputePackageIdentitySha256(ValidatedMigrationPackage package) =>
         HashFile(Path.Combine(package.RootPath, "manifest.json"));
@@ -865,7 +953,7 @@ public static class MigrationPackageValidator
         return false;
     }
 
-    private static void EnsureNoDuplicateProperties(JsonElement element, string code)
+    internal static void EnsureNoDuplicateProperties(JsonElement element, string code)
     {
         if (element.ValueKind == JsonValueKind.Object)
         {

@@ -30,7 +30,8 @@ public sealed partial class PatronJourneyTests
             .Select(item => item.Id).FirstAsync();
         seed.Organizations.Add(new Organization
         {
-            Id = libraryId, DisplayName = "Action email test library", Abbreviation = "AET", IsActive = true
+            Id = libraryId, DisplayName = "Action email test library", Abbreviation = "AET",
+            OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
         });
         await seed.SaveChangesAsync();
         seed.EmailSettings.Add(new EmailSettings

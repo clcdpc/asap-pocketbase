@@ -14,7 +14,11 @@ namespace Asap.Web.Features.Administration;
 
 public sealed partial class AdministrationService
 {
-    private static SystemSettingsView ToSystemSettings(SystemSettings row, IReadOnlyList<string> origins) => new SystemSettingsView
+    private static SystemSettingsView ToSystemSettings(
+        SystemSettings row,
+        IReadOnlyList<string> origins,
+        IReadOnlyList<int> enabledLibraryOrgIds,
+        IReadOnlyList<int> libraryOrgIds) => new SystemSettingsView
     {
         StaffUrl = row.StaffApplicationUrl,
         LeapBibUrlPattern = row.LeapBibUrlPattern,
@@ -23,6 +27,8 @@ public sealed partial class AdministrationService
         SystemNotEnabledMessage = row.SystemNotEnabledMessage,
         MisconfiguredMessage = row.MisconfiguredMessage,
         PatronEmbedAllowedOrigins = origins,
+        EnabledLibraryOrgIds = enabledLibraryOrgIds,
+        LibraryOrgIds = libraryOrgIds,
         Version = StaffVersion.Encode(row.RowVersion)
     };
 
@@ -510,6 +516,38 @@ public sealed partial class AdministrationService
                 overridden = value is not null
             };
         }).ToArray();
+    }
+
+    private static async Task<IReadOnlyList<object>> LoadRawCustomFieldRulesAsync(
+        AsapDbContext context,
+        int organizationId,
+        CancellationToken cancellationToken)
+    {
+        var rows = await (from rule in context.MaterialFormatCustomFieldRules.AsNoTracking()
+                          join format in context.MaterialFormats.AsNoTracking()
+                              on rule.MaterialFormatId equals format.Id
+                          join field in context.PatronCustomFields.AsNoTracking()
+                              on rule.PatronCustomFieldId equals field.Id
+                          where rule.LibraryOrganizationId == organizationId
+                          orderby format.Code, field.FieldKey
+                          select new
+                          {
+                              format.Code,
+                              field.FieldKey,
+                              rule.Mode,
+                              rule.LabelOverride
+                          })
+            .ToListAsync(cancellationToken);
+        return rows.GroupBy(item => item.Code, StringComparer.Ordinal)
+            .Select(group => (object)new
+            {
+                code = group.Key,
+                customFields = group.ToDictionary(
+                    item => item.FieldKey,
+                    item => (object)new { mode = item.Mode, labelOverride = item.LabelOverride },
+                    StringComparer.Ordinal)
+            })
+            .ToArray();
     }
 
     private static async Task<IReadOnlyList<object>> LoadFormatsAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)

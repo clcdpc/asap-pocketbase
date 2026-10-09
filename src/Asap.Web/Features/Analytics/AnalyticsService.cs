@@ -104,7 +104,8 @@ public sealed class AnalyticsService(
                 r.[UpdatedUtc]
             FROM [asap].[TitleRequest] AS r
             INNER JOIN [asap].[Organization] AS o ON o.[Id] = r.[LibraryOrganizationId]
-                AND o.[Id] <> 1
+                AND o.[Id] > 1
+                AND o.[OrganizationCodeId] = 2
             WHERE @scopeOrganizationId IS NULL
                OR r.[LibraryOrganizationId] = @scopeOrganizationId
         ),
@@ -130,7 +131,8 @@ public sealed class AnalyticsService(
                 r.[UpdatedUtc]
             FROM [asap].[AdditionalCopyRequest] AS r
             INNER JOIN [asap].[Organization] AS o ON o.[Id] = r.[LibraryOrganizationId]
-                AND o.[Id] <> 1
+                AND o.[Id] > 1
+                AND o.[OrganizationCodeId] = 2
             WHERE @scopeOrganizationId IS NULL
                OR r.[LibraryOrganizationId] = @scopeOrganizationId
         ),
@@ -167,7 +169,8 @@ public sealed class AnalyticsService(
             SELECT r.[Id], r.[LibraryOrganizationId], r.[Status], r.[CreatedUtc], r.[UpdatedUtc]
             FROM [asap].[TitleRequest] AS r
             INNER JOIN [asap].[Organization] AS o ON o.[Id] = r.[LibraryOrganizationId]
-                AND o.[Id] <> 1
+                AND o.[Id] > 1
+                AND o.[OrganizationCodeId] = 2
             WHERE @scopeOrganizationId IS NULL OR r.[LibraryOrganizationId] = @scopeOrganizationId
         ),
         ScopedRequests AS
@@ -178,7 +181,8 @@ public sealed class AnalyticsService(
             SELECT CASE WHEN r.[Status] = N'closed' THEN N'closed' ELSE N'additional_copies' END
             FROM [asap].[AdditionalCopyRequest] AS r
             INNER JOIN [asap].[Organization] AS o ON o.[Id] = r.[LibraryOrganizationId]
-                AND o.[Id] <> 1
+                AND o.[Id] > 1
+                AND o.[OrganizationCodeId] = 2
             WHERE @scopeOrganizationId IS NULL OR r.[LibraryOrganizationId] = @scopeOrganizationId
         )
         SELECT stages.[Stage], COALESCE(COUNT_BIG(r.[Status]), CONVERT(bigint, 0)) AS [Count]
@@ -197,14 +201,16 @@ public sealed class AnalyticsService(
             SELECT r.[Status], r.[CloseReason], r.[UpdatedUtc]
             FROM [asap].[TitleRequest] AS r
             INNER JOIN [asap].[Organization] AS o ON o.[Id] = r.[LibraryOrganizationId]
-                AND o.[Id] <> 1
+                AND o.[Id] > 1
+                AND o.[OrganizationCodeId] = 2
             WHERE @scopeOrganizationId IS NULL OR r.[LibraryOrganizationId] = @scopeOrganizationId
             UNION ALL
             SELECT CASE WHEN r.[Status] = N'closed' THEN N'closed' ELSE N'additional_copies' END,
                    CAST(NULL AS nvarchar(64)), r.[UpdatedUtc]
             FROM [asap].[AdditionalCopyRequest] AS r
             INNER JOIN [asap].[Organization] AS o ON o.[Id] = r.[LibraryOrganizationId]
-                AND o.[Id] <> 1
+                AND o.[Id] > 1
+                AND o.[OrganizationCodeId] = 2
             WHERE @scopeOrganizationId IS NULL OR r.[LibraryOrganizationId] = @scopeOrganizationId
         )
         SELECT
@@ -222,14 +228,16 @@ public sealed class AnalyticsService(
             SELECT r.[Status], r.[CreatedUtc]
             FROM [asap].[TitleRequest] AS r
             INNER JOIN [asap].[Organization] AS o ON o.[Id] = r.[LibraryOrganizationId]
-                AND o.[Id] <> 1
+                AND o.[Id] > 1
+                AND o.[OrganizationCodeId] = 2
             WHERE @scopeOrganizationId IS NULL OR r.[LibraryOrganizationId] = @scopeOrganizationId
             UNION ALL
             SELECT CASE WHEN r.[Status] = N'closed' THEN N'closed' ELSE N'additional_copies' END,
                    r.[CreatedUtc]
             FROM [asap].[AdditionalCopyRequest] AS r
             INNER JOIN [asap].[Organization] AS o ON o.[Id] = r.[LibraryOrganizationId]
-                AND o.[Id] <> 1
+                AND o.[Id] > 1
+                AND o.[OrganizationCodeId] = 2
             WHERE @scopeOrganizationId IS NULL OR r.[LibraryOrganizationId] = @scopeOrganizationId
         )
         SELECT
@@ -254,14 +262,16 @@ public sealed class AnalyticsService(
             SELECT r.[Status], r.[CreatedUtc]
             FROM [asap].[TitleRequest] AS r
             INNER JOIN [asap].[Organization] AS o ON o.[Id] = r.[LibraryOrganizationId]
-                AND o.[Id] <> 1
+                AND o.[Id] > 1
+                AND o.[OrganizationCodeId] = 2
             WHERE @scopeOrganizationId IS NULL OR r.[LibraryOrganizationId] = @scopeOrganizationId
             UNION ALL
             SELECT CASE WHEN r.[Status] = N'closed' THEN N'closed' ELSE N'additional_copies' END,
                    r.[CreatedUtc]
             FROM [asap].[AdditionalCopyRequest] AS r
             INNER JOIN [asap].[Organization] AS o ON o.[Id] = r.[LibraryOrganizationId]
-                AND o.[Id] <> 1
+                AND o.[Id] > 1
+                AND o.[OrganizationCodeId] = 2
             WHERE @scopeOrganizationId IS NULL OR r.[LibraryOrganizationId] = @scopeOrganizationId
         )
         SELECT COUNT_BIG(*)
@@ -274,7 +284,8 @@ public sealed class AnalyticsService(
             SELECT r.[Id], r.[IsbnCheckStatus]
             FROM [asap].[TitleRequest] AS r
             INNER JOIN [asap].[Organization] AS o ON o.[Id] = r.[LibraryOrganizationId]
-                AND o.[Id] <> 1
+                AND o.[Id] > 1
+                AND o.[OrganizationCodeId] = 2
             WHERE @scopeOrganizationId IS NULL OR r.[LibraryOrganizationId] = @scopeOrganizationId
         )
         SELECT
@@ -305,7 +316,8 @@ public sealed class AnalyticsService(
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var organizations = await context.Organizations.AsNoTracking()
-            .Where(item => item.Id != 1 && item.IsActive)
+            .Where(item => item.Id > LibraryScope.SystemOrganizationId &&
+                           item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive)
             .OrderBy(item => item.DisplayName)
             .ThenBy(item => item.Id)
             .Select(item => new AnalyticsLibrary(item.Id, item.DisplayName))

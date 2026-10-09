@@ -37,7 +37,10 @@ public sealed partial class PatronJourneyTests
             new([new(bibId, "Strict Title", "Strict Author", "2026", "Book", "FOUND")], 1));
         provider.SetIdentifierResult("FOUND", organizationId, new(IdentifierLookupOutcome.Found, bibId));
         await ExecuteNonQueryAsync("""
-            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (3502, N'Home Library', 1), (3503, N'Selected Library', 1), (350201, N'Registered Home Branch', 0);
+            INSERT INTO [asap].[Organization]
+                ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+            VALUES (3502, N'Home Library', 2, 1, 1), (3503, N'Selected Library', 2, 1, 1),
+                   (350201, N'Registered Home Branch', 3, 3502, 0);
             INSERT INTO [asap].[WorkflowSettings] ([OrganizationId], [AllowAnyRegisteredCardLogin], [UpdatedUtc])
                 VALUES (@org, 1, SYSUTCDATETIME());
             """, ("@org", organizationId));
@@ -67,7 +70,14 @@ public sealed partial class PatronJourneyTests
             });
             Assert.AreEqual(HttpStatusCode.Created, submitted.StatusCode, await submitted.Content.ReadAsStringAsync());
             using var result = JsonDocument.Parse(await submitted.Content.ReadAsStringAsync());
-            requestId = result.RootElement.GetProperty("id").GetInt64();
+            var requestIdElement = result.RootElement.GetProperty("id");
+            Assert.AreEqual(JsonValueKind.String, requestIdElement.ValueKind);
+            var requestIdText = requestIdElement.GetString();
+            Assert.IsNotNull(requestIdText);
+            Assert.IsTrue(long.TryParse(requestIdText, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsedRequestId));
+            Assert.AreEqual(parsedRequestId.ToString(System.Globalization.CultureInfo.InvariantCulture), requestIdText);
+            requestId = parsedRequestId;
             Assert.AreEqual(branchId + 1, (await provider.RefreshAsync(barcode, organizationId, CancellationToken.None)).PreferredPickupBranchId);
             var contexts = scopedFactory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
             var actor = await ReadConfiguredSuperAdminAsync();

@@ -43,7 +43,7 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
     if (!departure) return;
     const attempt = { owner: identity.preferences(), departure, pending: true, outcome: 'pending' }; signOutAttempt = attempt;
     try {
-      await request('/api/asap/staff/sign-out', { method: 'POST' });
+      await request('/api/asap/staff/sign-out', { method: 'POST', allowNoContent: true });
       attempt.outcome = 'committed';
       if (!disposed && shell.isPresentationOwner(attempt.owner)) lose('You are signed out.');
     } catch (error) {

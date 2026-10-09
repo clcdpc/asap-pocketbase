@@ -193,18 +193,18 @@ public sealed partial class PatronJourneyTests
     };
 
     private static Task EnsureManualActorOrganizationAsync(int organizationId) => ExecuteNonQueryAsync(
-        "IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = @organizationId) " +
-        "INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive]) " +
-        "VALUES (@organizationId, N'Slice 5 manual actor library', N'S5M', 1);",
+        "UPDATE [asap].[Organization] SET [OrganizationCodeId] = 2, [ParentOrganizationId] = 1, [IsActive] = 1 WHERE [Id] = @organizationId; " +
+        "IF @@ROWCOUNT = 0 INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive]) " +
+        "VALUES (@organizationId, N'Slice 5 manual actor library', N'S5M', 2, 1, 1);",
         ("@organizationId", organizationId));
 
     private static async Task MoveManualActorAsync(long staffId)
     {
         const int destinationOrganizationId = 99009;
         await ExecuteNonQueryAsync(
-            "IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = @organizationId) " +
-            "INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive]) " +
-            "VALUES (@organizationId, N'Slice 5 actor race destination', N'S5A', 1);",
+            "UPDATE [asap].[Organization] SET [OrganizationCodeId] = 2, [ParentOrganizationId] = 1, [IsActive] = 1 WHERE [Id] = @organizationId; " +
+            "IF @@ROWCOUNT = 0 INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive]) " +
+            "VALUES (@organizationId, N'Slice 5 actor race destination', N'S5A', 2, 1, 1);",
             ("@organizationId", destinationOrganizationId));
         await ExecuteNonQueryAsync(
             "UPDATE [asap].[StaffUser] SET [Role] = N'admin', [OrganizationId] = @organizationId WHERE [Id] = @id;",

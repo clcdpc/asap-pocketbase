@@ -33,6 +33,11 @@ export function setAuthToken(token) {
   }
 }
 
+export let submitOutcomeUnknown = false;
+export function setSubmitOutcomeUnknown(value) {
+  submitOutcomeUnknown = Boolean(value);
+}
+
 export let lastSelectedFormat = formatSelect ? formatSelect.value : 'book';
 export function setLastSelectedFormat(format) {
   lastSelectedFormat = format || 'book';

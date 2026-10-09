@@ -27,8 +27,17 @@ public sealed partial class PatronJourneyTests
                 Id = organizationId,
                 DisplayName = "Slice 5 Isolated Library",
                 Abbreviation = "S5I",
+                OrganizationCodeId = 2,
+                ParentOrganizationId = 1,
                 IsActive = true
             });
+            await context.SaveChangesAsync();
+        }
+        else
+        {
+            organization.OrganizationCodeId = 2;
+            organization.ParentOrganizationId = 1;
+            organization.IsActive = true;
             await context.SaveChangesAsync();
         }
     }

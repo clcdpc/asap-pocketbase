@@ -1,10 +1,13 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Data;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace Asap.Web.Features.Staff;
 
@@ -548,12 +551,45 @@ public static class TitleRequestEndpoints
     private static async Task<IResult> ActionAsync(
         HttpContext context,
         long id,
-        TitleRequestActionInput input,
         TitleRequestMutationService mutations,
         TitleRequestViewService views,
         ILoggerFactory loggerFactory,
+        IOptions<Microsoft.AspNetCore.Http.Json.JsonOptions> jsonOptions,
         CancellationToken cancellationToken)
     {
+        if (!context.Request.HasJsonContentType())
+        {
+            return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
+        }
+
+        TitleRequestActionInput input;
+        try
+        {
+            using var document = await JsonDocument.ParseAsync(
+                context.Request.Body,
+                cancellationToken: cancellationToken);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return InvalidActionPayload();
+            }
+
+            var propertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (!propertyNames.Add(property.Name))
+                {
+                    return InvalidActionPayload();
+                }
+            }
+
+            input = document.RootElement.Deserialize<TitleRequestActionInput>(jsonOptions.Value.SerializerOptions)
+                ?? throw new JsonException("The title-request action body must be an object.");
+        }
+        catch (JsonException)
+        {
+            return InvalidActionPayload();
+        }
+
         TitleRequestMutationResult result;
         try
         {
@@ -582,7 +618,7 @@ public static class TitleRequestEndpoints
         }
         if (row is not null)
         {
-            return Results.Json(row with
+        return Results.Json(row with
             {
                 Committed = true,
                 FinalStatus = result.FinalStatus,
@@ -604,6 +640,10 @@ public static class TitleRequestEndpoints
             refreshUnavailable = row is null
         });
     }
+
+    private static IResult InvalidActionPayload() =>
+        Results.Json(new { code = "invalid_action_payload", message = "The title-request action body is invalid." },
+            statusCode: StatusCodes.Status400BadRequest);
 
     private static Task<IResult> RetryIdentifierAsync(
         HttpContext context,

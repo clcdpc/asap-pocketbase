@@ -40,7 +40,29 @@ public sealed record PatronSnapshot(
     int PatronOrganizationId,
     int HomeLibraryOrganizationId,
     string HomeLibraryOrganizationName,
-    int? PreferredPickupBranchId);
+    int? PreferredPickupBranchId,
+    string? FormerBarcode = null,
+    string? RequestedBarcode = null)
+{
+    public IReadOnlyList<string> KnownBarcodeAliases
+    {
+        get
+        {
+            var aliases = new List<string>(3);
+            foreach (var candidate in new[] { Barcode, FormerBarcode, RequestedBarcode })
+            {
+                var value = candidate?.Trim();
+                if (!string.IsNullOrEmpty(value) &&
+                    !aliases.Contains(value, StringComparer.OrdinalIgnoreCase))
+                {
+                    aliases.Add(value);
+                }
+            }
+
+            return aliases;
+        }
+    }
+}
 
 public sealed record PickupBranch(int Id, string Label);
 

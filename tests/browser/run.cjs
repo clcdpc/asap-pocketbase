@@ -8,6 +8,9 @@ const browserTests = [
   'FullyQualifiedName~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport',
   'FullyQualifiedName~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers',
   'FullyQualifiedName~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures',
+  'FullyQualifiedName~PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses',
+  'FullyQualifiedName~StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp',
+  'FullyQualifiedName~SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp',
 ].join('|');
 
 const child = spawn(
@@ -21,7 +24,7 @@ const child = spawn(
     '--no-build',
     '--no-restore',
     '--minimum-expected-tests',
-    '3',
+    '6',
     '--filter',
     browserTests,
   ],

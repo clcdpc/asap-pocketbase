@@ -33,7 +33,7 @@ function settingsData(organizationId, version, prefix) {
     version,
     organization: { id: organizationId, name: prefix + ' Library', abbreviation: prefix, active: true, version },
     stored: {
-      systemSettings: {},
+      systemSettings: { enabledLibraryOrgIds: [2, 3], libraryOrgIds: [2, 3] },
       polaris: {},
       configuredSystem: configured,
       libraryOverride: organizationId === 1 ? null : {
@@ -74,7 +74,9 @@ function settingsData(organizationId, version, prefix) {
     },
     workflow: {},
     ui_text: {},
-    emails: { fromAddress: 'system@example.org', fromName: 'System', templates: [] }
+    emails: { fromAddress: 'system@example.org', fromName: 'System', templates: [] },
+    patronCodeChoices: [],
+    autoClaimStaff: []
   };
 }
 
@@ -137,10 +139,11 @@ async function flush() {
           return response(200, settingsData(organizationId === 'system' ? 1 : Number(organizationId), `${organizationId}-version`, prefix));
         }
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
-          return response(200, [
-            { id: 2, name: 'Library Two', abbreviation: 'TWO', isActive: true, version: 'org-2' },
-            { id: 3, name: 'Library Three', abbreviation: 'THREE', isActive: true, version: 'org-3' }
-          ]);
+          return response(200, { code: 'ok', data: [
+            { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-1' },
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-3' }
+          ] });
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
         if (requestUrl.endsWith('/api/asap/staff/settings')) {
@@ -271,7 +274,11 @@ async function flush() {
             : response(200, data);
         }
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
-          return response(200, [{ id: 2, name: 'Library Two', isActive: true, version: 'org-2' }]);
+          return response(200, { code: 'ok', data: [
+            { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-1' },
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-3' }
+          ] });
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
           return response(200, { code: 'ok', data: [] });
@@ -412,10 +419,11 @@ async function flush() {
             `${organizationId}-version`, prefix));
         }
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
-          return response(200, [
-            { id: 2, name: 'Library Two', abbreviation: 'TWO', isActive: true, version: 'org-2' },
-            { id: 3, name: 'Library Three', abbreviation: 'THREE', isActive: true, version: 'org-3' }
-          ]);
+          return response(200, { code: 'ok', data: [
+            { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-1' },
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-3' }
+          ] });
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
         throw new Error('Unexpected request: ' + requestUrl);

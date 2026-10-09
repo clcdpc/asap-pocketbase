@@ -461,7 +461,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#request-dialog[open]').waitFor();
     await page.getByRole('link', { name: 'Open patron in LEAP' }).waitFor();
     assert.equal(await page.getByRole('link', { name: 'Open patron in LEAP' }).getAttribute('href'),
-      'https://leap.example.test/patron/7001');
+      'https://leap.example.test/patron/9901');
     const researchLabels = await page.locator('.research-links a').allTextContents();
     assert.deepEqual(researchLabels, ['Open patron in LEAP', 'Browser vendor', 'Search WorldCat']);
     assert.equal(await page.getByRole('link', { name: 'Search Goodreads' }).count(), 0);

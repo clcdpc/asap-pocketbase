@@ -17,9 +17,9 @@ function response(status, body) {
 function settingsData(note, version, formats = []) {
   const emptySet = { exists: false, values: [] };
   const systemNote = 'System login note';
-  const libraryOverride = note === systemNote ? null : {
+  const libraryOverride = {
     workflow: null,
-    patron: { loginNote: note },
+    patron: note === systemNote ? null : { loginNote: note },
     email: null,
     publicationOptions: emptySet,
     commonCreators: emptySet,
@@ -46,7 +46,7 @@ function settingsData(note, version, formats = []) {
     version,
     organization: { id: 2, name: 'Library Two', abbreviation: 'TWO', active: true, version },
     stored: {
-      systemSettings: {},
+      systemSettings: { enabledLibraryOrgIds: [2], libraryOrgIds: [2] },
       polaris: {},
       configuredSystem,
       libraryOverride,
@@ -60,6 +60,7 @@ function settingsData(note, version, formats = []) {
       providers: [],
       formats,
       customFields: [],
+      formatRules: [],
       templates: [],
       autoClaimRules: [],
       branding: { hasLogo: false, altText: null }
@@ -77,7 +78,9 @@ function settingsData(note, version, formats = []) {
     },
     workflow: {},
     ui_text: { loginNote: note },
-    emails: { fromAddress: 'system@example.org', fromName: 'System', templates: [] }
+    emails: { fromAddress: 'system@example.org', fromName: 'System', templates: [] },
+    patronCodeChoices: [],
+    autoClaimStaff: []
   };
 }
 
@@ -129,7 +132,10 @@ async function flush() {
           ? settingsData(savedNote, saveCount === 1 ? 'after-save' : `after-save-${saveCount}`, formatRows)
           : settingsData('System login note', 'before-save'));
       }
-      if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, []);
+      if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, { code: 'ok', data: [
+        { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-1' },
+        { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-2' }
+      ] });
       if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
         return response(200, { code: 'ok', data: [] });
       }
@@ -191,7 +197,7 @@ async function flush() {
     const discard = document.getElementById('settings-discard');
     const reset = document.getElementById('settings-reset');
     assert.strictEqual(saveBar.classList.contains('attention'), false);
-    assert.strictEqual(save.disabled, true);
+    assert.strictEqual(save.disabled, true, document.getElementById('settings-message').textContent);
     assert.strictEqual(discard.hidden, true);
     assert.strictEqual(reset.hidden, false);
     assert.strictEqual(reset.disabled, false);
@@ -214,7 +220,7 @@ async function flush() {
     for (let attempt = 0; attempt < 20 && settingsRequests < 2; attempt++) await flush();
     for (let attempt = 0; attempt < 20; attempt++) await flush();
 
-    assert.strictEqual(settingsRequests, 2);
+    assert.strictEqual(settingsRequests, 2, document.getElementById('settings-message').textContent);
     assert.strictEqual(document.getElementById('settings-version').value, 'after-save');
     assert.strictEqual(document.getElementById('settings-save').disabled, true);
     assert.strictEqual(document.getElementById('settings-save-title').textContent, 'No changes');
@@ -272,8 +278,8 @@ async function flush() {
     assert.strictEqual(saveBar.classList.contains('attention'), true);
 
     formatRows = [
-      { id: '101', version: 'format-v1', code: 'local_one', label: 'Local one', ownerOrganizationId: 2, isEnabled: true },
-      { id: '102', version: 'format-v2', code: 'local_two', label: 'Local two', ownerOrganizationId: 2, isEnabled: true }
+      { id: '101', version: 'format-v1', code: 'local_one', label: 'Local one', ownerOrganizationId: 2, isEnabled: true, customFields: {} },
+      { id: '102', version: 'format-v2', code: 'local_two', label: 'Local two', ownerOrganizationId: 2, isEnabled: true, customFields: {} }
     ];
     refreshFailureStatus = 0;
     document.getElementById('settings-refresh').click();
@@ -289,7 +295,7 @@ async function flush() {
     }));
     for (let attempt = 0; attempt < 20 && formatDeleteCount < 2; attempt++) await flush();
     for (let attempt = 0; attempt < 20; attempt++) await flush();
-    assert.strictEqual(formatDeleteCount, 2);
+    assert.strictEqual(formatDeleteCount, 2, document.getElementById('settings-message').textContent);
     assert.match(committedMessages.at(-2), /Format deletions confirmed: 0 of 2/);
     assert.match(committedMessages.at(-1), /Format deletions confirmed: 1 of 2/);
     assert.equal(configurationCommits.length, 5, 'Settings and each confirmed format deletion invalidate before a partial follow-up failure');

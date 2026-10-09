@@ -20,7 +20,8 @@ public sealed partial class PatronJourneyTests
             .ToDictionaryAsync(item => item.Code, item => item.Id);
         seed.Organizations.Add(new Organization
         {
-            Id = libraryId, DisplayName = "Action claim library", Abbreviation = "ACL", IsActive = true
+            Id = libraryId, DisplayName = "Action claim library", Abbreviation = "ACL",
+            OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
         });
         var assignee = new StaffUser
         {

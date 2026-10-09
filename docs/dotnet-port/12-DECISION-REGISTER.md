@@ -218,7 +218,7 @@ Staged PRs began with Slice 6. Beginning with Slice 7, GPT-6 Astra High is the p
 - Organization `1` is the real system/default scope; do not use null/negative/synthetic scope sentinels.
 - `SystemSettings` and `PolarisSettings` are system-only and constrained to Organization `1`; patron embed origins are normalized system-only rows.
 - `WorkflowSettings`, `PatronSettings`, and `EmailSettings` use complete system rows plus sparse nullable library field overrides. A null field inherits only that field. Ordinary overrideable library text input that normalizes to blank is stored as null/no override where current behavior treats blank as fallback; secret edit forms keep blank=preserve and require an explicit action to clear an override.
-- Publication options, common-creator lists, and allowed patron-code IDs use relational whole-set tables where absence of a library set means inherit and presence means complete replacement, with blank/empty library input treated as reset/inherit.
+- Publication options, common-creator lists, and allowed patron-code IDs use relational whole-set tables: omitted target properties make no edit, absence of a library set means inherit, a library `null` explicitly resets to inheritance, and `[]` is a present empty replacement set. System `null`/`[]` both clear common creators and publication options; patron-code system `null` is invalid and `[]` clears. Blank ordinary text remains a separate no-override case; legacy source blank/empty lists may normalize to inheritance during import under the pinned source contract.
 - External search providers use stable system provider identities plus sparse library override rows instead of numbered columns.
 - Patron custom fields/options and per-format custom-field rules are relational library-owned configuration, not JSON and not inheritable.
 - Built-in material-format field behavior is represented by typed `MaterialFormat`/`MaterialFormatOverride` columns; custom-field per-format mode/label behavior uses `MaterialFormatCustomFieldRule`; do not preserve competing `patronFormatRules` JSON.
@@ -291,7 +291,7 @@ Staged PRs began with Slice 6. Beginning with Slice 7, GPT-6 Astra High is the p
 - Library custom format may be hard-deleted only when unreferenced.
 - Resetting a library override deletes the override row.
 - Do not persist a request-level material-format label snapshot; historical request display resolves through current format configuration.
-- Publication options use relational `PublicationOptionSet`/`PublicationOption` whole-set inheritance; no library set means inherit, and a library set is the complete replacement with blank/empty library input treated as reset/inherit.
+- Publication options use relational `PublicationOptionSet`/`PublicationOption` whole-set inheritance; no library set means inherit, and a present library set is the complete replacement, including an empty replacement. Target writes distinguish omitted (no edit), library `null` (reset/inherit), and `[]` (empty set); system `null` or `[]` is an empty system set. Legacy source blank/empty normalization is a migration rule, not the target API rule.
 - Workflow tags are a fixed relational seeded taxonomy with join table; no general CRUD UI required.
 - Request statuses/close reasons are constrained application codes/SQL checks rather than editable taxonomy tables.
 

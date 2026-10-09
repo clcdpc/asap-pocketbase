@@ -21,10 +21,16 @@ public sealed partial class PatronJourneyTests
     {
         var provider = new ServicingContextProvider(organizationId);
         await ExecuteNonQueryAsync("""
-            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (@org, N'Context Library', 1);
+            INSERT INTO [asap].[Organization]
+                ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+            VALUES (@org, N'Context Library', 2, 1, 1);
             IF @org <> 3472
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (3472, N'Patron Home Library', 1);
-            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (@branch, N'Context Branch', 0);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (3472, N'Patron Home Library', 2, 1, 1);
+            INSERT INTO [asap].[Organization]
+                ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+            VALUES (@branch, N'Context Branch', 3, 3472, 0);
             INSERT INTO [asap].[WorkflowSettings] ([OrganizationId], [AllowAnyRegisteredCardLogin], [UpdatedUtc])
                 VALUES (@org, 1, SYSUTCDATETIME());
             """, ("@org", organizationId), ("@branch", provider.RegisteredBranchId));

@@ -366,10 +366,12 @@ public sealed class StaffSuggestionService(
         var organizationIds = new[] { patron.PatronOrganizationId, patron.HomeLibraryOrganizationId };
         var organizations = await context.Organizations.AsNoTracking()
             .Where(item => organizationIds.Contains(item.Id))
-            .Select(item => new { item.Id, item.IsActive })
+            .Select(item => new { item.Id, item.OrganizationCodeId, item.IsActive })
             .ToListAsync(cancellationToken);
         var byId = organizations.ToDictionary(item => item.Id);
         return byId.Count == organizationIds.Distinct().Count() &&
+               OrganizationAuthority.IsLibrary(patron.HomeLibraryOrganizationId,
+                   byId[patron.HomeLibraryOrganizationId].OrganizationCodeId) &&
                byId[patron.HomeLibraryOrganizationId].IsActive;
     }
 

@@ -51,6 +51,14 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
   }
 
   function buildEditForm(request, configuration) {
+    if (request.customFieldsValid === false) {
+      return element('p', {
+        className: 'blocked-callout wide',
+        role: 'alert',
+        text: 'Saved custom-field history is invalid. Request edits are blocked to protect the stored values; contact an administrator.'
+      });
+    }
+
     const form = element('form', { className: 'edit-form' });
     formEvents?.abort();
     const events = new window.AbortController(); formEvents = events;

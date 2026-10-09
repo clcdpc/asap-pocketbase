@@ -1,4 +1,4 @@
-import { authToken, setAuthToken } from './state.js';
+import { authToken } from './state.js';
 import { requestJson } from '../../shared/http.js';
 
 export class SessionExpiredError extends Error {
@@ -22,11 +22,11 @@ export async function request(path, options = {}) {
   try {
     return await requestJson(getApiUrl(path), {
       ...options,
+      requireObjectResponse: true,
       headers: { ...headers, ...(options.headers || {}) }
     });
   } catch (err) {
     if (err.status === 401 && !path.endsWith('/login')) {
-      if (authToken === requestToken) setAuthToken('');
       throw new SessionExpiredError('Your session has expired. Please log in again.', requestToken);
     }
     throw err;
@@ -40,6 +40,11 @@ export function loadPatronConfig(path) {
 export function loginPatron(payload) {
   return request('/api/asap/patron/login', {
     method: 'POST',
+    validateResponse: data => {
+      if (typeof data?.token !== 'string' || !data.token || typeof data?.barcode !== 'string') {
+        throw new Error('Login response is incomplete.');
+      }
+    },
     body: payload
   });
 }
@@ -47,6 +52,12 @@ export function loginPatron(payload) {
 export function submitSuggestion(payload) {
   return request('/api/asap/patron/suggestions', {
     method: 'POST',
+    validateResponse: data => {
+      if (typeof data?.id !== 'string' || !/^[0-9]+$/.test(data.id) ||
+          typeof data?.successTitle !== 'string' || typeof data?.successMessage !== 'string') {
+        throw new Error('Suggestion response is incomplete.');
+      }
+    },
     body: payload
   });
 }
@@ -57,6 +68,7 @@ export function restorePatronSession() {
 
 export function logoutPatron() {
   return request('/api/asap/patron/logout', {
-    method: 'POST'
+    method: 'POST',
+    allowNoContent: true
   });
 }

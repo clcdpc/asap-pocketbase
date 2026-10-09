@@ -33,7 +33,7 @@ function settingsData(organizationId) {
     version: `library-${organizationId}-version`,
     organization: { id: organizationId, name: 'Library Two', abbreviation: 'TWO', active: true },
     stored: {
-      systemSettings: {},
+      systemSettings: { enabledLibraryOrgIds: [2], libraryOrgIds: [2] },
       polaris: {},
       configuredSystem,
       libraryOverride: organizationId === 1 ? null : {
@@ -74,7 +74,9 @@ function settingsData(organizationId) {
     },
     workflow: {},
     ui_text: {},
-    emails: { fromAddress: 'system@example.org', fromName: 'System', templates: [] }
+    emails: { fromAddress: 'system@example.org', fromName: 'System', templates: [] },
+    patronCodeChoices: [],
+    autoClaimStaff: []
   };
 }
 
@@ -115,9 +117,10 @@ async function flush() {
         return response(200, settingsData(requestUrl.endsWith('orgId=system') ? 1 : 2));
       }
       if (requestUrl.endsWith('/api/asap/staff/organizations')) {
-        return response(200, [
-          { id: 2, name: 'Library Two', abbreviation: 'TWO', isActive: true, version: 'org-2' }
-        ]);
+        return response(200, { code: 'ok', data: [
+          { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-1' },
+          { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-2' }
+        ] });
       }
       if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
         return response(200, { code: 'ok', data: [] });

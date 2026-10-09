@@ -33,7 +33,7 @@ public sealed partial class DatabaseBaselineTests
                 """);
             await NonQuery(connection, $"UPDATE [asap].[SchemaVersion] SET [Version] = {sourceVersion} WHERE [Id] = 1;");
             new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
-            Assert.AreEqual(10, Convert.ToInt32(await Scalar(connection,
+            Assert.AreEqual(11, Convert.ToInt32(await Scalar(connection,
                 "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
             Assert.AreEqual(true, Convert.ToBoolean(await Scalar(connection,
                 "SELECT [LegacyHoldProtected] FROM [asap].[TitleRequest] WHERE [Barcode] = N'34900000000001';")));

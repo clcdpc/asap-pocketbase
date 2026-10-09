@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 
 namespace Asap.Migration;
 
@@ -254,7 +255,7 @@ internal static class MigrationEffectiveConfiguration
         int maximum,
         string fallbackProvenance)
     {
-        var raw = EnvironmentValue(name);
+        var raw = NumericEnvironmentValue(name);
         if (raw is null)
         {
             return new(fallback, fallbackProvenance);
@@ -266,7 +267,7 @@ internal static class MigrationEffectiveConfiguration
 
     private static int? ResolveOptionalInteger(string name, int minimum, int maximum)
     {
-        var raw = EnvironmentValue(name);
+        var raw = NumericEnvironmentValue(name);
         if (raw is null)
         {
             return null;
@@ -278,15 +279,49 @@ internal static class MigrationEffectiveConfiguration
 
     private static int ParseLegacyInteger(string value, int fallback)
     {
-        var digits = new string(value
-            .SkipWhile(character => char.IsWhiteSpace(character))
-            .TakeWhile((character, index) =>
-                char.IsDigit(character) || index == 0 && character is '+' or '-')
-            .ToArray());
-        return int.TryParse(digits, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
-            ? parsed
-            : fallback;
+        var start = 0;
+        while (start < value.Length && IsEcmaScriptWhitespace(value[start]))
+        {
+            start++;
+        }
+
+        var end = start;
+        if (end < value.Length && value[end] is '+' or '-')
+        {
+            end++;
+        }
+        var digitStart = end;
+        while (end < value.Length && value[end] is >= '0' and <= '9')
+        {
+            end++;
+        }
+        if (end == digitStart)
+        {
+            return fallback;
+        }
+
+        var digits = value.AsSpan(start, end - start);
+        if (!BigInteger.TryParse(digits, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+        {
+            return fallback;
+        }
+        if (parsed < int.MinValue)
+        {
+            return int.MinValue;
+        }
+        if (parsed > int.MaxValue)
+        {
+            return int.MaxValue;
+        }
+        return (int)parsed;
     }
+
+    // Keep the ECMAScript parseInt TrimString set: FEFF counts as whitespace; NEL does not.
+    private static bool IsEcmaScriptWhitespace(char value) => value is
+        '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or
+        '\u1680' or '\u2000' or '\u2001' or '\u2002' or '\u2003' or '\u2004' or '\u2005' or
+        '\u2006' or '\u2007' or '\u2008' or '\u2009' or '\u200A' or '\u2028' or '\u2029' or
+        '\u202F' or '\u205F' or '\u3000' or '\uFEFF';
 
     private static string NormalizePersistedStaffUrl(string value)
     {
@@ -325,6 +360,13 @@ internal static class MigrationEffectiveConfiguration
     {
         var value = Environment.GetEnvironmentVariable(name);
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static string? NumericEnvironmentValue(string name)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        // Leave non-empty numeric text untouched so ParseLegacyInteger applies ECMAScript whitespace rules.
+        return string.IsNullOrEmpty(value) ? null : value;
     }
 
     private static string? Value(IReadOnlyDictionary<string, object?>? row, string name)

@@ -112,7 +112,8 @@ public sealed class AdditionalCopyService(
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var organizations = await context.Organizations.AsNoTracking()
-            .Where(item => item.Id != 1 && item.IsActive)
+            .Where(item => item.Id > LibraryScope.SystemOrganizationId &&
+                           item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive)
             .OrderBy(item => item.DisplayName)
             .ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
@@ -707,7 +708,7 @@ public sealed class AdditionalCopyService(
             return new LockedRelationshipContext("organization_inactive");
         }
         var organization = context.Organizations.Local.Single(item => item.Id == organizationId);
-        if (!organization.IsActive)
+        if (!OrganizationAuthority.IsActiveLibrary(organization))
         {
             return new LockedRelationshipContext("organization_inactive");
         }

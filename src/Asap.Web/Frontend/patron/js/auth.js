@@ -1,6 +1,6 @@
 import { loginForm, suggestionForm } from './state.js';
 import { loginPatron, logoutPatron, restorePatronSession, SessionExpiredError } from './api.js';
-import { authToken, setAuthToken } from './state.js';
+import { authToken, setAuthToken, setSubmitOutcomeUnknown } from './state.js';
 import { applyLoadedUiText, uiConfig } from './config.js';
 import { applyUiConfig, updateFormatUI } from './form-ui.js';
 import { showLoginStep, showSuggestionStep } from './steps.js';
@@ -20,6 +20,10 @@ function isCurrentAuthOperation(operation) {
 
 export function captureAuthOperation() {
   return authOperation;
+}
+
+export function isCurrentAuthContext(operation, token) {
+  return isCurrentAuthOperation(operation) && authToken === token;
 }
 
 export function patronContextCookieValue() {
@@ -166,6 +170,12 @@ export async function logout() {
 
 function clearPatronState() {
   setAuthToken('');
+  setSubmitOutcomeUnknown(false);
+  const submitButton = byId('submit-btn');
+  if (submitButton) {
+    submitButton.disabled = false;
+    submitButton.textContent = 'Submit';
+  }
   if (loginForm) loginForm.reset();
   if (suggestionForm) suggestionForm.reset();
   setLoginBusy(false);
@@ -200,8 +210,9 @@ export async function restoreSession(expectedOperation = authOperation) {
 export function handleSessionExpired(error) {
   if (!(error instanceof SessionExpiredError) && error.status !== 401) return false;
   if (error.requestToken && authToken && error.requestToken !== authToken) return true;
+  beginAuthOperation();
+  clearPatronState();
   showLoginError('Your session has expired. Please log in again.');
-  showLoginStep();
   return true;
 }
 

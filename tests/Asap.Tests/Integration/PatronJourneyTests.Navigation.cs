@@ -13,7 +13,12 @@ public sealed partial class PatronJourneyTests
         using var startup = factory!.CreateClient();
         await startup.GetAsync("/api/asap/staff/session");
         var superAdmin = await ReadConfiguredSuperAdminAsync();
-        var libraryStaff = superAdmin with { Role = "staff", OrganizationId = 2 };
+        var libraryStaff = superAdmin with
+        {
+            Role = "staff",
+            OrganizationId = 2,
+            OrganizationCodeId = OrganizationAuthority.LibraryOrganizationCodeId
+        };
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var title = $"Related navigation {Guid.NewGuid():N}";
         const int otherLibraryId = 93456;
@@ -57,7 +62,8 @@ public sealed partial class PatronJourneyTests
                 library.AdditionalCopyTimeoutEnabled = false;
                 context.Organizations.Add(new Organization
                 {
-                    Id = otherLibraryId, DisplayName = "Related foreign library", IsActive = true
+                    Id = otherLibraryId, DisplayName = "Related foreign library",
+                    OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
                 });
                 var formatId = await context.MaterialFormats.Select(item => item.Id).FirstAsync();
                 var now = timeProvider!.GetUtcNow().UtcDateTime;

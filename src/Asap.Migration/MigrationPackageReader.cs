@@ -164,6 +164,9 @@ internal sealed class SourceRow(IReadOnlyDictionary<string, JsonElement> values)
         try
         {
             using var document = JsonDocument.Parse(text);
+            MigrationPackageValidator.EnsureNoDuplicateProperties(
+                document.RootElement,
+                "source_json_invalid");
             return document.RootElement.GetRawText();
         }
         catch (JsonException)

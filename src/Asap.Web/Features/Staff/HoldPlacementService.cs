@@ -737,7 +737,7 @@ public sealed class HoldPlacementService(
         var organization = await context.Organizations.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {preRequest.LibraryOrganizationId}")
             .SingleOrDefaultAsync(cancellationToken);
-        if (organization?.IsActive != true)
+        if (organization is null || !OrganizationAuthority.IsActiveLibrary(organization))
         {
             return new HoldPlacementResult("organization_inactive", operationId);
         }
@@ -809,17 +809,45 @@ public sealed class HoldPlacementService(
         CancellationToken cancellationToken,
         StaffIdentityEvidence? manualActorEvidence = null)
     {
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-        var snapshot = await context.TitleRequests.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.Id == requestId, cancellationToken);
+        TitleRequest? snapshot;
+        await using (var preflightContext = await contextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            snapshot = await preflightContext.TitleRequests.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.Id == requestId, cancellationToken);
+        }
+
         if (snapshot is null || actor is not null && !TitleRequestViewService.CanAccess(actor, snapshot.LibraryOrganizationId))
         {
             return new AcquisitionResult("not_found");
         }
+
+        PatronSnapshot verifiedPatron;
+        try
+        {
+            verifiedPatron = await patronProvider.RefreshAsync(snapshot.Barcode, snapshot.LibraryOrganizationId, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException)
+        {
+            return new AcquisitionResult("hold_provider_error");
+        }
+
+        var barcodeAliases = verifiedPatron.KnownBarcodeAliases;
+        if (verifiedPatron.PatronId <= 0 || barcodeAliases.Count == 0 ||
+            !barcodeAliases.Contains(snapshot.Barcode, StringComparer.OrdinalIgnoreCase) ||
+            snapshot.PatronIdSnapshot is > 0 && snapshot.PatronIdSnapshot.Value != verifiedPatron.PatronId)
+        {
+            return new AcquisitionResult("patron_identity_changed");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         if (!await PatronMutationLock.TryAcquireAsync(
                 (SqlConnection)context.Database.GetDbConnection(), (SqlTransaction)transaction.GetDbTransaction(),
-                snapshot.Barcode, cancellationToken))
+                verifiedPatron.PatronId, barcodeAliases, cancellationToken))
         {
             return new AcquisitionResult("hold_operation_incomplete");
         }
@@ -832,7 +860,7 @@ public sealed class HoldPlacementService(
         var organization = await context.Organizations.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {snapshot.LibraryOrganizationId}")
             .SingleOrDefaultAsync(cancellationToken);
-        if (organization?.IsActive != true)
+        if (organization is null || !OrganizationAuthority.IsActiveLibrary(organization))
         {
             return new AcquisitionResult("organization_inactive");
         }
@@ -863,9 +891,14 @@ public sealed class HoldPlacementService(
         var request = await context.TitleRequests.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[TitleRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {requestId}")
             .SingleOrDefaultAsync(cancellationToken);
-        if (request is null || request.LibraryOrganizationId != snapshot.LibraryOrganizationId)
+        if (request is null || request.LibraryOrganizationId != snapshot.LibraryOrganizationId ||
+            request.Barcode != snapshot.Barcode || request.PatronIdSnapshot != snapshot.PatronIdSnapshot)
         {
             return new AcquisitionResult("not_found");
+        }
+        if (request.PatronIdSnapshot is > 0 && request.PatronIdSnapshot != verifiedPatron.PatronId)
+        {
+            return new AcquisitionResult("patron_identity_changed");
         }
         if (!request.RowVersion.SequenceEqual(expectedVersion))
         {
@@ -897,9 +930,12 @@ public sealed class HoldPlacementService(
             return new AcquisitionResult("patron_barcode_missing");
         }
 
+        var barcodeAliasesJson = JsonSerializer.Serialize(barcodeAliases);
         var pickupPending = await context.Database.SqlQuery<int>($"""
             SELECT COUNT(*) AS [Value] FROM [asap].[PickupPreferenceOperation]
-            WHERE [Barcode] = {request.Barcode} AND [CompletedUtc] IS NULL
+            WHERE ([PatronId] = {verifiedPatron.PatronId} OR [Barcode] IN
+                (SELECT [value] FROM OPENJSON({barcodeAliasesJson})))
+              AND [CompletedUtc] IS NULL
             """).SingleAsync(cancellationToken);
         if (pickupPending != 0)
         {
@@ -916,7 +952,8 @@ public sealed class HoldPlacementService(
 
         var otherActiveRequests = await context.TitleRequests.AsNoTracking()
             .Where(item => item.LibraryOrganizationId == request.LibraryOrganizationId &&
-                item.Barcode == request.Barcode && item.Id != request.Id &&
+                (item.PatronIdSnapshot == verifiedPatron.PatronId ||
+                 item.PatronIdSnapshot == null && barcodeAliases.Contains(item.Barcode)) && item.Id != request.Id &&
                 (item.Status == RequestStatus.PendingHold || item.Status == RequestStatus.HoldPlaced) && item.BibId != null)
             .OrderBy(item => item.Id)
             .Select(item => new { item.Id, item.Title, item.Status, item.BibId })
@@ -961,6 +998,7 @@ public sealed class HoldPlacementService(
         {
             TitleRequestId = request.Id,
             PatronBarcodeSnapshot = request.Barcode,
+            PatronIdSnapshot = request.PatronIdSnapshot ?? verifiedPatron.PatronId,
             BibIdSnapshot = bibId,
             RequestingOrganizationIdSnapshot = request.LibraryOrganizationId,
             PickupBranchIdSnapshot = request.PreferredPickupBranchId,
@@ -1021,6 +1059,11 @@ public sealed class HoldPlacementService(
         try
         {
             patron = await CallWithLeaseAsync(owner, token => patronProvider.RefreshAsync(operation.PatronBarcodeSnapshot, organizationId, token), cancellationToken);
+            if (operation.PatronIdSnapshot is > 0 && patron.PatronId != operation.PatronIdSnapshot.Value)
+            {
+                await RequireOperatorAsync(owner, "patron_identity_changed", cancellationToken);
+                return new HoldPlacementResult("patron_identity_changed", owner.Id);
+            }
             holds = await CallWithLeaseAsync(owner, token => staffPolarisProvider.GetPatronHoldsAsync(operation.PatronBarcodeSnapshot, organizationId, token), cancellationToken);
         }
         catch (OwnershipLostException)
@@ -1128,9 +1171,13 @@ public sealed class HoldPlacementService(
         var request = await context.TitleRequests.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == operation.TitleRequestId, cancellationToken);
         if (request is null || request.Status != RequestStatus.PendingHold || !request.AutoHold ||
-            !SameBibIdentity(request.BibId, operation.BibIdSnapshot))
+            !SameBibIdentity(request.BibId, operation.BibIdSnapshot) || request.Barcode != operation.PatronBarcodeSnapshot)
         {
             return "hold_not_eligible";
+        }
+        if (request.PatronIdSnapshot is > 0 && request.PatronIdSnapshot != operation.PatronIdSnapshot)
+        {
+            return "patron_identity_changed";
         }
         if (request.LegacyHoldProtected)
         {
@@ -1253,6 +1300,7 @@ public sealed class HoldPlacementService(
                     AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
                     AND request.[LegacyHoldProtected] = 0
                     AND request.[LibraryOrganizationId] = {organizationId}
+                    AND (request.[PatronIdSnapshot] IS NULL OR request.[PatronIdSnapshot] = {patron.PatronId})
                     AND request.[BibId] = [BibIdSnapshot])
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
@@ -1351,8 +1399,8 @@ public sealed class HoldPlacementService(
                 .SingleOrDefaultAsync(cancellationToken);
             var permitted = organizationsPresent && staff is not null &&
                 IsLockedActorOrganizationActive(context, staff) &&
-                (owner.IsRecovery || context.Organizations.Local
-                    .Single(item => item.Id == requestSnapshot.LibraryOrganizationId).IsActive) &&
+                (owner.IsRecovery || OrganizationAuthority.IsActiveLibrary(context.Organizations.Local
+                    .Single(item => item.Id == requestSnapshot.LibraryOrganizationId))) &&
                 (actor is not null
                     ? owner.IsRecovery
                         ? IsCurrentSuperAdmin(actor, staff)

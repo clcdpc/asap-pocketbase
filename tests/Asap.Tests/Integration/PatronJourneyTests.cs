@@ -238,7 +238,13 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(HttpStatusCode.Created, submission.StatusCode, await submission.Content.ReadAsStringAsync());
 
         using var submissionDocument = JsonDocument.Parse(await submission.Content.ReadAsStringAsync());
-        var requestId = submissionDocument.RootElement.GetProperty("id").GetInt64();
+        var requestIdElement = submissionDocument.RootElement.GetProperty("id");
+        Assert.AreEqual(JsonValueKind.String, requestIdElement.ValueKind);
+        var requestIdText = requestIdElement.GetString();
+        Assert.IsNotNull(requestIdText);
+        Assert.IsTrue(long.TryParse(requestIdText, System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out var requestId));
+        Assert.AreEqual(requestId.ToString(System.Globalization.CultureInfo.InvariantCulture), requestIdText);
         Assert.HasCount(1, dispatcher!.EnqueuedIds);
 
         await using (var connection = new SqlConnection(databaseConnectionString))
@@ -1834,8 +1840,9 @@ public sealed partial class PatronJourneyTests
             await using var seed = connection.CreateCommand();
             seed.CommandText =
                 """
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (8830, N'Empty Code Override Library', N'ECL', 1);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (8830, N'Empty Code Override Library', N'ECL', 2, 1, 1);
                 SELECT COUNT(*) FROM [asap].[PatronCodeEligibilityMember]
                 WHERE [OrganizationId] = 1 AND [PatronCodeId] = N'1';
                 """;
@@ -1925,9 +1932,10 @@ public sealed partial class PatronJourneyTests
             previousStaffUrl = (await seed.ExecuteScalarAsync()) as string;
             seed.CommandText =
                 """
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (8828, N'Patron Link Library', N'PLL', 1),
-                       (8829, N'Foreign Code Library', N'FCL', 1);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (8828, N'Patron Link Library', N'PLL', 2, 1, 1),
+                       (8829, N'Foreign Code Library', N'FCL', 2, 1, 1);
                 INSERT INTO [asap].[PatronCodeEligibilitySet] ([OrganizationId]) VALUES (8828), (8829);
                 INSERT INTO [asap].[PatronCodeEligibilityMember] ([OrganizationId], [PatronCodeId])
                 VALUES (8828, 8828), (8829, 8829);
@@ -2615,8 +2623,9 @@ public sealed partial class PatronJourneyTests
                 """
                 DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = 91320)
-                    INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                    VALUES (91320, N'Role contraction library', N'RCL', 1);
+                    INSERT INTO [asap].[Organization]
+                        ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                    VALUES (91320, N'Role contraction library', N'RCL', 2, 1, 1);
                 INSERT INTO [asap].[StaffUser]
                     ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
                      [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive])
@@ -3103,13 +3112,7 @@ public sealed partial class PatronJourneyTests
             new Dictionary<string, string?>());
 
         var submissionFirst = await SeedLifecycleAutoClaimRaceAsync("automatic-first");
-        var firstSession = new PatronSessionContext(
-            0,
-            "20000000002041",
-            2,
-            2,
-            2,
-            DateTime.UtcNow.AddHours(1));
+        var firstSession = await IssueTestPatronSessionAsync("20000000002041");
         PatronSuggestionResult firstResult;
         await using (var blockerConnection = new SqlConnection(databaseConnectionString))
         {
@@ -3155,13 +3158,7 @@ public sealed partial class PatronJourneyTests
             expectedCleanupEvents: 1);
 
         var lifecycleFirst = await SeedLifecycleAutoClaimRaceAsync("lifecycle-first");
-        var secondSession = new PatronSessionContext(
-            0,
-            "20000000002042",
-            2,
-            2,
-            2,
-            DateTime.UtcNow.AddHours(1));
+        var secondSession = await IssueTestPatronSessionAsync("20000000002042");
         PatronSuggestionResult secondResult;
         await using (var blockerConnection = new SqlConnection(databaseConnectionString))
         {
@@ -3199,6 +3196,8 @@ public sealed partial class PatronJourneyTests
             secondResult.Id,
             expectedAssignedEvents: 0,
             expectedCleanupEvents: 0);
+        await DeleteTestPatronSessionAsync(firstSession.Id);
+        await DeleteTestPatronSessionAsync(secondSession.Id);
     }
 
     [TestMethod]
@@ -3318,8 +3317,9 @@ public sealed partial class PatronJourneyTests
                 """
                 IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = 82)
                 BEGIN
-                    INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                    VALUES (82, N'Candidate Foreign Library', N'CFL', 1);
+                    INSERT INTO [asap].[Organization]
+                        ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                    VALUES (82, N'Candidate Foreign Library', N'CFL', 2, 1, 1);
                 END;
 
                 DECLARE @superId bigint = (
@@ -5535,8 +5535,9 @@ public sealed partial class PatronJourneyTests
                     SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (91211, N'Inactive recovery library', N'IRL', 0);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (91211, N'Inactive recovery library', N'IRL', 2, 1, 0);
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
@@ -6385,8 +6386,9 @@ public sealed partial class PatronJourneyTests
             await using var seedOrganization = connection.CreateCommand();
             seedOrganization.CommandText =
                 """
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (@id, N'Inactive identity library', N'IIL', 0);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (@id, N'Inactive identity library', N'IIL', 2, 1, 0);
                 """;
             seedOrganization.Parameters.AddWithValue("@id", inactiveOrganizationId);
             Assert.AreEqual(1, await seedOrganization.ExecuteNonQueryAsync());
@@ -8152,6 +8154,8 @@ public sealed partial class PatronJourneyTests
     [DataRow(200, "{}")]
     [DataRow(200, "not-json")]
     [DataRow(200, "{\"PAPIErrorCode\":0}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-1,\"PatronID\":\"7001\"}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-1,\"PatronID\":7001,\"patronid\":7002}")]
     public async Task PolarisAuthenticationTreatsTransportAndProtocolFailuresAsOperational(
         int statusCode,
         string content)
@@ -8409,8 +8413,9 @@ public sealed partial class PatronJourneyTests
             organization.CommandText =
                 """
                 IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = @id)
-                    INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                    VALUES (@id, N'Other sensitive library', N'OSL', 1);
+                    INSERT INTO [asap].[Organization]
+                        ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                    VALUES (@id, N'Other sensitive library', N'OSL', 2, 1, 1);
                 """;
             organization.Parameters.AddWithValue("@id", otherOrganizationId);
             await organization.ExecuteNonQueryAsync();
@@ -8694,14 +8699,9 @@ public sealed partial class PatronJourneyTests
         var blockedSuggestionService = CreatePatronSuggestionService(
             allowedDomains: ["allowed.invalid"],
             blockedDispatcher);
+        var blockedSession = await IssueTestPatronSessionAsync("20000000000040");
         var blockedResult = await blockedSuggestionService.CreateAsync(
-            new PatronSessionContext(
-                9001,
-                "20000000000040",
-                2,
-                2,
-                2,
-                DateTime.UtcNow.AddHours(1)),
+            blockedSession,
             Suggestion("Initially Blocked Domain"),
             CancellationToken.None);
         var initiallyBlockedOutboxId = await FindSubmissionOutboxIdAsync(blockedResult.Id);
@@ -8723,14 +8723,9 @@ public sealed partial class PatronJourneyTests
         var allowedSuggestionService = CreatePatronSuggestionService(
             allowedDomains: ["example.org"],
             allowedDispatcher);
+        var allowedSession = await IssueTestPatronSessionAsync("20000000000041");
         var queuedResult = await allowedSuggestionService.CreateAsync(
-            new PatronSessionContext(
-                9002,
-                "20000000000041",
-                2,
-                2,
-                2,
-                DateTime.UtcNow.AddHours(1)),
+            allowedSession,
             Suggestion("Allowed Then Blocked Domain"),
             CancellationToken.None);
         var queuedOutboxId = await FindSubmissionOutboxIdAsync(queuedResult.Id);
@@ -8747,6 +8742,8 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(0, senderAfterTightening.Envelopes.Count);
         Assert.AreEqual("suppressed", suppressedAtSend.Status);
         Assert.AreEqual("recipient_domain_not_allowed", suppressedAtSend.SuppressionReason);
+        await DeleteTestPatronSessionAsync(blockedSession.Id);
+        await DeleteTestPatronSessionAsync(allowedSession.Id);
     }
 
     [TestMethod]
@@ -8759,14 +8756,9 @@ public sealed partial class PatronJourneyTests
             localDispatcher,
             sender);
 
+        var session = await IssueTestPatronSessionAsync("20000000000050");
         var result = await service.CreateAsync(
-            new PatronSessionContext(
-                9010,
-                "20000000000050",
-                2,
-                2,
-                2,
-                DateTime.UtcNow.AddHours(1)),
+            session,
             Suggestion($"Unavailable Transport {Guid.NewGuid():N}"),
             CancellationToken.None);
 
@@ -8775,6 +8767,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("suppressed", outbox.Status);
         Assert.AreEqual("mail_not_configured", outbox.SuppressionReason);
         Assert.AreEqual(0, localDispatcher.EnqueuedIds.Count);
+        await DeleteTestPatronSessionAsync(session.Id);
     }
 
     [TestMethod]
@@ -8783,14 +8776,9 @@ public sealed partial class PatronJourneyTests
         var localDispatcher = new RecordingOutboxDispatcher();
         var sender = new MutableReadinessEmailSender(isConfigured: true);
         var service = CreatePatronSuggestionService(["example.org"], localDispatcher, sender);
+        var session = await IssueTestPatronSessionAsync("20000000000051");
         var result = await service.CreateAsync(
-            new PatronSessionContext(
-                9011,
-                "20000000000051",
-                2,
-                2,
-                2,
-                DateTime.UtcNow.AddHours(1)),
+            session,
             Suggestion($"Readiness Lost {Guid.NewGuid():N}"),
             CancellationToken.None);
         var outboxId = await FindSubmissionOutboxIdAsync(result.Id);
@@ -8803,6 +8791,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(0, sender.SendCount);
         Assert.AreEqual("failed", outbox.Status);
         Assert.AreEqual("mail_not_configured", outbox.LastErrorCode);
+        await DeleteTestPatronSessionAsync(session.Id);
     }
 
     [TestMethod]
@@ -9026,7 +9015,9 @@ public sealed partial class PatronJourneyTests
             "Duplicate Identifier &lt;Winner&gt; is Library declined via identifier number.",
             root.GetProperty("conflictMessage").GetString());
         var duplicate = root.GetProperty("duplicate");
-        Assert.AreEqual(identifierRequestId, duplicate.GetProperty("id").GetInt64());
+        var duplicateId = duplicate.GetProperty("id");
+        Assert.AreEqual(JsonValueKind.String, duplicateId.ValueKind);
+        Assert.AreEqual(identifierRequestId.ToString(System.Globalization.CultureInfo.InvariantCulture), duplicateId.GetString());
         Assert.AreEqual("Identifier <Winner>", duplicate.GetProperty("title").GetString());
         Assert.AreEqual("First Author", duplicate.GetProperty("author").GetString());
         Assert.AreEqual("book", duplicate.GetProperty("format").GetString());
@@ -9979,8 +9970,9 @@ public sealed partial class PatronJourneyTests
             """
             IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id]=83)
             BEGIN
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (83, N'Additional Copy Race Library', N'ACR', 1);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (83, N'Additional Copy Race Library', N'ACR', 2, 1, 1);
             END;
             INSERT INTO [asap].[StaffUser]
                 ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
@@ -10179,8 +10171,9 @@ public sealed partial class PatronJourneyTests
             """
             IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = 82)
             BEGIN
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (82, N'Other Browser Library', N'OBR', 1);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (82, N'Other Browser Library', N'OBR', 2, 1, 1);
             END;
 
             UPDATE [asap].[SystemSettings]
@@ -10493,10 +10486,12 @@ public sealed partial class PatronJourneyTests
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-            VALUES (2, N'Test Library', N'TEST', 1);
-            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-            VALUES (101, N'Main Library Branch', N'MAIN', 0);
+            INSERT INTO [asap].[Organization]
+                ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+            VALUES (2, N'Test Library', N'TEST', 2, 1, 1);
+            INSERT INTO [asap].[Organization]
+                ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+            VALUES (101, N'Main Library Branch', N'MAIN', 3, 2, 0);
             UPDATE [asap].[PolarisSettings]
             SET [WorkstationId] = 99, [SystemPolarisUserId] = 42 WHERE [OrganizationId] = 1;
             UPDATE [asap].[EmailSettings]
@@ -10935,11 +10930,13 @@ public sealed partial class PatronJourneyTests
             """
             IF EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = @id)
                 UPDATE [asap].[Organization]
-                SET [DisplayName] = @name, [Abbreviation] = @abbreviation, [IsActive] = 1
+                SET [DisplayName] = @name, [Abbreviation] = @abbreviation,
+                    [OrganizationCodeId] = 2, [ParentOrganizationId] = 1, [IsActive] = 1
                 WHERE [Id] = @id;
             ELSE
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (@id, @name, @abbreviation, 1);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (@id, @name, @abbreviation, 2, 1, 1);
             """;
         command.Parameters.AddWithValue("@id", organizationId);
         command.Parameters.AddWithValue("@name", name);
@@ -11201,7 +11198,8 @@ public sealed partial class PatronJourneyTests
 
         public Task<IReadOnlyList<PolarisOrganizationSnapshot>> GetOrganizationsAsync(
             CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<PolarisOrganizationSnapshot>>([]);
+            Task.FromResult<IReadOnlyList<PolarisOrganizationSnapshot>>(
+                [new(1, "System", null, 1, null), new(2, "Test Library", "Test", 2, 1)]);
 
         public Task<IReadOnlyList<PolarisPatronCodeSnapshot>> GetPatronCodesAsync(
             CancellationToken cancellationToken) =>

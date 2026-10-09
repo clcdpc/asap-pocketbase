@@ -26,7 +26,7 @@ public sealed partial class AdministrationService
             return;
         }
 
-        var normalized = ParseValues(value)
+        var normalized = ParseStrictStringSet(value, "Embed origins")
             .Select(NormalizeOrigin)
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
@@ -63,13 +63,18 @@ public sealed partial class AdministrationService
             return;
         }
 
-        var enabled = ParseValues(value)
-            .Select(item => int.TryParse(item, out var id) ? id : 0)
-            .Where(item => item > 1)
-            .ToHashSet();
-        var organizations = await context.Organizations
+        var enabled = ParseParticipationIds(value);
+        var allOrganizations = await context.Organizations
             .Where(item => item.Id > 1)
             .ToListAsync(cancellationToken);
+        var organizations = allOrganizations
+            .Where(item => OrganizationAuthority.IsLibrary(item))
+            .ToList();
+        var knownLibraryIds = organizations.Select(item => item.Id).ToHashSet();
+        if (enabled.Any(id => !knownLibraryIds.Contains(id)))
+        {
+            throw new AdministrationInputException("Participation may only include known Polaris libraries.");
+        }
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var revoked = organizations
             .Where(item => item.IsActive && !enabled.Contains(item.Id))
@@ -288,11 +293,25 @@ public sealed partial class AdministrationService
         var systemProviders = await context.ExternalSearchProviders
             .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
             .ToListAsync(cancellationToken);
+        var seenProviderIds = new HashSet<long>();
         foreach (var input in inputs)
         {
             var provider = input.Id.HasValue
                 ? systemProviders.SingleOrDefault(item => item.Id == input.Id.Value)
                 : systemProviders.SingleOrDefault(item => item.ProviderKey == input.Key);
+            if (input.Id.HasValue && provider is null)
+            {
+                throw new AdministrationInputException("The selected external provider ID is outside the settings scope.");
+            }
+            if (provider is not null && input.Key is not null &&
+                !string.Equals(provider.ProviderKey, input.Key, StringComparison.Ordinal))
+            {
+                throw new AdministrationInputException("The external provider ID and key do not identify the same provider.");
+            }
+            if (provider is not null && provider.Id > 0 && !seenProviderIds.Add(provider.Id))
+            {
+                throw new AdministrationInputException("External provider IDs and keys must identify unique providers.");
+            }
             if (provider is null)
             {
                 if (organizationId != LibraryScope.SystemOrganizationId)
@@ -422,14 +441,16 @@ public sealed partial class AdministrationService
                 .ToListAsync(cancellationToken);
         if (hasFormats)
         {
+            var seenFormatTargets = new HashSet<(int OwnerOrganizationId, long? Id, string? Code)>();
             foreach (var item in value.EnumerateArray())
             {
                 if (item.ValueKind != JsonValueKind.Object)
                 {
-                    continue;
+                    throw new AdministrationInputException("Each format must be an object.");
                 }
 
-                await ApplyFormatObjectAsync(context, organizationId, item, systemFormats, customFormats, cancellationToken);
+                await ApplyFormatObjectAsync(context, organizationId, item, systemFormats, customFormats,
+                    seenFormatTargets, cancellationToken);
             }
         }
         if (hasRules)
@@ -478,28 +499,53 @@ public sealed partial class AdministrationService
         JsonElement item,
         IReadOnlyList<MaterialFormat> systemFormats,
         IReadOnlyList<MaterialFormat> customFormats,
+        HashSet<(int OwnerOrganizationId, long? Id, string? Code)> seenFormatTargets,
         CancellationToken cancellationToken)
     {
-        var id = GetLong(item, "id");
-        var code = Clean(GetString(item, "code"));
-        var owner = GetInt(item, "ownerOrganizationId") ?? (GetBool(item, "custom") == true ? organizationId : 1);
+        ValidateFormatInput(item);
+        var id = ReadOptionalLong(item, "id", "materialFormatId");
+        var code = Clean(ReadOptionalString(item, "code", "format"));
+        var explicitOwner = ReadOptionalInt(item, "ownerOrganizationId");
+        var customFlag = ReadOptionalBoolean(item, "custom");
+        var owner = explicitOwner ?? (customFlag == true ? organizationId : 1);
+        var byId = id.HasValue
+            ? systemFormats.Concat(customFormats).SingleOrDefault(format => format.Id == id.Value)
+            : null;
+        if (id.HasValue && byId is null)
+        {
+            throw new AdministrationInputException("The selected format ID is not available in this settings scope.");
+        }
+        if (byId is not null && code is not null && !string.Equals(byId.Code, code, StringComparison.Ordinal))
+        {
+            throw new AdministrationInputException("The selected format ID and code do not identify the same format.");
+        }
         if (organizationId == LibraryScope.SystemOrganizationId)
         {
-            var target = (id.HasValue ? systemFormats.SingleOrDefault(format => format.Id == id.Value) : null) ??
-                         (code is null ? null : systemFormats.SingleOrDefault(format => format.Code == code));
+            if (byId is not null && byId.OwnerOrganizationId != LibraryScope.SystemOrganizationId ||
+                explicitOwner.HasValue && explicitOwner.Value != LibraryScope.SystemOrganizationId || customFlag == true)
+            {
+                throw new AdministrationInputException("System settings cannot edit a library-owned format.");
+            }
+            var byCode = code is null ? null : systemFormats.SingleOrDefault(format => format.Code == code);
+            var target = byId ?? byCode;
             if (target is null)
             {
-                if (owner != 1)
+                if (owner != LibraryScope.SystemOrganizationId)
                 {
                     throw new AdministrationInputException("System settings cannot create a library-owned format.");
                 }
 
                 target = CreateFormat(item, code, 1);
+                EnsureUniqueFormatTarget(seenFormatTargets, target);
                 context.MaterialFormats.Add(target);
                 if (systemFormats is List<MaterialFormat> mutableSystemFormats)
                 {
                     mutableSystemFormats.Add(target);
                 }
+            }
+            else
+            {
+                EnsureUniqueFormatTarget(seenFormatTargets, target);
             }
             ApplyOwnedFormat(target, item, allowCode: false);
             if (GetBool(item, "deleted") == true || GetBool(item, "delete") == true)
@@ -509,34 +555,73 @@ public sealed partial class AdministrationService
             return;
         }
 
-        var custom = id.HasValue
-            ? customFormats.SingleOrDefault(format => format.Id == id.Value)
-            : code is null ? null : customFormats.SingleOrDefault(format => format.Code == code);
-        if (owner == organizationId || GetBool(item, "custom") == true)
+        if (explicitOwner.HasValue && explicitOwner.Value is not (1) && explicitOwner.Value != organizationId)
         {
+            throw new AdministrationInputException("The format owner is outside the selected settings scope.");
+        }
+        if (explicitOwner.HasValue && byId is not null && explicitOwner.Value != byId.OwnerOrganizationId)
+        {
+            throw new AdministrationInputException("The selected format ID and owner do not identify the same format.");
+        }
+        var requestedCustom = owner == organizationId || customFlag == true || byId?.OwnerOrganizationId == organizationId;
+        if (customFlag == false && (owner == organizationId || byId?.OwnerOrganizationId == organizationId) ||
+            customFlag == true && byId?.OwnerOrganizationId == LibraryScope.SystemOrganizationId)
+        {
+            throw new AdministrationInputException("The custom-format flag conflicts with the selected format ID.");
+        }
+        if (requestedCustom)
+        {
+            var byCode = code is null ? null : customFormats.SingleOrDefault(format => format.Code == code);
+            if (byId is not null && byId.OwnerOrganizationId != organizationId)
+            {
+                throw new AdministrationInputException("The selected format ID does not identify a library-owned format.");
+            }
+            if (byId is not null && byCode is not null && byId.Id != byCode.Id)
+            {
+                throw new AdministrationInputException("The selected format ID and code do not identify the same format.");
+            }
+            if (code is not null && systemFormats.Any(format => format.Code == code))
+            {
+                throw new AdministrationInputException("A custom format code must not collide with a system format.");
+            }
+            var custom = byId ?? byCode;
             if (custom is null)
             {
-                if (code is null || systemFormats.Any(format => format.Code == code))
+                if (code is null)
                 {
                     throw new AdministrationInputException("A custom format code must be present and must not collide with a system format.");
                 }
                 custom = CreateFormat(item, code, organizationId);
+                EnsureUniqueFormatTarget(seenFormatTargets, custom);
                 context.MaterialFormats.Add(custom);
                 if (customFormats is List<MaterialFormat> mutableCustomFormats)
                 {
                     mutableCustomFormats.Add(custom);
                 }
             }
+            else
+            {
+                EnsureUniqueFormatTarget(seenFormatTargets, custom);
+            }
             ApplyOwnedFormat(custom, item, allowCode: false);
             return;
         }
 
-        var system = (id.HasValue ? systemFormats.SingleOrDefault(format => format.Id == id.Value) : null) ??
-                     (code is null ? null : systemFormats.SingleOrDefault(format => format.Code == code));
+        if (byId is not null && byId.OwnerOrganizationId != LibraryScope.SystemOrganizationId)
+        {
+            throw new AdministrationInputException("The selected format ID does not identify a system format.");
+        }
+        var systemByCode = code is null ? null : systemFormats.SingleOrDefault(format => format.Code == code);
+        var system = byId ?? systemByCode;
+        if (byId is not null && systemByCode is not null && byId.Id != systemByCode.Id)
+        {
+            throw new AdministrationInputException("The selected format ID and code do not identify the same format.");
+        }
         if (system is null)
         {
             throw new AdministrationInputException("The selected system format is not available in this library scope.");
         }
+        EnsureUniqueFormatTarget(seenFormatTargets, system);
 
         var existing = await context.MaterialFormatOverrides
             .SingleOrDefaultAsync(itemRow => itemRow.LibraryOrganizationId == organizationId && itemRow.MaterialFormatId == system.Id, cancellationToken);
@@ -569,6 +654,18 @@ public sealed partial class AdministrationService
         }
     }
 
+    private static void EnsureUniqueFormatTarget(
+        HashSet<(int OwnerOrganizationId, long? Id, string? Code)> seenTargets,
+        MaterialFormat target)
+    {
+        var id = target.Id > 0 ? target.Id : (long?)null;
+        var identity = (target.OwnerOrganizationId, id, id.HasValue ? null : target.Code);
+        if (!seenTargets.Add(identity))
+        {
+            throw new AdministrationInputException("A material format may only appear once in a settings replacement.");
+        }
+    }
+
     private static async Task ApplyLegacyFormatMapsAsync(
         AsapDbContext context,
         int organizationId,
@@ -577,23 +674,36 @@ public sealed partial class AdministrationService
         IReadOnlyList<MaterialFormat> customFormats,
         CancellationToken cancellationToken)
     {
-        var labels = TryGetAny(patron, out var labelValue, "formatLabels") && labelValue.ValueKind == JsonValueKind.Object
-            ? labelValue
-            : default;
+        var hasLabels = TryGetAny(patron, out var labelValue, "formatLabels");
+        if (hasLabels && labelValue.ValueKind != JsonValueKind.Object)
+        {
+            throw new AdministrationInputException("Format labels must be an object.");
+        }
+        var labels = hasLabels ? labelValue : default;
         var order = TryGetAny(patron, out var orderValue, "formatOrder") ? ParseValues(orderValue) : [];
         var available = TryGetAny(patron, out var availableValue, "availableFormats")
             ? ParseValues(availableValue).ToHashSet(StringComparer.Ordinal)
             : null;
+        var formats = systemFormats.Concat(customFormats).ToArray();
+        var knownCodes = formats.Select(format => format.Code).ToHashSet(StringComparer.Ordinal);
+        if (order.Any(code => !knownCodes.Contains(code)) ||
+            available is not null && available.Any(code => !knownCodes.Contains(code)))
+        {
+            throw new AdministrationInputException("Legacy format settings contain an unknown format code.");
+        }
+        if (labels.ValueKind == JsonValueKind.Object && labels.EnumerateObject().Any(item => !knownCodes.Contains(item.Name)))
+        {
+            throw new AdministrationInputException("Legacy format labels contain an unknown format code.");
+        }
         if (labels.ValueKind != JsonValueKind.Object && order.Count == 0 && available is null)
         {
             return;
         }
 
-        var formats = systemFormats.Concat(customFormats).ToArray();
         foreach (var format in formats)
         {
             var itemLabel = labels.ValueKind == JsonValueKind.Object && labels.TryGetProperty(format.Code, out var label)
-                ? label.GetString()
+                ? ReadRequiredStringValue(label, "Format label")
                 : null;
             var position = order.Select((value, index) => (value, index))
                 .Where(item => string.Equals(item.value, format.Code, StringComparison.Ordinal))
@@ -661,13 +771,19 @@ public sealed partial class AdministrationService
         JsonElement payload,
         CancellationToken cancellationToken)
     {
+        var hasDefinitions = TryGetAny(payload, out var definitions, "customFields", "additionalFieldDefinitions") ||
+                             TryGetAny(patron, out definitions, "customFields", "additionalFieldDefinitions");
+        var hasRules = TryGetAny(payload, out var rules, "formatRules", "patronFormatRules") ||
+                       TryGetAny(patron, out rules, "formatRules", "patronFormatRules");
         if (organizationId == LibraryScope.SystemOrganizationId)
         {
+            if (hasDefinitions || hasRules && HasCustomFieldRules(rules))
+            {
+                throw new AdministrationInputException("Custom fields and their rules are library-only settings.");
+            }
             return;
         }
 
-        var hasDefinitions = TryGetAny(payload, out var definitions, "customFields", "additionalFieldDefinitions") ||
-                             TryGetAny(patron, out definitions, "customFields", "additionalFieldDefinitions");
         if (hasDefinitions)
         {
             if (definitions.ValueKind != JsonValueKind.Array)
@@ -679,22 +795,44 @@ public sealed partial class AdministrationService
                 .Where(item => item.LibraryOrganizationId == organizationId)
                 .ToListAsync(cancellationToken);
             var keep = new HashSet<long>();
+            var requestedKeys = new HashSet<string>(StringComparer.Ordinal);
+            var requestedIds = new HashSet<long>();
             foreach (var item in definitions.EnumerateArray())
             {
                 if (item.ValueKind != JsonValueKind.Object)
                 {
-                    continue;
+                    throw new AdministrationInputException("Each custom field must be an object.");
                 }
 
-                var id = GetLong(item, "id");
-                var key = Clean(GetString(item, "key") ?? GetString(item, "fieldKey"));
+                var id = ReadOptionalLong(item, "id");
+                var key = Clean(ReadOptionalString(item, "key", "fieldKey"));
                 if (key is null)
                 {
                     throw new AdministrationInputException("Each custom field requires a stable key.");
                 }
+                if (!requestedKeys.Add(key))
+                {
+                    throw new AdministrationInputException("Custom field keys must be unique.");
+                }
 
-                var field = (id.HasValue ? existing.SingleOrDefault(row => row.Id == id.Value) : null) ??
-                            existing.SingleOrDefault(row => row.FieldKey == key);
+                if (id.HasValue && id.Value <= 0)
+                {
+                    throw new AdministrationInputException("A custom field ID must be a positive integer or null.");
+                }
+                var fieldById = id.HasValue ? existing.SingleOrDefault(row => row.Id == id.Value) : null;
+                if (id.HasValue && fieldById is null)
+                {
+                    throw new AdministrationInputException("The selected custom field ID is outside the library settings scope.");
+                }
+                if (fieldById is not null && !string.Equals(fieldById.FieldKey, key, StringComparison.Ordinal))
+                {
+                    throw new AdministrationInputException("The selected custom field ID and key do not identify the same field.");
+                }
+                var field = fieldById ?? existing.SingleOrDefault(row => row.FieldKey == key);
+                if (field is not null && !requestedIds.Add(field.Id))
+                {
+                    throw new AdministrationInputException("Custom field IDs must be unique.");
+                }
                 var isNewField = field is null;
                 field ??= new PatronCustomField
                 {
@@ -714,25 +852,29 @@ public sealed partial class AdministrationService
                 }
                 keep.Add(field.Id);
                 field.FieldKey = key;
-                field.FieldType = NormalizeFieldType(GetString(item, "type") ?? GetString(item, "fieldType") ?? field.FieldType);
-                field.Label = RequireText(GetString(item, "label") ?? field.Label, "Custom field label");
+                field.FieldType = NormalizeFieldType(ReadOptionalString(item, "type", "fieldType") ?? field.FieldType);
+                field.Label = RequireText(ReadOptionalString(item, "label") ?? field.Label, "Custom field label");
                 if (HasProperty(item, "helpText"))
                 {
-                    field.HelpText = Clean(GetString(item, "helpText"));
+                    field.HelpText = Clean(ReadOptionalString(item, "helpText"));
                 }
 
-                if (GetBool(item, "enabled").HasValue)
+                if (ReadOptionalBoolean(item, "enabled").HasValue)
                 {
-                    field.IsEnabled = GetBool(item, "enabled")!.Value;
+                    field.IsEnabled = ReadOptionalBoolean(item, "enabled")!.Value;
                 }
 
-                if (GetInt(item, "sortOrder").HasValue)
+                if (ReadOptionalInt(item, "sortOrder").HasValue)
                 {
-                    field.SortOrder = GetInt(item, "sortOrder")!.Value;
+                    field.SortOrder = ReadOptionalInt(item, "sortOrder")!.Value;
                 }
 
-                if (TryGetAny(item, out var options, "options") && options.ValueKind == JsonValueKind.Array)
+                if (TryGetAny(item, out var options, "options"))
                 {
+                    if (options.ValueKind != JsonValueKind.Array)
+                    {
+                        throw new AdministrationInputException("Custom field options must be an array.");
+                    }
                     var oldOptions = await context.PatronCustomFieldOptions
                         .Where(row => row.PatronCustomFieldId == field.Id)
                         .ToListAsync(cancellationToken);
@@ -775,8 +917,6 @@ public sealed partial class AdministrationService
             }
         }
 
-        var hasRules = TryGetAny(payload, out var rules, "formatRules", "patronFormatRules") ||
-                       TryGetAny(patron, out rules, "formatRules", "patronFormatRules");
         if (!hasRules && (TryGetAny(payload, out var formats, "formats", "materialFormats") ||
                           TryGetAny(patron, out formats, "formats", "materialFormats")) && formats.ValueKind == JsonValueKind.Array)
         {
@@ -811,21 +951,36 @@ public sealed partial class AdministrationService
 
             if (!TryGetAny(formatRule, out var custom, "customFields") || custom.ValueKind != JsonValueKind.Object)
             {
-                continue;
+                throw new AdministrationInputException("Each format rule must include a customFields object.");
             }
 
+            var seenFieldKeys = new HashSet<string>(StringComparer.Ordinal);
             foreach (var fieldProperty in custom.EnumerateObject())
             {
+                if (!seenFieldKeys.Add(fieldProperty.Name))
+                {
+                    throw new AdministrationInputException("Custom field rule keys must be unique.");
+                }
                 if (!fieldsByKey.TryGetValue(fieldProperty.Name, out var field))
                 {
-                    continue;
+                    throw new AdministrationInputException($"Custom field rule {fieldProperty.Name} is not defined in the selected library.");
                 }
 
                 var rule = fieldProperty.Value;
-                var mode = GetString(rule, "mode") ?? "hidden";
+                if (rule.ValueKind != JsonValueKind.Object ||
+                    !TryGetAny(rule, out var modeValue, "mode") || modeValue.ValueKind != JsonValueKind.String)
+                {
+                    throw new AdministrationInputException("Each custom field rule requires a valid mode.");
+                }
+                var mode = modeValue.GetString();
                 if (mode is not ("required" or "optional" or "hidden"))
                 {
                     throw new AdministrationInputException("Custom field mode must be required, optional, or hidden.");
+                }
+                string? labelOverride = null;
+                if (HasProperty(rule, "labelOverride") || HasProperty(rule, "label"))
+                {
+                    labelOverride = ReadOptionalString(rule, "labelOverride", "label");
                 }
                 if (mode == "hidden")
                 {
@@ -838,7 +993,7 @@ public sealed partial class AdministrationService
                     MaterialFormatId = format.Id,
                     PatronCustomFieldId = field.Id,
                     Mode = mode,
-                    LabelOverride = Clean(GetString(rule, "labelOverride") ?? GetString(rule, "label"))
+                    LabelOverride = Clean(labelOverride)
                 });
             }
         }
@@ -859,16 +1014,95 @@ public sealed partial class AdministrationService
         }
     }
 
+    private static async Task ValidateEffectiveRequiredSelectRulesAsync(
+        AsapDbContext context,
+        int organizationId,
+        CancellationToken cancellationToken)
+    {
+        var libraryIds = organizationId == LibraryScope.SystemOrganizationId
+            ? await context.Organizations.AsNoTracking()
+                .Where(item => item.Id > LibraryScope.SystemOrganizationId &&
+                               item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId)
+                .OrderBy(item => item.Id)
+                .Select(item => item.Id)
+                .ToArrayAsync(cancellationToken)
+            : [organizationId];
+        foreach (var libraryId in libraryIds)
+        {
+            await ValidateLibraryRequiredSelectRulesAsync(context, libraryId, cancellationToken);
+        }
+    }
+
+    private static bool HasEffectiveFormatOrCustomFieldEdits(JsonElement payload, JsonElement patron) =>
+        HasEffectiveFormatOrCustomFieldEditsIn(payload) || HasEffectiveFormatOrCustomFieldEditsIn(patron);
+
+    private static bool HasEffectiveFormatOrCustomFieldEditsIn(JsonElement section) =>
+        TryGetAny(section, out _, "formats", "materialFormats") ||
+        TryGetAny(section, out _, "availableFormats") ||
+        TryGetAny(section, out _, "customFields", "additionalFieldDefinitions") ||
+        TryGetAny(section, out _, "formatRules", "patronFormatRules");
+
+    private static async Task ValidateLibraryRequiredSelectRulesAsync(
+        AsapDbContext context,
+        int organizationId,
+        CancellationToken cancellationToken)
+    {
+        var requiredSelectFields = await context.PatronCustomFields.AsNoTracking()
+            .Where(field => field.LibraryOrganizationId == organizationId && field.IsEnabled &&
+                            field.FieldType == "select" &&
+                            !context.PatronCustomFieldOptions.Any(option =>
+                                option.PatronCustomFieldId == field.Id && option.IsEnabled))
+            .Select(field => field.Id)
+            .ToArrayAsync(cancellationToken);
+        if (requiredSelectFields.Length == 0)
+        {
+            return;
+        }
+
+        var formats = await context.MaterialFormats.AsNoTracking()
+            .Where(item => item.OwnerOrganizationId == LibraryScope.SystemOrganizationId ||
+                           item.OwnerOrganizationId == organizationId)
+            .ToListAsync(cancellationToken);
+        var overrides = await context.MaterialFormatOverrides.AsNoTracking()
+            .Where(item => item.LibraryOrganizationId == organizationId)
+            .ToDictionaryAsync(item => item.MaterialFormatId, cancellationToken);
+        var activeFormatIds = formats
+            .Where(format => overrides.TryGetValue(format.Id, out var overrideRow)
+                ? overrideRow.IsEnabled ?? format.IsEnabled
+                : format.IsEnabled)
+            .Select(format => format.Id)
+            .ToArray();
+        if (activeFormatIds.Length == 0)
+        {
+            return;
+        }
+
+        var impossibleRule = await context.MaterialFormatCustomFieldRules.AsNoTracking()
+            .AnyAsync(rule => rule.LibraryOrganizationId == organizationId &&
+                              rule.Mode == "required" &&
+                              requiredSelectFields.Contains(rule.PatronCustomFieldId) &&
+                              activeFormatIds.Contains(rule.MaterialFormatId),
+                cancellationToken);
+        if (impossibleRule)
+        {
+            throw new AdministrationInputException(
+                "An enabled required select field must have at least one enabled option for every active format.");
+        }
+    }
+
     private async Task ApplyAutoClaimRulesAsync(
         AsapDbContext context,
         int organizationId,
         JsonElement payload,
         CancellationToken cancellationToken)
     {
-        if (organizationId == LibraryScope.SystemOrganizationId ||
-            !TryGetAny(payload, out var value, "autoClaimRules", "formatClaimRules"))
+        if (!TryGetAny(payload, out var value, "autoClaimRules", "formatClaimRules"))
         {
             return;
+        }
+        if (organizationId == LibraryScope.SystemOrganizationId)
+        {
+            throw new AdministrationInputException("Auto-claim rules are library-only settings.");
         }
 
         if (value.ValueKind != JsonValueKind.Array)
@@ -883,32 +1117,33 @@ public sealed partial class AdministrationService
             .Where(item => item.LibraryOrganizationId == organizationId && item.IsActive)
             .ToListAsync(cancellationToken);
         var desired = new Dictionary<long, long?>();
+        var seenFormats = new HashSet<long>();
         foreach (var item in value.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.Object)
             {
-                continue;
+                throw new AdministrationInputException("Each auto-claim rule must be an object.");
             }
 
-            var formatId = GetLong(item, "materialFormatId") ?? GetLong(item, "formatId");
-            if (!formatId.HasValue || formats.All(format => format.Id != formatId.Value))
+            var formatId = ReadOptionalLong(item, "materialFormatId", "formatId");
+            if (!formatId.HasValue || formatId.Value <= 0 || formats.All(format => format.Id != formatId.Value))
             {
                 throw new AdministrationInputException("Each auto-claim rule must reference a format in the selected library scope.");
             }
-            if (GetBool(item, "active") == false || GetBool(item, "isActive") == false)
+            if (!seenFormats.Add(formatId.Value))
+            {
+                throw new AdministrationInputException("Only one auto-claim rule is allowed per format.");
+            }
+            var isActive = ReadOptionalBoolean(item, "active", "isActive") ?? true;
+            if (!isActive)
             {
                 desired.Remove(formatId.Value);
                 continue;
             }
-            var staffId = GetLong(item, "staffUserId") ?? GetLong(item, "staffId");
-            if (!staffId.HasValue)
+            var staffId = ReadOptionalLong(item, "staffUserId", "staffId");
+            if (!staffId.HasValue || staffId.Value <= 0)
             {
                 throw new AdministrationInputException("An active auto-claim rule requires a staff user.");
-            }
-
-            if (desired.ContainsKey(formatId.Value))
-            {
-                throw new AdministrationInputException("Only one active auto-claim rule is allowed per format.");
             }
 
             var staff = context.StaffUsers.Local.SingleOrDefault(itemRow => itemRow.Id == staffId.Value);
@@ -952,6 +1187,7 @@ public sealed partial class AdministrationService
         JsonElement payload,
         CancellationToken cancellationToken)
     {
+        var seenTemplateTargets = new HashSet<(int OrganizationId, string Kind, long? Id, string? Key)>();
         if (TryGetAny(payload, out var templates, "templates", "emailTemplates"))
         {
             if (templates.ValueKind != JsonValueKind.Array)
@@ -961,10 +1197,11 @@ public sealed partial class AdministrationService
 
             foreach (var item in templates.EnumerateArray())
             {
-                if (item.ValueKind == JsonValueKind.Object)
+                if (item.ValueKind != JsonValueKind.Object)
                 {
-                    await ApplyTemplateObjectAsync(context, organizationId, item, null, cancellationToken);
+                    throw new AdministrationInputException("Each email template must be an object.");
                 }
+                await ApplyTemplateObjectAsync(context, organizationId, item, null, seenTemplateTargets, cancellationToken);
             }
             return;
         }
@@ -976,29 +1213,37 @@ public sealed partial class AdministrationService
 
         if (emails.ValueKind != JsonValueKind.Object)
         {
-            return;
+            throw new AdministrationInputException("Email template settings must be an object.");
         }
 
         foreach (var property in emails.EnumerateObject())
         {
-            if (property.Name is "fromAddress" or "fromName" or "postmarkToken" or "serverToken" or "rejection_templates")
+            if (property.Name is "fromAddress" or "fromName" or "postmarkToken" or "serverToken" or
+                "clearPostmarkToken" or "clearServerToken" or "rejection_templates")
             {
                 continue;
             }
 
-            if (property.Value.ValueKind == JsonValueKind.Object)
+            if (property.Value.ValueKind != JsonValueKind.Object)
             {
-                await ApplyTemplateObjectAsync(context, organizationId, property.Value, property.Name, cancellationToken);
+                throw new AdministrationInputException("Each email template must be an object.");
             }
+            await ApplyTemplateObjectAsync(context, organizationId, property.Value, property.Name,
+                seenTemplateTargets, cancellationToken);
         }
-        if (emails.TryGetProperty("rejection_templates", out var rejectionTemplates) && rejectionTemplates.ValueKind == JsonValueKind.Array)
+        if (emails.TryGetProperty("rejection_templates", out var rejectionTemplates))
         {
+            if (rejectionTemplates.ValueKind != JsonValueKind.Array)
+            {
+                throw new AdministrationInputException("Rejection templates must be an array.");
+            }
             foreach (var item in rejectionTemplates.EnumerateArray())
             {
-                if (item.ValueKind == JsonValueKind.Object)
+                if (item.ValueKind != JsonValueKind.Object)
                 {
-                    await ApplyTemplateObjectAsync(context, organizationId, item, null, cancellationToken);
+                    throw new AdministrationInputException("Each rejection template must be an object.");
                 }
+                await ApplyTemplateObjectAsync(context, organizationId, item, null, seenTemplateTargets, cancellationToken);
             }
         }
     }
@@ -1008,18 +1253,24 @@ public sealed partial class AdministrationService
         int organizationId,
         JsonElement item,
         string? legacyKey,
+        HashSet<(int OrganizationId, string Kind, long? Id, string? Key)> seenTemplateTargets,
         CancellationToken cancellationToken)
     {
-        var itemOrganization = GetInt(item, "organizationId");
-        if (itemOrganization.HasValue && itemOrganization.Value != organizationId && organizationId != LibraryScope.SystemOrganizationId)
+        ValidateTemplateInput(item);
+        var itemOrganization = ReadOptionalInt(item, "organizationId");
+        if (itemOrganization.HasValue && itemOrganization.Value != organizationId)
         {
-            return;
+            throw new AdministrationInputException("An email template belongs to a different settings scope.");
         }
 
-        var key = Clean(GetString(item, "templateKey") ?? GetString(item, "key") ?? legacyKey);
-        var sourceId = GetLong(item, "sourceTemplateId") ?? GetLong(item, "sourceId");
-        var reset = GetBool(item, "reset") == true || GetBool(item, "useSystemDefault") == true || GetBool(item, "overridden") == false;
-        var isCustom = GetBool(item, "isCustom") == true || GetBool(item, "custom") == true;
+        var suppliedId = ReadOptionalLong(item, "id");
+        var key = Clean(ReadOptionalString(item, "templateKey", "key") ?? legacyKey);
+        var sourceId = ReadOptionalLong(item, "sourceTemplateId", "sourceId");
+        var resetFlag = ReadOptionalBoolean(item, "reset") == true;
+        var systemDefaultFlag = ReadOptionalBoolean(item, "useSystemDefault") == true;
+        var overridden = ReadOptionalBoolean(item, "overridden");
+        var reset = resetFlag || systemDefaultFlag || overridden == false;
+        var isCustom = ReadOptionalBoolean(item, "isCustom", "custom") == true;
         if (organizationId == LibraryScope.SystemOrganizationId)
         {
             if (sourceId.HasValue || isCustom)
@@ -1034,6 +1285,10 @@ public sealed partial class AdministrationService
 
             var template = await context.EmailTemplates.SingleOrDefaultAsync(
                 row => row.OrganizationId == LibraryScope.SystemOrganizationId && row.TemplateKey == key, cancellationToken);
+            if (suppliedId.HasValue && (template is null || template.Id != suppliedId.Value))
+            {
+                throw new AdministrationInputException("The selected system template ID and key do not identify the same template.");
+            }
             template ??= new EmailTemplate
             {
                 OrganizationId = 1,
@@ -1041,6 +1296,7 @@ public sealed partial class AdministrationService
                 IsCustom = false,
                 IsHidden = false
             };
+            EnsureUniqueTemplateTarget(seenTemplateTargets, organizationId, "system", template.Id, key);
             if (template.Id == 0)
             {
                 context.EmailTemplates.Add(template);
@@ -1059,6 +1315,11 @@ public sealed partial class AdministrationService
 
             var custom = await context.EmailTemplates.SingleOrDefaultAsync(
                 row => row.OrganizationId == organizationId && row.IsCustom && row.TemplateKey == key, cancellationToken);
+            if (suppliedId.HasValue && (custom is null || custom.Id != suppliedId.Value))
+            {
+                throw new AdministrationInputException("The selected custom template ID and key do not identify the same template.");
+            }
+            EnsureUniqueTemplateTarget(seenTemplateTargets, organizationId, "custom", custom?.Id ?? 0, key);
             if (reset)
             {
                 if (custom is not null)
@@ -1093,9 +1354,18 @@ public sealed partial class AdministrationService
         {
             throw new AdministrationInputException("A library template override must reference a system template.");
         }
+        if (key is not null && !string.Equals(key, source.TemplateKey, StringComparison.Ordinal))
+        {
+            throw new AdministrationInputException("The selected system template ID and key do not identify the same template.");
+        }
 
         var overrideRow = await context.EmailTemplates.SingleOrDefaultAsync(
             row => row.OrganizationId == organizationId && row.SourceTemplateId == source.Id, cancellationToken);
+        if (suppliedId.HasValue && (overrideRow is null || overrideRow.Id != suppliedId.Value))
+        {
+            throw new AdministrationInputException("The selected template ID and source do not identify the same override.");
+        }
+        EnsureUniqueTemplateTarget(seenTemplateTargets, organizationId, "lineage", source.Id, null);
         if (reset)
         {
             if (overrideRow is not null)
@@ -1121,54 +1391,128 @@ public sealed partial class AdministrationService
         ApplyTemplateContent(overrideRow, item, requireContent: false);
     }
 
+    private static void EnsureUniqueTemplateTarget(
+        HashSet<(int OrganizationId, string Kind, long? Id, string? Key)> seenTargets,
+        int organizationId,
+        string kind,
+        long id,
+        string? key)
+    {
+        var persistedId = id > 0 ? id : (long?)null;
+        var identity = (organizationId, kind, persistedId, persistedId.HasValue ? null : key);
+        if (!seenTargets.Add(identity))
+        {
+            throw new AdministrationInputException("An email template may only appear once in a settings replacement.");
+        }
+    }
+
     private static void ApplyTemplateContent(EmailTemplate template, JsonElement item, bool requireContent)
     {
         if (HasProperty(item, "subject"))
         {
-            template.SubjectTemplate = GetString(item, "subject");
+            template.SubjectTemplate = ReadOptionalString(item, "subject");
         }
         else if (HasProperty(item, "subjectTemplate"))
         {
-            template.SubjectTemplate = GetString(item, "subjectTemplate");
+            template.SubjectTemplate = ReadOptionalString(item, "subjectTemplate");
         }
 
         if (HasProperty(item, "body"))
         {
-            template.BodyTemplate = GetString(item, "body");
+            template.BodyTemplate = ReadOptionalString(item, "body");
         }
         else if (HasProperty(item, "bodyTemplate"))
         {
-            template.BodyTemplate = GetString(item, "bodyTemplate");
+            template.BodyTemplate = ReadOptionalString(item, "bodyTemplate");
         }
 
         if (HasProperty(item, "displayName"))
         {
-            template.DisplayName = Clean(GetString(item, "displayName"));
+            template.DisplayName = Clean(ReadOptionalString(item, "displayName"));
         }
 
-        if (GetBool(item, "enabled").HasValue)
+        if (ReadOptionalBoolean(item, "enabled").HasValue)
         {
-            template.IsHidden = !GetBool(item, "enabled")!.Value;
+            template.IsHidden = !ReadOptionalBoolean(item, "enabled")!.Value;
         }
 
-        if (GetBool(item, "hidden").HasValue)
+        if (ReadOptionalBoolean(item, "hidden").HasValue)
         {
-            template.IsHidden = GetBool(item, "hidden")!.Value;
+            template.IsHidden = ReadOptionalBoolean(item, "hidden")!.Value;
         }
 
-        if (GetBool(item, "isHidden").HasValue)
+        if (ReadOptionalBoolean(item, "isHidden").HasValue)
         {
-            template.IsHidden = GetBool(item, "isHidden")!.Value;
+            template.IsHidden = ReadOptionalBoolean(item, "isHidden")!.Value;
         }
 
-        if (GetInt(item, "sortOrder").HasValue)
+        if (ReadOptionalInt(item, "sortOrder").HasValue)
         {
-            template.SortOrder = GetInt(item, "sortOrder")!.Value;
+            template.SortOrder = ReadOptionalInt(item, "sortOrder")!.Value;
         }
 
         if (requireContent && (string.IsNullOrWhiteSpace(template.SubjectTemplate) || string.IsNullOrWhiteSpace(template.BodyTemplate)))
         {
             throw new AdministrationInputException("A system or custom email template requires both subject and body content.");
+        }
+    }
+
+    private static void ValidateTemplateInput(JsonElement item)
+    {
+        if (item.ValueKind != JsonValueKind.Object)
+        {
+            throw new AdministrationInputException("Each email template must be an object.");
+        }
+        var id = ReadOptionalLong(item, "id");
+        var sourceId = ReadOptionalLong(item, "sourceTemplateId", "sourceId");
+        if (id.HasValue && id.Value <= 0 || sourceId.HasValue && sourceId.Value <= 0)
+        {
+            throw new AdministrationInputException("Template IDs must be positive integers.");
+        }
+        ReadOptionalInt(item, "organizationId");
+        ReadOptionalString(item, "templateKey", "key");
+        ReadOptionalBoolean(item, "reset");
+        ReadOptionalBoolean(item, "useSystemDefault");
+        ReadOptionalBoolean(item, "overridden");
+        ReadOptionalBoolean(item, "isCustom", "custom");
+        ReadOptionalBoolean(item, "libraryCustom");
+        ReadOptionalString(item, "subject", "subjectTemplate");
+        ReadOptionalString(item, "body", "bodyTemplate");
+        ReadOptionalString(item, "displayName");
+        ReadOptionalBoolean(item, "enabled");
+        ReadOptionalBoolean(item, "hidden");
+        ReadOptionalBoolean(item, "isHidden");
+        ReadOptionalInt(item, "sortOrder");
+        ValidateResetOverrideIntent(item, "Template");
+        ValidateTemplateVisibilityIntent(item);
+        if (ReadOptionalBoolean(item, "isCustom", "custom") == true && sourceId.HasValue)
+        {
+            throw new AdministrationInputException("A custom template cannot also reference a system source template.");
+        }
+    }
+
+    private static void ValidateTemplateVisibilityIntent(JsonElement item)
+    {
+        var enabled = ReadOptionalBoolean(item, "enabled");
+        var hidden = ReadOptionalBoolean(item, "hidden", "isHidden");
+        if (enabled.HasValue && hidden.HasValue && enabled.Value == hidden.Value)
+        {
+            throw new AdministrationInputException("Template enabled and hidden flags conflict.");
+        }
+    }
+
+    private static void ValidateResetOverrideIntent(JsonElement item, string collectionName)
+    {
+        var reset = ReadOptionalBoolean(item, "reset", "useSystemDefault");
+        var overridden = ReadOptionalBoolean(item, "overridden");
+        if (((HasProperty(item, "reset") || HasProperty(item, "useSystemDefault")) && !reset.HasValue) ||
+            (HasProperty(item, "overridden") && !overridden.HasValue))
+        {
+            throw new AdministrationInputException($"{collectionName} reset and override flags must be Boolean values when supplied.");
+        }
+        if (reset.HasValue && overridden.HasValue && reset.Value == overridden.Value)
+        {
+            throw new AdministrationInputException($"{collectionName} reset and override flags conflict.");
         }
     }
 
@@ -1189,10 +1533,23 @@ public sealed partial class AdministrationService
 
             branding = patron;
         }
+        if (branding.ValueKind != JsonValueKind.Object)
+        {
+            throw new AdministrationInputException("Branding settings must be an object.");
+        }
+
+        var altText = ReadOptionalString(branding, "altText", "logoAlt", "logoAltText");
+        var logoData = ReadOptionalString(branding, "logoData");
+        var contentTypeValue = ReadOptionalString(branding, "contentType", "logoContentType");
+        var fileName = ReadOptionalString(branding, "fileName", "logoFileName");
+        var clearLogo = ReadOptionalBoolean(branding, "clearLogo", "removeLogo") == true;
+        if (clearLogo && logoData is not null)
+        {
+            throw new AdministrationInputException("A logo image and clear command cannot be submitted together.");
+        }
 
         var hasLogoData = HasProperty(branding, "logoData");
         var hasAlt = HasProperty(branding, "altText") || HasProperty(branding, "logoAlt") || HasProperty(branding, "logoAltText");
-        var clearLogo = GetBool(branding, "clearLogo") == true || GetBool(branding, "removeLogo") == true;
         if (!hasLogoData && !hasAlt && !clearLogo)
         {
             return;
@@ -1203,7 +1560,7 @@ public sealed partial class AdministrationService
         row ??= new Branding { OrganizationId = organizationId };
         if (hasAlt)
         {
-            row.LogoAltText = Clean(GetString(branding, "altText") ?? GetString(branding, "logoAlt") ?? GetString(branding, "logoAltText"));
+            row.LogoAltText = Clean(altText);
         }
         if (clearLogo)
         {
@@ -1213,7 +1570,7 @@ public sealed partial class AdministrationService
         }
         if (hasLogoData && !clearLogo)
         {
-            var encoded = Clean(GetString(branding, "logoData"));
+            var encoded = Clean(logoData);
             if (encoded is null)
             {
                 throw new AdministrationInputException("logoData must contain a base64 encoded PNG, JPEG, or GIF image.");
@@ -1222,14 +1579,14 @@ public sealed partial class AdministrationService
             byte[] data;
             try { data = Convert.FromBase64String(encoded); }
             catch (FormatException) { throw new AdministrationInputException("logoData must be valid base64."); }
-            var contentType = Clean(GetString(branding, "contentType") ?? GetString(branding, "logoContentType"));
+            var contentType = Clean(contentTypeValue);
             if (!LogoImageValidator.TryValidate(data, contentType, out var logoInfo, out var logoError))
             {
                 throw new AdministrationInputException(logoError);
             }
             row.LogoData = data;
             row.LogoContentType = logoInfo!.ContentType;
-            row.LogoFileName = Clean(GetString(branding, "fileName") ?? GetString(branding, "logoFileName")) ?? "logo";
+            row.LogoFileName = Clean(fileName) ?? "logo";
         }
         row.UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime;
         if (isNew && !IsEmpty(row))
@@ -1301,6 +1658,7 @@ public sealed partial class AdministrationService
 
     private static void ApplyOwnedFormat(MaterialFormat row, JsonElement item, bool allowCode)
     {
+        ValidateFormatInput(item);
         if (allowCode && HasProperty(item, "code"))
         {
             row.Code = RequireText(GetString(item, "code"), "Format code");
@@ -1369,6 +1727,7 @@ public sealed partial class AdministrationService
 
     private static void ApplyFormatOverride(MaterialFormatOverride row, MaterialFormat baseline, JsonElement item)
     {
+        ValidateFormatInput(item);
         if (HasProperty(item, "label"))
         {
             row.Label = Same(GetString(item, "label"), baseline.Label) ? null : Clean(GetString(item, "label"));
@@ -1410,13 +1769,20 @@ public sealed partial class AdministrationService
         string defaultLabel,
         bool forceRequired)
     {
-        if (!TryGetAny(item, out var field, name) || field.ValueKind != JsonValueKind.Object)
+        if (!TryGetAny(item, out var field, name))
         {
             return;
         }
 
-        var mode = NormalizeFieldMode(GetString(field, "mode") ?? defaultMode, forceRequired);
-        var label = Clean(GetString(field, "label")) ?? defaultLabel;
+        if (field.ValueKind != JsonValueKind.Object)
+        {
+            throw new AdministrationInputException($"The {name} format rule must be an object.");
+        }
+
+        var modeInput = ReadOptionalString(field, "mode");
+        var labelInput = ReadOptionalString(field, "label");
+        var mode = NormalizeFieldMode(modeInput ?? defaultMode, forceRequired);
+        var label = Clean(labelInput) ?? defaultLabel;
         var value = (Mode: mode, Label: label);
         modeSetter(value);
         labelSetter(value);
@@ -1430,13 +1796,20 @@ public sealed partial class AdministrationService
         Action<(string Mode, string Label)> modeSetter,
         Action<(string Mode, string Label)> labelSetter)
     {
-        if (!TryGetAny(item, out var field, name) || field.ValueKind != JsonValueKind.Object)
+        if (!TryGetAny(item, out var field, name))
         {
             return;
         }
 
-        var mode = NormalizeFieldMode(GetString(field, "mode") ?? baselineMode, name == "title");
-        var label = Clean(GetString(field, "label")) ?? baselineLabel;
+        if (field.ValueKind != JsonValueKind.Object)
+        {
+            throw new AdministrationInputException($"The {name} format override must be an object.");
+        }
+
+        var modeInput = ReadOptionalString(field, "mode");
+        var labelInput = ReadOptionalString(field, "label");
+        var mode = NormalizeFieldMode(modeInput ?? baselineMode, name == "title");
+        var label = Clean(labelInput) ?? baselineLabel;
         modeSetter((Same(mode, baselineMode) ? null! : mode, Same(label, baselineLabel) ? null! : label));
         labelSetter((Same(mode, baselineMode) ? null! : mode, Same(label, baselineLabel) ? null! : label));
     }
@@ -1447,6 +1820,89 @@ public sealed partial class AdministrationService
         return normalized is "none" or "message" or "ebookMessage" or "eaudiobookMessage"
             ? normalized
             : throw new AdministrationInputException("Message behavior is invalid.");
+    }
+
+    private static void ValidateFormatInput(JsonElement item)
+    {
+        if (item.ValueKind != JsonValueKind.Object)
+        {
+            throw new AdministrationInputException("Each format setting must be an object.");
+        }
+
+        var id = ReadOptionalLong(item, "id", "materialFormatId");
+        if (id.HasValue && id.Value <= 0)
+        {
+            throw new AdministrationInputException("A format ID must be a positive integer.");
+        }
+        ReadOptionalString(item, "code", "format");
+        var owner = ReadOptionalInt(item, "ownerOrganizationId");
+        if (owner.HasValue && owner.Value <= 0)
+        {
+            throw new AdministrationInputException("A format owner ID must be positive.");
+        }
+        ReadOptionalString(item, "label");
+        ReadOptionalInt(item, "sortOrder");
+        ReadOptionalBoolean(item, "isEnabled", "enabled");
+        ReadOptionalBoolean(item, "deleted", "delete");
+        ReadOptionalBoolean(item, "custom");
+        ReadOptionalBoolean(item, "reset", "useSystemDefault");
+        ReadOptionalBoolean(item, "overridden");
+        ValidateResetOverrideIntent(item, "Format");
+        ReadOptionalString(item, "messageBehavior");
+        ReadOptionalString(item, "message");
+        foreach (var name in new[] { "title", "author", "identifier", "publication" })
+        {
+            if (!TryGetAny(item, out var field, name))
+            {
+                continue;
+            }
+            if (field.ValueKind != JsonValueKind.Object)
+            {
+                throw new AdministrationInputException($"The {name} format rule must be an object.");
+            }
+            var mode = ReadOptionalString(field, "mode");
+            ReadOptionalString(field, "label");
+            if (mode is not null)
+            {
+                _ = NormalizeFieldMode(mode, forceRequired: false);
+            }
+        }
+        if (TryGetAny(item, out var customFields, "customFields") &&
+            customFields.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null))
+        {
+            throw new AdministrationInputException("Format customFields must be an object or null.");
+        }
+    }
+
+    private static string ReadRequiredStringValue(JsonElement value, string label)
+    {
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            throw new AdministrationInputException($"{label} must be a string.");
+        }
+        return value.GetString() ?? throw new AdministrationInputException($"{label} cannot be blank.");
+    }
+
+    private static bool HasCustomFieldRules(JsonElement value) => ContainsPropertyNamed(value, "customFields");
+
+    private static bool ContainsPropertyNamed(JsonElement value, string name)
+    {
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            return value.EnumerateArray().Any(item => ContainsPropertyNamed(item, name));
+        }
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+        foreach (var property in value.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.Ordinal) || ContainsPropertyNamed(property.Value, name))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static string NormalizeFieldMode(string value, bool forceRequired)
@@ -1471,21 +1927,46 @@ public sealed partial class AdministrationService
     {
         if (value.ValueKind != JsonValueKind.Array)
         {
-            return [];
+            throw new AdministrationInputException("Providers must be an array.");
         }
 
-        return value.EnumerateArray()
-            .Where(item => item.ValueKind == JsonValueKind.Object)
-            .Select(item => new ProviderInput(
-                Clean(GetString(item, "key") ?? GetString(item, "providerKey")),
-                GetLong(item, "id"),
-                GetBool(item, "isEnabled") ?? GetBool(item, "enabled"),
-                GetString(item, "label"),
-                GetString(item, "urlTemplate") ?? GetString(item, "url"),
-                GetBool(item, "reset") == true || GetBool(item, "useSystemDefault") == true,
-                GetBool(item, "overridden"),
-                GetInt(item, "sortOrder")))
-            .ToArray();
+        var result = new List<ProviderInput>();
+        var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                throw new AdministrationInputException("Each provider must be an object.");
+            }
+
+            var key = Clean(ReadOptionalString(item, "key", "providerKey"));
+            var id = ReadOptionalLong(item, "id");
+            ValidateResetOverrideIntent(item, "Provider");
+            if (id.HasValue && id.Value <= 0)
+            {
+                throw new AdministrationInputException("External provider IDs must be positive integers.");
+            }
+            if (!id.HasValue && key is null)
+            {
+                throw new AdministrationInputException("Each provider requires an ID or key.");
+            }
+            var identity = id.HasValue ? $"id:{id.Value}" : $"key:{key}";
+            if (!identities.Add(identity))
+            {
+                throw new AdministrationInputException("Provider IDs and keys must be unique.");
+            }
+
+            result.Add(new ProviderInput(
+                key,
+                id,
+                ReadOptionalBoolean(item, "isEnabled", "enabled"),
+                ReadOptionalString(item, "label"),
+                ReadOptionalString(item, "urlTemplate", "url"),
+                ReadOptionalBoolean(item, "reset", "useSystemDefault") == true,
+                ReadOptionalBoolean(item, "overridden"),
+                ReadOptionalInt(item, "sortOrder")));
+        }
+        return result;
     }
 
     private static IReadOnlyList<ProviderInput> ParseLegacyProviders(JsonElement workflow, JsonElement payload)
@@ -1493,9 +1974,12 @@ public sealed partial class AdministrationService
         var result = new List<ProviderInput>();
         for (var index = 1; index <= 4; index++)
         {
-            var enabled = GetBool(workflow, $"externalSearch{index}Enabled") ?? GetBool(payload, $"externalSearch{index}Enabled");
-            var label = GetString(workflow, $"externalSearch{index}Label") ?? GetString(payload, $"externalSearch{index}Label");
-            var url = GetString(workflow, $"externalSearch{index}UrlTemplate") ?? GetString(payload, $"externalSearch{index}UrlTemplate");
+            var enabled = ReadOptionalBoolean(workflow, $"externalSearch{index}Enabled") ??
+                          ReadOptionalBoolean(payload, $"externalSearch{index}Enabled");
+            var label = ReadOptionalString(workflow, $"externalSearch{index}Label") ??
+                        ReadOptionalString(payload, $"externalSearch{index}Label");
+            var url = ReadOptionalString(workflow, $"externalSearch{index}UrlTemplate") ??
+                      ReadOptionalString(payload, $"externalSearch{index}UrlTemplate");
             if (!enabled.HasValue && label is null && url is null)
             {
                 continue;
@@ -1508,19 +1992,38 @@ public sealed partial class AdministrationService
 
     private static IReadOnlyList<SetOption> ParseOptions(JsonElement value)
     {
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return [];
+        }
         if (value.ValueKind == JsonValueKind.String)
         {
             var text = value.GetString() ?? string.Empty;
             if (text.TrimStart().StartsWith("[", StringComparison.Ordinal))
             {
-                using var document = JsonDocument.Parse(text);
-                return ParseOptions(document.RootElement);
+                try
+                {
+                    using var document = JsonDocument.Parse(text);
+                    if (AdministrationSettingsBinding.HasAmbiguousProperties(document.RootElement))
+                    {
+                        throw new AdministrationInputException("Set options contain duplicate or conflicting properties.");
+                    }
+                    return ParseOptions(document.RootElement);
+                }
+                catch (AdministrationInputException)
+                {
+                    throw;
+                }
+                catch (JsonException exception)
+                {
+                    throw new AdministrationInputException($"Set options contain invalid JSON: {exception.Message}");
+                }
             }
             return ParseValues(value).Select((label, index) => new SetOption(OptionKey(label, index), label, true, (index + 1) * 10)).ToArray();
         }
         if (value.ValueKind != JsonValueKind.Array)
         {
-            return [];
+            throw new AdministrationInputException("Set options must be an array or newline-delimited string.");
         }
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1528,21 +2031,32 @@ public sealed partial class AdministrationService
         var index = 0;
         foreach (var item in value.EnumerateArray())
         {
-            var label = item.ValueKind == JsonValueKind.String
-                ? Clean(item.GetString())
-                : Clean(GetString(item, "label") ?? GetString(item, "value") ?? GetString(item, "name"));
-            if (label is null)
+            if (item.ValueKind is not (JsonValueKind.String or JsonValueKind.Object))
             {
-                continue;
+                throw new AdministrationInputException("Each set option must be a string or object.");
             }
 
-            var key = Clean(GetString(item, "id") ?? GetString(item, "key")) ?? OptionKey(label, index);
+            var label = item.ValueKind == JsonValueKind.String
+                ? Clean(item.GetString())
+                : Clean(ReadOptionalString(item, "label", "value", "name"));
+            if (label is null)
+            {
+                throw new AdministrationInputException("Each set option requires a nonblank label.");
+            }
+
+            var key = item.ValueKind == JsonValueKind.Object
+                ? Clean(ReadOptionalCollectionIdentity(item, "id", "key")) ?? OptionKey(label, index)
+                : OptionKey(label, index);
             if (!seen.Add(key))
             {
                 throw new AdministrationInputException("Set option IDs must be unique.");
             }
 
-            result.Add(new SetOption(key, label, GetBool(item, "enabled") ?? true, GetInt(item, "sortOrder") ?? ((index + 1) * 10)));
+            var enabled = item.ValueKind == JsonValueKind.Object ? ReadOptionalBoolean(item, "enabled") ?? true : true;
+            var sortOrder = item.ValueKind == JsonValueKind.Object
+                ? ReadOptionalInt(item, "sortOrder") ?? ((index + 1) * 10)
+                : ((index + 1) * 10);
+            result.Add(new SetOption(key, label, enabled, sortOrder));
             index++;
         }
         return result;
@@ -1582,7 +2096,10 @@ public sealed partial class AdministrationService
             {
                 return false;
             }
-            result.Add(id);
+            if (!result.Add(id))
+            {
+                return false;
+            }
         }
         ids = result.Order().ToArray();
         return true;
@@ -1590,29 +2107,117 @@ public sealed partial class AdministrationService
 
     private static IReadOnlyList<string> ParseValues(JsonElement value)
     {
-        if (value.ValueKind == JsonValueKind.String)
-        {
-            var text = value.GetString() ?? string.Empty;
-            return text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(Clean)
-                .Where(item => item is not null)
-                .Select(item => item!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-        }
-        if (value.ValueKind != JsonValueKind.Array)
+        if (value.ValueKind == JsonValueKind.Null)
         {
             return [];
         }
 
-        return value.EnumerateArray()
-            .Select(item => item.ValueKind == JsonValueKind.String
-                ? Clean(item.GetString())
-                : Clean(GetString(item, "id") ?? GetString(item, "key") ?? GetString(item, "value") ?? GetString(item, "name")))
-            .Where(item => item is not null)
-            .Select(item => item!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        IEnumerable<string?> source;
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            var text = value.GetString() ?? string.Empty;
+            source = text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            var values = new List<string?>();
+            foreach (var item in value.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                {
+                    values.Add(item.GetString());
+                    continue;
+                }
+                if (item.ValueKind == JsonValueKind.Object)
+                {
+                    values.Add(ReadCollectionEntryValue(item));
+                    continue;
+                }
+                throw new AdministrationInputException("Collection values must be strings or objects with a string value.");
+            }
+            source = values;
+        }
+        else
+        {
+            throw new AdministrationInputException("Collection values must be an array or newline-delimited string.");
+        }
+
+        var parsed = source.Select(item => Clean(item) ??
+            throw new AdministrationInputException("Collection values cannot contain blank items."))
             .ToArray();
+        if (parsed.Distinct(StringComparer.OrdinalIgnoreCase).Count() != parsed.Length)
+        {
+            throw new AdministrationInputException("Collection values cannot contain duplicates.");
+        }
+        return parsed;
+    }
+
+    private static IReadOnlyList<string> ParseStrictStringSet(JsonElement value, string label)
+    {
+        IEnumerable<string?> source;
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            source = (value.GetString() ?? string.Empty)
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            var values = new List<string?>();
+            foreach (var item in value.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String)
+                {
+                    throw new AdministrationInputException($"{label} must contain only strings.");
+                }
+                values.Add(item.GetString());
+            }
+            source = values;
+        }
+        else
+        {
+            throw new AdministrationInputException($"{label} must be a string or an array of strings.");
+        }
+
+        var parsed = source.Select(item => Clean(item) ?? throw new AdministrationInputException($"{label} cannot contain blank values."))
+            .ToArray();
+        if (parsed.Distinct(StringComparer.OrdinalIgnoreCase).Count() != parsed.Length)
+        {
+            throw new AdministrationInputException($"{label} cannot contain duplicates.");
+        }
+        return parsed;
+    }
+
+    private static IReadOnlySet<int> ParseParticipationIds(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw new AdministrationInputException("Participation must be an array of library IDs.");
+        }
+
+        var ids = new HashSet<int>();
+        JsonValueKind? itemKind = null;
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind is not (JsonValueKind.Number or JsonValueKind.String) ||
+                itemKind.HasValue && itemKind.Value != item.ValueKind)
+            {
+                throw new AdministrationInputException("Participation IDs must use one consistent numeric representation.");
+            }
+            itemKind = item.ValueKind;
+            var raw = item.ValueKind switch
+            {
+                JsonValueKind.Number => item.GetRawText(),
+                JsonValueKind.String => item.GetString(),
+                _ => throw new InvalidOperationException("Validated participation item has an invalid type.")
+            };
+            if (raw is null || !int.TryParse(raw, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var id) || id <= LibraryScope.SystemOrganizationId ||
+                !ids.Add(id))
+            {
+                throw new AdministrationInputException("Participation must contain unique positive library IDs.");
+            }
+        }
+        return ids;
     }
 
     private static IEnumerable<(string Code, JsonElement Rule)> EnumerateFormatRules(JsonElement value)
@@ -1621,6 +2226,10 @@ public sealed partial class AdministrationService
         {
             foreach (var property in value.EnumerateObject())
             {
+                if (Clean(property.Name) is null || property.Value.ValueKind != JsonValueKind.Object)
+                {
+                    throw new AdministrationInputException("Each format rule requires a code and an object value.");
+                }
                 yield return (property.Name, property.Value);
             }
 
@@ -1628,17 +2237,180 @@ public sealed partial class AdministrationService
         }
         if (value.ValueKind != JsonValueKind.Array)
         {
-            yield break;
+            throw new AdministrationInputException("Format rules must be an object or array.");
         }
 
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in value.EnumerateArray())
         {
-            var code = Clean(GetString(item, "code") ?? GetString(item, "format"));
-            if (code is not null)
+            if (item.ValueKind != JsonValueKind.Object)
             {
-                yield return (code, item);
+                throw new AdministrationInputException("Each format rule must be an object.");
+            }
+            var code = Clean(ReadOptionalString(item, "code", "format"));
+            if (code is null || !seen.Add(code))
+            {
+                throw new AdministrationInputException("Format rules require unique format codes.");
+            }
+            yield return (code, item);
+        }
+    }
+
+    private static string? ReadOptionalCollectionIdentity(JsonElement root, params string[] names)
+    {
+        string? result = null;
+        foreach (var name in names)
+        {
+            var current = ReadOptionalIdentifierText(root, name);
+            if (current is null)
+            {
+                continue;
+            }
+            if (result is not null && !string.Equals(result, current, StringComparison.Ordinal))
+            {
+                throw new AdministrationInputException("A collection identity contains conflicting identifiers.");
+            }
+            result = current;
+        }
+        return result;
+    }
+
+    private static string? ReadOptionalIdentifierText(JsonElement root, string name)
+    {
+        if (!TryGetAny(root, out var value, name))
+        {
+            return null;
+        }
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            return value.GetString();
+        }
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out _))
+        {
+            return value.GetRawText();
+        }
+        throw new AdministrationInputException("A collection identifier must be a string, integer, or null.");
+    }
+
+    private static string? ReadCollectionEntryValue(JsonElement item)
+    {
+        var identity = ReadOptionalCollectionIdentity(item, "id", "key");
+        var value = ReadOptionalString(item, "value");
+        var name = ReadOptionalString(item, "name");
+        if (value is not null && name is not null && !string.Equals(value, name, StringComparison.Ordinal))
+        {
+            throw new AdministrationInputException("A collection value contains conflicting text values.");
+        }
+        return identity ?? value ?? name;
+    }
+
+    private static string? ReadOptionalString(JsonElement root, params string[] names)
+    {
+        var found = false;
+        string? result = null;
+        foreach (var value in ReadAliasValues(root, names))
+        {
+            string? current = value.ValueKind switch
+            {
+                JsonValueKind.Null => null,
+                JsonValueKind.String => value.GetString(),
+                _ => throw new AdministrationInputException("A settings value must be a string or null.")
+            };
+            if (found && !string.Equals(result, current, StringComparison.Ordinal))
+            {
+                throw new AdministrationInputException("A settings value contains conflicting aliases.");
+            }
+            result = current;
+            found = true;
+        }
+        return result;
+    }
+
+    private static bool? ReadOptionalBoolean(JsonElement root, params string[] names)
+    {
+        var found = false;
+        bool? result = null;
+        foreach (var value in ReadAliasValues(root, names))
+        {
+            bool? current = value.ValueKind switch
+            {
+                JsonValueKind.Null => null,
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.String when bool.TryParse(value.GetString(), out var parsed) => parsed,
+                _ => throw new AdministrationInputException("A collection Boolean value is invalid.")
+            };
+            if (found && result != current)
+            {
+                throw new AdministrationInputException("A collection Boolean contains conflicting aliases.");
+            }
+            result = current;
+            found = true;
+        }
+        return result;
+    }
+
+    private static int? ReadOptionalInt(JsonElement root, params string[] names)
+    {
+        var found = false;
+        int? result = null;
+        foreach (var value in ReadAliasValues(root, names))
+        {
+            int? current = value.ValueKind switch
+            {
+                JsonValueKind.Null => null,
+                JsonValueKind.Number when value.TryGetInt32(out var numericValue) => numericValue,
+                JsonValueKind.String when int.TryParse(value.GetString(), out var stringValue) => stringValue,
+                _ => throw new AdministrationInputException("A collection integer value is invalid.")
+            };
+            if (found && result != current)
+            {
+                throw new AdministrationInputException("A collection integer contains conflicting aliases.");
+            }
+            result = current;
+            found = true;
+        }
+        return result;
+    }
+
+    private static long? ReadOptionalLong(JsonElement root, params string[] names)
+    {
+        var found = false;
+        long? result = null;
+        foreach (var value in ReadAliasValues(root, names))
+        {
+            long? current = value.ValueKind switch
+            {
+                JsonValueKind.Null => null,
+                JsonValueKind.Number when value.TryGetInt64(out var numericValue) => numericValue,
+                JsonValueKind.String when long.TryParse(value.GetString(), out var stringValue) => stringValue,
+                _ => throw new AdministrationInputException("A collection ID value is invalid.")
+            };
+            if (found && result != current)
+            {
+                throw new AdministrationInputException("A collection ID contains conflicting aliases.");
+            }
+            result = current;
+            found = true;
+        }
+        return result;
+    }
+
+    private static IReadOnlyList<JsonElement> ReadAliasValues(JsonElement root, IReadOnlyList<string> names)
+    {
+        var values = new List<JsonElement>();
+        foreach (var name in names)
+        {
+            if (TryGetAny(root, out var value, name))
+            {
+                values.Add(value);
             }
         }
+        return values;
     }
 
     private static string NormalizeOrigin(string value)
@@ -1646,11 +2418,19 @@ public sealed partial class AdministrationService
         var normalized = Clean(value) ?? throw new AdministrationInputException("Embed origins cannot be blank.");
         if (normalized.StartsWith("https://*.", StringComparison.OrdinalIgnoreCase))
         {
-            if (normalized.Contains('/', StringComparison.Ordinal) || normalized.Contains('?', StringComparison.Ordinal) || normalized.Contains('#', StringComparison.Ordinal))
+            var wildcardHost = normalized[10..];
+            if (wildcardHost.Contains('/', StringComparison.Ordinal) || wildcardHost.Contains('?', StringComparison.Ordinal) ||
+                wildcardHost.Contains('#', StringComparison.Ordinal) || wildcardHost.Contains('@', StringComparison.Ordinal) ||
+                wildcardHost.Contains('\\', StringComparison.Ordinal) ||
+                !Uri.TryCreate($"https://{wildcardHost}", UriKind.Absolute, out var wildcardUri) ||
+                !string.IsNullOrEmpty(wildcardUri.UserInfo) || wildcardUri.AbsolutePath != "/" ||
+                !string.IsNullOrEmpty(wildcardUri.Query) || !string.IsNullOrEmpty(wildcardUri.Fragment) ||
+                Uri.CheckHostName(wildcardUri.Host) == UriHostNameType.Unknown)
             {
                 throw new AdministrationInputException("Wildcard embed origins may not include a path or query.");
             }
-            return "https://*." + normalized[10..].ToLowerInvariant();
+            var wildcardPort = wildcardUri.IsDefaultPort ? string.Empty : $":{wildcardUri.Port}";
+            return $"https://*.{wildcardUri.IdnHost.ToLowerInvariant()}{wildcardPort}";
         }
         if (!Uri.TryCreate(normalized, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") ||
             uri.AbsolutePath != "/" || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment) ||

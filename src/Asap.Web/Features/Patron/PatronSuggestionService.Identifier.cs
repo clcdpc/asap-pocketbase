@@ -105,7 +105,9 @@ public sealed partial class PatronSuggestionService
             cancellationToken);
         await using (var organization = new SqlCommand(
             """
-            SELECT [IsActive]
+            SELECT CONVERT(bit, CASE
+                WHEN [Id] > 1 AND [OrganizationCodeId] = 2 AND [IsActive] = 1 THEN 1
+                ELSE 0 END)
             FROM [asap].[Organization] WITH (UPDLOCK, HOLDLOCK)
             WHERE [Id] = @organizationId;
             """,

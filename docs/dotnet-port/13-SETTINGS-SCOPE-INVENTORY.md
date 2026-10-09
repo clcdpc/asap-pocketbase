@@ -17,7 +17,7 @@ The target does **not** use one generic or catch-all `Settings` table. Configura
 |---|---|---|
 | **System-only** | One value controls the entire ASAP installation. It is not a library default and cannot be overridden. | Super-admin only |
 | **System default + library override** | CLC establishes the default. A library stores a value only when it needs to differ. | Super-admin for system; library admin for own library |
-| **Whole-set system default + library replacement** | The system owns an ordered/list/set default. Absence of a library set means inherit the whole system set; a meaningful library set replaces it completely. To preserve current behavior, a blank/empty library value means reset/inherit rather than “override to empty.” | Super-admin for system; library admin for own library |
+| **Whole-set system default + library replacement** | The system owns an ordered/list/set default. An omitted property makes no edit; a library set replaces the complete system set. At library scope, `null` explicitly resets to inheritance, while `[]` stores an intentional empty replacement set. At system scope, `[]` stores an empty system set; `null` has the same empty-set effect for common creators and publication options, while system patron-code `null` is invalid and must use `[]`. Blank ordinary text remains a separate no-override case. | Super-admin for system; library admin for own library |
 | **Library-only** | The configuration inherently belongs to a particular library and has no meaningful system version. | Library admin for own library; super-admin for any library |
 | **Not a setting** | Administrative records, environment configuration, operational state, or other first-class data. | Managed through the appropriate administration/operations surface |
 
@@ -58,7 +58,7 @@ Some settings are not merged field-by-field. The existence of a library-owned se
 - `[asap].[CommonCreatorSet]` + `[asap].[CommonCreatorTerm]` for the common-author/creator list itself;
 - `[asap].[PatronCodeEligibilitySet]` + `[asap].[PatronCodeEligibilityMember]` for allowed Polaris patron-code IDs.
 
-For each domain, organization 1 owns the system set. If a library has no set row, it inherits the complete system set. If it has a meaningful set row, that set is authoritative. At library scope, clearing all values removes the set and resumes inheritance; do not introduce an “override to empty” behavior during the port. Resetting the override deletes the library set and its children.
+For each domain, organization 1 owns the system set. If a library has no set row, it inherits the complete system set. If it has a set row, that set is authoritative, including when it has no members. For target settings writes, an omitted collection property leaves the set unchanged, `null` at library scope deletes the library set and resumes inheritance, and `[]` persists an empty set. At system scope, `[]` persists an empty system set; `null` also clears common creators and publication options to an empty system set, but is invalid for system patron-code IDs. Resetting a library override deletes its set and children. Ordinary library text that is blank after trimming still normalizes to no override; that scalar rule does not apply to whole-set arrays.
 
 ### 3.4 Other specialized relational configuration
 
@@ -139,9 +139,13 @@ The system row is required and should be seeded if missing without overwriting a
 `PublicationOptionSet`, `CommonCreatorSet`, and `PatronCodeEligibilitySet` use row-existence semantics:
 
 - no library set row -> inherit the system set;
-- library set row present -> use only that library set;
-- blank/empty library input is normalized to no library set -> inherit, preserving current behavior;
-- reset -> delete the library set and children.
+- library set row present -> use only that library set, including a set with zero members;
+- omitted collection property -> do not edit the set;
+- `null` at library scope -> delete the library set and children, then inherit;
+- `[]` -> persist an intentional empty set (also valid for the system set);
+- system `null` for common creators/publication options -> persist the same empty system set; system patron-code `null` is rejected, so use `[]` to clear it.
+
+The legacy source-data migration has its own normalization: blank or empty source library lists map to no target library set where the pinned source contract treats them as inheritance. This source-import rule does not redefine the current target settings API. Ordinary blank library text continues to normalize to no scalar override where specified above.
 
 ### 5.3 Material formats
 
@@ -251,7 +255,7 @@ For every scalar field marked **system default + library override**, tests must 
 Additionally test:
 
 - system-only tables reject/nonrepresent library scope;
-- whole-set absence/inherit, meaningful complete replacement, blank-value reset, and reset semantics;
+- whole-set omitted/no-edit, absence/inherit, complete replacement, `[]` empty replacement, and library `null` reset semantics;
 - `Reset inherited overrides` preserves every library-owned domain listed above;
 - external-search provider overrides do not create unauthorized library provider identities;
 - built-in and custom-field material-format behavior has no competing legacy JSON rule source;

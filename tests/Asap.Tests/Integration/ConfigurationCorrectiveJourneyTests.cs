@@ -55,7 +55,11 @@ public sealed partial class PatronJourneyTests
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         const int organizationId = 91906;
         await using var context = await contextFactory.CreateDbContextAsync();
-        context.Organizations.Add(new Organization { Id = organizationId, DisplayName = "Set preservation", IsActive = true });
+        context.Organizations.Add(new Organization
+        {
+            Id = organizationId, DisplayName = "Set preservation", OrganizationCodeId = 2,
+            ParentOrganizationId = 1, IsActive = true
+        });
         await context.SaveChangesAsync();
         async Task<string> VersionAsync() => JsonSerializer.SerializeToElement(
             (await administration.GetSettingsAsync(actor, LibraryScope.ForLibrary(organizationId), CancellationToken.None)).Data)
@@ -106,7 +110,7 @@ public sealed partial class PatronJourneyTests
             var empty = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor, JsonSerializer.SerializeToElement(new
             {
                 orgId = organizationId.ToString(), version = await VersionAsync(),
-                workflow = new { commonCreators = Array.Empty<string>() },
+                workflow = new { commonCreators = Array.Empty<string>(), allowedPatronCodeIds = Array.Empty<int>() },
                 patron = new { publicationOptions = Array.Empty<object>() }
             })), CancellationToken.None);
             Assert.AreEqual("saved", empty.Code);
@@ -114,18 +118,23 @@ public sealed partial class PatronJourneyTests
                 (await administration.GetSettingsAsync(actor, LibraryScope.ForLibrary(organizationId), CancellationToken.None)).Data);
             var emptyOverrides = emptySettings.GetProperty("stored").GetProperty("libraryOverride");
             Assert.IsTrue(emptyOverrides.GetProperty("commonCreators").GetProperty("exists").GetBoolean());
+            Assert.IsTrue(emptyOverrides.GetProperty("allowedPatronCodeIds").GetProperty("exists").GetBoolean());
             Assert.IsTrue(emptyOverrides.GetProperty("publicationOptions").GetProperty("exists").GetBoolean());
             Assert.AreEqual(0, emptyOverrides.GetProperty("commonCreators").GetProperty("values").GetArrayLength());
+            Assert.AreEqual(0, emptyOverrides.GetProperty("allowedPatronCodeIds").GetProperty("values").GetArrayLength());
             Assert.AreEqual(0, emptyOverrides.GetProperty("publicationOptions").GetProperty("values").GetArrayLength());
+            Assert.IsTrue(await context.PatronCodeEligibilitySets.AnyAsync(item => item.OrganizationId == organizationId));
+            Assert.IsFalse(await context.PatronCodeEligibilityMembers.AnyAsync(item => item.OrganizationId == organizationId));
             var configurations = factory.Services.GetRequiredService<PatronConfigurationService>();
             var effectiveEmpty = await configurations.GetAsync(organizationId, CancellationToken.None);
             Assert.AreEqual(0, effectiveEmpty!.CommonCreators.Count);
+            Assert.AreEqual(0, effectiveEmpty.AllowedPatronCodeIds.Count);
             Assert.AreEqual(0, effectiveEmpty.PublicationOptions.Count);
 
             var reset = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor, JsonSerializer.SerializeToElement(new
             {
                 orgId = organizationId.ToString(), version = await VersionAsync(),
-                workflow = new { commonCreators = (string[]?)null },
+                workflow = new { commonCreators = (string[]?)null, allowedPatronCodeIds = (int[]?)null },
                 patron = new { publicationOptions = (object[]?)null }
             })), CancellationToken.None);
             Assert.AreEqual("saved", reset.Code);
@@ -133,11 +142,14 @@ public sealed partial class PatronJourneyTests
                 (await administration.GetSettingsAsync(actor, LibraryScope.ForLibrary(organizationId), CancellationToken.None)).Data);
             var resetOverrides = resetSettings.GetProperty("stored").GetProperty("libraryOverride");
             Assert.IsFalse(resetOverrides.GetProperty("commonCreators").GetProperty("exists").GetBoolean());
+            Assert.IsFalse(resetOverrides.GetProperty("allowedPatronCodeIds").GetProperty("exists").GetBoolean());
             Assert.IsFalse(resetOverrides.GetProperty("publicationOptions").GetProperty("exists").GetBoolean());
+            Assert.IsFalse(await context.PatronCodeEligibilitySets.AnyAsync(item => item.OrganizationId == organizationId));
             var inherited = await configurations.GetAsync(organizationId, CancellationToken.None);
             var system = await configurations.GetAsync(1, CancellationToken.None);
             Assert.IsFalse(string.IsNullOrWhiteSpace(system!.PageTitle));
             CollectionAssert.AreEqual(system!.CommonCreators.ToArray(), inherited!.CommonCreators.ToArray());
+            CollectionAssert.AreEquivalent(system!.AllowedPatronCodeIds.ToArray(), inherited!.AllowedPatronCodeIds.ToArray());
             CollectionAssert.AreEqual(system.PublicationOptions.ToArray(), inherited.PublicationOptions.ToArray());
 
             var blankText = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor, JsonSerializer.SerializeToElement(new
@@ -162,6 +174,122 @@ public sealed partial class PatronJourneyTests
             await context.SaveChangesAsync();
             context.Organizations.Remove(await context.Organizations.SingleAsync(item => item.Id == organizationId));
             await context.SaveChangesAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task SystemNullClearsCommonCreatorsAndPublicationOptionsToEmptySets()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var administration = factory.Services.GetRequiredService<AdministrationService>();
+
+        async Task<JsonElement> ReadSystemAsync() => JsonSerializer.SerializeToElement(
+            (await administration.GetSettingsAsync(actor, LibraryScope.System, CancellationToken.None)).Data);
+
+        static (string Id, string Label, bool Enabled, int SortOrder)[] ReadOptions(JsonElement settings) => settings
+            .GetProperty("stored").GetProperty("configuredSystem").GetProperty("publicationOptions")
+            .GetProperty("values").EnumerateArray()
+            .Select(item => (
+                item.GetProperty("id").GetString()!,
+                item.GetProperty("label").GetString()!,
+                item.GetProperty("enabled").GetBoolean(),
+                item.GetProperty("sortOrder").GetInt32()))
+            .ToArray();
+
+        var original = await ReadSystemAsync();
+        var originalCreatorsSnapshot = original.GetProperty("stored").GetProperty("configuredSystem").GetProperty("commonCreators");
+        var originalOptionsSnapshot = original.GetProperty("stored").GetProperty("configuredSystem").GetProperty("publicationOptions");
+        Assert.IsTrue(originalCreatorsSnapshot.GetProperty("exists").GetBoolean());
+        Assert.IsTrue(originalOptionsSnapshot.GetProperty("exists").GetBoolean());
+        var originalCreators = originalCreatorsSnapshot.GetProperty("values").EnumerateArray()
+            .Select(item => item.GetProperty("value").GetString()!).ToArray();
+        var originalOptions = originalOptionsSnapshot.GetProperty("values").EnumerateArray()
+            .Select(item => new
+            {
+                id = item.GetProperty("id").GetString()!,
+                label = item.GetProperty("label").GetString()!,
+                enabled = item.GetProperty("enabled").GetBoolean(),
+                sortOrder = item.GetProperty("sortOrder").GetInt32()
+            }).ToArray();
+        var changed = false;
+
+        async Task RestoreSystemSetsAsync()
+        {
+            var latest = await ReadSystemAsync();
+            var restored = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor,
+                JsonSerializer.SerializeToElement(new
+                {
+                    orgId = "system",
+                    version = latest.GetProperty("version").GetString(),
+                    workflow = new { commonAuthorsList = originalCreators },
+                    patron = new { publicationOptions = originalOptions }
+                })), CancellationToken.None);
+            Assert.AreEqual("saved", restored.Code);
+            changed = false;
+        }
+
+        try
+        {
+            changed = true;
+            var seeded = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor,
+                JsonSerializer.SerializeToElement(new
+                {
+                    orgId = "system",
+                    version = original.GetProperty("version").GetString(),
+                    workflow = new { commonAuthorsList = new[] { $"System null clear {Guid.NewGuid():N}" } },
+                    patron = new
+                    {
+                        publicationOptions = new[]
+                        {
+                            new
+                            {
+                                id = $"system_null_{Guid.NewGuid():N}",
+                                label = "System null clear option",
+                                enabled = true,
+                                sortOrder = 10
+                            }
+                        }
+                    }
+                })), CancellationToken.None);
+            Assert.AreEqual("saved", seeded.Code);
+
+            var beforeClear = await ReadSystemAsync();
+            var cleared = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor,
+                JsonSerializer.SerializeToElement(new
+                {
+                    orgId = "system",
+                    version = beforeClear.GetProperty("version").GetString(),
+                    workflow = new { commonAuthorsList = (string[]?)null },
+                    patron = new { publicationOptions = (object[]?)null }
+                })), CancellationToken.None);
+            Assert.AreEqual("saved", cleared.Code);
+
+            var empty = await ReadSystemAsync();
+            var configuredSystem = empty.GetProperty("stored").GetProperty("configuredSystem");
+            Assert.IsTrue(configuredSystem.GetProperty("commonCreators").GetProperty("exists").GetBoolean());
+            Assert.AreEqual(0, configuredSystem.GetProperty("commonCreators").GetProperty("values").GetArrayLength());
+            Assert.IsTrue(configuredSystem.GetProperty("publicationOptions").GetProperty("exists").GetBoolean());
+            Assert.AreEqual(0, configuredSystem.GetProperty("publicationOptions").GetProperty("values").GetArrayLength());
+            Assert.AreEqual(1, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] = 1;"));
+            Assert.AreEqual(0, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] = 1;"));
+            Assert.AreEqual(1, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = 1;"));
+            Assert.AreEqual(0, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 1;"));
+
+            await RestoreSystemSetsAsync();
+            var restoredSettings = await ReadSystemAsync();
+            CollectionAssert.AreEqual(originalCreators,
+                restoredSettings.GetProperty("stored").GetProperty("configuredSystem").GetProperty("commonCreators")
+                    .GetProperty("values").EnumerateArray().Select(item => item.GetProperty("value").GetString()).ToArray());
+            CollectionAssert.AreEqual(ReadOptions(original), ReadOptions(restoredSettings));
+        }
+        finally
+        {
+            if (changed)
+            {
+                await RestoreSystemSetsAsync();
+            }
         }
     }
 
@@ -223,7 +351,11 @@ public sealed partial class PatronJourneyTests
         var administration = factory.Services.GetRequiredService<AdministrationService>();
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var context = await contextFactory.CreateDbContextAsync();
-        var organization = new Organization { Id = 91905, DisplayName = "Version participation", IsActive = true };
+        var organization = new Organization
+        {
+            Id = 91905, DisplayName = "Version participation",
+            OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
+        };
         context.Organizations.Add(organization);
         await context.SaveChangesAsync();
         async Task<string> VersionAsync(string scope)
@@ -334,7 +466,8 @@ public sealed partial class PatronJourneyTests
             var localDispatcher = new RecordingOutboxDispatcher();
             var service = CreatePatronSuggestionService(["example.org"], localDispatcher, sender);
             var title = $"Template visibility {Guid.NewGuid():N}";
-            var result = await service.CreateAsync(new PatronSessionContext(9091, "20000000003910", 2, 2, 2, timeProvider!.GetUtcNow().UtcDateTime.AddHours(1)),
+            var session = await IssueTestPatronSessionAsync("20000000003910");
+            var result = await service.CreateAsync(session,
                 Suggestion(title), CancellationToken.None);
             var committedTitle = await context.TitleRequests.Where(item => item.Id == result.Id).Select(item => item.Title).SingleAsync();
             var outboxId = await FindSubmissionOutboxIdAsync(result.Id);
@@ -355,6 +488,9 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
+            await ExecuteNonQueryAsync(
+                "DELETE FROM [asap].[PatronSession] WHERE [Barcode] = @barcode;",
+                ("@barcode", "20000000003910"));
             system.IsHidden = oldSystemHidden;
             system.SubjectTemplate = oldSubject;
             system.BodyTemplate = oldBody;

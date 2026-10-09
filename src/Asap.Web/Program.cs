@@ -19,6 +19,10 @@ using Asap.Web.Features.Administration;
 using Asap.Web.Features.Analytics;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.AllowDuplicateProperties = false;
+});
 
 var configurationResult = ExternalConfigurationLoader.Load(
     builder.Configuration,

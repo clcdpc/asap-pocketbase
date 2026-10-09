@@ -19,8 +19,8 @@ public sealed record AssignTitleRequestInput(string? Version,
 
 public sealed record TitleRequestMutationResult(
     string Code,
-    long? RequestId = null,
-    IReadOnlyList<long>? DispatchOutboxIds = null,
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString)] long? RequestId = null,
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString)] IReadOnlyList<long>? DispatchOutboxIds = null,
     string? FinalStatus = null,
     string? NotificationStatus = null,
     string? NotificationReason = null,
@@ -28,7 +28,12 @@ public sealed record TitleRequestMutationResult(
     string? PatronNotificationReason = null,
     TitleRequestDuplicateConflict? Duplicate = null);
 
-public sealed record TitleRequestDuplicateConflict(long Id, string Title, string Status, int BibId, string MatchType);
+public sealed record TitleRequestDuplicateConflict(
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString)] long Id,
+    string Title,
+    string Status,
+    int BibId,
+    string MatchType);
 
 public sealed class TitleRequestMutationService(
     IDbContextFactory<AsapDbContext> contextFactory,
@@ -280,6 +285,18 @@ public sealed class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult(validationError);
         }
+        if (input.Title is { } suppliedTitle)
+        {
+            var normalizedTitle = suppliedTitle.Trim();
+            if (normalizedTitle.Length == 0)
+            {
+                return new TitleRequestMutationResult("invalid_title");
+            }
+            if (normalizedTitle.Length > 500)
+            {
+                return new TitleRequestMutationResult("title_too_long");
+            }
+        }
         var proposedExactDate = input.ExactPublicationDate.Value;
 
         var bibPreflight = await PreflightExplicitBibAsync(
@@ -487,7 +504,8 @@ public sealed class TitleRequestMutationService(
             // creation and automatic promotion take the same lock before writing requests.
             var otherOpenRequests = await context.TitleRequests.AsNoTracking().Where(item =>
                 item.LibraryOrganizationId == request.LibraryOrganizationId &&
-                item.Barcode == request.Barcode && item.BibId != null &&
+                ((request.PatronIdSnapshot.HasValue && item.PatronIdSnapshot == request.PatronIdSnapshot) ||
+                 item.PatronIdSnapshot == null && item.Barcode == request.Barcode) && item.BibId != null &&
                 item.Id != request.Id && item.Status != RequestStatus.Closed)
                 .OrderBy(item => item.Id)
                 .Select(item => new { item.Id, item.Title, item.Status, item.BibId })
@@ -890,7 +908,9 @@ public sealed class TitleRequestMutationService(
         }
 
         if (!await context.Organizations.AsNoTracking()
-                .AnyAsync(item => item.Id == request.LibraryOrganizationId && item.IsActive, cancellationToken))
+                .AnyAsync(item => item.Id == request.LibraryOrganizationId && item.Id > LibraryScope.SystemOrganizationId &&
+                                  item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive,
+                    cancellationToken))
         {
             return "organization_inactive";
         }
@@ -1129,7 +1149,7 @@ public sealed class TitleRequestMutationService(
             return new LockedMutation("organization_inactive");
         }
         var organization = context.Organizations.Local.Single(item => item.Id == snapshot.LibraryOrganizationId);
-        if (organization?.IsActive != true)
+        if (!OrganizationAuthority.IsActiveLibrary(organization))
         {
             return new LockedMutation("organization_inactive");
         }
@@ -1544,6 +1564,16 @@ public sealed class TitleRequestMutationService(
         IReadOnlyDictionary<string, string?> submitted,
         CancellationToken cancellationToken)
     {
+        Dictionary<string, JsonElement> merged;
+        try
+        {
+            merged = TitleRequestCustomFieldsSnapshot.Parse(request.CustomFieldsJson);
+        }
+        catch (JsonException)
+        {
+            return ("invalid_custom_fields", null);
+        }
+
         var configuration = await patronConfigurations.GetAsync(
             context, request.LibraryOrganizationId, cancellationToken);
         var format = configuration?.Formats.FirstOrDefault(item => item.Id == request.MaterialFormatId);
@@ -1552,19 +1582,6 @@ public sealed class TitleRequestMutationService(
             return submitted.Count != 0
                 ? ("invalid_custom_fields", null)
                 : (null, request.CustomFieldsJson);
-        }
-
-        Dictionary<string, JsonElement> merged;
-        try
-        {
-            merged = string.IsNullOrWhiteSpace(request.CustomFieldsJson)
-                ? new(StringComparer.Ordinal)
-                : JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(request.CustomFieldsJson)
-                  ?? new(StringComparer.Ordinal);
-        }
-        catch (JsonException)
-        {
-            merged = new(StringComparer.Ordinal);
         }
 
         foreach (var field in format.CustomFields)
@@ -1593,6 +1610,14 @@ public sealed class TitleRequestMutationService(
                     return ("invalid_custom_fields", null);
                 }
                 merged.Remove(property.Key);
+                continue;
+            }
+            if (merged.TryGetValue(property.Key, out var existingSnapshot) &&
+                existingSnapshot.ValueKind == JsonValueKind.Object &&
+                existingSnapshot.TryGetProperty("value", out var existingValue) &&
+                existingValue.ValueKind == JsonValueKind.String &&
+                string.Equals(Clean(existingValue.GetString()), cleaned, StringComparison.Ordinal))
+            {
                 continue;
             }
             if (definition.Type == "select")

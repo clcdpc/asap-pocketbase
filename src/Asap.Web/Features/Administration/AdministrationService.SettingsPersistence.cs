@@ -301,6 +301,11 @@ public sealed partial class AdministrationService
         await ApplyProvidersAsync(context, organizationId, workflowSection, payload, cancellationToken);
         await ApplyFormatsAsync(context, organizationId, payload, patronSection, cancellationToken);
         await ApplyCustomFieldsAsync(context, organizationId, patronSection, payload, cancellationToken);
+        await context.SaveChangesAsync(cancellationToken);
+        if (HasEffectiveFormatOrCustomFieldEdits(payload, patronSection))
+        {
+            await ValidateEffectiveRequiredSelectRulesAsync(context, organizationId, cancellationToken);
+        }
         await ApplyAutoClaimRulesAsync(context, organizationId, payload, cancellationToken);
         await ApplyTemplatesAsync(context, organizationId, payload, cancellationToken);
         await ValidateRejectionTemplateReferencesAsync(context, organizationId, cancellationToken);
