@@ -821,31 +821,36 @@ public sealed class HoldPlacementService(
             return new AcquisitionResult("not_found");
         }
 
-        PatronSnapshot verifiedPatron;
-        try
+        PatronSnapshot? verifiedPatron = null;
+        IReadOnlyList<string> barcodeAliases = [];
+        if (!snapshot.LegacyHoldProtected)
         {
-            verifiedPatron = await patronProvider.RefreshAsync(snapshot.Barcode, snapshot.LibraryOrganizationId, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (PolarisOperationalException)
-        {
-            return new AcquisitionResult("hold_provider_error");
-        }
+            try
+            {
+                verifiedPatron = await patronProvider.RefreshAsync(
+                    snapshot.Barcode, snapshot.LibraryOrganizationId, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (PolarisOperationalException)
+            {
+                return new AcquisitionResult("hold_provider_error");
+            }
 
-        var barcodeAliases = verifiedPatron.KnownBarcodeAliases;
-        if (verifiedPatron.PatronId <= 0 || barcodeAliases.Count == 0 ||
-            !barcodeAliases.Contains(snapshot.Barcode, StringComparer.OrdinalIgnoreCase) ||
-            snapshot.PatronIdSnapshot is > 0 && snapshot.PatronIdSnapshot.Value != verifiedPatron.PatronId)
-        {
-            return new AcquisitionResult("patron_identity_changed");
+            barcodeAliases = verifiedPatron.KnownBarcodeAliases;
+            if (verifiedPatron.PatronId <= 0 || barcodeAliases.Count == 0 ||
+                !barcodeAliases.Contains(snapshot.Barcode, StringComparer.OrdinalIgnoreCase) ||
+                snapshot.PatronIdSnapshot is > 0 && snapshot.PatronIdSnapshot.Value != verifiedPatron.PatronId)
+            {
+                return new AcquisitionResult("patron_identity_changed");
+            }
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-        if (!await PatronMutationLock.TryAcquireAsync(
+        if (verifiedPatron is not null && !await PatronMutationLock.TryAcquireAsync(
                 (SqlConnection)context.Database.GetDbConnection(), (SqlTransaction)transaction.GetDbTransaction(),
                 verifiedPatron.PatronId, barcodeAliases, cancellationToken))
         {
@@ -896,7 +901,8 @@ public sealed class HoldPlacementService(
         {
             return new AcquisitionResult("not_found");
         }
-        if (request.PatronIdSnapshot is > 0 && request.PatronIdSnapshot != verifiedPatron.PatronId)
+        if (verifiedPatron is not null && request.PatronIdSnapshot is > 0 &&
+            request.PatronIdSnapshot != verifiedPatron.PatronId)
         {
             return new AcquisitionResult("patron_identity_changed");
         }
@@ -913,6 +919,11 @@ public sealed class HoldPlacementService(
         if (request.LegacyHoldProtected)
         {
             return new AcquisitionResult("hold_history_retained");
+        }
+
+        if (verifiedPatron is null)
+        {
+            return new AcquisitionResult("patron_identity_unavailable");
         }
 
         if (request.BibId is not > 0)

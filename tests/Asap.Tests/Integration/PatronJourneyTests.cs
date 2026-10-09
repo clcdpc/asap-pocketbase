@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Data;
 using System.Diagnostics;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -9029,130 +9030,315 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task CrossPatronIdentifierDuplicateCommitsTagAndExactSystemNote()
     {
-        await using (var connection = new SqlConnection(databaseConnectionString))
+        const int currentPatronId = 980011;
+        var currentBarcode = $"349-cross-{Guid.NewGuid():N}";
+        const string crossPatronNote = "Tagged as a duplicate suggestion because another patron has a suggestion with the same identifier number.";
+        var legacyIdentifier = $"CROSS-PATRON-LEGACY-{Guid.NewGuid():N}";
+        var reassignedIdentifier = $"CROSS-PATRON-REASSIGNED-{Guid.NewGuid():N}";
+        var candidateIds = new List<long>();
+        var requestIds = new List<long>();
+        try
         {
+            candidateIds.Add(await SeedDuplicateCandidateAsync("20000000000010", legacyIdentifier, null));
+
+            var provider = factory!.Services.GetRequiredService<DeterministicTestingPatronProvider>();
+            provider.AddPatron(
+                new PatronSnapshot(currentPatronId, currentBarcode, "cross-patron@example.org", "Cross", "Patron",
+                    1, "Adult", 101, 2, "Test Library", 101),
+                [new PickupBranch(101, "Main Library")], 2);
+            provider.SetIdentifierResult(legacyIdentifier, 2, new(IdentifierLookupOutcome.DefinitiveNotFound));
+            provider.SetIdentifierResult(reassignedIdentifier, 2, new(IdentifierLookupOutcome.DefinitiveNotFound));
+            using var client = factory.CreateClient();
+            var login = await client.PostAsJsonAsync(
+                "/api/asap/patron/login",
+                new { barcode = currentBarcode, pin = "1234", libraryOrgId = 2 });
+            using var loginDocument = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                "Bearer",
+                loginDocument.RootElement.GetProperty("token").GetString());
+
+            using var legacyResponse = await SubmitSuggestionAsync(client, legacyIdentifier, "Legacy Cross Patron Request");
+            Assert.AreEqual(HttpStatusCode.Created, legacyResponse.StatusCode, await legacyResponse.Content.ReadAsStringAsync());
+            var legacyRequestId = await ReadCreatedRequestIdAsync(legacyResponse);
+            requestIds.Add(legacyRequestId);
+            var legacyDuplicate = await ReadDuplicateResultAsync(legacyRequestId);
+            CollectionAssert.Contains(legacyDuplicate.Notes.Split(["\r\n"], StringSplitOptions.None), crossPatronNote, legacyDuplicate.Notes);
+            Assert.AreEqual(1, legacyDuplicate.DuplicateTagCount);
+            Assert.AreEqual(currentPatronId, legacyDuplicate.PatronIdSnapshot);
+
+            // A positive snapshot must also identify another patron when the barcode was later reused.
+            candidateIds.Add(await SeedDuplicateCandidateAsync(currentBarcode, reassignedIdentifier, 980012));
+            using var reassignedResponse = await SubmitSuggestionAsync(client, reassignedIdentifier, "Reassigned Barcode Request");
+            Assert.AreEqual(HttpStatusCode.Created, reassignedResponse.StatusCode, await reassignedResponse.Content.ReadAsStringAsync());
+            var reassignedRequestId = await ReadCreatedRequestIdAsync(reassignedResponse);
+            requestIds.Add(reassignedRequestId);
+            var reassignedDuplicate = await ReadDuplicateResultAsync(reassignedRequestId);
+            CollectionAssert.Contains(reassignedDuplicate.Notes.Split(["\r\n"], StringSplitOptions.None), crossPatronNote, reassignedDuplicate.Notes);
+            Assert.AreEqual(1, reassignedDuplicate.DuplicateTagCount);
+            Assert.AreEqual(currentPatronId, reassignedDuplicate.PatronIdSnapshot);
+        }
+        finally
+        {
+            await using (var discover = new SqlConnection(databaseConnectionString))
+            {
+                await discover.OpenAsync();
+                await using var findRequests = discover.CreateCommand();
+                findRequests.CommandText =
+                    "SELECT [Id] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 2 AND [Barcode] = @barcode " +
+                    "AND [Title] IN (N'Legacy Cross Patron Request', N'Reassigned Barcode Request') " +
+                    "AND [Identifier] IN (@legacy, @reassigned);";
+                findRequests.Parameters.Add("@barcode", SqlDbType.NVarChar, 50).Value = currentBarcode;
+                findRequests.Parameters.Add("@legacy", SqlDbType.NVarChar, 100).Value = legacyIdentifier;
+                findRequests.Parameters.Add("@reassigned", SqlDbType.NVarChar, 100).Value = reassignedIdentifier;
+                await using var rows = await findRequests.ExecuteReaderAsync();
+                while (await rows.ReadAsync())
+                {
+                    var requestId = rows.GetInt64(0);
+                    if (!requestIds.Contains(requestId))
+                    {
+                        requestIds.Add(requestId);
+                    }
+                }
+            }
+            await using (var cleanup = new SqlConnection(databaseConnectionString))
+            {
+                await cleanup.OpenAsync();
+                await using var removeOutbox = cleanup.CreateCommand();
+                removeOutbox.CommandText =
+                    "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @requestId);";
+                removeOutbox.Parameters.Add("@requestId", SqlDbType.BigInt);
+                foreach (var requestId in requestIds)
+                {
+                    removeOutbox.Parameters["@requestId"].Value = requestId;
+                    await removeOutbox.ExecuteNonQueryAsync();
+                }
+            }
+            foreach (var requestId in requestIds)
+            {
+                await DeleteRequestAsync(requestId);
+            }
+            await DeleteTestPatronSessionAsyncByBarcode(currentBarcode);
+            if (candidateIds.Count > 0)
+            {
+                await using var cleanup = new SqlConnection(databaseConnectionString);
+                await cleanup.OpenAsync();
+                await using var removeCandidates = cleanup.CreateCommand();
+                removeCandidates.CommandText = $"DELETE FROM [asap].[TitleRequest] WHERE [Id] IN ({string.Join(",", candidateIds.Select((_, index) => $"@candidate{index}"))});";
+                for (var index = 0; index < candidateIds.Count; index++)
+                {
+                    removeCandidates.Parameters.AddWithValue($"@candidate{index}", candidateIds[index]);
+                }
+                await removeCandidates.ExecuteNonQueryAsync();
+            }
+        }
+
+        async Task<long> SeedDuplicateCandidateAsync(string barcode, string identifier, int? patronIdSnapshot)
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
             await connection.OpenAsync();
             await using var command = connection.CreateCommand();
             command.CommandText =
                 """
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [Author], [Identifier],
+                    ([LibraryOrganizationId], [PatronOrganizationId], [PatronIdSnapshot], [Barcode], [Title], [Author], [Identifier],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
                      [AutoHold], [MaterialFormatId], [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
+                OUTPUT INSERTED.[Id]
                 VALUES
-                    (2, 101, N'20000000000010', N'Existing Other Patron Request', N'Existing Author', N'CROSS-PATRON-ID',
+                    (2, 101, @patronIdSnapshot, @barcode, N'Existing Other Patron Request', N'Existing Author', @identifier,
                      101, N'Main Library', N'Test Library', 1,
                      (SELECT [Id] FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book'),
                      N'suggestion', N'not_found', DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(day, -1, SYSUTCDATETIME()));
                 """;
-            await command.ExecuteNonQueryAsync();
+            command.Parameters.Add("@patronIdSnapshot", SqlDbType.Int).Value = patronIdSnapshot is > 0
+                ? patronIdSnapshot.Value
+                : DBNull.Value;
+            command.Parameters.Add("@barcode", SqlDbType.NVarChar, 50).Value = barcode;
+            command.Parameters.Add("@identifier", SqlDbType.NVarChar, 100).Value = identifier;
+            return Convert.ToInt64(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        using var client = factory!.CreateClient();
-        var login = await client.PostAsJsonAsync(
-            "/api/asap/patron/login",
-            new { barcode = "20000000000011", pin = "1234", libraryOrgId = 2 });
-        using var loginDocument = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
-            "Bearer",
-            loginDocument.RootElement.GetProperty("token").GetString());
+        static Task<HttpResponseMessage> SubmitSuggestionAsync(HttpClient client, string identifier, string title) =>
+            client.PostAsJsonAsync(
+                "/api/asap/patron/suggestions",
+                new
+                {
+                    format = "book",
+                    title,
+                    author = "New Author",
+                    isbn = identifier,
+                    publication = "Coming soon",
+                    preferredPickupBranchId = 101,
+                    autohold = true,
+                    customFields = new Dictionary<string, string?>()
+                });
 
-        var response = await client.PostAsJsonAsync(
-            "/api/asap/patron/suggestions",
-            new
-            {
-                format = "book",
-                title = "A New Cross Patron Request",
-                author = "New Author",
-                isbn = "CROSS-PATRON-ID",
-                publication = "Coming soon",
-                preferredPickupBranchId = 101,
-                autohold = true,
-                customFields = new Dictionary<string, string?>()
-            });
+        static async Task<long> ReadCreatedRequestIdAsync(HttpResponseMessage response)
+        {
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            return long.Parse(document.RootElement.GetProperty("id").GetString()!, System.Globalization.CultureInfo.InvariantCulture);
+        }
 
-        Assert.AreEqual(HttpStatusCode.Created, response.StatusCode, await response.Content.ReadAsStringAsync());
-        await using var verify = new SqlConnection(databaseConnectionString);
-        await verify.OpenAsync();
-        await using var verifyCommand = verify.CreateCommand();
-        verifyCommand.CommandText =
-            """
-            SELECT request.[Notes], COUNT(tag.[Id])
-            FROM [asap].[TitleRequest] AS request
-            LEFT JOIN [asap].[TitleRequestWorkflowTag] AS requestTag ON requestTag.[TitleRequestId] = request.[Id]
-            LEFT JOIN [asap].[WorkflowTag] AS tag
-              ON tag.[Id] = requestTag.[WorkflowTagId] AND tag.[Code] = N'duplicate_suggestion'
-            WHERE request.[LibraryOrganizationId] = 2 AND request.[Barcode] = N'20000000000011'
-            GROUP BY request.[Notes];
-            """;
-        await using var reader = await verifyCommand.ExecuteReaderAsync();
-        Assert.IsTrue(await reader.ReadAsync());
-        CollectionAssert.Contains(
-            reader.GetString(0).Split(["\r\n"], StringSplitOptions.None),
-            "Tagged as a duplicate suggestion because another patron has a suggestion with the same identifier number.",
-            reader.GetString(0));
-        Assert.AreEqual(1, reader.GetInt32(1));
+        async Task<(string Notes, int DuplicateTagCount, int? PatronIdSnapshot)> ReadDuplicateResultAsync(long requestId)
+        {
+            await using var verify = new SqlConnection(databaseConnectionString);
+            await verify.OpenAsync();
+            await using var command = verify.CreateCommand();
+            command.CommandText =
+                """
+                SELECT request.[Notes], COUNT(tag.[Id]), request.[PatronIdSnapshot]
+                FROM [asap].[TitleRequest] AS request
+                LEFT JOIN [asap].[TitleRequestWorkflowTag] AS requestTag ON requestTag.[TitleRequestId] = request.[Id]
+                LEFT JOIN [asap].[WorkflowTag] AS tag
+                  ON tag.[Id] = requestTag.[WorkflowTagId] AND tag.[Code] = N'duplicate_suggestion'
+                WHERE request.[Id] = @id
+                GROUP BY request.[Notes], request.[PatronIdSnapshot];
+                """;
+            command.Parameters.AddWithValue("@id", requestId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            return (reader.GetString(0), reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetInt32(2));
+        }
     }
 
     [TestMethod]
     public async Task WeeklyLimitUsesSevenBusinessCalendarDaysAcrossSpringGap()
     {
-        timeProvider!.SetUtcNow(new DateTimeOffset(2030, 3, 17, 6, 30, 0, TimeSpan.Zero));
+        int? originalLimit;
+        string? originalMessage;
+        DateTime originalUpdatedUtc;
+        bool hadSettings;
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
-            await using var command = connection.CreateCommand();
-            command.CommandText =
-                """
-                IF EXISTS (SELECT 1 FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 2)
-                    UPDATE [asap].[WorkflowSettings]
-                    SET [SuggestionLimit] = 1,
-                        [SuggestionLimitMessage] = N'Available after {{next_available_date}}.',
-                        [UpdatedUtc] = SYSUTCDATETIME()
-                    WHERE [OrganizationId] = 2;
-                ELSE
-                    INSERT INTO [asap].[WorkflowSettings]
-                        ([OrganizationId], [SuggestionLimit], [SuggestionLimitMessage], [UpdatedUtc])
-                    VALUES
-                        (2, 1, N'Available after {{next_available_date}}.', SYSUTCDATETIME());
-
-                INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [Author], [Identifier],
-                     [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
-                     [AutoHold], [MaterialFormatId], [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES
-                    (2, 101, N'20000000000020', N'Outside Calendar Window', N'Test Author', N'OLD-LIMIT-ID',
-                     101, N'Main Library', N'Test Library', 1,
-                     (SELECT [Id] FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book'),
-                     N'suggestion', N'not_found', '2030-03-10T07:00:00Z', '2030-03-10T07:00:00Z');
-                """;
-            await command.ExecuteNonQueryAsync();
+            await using var read = connection.CreateCommand();
+            read.CommandText = "SELECT [SuggestionLimit], [SuggestionLimitMessage], [UpdatedUtc] FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 2;";
+            await using var reader = await read.ExecuteReaderAsync();
+            hadSettings = await reader.ReadAsync();
+            originalLimit = hadSettings && !reader.IsDBNull(0) ? reader.GetInt32(0) : null;
+            originalMessage = hadSettings && !reader.IsDBNull(1) ? reader.GetString(1) : null;
+            originalUpdatedUtc = hadSettings ? reader.GetDateTime(2) : default;
         }
 
-        using var client = factory!.CreateClient();
-        var login = await client.PostAsJsonAsync(
-            "/api/asap/patron/login",
-            new { barcode = "20000000000020", pin = "1234", libraryOrgId = 2 });
-        using var loginDocument = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
-            "Bearer",
-            loginDocument.RootElement.GetProperty("token").GetString());
-
-        var response = await client.PostAsJsonAsync(
-            "/api/asap/patron/suggestions",
-            new
+        long? seededRequestId = null;
+        long? submittedRequestId = null;
+        var barcode = $"349-weekly-{Guid.NewGuid():N}";
+        try
+        {
+            timeProvider!.SetUtcNow(new DateTimeOffset(2030, 3, 17, 6, 30, 0, TimeSpan.Zero));
+            var provider = factory!.Services.GetRequiredService<DeterministicTestingPatronProvider>();
+            provider.AddPatron(
+                new PatronSnapshot(989020, barcode, "weekly-limit@example.org", "Weekly", "Limit",
+                    1, "Adult", 101, 2, "Test Library", 101),
+                [new PickupBranch(101, "Main Library")], 2);
+            provider.SetIdentifierResult("NEW-LIMIT-ID", 2, new(IdentifierLookupOutcome.DefinitiveNotFound));
+            await using (var connection = new SqlConnection(databaseConnectionString))
             {
-                format = "book",
-                title = "Inside New Calendar Window",
-                author = "Test Author",
-                isbn = "NEW-LIMIT-ID",
-                publication = "Coming soon",
-                preferredPickupBranchId = 101,
-                autohold = true,
-                customFields = new Dictionary<string, string?>()
-            });
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    IF EXISTS (SELECT 1 FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 2)
+                        UPDATE [asap].[WorkflowSettings]
+                        SET [SuggestionLimit] = 1,
+                            [SuggestionLimitMessage] = N'Available after {{next_available_date}}.',
+                            [UpdatedUtc] = SYSUTCDATETIME()
+                        WHERE [OrganizationId] = 2;
+                    ELSE
+                        INSERT INTO [asap].[WorkflowSettings]
+                            ([OrganizationId], [SuggestionLimit], [SuggestionLimitMessage], [UpdatedUtc])
+                        VALUES
+                            (2, 1, N'Available after {{next_available_date}}.', SYSUTCDATETIME());
 
-        Assert.AreEqual(HttpStatusCode.Created, response.StatusCode, await response.Content.ReadAsStringAsync());
+                    INSERT INTO [asap].[TitleRequest]
+                        ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [Author], [Identifier],
+                         [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
+                         [AutoHold], [MaterialFormatId], [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
+                    OUTPUT INSERTED.[Id]
+                    VALUES
+                        (2, 101, @barcode, N'Outside Calendar Window', N'Test Author', N'OLD-LIMIT-ID',
+                         101, N'Main Library', N'Test Library', 1,
+                         (SELECT [Id] FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book'),
+                         N'suggestion', N'not_found', '2030-03-10T07:00:00Z', '2030-03-10T07:00:00Z');
+                    """;
+                command.Parameters.Add("@barcode", SqlDbType.NVarChar, 50).Value = barcode;
+                seededRequestId = Convert.ToInt64(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            using var client = factory!.CreateClient();
+            var login = await client.PostAsJsonAsync(
+                "/api/asap/patron/login",
+                new { barcode, pin = "1234", libraryOrgId = 2 });
+            using var loginDocument = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                "Bearer",
+                loginDocument.RootElement.GetProperty("token").GetString());
+
+            var response = await client.PostAsJsonAsync(
+                "/api/asap/patron/suggestions",
+                new
+                {
+                    format = "book",
+                    title = "Inside New Calendar Window",
+                    author = "Test Author",
+                    isbn = "NEW-LIMIT-ID",
+                    publication = "Coming soon",
+                    preferredPickupBranchId = 101,
+                    autohold = true,
+                    customFields = new Dictionary<string, string?>()
+                });
+
+            Assert.AreEqual(HttpStatusCode.Created, response.StatusCode, await response.Content.ReadAsStringAsync());
+            using var submittedDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            submittedRequestId = long.Parse(
+                submittedDocument.RootElement.GetProperty("id").GetString()!,
+                System.Globalization.CultureInfo.InvariantCulture);
+        }
+        finally
+        {
+            await DeleteTestPatronSessionAsyncByBarcode(barcode);
+            var requestIds = new HashSet<long>(new[] { seededRequestId, submittedRequestId }.OfType<long>());
+            await using (var discover = new SqlConnection(databaseConnectionString))
+            {
+                await discover.OpenAsync();
+                await using var findRequests = discover.CreateCommand();
+                findRequests.CommandText =
+                    "SELECT [Id] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 2 AND [Barcode] = @barcode " +
+                    "AND [Identifier] IN (N'OLD-LIMIT-ID', N'NEW-LIMIT-ID');";
+                findRequests.Parameters.Add("@barcode", SqlDbType.NVarChar, 50).Value = barcode;
+                await using var rows = await findRequests.ExecuteReaderAsync();
+                while (await rows.ReadAsync())
+                {
+                    requestIds.Add(rows.GetInt64(0));
+                }
+            }
+            foreach (var requestId in requestIds)
+            {
+                await using (var cleanup = new SqlConnection(databaseConnectionString))
+                {
+                    await cleanup.OpenAsync();
+                    await using var removeOutbox = new SqlCommand(
+                        "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @id);",
+                        cleanup);
+                    removeOutbox.Parameters.AddWithValue("@id", requestId);
+                    await removeOutbox.ExecuteNonQueryAsync();
+                }
+                await DeleteRequestAsync(requestId);
+            }
+            await using var restore = new SqlConnection(databaseConnectionString);
+            await restore.OpenAsync();
+            await using var command = restore.CreateCommand();
+            command.CommandText = hadSettings
+                ? "UPDATE [asap].[WorkflowSettings] SET [SuggestionLimit] = @limit, [SuggestionLimitMessage] = @message, [UpdatedUtc] = @updated WHERE [OrganizationId] = 2;"
+                : "DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 2;";
+            if (hadSettings)
+            {
+                command.Parameters.Add("@limit", SqlDbType.Int).Value = originalLimit is { } limit ? limit : DBNull.Value;
+                command.Parameters.Add("@message", SqlDbType.NVarChar, -1).Value = originalMessage is { } message ? message : DBNull.Value;
+                command.Parameters.Add("@updated", SqlDbType.DateTime2).Value = originalUpdatedUtc;
+            }
+            await command.ExecuteNonQueryAsync();
+        }
     }
 
     private static async Task<string> WriteStaffConfigurationAsync(

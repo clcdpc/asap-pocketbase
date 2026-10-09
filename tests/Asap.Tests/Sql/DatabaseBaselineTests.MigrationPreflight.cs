@@ -25,6 +25,8 @@ public sealed partial class DatabaseBaselineTests
                 await NonQuery(connection, """
                     ALTER TABLE [asap].[PolarisSettings]
                         ADD [OrganizationIdForRequests] int NULL, [PickupOrganizationId] int NULL;
+                    -- The fixture is explicitly schema 7; that native schema predates this schema-8 constraint.
+                    ALTER TABLE [asap].[PolarisSettings] DROP CONSTRAINT [CK_PolarisSettings_IntegrationIdentity];
                     """);
                 await NonQuery(connection, """
                     ALTER TABLE [asap].[PolarisSettings] ALTER COLUMN [AccessId] nvarchar(512) NULL;

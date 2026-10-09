@@ -1147,8 +1147,10 @@ public sealed partial class PatronSuggestionService
                 WHERE candidate.[LibraryOrganizationId] = @organizationId
                   AND candidate.[Identifier] = @identifier
                   AND candidate.[Id] <> @requestId
-                  AND NOT (candidate.[PatronIdSnapshot] = @nativePatronId OR
-                           candidate.[PatronIdSnapshot] IS NULL AND candidate.[Barcode] IN ({aliasParameters}))
+                  AND (
+                      candidate.[PatronIdSnapshot] IS NOT NULL AND candidate.[PatronIdSnapshot] <> @nativePatronId
+                      OR candidate.[PatronIdSnapshot] IS NULL AND candidate.[Barcode] NOT IN ({aliasParameters})
+                  )
             )
             BEGIN
                 INSERT INTO [asap].[TitleRequestWorkflowTag] ([TitleRequestId], [WorkflowTagId])
