@@ -102,10 +102,13 @@ public sealed class PickupPreferenceMutationService(
                     pending.Confirmed);
             }
 
-            // Setting a preference has no distinct transaction identity to discover.
-            // Observing the requested current value is sufficient to accept that
-            // value locally, but is not proof that an uncertain dispatch succeeded.
-            await ConfirmAsync(pending.Receipt.OperationId, byRead: true, cancellationToken);
+            if (!pending.Confirmed)
+            {
+                // Setting a preference has no distinct transaction identity to discover.
+                // Observing the requested current value is sufficient to accept that
+                // value locally, but is not proof that an uncertain dispatch succeeded.
+                await ConfirmAsync(pending.Receipt.OperationId, byRead: true, cancellationToken);
+            }
             return pending.Receipt with { ConfirmedByRead = !pending.Confirmed || pending.Receipt.ConfirmedByRead };
         }
         if (patron.PreferredPickupBranchId == selected.Id)
@@ -215,9 +218,9 @@ public sealed class PickupPreferenceMutationService(
                 }
                 catch (SqlException exception) when (exception.Number is 2601 or 2627)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    await transaction.RollbackAsync(cancellationToken);
-                    var concurrent = await ReadPendingAsync(patron, cancellationToken);
+                    using var conflictResolution = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    await transaction.RollbackAsync(conflictResolution.Token);
+                    var concurrent = await ReadPendingAsync(patron, conflictResolution.Token);
                     throw new PickupMutationException("pickup_reconciliation_required",
                         concurrent?.Receipt.OperationId ?? receipt.OperationId, concurrent?.Confirmed == true, exception);
                 }
@@ -226,54 +229,48 @@ public sealed class PickupPreferenceMutationService(
             var dispatchFinishedRecorded = false;
             try
             {
-                await provider.UpdatePreferredPickupBranchAsync(patron.Barcode, selected.Id,
-                    organizationId, cancellationToken);
+                try
+                {
+                    await provider.UpdatePreferredPickupBranchAsync(patron.Barcode, selected.Id,
+                        organizationId, cancellationToken);
+                }
+                catch (PolarisMutationNotDispatchedException exception)
+                {
+                    await RecordNoEffectAsync(receipt.OperationId, "local_not_dispatched");
+                    dispatchFinishedRecorded = true;
+                    exception.RethrowCause();
+                    throw;
+                }
+                catch (PolarisPickupRejectedException exception)
+                {
+                    await RecordNoEffectAsync(receipt.OperationId,
+                        $"documented_rejection_{exception.PapiErrorCode}");
+                    dispatchFinishedRecorded = true;
+                    throw;
+                }
+                catch (PolarisOperationalException exception)
+                {
+                    // A transport/provider failure does not prove the write had no effect.
+                    throw new PickupMutationException("pickup_outcome_unconfirmed", receipt.OperationId, false, exception);
+                }
+
+                await RecordProviderSuccessAsync(receipt.OperationId);
+                dispatchFinishedRecorded = true;
                 cancellationToken.ThrowIfCancellationRequested();
-            }
-            catch (PolarisMutationNotDispatchedException exception)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                await RecordNoEffectAsync(receipt.OperationId, "local_not_dispatched", cancellationToken);
-                exception.RethrowCause();
-                throw;
-            }
-            catch (PolarisPickupRejectedException exception)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                await RecordNoEffectAsync(receipt.OperationId, $"documented_rejection_{exception.PapiErrorCode}", cancellationToken);
-                throw;
-            }
-            catch (PolarisOperationalException exception)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                // A transport/provider failure does not prove the write had no effect.
-                throw new PickupMutationException("pickup_outcome_unconfirmed", receipt.OperationId, false, exception);
-            }
-            catch (Exception) when (cancellationToken.IsCancellationRequested)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                throw;
             }
             finally
             {
-                // Cancellation still propagates. Use a separate bounded SQL-only token
-                // to record that this invocation ended; no recovery may race an active
-                // invocation merely because another live read sees its target value.
-                dispatchFinishedRecorded = await RecordDispatchFinishedAsync(receipt.OperationId);
+                if (!dispatchFinishedRecorded)
+                {
+                    // A separate bounded SQL-only token records an unknown invocation's
+                    // end; it never authorizes another external provider mutation.
+                    dispatchFinishedRecorded = await RecordDispatchFinishedAsync(receipt.OperationId);
+                }
             }
             if (!dispatchFinishedRecorded)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 throw new PickupMutationException("pickup_changed_request_not_updated", receipt.OperationId, true);
-            }
-            try
-            {
-                await ConfirmAsync(receipt.OperationId, byRead: false, cancellationToken);
-            }
-            catch (SqlException exception)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                throw new PickupMutationException("pickup_changed_request_not_updated", receipt.OperationId, true, exception);
             }
             return receipt;
         }
@@ -329,29 +326,77 @@ public sealed class PickupPreferenceMutationService(
             UPDATE [asap].[PickupPreferenceOperation]
             SET [State] = 2, [ProviderConfirmedUtc] = @now, [ConfirmedByRead] = @byRead,
                 [ObservedPickupBranchId] = [ToPickupBranchId]
-            WHERE [Id] = @id AND [State] = 1;
+            WHERE [Id] = @id AND [State] = 1 AND [CompletedUtc] IS NULL
+              AND [ProviderConfirmedUtc] IS NULL AND [DispatchFinishedUtc] IS NOT NULL;
             """;
         Add(command, "@id", SqlDbType.UniqueIdentifier, id);
         Add(command, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
         Add(command, "@byRead", SqlDbType.Bit, byRead);
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private async Task RecordNoEffectAsync(Guid id, string failureCode, CancellationToken cancellationToken)
-    {
-        await using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await using var command = new SqlCommand("""
-            UPDATE [asap].[PickupPreferenceOperation]
-            SET [State] = 4, [FailureCode] = @code, [CompletedUtc] = @now, [DispatchFinishedUtc] = @now
-            WHERE [Id] = @id AND [State] = 1 AND [CompletedUtc] IS NULL;
-            """, connection);
-        Add(command, "@id", SqlDbType.UniqueIdentifier, id);
-        Add(command, "@code", SqlDbType.NVarChar, failureCode, 80);
-        Add(command, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
         if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
         {
             throw new PickupMutationException("pickup_reconciliation_required", id, false);
+        }
+    }
+
+    private async Task RecordProviderSuccessAsync(Guid id)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            await using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync(timeout.Token);
+            await using var command = new SqlCommand("""
+                UPDATE [asap].[PickupPreferenceOperation]
+                SET [State] = 2, [ProviderConfirmedUtc] = @now, [ConfirmedByRead] = 0,
+                    [ObservedPickupBranchId] = [ToPickupBranchId], [DispatchFinishedUtc] = @now
+                WHERE [Id] = @id AND [State] = 1 AND [CompletedUtc] IS NULL
+                  AND [ProviderConfirmedUtc] IS NULL AND [DispatchFinishedUtc] IS NULL;
+                """, connection);
+            Add(command, "@id", SqlDbType.UniqueIdentifier, id);
+            Add(command, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
+            if (await command.ExecuteNonQueryAsync(timeout.Token) != 1)
+            {
+                throw new PickupMutationException("pickup_reconciliation_required", id, true);
+            }
+        }
+        catch (PickupMutationException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is SqlException or OperationCanceledException)
+        {
+            throw new PickupMutationException("pickup_changed_request_not_updated", id, true, exception);
+        }
+    }
+
+    private async Task RecordNoEffectAsync(Guid id, string failureCode)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            await using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync(timeout.Token);
+            await using var command = new SqlCommand("""
+                UPDATE [asap].[PickupPreferenceOperation]
+                SET [State] = 4, [FailureCode] = @code, [CompletedUtc] = @now, [DispatchFinishedUtc] = @now
+                WHERE [Id] = @id AND [State] = 1 AND [CompletedUtc] IS NULL
+                  AND [ProviderConfirmedUtc] IS NULL AND [DispatchFinishedUtc] IS NULL;
+                """, connection);
+            Add(command, "@id", SqlDbType.UniqueIdentifier, id);
+            Add(command, "@code", SqlDbType.NVarChar, failureCode, 80);
+            Add(command, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
+            if (await command.ExecuteNonQueryAsync(timeout.Token) != 1)
+            {
+                throw new PickupMutationException("pickup_reconciliation_required", id, false);
+            }
+        }
+        catch (PickupMutationException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is SqlException or OperationCanceledException)
+        {
+            throw new PickupMutationException("pickup_reconciliation_required", id, false, exception);
         }
     }
 
@@ -364,7 +409,8 @@ public sealed class PickupPreferenceMutationService(
             await connection.OpenAsync(timeout.Token);
             await using var command = connection.CreateCommand();
             command.CommandText = """
-                UPDATE [asap].[PickupPreferenceOperation] SET [DispatchFinishedUtc] = @now WHERE [Id] = @id;
+                UPDATE [asap].[PickupPreferenceOperation] SET [DispatchFinishedUtc] = @now
+                WHERE [Id] = @id AND [State] = 1 AND [CompletedUtc] IS NULL AND [DispatchFinishedUtc] IS NULL;
                 """;
             Add(command, "@id", SqlDbType.UniqueIdentifier, id);
             Add(command, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);

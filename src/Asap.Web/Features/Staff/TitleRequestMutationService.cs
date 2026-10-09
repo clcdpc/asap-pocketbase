@@ -211,12 +211,10 @@ public sealed class TitleRequestMutationService(
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new TitleRequestMutationResult("notification_dependency_unavailable");
         }
         catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
@@ -261,10 +259,13 @@ public sealed class TitleRequestMutationService(
         {
             Dispatch(outbox, cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The committed outbox remains available to the delivery sweep.
+        }
         // The mutation and outbox are committed; preserve the accepted result and let the sweep recover delivery.
         catch (Exception exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             logger.LogError(exception, "Assignment notification dispatch failed after request {RequestId} committed", request.Id);
             notificationStatus = "dispatch_failed";
             notificationReason = "queue_unavailable";
@@ -394,13 +395,11 @@ public sealed class TitleRequestMutationService(
             }
             catch (PolarisOperationalException exception)
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 logger.LogWarning(exception,
                     "Patron refresh failed before action email for request {RequestId}.", requestId);
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 throw;
             }
         }
@@ -416,12 +415,10 @@ public sealed class TitleRequestMutationService(
             catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 return new TitleRequestMutationResult("notification_dependency_unavailable");
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 throw;
             }
         }
@@ -842,15 +839,21 @@ public sealed class TitleRequestMutationService(
         await transaction.CommitAsync(cancellationToken);
         foreach (var outboxId in outboxIds)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
             try
             {
                 outboxDispatcher.Enqueue(outboxId);
-                cancellationToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
             }
             // Committed outbox rows remain recoverable even if the immediate dispatch path has a defect.
             catch (Exception exception)
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 logger.LogError(exception, "Notification dispatch failed after request {RequestId} committed", request.Id);
                 if (patronNotificationOutboxId == outboxId)
                 {
@@ -1000,7 +1003,6 @@ public sealed class TitleRequestMutationService(
         }
         catch (PolarisOperationalException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return "bib_validation_unavailable";
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -1009,7 +1011,6 @@ public sealed class TitleRequestMutationService(
         }
         catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
     }
@@ -1063,23 +1064,24 @@ public sealed class TitleRequestMutationService(
         var identifier = request.Identifier!;
         var organizationId = request.LibraryOrganizationId;
         await transaction.CommitAsync(cancellationToken);
-        try
+        if (!cancellationToken.IsCancellationRequested)
         {
-            identifierLookupDispatcher.Enqueue(request.Id, identifier, organizationId, processingVersion);
-            cancellationToken.ThrowIfCancellationRequested();
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        // The retry state is already committed and the recurring processor is its recovery path.
-        catch (Exception exception)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            logger.LogWarning(
-                exception,
-                "Identifier retry job enqueue failed for title request {TitleRequestId}; the recurring processor remains the recovery path.",
-                request.Id);
+            try
+            {
+                identifierLookupDispatcher.Enqueue(request.Id, identifier, organizationId, processingVersion);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The retry is committed and the recurring processor remains its recovery path.
+            }
+            // The retry state is already committed and the recurring processor is its recovery path.
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Identifier retry job enqueue failed for title request {TitleRequestId}; the recurring processor remains the recovery path.",
+                    request.Id);
+            }
         }
         return new TitleRequestMutationResult("updated", request.Id);
     }
@@ -1536,10 +1538,9 @@ public sealed class TitleRequestMutationService(
 
     private void Dispatch(EmailOutbox? outbox, CancellationToken cancellationToken)
     {
-        if (outbox?.Status == "pending")
+        if (outbox?.Status == "pending" && !cancellationToken.IsCancellationRequested)
         {
             outboxDispatcher.Enqueue(outbox.Id);
-            cancellationToken.ThrowIfCancellationRequested();
         }
     }
 

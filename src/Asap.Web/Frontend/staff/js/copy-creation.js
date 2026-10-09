@@ -178,7 +178,7 @@ export function createCopyCreationController({ root, sessionIdentity, announce, 
         if (owner.parent.isCurrent()) announce('Additional-copy task created. Request details could not refresh.', 'warning'); return;
       }
       const definiteNoCommit = [400, 401, 403, 404, 409].includes(error.status) || error.status === 503 && error.response?.code === 'notification_dependency_unavailable';
-      const uncertain = !definiteNoCommit && (!error.status || error.status === 408 || error.status >= 500 || isAbortError(error));
+      const uncertain = !definiteNoCommit && (error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error));
       attempt.outcome = uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
       if (definiteNoCommit) clearRecord(record);
       if (uncertain) {

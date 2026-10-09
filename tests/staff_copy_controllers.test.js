@@ -5,20 +5,21 @@ const actorB = { ...actorA, id: '21', authenticationEmail: 'b@example.org' };
 const requestA = { id: '9223372036854775807', version: 'v1', title: 'A', libraryOrgId: 2, status: 'open', capabilities: { canClaim: true } };
 
 (async () => {
+  for (const outcome of ['committed', 'accepted_unknown']) {
   await fixture(async ({ load, get }) => {
     const { createSessionIdentity } = await load('session-identity');
     const { createDetailHost } = await load('detail-host');
     const { createCopyDetailController } = await load('copy-detail');
     const session = createSessionIdentity(); session.accept(actorA);
     const host = createDetailHost({ root: get('#request-dialog') });
-    const receipts = [], notices = [], posted = []; let complete;
+    const receipts = [], notices = [], posted = []; let complete, reject;
     const options = { host, sessionIdentity: session, announce: message => notices.push(message),
       beforeOpen: () => ({ isCurrent: () => true }), isNavigationCurrent: () => true, onAlign: async () => ({ commit: () => 1 }),
       onOpened() {}, beforeClose: () => true, onClosed() {}, getFocusReturn: () => null,
       refreshQueue: async () => true, onReceipt: (...args) => receipts.push(args), clearReceipt() {},
       request: async (path, init = {}) => {
         if (!init.method) return requestA;
-        posted.push(init); return new Promise(resolve => { complete = resolve; });
+        posted.push(init); return new Promise((resolve, fail) => { complete = resolve; reject = fail; });
       }
     };
     const first = createCopyDetailController(options); await first.open(requestA.id);
@@ -28,12 +29,21 @@ const requestA = { id: '9223372036854775807', version: 'v1', title: 'A', library
     session.clear(); first.signedOut(); session.accept(actorB);
     const replacement = createCopyDetailController({ ...options, request: async () => ({ ...requestA, title: 'B' }) });
     await replacement.open(requestA.id);
-    complete({ committed: true, request: { ...requestA, version: 'v2' }, finalStatus: 'open' }); await saving;
-    assert.equal(receipts[0][2].outcome, 'committed', 'record commit before checking retired presentation');
+    if (outcome === 'committed') {
+      complete({ committed: true, request: { ...requestA, version: 'v2' }, finalStatus: 'open' });
+    } else {
+      reject(Object.assign(new Error('Accepted HTTP result is unknown.'), { status: 200, outcomeUnknown: true }));
+    }
+    await saving;
+    assert.equal(receipts.length, 1, `${outcome}: the captured actor receives one terminal receipt before presentation checks`);
+    assert.equal(receipts[0][2].outcome, outcome === 'accepted_unknown' ? 'uncertain' : 'committed',
+      'record the result before checking the retired presentation');
+    assert.equal(receipts[0][1].id, actorA.id);
     assert.equal(get('#request-dialog-title').textContent, 'B');
     assert.equal(notices.includes('Task claimed. Final state: Open.'), false);
     first.dispose(); replacement.dispose(); host.dispose();
   });
+  }
   await fixture(async ({ load, get }) => {
     const { createSessionIdentity } = await load('session-identity');
     const { createDetailHost } = await load('detail-host');
@@ -168,6 +178,51 @@ const requestA = { id: '9223372036854775807', version: 'v1', title: 'A', library
       controller.dispose();
     });
   }
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createDraftScope } = await load('draft-scope');
+    const { createCopyCreationController, copyCreationStorageKey } = await load('copy-creation');
+    const session = createSessionIdentity();
+    const ownerA = session.accept(actorA);
+    const drafts = createDraftScope();
+    const source = { ...requestA, bibid: 9001, status: 'pending_hold' };
+    const parent = { request: source, actor: ownerA, isCurrent: () => session.isCurrent(ownerA),
+      isSelectionCurrent: () => session.isCurrent(ownerA), admit: declaration => drafts.admit(declaration).allowed,
+      registerDraft: definition => drafts.register(definition), releaseDraft: handle => drafts.release(handle),
+      touchDraft: () => drafts.touch() };
+    const posts = [], receipts = [];
+    let reject;
+    const controller = createCopyCreationController({ root: get('#additional-copy-create-dialog'), sessionIdentity: session,
+      announce() {}, onReceipt: (...args) => receipts.push(args), clearReceipt() {}, onRecoveryChanged() {}, onParentChanged() {},
+      request: async (path, init = {}) => {
+        if (!init.method) return { version: source.version, bibid: source.bibid, openCount: 0 };
+        posts.push({ path, init });
+        return new Promise((resolve, fail) => { reject = fail; });
+      } });
+    controller.setStaff();
+    await controller.preview(parent);
+    const creating = controller.create({ preventDefault() {} });
+    assert.equal(posts.length, 1, 'creation captures exactly one provider-independent POST');
+    const actorAKey = copyCreationStorageKey(actorA);
+    const actorAEvidence = dom.window.sessionStorage.getItem(actorAKey);
+    assert.ok(actorAEvidence);
+    controller.signedOut();
+    session.clear();
+    const actorBOwner = session.accept(actorB);
+    controller.setStaff();
+    reject(Object.assign(new Error('Accepted HTTP result is unknown.'), { status: 200, outcomeUnknown: true }));
+    await creating;
+    assert.equal(receipts.length, 1, 'uncertain creation keeps a receipt after actor A retires');
+    assert.equal(receipts[0][1].id, actorA.id);
+    assert.equal(receipts[0][2].outcome, 'uncertain');
+    assert.equal(dom.window.sessionStorage.getItem(actorAKey), actorAEvidence,
+      'unconfirmed creation preserves actor A recovery evidence');
+    assert.equal(controller.review.current(), null, 'actor A evidence is not adopted by actor B');
+    assert.equal(session.isCurrent(actorBOwner), true);
+    assert.equal(posts.length, 1, 'an uncertain create is not replayed automatically');
+    controller.dispose();
+    drafts.dispose();
+  });
   await fixture(async ({ load, get, dom }) => {
     const { createSessionIdentity, actorKey } = await load('session-identity');
     const { createCopyCreationController, copyCreationStorageKey } = await load('copy-creation');

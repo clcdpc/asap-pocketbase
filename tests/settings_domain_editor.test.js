@@ -255,6 +255,64 @@ const { JSDOM } = require('jsdom');
     assert.throws(() => missingRuleControlEditors.collect(), /custom field rule editor is incomplete/);
     missingRuleControlEditors.dispose();
 
+    const secondFormat = {
+      ...systemFormats[0],
+      id: '8',
+      code: 'magazine',
+      label: 'Magazine',
+      customFields: {}
+    };
+    const partialSnapshotData = JSON.parse(JSON.stringify(data));
+    partialSnapshotData.stored.configuredSystem.formats = [...systemFormats, secondFormat];
+    partialSnapshotData.stored.formats = [...systemFormats, secondFormat];
+    partialSnapshotData.stored.formatRules.push({
+      code: 'magazine',
+      customFields: {
+        retired_type: { mode: 'required', labelOverride: 'Magazine history' }
+      }
+    });
+    let partialSnapshotBlocked = false;
+    let partialSnapshotPayloadEmitted = false;
+    const partialSnapshotRoot = root.cloneNode(true);
+    const partialSnapshotEditors = module.createSettingsDomainEditors({ root: partialSnapshotRoot });
+    try {
+      partialSnapshotEditors.populate(partialSnapshotData, false);
+      partialSnapshotRoot.querySelector('#format-rules-editor [data-rule-code="book"] [data-rule-property="message"]')
+        .value = 'Changed visible rule while another stored rule is absent from the effective snapshot.';
+      partialSnapshotEditors.collect();
+      partialSnapshotPayloadEmitted = true;
+    } catch {
+      partialSnapshotBlocked = true;
+    }
+    partialSnapshotEditors.dispose();
+
+    const completeRuleData = JSON.parse(JSON.stringify(partialSnapshotData));
+    completeRuleData.effective.formats = [...systemFormats, secondFormat];
+    let missingRuleRowBlocked = false;
+    let missingRuleRowPayloadEmitted = false;
+    const missingRuleRowRoot = root.cloneNode(true);
+    const missingRuleRowEditors = module.createSettingsDomainEditors({ root: missingRuleRowRoot });
+    try {
+      missingRuleRowEditors.populate(completeRuleData, false);
+      missingRuleRowRoot.querySelector('#format-rules-editor [data-rule-code="book"]').remove();
+      missingRuleRowRoot.querySelector('#format-rules-editor [data-rule-code="magazine"] [data-rule-property="message"]')
+        .value = 'Changed visible rule after another editor row disappeared.';
+      missingRuleRowEditors.collect();
+      missingRuleRowPayloadEmitted = true;
+    } catch {
+      missingRuleRowBlocked = true;
+    }
+    missingRuleRowEditors.dispose();
+
+    assert.strictEqual(partialSnapshotBlocked, true,
+      'A saved rule for a format missing from the effective snapshot must block rule collection.');
+    assert.strictEqual(partialSnapshotPayloadEmitted, false,
+      'An incomplete effective format snapshot must not produce a replacement payload.');
+    assert.strictEqual(missingRuleRowBlocked, true,
+      'A disappeared complete rule row must block collection while another visible rule is edited.');
+    assert.strictEqual(missingRuleRowPayloadEmitted, false,
+      'A partial rendered rule roster must not produce a replacement payload.');
+
     dom.window.close();
     console.log('Settings domain editor controls and inheritance checks passed');
   } finally {

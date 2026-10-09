@@ -496,7 +496,7 @@ async function flush() {
       const replacement = settingsModule.createSettingsController(options); replacement.bind();
       replacement.setStaff({ id: '2', tenantId: 'tenant-b', authenticationEmail: 'b@example.org', role: 'super_admin', organizationId: 1 });
       await replacement.activate(); first.dispose();
-      if (outcome === 'committed') complete(response(200, { data: { version: 'old-commit-version' } }));
+      if (outcome === 'committed') complete(response(200, { code: 'saved', data: { version: 'old-commit-version' } }));
       else fail(new Error('Lost response'));
       await flush(); await flush();
       assert.equal(receipts.at(-1)[1].id, '1'); assert.equal(receipts.at(-1)[2].outcome, outcome, 'record old attempt truth before presentation checks');
@@ -533,7 +533,7 @@ async function flush() {
       controller.setStaff({ ...owner, authenticationEmail: undefined });
       assert.equal(controller.hasPendingMutation(), false, 'principal-name fallback cannot adopt a command from different authentication evidence');
       await controller.activate();
-      if (outcome === 'committed') complete(response(200, { data: { version: 'old-actor-version' } }));
+      if (outcome === 'committed') complete(response(200, { code: 'saved', data: { version: 'old-actor-version' } }));
       else fail(new Error('Old actor response lost'));
       await flush(); await flush();
       assert.equal(receipts.at(-1)[1], owner); assert.equal(receipts.at(-1)[2].outcome, outcome);

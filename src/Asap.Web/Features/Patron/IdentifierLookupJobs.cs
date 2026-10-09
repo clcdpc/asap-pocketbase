@@ -20,6 +20,7 @@ public sealed class IdentifierLookupDispatcher(IBackgroundJobClient jobs) : IIde
 
 public sealed class IdentifierLookupJobs(PatronSuggestionService processor)
 {
+    [Queue("asap-identifier")]
     public Task ProcessAsync(
         long requestId,
         string identifier,

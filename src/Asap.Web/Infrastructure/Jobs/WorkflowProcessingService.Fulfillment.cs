@@ -54,6 +54,11 @@ public sealed partial class WorkflowProcessingService
         }
         catch (PolarisOperationalException exception)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
             logger.LogWarning(exception, "Patron identity unavailable for fulfillment request {RequestId}.", candidate.Id);
             return await RecordFulfillmentDiagnosticAsync(
                 candidate,
@@ -81,6 +86,11 @@ public sealed partial class WorkflowProcessingService
         }
         catch (PolarisOperationalException exception)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
             logger.LogWarning(exception, "Patron checkout evidence unavailable for request {RequestId}.", candidate.Id);
             return await RecordFulfillmentDiagnosticAsync(
                 candidate,
@@ -119,6 +129,11 @@ public sealed partial class WorkflowProcessingService
             }
             catch (PolarisOperationalException exception)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+
                 logger.LogWarning(exception, "Patron identity unavailable after checkout evidence for request {RequestId}.", candidate.Id);
                 return await RecordFulfillmentDiagnosticAsync(
                     candidate,
@@ -156,6 +171,11 @@ public sealed partial class WorkflowProcessingService
         }
         catch (PolarisOperationalException exception)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
             logger.LogWarning(exception, "Patron hold evidence unavailable for request {RequestId}.", candidate.Id);
             return await RecordFulfillmentDiagnosticAsync(
                 candidate,
@@ -253,6 +273,11 @@ public sealed partial class WorkflowProcessingService
         }
         catch (PolarisOperationalException exception)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
             logger.LogWarning(exception, "Patron identity unavailable after hold evidence for request {RequestId}.", candidate.Id);
             return await RecordFulfillmentDiagnosticAsync(
                 candidate,

@@ -5,8 +5,10 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Asap.Web.Features.Administration;
+using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
+using Asap.Web.Infrastructure.Security;
 using Asap.Web.Infrastructure.Testing;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -2962,6 +2964,107 @@ public sealed partial class PatronJourneyTests
                 DELETE FROM [asap].[Organization] WHERE [Id] IN (88781, 88782);
                 """, ("@auditBefore", auditBefore), ("@email", email));
         }
+    }
+
+    [TestMethod]
+    public async Task OrganizationSyncPreservesProviderFaultsWhenCallerCancellationRacesTheResult()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var services = factory!.Services;
+        AdministrationService CreateService(IPolarisReferenceProvider provider) => new(
+            services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
+            services.GetRequiredService<PatronConfigurationService>(),
+            services.GetRequiredService<StaffEligibilityService>(),
+            services.GetRequiredService<IntegrationCredentialProtector>(),
+            provider,
+            services.GetRequiredService<TimeProvider>());
+
+        async Task<(long Organizations, long Audits, long Sessions, long RequestEvents, long EmailEvents, long Outbox)> ReadEffectsAsync()
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = new SqlCommand("""
+                SELECT
+                    (SELECT COUNT_BIG(*) FROM [asap].[Organization]),
+                    (SELECT COUNT_BIG(*) FROM [asap].[AdministrativeAudit]),
+                    (SELECT COUNT_BIG(*) FROM [asap].[PatronSession]),
+                    (SELECT COUNT_BIG(*) FROM [asap].[TitleRequestEvent]),
+                    (SELECT COUNT_BIG(*) FROM [asap].[EmailDeliveryEvent]),
+                    (SELECT COUNT_BIG(*) FROM [asap].[EmailOutbox]);
+                """, connection);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2),
+                reader.GetInt64(3), reader.GetInt64(4), reader.GetInt64(5));
+        }
+
+        var before = await ReadEffectsAsync();
+        using (var cancellation = new CancellationTokenSource())
+        {
+            var providerFault = new PolarisOperationalException("polaris_sync_unavailable", "Provider result failed.");
+            var provider = new CancellationRaceOrganizationProvider(cancellation, providerFault);
+            var result = await CreateService(provider).SyncOrganizationsAsync(actor, cancellation.Token);
+            Assert.IsTrue(cancellation.IsCancellationRequested);
+            Assert.AreEqual(1, provider.OrganizationCalls);
+            Assert.AreEqual("polaris_unavailable", result.Code,
+                "a provider's typed operational failure keeps the normal domain result when cancellation races it");
+        }
+
+        using (var cancellation = new CancellationTokenSource())
+        {
+            var providerFault = new InvalidOperationException("Unexpected provider programming fault.");
+            var provider = new CancellationRaceOrganizationProvider(cancellation, providerFault);
+            var observed = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                () => CreateService(provider).SyncOrganizationsAsync(actor, cancellation.Token));
+            Assert.IsTrue(cancellation.IsCancellationRequested);
+            Assert.AreSame(providerFault, observed,
+                "a genuine provider/programming failure must not be replaced with cancellation");
+            Assert.AreEqual(1, provider.OrganizationCalls);
+        }
+
+        using (var cancellation = new CancellationTokenSource())
+        {
+            var providerCancellation = new OperationCanceledException("Provider canceled the organization read.");
+            var provider = new CancellationRaceOrganizationProvider(cancellation, providerCancellation);
+            var observed = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+                () => CreateService(provider).SyncOrganizationsAsync(actor, cancellation.Token));
+            Assert.AreSame(providerCancellation, observed,
+                "a real provider cancellation remains cancellation when the caller token is also canceled");
+            Assert.AreEqual(1, provider.OrganizationCalls);
+        }
+
+        using (var cancellation = new CancellationTokenSource())
+        {
+            cancellation.Cancel();
+            var provider = new DeterministicTestingPatronProvider();
+            await Assert.ThrowsAsync<OperationCanceledException>(
+                () => CreateService(provider).SyncOrganizationsAsync(actor, cancellation.Token));
+            Assert.AreEqual(0, provider.Calls.Count,
+                "pre-canceled requests stop before the deterministic provider observes an organization read");
+        }
+
+        Assert.AreEqual(before, await ReadEffectsAsync(),
+            "provider failures and cancellation races make no organization, audit, session, event, or outbox writes");
+    }
+
+    private sealed class CancellationRaceOrganizationProvider(
+        CancellationTokenSource cancellation,
+        Exception failure) : IPolarisReferenceProvider
+    {
+        public int OrganizationCalls { get; private set; }
+
+        public Task<PolarisConnectionTestResult> TestConnectionAsync(CancellationToken cancellationToken) =>
+            Task.FromException<PolarisConnectionTestResult>(new NotSupportedException());
+
+        public Task<IReadOnlyList<PolarisOrganizationSnapshot>> GetOrganizationsAsync(CancellationToken cancellationToken)
+        {
+            OrganizationCalls++;
+            cancellation.Cancel();
+            return Task.FromException<IReadOnlyList<PolarisOrganizationSnapshot>>(failure);
+        }
+
+        public Task<IReadOnlyList<PolarisPatronCodeSnapshot>> GetPatronCodesAsync(CancellationToken cancellationToken) =>
+            Task.FromException<IReadOnlyList<PolarisPatronCodeSnapshot>>(new NotSupportedException());
     }
 
     private static async Task<HttpResponseMessage> PostSettingsJsonAsync(HttpClient client, string json) =>

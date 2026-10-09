@@ -426,18 +426,23 @@ function validateEditorSnapshot(data, system) {
   validateFields(definitions, fieldKeys);
   validateFields(property(effective, 'customFields'), new Set());
 
-  const ruleCodes = new Set();
+  const effectiveFormatCodes = new Set();
   for (const format of property(effective, 'formats')) {
     const code = clean(property(format, 'code'));
     if (!isRecord(format) || !code || !isRecord(property(format, 'customFields'))) {
       throw new Error('The effective format snapshot is incomplete. Reload settings before saving.');
     }
+    effectiveFormatCodes.add(code);
     validateCustomRuleMap(property(format, 'customFields'), `Format ${code} customFields`);
   }
+  const ruleCodes = new Set();
   for (const rule of property(stored, 'formatRules')) {
     const code = clean(property(rule, 'code'));
     if (!isRecord(rule) || !code || ruleCodes.has(code)) {
       throw new Error('The stored format-rule snapshot is malformed. Reload settings before saving.');
+    }
+    if (!system && !effectiveFormatCodes.has(code)) {
+      throw new Error('The effective format snapshot is incomplete. Reload settings before saving.');
     }
     ruleCodes.add(code);
     const customFields = property(rule, 'customFields');
@@ -564,6 +569,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     system: false,
     data: null,
     models: {},
+    ruleRosterCodes: [],
     baseline: null,
     originalTemplates: [],
     deletedFormats: [],
@@ -1255,7 +1261,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     const values = readDomain(name);
     const rules = name === 'fields' ? readRules() : null;
     const removedFieldKey = name === 'fields' ? values[index]?.key : null;
-    values.splice(index, 1);
+    const [removed] = values.splice(index, 1);
+    if (name === 'rules' && removed) {
+      state.ruleRosterCodes = state.ruleRosterCodes.filter(code => code !== removed.code);
+    }
     renderDomain(name, values);
     if (name === 'fields') {
       for (const rule of rules || []) delete rule.customFields[removedFieldKey];
@@ -1293,12 +1302,15 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
 
   function validateRenderedRules() {
     const fieldKeys = new Set(readFields().map(item => item.key));
+    const expectedCodes = new Set(state.ruleRosterCodes);
+    const renderedCodes = new Set();
     for (const row of dom.rules.querySelectorAll('[data-domain-row]')) {
       const code = clean(row.dataset.ruleCode);
-      if (!code || !row.querySelector('[data-rule-property="messageBehavior"]') ||
+      if (!code || renderedCodes.has(code) || !row.querySelector('[data-rule-property="messageBehavior"]') ||
           !row.querySelector('[data-rule-property="message"]')) {
         throw new Error('A format-rule editor is incomplete. Reload settings before saving.');
       }
+      renderedCodes.add(code);
       for (const name of ['title', 'author', 'identifier', 'publication']) {
         if (!row.querySelector(`[data-format-field="${name}"]`) ||
             !row.querySelector(`[data-format-label="${name}"]`)) {
@@ -1323,6 +1335,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
       if ([...expectedKeys].some(key => !actualKeys.has(key))) {
         throw new Error('A custom field rule control is unavailable. Reload settings before saving.');
       }
+    }
+    if (renderedCodes.size !== expectedCodes.size ||
+        [...expectedCodes].some(code => !renderedCodes.has(code))) {
+      throw new Error('The format-rule editor is incomplete. Reload settings before saving.');
     }
   }
 
@@ -1367,7 +1383,11 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     listen(addButtons[name], 'click', () => {
       const rules = name === 'fields' ? readRules() : null;
       const values = readDomain(name);
-      values.push(factory(values));
+      const added = factory(values);
+      values.push(added);
+      if (name === 'rules' && !state.ruleRosterCodes.includes(added.code)) {
+        state.ruleRosterCodes = [...state.ruleRosterCodes, added.code];
+      }
       renderDomain(name, values);
       if (name === 'fields') renderRules(rules);
       onChange();
@@ -1463,6 +1483,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     state.originalTemplates = clone(templates.filter(item => item.isCustom));
     state.deletedFormats = [];
     state.models = { publication, creators, codes, providers: providerValues, formats, fields, rules, claims, templates };
+    state.ruleRosterCodes = rules.map(item => item.code);
 
     if (addButtons.providers) addButtons.providers.hidden = !state.system;
     if (addButtons.formats) addButtons.formats.hidden = state.system;
@@ -1545,6 +1566,13 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     const changed = Object.values(domainsChanged).some(Boolean);
     const collectedValues = {
       ...values,
+      rules: state.system
+        ? values.rules.map(rule => {
+            const serialized = { ...rule };
+            delete serialized.customFields;
+            return serialized;
+          })
+        : values.rules,
       publicationUseSystem: Boolean(current.publication?.useSystem),
       creatorsUseSystem: Boolean(current.creators?.useSystem),
       codesUseSystem: Boolean(current.codes?.useSystem)

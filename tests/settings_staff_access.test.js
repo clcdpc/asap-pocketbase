@@ -376,6 +376,72 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
 
     dom.window.close();
 
+    for (const missingEvidence of ['id', 'version', 'cleanup']) {
+      const lifecycleRequests = [];
+      const lifecycleCommits = [];
+      let createBody;
+      let rosterReads = 0;
+      const lifecycle = await setupController(
+        settingsModule,
+        frontendRoot,
+        superStaff,
+        async (url, options = {}) => {
+          const requestUrl = String(url);
+          lifecycleRequests.push({ requestUrl, options });
+          if (requestUrl.includes('/api/asap/staff/settings?orgId=')) return response(200, settingsData('system'));
+          if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, { code: 'ok', data: [
+            { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-v1' },
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-v2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-v3' }
+          ] });
+          if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
+          if (requestUrl === '/api/asap/staff/users' && options.method === 'GET') {
+            rosterReads += 1;
+            return response(200, { canAssignSuperAdmin: true, users: [] });
+          }
+          if (requestUrl === '/api/asap/staff/audit?limit=50') return response(200, { code: 'ok', data: [] });
+          if (requestUrl === '/api/asap/staff/users' && options.method === 'POST') {
+            createBody = JSON.parse(options.body);
+            const user = staffUser(40, { userPrincipalName: createBody.email, version: 'created-v1' });
+            if (missingEvidence === 'id') delete user.id;
+            if (missingEvidence === 'version') delete user.version;
+            const envelope = { user,
+              cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 } };
+            if (missingEvidence === 'cleanup') delete envelope.cleanup;
+            return response(201, envelope);
+          }
+          throw new Error(`Unexpected lifecycle request: ${requestUrl}`);
+        },
+        { onCommitted: message => lifecycleCommits.push(message) }
+      );
+      document.getElementById('settings-nav-staff').click();
+      await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff access loaded'));
+      const email = `uncertain-${missingEvidence}@example.org`;
+      document.getElementById('staff-add-email').value = email;
+      const createRole = document.getElementById('staff-add-role');
+      createRole.value = 'staff';
+      createRole.dispatchEvent(new lifecycle.dom.window.Event('change', { bubbles: true }));
+      const createOrganization = document.getElementById('staff-add-organization');
+      assert.ok([...createOrganization.options].some(option => option.value === '2'),
+        `${missingEvidence}: changing to a library staff role populates the Library Two choice`);
+      createOrganization.value = '2';
+      assert.equal(createOrganization.value, '2', `${missingEvidence}: Library Two remains selected for the real lifecycle request`);
+      document.getElementById('staff-add-submit').click();
+      await waitFor(() => createBody !== undefined, `${missingEvidence}: staff create reaches the real lifecycle POST`);
+      await flush();
+      assert.deepStrictEqual(createBody, { email, role: 'staff', organizationId: 2 });
+      assert.equal(lifecycleCommits.length, 0, `${missingEvidence}: incomplete lifecycle evidence is not announced as committed`);
+      assert.equal(lifecycle.controller.hasUnconfirmedOutcome(), true,
+        `${missingEvidence}: missing lifecycle evidence requires authoritative roster review`);
+      assert.equal(document.getElementById('staff-add-email').value, email,
+        `${missingEvidence}: uncertain creation preserves its draft`);
+      assert.equal(lifecycle.controller.inspectDeparture().blocked, true,
+        `${missingEvidence}: the pending staff result guards departure`);
+      assert.equal(rosterReads, 1, `${missingEvidence}: do not treat the incomplete response as a committed roster refresh`);
+      lifecycle.controller.dispose();
+      lifecycle.dom.window.close();
+    }
+
     const adminRequests = [];
     const adminStaff = {
       id: '2',

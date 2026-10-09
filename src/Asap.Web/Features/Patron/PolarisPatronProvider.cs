@@ -5,6 +5,7 @@ using Clc.Polaris.Api.Configuration;
 using Clc.Polaris.Api.Models;
 using Clc.Rest;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Asap.Web.Features.Staff;
@@ -15,7 +16,8 @@ public sealed partial class PolarisPatronProvider(
     IDbContextFactory<AsapDbContext> contextFactory,
     IntegrationCredentialProtector credentialProtector,
     IHttpClientFactory httpClientFactory,
-    TimeProvider timeProvider) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
+    TimeProvider timeProvider,
+    ILogger<PolarisPatronProvider> logger) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
 {
     private static readonly HashSet<int> DocumentedCreateNoEffectStatuses =
         [6, -4002, -4004, -4006, -4007, -4020, -4021, -4022];
@@ -1145,7 +1147,8 @@ public sealed partial class PolarisPatronProvider(
                     settings.StaffDomain!,
                     settings.AdminUser!,
                     password)
-            });
+            },
+            logger);
         return (client, settings);
     }
 

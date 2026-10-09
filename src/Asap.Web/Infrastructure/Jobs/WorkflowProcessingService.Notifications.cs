@@ -9,6 +9,7 @@ using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.SqlClient;
 
 namespace Asap.Web.Infrastructure.Jobs;
 
@@ -127,14 +128,8 @@ public sealed partial class WorkflowProcessingService
             catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 logger.LogWarning("Weekly summary readiness failed ({FailureType}).", exception.GetType().Name);
                 return new WorkflowRunResult("operational_failure", visited, createdCount, visited - createdCount, manualRunId);
-            }
-            catch (Exception) when (cancellationToken.IsCancellationRequested)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                throw;
             }
             var businessKey = manualRunId is null
                 ? $"weekly-summary:{recipientSnapshot.Id}:{periodStart:yyyyMMdd}-{periodEnd:yyyyMMdd}"
@@ -221,9 +216,8 @@ public sealed partial class WorkflowProcessingService
                 createdCount++;
                 DispatchCommittedOutbox(outbox, cancellationToken);
             }
-            catch (DbUpdateException exception) when (exception.InnerException is DbException)
+            catch (DbUpdateException exception) when (exception.InnerException is SqlException { Number: 2601 or 2627 })
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 logger.LogInformation(exception, "Weekly summary duplicate or concurrent recipient mutation was ignored.");
             }
         }
@@ -256,14 +250,8 @@ public sealed partial class WorkflowProcessingService
                 catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
                     logger.LogWarning("Timeout email readiness failed ({FailureType}).", exception.GetType().Name);
                     return new WorkflowItemResult("operational_failure", Stop: true);
-                }
-                catch (Exception) when (cancellationToken.IsCancellationRequested)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    throw;
                 }
             }
         }
@@ -356,15 +344,20 @@ public sealed partial class WorkflowProcessingService
         {
             return;
         }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            logger.LogInformation("Email outbox {OutboxId} awaits the scheduled sweep after caller cancellation.", outbox.Id);
+            return;
+        }
+
         try
         {
             outboxDispatcher.Enqueue(outbox.Id);
-            cancellationToken.ThrowIfCancellationRequested();
         }
         // Local state and the outbox are committed; the scheduled sweep retries delivery after any dispatch failure.
         catch (Exception exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             logger.LogWarning("Email outbox {OutboxId} awaits the scheduled sweep after dispatch failure ({FailureType}).",
                 outbox.Id, exception.GetType().Name);
         }

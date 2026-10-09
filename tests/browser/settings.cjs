@@ -6,8 +6,8 @@ const path = require('node:path');
 const { URL } = require('node:url');
 
 function parseArguments(argv) {
-  if (argv.length !== 5) {
-    throw new Error('Usage: node tests/browser/settings.cjs <baseURL> <artifactDirectory> <staffId> <tenantId> <email>');
+  if (![5, 6, 8].includes(argv.length)) {
+    throw new Error('Usage: node tests/browser/settings.cjs <baseURL> <artifactDirectory> <staffId> <tenantId> <email> [mode [scopeId formatCode]]');
   }
   const parsed = new URL(argv[0]);
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== '/' ||
@@ -17,7 +17,10 @@ function parseArguments(argv) {
   return {
     baseOrigin: parsed.origin,
     artifactRoot: path.resolve(argv[1]),
-    identity: { staffId: argv[2], tenantId: argv[3], email: argv[4] }
+    identity: { staffId: argv[2], tenantId: argv[3], email: argv[4] },
+    mode: argv[5] || 'full',
+    scopeId: argv[6] || 'system',
+    formatCode: argv[7] || null
   };
 }
 
@@ -48,8 +51,94 @@ async function scan(page, axeSource, artifactRoot, report, viewport) {
   assert.equal(layout.imagesLoaded, true, `Visible image failed to load in ${viewport} settings`);
 }
 
+async function runSystemFormatRuleEditor(page, report, waitForSettingsReady) {
+  await page.locator('#settings-nav-patron').click();
+  const rule = page.locator('#format-rules-editor [data-rule-code="book"]');
+  await rule.locator('[data-rule-property="messageBehavior"]').selectOption('message');
+  await rule.locator('[data-rule-property="message"]').fill('System format-rule integration witness');
+
+  const requestPromise = page.waitForRequest(request => request.method() === 'POST' &&
+    new URL(request.url()).pathname === '/api/asap/staff/settings');
+  const responsePromise = page.waitForResponse(response => response.request().method() === 'POST' &&
+    new URL(response.url()).pathname === '/api/asap/staff/settings');
+  await page.locator('#settings-save').click();
+  const [request, response] = await Promise.all([requestPromise, responsePromise]);
+  const requestBody = request.postData();
+  const responseBody = await response.text();
+  report.systemFormatRulePost = {
+    status: response.status(),
+    requestBody,
+    responseBody
+  };
+
+  const payload = request.postDataJSON();
+  assert.equal(payload.orgId, 'system');
+  const submittedRule = payload.formatRules?.find(item => item.code === 'book');
+  assert.ok(submittedRule, 'The shipped System editor must submit the edited book format rule.');
+  assert.equal(Object.hasOwn(submittedRule, 'customFields'), false,
+    'A System format-rule request must omit the library-only customFields property.');
+  assert.equal(response.status(), 200, responseBody);
+
+  await page.reload({ waitUntil: 'networkidle' });
+  await waitForSettingsReady('system');
+  await page.locator('#settings-nav-patron').click();
+  assert.equal(await page.locator('#format-rules-editor [data-rule-code="book"] [data-rule-property="messageBehavior"]')
+    .inputValue(), 'message');
+  assert.equal(await page.locator('#format-rules-editor [data-rule-code="book"] [data-rule-property="message"]')
+    .inputValue(), 'System format-rule integration witness');
+  report.systemFormatRuleRoundTrip = true;
+}
+
+async function runLibraryRuleCompletenessEditor(page, axeSource, args, report) {
+  await page.locator('#settings-nav-patron').click();
+  const targetRule = page.locator(`#format-rules-editor [data-rule-code="${args.formatCode}"]`);
+  if (args.mode === 'library-rule-missing-row') {
+    assert.equal(await targetRule.count(), 1,
+      'The full library snapshot must initially render the format row backed by the saved custom rule.');
+    report.libraryFormatRuleWitness.targetRowInitiallyPresent = true;
+    await targetRule.evaluate(element => element.remove());
+    report.libraryFormatRuleWitness.targetRowRemoved = true;
+  } else {
+    assert.equal(await targetRule.count(), 0,
+      'The endpoint-shaped partial effective snapshot must omit the saved format row.');
+  }
+
+  const bookRule = page.locator('#format-rules-editor [data-rule-code="book"]');
+  await bookRule.locator('[data-rule-property="messageBehavior"]').selectOption('message');
+  await bookRule.locator('[data-rule-property="message"]').fill('Library rule completeness integration witness');
+  assert.equal(await page.locator('#settings-save').isEnabled(), true,
+    'Changing a visible rule should reach the settings completeness guard.');
+  const responsePromise = page.waitForResponse(response => response.request().method() === 'POST' &&
+    new URL(response.url()).pathname === '/api/asap/staff/settings', { timeout: 5000 })
+    .then(async response => ({ status: response.status(), body: await response.text() }))
+    .catch(() => null);
+  await page.locator('#settings-save').click();
+  await page.waitForFunction(() => {
+    const message = document.getElementById('settings-message');
+    const text = message?.textContent.trim() || '';
+    return text.length > 0 && text !== 'Settings loaded.' && text !== 'Saving settings...';
+  }, null, { timeout: 10000 });
+  const response = await responsePromise;
+  if (response) {
+    report.libraryFormatRuleWitness.responseStatus = response.status;
+    report.libraryFormatRuleWitness.responseBody = response.body;
+  }
+  report.libraryFormatRuleWitness.blocked = await page.locator('#settings-message')
+    .evaluate(element => element.classList.contains('error'));
+  report.libraryFormatRuleWitness.blockedMessage = await page.locator('#settings-message').textContent();
+  await scan(page, axeSource, args.artifactRoot, report, 'desktop');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await scan(page, axeSource, args.artifactRoot, report, 'mobile');
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
+  if (!['full', 'system-format-rule', 'library-rule-partial-snapshot', 'library-rule-missing-row'].includes(args.mode)) {
+    throw new Error(`Unsupported settings browser mode: ${args.mode}`);
+  }
+  if (args.mode.startsWith('library-rule-') && (!args.formatCode || args.scopeId === 'system')) {
+    throw new Error('Library rule-completeness modes require a library scope and a seeded format code.');
+  }
   await fs.mkdir(args.artifactRoot, { recursive: true });
   let chromium;
   let axeSource;
@@ -68,7 +157,20 @@ async function main() {
     systemPatronCodesRoundTrip: false, systemUnrelatedSavePreservedPatronCodes: false,
     libraryPatronCodesRoundTrip: false, libraryUnrelatedSavePreservedPatronCodes: false,
     libraryEmptyPatronCodeReplacementRoundTrip: false, libraryPatronCodeResetRoundTrip: false,
-    wildcardOriginNormalized: false };
+    wildcardOriginNormalized: false, systemFormatRuleRoundTrip: false, systemFormatRulePost: null,
+    systemFormatRulePostCount: 0,
+    libraryFormatRuleWitness: {
+      postCount: 0,
+      requestBody: null,
+      responseStatus: null,
+      responseBody: null,
+      partialSnapshotProjectionApplied: false,
+      storedTargetRulePresent: false,
+      targetRowInitiallyPresent: false,
+      targetRowRemoved: false,
+      blocked: false,
+      blockedMessage: null
+    } };
   let postedPayload = null;
   const postedPayloads = [];
   try {
@@ -95,8 +197,40 @@ async function main() {
       if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/settings') {
         postedPayload = request.postDataJSON();
         postedPayloads.push(postedPayload);
+        if (args.mode === 'system-format-rule') report.systemFormatRulePostCount = postedPayloads.length;
+        if (args.mode.startsWith('library-rule-')) {
+          report.libraryFormatRuleWitness.postCount = postedPayloads.length;
+          report.libraryFormatRuleWitness.requestBody = request.postData();
+        }
       }
     });
+
+    if (args.mode === 'library-rule-partial-snapshot') {
+      await page.route('**/api/asap/staff/settings*', async route => {
+        const requestUrl = new URL(route.request().url());
+        if (route.request().method() !== 'GET' || requestUrl.pathname !== '/api/asap/staff/settings' ||
+            requestUrl.searchParams.get('orgId') !== args.scopeId) {
+          await route.continue();
+          return;
+        }
+        const response = await route.fetch();
+        const data = await response.json();
+        const storedRules = data.stored?.formatRules;
+        report.libraryFormatRuleWitness.storedTargetRulePresent = Array.isArray(storedRules) &&
+          storedRules.some(item => item.code === args.formatCode);
+        const effectiveFormats = data.effective?.formats;
+        assert.ok(Array.isArray(effectiveFormats), 'The settings endpoint must return its effective format snapshot.');
+        assert.ok(effectiveFormats.some(item => item.code === args.formatCode),
+          'The unmodified settings endpoint must include the seeded format before the test projection is made.');
+        data.effective.formats = effectiveFormats.filter(item => item.code !== args.formatCode);
+        report.libraryFormatRuleWitness.partialSnapshotProjectionApplied = true;
+        await route.fulfill({
+          status: response.status(),
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+          body: JSON.stringify(data)
+        });
+      });
+    }
 
     const saveSettings = async () => {
       const response = page.waitForResponse(candidate => candidate.request().method() === 'POST' &&
@@ -124,8 +258,40 @@ async function main() {
         'The settings editor became ready for the wrong scope.');
     };
 
-    await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=system#settings-start`, { waitUntil: 'networkidle' });
-    await waitForSettingsReady('system');
+    const initialScope = args.mode.startsWith('library-rule-') ? args.scopeId : 'system';
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=${encodeURIComponent(initialScope)}#settings-start`, { waitUntil: 'networkidle' });
+    await waitForSettingsReady(initialScope);
+    if (args.mode === 'system-format-rule') {
+      await runSystemFormatRuleEditor(page, report, waitForSettingsReady);
+      await scan(page, axeSource, args.artifactRoot, report, 'desktop');
+      await page.setViewportSize({ width: 390, height: 844 });
+      await scan(page, axeSource, args.artifactRoot, report, 'mobile');
+      await page.close();
+      await context.close();
+      assert.deepEqual(pageErrors, [], 'The System format-rule journey raised browser errors.');
+      assert.equal(traffic.externalRequests, 0, 'The System format-rule journey requested external assets.');
+      assert.equal(report.systemFormatRuleRoundTrip, true);
+      return;
+    }
+    if (args.mode.startsWith('library-rule-')) {
+      await runLibraryRuleCompletenessEditor(page, axeSource, args, report);
+      await page.close();
+      await context.close();
+      assert.deepEqual(pageErrors, [], 'The library rule-completeness journey raised browser errors.');
+      assert.equal(traffic.externalRequests, 0, 'The library rule-completeness journey requested external assets.');
+      assert.equal(report.libraryFormatRuleWitness.postCount, 0,
+        `An incomplete rule projection must block the save before HTTP. Body: ${report.libraryFormatRuleWitness.responseBody || ''}`);
+      assert.equal(report.libraryFormatRuleWitness.blocked, true,
+        'The editor must explain that an incomplete rule projection cannot be saved.');
+      if (args.mode === 'library-rule-partial-snapshot') {
+        assert.equal(report.libraryFormatRuleWitness.partialSnapshotProjectionApplied, true);
+        assert.equal(report.libraryFormatRuleWitness.storedTargetRulePresent, true);
+      } else {
+        assert.equal(report.libraryFormatRuleWitness.targetRowInitiallyPresent, true);
+        assert.equal(report.libraryFormatRuleWitness.targetRowRemoved, true);
+      }
+      return;
+    }
     const participationRows = page.locator('#enabled-libraries-checkbox-container input[type="checkbox"]');
     const participationIds = await participationRows.evaluateAll(inputs => inputs.map(input => input.value));
     assert.ok(participationIds.includes('2') && participationIds.includes('3') && participationIds.includes('4'),

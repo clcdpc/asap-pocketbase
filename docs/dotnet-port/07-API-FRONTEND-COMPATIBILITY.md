@@ -220,9 +220,9 @@ Hold placement re-resolves live patron/pickup state immediately before its own e
 
 ## 14.4 Email operations state contract
 
-The administrative email surface must distinguish `pending`, `sending`, `sent`, `failed`, and `suppressed`. Manual **Retry** is available only for `failed` rows and reuses the same business identity/payload; attempting to retry a non-retryable row returns a normal conflict/validation response. `suppressed` is terminal and visible with a safe suppression reason but never exposes Retry. Payload cleanup may remove subject/body only from terminal `sent`/`suppressed` rows after the retention period, so the UI must remain useful from retained delivery metadata even after payload purge. Library admins remain scoped to their own library and super-admins may inspect all authorized contexts.
+The administrative email surface must distinguish `pending`, `sending`, `sent`, `failed`, and `suppressed`. The server exposes Retry only for the certified no-send `mail_not_configured` row whose persisted state has no provider message ID, send-start timestamp, lease, expiry, or scheduled retry; the UI follows that authoritative capability. All other failed rows, including ambiguous expired sends, remain inspectable but cannot be retried, and a rejected retry returns a normal conflict/validation response. `suppressed` is terminal and visible with a safe suppression reason but never exposes Retry. Payload cleanup may remove subject/body only from terminal `sent`/`suppressed` rows after the retention period, so the UI must remain useful from retained delivery metadata even after payload purge. Library admins remain scoped to their own library and super-admins may inspect all authorized contexts.
 
-For `staff_authorization_sensitive` messages, persist recipient StaffUser ID and normalized authentication-email snapshot at intent creation. Delivery/retry revalidates that email, active state, role/resource scope, required Organization activity, and current message-class destination. An authentication-email change suppresses the stale row; stored OID changes do not. Immutable business-event notifications may still drain after later authorization changes.
+For `staff_authorization_sensitive` messages, persist recipient StaffUser ID and normalized authentication-email snapshot at intent creation. Delivery/retry revalidates that email, active state, role/resource scope, required Organization activity, and current message-class destination. An authentication-email change suppresses the stale row; stored OID changes do not. Immutable business-event notifications may still drain after later authorization changes through the normal worker, subject to the section 14 ambiguous-send quarantine/no-replay rule.
 
 ### AdditionalCopy reopen response
 
@@ -284,7 +284,7 @@ At minimum:
 - analytics aggregation moves to SQL;
 - Polaris calls use system/application credentials rather than staff-specific Polaris identity;
 - organization `IsActive` becomes the broad participation switch;
-- library admins may run own-library background jobs and inspect/retry own-library failed emails;
+- library admins may run own-library background jobs and inspect failed emails in their scope; Retry remains limited to the certified no-send `mail_not_configured` case in section 14;
 - delete audit is intentionally reduced;
 - unsupported/ambiguous legacy values may block migration rather than being silently normalized.
 

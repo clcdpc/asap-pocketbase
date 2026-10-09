@@ -12,15 +12,21 @@ public sealed partial class PatronJourneyTests
     [DataRow("search", "operation_cancelled")]
     [DataRow("search", "failure_cancelled")]
     [DataRow("search", "failure_uncancelled")]
+    [DataRow("search", "generic_failure_cancelled")]
+    [DataRow("search", "generic_failure_uncancelled")]
     [DataRow("refresh", "return_cancelled")]
     [DataRow("refresh", "operation_cancelled")]
     [DataRow("refresh", "failure_cancelled")]
     [DataRow("refresh", "failure_uncancelled")]
+    [DataRow("refresh", "generic_failure_cancelled")]
+    [DataRow("refresh", "generic_failure_uncancelled")]
     [DataRow("branches", "return_cancelled")]
     [DataRow("branches", "operation_cancelled")]
     [DataRow("branches", "failure_cancelled")]
     [DataRow("branches", "failure_uncancelled")]
-    public async Task StaffSuggestionProviderCancellationRemainsVisibleAtLookupBoundary(
+    [DataRow("branches", "generic_failure_cancelled")]
+    [DataRow("branches", "generic_failure_uncancelled")]
+    public async Task StaffSuggestionProviderFaultPreservesProvenanceAtLookupBoundary(
         string stage,
         string providerMode)
     {
@@ -40,12 +46,20 @@ public sealed partial class PatronJourneyTests
             ? new StaffPatronLookupInput("Jordan Example", null, 2)
             : new StaffPatronLookupInput(null, "20000000001994", 2);
 
-        if (providerMode == "failure_uncancelled")
+        if (providerMode is "failure_cancelled" or "failure_uncancelled")
         {
             var failure = await Assert.ThrowsExactlyAsync<StaffSuggestionException>(() =>
                 lookup.LookupAsync(actor, input, cancellation.Token));
             Assert.AreEqual(stage == "branches" ? "pickup_branches_unavailable" : "polaris_unavailable", failure.Code);
-            Assert.IsFalse(cancellation.IsCancellationRequested);
+            Assert.IsInstanceOfType<PolarisOperationalException>(failure.InnerException);
+            Assert.AreEqual(providerMode == "failure_cancelled", cancellation.IsCancellationRequested);
+        }
+        else if (providerMode is "generic_failure_cancelled" or "generic_failure_uncancelled")
+        {
+            var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                lookup.LookupAsync(actor, input, cancellation.Token));
+            Assert.AreSame(provider.GenericFailure, failure);
+            Assert.AreEqual(providerMode == "generic_failure_cancelled", cancellation.IsCancellationRequested);
         }
         else
         {
@@ -65,6 +79,8 @@ public sealed partial class PatronJourneyTests
     [DataRow("operation_cancelled")]
     [DataRow("failure_cancelled")]
     [DataRow("failure_uncancelled")]
+    [DataRow("generic_failure_cancelled")]
+    [DataRow("generic_failure_uncancelled")]
     public async Task StaffSuggestionCreateStopsBeforeMutationWhenProviderCancelsOrFails(string providerMode)
     {
         var actor = await ReadConfiguredSuperAdminAsync();
@@ -82,12 +98,20 @@ public sealed partial class PatronJourneyTests
         var title = $"Provider cancellation before staff mutation {Guid.NewGuid():N}";
         var input = StaffBibInput(title, 9001);
 
-        if (providerMode == "failure_uncancelled")
+        if (providerMode is "failure_cancelled" or "failure_uncancelled")
         {
             var failure = await Assert.ThrowsExactlyAsync<StaffSuggestionException>(() =>
                 service.CreateAsync(actor, input, cancellation.Token));
             Assert.AreEqual("polaris_unavailable", failure.Code);
-            Assert.IsFalse(cancellation.IsCancellationRequested);
+            Assert.IsInstanceOfType<PolarisOperationalException>(failure.InnerException);
+            Assert.AreEqual(providerMode == "failure_cancelled", cancellation.IsCancellationRequested);
+        }
+        else if (providerMode is "generic_failure_cancelled" or "generic_failure_uncancelled")
+        {
+            var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                service.CreateAsync(actor, input, cancellation.Token));
+            Assert.AreSame(provider.GenericFailure, failure);
+            Assert.AreEqual(providerMode == "generic_failure_cancelled", cancellation.IsCancellationRequested);
         }
         else
         {
@@ -99,6 +123,34 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(1, provider.RefreshCount);
         Assert.AreEqual(0, provider.UpdateCount);
         await AssertNoStaffBibRequestAsync(title);
+    }
+
+    [TestMethod]
+    public async Task StaffSuggestionPreIntentCancellationDoesNotCallPatronProviders()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var provider = new BoundaryStaffSuggestionProvider("refresh", "failure_uncancelled", cancellation);
+        await using var scopedFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.AddSingleton<IPatronProvider>(provider);
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IStaffPolarisProvider>(provider);
+            }));
+        var lookup = scopedFactory.Services.GetRequiredService<StaffSuggestionService>();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => lookup.LookupAsync(
+            actor,
+            new StaffPatronLookupInput(null, "20000000001994", 2),
+            cancellation.Token));
+
+        Assert.AreEqual(0, provider.SearchCount);
+        Assert.AreEqual(0, provider.RefreshCount);
+        Assert.AreEqual(0, provider.BranchCount);
+        Assert.AreEqual(0, provider.UpdateCount);
     }
 
     private sealed class BoundaryStaffSuggestionProvider(
@@ -123,6 +175,8 @@ public sealed partial class PatronJourneyTests
         public int RefreshCount { get; private set; }
         public int BranchCount { get; private set; }
         public int UpdateCount { get; private set; }
+        public InvalidOperationException GenericFailure { get; } =
+            new("The provider programming failure must retain its original exception.");
 
         public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken cancellationToken) =>
             RefreshAsync(barcode, 2, cancellationToken);
@@ -212,6 +266,11 @@ public sealed partial class PatronJourneyTests
                     throw new PolarisOperationalException("provider_failed", "The provider failed after caller cancellation.");
                 case "failure_uncancelled":
                     throw new PolarisOperationalException("provider_failed", "The provider failed without caller cancellation.");
+                case "generic_failure_cancelled":
+                    cancellation.Cancel();
+                    throw GenericFailure;
+                case "generic_failure_uncancelled":
+                    throw GenericFailure;
                 default:
                     throw new AssertFailedException($"Unknown provider mode {mode}.");
             }

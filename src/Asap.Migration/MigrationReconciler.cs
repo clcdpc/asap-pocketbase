@@ -89,7 +89,7 @@ public static class MigrationReconciler
             using var report = ReadReportDocument(options.ImportReportPath);
             var root = report.RootElement;
             ValidateReportPackage(root, package, allowPending: false);
-            VerifyReportTarget(root, package, options.ConnectionString);
+            VerifyReportTarget(root, package, options.ConnectionString, options.ExternalConfigurationPath);
         }
         catch (MigrationOperationException)
         {
@@ -120,7 +120,7 @@ public static class MigrationReconciler
         {
             using var completed = ReadReportDocument(reportPath);
             ValidateReportPackage(completed.RootElement, package, allowPending: false);
-            VerifyReportTarget(completed.RootElement, package, options.ConnectionString);
+            VerifyReportTarget(completed.RootElement, package, options.ConnectionString, options.ExternalConfigurationPath);
             return;
         }
         if (!File.Exists(pendingPath))
@@ -133,7 +133,7 @@ public static class MigrationReconciler
         using (var pending = ReadReportDocument(pendingPath))
         {
             ValidateReportPackage(pending.RootElement, package, allowPending: true);
-            VerifyReportTarget(pending.RootElement, package, options.ConnectionString);
+            VerifyReportTarget(pending.RootElement, package, options.ConnectionString, options.ExternalConfigurationPath);
         }
 
         SetReportState(pendingPath, "recovered", reconciliationPassed: true);
@@ -144,16 +144,21 @@ public static class MigrationReconciler
         string connectionString,
         ValidatedMigrationPackage package,
         string pendingPath,
-        string reportPath)
+        string reportPath,
+        string? externalConfigurationPath)
     {
         using var pending = ReadReportDocument(pendingPath);
         ValidateReportPackage(pending.RootElement, package, allowPending: true);
-        VerifyReportTarget(pending.RootElement, package, connectionString);
+        VerifyReportTarget(pending.RootElement, package, connectionString, externalConfigurationPath);
         SetReportState(pendingPath, "committed", reconciliationPassed: true);
         File.Move(pendingPath, reportPath, overwrite: true);
     }
 
-    private static void VerifyReportTarget(JsonElement report, ValidatedMigrationPackage package, string connectionString)
+    private static void VerifyReportTarget(
+        JsonElement report,
+        ValidatedMigrationPackage package,
+        string connectionString,
+        string? externalConfigurationPath)
     {
         var expectedTargetIdentity = report.GetProperty("targetIdentitySha256").GetString();
         var actualTargetIdentity = ComputeTargetIdentitySha256(connectionString);
@@ -196,7 +201,9 @@ public static class MigrationReconciler
             package,
             postmarkTokenProvisioned,
             bootstrapTargetStaffUserId,
-            bootstrapInserted);
+            bootstrapInserted,
+            externalConfigurationPath);
+        MigrationIndependentReportVerifier.Verify(connectionString, package, report);
         var expectedQueueProgress = report.GetProperty("targetCounts").GetProperty("queue_progress").GetInt32();
         var actualQueueProgress = ReadQueueProgressCount(connectionString);
         if (actualQueueProgress != expectedQueueProgress)
@@ -219,7 +226,7 @@ public static class MigrationReconciler
         VerifyReportCounts(report, package, connectionString);
     }
 
-    private static void ValidateReportPackage(JsonElement root, ValidatedMigrationPackage package, bool allowPending)
+    internal static void ValidateReportPackage(JsonElement root, ValidatedMigrationPackage package, bool allowPending)
     {
         try
         {
@@ -342,6 +349,9 @@ public static class MigrationReconciler
             "email_template" => HasExactProperties(item, "entity", "sourceId", "transformation") &&
                 HasString(item, "sourceId") && HasString(item, "transformation"),
             "patron_duplicate_labels" => HasPatronDuplicateLabelsShape(item),
+            "patron_ui_inheritance" => HasExactProperties(item, "entity", "sourceCollection", "sourceId", "organizationId", "affectedFields", "disposition") &&
+                HasString(item, "sourceCollection") && HasString(item, "sourceId") && HasPositiveInt32(item, "organizationId") &&
+                HasStringArray(item, "affectedFields") && HasString(item, "disposition"),
             "system_material_format_availability" => HasExactProperties(item, "entity", "unavailableSeedCodes") &&
                 HasStringArray(item, "unavailableSeedCodes"),
             "legacy_library_branding" => HasExactProperties(item, "entity", "sourceCollection", "sourceId", "organizationId", "disposition", "populatedFields") &&
@@ -678,10 +688,18 @@ public static class MigrationReconciler
         bool titleRequest)
     {
         return MigrationPackageReader.ReadRows(package, file, collection).Count(row =>
-            row.String("claimedByStaffUserId") is not null ||
-            row.String("claimedByDisplayName") is not null ||
-            row.UtcDateTime("claimedAt").HasValue ||
-            titleRequest && (row.String("claimType") is not null || row.String("claimRuleId") is not null));
+        {
+            var displayName = titleRequest
+                ? row.String("claimedByDisplayName")
+                : row.Text("claimedByDisplayName");
+            var hasDisplayName = titleRequest
+                ? displayName is not null
+                : !string.IsNullOrEmpty(displayName);
+            return row.String("claimedByStaffUserId") is not null ||
+                hasDisplayName ||
+                row.UtcDateTime("claimedAt").HasValue ||
+                titleRequest && (row.String("claimType") is not null || row.String("claimRuleId") is not null);
+        });
     }
 
     private static void ValidateTransformationPopulation(
@@ -733,6 +751,7 @@ public static class MigrationReconciler
             ["email_provider_token"] = 1,
             ["email_template_sender"] = ExpectedLibrarySenderTransformCount(emailRows, package),
             ["patron_duplicate_labels"] = ExpectedPatronDuplicateLabelTransformCount(package),
+            ["patron_ui_inheritance"] = ExpectedPatronUiInheritanceTransformCount(package),
             ["system_material_format_availability"] = 1,
             ["legacy_library_branding"] = sourceCounts["library_settings"],
             ["patron_format_rules"] = MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_settings_overrides")
@@ -778,7 +797,7 @@ public static class MigrationReconciler
         var systemSeedCodes = new[] { "book", "audiobook_cd", "dvd", "music_cd", "ebook", "eaudiobook" };
         var sourceSystemFormatCodes = sourceFieldRows["material_formats"]
             .Where(row => row.RequiredString("scope").Equals("system", StringComparison.OrdinalIgnoreCase))
-            .Select(row => NormalizeAuditFormatCode(row.RequiredString("code")))
+            .Select(row => NormalizeAuditFormatCode(row.Text("code") ?? string.Empty))
             .ToHashSet(StringComparer.Ordinal);
         var expectedUnavailableSeedCodes = systemSeedCodes
             .Where(code => !sourceSystemFormatCodes.Contains(code))
@@ -1111,6 +1130,41 @@ public static class MigrationReconciler
             ignoredUiFields.Any(row.HasValue));
     }
 
+    private static int ExpectedPatronUiInheritanceTransformCount(ValidatedMigrationPackage package)
+    {
+        var fields = new[]
+        {
+            "pageTitle", "barcodeLabel", "pinLabel", "loginPrompt", "loginNote", "suggestionFormNote",
+            "noEmailMessage", "successTitle", "successMessage", "alreadySubmittedMessage", "ebookMessage",
+            "eaudiobookMessage"
+        };
+        var organizations = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations");
+        var uiRows = MigrationPackageReader.ReadRows(package, "patron-settings.json", "ui_settings");
+        var overrides = MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_settings_overrides");
+        var modernEbookOrganizations = overrides
+            .Where(row => row.Text("ebookMessage") is { Length: > 0 })
+            .Select(row => row.Int32("orgId") ?? throw ReportMismatch("A patron override has no native organization identity."))
+            .ToHashSet();
+        var modernEaudiobookOrganizations = overrides
+            .Where(row => row.Text("eaudiobookMessage") is { Length: > 0 })
+            .Select(row => row.Int32("orgId") ?? throw ReportMismatch("A patron override has no native organization identity."))
+            .ToHashSet();
+
+        return uiRows.Count(row =>
+        {
+            if (!row.RequiredString("scope").Equals("library", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var organizationId = ResolveAuditLibraryId(organizations, row.RequiredString("libraryOrganization"));
+            return fields.Any(field =>
+                string.IsNullOrWhiteSpace(row.Text(field)) &&
+                !(field == "ebookMessage" && modernEbookOrganizations.Contains(organizationId)) &&
+                !(field == "eaudiobookMessage" && modernEaudiobookOrganizations.Contains(organizationId)));
+        });
+    }
+
     private static int ExpectedEffectiveFormatCount(ValidatedMigrationPackage package, int libraryId)
         => ExpectedEffectiveFormatCodes(package, libraryId).Count;
 
@@ -1257,16 +1311,16 @@ public static class MigrationReconciler
         var libraryRow = formats.FirstOrDefault(row =>
             row.RequiredString("scope").Equals("library", StringComparison.OrdinalIgnoreCase) &&
             ResolveAuditLibraryId(package, row.RequiredString("libraryOrganization")) == libraryId &&
-            NormalizeAuditFormatCode(row.RequiredString("code")) == NormalizeAuditFormatCode(normalizedCode));
+            NormalizeAuditFormatCode(row.Text("code") ?? string.Empty) == NormalizeAuditFormatCode(normalizedCode));
         if (libraryRow is not null)
         {
-            return libraryRow.RequiredString("code");
+            return libraryRow.Text("code") ?? string.Empty;
         }
 
         var systemRow = formats.FirstOrDefault(row =>
             row.RequiredString("scope").Equals("system", StringComparison.OrdinalIgnoreCase) &&
-            NormalizeAuditFormatCode(row.RequiredString("code")) == NormalizeAuditFormatCode(normalizedCode));
-        return systemRow?.RequiredString("code") ?? NormalizeAuditFormatCode(normalizedCode);
+            NormalizeAuditFormatCode(row.Text("code") ?? string.Empty) == NormalizeAuditFormatCode(normalizedCode));
+        return systemRow?.Text("code") ?? NormalizeAuditFormatCode(normalizedCode);
     }
 
     private static HashSet<string> ExpectedEffectiveFormatCodes(ValidatedMigrationPackage package, int libraryId)
@@ -1277,7 +1331,7 @@ public static class MigrationReconciler
         };
         foreach (var row in MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats"))
         {
-            var code = NormalizeAuditFormatCode(row.RequiredString("code"));
+            var code = NormalizeAuditFormatCode(row.Text("code") ?? string.Empty);
             if (row.RequiredString("scope").Equals("system", StringComparison.OrdinalIgnoreCase) ||
                 row.RequiredString("scope").Equals("library", StringComparison.OrdinalIgnoreCase) &&
                 ResolveAuditLibraryId(package, row.RequiredString("libraryOrganization")) == libraryId)
@@ -1436,7 +1490,13 @@ public static class MigrationReconciler
         foreach (var row in rows)
         {
             var sourceClaimantId = row.String("claimedByStaffUserId");
-            var displayName = row.String("claimedByDisplayName");
+            var displayName = titleRequests
+                ? row.String("claimedByDisplayName")
+                : row.Text("claimedByDisplayName");
+            if (!titleRequests && string.IsNullOrEmpty(displayName))
+            {
+                displayName = null;
+            }
             var claimedAt = row.UtcDateTime("claimedAt");
             var sourceClaimType = titleRequests ? NormalizeAuditClaimType(row.String("claimType")) : null;
             var sourceRuleId = titleRequests ? row.String("claimRuleId") : null;
@@ -1567,9 +1627,11 @@ public static class MigrationReconciler
 
         var ruleStaffId = rule.String("staffUserId") ?? rule.String("staffUser");
         var requestFormatCode = row.String("formatRef") is { } formatRef && formats.TryGetValue(formatRef, out var format)
-            ? NormalizeAuditFormatCode(format.RequiredString("code"))
-            : row.String("format") is { } formatCode ? NormalizeAuditFormatCode(formatCode) : null;
-        var ruleFormatCode = NormalizeAuditFormatCode(rule.RequiredString("format"));
+            ? NormalizeAuditFormatCode(format.Text("code") ?? string.Empty)
+            : row.Text("format") is { } formatCode && TrimJavascriptFormatCode(formatCode).Length > 0
+                ? NormalizeAuditFormatCode(formatCode)
+                : null;
+        var ruleFormatCode = NormalizeAuditFormatCode(rule.Text("format") ?? string.Empty);
         var ruleLibraryId = rule.Int32("libraryOrgId") ?? 0;
         return ruleLibraryId == (row.Int32("libraryOrgId") ?? 0) &&
                string.Equals(ruleFormatCode, requestFormatCode, StringComparison.OrdinalIgnoreCase) &&
@@ -1666,7 +1728,7 @@ public static class MigrationReconciler
         var formatRows = MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats");
 
         var fields = 4 + (systemSettings?.HasValue("systemNotEnabledMessage") == true ? 1 : 0) +
-            AuditSplitValues(systemSettings?.String("patronEmbedAllowedOrigins"))
+            AuditSplitEmbedOrigins(systemSettings?.Text("patronEmbedAllowedOrigins"))
                 .Select(NormalizeAuditEmbedOrigin)
                 .Distinct(StringComparer.Ordinal)
                 .Count();
@@ -1787,7 +1849,7 @@ public static class MigrationReconciler
 
         var exactSystemSourceCodes = formatRows
             .Where(row => row.RequiredString("scope").Equals("system", StringComparison.OrdinalIgnoreCase))
-            .Select(row => row.RequiredString("code"))
+            .Select(row => row.Text("code") ?? string.Empty)
             .ToHashSet(StringComparer.Ordinal);
         var librariesWithRuleOverrides = overrides
             .Where(row => row.JsonText("patronFormatRules") is not null)
@@ -1797,7 +1859,7 @@ public static class MigrationReconciler
         {
             var isLibrary = row.RequiredString("scope").Equals("library", StringComparison.OrdinalIgnoreCase);
             var libraryId = isLibrary ? ResolveAuditLibraryId(package, row.RequiredString("libraryOrganization")) : 1;
-            var sparse = isLibrary && exactSystemSourceCodes.Contains(row.RequiredString("code"));
+            var sparse = isLibrary && exactSystemSourceCodes.Contains(row.Text("code") ?? string.Empty);
             var ruleOverridePresent = isLibrary && librariesWithRuleOverrides.Contains(libraryId);
             if (!sparse)
             {
@@ -1861,6 +1923,14 @@ public static class MigrationReconciler
         string.IsNullOrWhiteSpace(source)
             ? []
             : source.Split([',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(value => value.Length > 0)
+                .ToArray();
+
+    private static string[] AuditSplitEmbedOrigins(string? source) =>
+        source is null
+            ? []
+            : source.Split([',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Select(TrimAuditConfigurationText)
                 .Where(value => value.Length > 0)
                 .ToArray();
 
@@ -2938,11 +3008,11 @@ public static class MigrationReconciler
         var formats = MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats");
         var exactSystemSourceCodes = formats
             .Where(row => row.RequiredString("scope").Equals("system", StringComparison.OrdinalIgnoreCase))
-            .Select(row => row.RequiredString("code"))
+            .Select(row => row.Text("code") ?? string.Empty)
             .ToHashSet(StringComparer.Ordinal);
         var baseFormats = formats.Count(row =>
             row.RequiredString("scope").Equals("system", StringComparison.OrdinalIgnoreCase) ||
-            !exactSystemSourceCodes.Contains(row.RequiredString("code")));
+            !exactSystemSourceCodes.Contains(row.Text("code") ?? string.Empty));
         var formatOverrides = formats.Count - baseFormats;
         return sourceCounts["polaris_organizations"] + sourceCounts["staff_users"] +
             sourceCounts["email_templates"] + sourceCounts["rejection_templates"] + baseFormats + formatOverrides +
@@ -2951,7 +3021,7 @@ public static class MigrationReconciler
             sourceCounts["title_request_tags"] + sourceCounts["title_request_events"] + sourceCounts["email_delivery_events"];
     }
 
-    private static string NormalizeAuditFormatCode(string value) => value.Trim().ToLowerInvariant() switch
+    private static string NormalizeAuditFormatCode(string value) => TrimJavascriptFormatCode(value).ToLowerInvariant() switch
     {
         "0" => "book",
         "1" => "ebook",
@@ -2961,6 +3031,27 @@ public static class MigrationReconciler
         "5" => "music_cd",
         var code => code
     };
+
+    private static string TrimJavascriptFormatCode(string value)
+    {
+        var start = 0;
+        while (start < value.Length && IsJavascriptFormatWhitespace(value[start]))
+        {
+            start++;
+        }
+        var end = value.Length;
+        while (end > start && IsJavascriptFormatWhitespace(value[end - 1]))
+        {
+            end--;
+        }
+        return value[start..end];
+    }
+
+    private static bool IsJavascriptFormatWhitespace(char value) => value is
+        '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or
+        '\u1680' or '\u2000' or '\u2001' or '\u2002' or '\u2003' or '\u2004' or '\u2005' or
+        '\u2006' or '\u2007' or '\u2008' or '\u2009' or '\u200A' or '\u2028' or '\u2029' or
+        '\u202F' or '\u205F' or '\u3000' or '\uFEFF';
 
     private static int ReadCount(SqlConnection connection, string sql)
     {

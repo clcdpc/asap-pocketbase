@@ -1824,7 +1824,10 @@ for (const commit of ['library save', 'system save', 'library reset']) {
           return response(200, { availableFormats: ['book'], formatLabels: { book: committed ? 'Configuration B' : 'Configuration A' } });
         }
         if ((pathname.endsWith('/settings') || pathname.endsWith('/settings/reset')) && init.method === 'POST') {
-          committed = true; return response(200, { data: { version: 'settings-v2' } });
+          committed = true;
+          return pathname.endsWith('/settings/reset')
+            ? response(200, { code: 'reset', data: { version: 'settings-v2' } })
+            : response(200, { code: 'saved', data: { version: 'settings-v2' } });
         }
         if (pathname.endsWith('/settings') && committed) {
           reloads++;
@@ -2252,7 +2255,9 @@ for (const copy of [false, true]) {
         ui.setApi(({ pathname, init }) => {
           if (pathname.endsWith('/settings') && init.method === 'POST') {
             changed = true;
-            return response(uncertain ? 503 : 200, { data: { version: 'v2' }, message: 'Lost configuration response' });
+            return uncertain
+              ? response(503, { data: { version: 'v2' }, message: 'Lost configuration response' })
+              : response(200, { code: 'saved', data: { version: 'v2' } });
           }
           if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
             queueReads++;
@@ -2291,7 +2296,7 @@ for (const copy of [false, true]) {
       fixture(`?stage=settings&settingsScope=${settingsScope}`, async ui => {
         let committed = false, queueReads = 0;
         ui.setApi(({ pathname, init, parsed }) => {
-          if (pathname.endsWith('/settings') && init.method === 'POST') { committed = true; return response(200, { data: { version: 'v2' } }); }
+          if (pathname.endsWith('/settings') && init.method === 'POST') { committed = true; return response(200, { code: 'saved', data: { version: 'v2' } }); }
           if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
             queueReads++;
             const item = copy ? ui.readCopyRequest() : ui.readRequest();
@@ -2465,7 +2470,7 @@ test('authoritative projections: system save participation retires the selected 
       }
       if (pathname.endsWith('/settings') && init.method === 'POST') {
         assert.deepEqual(JSON.parse(init.body).systemSettings.enabledLibraryOrgIds, [3]);
-        committed = true; ui.setOrganizations(catalog()); return response(200, { data: { version: 'v2' } });
+        committed = true; ui.setOrganizations(catalog()); return response(200, { code: 'saved', data: { version: 'v2' } });
       }
       if (pathname.endsWith('/settings') && committed) return response(503, { message: 'Settings reload unavailable' });
       if (pathname.endsWith('/title-requests')) {
@@ -2754,7 +2759,7 @@ test('authoritative projections: email readiness refresh survives failed Setting
   fixture('?stage=settings&settingsScope=system', async ui => {
     let committed = false, readinessReads = 0;
     ui.setApi(({ pathname, init }) => {
-      if (pathname.endsWith('/settings') && init.method === 'POST') { committed = true; return response(200, { data: { version: 'v2' } }); }
+      if (pathname.endsWith('/settings') && init.method === 'POST') { committed = true; return response(200, { code: 'saved', data: { version: 'v2' } }); }
       if (pathname.endsWith('/settings') && committed) return response(503, { message: 'Settings review unavailable' });
       if (pathname.endsWith('/email-readiness')) {
         readinessReads++;

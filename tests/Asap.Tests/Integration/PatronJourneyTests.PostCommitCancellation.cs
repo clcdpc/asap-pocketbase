@@ -17,7 +17,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("return")]
     [DataRow("canceled")]
     [DataRow("failure")]
-    public async Task PublicSuggestionDispatchCancellationPropagatesAfterDurableCommit(string dispatchMode)
+    public async Task PublicSuggestionDispatchPreservesCommittedResultAfterCancellationOrFailure(string dispatchMode)
     {
         var patron = AddPostCommitCancellationPatron();
         var session = await IssueTestPatronSessionAsync(patron.Barcode);
@@ -36,7 +36,10 @@ public sealed partial class PatronJourneyTests
 
             cancellation.Cancel();
             dispatcher.Release();
-            await Assert.ThrowsAsync<OperationCanceledException>(() => submission);
+            var accepted = await submission;
+            Assert.AreEqual(durableRequest.Request.Id, accepted.Id);
+            Assert.AreEqual(dispatchMode == "failure" ? "dispatch_failed" : "queued", accepted.NotificationStatus,
+                "The committed request remains authoritative while its durable outbox reports the actual enqueue result.");
 
             await AssertCommittedSuggestionStillDurableAsync(
                 durableRequest.Request, dispatcher.EnqueuedIds.Single(), durableRequest.EventCount);
@@ -52,7 +55,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("return")]
     [DataRow("canceled")]
     [DataRow("failure")]
-    public async Task StaffSuggestionDispatchCancellationPropagatesAfterDurableCommit(string dispatchMode)
+    public async Task StaffSuggestionDispatchPreservesCommittedResultAfterCancellationOrFailure(string dispatchMode)
     {
         var patron = AddPostCommitCancellationPatron();
         var actor = await ReadConfiguredSuperAdminAsync();
@@ -87,7 +90,10 @@ public sealed partial class PatronJourneyTests
 
             cancellation.Cancel();
             dispatcher.Release();
-            await Assert.ThrowsAsync<OperationCanceledException>(() => submission);
+            var accepted = await submission;
+            Assert.AreEqual(durableRequest.Request.Id, accepted.Id);
+            Assert.AreEqual(dispatchMode == "failure" ? "dispatch_failed" : "queued", accepted.NotificationStatus,
+                "The committed request remains authoritative while its durable outbox reports the actual enqueue result.");
 
             await AssertCommittedSuggestionStillDurableAsync(
                 durableRequest.Request, dispatcher.EnqueuedIds.Single(), durableRequest.EventCount);
@@ -106,7 +112,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("staff", "return")]
     [DataRow("staff", "canceled")]
     [DataRow("staff", "failure")]
-    public async Task SuggestionIdentifierFollowupCancellationPropagatesAfterDurableCommit(
+    public async Task SuggestionIdentifierFollowupPreservesCommittedRequestAfterCancellationOrFailure(
         string caller,
         string providerMode)
     {
@@ -155,10 +161,21 @@ public sealed partial class PatronJourneyTests
                 "The accepted request's one durable outbox is dispatched before optional identifier processing.");
 
             provider.ReleaseIdentifierLookup();
-            await Assert.ThrowsAsync<OperationCanceledException>(() => submission);
+            var accepted = await submission;
+            Assert.AreEqual(durableRequest.Request.Id, accepted.Id);
+            Assert.AreEqual("queued", accepted.NotificationStatus);
 
             await AssertCommittedSuggestionStillDurableAsync(
                 durableRequest.Request, dispatcher.EnqueuedIds.Single(), durableRequest.EventCount);
+            await using var verify = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+                .CreateDbContextAsync();
+            var pending = await verify.TitleRequests.AsNoTracking()
+                .SingleAsync(item => item.Id == durableRequest.Request.Id);
+            Assert.AreEqual(IdentifierCheckState.Pending, pending.IsbnCheckStatus,
+                "The recurring processor must retain accepted identifier work after optional inline failure.");
+            Assert.AreEqual(0, pending.IsbnCheckRetryCount);
+            Assert.IsNull(pending.IsbnCheckLastErrorCode);
+            Assert.IsNull(pending.LastCheckedUtc);
         }
         finally
         {

@@ -157,7 +157,7 @@ internal static class MigrationOperationalConfiguration
     }
 
     private static string? StringProperty(JsonElement value, string name) =>
-        Property(value, name).GetString()?.Trim();
+        Property(value, name).GetString();
 
     private static int RequiredInt(JsonElement value, string name) =>
         Property(value, name).GetInt32();

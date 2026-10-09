@@ -514,7 +514,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     } catch (error) {
       if (attempt.outcome === 'committed') return;
       const pickupChanged = error.response?.code === 'request_not_created_pickup_changed' && error.response?.pickupPreferenceChanged === true;
-      const uncertain = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
+      const uncertain = !pickupChanged && (error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error));
       attempt.outcome = pickupChanged ? 'pickup_changed' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
       if (pickupChanged) onReceipt(`${error.response?.message || error.message || "The suggestion was not created, but the patron's preferred pickup location was changed successfully."} Sign in again to restore staff access before continuing.`, owner, attempt);
       if (uncertain) onReceipt('Suggestion creation is unconfirmed. Sign in again and review the servicing library queue before another submission.', owner, attempt);

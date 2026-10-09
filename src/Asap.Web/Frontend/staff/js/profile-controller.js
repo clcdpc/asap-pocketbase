@@ -152,7 +152,7 @@ export function createProfileController({ root, sessionIdentity, announce,
         if (isPresentationCurrent(owner)) announce('Profile saved. Current preferences could not be refreshed.', 'warning');
         return;
       }
-      const unconfirmed = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
+      const unconfirmed = error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
       mutation.outcome = unconfirmed ? 'uncertain' : 'rejected';
       const conflictMessage = 'Profile could not be saved. Sign in again to review your current profile.';
       if (error.status === 409) onReceipt(conflictMessage, owner, mutation);

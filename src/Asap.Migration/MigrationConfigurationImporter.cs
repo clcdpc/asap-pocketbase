@@ -78,6 +78,15 @@ internal static class MigrationConfigurationImporter
         "duplicateLabelSilent"
     ];
 
+    private static readonly string[] ScopedWorkflowTextFields =
+    [
+        "suggestionLimitMessage",
+        "commonAuthorsLabel",
+        "commonAuthorsHelp",
+        "commonAuthorsMessage",
+        "patronCodeEligibilityMessage"
+    ];
+
     private static readonly string[] SeededEmailTemplateKeys = ["suggestion_submitted"];
 
     public static void Import(
@@ -217,7 +226,7 @@ internal static class MigrationConfigurationImporter
                 "system_settings_ambiguous",
                 "More than one source system_settings row was exported.");
         }
-        _ = SplitValues(rows.SingleOrDefault()?.String("patronEmbedAllowedOrigins"))
+        _ = SplitLegacyEmbedOrigins(rows.SingleOrDefault()?.Text("patronEmbedAllowedOrigins"))
             .Select(NormalizeEmbedOrigin)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
@@ -231,6 +240,9 @@ internal static class MigrationConfigurationImporter
 
     private static void ValidateConfigurationRows(ValidatedMigrationPackage package)
     {
+        ValidatePolarisSourceSettings(package);
+        ValidateLeapPatronUrlRepresentability(package);
+
         var workflowRows = MigrationPackageReader.ReadRows(package, "workflow-settings.json", "workflow_settings");
         ValidateUniqueScope(
             workflowRows,
@@ -238,6 +250,12 @@ internal static class MigrationConfigurationImporter
             row => ScopedKey(row, "libraryOrganization"));
         foreach (var row in workflowRows)
         {
+            if (UnrepresentableWorkflowTextField(row) is { } field)
+            {
+                throw new MigrationOperationException(
+                    "workflow_text_unrepresentable",
+                    $"The pinned workflow text field {field} is selected by the source but contains only whitespace that target patron configuration treats as absent.");
+            }
             _ = ParsePatronCodeIds(row.Text("allowedPatronCodeIds"));
         }
         ValidateUniqueScope(
@@ -283,6 +301,12 @@ internal static class MigrationConfigurationImporter
         }
         foreach (var row in MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_settings_overrides"))
         {
+            if (UnrepresentablePatronMessageOverrideField(row) is { } messageField)
+            {
+                throw new MigrationOperationException(
+                    "patron_message_unrepresentable",
+                    $"The modern {messageField} override contains a non-empty whitespace-only message. The pinned source returns that raw value, but target patron configuration treats it as absent.");
+            }
             _ = ParseDuplicateLabelObject(row.JsonText("duplicateStatusLabels"), modernOverride: true);
             var rawOptions = row.Text("publicationOptions");
             if (HasLegacyConfigurationText(rawOptions))
@@ -323,7 +347,205 @@ internal static class MigrationConfigurationImporter
         ValidateUniqueScope(
             MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats"),
             "material formats",
-            row => $"{ScopedKey(row, "libraryOrganization")}|{row.RequiredString("code").Trim().ToLowerInvariant()}");
+            row => $"{ScopedKey(row, "libraryOrganization")}|{NormalizeFormatCode(row.Text("code") ?? string.Empty)}");
+    }
+
+    private static void ValidatePolarisSourceSettings(ValidatedMigrationPackage package)
+    {
+        var rows = MigrationPackageReader.ReadRows(package, "polaris-settings.json", "polaris_settings");
+        if (rows.Count > 1)
+        {
+            throw new MigrationOperationException(
+                "polaris_settings_ambiguous",
+                "More than one source polaris_settings row was exported.");
+        }
+
+        var row = rows.SingleOrDefault();
+        if (row is null)
+        {
+            return;
+        }
+
+        _ = LegacyPolarisHost(row.Text("host"));
+        _ = LegacyPolarisAccessId(row.Text("accessId"));
+        EnsurePolarisTextRepresentable(row.Text("staffDomain"), 256);
+        EnsurePolarisTextRepresentable(row.Text("adminUser"), 256);
+        ValidateLegacyPolarisEndpointValue(row.Text("langId"), "1033");
+        ValidateLegacyPolarisEndpointValue(row.Text("appId"), "100");
+        _ = LegacyPolarisIdentity(row, "workstationId");
+        _ = LegacyPolarisIdentity(row, "userId");
+    }
+
+    private static string? LegacyPolarisHost(string? sourceHost)
+    {
+        if (string.IsNullOrEmpty(sourceHost))
+        {
+            return null;
+        }
+
+        var trimmedHost = sourceHost.TrimEnd('/');
+        if (HasUnsupportedHostScheme(trimmedHost))
+        {
+            throw UnrepresentablePolarisSettings();
+        }
+
+        var effectiveHost = HasHttpScheme(trimmedHost)
+            ? trimmedHost
+            : $"https://{trimmedHost}";
+        if (effectiveHost.Length > 2048 ||
+            !string.Equals(effectiveHost, TrimLegacyConfigurationText(effectiveHost), StringComparison.Ordinal) ||
+            !string.Equals(effectiveHost, effectiveHost.Trim(), StringComparison.Ordinal) ||
+            !Uri.TryCreate(effectiveHost, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("https" or "http") ||
+            string.IsNullOrWhiteSpace(uri.Host) ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment))
+        {
+            throw UnrepresentablePolarisSettings();
+        }
+
+        return effectiveHost;
+    }
+
+    private static string LegacyPolarisAccessId(string? sourceAccessId)
+    {
+        var effectiveAccessId = string.IsNullOrEmpty(sourceAccessId) ? "SuggestAPI" : sourceAccessId;
+        EnsurePolarisTextRepresentable(effectiveAccessId, 256);
+        if (string.IsNullOrWhiteSpace(effectiveAccessId))
+        {
+            throw UnrepresentablePolarisSettings();
+        }
+
+        return effectiveAccessId;
+    }
+
+    private static void EnsurePolarisTextRepresentable(string? value, int maximumLength)
+    {
+        if (value is not null &&
+            (value.Length > maximumLength || value.Length > 0 && string.IsNullOrWhiteSpace(value)))
+        {
+            throw UnrepresentablePolarisSettings();
+        }
+    }
+
+    private static bool HasHttpScheme(string value) =>
+        value.StartsWith("https://", StringComparison.Ordinal) ||
+        value.StartsWith("http://", StringComparison.Ordinal);
+
+    private static bool HasUnsupportedHostScheme(string value) =>
+        Regex.IsMatch(value, "^[A-Za-z][A-Za-z0-9+.-]*://", RegexOptions.CultureInvariant) &&
+        !HasHttpScheme(value);
+
+    private static int LegacyPolarisIdentity(SourceRow row, string field)
+    {
+        var raw = row.Text(field);
+        if (string.IsNullOrEmpty(raw))
+        {
+            return 1;
+        }
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            throw new MigrationOperationException(
+                "source_polaris_identity_invalid",
+                $"Source field {field} is not a positive Int32 Polaris identity.");
+        }
+
+        return row.PositiveInt32(field, "source_polaris_identity_invalid") ??
+            throw new MigrationOperationException(
+                "source_polaris_identity_invalid",
+                $"Source field {field} is not a positive Int32 Polaris identity.");
+    }
+
+    private static void ValidateLegacyPolarisEndpointValue(string? sourceValue, string fallback)
+    {
+        if (!string.IsNullOrEmpty(sourceValue) &&
+            !string.Equals(sourceValue, fallback, StringComparison.Ordinal))
+        {
+            throw UnrepresentablePolarisSettings();
+        }
+    }
+
+    private static string? LegacyEffectivePatronPattern(string? sourcePattern)
+    {
+        if (sourcePattern is null)
+        {
+            return null;
+        }
+
+        var effective = TrimLegacyConfigurationText(sourcePattern);
+        return effective.Length == 0 ? null : effective;
+    }
+
+    private static MigrationOperationException UnrepresentablePolarisSettings() =>
+        new(
+            "polaris_settings_unrepresentable",
+            "A source Polaris setting cannot be represented by the target provider configuration.");
+
+    private static void ValidateLeapPatronUrlRepresentability(ValidatedMigrationPackage package)
+    {
+        var rows = MigrationPackageReader.ReadRows(package, "system-settings.json", "system_settings");
+        if (rows.Count > 1)
+        {
+            throw new MigrationOperationException(
+                "system_settings_ambiguous",
+                "More than one source system_settings row was exported.");
+        }
+
+        var row = rows.SingleOrDefault();
+        var bibPattern = row?.Text("leapBibUrlPattern");
+        var pattern = row?.Text("leapPatronUrlPattern");
+        if (bibPattern is { Length: > 2048 } || pattern is { Length: > 2048 })
+        {
+            throw new MigrationOperationException(
+                "system_settings_unrepresentable",
+                "A source research URL pattern exceeds the target system settings capacity.");
+        }
+        if (pattern is null)
+        {
+            return;
+        }
+
+        var legacyPattern = TrimLegacyConfigurationText(pattern);
+        var targetPattern = pattern.Trim();
+        if (HasUsableTargetPatronResearchUrl(targetPattern) &&
+            !string.Equals(legacyPattern, targetPattern, StringComparison.Ordinal))
+        {
+            throw new MigrationOperationException(
+                "leap_patron_url_pattern_unrepresentable",
+                "A source patron research URL pattern cannot be represented by the target lookup behavior.");
+        }
+    }
+
+    private static bool HasUsableTargetPatronResearchUrl(string? pattern)
+    {
+        var value = pattern?.Trim();
+        if (string.IsNullOrWhiteSpace(value) ||
+            !value.Contains("{{patron-id}}", StringComparison.Ordinal) &&
+            !value.Contains("{{patronId}}", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var hasUnsupportedToken = false;
+        var candidate = Regex.Replace(value, "\\{\\{([^{}]+)\\}\\}", match =>
+        {
+            if (match.Groups[1].Value is not ("title" or "identifier" or "bibid" or "patron-id" or "patronId"))
+            {
+                hasUnsupportedToken = true;
+                return string.Empty;
+            }
+            return "1";
+        });
+        if (hasUnsupportedToken || candidate.Contains("{{", StringComparison.Ordinal) ||
+            candidate.Contains("}}", StringComparison.Ordinal) ||
+            !Uri.TryCreate(candidate, UriKind.Absolute, out var url))
+        {
+            return false;
+        }
+
+        return (url.Scheme == Uri.UriSchemeHttp || url.Scheme == Uri.UriSchemeHttps) &&
+               string.IsNullOrEmpty(url.UserInfo);
     }
 
     private static void ValidateEmailTemplateSqlIdentity(
@@ -663,7 +885,7 @@ internal static class MigrationConfigurationImporter
                 "The frozen effective runtime configuration is incomplete.");
         }
 
-        var origins = SplitValues(row?.String("patronEmbedAllowedOrigins"))
+        var origins = SplitLegacyEmbedOrigins(row?.Text("patronEmbedAllowedOrigins"))
             .Select(NormalizeEmbedOrigin)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
@@ -684,8 +906,8 @@ internal static class MigrationConfigurationImporter
             transaction))
         {
             command.Parameters.AddWithValue("@staffUrl", staffUrl);
-            command.Parameters.AddWithValue("@bibPattern", Db(row?.String("leapBibUrlPattern")));
-            command.Parameters.AddWithValue("@patronPattern", Db(row?.String("leapPatronUrlPattern")));
+            command.Parameters.AddWithValue("@bibPattern", Db(row?.Text("leapBibUrlPattern")));
+            command.Parameters.AddWithValue("@patronPattern", Db(LegacyEffectivePatronPattern(row?.Text("leapPatronUrlPattern"))));
             command.Parameters.AddWithValue("@iconPattern", iconPattern);
             AddDateTime2Parameter(command, "@updatedUtc", row?.UtcDateTime("updated") ?? exportedAtUtc);
             command.ExecuteNonQuery();
@@ -716,7 +938,7 @@ internal static class MigrationConfigurationImporter
 
     private static string NormalizeEmbedOrigin(string value)
     {
-        var origin = value.Trim();
+        var origin = TrimLegacyConfigurationText(value);
         if (origin.Any(char.IsWhiteSpace) || origin.IndexOfAny(['"', '\'', '`', ';', '\\']) >= 0)
         {
             throw InvalidEmbedOrigin();
@@ -845,8 +1067,8 @@ internal static class MigrationConfigurationImporter
         }
         foreach (var row in rows)
         {
-            var apiKey = row.String("apiKey");
-            var adminPassword = row.String("adminPassword");
+            var apiKey = row.Text("apiKey") is { Length: > 0 } rawApiKey ? rawApiKey : null;
+            var adminPassword = row.Text("adminPassword") is { Length: > 0 } rawAdminPassword ? rawAdminPassword : null;
             if ((apiKey is not null || adminPassword is not null) && credentialProtector is null)
             {
                 throw new MigrationOperationException(
@@ -864,14 +1086,14 @@ internal static class MigrationConfigurationImporter
                 """,
                 connection,
                 transaction);
-            command.Parameters.AddWithValue("@host", Db(row.String("host")));
-            command.Parameters.AddWithValue("@accessId", Db(row.String("accessId")));
+            command.Parameters.AddWithValue("@host", Db(LegacyPolarisHost(row.Text("host"))));
+            command.Parameters.AddWithValue("@accessId", LegacyPolarisAccessId(row.Text("accessId")));
             command.Parameters.AddWithValue("@protectedApiKey", Db(apiKey is null ? null : credentialProtector!.Protect(apiKey)));
-            command.Parameters.AddWithValue("@staffDomain", Db(row.String("staffDomain")));
-            command.Parameters.AddWithValue("@adminUser", Db(row.String("adminUser")));
+            command.Parameters.AddWithValue("@staffDomain", Db(row.Text("staffDomain")));
+            command.Parameters.AddWithValue("@adminUser", Db(row.Text("adminUser")));
             command.Parameters.AddWithValue("@protectedAdminPassword", Db(adminPassword is null ? null : credentialProtector!.Protect(adminPassword)));
-            command.Parameters.AddWithValue("@workstationId", Db(row.PositiveInt32("workstationId", "source_polaris_identity_invalid")));
-            command.Parameters.AddWithValue("@userId", Db(row.PositiveInt32("userId", "source_polaris_identity_invalid")));
+            command.Parameters.AddWithValue("@workstationId", LegacyPolarisIdentity(row, "workstationId"));
+            command.Parameters.AddWithValue("@userId", LegacyPolarisIdentity(row, "userId"));
             AddDateTime2Parameter(command, "@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
             command.ExecuteNonQuery();
             transformations.Add(new
@@ -880,8 +1102,8 @@ internal static class MigrationConfigurationImporter
                 sourceId = row.RequiredString("id"),
                 apiKeyProtected = apiKey is not null,
                 adminPasswordProtected = adminPassword is not null,
-                retiredRequestingOrganizationSource = row.String("requestingOrgId"),
-                retiredPickupOrganizationSource = row.String("pickupOrgId"),
+                retiredRequestingOrganizationSource = row.Text("requestingOrgId"),
+                retiredPickupOrganizationSource = row.Text("pickupOrgId"),
                 operationContextSource = "owning_request_or_effective_servicing_library"
             });
         }
@@ -959,7 +1181,7 @@ internal static class MigrationConfigurationImporter
                     entity = "email_settings",
                     sourceId = rows[0].RequiredString("id"),
                     transport = "legacy_smtp_transport_intentionally_dropped",
-                    targetTransport = "file_email_sender",
+                    targetTransport = "target_email_sender_selected_by_external_configuration",
                     postmarkTokenProvisioned = postmarkToken is not null
                 });
             }
@@ -1110,7 +1332,7 @@ internal static class MigrationConfigurationImporter
                 transaction);
             command.Parameters.AddWithValue("@organizationId", organizationId);
             command.Parameters.AddWithValue("@suggestionLimit", Db(isSystem ? row.Int32("suggestionLimit") ?? 5 : row.Int32("suggestionLimit")));
-            command.Parameters.AddWithValue("@suggestionLimitMessage", Db(ScopedText(row, "suggestionLimitMessage", isSystem)));
+            command.Parameters.AddWithValue("@suggestionLimitMessage", Db(WorkflowScopedText(row, "suggestionLimitMessage", isSystem)));
             command.Parameters.AddWithValue("@outstandingEnabled", Db(Bool(row, "outstandingTimeoutEnabled", isSystem, false)));
             command.Parameters.AddWithValue("@outstandingDays", Db(Int(row, "outstandingTimeoutDays", isSystem, 30)));
             command.Parameters.AddWithValue("@outstandingEmail", Db(Bool(row, "outstandingTimeoutSendEmail", isSystem, false)));
@@ -1123,13 +1345,13 @@ internal static class MigrationConfigurationImporter
             command.Parameters.AddWithValue("@additionalCopyDays", Db(Int(row, "additionalCopyTimeoutDays", isSystem, 14)));
             command.Parameters.AddWithValue("@autoPromote", Db(Bool(row, "autoPromote", isSystem, false)));
             command.Parameters.AddWithValue("@commonAuthorsEnabled", Db(Bool(row, "commonAuthorsEnabled", isSystem, false)));
-            command.Parameters.AddWithValue("@commonAuthorsLabel", Db(ScopedText(row, "commonAuthorsLabel", isSystem)));
-            command.Parameters.AddWithValue("@commonAuthorsHelp", Db(ScopedText(row, "commonAuthorsHelp", isSystem)));
-            command.Parameters.AddWithValue("@commonAuthorsMessage", Db(ScopedText(row, "commonAuthorsMessage", isSystem)));
+            command.Parameters.AddWithValue("@commonAuthorsLabel", Db(WorkflowScopedText(row, "commonAuthorsLabel", isSystem)));
+            command.Parameters.AddWithValue("@commonAuthorsHelp", Db(WorkflowScopedText(row, "commonAuthorsHelp", isSystem)));
+            command.Parameters.AddWithValue("@commonAuthorsMessage", Db(WorkflowScopedText(row, "commonAuthorsMessage", isSystem)));
             command.Parameters.AddWithValue("@allowOptOut", Db(Bool(row, "allowPatronAutoholdOptOut", isSystem, true)));
             command.Parameters.AddWithValue("@allowAnyCard", Db(Bool(row, "allowAnyRegisteredCardLogin", isSystem, false)));
             command.Parameters.AddWithValue("@patronCodeEnabled", Db(Bool(row, "patronCodeEligibilityEnabled", isSystem, false)));
-            command.Parameters.AddWithValue("@patronCodeMessage", Db(ScopedText(row, "patronCodeEligibilityMessage", isSystem)));
+            command.Parameters.AddWithValue("@patronCodeMessage", Db(WorkflowScopedText(row, "patronCodeEligibilityMessage", isSystem)));
             AddDateTime2Parameter(command, "@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
             command.ExecuteNonQuery();
 
@@ -1239,7 +1461,8 @@ internal static class MigrationConfigurationImporter
             var enabledField = $"externalSearch{slot}Enabled";
             var labelField = $"externalSearch{slot}Label";
             var urlField = $"externalSearch{slot}UrlTemplate";
-            if (!isSystem && !row.HasValue(enabledField) && !row.HasValue(labelField) && !row.HasValue(urlField))
+            if (!isSystem && !HasScopedWorkflowValue(row, enabledField) &&
+                !HasScopedWorkflowValue(row, labelField) && !HasScopedWorkflowValue(row, urlField))
             {
                 continue;
             }
@@ -1288,8 +1511,8 @@ internal static class MigrationConfigurationImporter
             command.Parameters.AddWithValue("@organizationId", organizationId);
             command.Parameters.AddWithValue("@providerId", providerId);
             command.Parameters.AddWithValue("@enabled", Db(isSystem ? row.Bool(enabledField, defaults[slot - 1].Item1) : row.NullableBool(enabledField)));
-            command.Parameters.AddWithValue("@label", Db(isSystem ? row.Text(labelField) ?? defaults[slot - 1].Item2 : ScopedText(row, labelField, false)));
-            command.Parameters.AddWithValue("@url", Db(isSystem ? row.Text(urlField) ?? defaults[slot - 1].Item3 : ScopedText(row, urlField, false)));
+            command.Parameters.AddWithValue("@label", Db(ExternalSearchText(row, labelField, isSystem, defaults[slot - 1].Item2)));
+            command.Parameters.AddWithValue("@url", Db(ExternalSearchText(row, urlField, isSystem, defaults[slot - 1].Item3)));
             if (command.ExecuteNonQuery() == 0)
             {
                 throw new MigrationOperationException(
@@ -1297,6 +1520,51 @@ internal static class MigrationConfigurationImporter
                     $"Target external-search provider {providerKey} could not be reconciled.");
             }
         }
+    }
+
+    // Match the pinned hasScopedWorkflowValue check while retaining the original text for storage.
+    private static bool HasScopedWorkflowValue(SourceRow row, string field) =>
+        HasLegacyConfigurationText(row.Text(field));
+
+    private static string? WorkflowScopedText(SourceRow row, string field, bool isSystem)
+    {
+        var value = row.Text(field);
+        return isSystem || HasPinnedWorkflowText(value) ? value : null;
+    }
+
+    private static bool HasPinnedWorkflowText(string? value) =>
+        value is not null && TrimLegacyConfigurationText(value).Length > 0;
+
+    private static string? UnrepresentableWorkflowTextField(SourceRow row)
+    {
+        if (!string.Equals(
+                row.RequiredString("scope").Trim(),
+                "library",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        foreach (var field in ScopedWorkflowTextFields)
+        {
+            var value = row.Text(field);
+            if (HasPinnedWorkflowText(value) && string.IsNullOrWhiteSpace(value))
+            {
+                return field;
+            }
+        }
+        return null;
+    }
+
+    private static string? ExternalSearchText(SourceRow row, string field, bool isSystem, string defaultValue)
+    {
+        var value = row.Text(field);
+        if (isSystem)
+        {
+            return string.IsNullOrEmpty(value) ? defaultValue : value;
+        }
+
+        return HasScopedWorkflowValue(row, field) ? value : null;
     }
 
     private static void ImportPatronConfiguration(
@@ -1310,9 +1578,11 @@ internal static class MigrationConfigurationImporter
         ICollection<object> transformations)
     {
         var uiRows = MigrationPackageReader.ReadRows(package, "patron-settings.json", "ui_settings");
+        var resolvedUiRows = new List<(SourceRow Row, int OrganizationId)>(uiRows.Count);
         foreach (var row in uiRows.OrderBy(item => string.Equals(item.RequiredString("scope").Trim(), "system", StringComparison.OrdinalIgnoreCase) ? 0 : 1))
         {
             var organizationId = ResolveScopedOrganization(connection, transaction, row, organizationIds);
+            resolvedUiRows.Add((row, organizationId));
             UpsertPatronSettings(connection, transaction, organizationId, row, exportedAtUtc);
             if (organizationId != 1)
             {
@@ -1352,6 +1622,7 @@ internal static class MigrationConfigurationImporter
 
         var overrides = MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_settings_overrides");
         var modernOverrideOrganizations = new HashSet<int>();
+        var modernOverrideMessageFieldsByOrganization = new Dictionary<int, HashSet<string>>();
         foreach (var row in overrides.OrderBy(item => item.RequiredString("orgId"), StringComparer.Ordinal))
         {
             var organizationId = row.Int32("orgId") ?? throw new MigrationOperationException("patron_override_org_invalid", "A patron settings override has no organization.");
@@ -1363,11 +1634,48 @@ internal static class MigrationConfigurationImporter
                     "patron_override_org_invalid",
                     "A patron override references an unknown or system organization.");
             }
+            if (row.Text("ebookMessage") is { Length: > 0 } || row.Text("eaudiobookMessage") is { Length: > 0 })
+            {
+                if (!modernOverrideMessageFieldsByOrganization.TryGetValue(organizationId, out var fields))
+                {
+                    fields = new HashSet<string>(StringComparer.Ordinal);
+                    modernOverrideMessageFieldsByOrganization.Add(organizationId, fields);
+                }
+                if (row.Text("ebookMessage") is { Length: > 0 })
+                {
+                    fields.Add("ebookMessage");
+                }
+                if (row.Text("eaudiobookMessage") is { Length: > 0 })
+                {
+                    fields.Add("eaudiobookMessage");
+                }
+            }
             modernOverrideOrganizations.Add(organizationId);
             EnsurePatronSettings(connection, transaction, organizationId, row.UtcDateTime("updated") ?? exportedAtUtc);
             ApplyPatronOverride(connection, transaction, organizationId, row, exportedAtUtc);
             ReplacePublicationOptions(connection, transaction, organizationId, row.Text("publicationOptions"));
             ImportCustomFields(connection, transaction, package, organizationId, row, organizationIds, transformations);
+        }
+
+        foreach (var (row, organizationId) in resolvedUiRows.Where(item => item.OrganizationId != 1))
+        {
+            var fields = PatronUiInheritanceFields(
+                row,
+                modernOverrideMessageFieldsByOrganization.GetValueOrDefault(organizationId));
+            if (fields.Length == 0)
+            {
+                continue;
+            }
+
+            transformations.Add(new
+            {
+                entity = "patron_ui_inheritance",
+                sourceCollection = "ui_settings",
+                sourceId = row.RequiredText("id"),
+                organizationId,
+                affectedFields = fields,
+                disposition = "blank_library_ui_fields_inherit_system_value"
+            });
         }
 
         var legacyPatronRows = MigrationPackageReader.ReadRows(
@@ -1418,6 +1726,13 @@ internal static class MigrationConfigurationImporter
         importedCounts["patron_library_settings"] = legacyPatronRows.Count;
         importedCounts["library_settings"] = dormantLibrarySettings.Count;
     }
+
+    private static string[] PatronUiInheritanceFields(SourceRow row, IReadOnlySet<string>? modernOverrideMessageFields) =>
+        PatronTextFields
+            .Where(field => string.IsNullOrWhiteSpace(row.Text(field.Source)) &&
+                modernOverrideMessageFields?.Contains(field.Source) != true)
+            .Select(field => field.Source)
+            .ToArray();
 
     internal static MigrationConfigurationReconciliation Reconcile(
         SqlConnection connection,
@@ -1474,8 +1789,8 @@ internal static class MigrationConfigurationImporter
         EnsureConfiguration(reader.Read(), "system settings");
         EnsureConfiguration(
             StringEquals(reader, 0, expectedStaffUrl) &&
-            StringEquals(reader, 1, row?.String("leapBibUrlPattern")) &&
-            StringEquals(reader, 2, row?.String("leapPatronUrlPattern")) &&
+            StringEquals(reader, 1, row?.Text("leapBibUrlPattern")) &&
+            StringEquals(reader, 2, LegacyEffectivePatronPattern(row?.Text("leapPatronUrlPattern"))) &&
             StringEquals(reader, 3, expectedIconPattern),
             "system settings");
         counter.Rows++;
@@ -1488,7 +1803,7 @@ internal static class MigrationConfigurationImporter
         }
         EnsureConfiguration(!reader.IsDBNull(5) && reader.GetString(5).Length > 0, "system misconfigured message");
 
-        var expectedOrigins = SplitValues(row?.String("patronEmbedAllowedOrigins"))
+        var expectedOrigins = SplitLegacyEmbedOrigins(row?.Text("patronEmbedAllowedOrigins"))
             .Select(NormalizeEmbedOrigin)
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
@@ -1529,14 +1844,14 @@ internal static class MigrationConfigurationImporter
         using var reader = command.ExecuteReader();
         EnsureConfiguration(reader.Read(), "Polaris settings");
         EnsureConfiguration(
-            StringEquals(reader, 0, row.String("host")) &&
-            StringEquals(reader, 1, row.String("accessId")) &&
-            ProtectedPresenceEquals(reader, 2, row.String("apiKey")) &&
-            StringEquals(reader, 3, row.String("staffDomain")) &&
-            StringEquals(reader, 4, row.String("adminUser")) &&
-            ProtectedPresenceEquals(reader, 5, row.String("adminPassword")) &&
-            IntEquals(reader, 6, row.PositiveInt32("workstationId", "source_polaris_identity_invalid")) &&
-            IntEquals(reader, 7, row.PositiveInt32("userId", "source_polaris_identity_invalid")),
+            StringEquals(reader, 0, LegacyPolarisHost(row.Text("host"))) &&
+            StringEquals(reader, 1, LegacyPolarisAccessId(row.Text("accessId"))) &&
+            ProtectedPresenceEquals(reader, 2, row.Text("apiKey") is { Length: > 0 }) &&
+            StringEquals(reader, 3, row.Text("staffDomain")) &&
+            StringEquals(reader, 4, row.Text("adminUser")) &&
+            ProtectedPresenceEquals(reader, 5, row.Text("adminPassword") is { Length: > 0 }) &&
+            IntEquals(reader, 6, LegacyPolarisIdentity(row, "workstationId")) &&
+            IntEquals(reader, 7, LegacyPolarisIdentity(row, "userId")),
             "Polaris settings");
         counter.Rows++;
         counter.Fields += 8;
@@ -1647,7 +1962,7 @@ internal static class MigrationConfigurationImporter
                 EnsureConfiguration(reader.Read(), "workflow settings");
                 matches =
                     IntEquals(reader, 0, isSystem ? row.Int32("suggestionLimit") ?? 5 : row.Int32("suggestionLimit")) &&
-                    StringEquals(reader, 1, ScopedText(row, "suggestionLimitMessage", isSystem)) &&
+                    StringEquals(reader, 1, WorkflowScopedText(row, "suggestionLimitMessage", isSystem)) &&
                     BoolEquals(reader, 2, Bool(row, "outstandingTimeoutEnabled", isSystem, false)) &&
                     IntEquals(reader, 3, Int(row, "outstandingTimeoutDays", isSystem, 30)) &&
                     BoolEquals(reader, 4, Bool(row, "outstandingTimeoutSendEmail", isSystem, false)) &&
@@ -1660,13 +1975,13 @@ internal static class MigrationConfigurationImporter
                     IntEquals(reader, 11, Int(row, "additionalCopyTimeoutDays", isSystem, 14)) &&
                     BoolEquals(reader, 12, Bool(row, "autoPromote", isSystem, false)) &&
                     BoolEquals(reader, 13, Bool(row, "commonAuthorsEnabled", isSystem, false)) &&
-                    StringEquals(reader, 14, ScopedText(row, "commonAuthorsLabel", isSystem)) &&
-                    StringEquals(reader, 15, ScopedText(row, "commonAuthorsHelp", isSystem)) &&
-                    StringEquals(reader, 16, ScopedText(row, "commonAuthorsMessage", isSystem)) &&
+                    StringEquals(reader, 14, WorkflowScopedText(row, "commonAuthorsLabel", isSystem)) &&
+                    StringEquals(reader, 15, WorkflowScopedText(row, "commonAuthorsHelp", isSystem)) &&
+                    StringEquals(reader, 16, WorkflowScopedText(row, "commonAuthorsMessage", isSystem)) &&
                     BoolEquals(reader, 17, Bool(row, "allowPatronAutoholdOptOut", isSystem, true)) &&
                     BoolEquals(reader, 18, Bool(row, "allowAnyRegisteredCardLogin", isSystem, false)) &&
                     BoolEquals(reader, 19, Bool(row, "patronCodeEligibilityEnabled", isSystem, false)) &&
-                    StringEquals(reader, 20, ScopedText(row, "patronCodeEligibilityMessage", isSystem));
+                    StringEquals(reader, 20, WorkflowScopedText(row, "patronCodeEligibilityMessage", isSystem));
             }
             EnsureConfiguration(matches, "workflow settings");
             counter.Rows++;
@@ -1763,14 +2078,15 @@ internal static class MigrationConfigurationImporter
             var enabledField = $"externalSearch{slot}Enabled";
             var labelField = $"externalSearch{slot}Label";
             var urlField = $"externalSearch{slot}UrlTemplate";
-            if (!isSystem && !row.HasValue(enabledField) && !row.HasValue(labelField) && !row.HasValue(urlField))
+            if (!isSystem && !HasScopedWorkflowValue(row, enabledField) &&
+                !HasScopedWorkflowValue(row, labelField) && !HasScopedWorkflowValue(row, urlField))
             {
                 continue;
             }
 
             var expectedEnabled = isSystem ? row.Bool(enabledField, defaults[slot - 1].Enabled) : row.NullableBool(enabledField);
-            var expectedLabel = isSystem ? row.Text(labelField) ?? defaults[slot - 1].Label : ScopedText(row, labelField, false);
-            var expectedUrl = isSystem ? row.Text(urlField) ?? defaults[slot - 1].Url : ScopedText(row, urlField, false);
+            var expectedLabel = ExternalSearchText(row, labelField, isSystem, defaults[slot - 1].Label);
+            var expectedUrl = ExternalSearchText(row, urlField, isSystem, defaults[slot - 1].Url);
             var providerKey = $"external_search_{slot}";
             using var command = new SqlCommand(
                 isSystem
@@ -1960,7 +2276,7 @@ internal static class MigrationConfigurationImporter
         {
             if (isSystem || row.HasValue(source))
             {
-                values[target] = ScopedText(row, source, isSystem);
+                values[target] = PatronUiScopedText(row, source, isSystem);
             }
         }
         if (isSystem)
@@ -1973,9 +2289,37 @@ internal static class MigrationConfigurationImporter
         IDictionary<string, string?> values,
         SourceRow row)
     {
-        values["EbookMessage"] = ScopedText(row, "ebookMessage", false);
-        values["EaudiobookMessage"] = ScopedText(row, "eaudiobookMessage", false);
+        var ebookMessage = PinnedPatronMessageOverrideText(row, "ebookMessage");
+        if (ebookMessage is not null)
+        {
+            values["EbookMessage"] = ebookMessage;
+        }
+        var eaudiobookMessage = PinnedPatronMessageOverrideText(row, "eaudiobookMessage");
+        if (eaudiobookMessage is not null)
+        {
+            values["EaudiobookMessage"] = eaudiobookMessage;
+        }
         AddDuplicateLabelValues(values, row, ParseDuplicateLabelObject(row.JsonText("duplicateStatusLabels"), modernOverride: true));
+    }
+
+    private static string? PinnedPatronMessageOverrideText(SourceRow row, string field)
+    {
+        var value = row.Text(field);
+        return string.IsNullOrEmpty(value) ? null : value;
+    }
+
+    private static string? UnrepresentablePatronMessageOverrideField(SourceRow row)
+    {
+        var ebookMessage = PinnedPatronMessageOverrideText(row, "ebookMessage");
+        if (ebookMessage is not null && string.IsNullOrWhiteSpace(ebookMessage))
+        {
+            return "eBook";
+        }
+
+        var eaudiobookMessage = PinnedPatronMessageOverrideText(row, "eaudiobookMessage");
+        return eaudiobookMessage is not null && string.IsNullOrWhiteSpace(eaudiobookMessage)
+            ? "eAudiobook"
+            : null;
     }
 
     private static void AddLegacyDuplicateLabelValues(
@@ -2373,7 +2717,7 @@ internal static class MigrationConfigurationImporter
     private static string? NormalizeTemplateText(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
 
-    private static string NormalizeFormatCode(string value) => value.Trim().ToLowerInvariant() switch
+    private static string NormalizeFormatCode(string value) => TrimLegacyConfigurationText(value).ToLowerInvariant() switch
     {
         "0" => "book",
         "1" => "ebook",
@@ -2501,11 +2845,12 @@ internal static class MigrationConfigurationImporter
             EnsureConfiguration(
                 sparseOverride || targetOwnerId == ownerId,
                 "material format ownership");
-            EnsureConfiguration(StringEquals(reader, 1, NormalizeFormatCode(row.RequiredString("code"))), "material format code");
+            var sourceCode = row.Text("code") ?? string.Empty;
+            EnsureConfiguration(StringEquals(reader, 1, NormalizeFormatCode(sourceCode)), "material format code");
             var fields = 2;
             if (!sparseOverride)
             {
-                var metadataMatches = StringEquals(reader, 2, LegacyMaterialFormatText(row.Text("label"), row.RequiredString("code"))) &&
+                var metadataMatches = StringEquals(reader, 2, LegacyMaterialFormatText(row.Text("label"), sourceCode)) &&
                     IntEquals(reader, 3, row.Int32("sortOrder") ?? 0) &&
                     BoolEquals(reader, 4, row.Bool("enabled", false)) &&
                     DateEquals(reader, 15, row.UtcDateTime("created") ?? exportedAtUtc) &&
@@ -2612,18 +2957,18 @@ internal static class MigrationConfigurationImporter
             transaction);
         command.Parameters.AddWithValue("@organizationId", organizationId);
         var isSystem = organizationId == 1;
-        command.Parameters.AddWithValue("@pageTitle", Db(ScopedText(row, "pageTitle", isSystem)));
-        command.Parameters.AddWithValue("@barcodeLabel", Db(ScopedText(row, "barcodeLabel", isSystem)));
-        command.Parameters.AddWithValue("@pinLabel", Db(ScopedText(row, "pinLabel", isSystem)));
-        command.Parameters.AddWithValue("@loginPrompt", Db(ScopedText(row, "loginPrompt", isSystem)));
-        command.Parameters.AddWithValue("@loginNote", Db(ScopedText(row, "loginNote", isSystem)));
-        command.Parameters.AddWithValue("@suggestionFormNote", Db(ScopedText(row, "suggestionFormNote", isSystem)));
-        command.Parameters.AddWithValue("@noEmailMessage", Db(ScopedText(row, "noEmailMessage", isSystem)));
-        command.Parameters.AddWithValue("@successTitle", Db(ScopedText(row, "successTitle", isSystem)));
-        command.Parameters.AddWithValue("@successMessage", Db(ScopedText(row, "successMessage", isSystem)));
-        command.Parameters.AddWithValue("@alreadySubmittedMessage", Db(ScopedText(row, "alreadySubmittedMessage", isSystem)));
-        command.Parameters.AddWithValue("@ebookMessage", Db(ScopedText(row, "ebookMessage", isSystem)));
-        command.Parameters.AddWithValue("@eaudiobookMessage", Db(ScopedText(row, "eaudiobookMessage", isSystem)));
+        command.Parameters.AddWithValue("@pageTitle", Db(PatronUiScopedText(row, "pageTitle", isSystem)));
+        command.Parameters.AddWithValue("@barcodeLabel", Db(PatronUiScopedText(row, "barcodeLabel", isSystem)));
+        command.Parameters.AddWithValue("@pinLabel", Db(PatronUiScopedText(row, "pinLabel", isSystem)));
+        command.Parameters.AddWithValue("@loginPrompt", Db(PatronUiScopedText(row, "loginPrompt", isSystem)));
+        command.Parameters.AddWithValue("@loginNote", Db(PatronUiScopedText(row, "loginNote", isSystem)));
+        command.Parameters.AddWithValue("@suggestionFormNote", Db(PatronUiScopedText(row, "suggestionFormNote", isSystem)));
+        command.Parameters.AddWithValue("@noEmailMessage", Db(PatronUiScopedText(row, "noEmailMessage", isSystem)));
+        command.Parameters.AddWithValue("@successTitle", Db(PatronUiScopedText(row, "successTitle", isSystem)));
+        command.Parameters.AddWithValue("@successMessage", Db(PatronUiScopedText(row, "successMessage", isSystem)));
+        command.Parameters.AddWithValue("@alreadySubmittedMessage", Db(PatronUiScopedText(row, "alreadySubmittedMessage", isSystem)));
+        command.Parameters.AddWithValue("@ebookMessage", Db(PatronUiScopedText(row, "ebookMessage", isSystem)));
+        command.Parameters.AddWithValue("@eaudiobookMessage", Db(PatronUiScopedText(row, "eaudiobookMessage", isSystem)));
         AddDuplicateLabelParameters(command, isSystem ? row : null, null);
         AddDateTime2Parameter(command, "@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
         command.ExecuteNonQuery();
@@ -2640,7 +2985,8 @@ internal static class MigrationConfigurationImporter
         using var command = new SqlCommand(
             """
             UPDATE [asap].[PatronSettings]
-            SET [EbookMessage] = @ebookMessage, [EaudiobookMessage] = @eaudiobookMessage,
+            SET [EbookMessage] = COALESCE(@ebookMessage, [EbookMessage]),
+                [EaudiobookMessage] = COALESCE(@eaudiobookMessage, [EaudiobookMessage]),
                 [SuggestionStatusLabel] = @suggestionLabel,
                 [OutstandingPurchaseStatusLabel] = @outstandingLabel,
                 [PendingHoldStatusLabel] = @pendingLabel, [HoldPlacedStatusLabel] = @placedLabel,
@@ -2653,8 +2999,8 @@ internal static class MigrationConfigurationImporter
             connection,
             transaction);
         command.Parameters.AddWithValue("@organizationId", organizationId);
-        command.Parameters.AddWithValue("@ebookMessage", Db(ScopedText(row, "ebookMessage", isSystem: false)));
-        command.Parameters.AddWithValue("@eaudiobookMessage", Db(ScopedText(row, "eaudiobookMessage", isSystem: false)));
+        command.Parameters.AddWithValue("@ebookMessage", Db(PinnedPatronMessageOverrideText(row, "ebookMessage")));
+        command.Parameters.AddWithValue("@eaudiobookMessage", Db(PinnedPatronMessageOverrideText(row, "eaudiobookMessage")));
         AddDuplicateLabelParameters(command, row, labels);
         AddDateTime2Parameter(command, "@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
         command.ExecuteNonQuery();
@@ -3146,7 +3492,7 @@ internal static class MigrationConfigurationImporter
         foreach (var row in MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats"))
         {
             var scope = row.RequiredString("scope");
-            var code = row.RequiredString("code");
+            var code = row.Text("code") ?? string.Empty;
             var normalizedCode = NormalizeFormatCode(code);
             var ownerId = scope.Equals("system", StringComparison.OrdinalIgnoreCase)
                 ? 1
@@ -3707,15 +4053,24 @@ internal static class MigrationConfigurationImporter
     private static int? Int(SourceRow row, string field, bool isSystem, int defaultValue) =>
         row.Int32(field) ?? (isSystem ? defaultValue : null);
 
-    private static string? ScopedText(SourceRow row, string field, bool isSystem) =>
-        isSystem
-            ? row.Text(field)
-            : string.IsNullOrWhiteSpace(row.Text(field)) ? null : row.Text(field)!.Trim();
+    private static string? PatronUiScopedText(SourceRow row, string field, bool isSystem)
+    {
+        var value = row.Text(field);
+        return isSystem || !string.IsNullOrWhiteSpace(value) ? value : null;
+    }
 
     private static IReadOnlyList<string> SplitValues(string? source) =>
         string.IsNullOrWhiteSpace(source)
             ? []
             : source.Split([',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(value => value.Length > 0)
+                .ToArray();
+
+    private static IReadOnlyList<string> SplitLegacyEmbedOrigins(string? source) =>
+        source is null
+            ? []
+            : source.Split([',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Select(TrimLegacyConfigurationText)
                 .Where(value => value.Length > 0)
                 .ToArray();
 

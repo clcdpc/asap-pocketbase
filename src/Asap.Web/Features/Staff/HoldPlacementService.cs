@@ -58,6 +58,7 @@ public sealed class HoldPlacementService(
     private static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ProviderTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan ProviderOutcomePersistenceTimeout = TimeSpan.FromSeconds(5);
     private readonly TimeZoneInfo businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(
         configuration.Application.BusinessTimeZone!);
 
@@ -465,12 +466,10 @@ public sealed class HoldPlacementService(
             catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 return new HoldPlacementResult("hold_resolution_dependency_unavailable", operationId);
             }
-            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 throw;
             }
         }
@@ -800,7 +799,6 @@ public sealed class HoldPlacementService(
         }
         catch (DbUpdateConcurrencyException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new HoldPlacementResult("stale_version", operationId);
         }
         await transaction.CommitAsync(cancellationToken);
@@ -845,13 +843,7 @@ public sealed class HoldPlacementService(
             }
             catch (PolarisOperationalException)
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 return new AcquisitionResult("hold_provider_error");
-            }
-            catch (Exception) when (cancellationToken.IsCancellationRequested)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                throw;
             }
 
             barcodeAliases = verifiedPatron.KnownBarcodeAliases;
@@ -1109,19 +1101,18 @@ public sealed class HoldPlacementService(
         }
         catch (OwnershipLostException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new HoldPlacementResult("operation_ownership_lost", owner.Id);
         }
         catch (Exception exception) when (exception is PolarisOperationalException or ProviderCallTimeoutException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            await FinishWithoutDispatchAsync(owner, "failed", "provider_precheck_failed", exception is ProviderCallTimeoutException ? "provider_timeout" : "provider_read_error", cancellationToken);
+            using var outcomePersistenceTimeout = new CancellationTokenSource(ProviderOutcomePersistenceTimeout);
+            await FinishWithoutDispatchAsync(
+                owner,
+                "failed",
+                "provider_precheck_failed",
+                exception is ProviderCallTimeoutException ? "provider_timeout" : "provider_read_error",
+                outcomePersistenceTimeout.Token);
             return new HoldPlacementResult("hold_provider_error", owner.Id);
-        }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            throw;
         }
 
         var activeSameBib = ActiveSameBibHolds(holds, operation.BibIdSnapshot);
@@ -1164,20 +1155,18 @@ public sealed class HoldPlacementService(
         }
         catch (OwnershipLostException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new HoldPlacementResult("operation_ownership_lost", owner.Id);
         }
         catch (Exception exception) when (exception is PolarisOperationalException or ProviderCallTimeoutException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            await FinishWithoutDispatchAsync(owner, "failed", "provider_precheck_failed",
-                exception is ProviderCallTimeoutException ? "provider_timeout" : "provider_read_error", cancellationToken);
+            using var outcomePersistenceTimeout = new CancellationTokenSource(ProviderOutcomePersistenceTimeout);
+            await FinishWithoutDispatchAsync(
+                owner,
+                "failed",
+                "provider_precheck_failed",
+                exception is ProviderCallTimeoutException ? "provider_timeout" : "provider_read_error",
+                outcomePersistenceTimeout.Token);
             return new HoldPlacementResult("hold_provider_error", owner.Id);
-        }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            throw;
         }
 
         var pickup = ResolveHoldPickup(patron, eligiblePickupBranches);
@@ -1214,52 +1203,66 @@ public sealed class HoldPlacementService(
         }
 
         HoldProviderResult createResult;
+        var createOutcomeRecorded = false;
+        var createProviderFailureObserved = false;
         try
         {
             createResult = await CallWithLeaseAsync(
                 owner,
-                token => staffPolarisProvider.CreateHoldAsync(new HoldCreateCommand(
-                    patron.PatronId,
-                    operation.BibIdSnapshot,
-                    pickup.BranchId.Value,
-                    patron.PatronOrganizationId,
-                    settings.WorkstationId.Value,
-                    settings.SystemPolarisUserId.Value), token),
+                async token =>
+                {
+                    var result = await staffPolarisProvider.CreateHoldAsync(new HoldCreateCommand(
+                        patron.PatronId,
+                        operation.BibIdSnapshot,
+                        pickup.BranchId.Value,
+                        patron.PatronOrganizationId,
+                        settings.WorkstationId.Value,
+                        settings.SystemPolarisUserId.Value), token);
+                    if (!await PersistCreateResultAsync(owner, result))
+                    {
+                        throw new OwnershipLostException();
+                    }
+                    createOutcomeRecorded = true;
+                    return result;
+                },
                 cancellationToken,
                 markerRenewedLease: true);
-            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OwnershipLostException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            return new HoldPlacementResult("operation_ownership_lost", owner.Id);
+            return new HoldPlacementResult("operation_ownership_lost", owner.Id,
+                ProviderOutcomeRecorded: createOutcomeRecorded);
         }
-        catch (ProviderCallTimeoutException)
+        catch (ProviderCallTimeoutException) when (!createOutcomeRecorded)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             createResult = AmbiguousResult("create_provider_timeout", "provider_timeout");
+            createProviderFailureObserved = true;
         }
-        catch (PolarisMutationNotDispatchedException exception)
+        catch (PolarisMutationNotDispatchedException exception) when (!createOutcomeRecorded)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            return await FinishLocalFailureAsync(owner, exception, cancellationToken);
+            return await FinishLocalFailureAsync(owner, exception, HoldOperationPhase.CreateStarted);
         }
-        catch (PolarisOperationalException exception)
+        catch (PolarisOperationalException exception) when (!createOutcomeRecorded)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             createResult = AmbiguousResult("create_provider_exception", SafeProviderErrorCode(exception));
-        }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            throw;
+            createProviderFailureObserved = true;
         }
 
-        var persisted = await PersistCreateResultAsync(owner, createResult, cancellationToken);
-        if (!persisted)
+        if (!createOutcomeRecorded)
         {
-            return new HoldPlacementResult("operation_ownership_lost", owner.Id);
+            if (!await PersistCreateResultAsync(owner, createResult))
+            {
+                return new HoldPlacementResult("operation_ownership_lost", owner.Id);
+            }
+            createOutcomeRecorded = true;
         }
+
+        if (createProviderFailureObserved && cancellationToken.IsCancellationRequested)
+        {
+            using var outcomeResolutionTimeout = new CancellationTokenSource(ProviderOutcomePersistenceTimeout);
+            return await ObserveMarkedAmbiguityAsync(owner, outcomeResolutionTimeout.Token);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
 
         return createResult.Outcome switch
         {
@@ -1317,59 +1320,74 @@ public sealed class HoldPlacementService(
         }
 
         HoldProviderResult replyResult;
+        var replyOutcomeRecorded = false;
+        var replyProviderFailureObserved = false;
         try
         {
             replyResult = await CallWithLeaseAsync(
                 owner,
-                token => staffPolarisProvider.ReplyToHoldAsync(new HoldReplyCommand(
-                    operation.PolarisRequestGuid.Value,
-                    operation.TxnGroupQualifier,
-                    operation.TxnQualifier,
-                    operation.RequestingOrganizationIdSnapshot.Value), token),
+                async token =>
+                {
+                    var result = await staffPolarisProvider.ReplyToHoldAsync(new HoldReplyCommand(
+                        operation.PolarisRequestGuid.Value,
+                        operation.TxnGroupQualifier,
+                        operation.TxnQualifier,
+                        operation.RequestingOrganizationIdSnapshot.Value), token);
+                    if (!await PersistReplyResultAsync(owner, result))
+                    {
+                        throw new OwnershipLostException();
+                    }
+                    replyOutcomeRecorded = true;
+                    return result;
+                },
                 cancellationToken,
                 markerRenewedLease: true);
-            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OwnershipLostException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            return new HoldPlacementResult("operation_ownership_lost", owner.Id);
+            return new HoldPlacementResult("operation_ownership_lost", owner.Id,
+                ProviderOutcomeRecorded: replyOutcomeRecorded);
         }
-        catch (ProviderCallTimeoutException)
+        catch (ProviderCallTimeoutException) when (!replyOutcomeRecorded)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             replyResult = AmbiguousResult("reply_provider_timeout", "provider_timeout") with
             {
                 RequestGuid = operation.PolarisRequestGuid,
                 TxnGroupQualifier = operation.TxnGroupQualifier,
                 TxnQualifier = operation.TxnQualifier
             };
+            replyProviderFailureObserved = true;
         }
-        catch (PolarisOperationalException exception)
+        catch (PolarisOperationalException exception) when (!replyOutcomeRecorded)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             replyResult = AmbiguousResult("reply_provider_exception", SafeProviderErrorCode(exception)) with
             {
                 RequestGuid = operation.PolarisRequestGuid,
                 TxnGroupQualifier = operation.TxnGroupQualifier,
                 TxnQualifier = operation.TxnQualifier
             };
+            replyProviderFailureObserved = true;
         }
-        catch (PolarisMutationNotDispatchedException exception)
+        catch (PolarisMutationNotDispatchedException exception) when (!replyOutcomeRecorded)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            return await FinishLocalFailureAsync(owner, exception, cancellationToken);
-        }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            throw;
+            return await FinishLocalFailureAsync(owner, exception, HoldOperationPhase.ReplyStarted);
         }
 
-        if (!await PersistReplyResultAsync(owner, replyResult, cancellationToken))
+        if (!replyOutcomeRecorded)
         {
-            return new HoldPlacementResult("operation_ownership_lost", owner.Id);
+            if (!await PersistReplyResultAsync(owner, replyResult))
+            {
+                return new HoldPlacementResult("operation_ownership_lost", owner.Id);
+            }
+            replyOutcomeRecorded = true;
         }
+
+        if (replyProviderFailureObserved && cancellationToken.IsCancellationRequested)
+        {
+            using var outcomeResolutionTimeout = new CancellationTokenSource(ProviderOutcomePersistenceTimeout);
+            return await ObserveMarkedAmbiguityAsync(owner, outcomeResolutionTimeout.Token);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
         return replyResult.Outcome switch
         {
             HoldProviderOutcome.FinalSuccess or HoldProviderOutcome.DefinitiveNoEffect =>
@@ -1432,9 +1450,10 @@ public sealed class HoldPlacementService(
 
     private async Task<bool> PersistCreateResultAsync(
         OwnedOperation owner,
-        HoldProviderResult result,
-        CancellationToken cancellationToken)
+        HoldProviderResult result)
     {
+        using var outcomePersistenceTimeout = new CancellationTokenSource(ProviderOutcomePersistenceTimeout);
+        var cancellationToken = outcomePersistenceTimeout.Token;
         var phase = result.Outcome == HoldProviderOutcome.ReplyRequired ? HoldOperationPhase.ReplyReady :
             result.Outcome is HoldProviderOutcome.FinalSuccess or HoldProviderOutcome.DefinitiveNoEffect
                 ? HoldOperationPhase.ResultRecorded
@@ -1454,7 +1473,8 @@ public sealed class HoldPlacementService(
                 [ResultCode] = {resultCode}, [OutcomeEvidenceKind] = {result.EvidenceKind},
                 [LastErrorCode] = {result.SafeErrorCode}
             WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
-              AND [Phase] = N'create_started' AND [LeaseExpiresUtc] > SYSUTCDATETIME();
+              AND [State] = N'in_progress' AND [Phase] = N'create_started' AND [CompletedUtc] IS NULL
+              AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             cancellationToken);
         return changed == 1;
@@ -1632,9 +1652,10 @@ public sealed class HoldPlacementService(
 
     private async Task<bool> PersistReplyResultAsync(
         OwnedOperation owner,
-        HoldProviderResult result,
-        CancellationToken cancellationToken)
+        HoldProviderResult result)
     {
+        using var outcomePersistenceTimeout = new CancellationTokenSource(ProviderOutcomePersistenceTimeout);
+        var cancellationToken = outcomePersistenceTimeout.Token;
         var final = result.Outcome is HoldProviderOutcome.FinalSuccess or HoldProviderOutcome.DefinitiveNoEffect;
         var phase = final ? HoldOperationPhase.ResultRecorded : HoldOperationPhase.ReplyStarted;
         var state = final ? HoldOperationState.InProgress : HoldOperationState.Ambiguous;
@@ -1648,7 +1669,8 @@ public sealed class HoldPlacementService(
                 [ResultCode] = {ResultCode(result)}, [OutcomeEvidenceKind] = {result.EvidenceKind},
                 [LastErrorCode] = {result.SafeErrorCode}
             WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
-              AND [Phase] = N'reply_started' AND [LeaseExpiresUtc] > SYSUTCDATETIME();
+              AND [State] = N'in_progress' AND [Phase] = N'reply_started' AND [CompletedUtc] IS NULL
+              AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             cancellationToken) == 1;
     }
@@ -1719,13 +1741,11 @@ public sealed class HoldPlacementService(
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new HoldPlacementResult("hold_resolution_dependency_unavailable", owner.Id,
                 ProviderOutcomeRecorded: true);
         }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
@@ -1854,16 +1874,20 @@ public sealed class HoldPlacementService(
 
     private bool DispatchCommittedOutbox(long outboxId, long requestId, CancellationToken cancellationToken)
     {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            logger.LogInformation("Hold notification dispatch for request {RequestId} was deferred after commit because the caller canceled.", requestId);
+            return true;
+        }
+
         try
         {
             outboxDispatcher.Enqueue(outboxId);
-            cancellationToken.ThrowIfCancellationRequested();
             return true;
         }
         // Hold completion and its outbox are committed; delivery is recoverable by the scheduled sweep.
         catch (Exception exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             logger.LogError(exception, "Hold notification dispatch failed after request {RequestId} committed", requestId);
             return false;
         }
@@ -1924,8 +1948,12 @@ public sealed class HoldPlacementService(
     }
 
     private async Task<HoldPlacementResult> FinishLocalFailureAsync(
-        OwnedOperation owner, PolarisMutationNotDispatchedException exception, CancellationToken cancellationToken)
+        OwnedOperation owner,
+        PolarisMutationNotDispatchedException exception,
+        string expectedPhase)
     {
+        using var outcomePersistenceTimeout = new CancellationTokenSource(ProviderOutcomePersistenceTimeout);
+        var cancellationToken = outcomePersistenceTimeout.Token;
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var code = exception.InnerException is PolarisOperationalException operational
             ? SafeProviderErrorCode(operational) : "provider_local_failure";
@@ -1937,7 +1965,7 @@ public sealed class HoldPlacementService(
                 [RecoveryAttemptCount] = [RecoveryAttemptCount] + CASE WHEN {owner.IsRecovery} = CAST(1 AS bit) THEN 1 ELSE 0 END,
                 [LastRecoveryUtc] = CASE WHEN {owner.IsRecovery} = CAST(1 AS bit) THEN SYSUTCDATETIME() ELSE [LastRecoveryUtc] END
             WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
-              AND [Phase] IN (N'create_started', N'reply_started') AND [CompletedUtc] IS NULL
+              AND [State] = N'in_progress' AND [Phase] = {expectedPhase} AND [CompletedUtc] IS NULL
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """, cancellationToken);
         // Unexpected defects still reach normal exception handling after preserving
@@ -2033,7 +2061,7 @@ public sealed class HoldPlacementService(
 
             return result;
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (execution.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             if (heartbeat.OwnershipLost)
             {
@@ -2097,13 +2125,7 @@ public sealed class HoldPlacementService(
         }
         catch (PolarisOperationalException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return null;
-        }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            throw;
         }
     }
 

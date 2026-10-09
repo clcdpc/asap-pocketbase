@@ -5,7 +5,7 @@ const actorB = { ...actorA, id: '21', authenticationEmail: 'b@example.org' };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 (async () => {
-  for (const outcome of ['committed', 'uncertain', 'pickup_changed']) {
+  for (const outcome of ['committed', 'uncertain', 'accepted_unknown', 'pickup_changed']) {
     await fixture(async ({ load, get, dom }) => {
       const { createSessionIdentity } = await load('session-identity');
       const { createSuggestionController } = await load('suggestion-controller');
@@ -44,9 +44,12 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       assert.equal(root.open, true, 'repeated retired disposal cannot close a recreated dialog');
       if (outcome === 'committed') complete({ id: '9223372036854775807', libraryOrgId: 2, notificationStatus: 'queued' });
       else reject(Object.assign(new Error(outcome === 'pickup_changed' ? 'Pickup changed; request not created.' : 'Response lost'),
-        outcome === 'pickup_changed' ? { status: 401, response: { code: 'request_not_created_pickup_changed', pickupPreferenceChanged: true } } : { status: 0 }));
+        outcome === 'pickup_changed' ? { status: 401, response: { code: 'request_not_created_pickup_changed', pickupPreferenceChanged: true } }
+          : outcome === 'accepted_unknown' ? { status: 200, outcomeUnknown: true } : { status: 0 }));
       await flush();
-      assert.equal(receipts[0][2].outcome, outcome, 'record outcome before retired UI checks');
+      assert.equal(receipts.length, 1, `${outcome}: the captured actor receives one terminal receipt before presentation checks`);
+      assert.equal(receipts[0][2].outcome, outcome === 'accepted_unknown' ? 'uncertain' : outcome,
+        'record outcome before retired UI checks');
       assert.equal(receipts[0][1].id, actorA.id); assert.equal(intents.length, 0, 'old actor cannot navigate the replacement');
       assert.equal(root.open, true); assert.equal(root.querySelector('input[type="search"]').value, '');
       assert.equal(replacement.inspectDeparture().blocked, false);

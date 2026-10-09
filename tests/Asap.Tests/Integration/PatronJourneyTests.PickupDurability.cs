@@ -70,9 +70,22 @@ public sealed partial class PatronJourneyTests
             var service = scoped.Services.GetRequiredService<StaffPickupService>();
             var input = new PickupPreferenceInput(StaffVersion.Encode(request.RowVersion), provider.SecondBranch,
                 provider.FirstBranch, true);
-            if (failure.StartsWith("cancel", StringComparison.Ordinal))
+            if (failure is "cancel" or "cancel_oce")
             {
                 await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                    service.UpdateAsync(actor, request.Id, input, cancelled.Token));
+            }
+            else if (failure == "cancel_failure")
+            {
+                var partial = await service.UpdateAsync(actor, request.Id, input, cancelled.Token);
+                Assert.AreEqual("pickup_outcome_unconfirmed", partial.Code,
+                    "A genuine provider fault remains the outcome when caller cancellation coincides.");
+                Assert.IsNotNull(partial.OperationId);
+                Assert.IsFalse(partial.PickupChanged);
+            }
+            else if (failure == "cancel_generic")
+            {
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
                     service.UpdateAsync(actor, request.Id, input, cancelled.Token));
             }
             else
@@ -85,7 +98,8 @@ public sealed partial class PatronJourneyTests
             }
             Assert.AreEqual(provider.SecondBranch, provider.Current);
             Assert.AreEqual(1, provider.Writes);
-            Assert.AreEqual(1, await PickupJournalCountAsync(provider.Barcode, failure == "conflict" ? 2 : 1));
+            var knownSuccess = failure is "conflict" or "cancel";
+            Assert.AreEqual(1, await PickupJournalCountAsync(provider.Barcode, knownSuccess ? 2 : 1));
             await using (var db = await contexts.CreateDbContextAsync())
             {
                 var unchanged = await db.TitleRequests.SingleAsync(x => x.Id == request.Id);
@@ -106,7 +120,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(provider.SecondBranch,
                 (await verify.TitleRequests.SingleAsync(x => x.Id == request.Id)).PreferredPickupBranchId);
             Assert.AreEqual(1, await verify.TitleRequestEvents.CountAsync(x => x.TitleRequestId == request.Id &&
-                x.EventType == (failure == "conflict" ? "pickup_preference_changed" : "pickup_preference_reconciled")));
+                x.EventType == (knownSuccess ? "pickup_preference_changed" : "pickup_preference_reconciled")));
         }
         finally
         {
@@ -157,18 +171,22 @@ public sealed partial class PatronJourneyTests
             var service = scoped.Services.GetRequiredService<StaffPickupService>();
             var input = new PickupPreferenceInput(StaffVersion.Encode(request.RowVersion), provider.SecondBranch,
                 provider.FirstBranch, true);
-            if (providerMode == "failure_uncancelled")
+            if (providerMode is "failure_cancelled" or "failure_uncancelled")
             {
                 Assert.AreEqual("pickup_provider_error", (await service.UpdateAsync(
                     actor, request.Id, input, cancellation.Token)).Code);
-                Assert.IsFalse(cancellation.IsCancellationRequested);
+            }
+            else if (providerMode == "generic_cancelled")
+            {
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.UpdateAsync(
+                    actor, request.Id, input, cancellation.Token));
             }
             else
             {
                 await Assert.ThrowsAsync<OperationCanceledException>(() => service.UpdateAsync(
                     actor, request.Id, input, cancellation.Token));
-                Assert.IsTrue(cancellation.IsCancellationRequested);
             }
+            Assert.AreEqual(providerMode != "failure_uncancelled", cancellation.IsCancellationRequested);
 
             Assert.AreEqual(1, provider.Reads);
             Assert.AreEqual(0, provider.Writes);
@@ -341,18 +359,22 @@ public sealed partial class PatronJourneyTests
                 }
             };
             var reconciliation = new PickupReconciliationInput(version, provider.FirstBranch, true, true);
-            if (providerMode == "failure_uncancelled")
+            if (providerMode is "failure_cancelled" or "failure_uncancelled")
             {
                 Assert.AreEqual("pickup_provider_error", (await service.ReconcileAsync(
                     actor, attempted.OperationId.Value, reconciliation, cancellation.Token)).Code);
-                Assert.IsFalse(cancellation.IsCancellationRequested);
+            }
+            else if (providerMode == "generic_cancelled")
+            {
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ReconcileAsync(
+                    actor, attempted.OperationId.Value, reconciliation, cancellation.Token));
             }
             else
             {
                 await Assert.ThrowsAsync<OperationCanceledException>(() => service.ReconcileAsync(
                     actor, attempted.OperationId.Value, reconciliation, cancellation.Token));
-                Assert.IsTrue(cancellation.IsCancellationRequested);
             }
+            Assert.AreEqual(providerMode != "failure_uncancelled", cancellation.IsCancellationRequested);
 
             Assert.AreEqual(1, provider.Writes, "Recovery must only read the provider and never repeat its original PUT.");
             Assert.AreEqual(1, await PickupJournalCountAsync(provider.Barcode, state: 1));

@@ -82,7 +82,10 @@ public sealed partial class PatronSuggestionService
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            if (exception is PolarisOperationalException && cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             logger.LogWarning(
                 exception,
                 "Immediate identifier lookup failed for title request {TitleRequestId}.",
@@ -93,7 +96,6 @@ public sealed partial class PatronSuggestionService
         }
         catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
 

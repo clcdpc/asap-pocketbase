@@ -240,12 +240,10 @@ public sealed class AdditionalCopyService(
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new AdditionalCopyMutationResult("notification_dependency_unavailable");
         }
         catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
@@ -363,10 +361,13 @@ public sealed class AdditionalCopyService(
         {
             Dispatch(outbox, cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The committed outbox remains available to the delivery sweep.
+        }
         // The accepted task and outbox are durable; return the dispatch outcome without misreporting a rollback.
         catch (Exception exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             logger.LogError(exception, "Additional-copy reminder dispatch failed after task {RequestId} committed", request.Id);
             notificationStatus = "dispatch_failed";
             notificationReason = "queue_unavailable";
@@ -459,12 +460,10 @@ public sealed class AdditionalCopyService(
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new AdditionalCopyMutationResult("notification_dependency_unavailable");
         }
         catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
@@ -554,10 +553,13 @@ public sealed class AdditionalCopyService(
         {
             Dispatch(outbox, cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The committed outbox remains available to the delivery sweep.
+        }
         // The accepted task and outbox are durable; return the dispatch outcome without misreporting a rollback.
         catch (Exception exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             logger.LogError(exception, "Additional-copy assignment dispatch failed after task {RequestId} committed", request.Id);
             notificationStatus = "dispatch_failed";
             notificationReason = "queue_unavailable";
@@ -847,10 +849,9 @@ public sealed class AdditionalCopyService(
 
     private void Dispatch(EmailOutbox? outbox, CancellationToken cancellationToken)
     {
-        if (outbox?.Status == "pending")
+        if (outbox?.Status == "pending" && !cancellationToken.IsCancellationRequested)
         {
             outboxDispatcher.Enqueue(outbox.Id);
-            cancellationToken.ThrowIfCancellationRequested();
         }
     }
 

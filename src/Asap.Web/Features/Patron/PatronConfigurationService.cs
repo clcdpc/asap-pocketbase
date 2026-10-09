@@ -208,8 +208,14 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             publicationOptions,
             creators,
             Pick(libraryWorkflow?.CommonAuthorsLabel, systemWorkflow.CommonAuthorsLabel, "Popular Creators"),
-            Pick(libraryWorkflow?.CommonAuthorsHelp, systemWorkflow.CommonAuthorsHelp, string.Empty),
-            Pick(libraryWorkflow?.CommonAuthorsMessage, systemWorkflow.CommonAuthorsMessage, string.Empty),
+            Pick(
+                libraryWorkflow?.CommonAuthorsHelp,
+                systemWorkflow.CommonAuthorsHelp,
+                "See if this is a creator we already collect."),
+            Pick(
+                libraryWorkflow?.CommonAuthorsMessage,
+                systemWorkflow.CommonAuthorsMessage,
+                "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items."),
             libraryWorkflow?.CommonAuthorsEnabled ?? systemWorkflow.CommonAuthorsEnabled ?? false,
             formats,
             customFields,
@@ -502,7 +508,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
     private static string Pick(string? library, string? system, string fallback) =>
         !string.IsNullOrWhiteSpace(library)
             ? library
-            : !string.IsNullOrWhiteSpace(system)
+            : !string.IsNullOrEmpty(system)
                 ? system
                 : fallback;
 

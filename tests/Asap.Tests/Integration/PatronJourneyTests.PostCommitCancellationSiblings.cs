@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using System.Text.Json;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
@@ -22,7 +23,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("action", "return")]
     [DataRow("action", "canceled")]
     [DataRow("action", "failure")]
-    public async Task TitleRequestMutationDispatchCancellationPropagatesAfterDurableCommit(
+    public async Task TitleRequestMutationDispatchPreservesCommitAndDeliveryStatusAfterCancellation(
         string mutation,
         string dispatchMode)
     {
@@ -60,10 +61,54 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(1, dispatcher.EnqueuedIds.Count);
             committedOutboxIds.AddRange(await ReadCommittedTitleMutationOutboxIdsAsync(seeded.Id, mutation));
             Assert.AreEqual(mutation == "action" ? 2 : 1, committedOutboxIds.Count);
+            var firstAttemptedOutboxId = dispatcher.EnqueuedIds[0];
+            await using (var context = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+                             .CreateDbContextAsync())
+            {
+                var businessKey = await context.EmailOutbox.AsNoTracking()
+                    .Where(item => item.Id == firstAttemptedOutboxId)
+                    .Select(item => item.BusinessKey)
+                    .SingleAsync();
+                StringAssert.StartsWith(businessKey!, mutation == "action"
+                    ? $"purchase-reminder:{seeded.Id}:"
+                    : $"title-assignment:{seeded.Id}:");
+            }
 
             cancellation.Cancel();
             dispatcher.Release();
-            await Assert.ThrowsAsync<OperationCanceledException>(() => mutationTask);
+            var accepted = await mutationTask;
+            var dispatchFailed = dispatchMode == "failure";
+            Assert.AreEqual("updated", accepted.Code);
+            Assert.AreEqual(seeded.Id, accepted.RequestId);
+            string? expectedFinalStatus = mutation == "action" ? "outstanding_purchase" : null;
+            Assert.AreEqual(expectedFinalStatus, accepted.FinalStatus);
+            CollectionAssert.AreEquivalent(committedOutboxIds,
+                accepted.DispatchOutboxIds?.ToArray() ?? Array.Empty<long>());
+            Assert.AreEqual(1, dispatcher.EnqueuedIds.Count,
+                "Once the caller cancels during the first optional enqueue, later committed outboxes remain queued for recovery.");
+            CollectionAssert.AllItemsAreUnique(dispatcher.EnqueuedIds);
+            foreach (var enqueuedId in dispatcher.EnqueuedIds)
+            {
+                Assert.IsTrue(committedOutboxIds.Contains(enqueuedId),
+                    "The dispatch path may only attempt the outboxes committed with this mutation.");
+            }
+
+            Assert.AreEqual(dispatchFailed ? "dispatch_failed" : "queued", accepted.NotificationStatus);
+            Assert.AreEqual(dispatchFailed ? "queue_unavailable" : null, accepted.NotificationReason);
+            if (mutation == "action")
+            {
+                var patronOutboxId = committedOutboxIds.Single(id => id != firstAttemptedOutboxId);
+                var patronDispatchFailed = dispatcher.EnqueuedIds.Contains(patronOutboxId) && dispatchFailed;
+                Assert.AreEqual(patronDispatchFailed ? "dispatch_failed" : "queued",
+                    accepted.PatronNotificationStatus);
+                Assert.AreEqual(patronDispatchFailed ? "queue_unavailable" : null,
+                    accepted.PatronNotificationReason);
+            }
+            else
+            {
+                Assert.IsNull(accepted.PatronNotificationStatus);
+                Assert.IsNull(accepted.PatronNotificationReason);
+            }
 
             await AssertTitleMutationStillCommittedAsync(seeded.Id, committedOutboxIds, beforeCancel);
         }
@@ -82,7 +127,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("canceled", true)]
     [DataRow("failure", true)]
     [DataRow("canceled", false)]
-    public async Task IdentifierRetryDispatchPreservesCallerCancellationAndCommittedRetry(
+    public async Task IdentifierRetryDispatchPreservesCommittedRetryAfterCancellationOrFailure(
         string dispatchMode,
         bool cancelCaller)
     {
@@ -115,15 +160,8 @@ public sealed partial class PatronJourneyTests
                 cancellation.Cancel();
             }
             dispatcher.Release();
-            if (cancelCaller)
-            {
-                await Assert.ThrowsAsync<OperationCanceledException>(() => retry);
-            }
-            else
-            {
-                Assert.AreEqual("updated", (await retry).Code,
-                    "An OCE from the dispatcher without caller cancellation remains recoverable by the recurring processor.");
-            }
+            Assert.AreEqual("updated", (await retry).Code,
+                "The committed retry remains authoritative while the recurring processor owns recovery.");
 
             var afterCancel = await ReadIdentifierRetrySnapshotAsync(seeded.Id);
             Assert.AreEqual(beforeCancel.Status, afterCancel.Status);
@@ -146,7 +184,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("assign", "return")]
     [DataRow("assign", "canceled")]
     [DataRow("assign", "failure")]
-    public async Task AdditionalCopyDispatchCancellationPropagatesAfterDurableCommit(
+    public async Task AdditionalCopyDispatchPreservesCommittedTaskAndDeliveryStatusAfterCancellation(
         string mutation,
         string dispatchMode)
     {
@@ -210,7 +248,14 @@ public sealed partial class PatronJourneyTests
 
             cancellation.Cancel();
             dispatcher.Release();
-            await Assert.ThrowsAsync<OperationCanceledException>(() => mutationTask);
+            var accepted = await mutationTask;
+            var dispatchFailed = dispatchMode == "failure";
+            Assert.AreEqual(mutation == "create" ? "created" : "updated", accepted.Code);
+            Assert.AreEqual(taskId, accepted.RequestId);
+            Assert.AreEqual("open", accepted.FinalStatus);
+            Assert.AreEqual(dispatchFailed ? "dispatch_failed" : "queued", accepted.NotificationStatus);
+            Assert.AreEqual(dispatchFailed ? "queue_unavailable" : null, accepted.NotificationReason);
+            Assert.AreEqual(1, dispatcher.EnqueuedIds.Count);
 
             await AssertCommittedAdditionalCopyStillDurableAsync(committed, outboxId);
         }
@@ -235,7 +280,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("return")]
     [DataRow("canceled")]
     [DataRow("failure")]
-    public async Task EmailTestQueueDispatchCancellationPropagatesAfterDurableCommit(string dispatchMode)
+    public async Task EmailTestQueuePreservesCommittedResultAndDispatchDelayAfterCancellation(string dispatchMode)
     {
         var (staff, actor) = await CreatePostCommitAdminAsync();
         var settings = await ConfigureCancellationEmailSettingsAsync();
@@ -254,7 +299,12 @@ public sealed partial class PatronJourneyTests
 
             cancellation.Cancel();
             dispatcher.Release();
-            await Assert.ThrowsAsync<OperationCanceledException>(() => queue);
+            var accepted = await queue;
+            Assert.AreEqual("queued", accepted.Code);
+            var details = ReadDispatchDetails(accepted);
+            Assert.AreEqual(outboxId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                details.GetProperty("id").GetString());
+            Assert.AreEqual(dispatchMode != "return", details.GetProperty("dispatchDelayed").GetBoolean());
 
             AssertOutboxStillPending(await ReadCommittedOutboxByIdAsync(outboxId));
         }
@@ -271,7 +321,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("return")]
     [DataRow("canceled")]
     [DataRow("failure")]
-    public async Task EmailRetryDispatchCancellationPropagatesAfterDurableCommit(string dispatchMode)
+    public async Task EmailRetryPreservesCommittedResultAndDispatchDelayAfterCancellation(string dispatchMode)
     {
         var (staff, actor) = await CreatePostCommitAdminAsync();
         var businessKey = $"post-commit-retry:{Guid.NewGuid():N}";
@@ -293,9 +343,14 @@ public sealed partial class PatronJourneyTests
 
             cancellation.Cancel();
             dispatcher.Release();
-            await Assert.ThrowsAsync<OperationCanceledException>(() => retry);
+            var accepted = await retry;
+            Assert.AreEqual("queued", accepted.Code);
+            var details = ReadDispatchDetails(accepted);
+            Assert.AreEqual(outbox.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                details.GetProperty("id").GetString());
+            Assert.AreEqual(dispatchMode != "return", details.GetProperty("dispatchDelayed").GetBoolean());
 
-            AssertOutboxStillPending(await ReadCommittedOutboxByIdAsync(outbox.Id), expectedAttempts: 3);
+            AssertOutboxStillPending(await ReadCommittedOutboxByIdAsync(outbox.Id), expectedAttempts: 0);
         }
         finally
         {
@@ -309,7 +364,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("return")]
     [DataRow("canceled")]
     [DataRow("failure")]
-    public async Task HoldResolutionDispatchCancellationPropagatesAfterDurableCommit(string dispatchMode)
+    public async Task HoldResolutionPreservesCommittedResultAndDeliveryStatusAfterCancellation(string dispatchMode)
     {
         var actor = await ReadConfiguredSuperAdminAsync();
         var settings = await ConfigureCancellationEmailSettingsAsync();
@@ -392,7 +447,13 @@ public sealed partial class PatronJourneyTests
 
             cancellation.Cancel();
             dispatcher.Release();
-            await Assert.ThrowsAsync<OperationCanceledException>(() => resolution);
+            var accepted = await resolution;
+            var dispatchFailed = dispatchMode != "return";
+            Assert.AreEqual("resolved", accepted.Code);
+            Assert.AreEqual(operationId, accepted.OperationId);
+            Assert.AreEqual("hold_placed", accepted.FinalStatus);
+            Assert.AreEqual(dispatchFailed ? "dispatch_failed" : "queued", accepted.NotificationStatus);
+            Assert.AreEqual(dispatchFailed ? "queue_unavailable" : null, accepted.NotificationReason);
 
             var after = await ReadHoldResolutionSnapshotAsync(seeded.Id, operationId, dispatcher.EnqueuedIds.Single());
             Assert.AreEqual(committed.Status, after.Status);
@@ -418,7 +479,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("return")]
     [DataRow("canceled")]
     [DataRow("failure")]
-    public async Task WeeklySummaryDispatchCancellationPropagatesAfterDurableCommit(string dispatchMode)
+    public async Task WeeklySummaryPreservesCommittedResultAfterCancellationOrDispatchFailure(string dispatchMode)
     {
         var (staff, _) = await CreatePostCommitAdminAsync();
         var settings = await ConfigureCancellationEmailSettingsAsync();
@@ -492,7 +553,12 @@ public sealed partial class PatronJourneyTests
 
             cancellation.Cancel();
             dispatcher.Release();
-            await Assert.ThrowsAsync<OperationCanceledException>(() => running);
+            var completed = await running;
+            Assert.AreEqual("completed", completed.Code);
+            Assert.AreEqual(1, completed.Visited);
+            Assert.AreEqual(1, completed.Changed,
+                "The returned cycle result includes the accepted summary outbox regardless of immediate enqueue status.");
+            Assert.AreEqual(0, completed.Skipped);
 
             AssertOutboxStillPending(await ReadCommittedOutboxByIdAsync(dispatcher.EnqueuedIds.Single()));
             await using var verify = await contexts.CreateDbContextAsync();
@@ -587,7 +653,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("return")]
     [DataRow("canceled")]
     [DataRow("failure")]
-    public async Task TimeoutEmailDispatchCancellationPropagatesAfterDurableCommit(string dispatchMode)
+    public async Task TimeoutEmailPreservesCommittedClosureAfterCancellationOrDispatchFailure(string dispatchMode)
     {
         const int scope = 99017;
         var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
@@ -663,6 +729,9 @@ public sealed partial class PatronJourneyTests
             cancellation.Cancel();
             dispatcher.Release();
             await Assert.ThrowsAsync<OperationCanceledException>(() => execution);
+            Assert.IsTrue(cancellation.IsCancellationRequested);
+            Assert.HasCount(1, dispatcher.EnqueuedIds,
+                "Cancellation after the accepted close stops acquisition of further timeout work.");
 
             AssertOutboxStillPending(await ReadCommittedOutboxByIdAsync(outboxId));
             await using var after = await contexts.CreateDbContextAsync();
@@ -670,6 +739,11 @@ public sealed partial class PatronJourneyTests
                 item.TitleRequestId == requestIds.Single() && item.EventType == "timeout_closed"));
             Assert.AreEqual("closed", await after.TitleRequests.Where(item => item.Id == requestIds.Single())
                 .Select(item => item.Status).SingleAsync());
+            var progress = await after.QueueProgress.AsNoTracking().SingleAsync(item =>
+                item.QueueName == QueueNames.OutstandingTimeout && item.ScopeOrganizationId == scope);
+            Assert.AreEqual(requestIds.Single(), progress.LastOutcomeItemId,
+                "The closed row and its queue checkpoint are committed before cancellation stops further acquisition.");
+            Assert.AreEqual("changed", progress.LastOutcomeCode);
         }
         finally
         {
@@ -906,14 +980,16 @@ public sealed partial class PatronJourneyTests
     {
         await using var context = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
             .CreateDbContextAsync();
+        // This deliberately models the narrow no-send mail_not_configured retry allowance.
+        // It does not assert the legacy failed-any replay behavior; ambiguous send/lease evidence is excluded.
         var row = new EmailOutbox
         {
             OrganizationId = 2,
             DeliveryClass = "operational_test",
             BusinessKey = businessKey,
             Status = "failed",
-            AttemptCount = 3,
-            LastErrorCode = "provider_failed",
+            AttemptCount = 0,
+            LastErrorCode = "mail_not_configured",
             ToAddress = "retry@example.org",
             FromAddress = "system@example.org",
             Subject = "Retry cancellation",
@@ -924,6 +1000,9 @@ public sealed partial class PatronJourneyTests
         await context.SaveChangesAsync();
         return row;
     }
+
+    private static JsonElement ReadDispatchDetails(EmailOperationResult result) =>
+        JsonSerializer.SerializeToElement(result.Data);
 
     private async Task<EmailOutbox> ReadCommittedOutboxAsync(long outboxId, string businessKey)
     {

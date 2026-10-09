@@ -187,6 +187,13 @@ token, ciphertext, or any secret-derived hash. Reconciliation and report
 recovery check that bit against the target credential's presence, independently
 of the SMTP source population.
 
+When an `smtp_settings` row exists, its report entry preserves the exact source
+ID and records `legacy_smtp_transport_intentionally_dropped` plus the stable
+`target_email_sender_selected_by_external_configuration` boundary. The latter
+means the target sender is selected by external configuration; it does not
+snapshot the mutable `EmailSafety.DeliveryMode`. Switching between `capture`
+and `postmark` therefore does not invalidate the migration's historical report.
+
 Operational integer overrides follow the pinned legacy `parseInt` prefix rule
 and are bounded only after parsing, including values outside signed Int32.
 Malformed values use the documented fallback; large positive and negative

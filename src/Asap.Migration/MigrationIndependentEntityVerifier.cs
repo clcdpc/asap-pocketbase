@@ -75,6 +75,303 @@ internal static class MigrationIndependentEntityVerifier
         VerifyEmailDeliveryEvents(connection, transaction, deliveryRows, deliveryIds, requestIds, templateIds);
     }
 
+    internal static void VerifyClaimAndPlacedBibReportTransformations(
+        SqlConnection connection,
+        SqlTransaction? transaction,
+        ValidatedMigrationPackage package,
+        JsonElement report)
+    {
+        VerifyTitleRequestClaimReportTransformations(connection, transaction, package, report);
+        VerifyAdditionalCopyClaimReportTransformations(connection, transaction, package, report);
+        VerifyPlacedBibProtectionReportTransformations(package, report);
+    }
+
+    private static void VerifyTitleRequestClaimReportTransformations(
+        SqlConnection connection,
+        SqlTransaction? transaction,
+        ValidatedMigrationPackage package,
+        JsonElement report)
+    {
+        var rows = MigrationPackageReader.ReadRows(package, "title-requests.json", "title_requests");
+        var staffRows = MigrationPackageReader.ReadRows(package, "staff-users.json", "staff_users");
+        var ruleRows = MigrationPackageReader.ReadRows(package, "format-auto-claim-rules.json", "format_claim_rules");
+        var formatRows = MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats");
+        var organizations = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations");
+        var staffIds = ReadMappings(connection, transaction, "staff_user", staffRows);
+        var ruleIds = ReadMappings(connection, transaction, "format_auto_claim_rule", ruleRows);
+        var formatIds = ReadFormatMappings(connection, transaction, formatRows);
+        var rulesById = ruleRows.ToDictionary(row => row.RequiredString("id"), StringComparer.Ordinal);
+        var formatsById = formatRows.ToDictionary(row => row.RequiredString("id"), StringComparer.Ordinal);
+        var statuses = ReadStatusMap(package);
+        var transformations = ReadReportTransformationsBySourceId(report, "title_request_claim");
+
+        foreach (var row in rows)
+        {
+            var sourceId = row.RequiredString("id");
+            var formatId = ResolveRequestFormat(connection, transaction, row, formatIds, formatsById, organizations);
+            var claim = ProjectRequestClaim(connection, transaction, row, ResolveRequestStatus(row, statuses),
+                formatId, staffIds, ruleIds, rulesById);
+            if (!claim.HasSourceAttribution)
+            {
+                continue;
+            }
+
+            if (!transformations.Remove(sourceId, out var transformation) ||
+                !ReportNullableStringMatches(transformation, "sourceClaimantId", claim.SourceClaimantId) ||
+                !ReportNullableLongMatches(transformation, "mappedStaffUserId", claim.MappedStaffUserId) ||
+                !ReportNullableLongMatches(transformation, "effectiveStaffUserId", claim.StaffUserId) ||
+                !ReportNullableStringMatches(transformation, "sourceDisplayName", row.Text("claimedByDisplayName")) ||
+                !ReportNullableDateTimeMatches(transformation, "sourceClaimedAtUtc", row.UtcDateTime("claimedAt")) ||
+                !ReportNullableStringMatches(transformation, "sourceClaimType", row.Text("claimType")) ||
+                !ReportNullableStringMatches(transformation, "sourceClaimRuleId", row.String("claimRuleId")) ||
+                !ReportStringMatches(transformation, "reason", claim.Reason) ||
+                !ReportBooleanMatches(transformation, "migrationAnnotationInserted", claim.RequiresMigrationAnnotation))
+            {
+                FailReportProjection("The title-request claim report does not match immutable source fields and the independently verified claim projection.");
+            }
+        }
+
+        if (transformations.Count != 0)
+        {
+            FailReportProjection("The title-request claim report contains an extra or duplicate source identity.");
+        }
+    }
+
+    private static void VerifyAdditionalCopyClaimReportTransformations(
+        SqlConnection connection,
+        SqlTransaction? transaction,
+        ValidatedMigrationPackage package,
+        JsonElement report)
+    {
+        var rows = MigrationPackageReader.ReadRows(package, "additional-copy-requests.json", "additional_copy_requests");
+        var staffRows = MigrationPackageReader.ReadRows(package, "staff-users.json", "staff_users");
+        var staffIds = ReadMappings(connection, transaction, "staff_user", staffRows);
+        var transformations = ReadReportTransformationsBySourceId(report, "additional_copy_claim");
+
+        foreach (var row in rows)
+        {
+            var sourceId = row.RequiredString("id");
+            var claim = ProjectCopyClaim(connection, transaction, row,
+                NormalizeAdditionalCopyStatus(row.RequiredString("status")), staffIds);
+            if (!claim.HasSourceAttribution)
+            {
+                continue;
+            }
+
+            if (!transformations.Remove(sourceId, out var transformation) ||
+                !ReportNullableStringMatches(transformation, "sourceClaimantId", claim.SourceClaimantId) ||
+                !ReportNullableLongMatches(transformation, "mappedStaffUserId", claim.MappedStaffUserId) ||
+                !ReportNullableLongMatches(transformation, "effectiveStaffUserId", claim.StaffUserId) ||
+                !ReportNullableStringMatches(transformation, "sourceDisplayName", row.Text("claimedByDisplayName")) ||
+                !ReportNullableDateTimeMatches(transformation, "sourceClaimedAtUtc", row.UtcDateTime("claimedAt")) ||
+                !ReportStringMatches(transformation, "reason", claim.Reason) ||
+                !ReportBooleanMatches(transformation, "migrationAnnotationInserted", claim.RequiresMigrationAnnotation))
+            {
+                FailReportProjection("The additional-copy claim report does not match immutable source fields and the independently verified claim projection.");
+            }
+        }
+
+        if (transformations.Count != 0)
+        {
+            FailReportProjection("The additional-copy claim report contains an extra or duplicate source identity.");
+        }
+    }
+
+    private static void VerifyPlacedBibProtectionReportTransformations(
+        ValidatedMigrationPackage package,
+        JsonElement report)
+    {
+        var requests = MigrationPackageReader.ReadRows(package, "title-requests.json", "title_requests");
+        var organizations = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations");
+        var organizationIds = organizations.ToDictionary(
+            row => row.RequiredString("id"),
+            row => row.Int32("organizationId") ?? Fail<int>("A source organization has no native identity."),
+            StringComparer.Ordinal);
+        var statuses = ReadStatusMap(package);
+        var closeReasons = ReadCloseReasonMap(package);
+        var eventRows = MigrationPackageReader.ReadRows(package, "title-request-events.json", "title_request_events");
+        var transformations = ReadReportTransformationsBySourceId(report, "placed_bib_protection");
+
+        foreach (var request in requests)
+        {
+            var sourceId = request.RequiredString("id");
+            var status = ResolveRequestStatus(request, statuses);
+            var closeReason = ResolveRequestCloseReason(request, closeReasons);
+            var evidence = ReadPlacementEvidence(request, sourceId, status, closeReason, eventRows, statuses, closeReasons);
+            var sourceHints = ReadPlacementHints(request, sourceId, status, closeReason, eventRows, evidence);
+            if (evidence.Count == 0 && sourceHints.Count > 0)
+            {
+                FailReportProjection("Hint-only BIB history cannot have a successful placed-protection report.");
+            }
+
+            var libraryId = ResolveSourceLibrary(
+                (request.Int32("libraryOrgId") ?? Fail<int>("A title request has no source library identity.")).ToString(CultureInfo.InvariantCulture),
+                organizationIds,
+                package);
+            int? bibId = null;
+            IReadOnlyList<PlacementBibSource> bibSources = [];
+            if (evidence.Count > 0)
+            {
+                using var metadata = JsonDocument.Parse(BuildPlacementMetadata(request, sourceId, eventRows, evidence));
+                var metadataRoot = metadata.RootElement;
+                var metadataBibId = metadataRoot.GetProperty("bibId");
+                bibId = metadataBibId.ValueKind == JsonValueKind.Null ? null : metadataBibId.GetInt32();
+                bibSources = metadataRoot.GetProperty("bibSources").EnumerateArray()
+                    .Select(item => new PlacementBibSource(
+                        item.GetProperty("sourceCollection").GetString()!,
+                        item.GetProperty("sourceRecordId").GetString()!,
+                        item.GetProperty("sourceField").GetString()!,
+                        item.GetProperty("bibId").GetInt32(),
+                        item.GetProperty("sourceValue").GetString()!))
+                    .ToArray();
+            }
+
+            if (!transformations.Remove(sourceId, out var transformation) ||
+                !ReportInt32Matches(transformation, "libraryOrganizationId", libraryId) ||
+                !ReportStringMatches(transformation, "status", status) ||
+                !ReportNullableInt32Matches(transformation, "bibId", bibId) ||
+                !ReportPlacementEvidenceMatches(transformation.GetProperty("evidence"), evidence) ||
+                !ReportPlacementEvidenceMatches(transformation.GetProperty("hints"), Array.Empty<PlacementEvidence>()) ||
+                !ReportPlacementBibSourcesMatch(transformation.GetProperty("bibSources"), bibSources) ||
+                !ReportStringMatches(transformation, "action", evidence.Count > 0 ? "inserted" : "no_placement_evidence"))
+            {
+                FailReportProjection("The placed-BIB protection report does not match immutable request/event evidence and the independently verified marker rows.");
+            }
+        }
+
+        if (transformations.Count != 0)
+        {
+            FailReportProjection("The placed-BIB protection report contains an extra or duplicate source identity.");
+        }
+    }
+
+    private static Dictionary<string, JsonElement> ReadReportTransformationsBySourceId(JsonElement report, string entity)
+    {
+        var transformations = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var transformation in report.GetProperty("transformations").EnumerateArray()
+                     .Where(item => string.Equals(item.GetProperty("entity").GetString(), entity, StringComparison.Ordinal)))
+        {
+            var sourceId = transformation.GetProperty("sourceId").GetString();
+            if (string.IsNullOrEmpty(sourceId) || !transformations.TryAdd(sourceId, transformation))
+            {
+                FailReportProjection($"The {entity} report has a missing or duplicate source identity.");
+            }
+        }
+        return transformations;
+    }
+
+    private static bool ReportNullableStringMatches(JsonElement item, string propertyName, string? expected)
+    {
+        var property = item.GetProperty(propertyName);
+        return expected is null
+            ? property.ValueKind == JsonValueKind.Null
+            : property.ValueKind == JsonValueKind.String && string.Equals(property.GetString(), expected, StringComparison.Ordinal);
+    }
+
+    private static bool ReportNullableLongMatches(JsonElement item, string propertyName, long? expected)
+    {
+        var property = item.GetProperty(propertyName);
+        return expected is null
+            ? property.ValueKind == JsonValueKind.Null
+            : property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var actual) && actual == expected.Value;
+    }
+
+    private static bool ReportNullableInt32Matches(JsonElement item, string propertyName, int? expected)
+    {
+        var property = item.GetProperty(propertyName);
+        return expected is null
+            ? property.ValueKind == JsonValueKind.Null
+            : property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out var actual) && actual == expected.Value;
+    }
+
+    private static bool ReportInt32Matches(JsonElement item, string propertyName, int expected) =>
+        item.GetProperty(propertyName).ValueKind == JsonValueKind.Number &&
+        item.GetProperty(propertyName).TryGetInt32(out var actual) &&
+        actual == expected;
+
+    private static bool ReportStringMatches(JsonElement item, string propertyName, string expected) =>
+        item.GetProperty(propertyName).ValueKind == JsonValueKind.String &&
+        string.Equals(item.GetProperty(propertyName).GetString(), expected, StringComparison.Ordinal);
+
+    private static bool ReportDateTimeMatches(JsonElement item, string propertyName, DateTime expected)
+    {
+        var property = item.GetProperty(propertyName);
+        return property.ValueKind == JsonValueKind.String &&
+            DateTimeOffset.TryParse(
+                property.GetString(),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var actual) &&
+            actual.UtcDateTime == expected;
+    }
+
+    private static bool ReportNullableDateTimeMatches(JsonElement item, string propertyName, DateTime? expected)
+    {
+        var property = item.GetProperty(propertyName);
+        return expected is null
+            ? property.ValueKind == JsonValueKind.Null
+            : ReportDateTimeMatches(item, propertyName, expected.Value);
+    }
+
+    private static bool ReportBooleanMatches(JsonElement item, string propertyName, bool expected) =>
+        (item.GetProperty(propertyName).ValueKind is JsonValueKind.True or JsonValueKind.False) &&
+        item.GetProperty(propertyName).GetBoolean() == expected;
+
+    private static bool ReportPlacementEvidenceMatches(
+        JsonElement actual,
+        IReadOnlyCollection<PlacementEvidence> expected)
+    {
+        if (actual.ValueKind != JsonValueKind.Array || actual.GetArrayLength() != expected.Count)
+        {
+            return false;
+        }
+
+        var actualSet = new HashSet<PlacementEvidence>();
+        foreach (var item in actual.EnumerateArray())
+        {
+            var value = new PlacementEvidence(
+                item.GetProperty("kind").GetString()!,
+                item.GetProperty("sourceCollection").GetString()!,
+                item.GetProperty("sourceRecordId").GetString()!,
+                item.GetProperty("sourceField").GetString()!,
+                item.GetProperty("value").GetString()!);
+            if (!actualSet.Add(value))
+            {
+                return false;
+            }
+        }
+        return actualSet.SetEquals(expected);
+    }
+
+    private static bool ReportPlacementBibSourcesMatch(
+        JsonElement actual,
+        IReadOnlyCollection<PlacementBibSource> expected)
+    {
+        if (actual.ValueKind != JsonValueKind.Array || actual.GetArrayLength() != expected.Count)
+        {
+            return false;
+        }
+
+        var actualSet = new HashSet<PlacementBibSource>();
+        foreach (var item in actual.EnumerateArray())
+        {
+            var value = new PlacementBibSource(
+                item.GetProperty("sourceCollection").GetString()!,
+                item.GetProperty("sourceRecordId").GetString()!,
+                item.GetProperty("sourceField").GetString()!,
+                item.GetProperty("bibId").GetInt32(),
+                item.GetProperty("sourceValue").GetString()!);
+            if (!actualSet.Add(value))
+            {
+                return false;
+            }
+        }
+        return actualSet.SetEquals(expected);
+    }
+
+    private static void FailReportProjection(string message) =>
+        throw new MigrationOperationException("reconciliation_report_mismatch", message);
+
     private static void VerifyStaff(
         SqlConnection connection,
         SqlTransaction? transaction,
@@ -177,7 +474,7 @@ internal static class MigrationIndependentEntityVerifier
         var ordinal = 0;
         foreach (var row in rows.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
         {
-            var code = NormalizeWorkflowTagCode(row.RequiredString("code"));
+            var code = NormalizeWorkflowTagCode(row);
             var label = row.String("label") ?? code;
             var sortOrder = row.Int32("sortOrder") ?? 1000 + ordinal;
             expected[code] = (label, sortOrder);
@@ -222,7 +519,7 @@ internal static class MigrationIndependentEntityVerifier
                 (row.Int32("libraryOrgId") ?? Fail<int>("A source auto-claim rule has no library identity.")).ToString(CultureInfo.InvariantCulture),
                 organizationIds,
                 package);
-            var formatCode = NormalizeFormatCode(row.RequiredString("format"));
+            var formatCode = NormalizeFormatCode(row.Text("format") ?? string.Empty);
             var formatId = FindFormat(connection, transaction, libraryId, formatCode) ??
                 FindFormat(connection, transaction, 1, formatCode) ??
                 Fail<long>("A source auto-claim rule format is absent from the target format set.");
@@ -297,12 +594,12 @@ internal static class MigrationIndependentEntityVerifier
             Ensure(reader.Read() &&
                 Same(reader, 0, row.String("legacyId")) && reader.GetInt32(1) == libraryId &&
                 NullableInt(reader, 2) == row.Int32("patronOrgId") && NullableInt(reader, 3) == row.Int32("staffLibraryOrgIdCreatedBy") &&
-                Same(reader, 4, row.RequiredString("barcode")) && Same(reader, 5, row.String("email")) &&
+                Same(reader, 4, row.RequiredString("barcode")) && Same(reader, 5, row.Text("email")) &&
                 Same(reader, 6, row.Text("nameFirst")) && Same(reader, 7, row.Text("nameLast")) &&
                 NullableInt(reader, 8) == row.PositiveInt32("patronCodeId") && Same(reader, 9, row.Text("patronCodeDescription")) &&
                 NullableInt(reader, 10) == row.Int32("preferredPickupBranchId") && Same(reader, 11, row.Text("preferredPickupBranchName")) &&
                 Same(reader, 12, row.Text("libraryOrgName")) && Same(reader, 13, row.RequiredText("title")) &&
-                Same(reader, 14, row.Text("author")) && Same(reader, 15, row.String("identifier")) &&
+                Same(reader, 14, row.Text("author")) && Same(reader, 15, row.Text("identifier")) &&
                 Same(reader, 16, row.Text("publication")) && Same(reader, 17, ParseSourceDate(row.String("exactPublicationDate")) ) &&
                 JsonSame(reader, 18, customFields) && reader.GetBoolean(19) == row.Bool("autohold") &&
                 reader.GetInt64(20) == formatId && Same(reader, 21, status) && Same(reader, 22, closeReason) &&
@@ -355,7 +652,7 @@ internal static class MigrationIndependentEntityVerifier
                     "additional-copy source request scope");
             }
             long? formatId = null;
-            if (row.String("format") is { } sourceFormat)
+            if (row.Text("format") is { } sourceFormat && TrimJavascriptFormatCode(sourceFormat).Length > 0)
             {
                 formatId = FindFormat(connection, transaction, libraryId, NormalizeFormatCode(sourceFormat)) ??
                     FindFormat(connection, transaction, 1, NormalizeFormatCode(sourceFormat)) ??
@@ -375,15 +672,15 @@ internal static class MigrationIndependentEntityVerifier
             Ensure(reader.Read() && Same(reader, 0, row.String("legacyId")) && NullableLong(reader, 1) == requestId &&
                 reader.GetInt32(2) == libraryId && Same(reader, 3, row.Text("libraryOrgName")) &&
                 reader.GetInt32(4) == row.PositiveInt32("bibid", "source_bib_invalid") && Same(reader, 5, row.RequiredText("title")) &&
-                Same(reader, 6, row.Text("author")) && Same(reader, 7, row.String("identifier")) &&
+                Same(reader, 6, row.Text("author")) && Same(reader, 7, row.Text("identifier")) &&
                 Same(reader, 8, row.Text("publication")) && NullableLong(reader, 9) == formatId &&
-                Same(reader, 10, row.String("format")) && Same(reader, 11, status) && Same(reader, 12, notes) &&
+                Same(reader, 10, row.Text("format")) && Same(reader, 11, status) && Same(reader, 12, notes) &&
                 NullableLong(reader, 13) == MapOptional(row.String("createdByStaff"), staffIds) &&
-                Same(reader, 14, row.String("createdByUsername")) && Same(reader, 15, created) && Same(reader, 16, updated) &&
+                Same(reader, 14, row.Text("createdByUsername")) && Same(reader, 15, created) && Same(reader, 16, updated) &&
                 NullableLong(reader, 17) == claim.StaffUserId && Same(reader, 18, claim.DisplayName) &&
                 Same(reader, 19, claim.ClaimedAtUtc) && reader.IsDBNull(20) && reader.IsDBNull(21) &&
                 NullableLong(reader, 22) == MapOptional(row.String("closedByStaff"), staffIds) &&
-                Same(reader, 23, row.String("closedByUsername")) && Same(reader, 24, row.UtcDateTime("closedAt")),
+                Same(reader, 23, row.Text("closedByUsername")) && Same(reader, 24, row.UtcDateTime("closedAt")),
                 "complete additional-copy history and claim transform");
         }
         Ensure(TargetIds(connection, transaction, "SELECT [Id] FROM [asap].[AdditionalCopyRequest];").SetEquals(expectedIds),
@@ -419,14 +716,14 @@ internal static class MigrationIndependentEntityVerifier
             Ensure(reader.Read() && Same(reader, 0, barcode is null ? "additional_copy" : "title_request") &&
                 Same(reader, 1, row.RequiredString("titleRequestId")) && reader.GetInt32(2) == libraryId &&
                 Same(reader, 3, row.Text("title")) && Same(reader, 4, row.Text("author")) &&
-                Same(reader, 5, row.String("identifier")) && NullableInt(reader, 6) == row.PositiveInt32("bibid", "source_bib_invalid") &&
+                Same(reader, 5, row.Text("identifier")) && NullableInt(reader, 6) == row.PositiveInt32("bibid", "source_bib_invalid") &&
                 Same(reader, 7, NormalizeStatus(row.RequiredString("status"))) &&
                 Same(reader, 8, NormalizeCloseReason(row.String("closeReason"))) &&
                 Same(reader, 9, MaskBarcode(barcode)) &&
                 Same(reader, 10, ParseUtc(row.JsonPropertyString("snapshot", "created"))) &&
                 Same(reader, 11, row.UtcDateTime("deletedAt")) &&
                 NullableLong(reader, 12) == MapOptional(row.String("deletedByStaff"), staffIds) &&
-                Same(reader, 13, row.String("deletedByUsername")),
+                Same(reader, 13, row.Text("deletedByUsername")),
                 "complete reduced deleted-request audit projection");
         }
         Ensure(TargetIds(connection, transaction, "SELECT [Id] FROM [asap].[DeletedRequestAudit];").SetEquals(expectedIds),
@@ -570,7 +867,7 @@ internal static class MigrationIndependentEntityVerifier
             {
                 sourceCollection = "title_request_events",
                 sourceRecordId = sourceId,
-                sourceEventType = sourceType,
+                sourceEventType = row.Text("eventType"),
                 sourceFromStatus = row.String("fromStatus"),
                 sourceToStatus = row.String("toStatus"),
                 sourceCloseReason = row.String("closeReason"),
@@ -669,10 +966,10 @@ internal static class MigrationIndependentEntityVerifier
                 targetTitleRequestId = requestId,
                 sourceEmailTemplateId = sourceTemplate,
                 targetEmailTemplateId = templateId,
-                templateKey = row.String("templateKey"),
-                recipient = row.String("recipient"),
+                templateKey = row.Text("templateKey"),
+                recipient = row.Text("recipient"),
                 subject = row.Text("subject"),
-                sourceStatus = status,
+                sourceStatus = row.Text("status"),
                 error = row.Text("error"),
                 sourceMetadata = ParseJson(row.JsonText("metadata"))
             });
@@ -871,13 +1168,15 @@ internal static class MigrationIndependentEntityVerifier
             var sourceOwner = sourceScope.Equals("system", StringComparison.OrdinalIgnoreCase)
                 ? 1
                 : ResolveSourceOrganization(sourceFormat.RequiredString("libraryOrganization"), organizations);
+            var scalarFormat = row.Text("format");
             Ensure((sourceOwner == 1 || sourceOwner == libraryId) &&
                 (targetOwner == 1 || targetOwner == libraryId) &&
-                (row.String("format") is null || NormalizeFormatCode(row.String("format")!) == targetCode),
+                (scalarFormat is null || TrimJavascriptFormatCode(scalarFormat).Length == 0 ||
+                    NormalizeFormatCode(scalarFormat) == targetCode),
                 "title-request format reference ownership and scalar consistency");
             return formatId;
         }
-        var code = NormalizeFormatCode(row.String("format") ?? string.Empty);
+        var code = NormalizeFormatCode(row.Text("format") ?? string.Empty);
         return FindFormat(connection, transaction, libraryId, code) ??
             FindFormat(connection, transaction, 1, code) ??
             Fail<long>("A title-request format code is unresolved.");
@@ -963,17 +1262,27 @@ internal static class MigrationIndependentEntityVerifier
         _ => Fail<string?>("A source close reason is not supported.")
     };
 
-    private static string NormalizeWorkflowTagCode(string value) => value.Trim() switch
+    private static string NormalizeWorkflowTagCode(SourceRow row)
     {
-        "Identifier found" or "dupe found in Polaris" => "polaris_bib_found",
-        "Identifier number not found in system" or "ISBN not found in system" => "polaris_bib_not_found",
-        "Multiple Polaris matches" => "polaris_multiple_matches",
-        "Duplicate suggestion" => "duplicate_suggestion",
-        var code when !string.IsNullOrWhiteSpace(code) => code,
-        _ => Fail<string>("A source workflow tag code is blank.")
-    };
+        var value = row.Text("code");
+        if (string.IsNullOrEmpty(value))
+        {
+            value = row.Text("label");
+        }
 
-    private static string NormalizeFormatCode(string value) => value.Trim().ToLowerInvariant() switch
+        var code = TrimJavascriptFormatCode(value ?? string.Empty);
+        return code switch
+        {
+            "Identifier found" or "Dupe found in Polaris" or "dupe found in Polaris" => "polaris_bib_found",
+            "Identifier number not found in system" or "ISBN not found in system" => "polaris_bib_not_found",
+            "Multiple Polaris matches" => "polaris_multiple_matches",
+            "Duplicate suggestion" => "duplicate_suggestion",
+            var nonblankCode when nonblankCode.Length > 0 => nonblankCode,
+            _ => Fail<string>("A source workflow tag code is blank.")
+        };
+    }
+
+    private static string NormalizeFormatCode(string value) => TrimJavascriptFormatCode(value).ToLowerInvariant() switch
     {
         "0" => "book",
         "1" => "ebook",
@@ -981,9 +1290,30 @@ internal static class MigrationIndependentEntityVerifier
         "3" => "eaudiobook",
         "4" => "dvd",
         "5" => "music_cd",
-        var code when !string.IsNullOrWhiteSpace(code) => code,
+        var code when code.Length > 0 => code,
         _ => Fail<string>("A source format code is blank.")
     };
+
+    private static string TrimJavascriptFormatCode(string value)
+    {
+        var start = 0;
+        while (start < value.Length && IsJavascriptFormatWhitespace(value[start]))
+        {
+            start++;
+        }
+        var end = value.Length;
+        while (end > start && IsJavascriptFormatWhitespace(value[end - 1]))
+        {
+            end--;
+        }
+        return value[start..end];
+    }
+
+    private static bool IsJavascriptFormatWhitespace(char value) => value is
+        '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or
+        '\u1680' or '\u2000' or '\u2001' or '\u2002' or '\u2003' or '\u2004' or '\u2005' or
+        '\u2006' or '\u2007' or '\u2008' or '\u2009' or '\u200A' or '\u2028' or '\u2029' or
+        '\u202F' or '\u205F' or '\u3000' or '\uFEFF';
 
     private static string? NormalizeIsbnStatus(SourceRow row)
     {
@@ -1050,6 +1380,7 @@ internal static class MigrationIndependentEntityVerifier
         var sourceClaimantId = row.String("claimedByStaffUserId");
         var mappedStaffId = sourceClaimantId is not null && staffIds.TryGetValue(sourceClaimantId, out var mappedStaff) ? mappedStaff : (long?)null;
         var displayName = row.String("claimedByDisplayName");
+        var sourceDisplayName = row.Text("claimedByDisplayName");
         var claimedAt = row.UtcDateTime("claimedAt");
         var sourceType = NormalizeClaimType(row.String("claimType"));
         var sourceRuleId = row.String("claimRuleId");
@@ -1065,7 +1396,7 @@ internal static class MigrationIndependentEntityVerifier
         {
             if (status == "closed" && displayName is not null && claimedAt.HasValue && sourceType is not null)
             {
-                return new(true, false, null, null, null, displayName, claimedAt,
+                return new(true, false, null, null, null, sourceDisplayName, claimedAt,
                     NormalizeHistoricalClaimType(sourceType, mappedStaffId, mappedRuleId), mappedRuleId, "closed_claimant_unmapped");
             }
             return new(true, true, null, null, null, null, null, null, null,
@@ -1079,7 +1410,7 @@ internal static class MigrationIndependentEntityVerifier
                 return new(true, true, sourceClaimantId, mappedStaffId, null, null, null, null, null, "closed_attribution_incomplete");
             }
             var historicalType = NormalizeHistoricalClaimType(sourceType, mappedStaffId, mappedRuleId);
-            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, displayName, claimedAt, historicalType, mappedRuleId,
+            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, sourceDisplayName, claimedAt, historicalType, mappedRuleId,
                 mappedStaffId is null ? "closed_claimant_unmapped" : "closed_history_preserved");
         }
 
@@ -1098,7 +1429,7 @@ internal static class MigrationIndependentEntityVerifier
         }
         if (sourceType == "manual")
         {
-            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, displayName, claimedAt, "manual", null, "eligible");
+            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, sourceDisplayName, claimedAt, "manual", null, "eligible");
         }
         if (sourceType != "automatic_format_rule")
         {
@@ -1106,14 +1437,14 @@ internal static class MigrationIndependentEntityVerifier
         }
         if (!mappedRuleId.HasValue)
         {
-            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, displayName, claimedAt, "legacy", null, "claim_rule_unmapped_normalized");
+            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, sourceDisplayName, claimedAt, "legacy", null, "claim_rule_unmapped_normalized");
         }
         Ensure(sourceRules.ContainsKey(sourceRuleId!), "source claim rule mapping relationship");
         if (!StoredRuleMatches(connection, transaction, mappedRuleId.Value, libraryId, formatId, mappedStaffId.Value))
         {
-            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, displayName, claimedAt, "legacy", mappedRuleId, "claim_rule_mismatch_normalized");
+            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, sourceDisplayName, claimedAt, "legacy", mappedRuleId, "claim_rule_mismatch_normalized");
         }
-        return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, displayName, claimedAt, "automatic_format_rule", mappedRuleId, "eligible");
+        return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, sourceDisplayName, claimedAt, "automatic_format_rule", mappedRuleId, "eligible");
     }
 
     private static ClaimProjection ProjectCopyClaim(
@@ -1125,27 +1456,28 @@ internal static class MigrationIndependentEntityVerifier
     {
         var sourceClaimantId = row.String("claimedByStaffUserId");
         var mappedStaffId = sourceClaimantId is not null && staffIds.TryGetValue(sourceClaimantId, out var mapped) ? mapped : (long?)null;
-        var displayName = row.String("claimedByDisplayName");
+        var sourceDisplayName = row.Text("claimedByDisplayName");
+        var hasDisplayName = !string.IsNullOrEmpty(sourceDisplayName);
         var claimedAt = row.UtcDateTime("claimedAt");
-        var hasAttribution = sourceClaimantId is not null || displayName is not null || claimedAt.HasValue;
+        var hasAttribution = sourceClaimantId is not null || hasDisplayName || claimedAt.HasValue;
         if (!hasAttribution)
         {
             return new(false, false, null, null, null, null, null, null, null, "unclaimed");
         }
         if (status == "closed")
         {
-            if (displayName is null || !claimedAt.HasValue)
+            if (!hasDisplayName || !claimedAt.HasValue)
             {
                 return new(true, true, sourceClaimantId, mappedStaffId, null, null, null, null, null, "closed_attribution_incomplete");
             }
-            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, displayName, claimedAt, null, null,
+            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, sourceDisplayName, claimedAt, null, null,
                 mappedStaffId.HasValue ? "closed_history_preserved" : "closed_claimant_unmapped");
         }
         if (sourceClaimantId is null || !mappedStaffId.HasValue)
         {
             return new(true, true, sourceClaimantId, mappedStaffId, null, null, null, null, null, "claimant_unmapped");
         }
-        if (displayName is null || !claimedAt.HasValue)
+        if (!hasDisplayName || !claimedAt.HasValue)
         {
             return new(true, true, sourceClaimantId, mappedStaffId, null, null, null, null, null, "claim_metadata_incomplete");
         }
@@ -1154,7 +1486,7 @@ internal static class MigrationIndependentEntityVerifier
         {
             return new(true, true, sourceClaimantId, mappedStaffId, null, null, null, null, null, StaffIneligibilityReason(connection, transaction, mappedStaffId.Value, libraryId));
         }
-        return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, displayName, claimedAt, null, null, "eligible");
+        return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, sourceDisplayName, claimedAt, null, null, "eligible");
     }
 
     private static string StaffIneligibilityReason(SqlConnection connection, SqlTransaction? transaction, long staffId, int libraryId)
@@ -1205,7 +1537,7 @@ internal static class MigrationIndependentEntityVerifier
             return notes;
         }
         var claimantId = claim.SourceClaimantId ?? "unmapped";
-        var displayName = row.String("claimedByDisplayName") ?? "unknown";
+        var displayName = row.Text("claimedByDisplayName") ?? "unknown";
         var claimedAt = row.UtcDateTime("claimedAt")?.ToString("O") ?? "unknown";
         var status = NormalizeAdditionalCopyStatus(row.RequiredString("status"));
         var action = status == "closed"
@@ -1249,9 +1581,9 @@ internal static class MigrationIndependentEntityVerifier
                 sourceRecordId = sourceId,
                 sourceClaimantId = claim.SourceClaimantId,
                 mappedStaffUserId = claim.MappedStaffUserId,
-                sourceDisplayName = row.String("claimedByDisplayName"),
+                sourceDisplayName = row.Text("claimedByDisplayName"),
                 sourceClaimedAtUtc = row.UtcDateTime("claimedAt"),
-                sourceClaimType = row.String("claimType"),
+                sourceClaimType = row.Text("claimType"),
                 sourceClaimRuleId = row.String("claimRuleId"),
                 reason = claim.Reason
             });

@@ -14,7 +14,7 @@ using Asap.Security;
 namespace Asap.Tests.Migration;
 
 [TestClass]
-public sealed class MigrationCliTests
+public sealed partial class MigrationCliTests
 {
     [TestMethod]
     public void HelpReportsImplementedExportImportAndReconciliation()
@@ -5733,6 +5733,242 @@ public sealed class MigrationCliTests
 
     [TestMethod]
     [DoNotParallelize]
+    public async Task ImportProjectsPolarisProviderDefaultsAndPreservesRepresentableConfiguration()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-polaris-runtime-{Guid.NewGuid():N}");
+        var defaultDatabaseName = $"AsapMigrationPolarisDefault_{Guid.NewGuid():N}";
+        var accessDatabaseName = $"AsapMigrationPolarisAccess_{Guid.NewGuid():N}";
+        var invalidLeapDatabaseName = $"AsapMigrationPolarisLeap_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var defaultTarget = new SqlConnectionStringBuilder(master) { InitialCatalog = defaultDatabaseName }.ConnectionString;
+        var accessTarget = new SqlConnectionStringBuilder(master) { InitialCatalog = accessDatabaseName }.ConnectionString;
+        var invalidLeapTarget = new SqlConnectionStringBuilder(master) { InitialCatalog = invalidLeapDatabaseName }.ConnectionString;
+        var connectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+
+        static string SqlLiteral(string? value) =>
+            value is null ? "NULL" : $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
+
+        string CreatePackage(
+            string caseName,
+            string? host,
+            string? accessId,
+            string? staffDomain,
+            string? adminUser,
+            string? leapBibPattern,
+            string? leapPatronPattern,
+            string? workstationId = "99",
+            string? userId = "42",
+            string? langId = null,
+            string? appId = null)
+        {
+            var caseRoot = Path.Combine(root, caseName);
+            Directory.CreateDirectory(caseRoot);
+            var sql = $$"""
+                CREATE TABLE [system_settings]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY, [leapBibUrlPattern] TEXT, [leapPatronUrlPattern] TEXT
+                );
+                INSERT INTO [system_settings] VALUES
+                    ('settings-1', {{SqlLiteral(leapBibPattern)}}, {{SqlLiteral(leapPatronPattern)}});
+                CREATE TABLE [polaris_settings]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY, [host] TEXT, [accessId] TEXT, [apiKey] TEXT,
+                    [staffDomain] TEXT, [adminUser] TEXT, [adminPassword] TEXT, [workstationId] TEXT,
+                    [userId] TEXT, [langId] TEXT, [appId] TEXT, [requestingOrgId] TEXT, [pickupOrgId] TEXT
+                );
+                INSERT INTO [polaris_settings] VALUES
+                    ('polaris-1', {{SqlLiteral(host)}}, {{SqlLiteral(accessId)}}, NULL,
+                     {{SqlLiteral(staffDomain)}}, {{SqlLiteral(adminUser)}}, NULL,
+                     {{SqlLiteral(workstationId)}}, {{SqlLiteral(userId)}}, {{SqlLiteral(langId)}}, {{SqlLiteral(appId)}}, NULL, NULL);
+                """;
+            return CreateMinimalPackage(caseRoot, sql);
+        }
+
+        try
+        {
+            var bibPattern = "\u0085https://catalog.example/title/{bib}";
+            var feffPatronPattern = "\uFEFFhttps://catalog.example/patron/{{patron-id}}";
+            var defaultPackage = CreatePackage(
+                "polaris-defaults",
+                "polaris.example.org/",
+                string.Empty,
+                "  EXAMPLE-DOMAIN  ",
+                "  service-user  ",
+                bibPattern,
+                feffPatronPattern,
+                langId: string.Empty);
+            DeployDacpac(master, defaultDatabaseName);
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, defaultTarget);
+            var defaultReport = Path.Combine(root, "polaris-default-report.json");
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(0, RunImport(defaultPackage, defaultReport, connectionEnvironmentName, tenantId, error), error.ToString());
+            }
+
+            await using (var connection = new SqlConnection(defaultTarget))
+            {
+                await connection.OpenAsync();
+                await using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = "SELECT [Host], [AccessId], [StaffDomain], [AdminUser] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;";
+                    await using var reader = await command.ExecuteReaderAsync();
+                    Assert.IsTrue(await reader.ReadAsync());
+                    Assert.AreEqual("https://polaris.example.org", reader.GetString(0),
+                        "A schemeless legacy PAPI host must resolve to the pinned HTTPS host.");
+                    Assert.AreEqual("SuggestAPI", reader.GetString(1),
+                        "A missing or empty legacy AccessId must use the pinned provider default.");
+                    Assert.AreEqual("  EXAMPLE-DOMAIN  ", reader.GetString(2),
+                        "A representable legacy staff domain must retain its exact raw value.");
+                    Assert.AreEqual("  service-user  ", reader.GetString(3),
+                        "A representable legacy admin user must retain its exact raw value.");
+                }
+                await using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = "SELECT [LeapBibUrlPattern], [LeapPatronUrlPattern] FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1;";
+                    await using var reader = await command.ExecuteReaderAsync();
+                    Assert.IsTrue(await reader.ReadAsync());
+                    Assert.AreEqual(bibPattern, reader.GetString(0),
+                        "NEL is not ECMAScript trim whitespace, so the source-invalid research pattern must remain inactive.");
+                    Assert.AreEqual("https://catalog.example/patron/{{patron-id}}", reader.GetString(1),
+                        "A valid FEFF-padded patron pattern must materialize its pinned ECMAScript-trimmed effective value.");
+                }
+                using var reconcile = new StringWriter();
+                Assert.AreEqual(0, RunReconcile(defaultPackage, defaultReport, connectionEnvironmentName, reconcile), reconcile.ToString());
+            }
+
+            var accessPackage = CreatePackage(
+                "polaris-raw-access",
+                "https://polaris.example.org",
+                "  ACCESS-ID  ",
+                "DOMAIN",
+                "service-user",
+                null,
+                null,
+                workstationId: null,
+                userId: string.Empty,
+                appId: string.Empty);
+            DeployDacpac(master, accessDatabaseName);
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, accessTarget);
+            var accessReport = Path.Combine(root, "polaris-access-report.json");
+            using (var error = new StringWriter())
+            {
+                Assert.AreEqual(0, RunImport(accessPackage, accessReport, connectionEnvironmentName, tenantId, error), error.ToString());
+            }
+            await using (var connection = new SqlConnection(accessTarget))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = "SELECT [AccessId], [WorkstationId], [SystemPolarisUserId] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;";
+                await using var reader = await command.ExecuteReaderAsync();
+                Assert.IsTrue(await reader.ReadAsync());
+                Assert.AreEqual("  ACCESS-ID  ", reader.GetString(0),
+                    "A nonempty legacy AccessId is sent verbatim by the pinned provider.");
+                Assert.IsFalse(reader.IsDBNull(1), "A missing legacy workstation uses the pinned provider default.");
+                Assert.IsFalse(reader.IsDBNull(2), "An empty legacy system-user identity uses the pinned provider default.");
+                Assert.AreEqual(1, reader.GetInt32(1));
+                Assert.AreEqual(1, reader.GetInt32(2));
+                using var reconcile = new StringWriter();
+                Assert.AreEqual(0, RunReconcile(accessPackage, accessReport, connectionEnvironmentName, reconcile), reconcile.ToString());
+            }
+
+            var initialTargetFingerprint = string.Empty;
+            DeployDacpac(master, invalidLeapDatabaseName);
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, invalidLeapTarget);
+            initialTargetFingerprint = ComputeTargetFingerprintForTest(invalidLeapTarget);
+
+            void AssertRefusedBeforeSql(string package, string report, string errorCode, string reason)
+            {
+                using (var error = new StringWriter())
+                {
+                    Assert.AreEqual(1, RunImport(package, report, connectionEnvironmentName, tenantId, error), reason);
+                    StringAssert.Contains(error.ToString(), errorCode);
+                }
+                Assert.AreEqual(initialTargetFingerprint, ComputeTargetFingerprintForTest(invalidLeapTarget),
+                    "An unrepresentable provider configuration must leave target SQL unchanged.");
+                Assert.IsFalse(File.Exists(report));
+                Assert.IsFalse(File.Exists(report + ".pending"));
+            }
+
+            var uppercaseHostPackage = CreatePackage(
+                "polaris-uppercase-host",
+                "HTTPS://polaris.example.org/",
+                null,
+                null,
+                null,
+                null,
+                null);
+            AssertRefusedBeforeSql(
+                uppercaseHostPackage,
+                Path.Combine(root, "polaris-uppercase-report.json"),
+                "polaris_settings_unrepresentable",
+                "The pinned case-sensitive scheme check must not turn an uppercase source prefix into a working endpoint.");
+
+            var nondefaultLanguagePackage = CreatePackage(
+                "polaris-nondefault-language",
+                "https://polaris.example.org",
+                null,
+                null,
+                null,
+                null,
+                null,
+                langId: "1036");
+            AssertRefusedBeforeSql(
+                nondefaultLanguagePackage,
+                Path.Combine(root, "polaris-language-report.json"),
+                "polaris_settings_unrepresentable",
+                "A nondefault source Polaris language cannot be represented by the target provider.");
+
+            var nondefaultApplicationPackage = CreatePackage(
+                "polaris-nondefault-application",
+                "https://polaris.example.org",
+                null,
+                null,
+                null,
+                null,
+                null,
+                appId: "101");
+            AssertRefusedBeforeSql(
+                nondefaultApplicationPackage,
+                Path.Combine(root, "polaris-application-report.json"),
+                "polaris_settings_unrepresentable",
+                "A nondefault source Polaris application cannot be represented by the target provider.");
+
+            var invalidPattern = "\u0085https://catalog.example/patron/{{patron-id}}";
+            var invalidLeapPackage = CreatePackage(
+                "leap-patron-nel",
+                null,
+                null,
+                null,
+                null,
+                null,
+                invalidPattern);
+            var invalidLeapReport = Path.Combine(root, "leap-patron-report.json");
+            AssertRefusedBeforeSql(
+                invalidLeapPackage,
+                invalidLeapReport,
+                "leap_patron_url_pattern_unrepresentable",
+                "A NEL-prefixed patron pattern is unrepresentable while the target resolver uses .NET Trim.");
+            await AssertFreshImportTargetAsync(invalidLeapTarget);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            await DropDatabaseAsync(master, defaultDatabaseName);
+            await DropDatabaseAsync(master, accessDatabaseName);
+            await DropDatabaseAsync(master, invalidLeapDatabaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
     public async Task ImportPromotesConfiguredBootstrapIdentityAndProtectsIntegrationCredentials()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-bootstrap-{Guid.NewGuid():N}");
@@ -5754,9 +5990,11 @@ public sealed class MigrationCliTests
         X509Certificate2? persistedCertificate = null;
         try
         {
+            const string sourceApiKey = " \uFEFFsource-api-secret\u0085 ";
+            const string sourceAdminPassword = "   ";
             var package = CreateMinimalPackage(
                 root,
-                """
+                $"""
                 UPDATE [staff_users] SET [role] = 'admin', [libraryOrgId] = '2';
                 CREATE TABLE [polaris_settings]
                 (
@@ -5765,9 +6003,18 @@ public sealed class MigrationCliTests
                     [workstationId] TEXT, [userId] TEXT, [requestingOrgId] TEXT, [pickupOrgId] TEXT
                 );
                 INSERT INTO [polaris_settings] VALUES
-                    ('polaris-1', 'https://polaris.example.org', 'access', 'source-api-secret',
-                     'EXAMPLE', 'service-user', 'source-admin-secret', '99', '42', '7', '3');
+                    ('polaris-1', 'https://polaris.example.org', 'access', '{sourceApiKey}',
+                     'EXAMPLE', 'service-user', '{sourceAdminPassword}', '99', '42', '7', '3');
                 """);
+            using (var runtime = JsonDocument.Parse(
+                       File.ReadAllText(Path.Combine(package, "effective-legacy-runtime-config.json"))))
+            {
+                var settings = runtime.RootElement.GetProperty("settings");
+                Assert.IsTrue(settings.GetProperty("PolarisApiKey").GetProperty("hasValue").GetBoolean(),
+                    "The frozen runtime must preserve nonempty Polaris credential presence without trimming.");
+                Assert.IsTrue(settings.GetProperty("PolarisAdminPassword").GetProperty("hasValue").GetBoolean(),
+                    "A whitespace-only nonempty Polaris credential must remain present in frozen runtime metadata.");
+            }
             DeployDacpac(master, databaseName);
 
             using var rsa = RSA.Create(2048);
@@ -5827,45 +6074,161 @@ public sealed class MigrationCliTests
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'SOURCE-ADMIN@EXAMPLE.ORG' AND [EntraTenantId] IS NULL AND [EntraObjectId] IS NULL AND [Role] = N'super_admin' AND [OrganizationId] = 1 AND [IsActive] = 1;"));
-            var ciphertexts = new List<string>();
+            string apiKeyCiphertext;
+            string adminPasswordCiphertext;
+            string postmarkTokenCiphertext;
             await using (var command = connection.CreateCommand())
             {
                 command.CommandText =
                     """
-                    SELECT [ProtectedApiKey] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1
-                    UNION ALL SELECT [ProtectedAdminPassword] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1
-                    UNION ALL SELECT [ProtectedServerToken] FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1;
+                    SELECT [ProtectedApiKey], [ProtectedAdminPassword]
+                    FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;
                     """;
                 await using var reader = await command.ExecuteReaderAsync();
-                while (await reader.ReadAsync()) ciphertexts.Add(reader.GetString(0));
+                Assert.IsTrue(await reader.ReadAsync(), "The imported system Polaris settings row must exist.");
+                Assert.IsFalse(reader.IsDBNull(0), "The source API key must remain protected.");
+                Assert.IsFalse(reader.IsDBNull(1), "The source admin password must remain protected.");
+                apiKeyCiphertext = reader.GetString(0);
+                adminPasswordCiphertext = reader.GetString(1);
             }
-            Assert.HasCount(3, ciphertexts);
-            Assert.IsFalse(ciphertexts.Contains("source-api-secret"));
-            Assert.IsFalse(ciphertexts.Contains("source-admin-secret"));
-            Assert.IsFalse(ciphertexts.Contains("target-postmark-secret"));
+            await using (var command = connection.CreateCommand())
+            {
+                command.CommandText =
+                    "SELECT [ProtectedServerToken] FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1;";
+                postmarkTokenCiphertext = (string)(await command.ExecuteScalarAsync() ??
+                    throw new InvalidOperationException("The operator-provisioned token ciphertext is missing."));
+            }
+            Assert.IsFalse(string.Equals(apiKeyCiphertext, sourceApiKey, StringComparison.Ordinal),
+                "The protected API key must not be stored as plaintext.");
+            Assert.IsFalse(string.Equals(adminPasswordCiphertext, sourceAdminPassword, StringComparison.Ordinal),
+                "The protected admin password must not be stored as plaintext.");
+            Assert.IsFalse(string.Equals(postmarkTokenCiphertext, "target-postmark-secret", StringComparison.Ordinal),
+                "The protected operator token must not be stored as plaintext.");
             var protector = DataProtectionProvider.Create(
                     new DirectoryInfo(keyPath),
                     builder => builder
                         .SetApplicationName(SecurityContract.DataProtectionApplicationName)
                         .ProtectKeysWithCertificate(persistedCertificate))
                 .CreateProtector(SecurityContract.IntegrationCredentialPurpose);
-            CollectionAssert.AreEquivalent(
-                new[] { "source-api-secret", "source-admin-secret", "target-postmark-secret" },
-                ciphertexts.Select(protector.Unprotect).ToArray());
+            Assert.IsTrue(StringComparer.Ordinal.Equals(sourceApiKey, protector.Unprotect(apiKeyCiphertext)),
+                "The protected API key must round-trip the exact source value without Unicode trimming.");
+            Assert.IsTrue(StringComparer.Ordinal.Equals(sourceAdminPassword, protector.Unprotect(adminPasswordCiphertext)),
+                "A whitespace-only nonempty protected admin password must round-trip exactly.");
+            Assert.IsTrue(StringComparer.Ordinal.Equals("target-postmark-secret", protector.Unprotect(postmarkTokenCiphertext)),
+                "The target operator token must retain its exact configured value.");
             var reportText = await File.ReadAllTextAsync(report);
             using (var reportDocument = JsonDocument.Parse(reportText))
             {
                 Assert.AreEqual(0, reportDocument.RootElement.GetProperty("importedCounts").GetProperty("smtp_settings").GetInt32());
+                var polarisState = reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
+                    item.GetProperty("entity").GetString() == "polaris_settings");
+                Assert.IsTrue(polarisState.GetProperty("apiKeyProtected").GetBoolean());
+                Assert.IsTrue(polarisState.GetProperty("adminPasswordProtected").GetBoolean());
                 var tokenState = reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
                     item.GetProperty("entity").GetString() == "email_provider_token");
                 Assert.AreEqual(1, tokenState.GetProperty("organizationId").GetInt32());
                 Assert.IsTrue(tokenState.GetProperty("postmarkTokenProvisioned").GetBoolean());
             }
             Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1 AND [ProtectedServerToken] IS NOT NULL;"));
+
+            string KeyRingSnapshot() => string.Join(
+                Environment.NewLine,
+                Directory.EnumerateFiles(keyPath, "*", SearchOption.AllDirectories)
+                    .OrderBy(path => Path.GetRelativePath(keyPath, path), StringComparer.Ordinal)
+                    .Select(path =>
+                    {
+                        var information = new FileInfo(path);
+                        var digest = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+                        return $"{Path.GetRelativePath(keyPath, path)}|{information.Length}|{information.LastWriteTimeUtc.Ticks}|{digest}";
+                    }));
+
+            var keyRingBeforeFirstReconcile = KeyRingSnapshot();
             using (var reconcile = new StringWriter())
             {
                 Assert.AreEqual(0, RunReconcile(package, report, connectionEnvironmentName, reconcile), reconcile.ToString());
             }
+            Assert.AreEqual(keyRingBeforeFirstReconcile, KeyRingSnapshot(),
+                "Successful read-only credential reconciliation must not create or rotate Data Protection keys.");
+
+            var differentApiKeyCiphertext = protector.Protect(Guid.NewGuid().ToString("N"));
+            var keyRingBeforeCredentialChecks = KeyRingSnapshot();
+            await using (var changeCredential = connection.CreateCommand())
+            {
+                changeCredential.CommandText = "UPDATE [asap].[PolarisSettings] SET [ProtectedApiKey] = @value WHERE [OrganizationId] = 1;";
+                changeCredential.Parameters.AddWithValue("@value", differentApiKeyCiphertext);
+                Assert.AreEqual(1, await changeCredential.ExecuteNonQueryAsync());
+            }
+            RefreshReportFingerprint(report, target);
+            var differentCredentialSqlFingerprint = ComputeTargetFingerprintForTest(target);
+            var differentCredentialReport = await File.ReadAllTextAsync(report);
+            using (var reconcile = new StringWriter())
+            {
+                Assert.AreEqual(1, RunReconcile(package, report, connectionEnvironmentName, reconcile),
+                    "Reconciliation must decrypt and compare the protected credential to immutable source bytes.");
+                StringAssert.Contains(reconcile.ToString(), "reconciliation_failed");
+                Assert.IsFalse(reconcile.ToString().Contains(sourceApiKey, StringComparison.Ordinal));
+            }
+            Assert.AreEqual(differentCredentialSqlFingerprint, ComputeTargetFingerprintForTest(target),
+                "Failed credential reconciliation must not repair SQL.");
+            Assert.AreEqual(differentCredentialReport, await File.ReadAllTextAsync(report),
+                "Failed credential reconciliation must not rewrite the report.");
+            Assert.AreEqual(keyRingBeforeCredentialChecks, KeyRingSnapshot(),
+                "Read-only credential reconciliation must not create or rotate Data Protection keys.");
+            await using (var readChangedCredential = connection.CreateCommand())
+            {
+                readChangedCredential.CommandText = "SELECT [ProtectedApiKey] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;";
+                Assert.AreEqual(differentApiKeyCiphertext, (string?)await readChangedCredential.ExecuteScalarAsync(),
+                    "The independently rejected ciphertext must remain unchanged.");
+            }
+
+            var pendingPath = report + ".pending";
+            var pendingReport = JsonNode.Parse(differentCredentialReport)!.AsObject();
+            pendingReport["reportState"] = "commit_pending";
+            pendingReport["reconciliationPassed"] = false;
+            var pendingReportText = pendingReport.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            await File.WriteAllTextAsync(pendingPath, pendingReportText, new UTF8Encoding(false));
+            File.Delete(report);
+            using (var recover = new StringWriter())
+            {
+                Assert.AreEqual(1, RunRecoverReport(package, report, connectionEnvironmentName, recover),
+                    "Report recovery must decrypt and compare the protected credential to immutable source bytes.");
+                StringAssert.Contains(recover.ToString(), "reconciliation_failed");
+                Assert.IsFalse(recover.ToString().Contains(sourceApiKey, StringComparison.Ordinal));
+            }
+            Assert.AreEqual(differentCredentialSqlFingerprint, ComputeTargetFingerprintForTest(target),
+                "Failed credential recovery must not repair SQL.");
+            Assert.AreEqual(pendingReportText, await File.ReadAllTextAsync(pendingPath),
+                "Failed credential recovery must not rewrite or promote the prepared report.");
+            Assert.IsFalse(File.Exists(report), "Failed credential recovery must leave the report unpromoted.");
+            Assert.AreEqual(keyRingBeforeCredentialChecks, KeyRingSnapshot(),
+                "Read-only credential recovery must not create or rotate Data Protection keys.");
+
+            await using (var restoreCredential = connection.CreateCommand())
+            {
+                restoreCredential.CommandText = "UPDATE [asap].[PolarisSettings] SET [ProtectedApiKey] = @value WHERE [OrganizationId] = 1;";
+                restoreCredential.Parameters.AddWithValue("@value", apiKeyCiphertext);
+                Assert.AreEqual(1, await restoreCredential.ExecuteNonQueryAsync());
+            }
+            var restoredCredentialFingerprint = ComputeTargetFingerprintForTest(target);
+            pendingReport = JsonNode.Parse(await File.ReadAllTextAsync(pendingPath))!.AsObject();
+            pendingReport["targetFingerprintSha256"] = restoredCredentialFingerprint;
+            await File.WriteAllTextAsync(
+                pendingPath,
+                pendingReport.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+                new UTF8Encoding(false));
+            using (var recover = new StringWriter())
+            {
+                Assert.AreEqual(0, RunRecoverReport(package, report, connectionEnvironmentName, recover), recover.ToString());
+            }
+            Assert.IsTrue(File.Exists(report));
+            Assert.IsFalse(File.Exists(pendingPath));
+            Assert.AreEqual(keyRingBeforeCredentialChecks, KeyRingSnapshot(),
+                "Successful read-only credential recovery must not create or rotate Data Protection keys.");
+            using (var reconcile = new StringWriter())
+            {
+                Assert.AreEqual(0, RunReconcile(package, report, connectionEnvironmentName, reconcile), reconcile.ToString());
+            }
+
             await AssertFingerprintRefreshedSourceOwnedDriftRejectedAsync(
                 connection, target, package, report, connectionEnvironmentName,
                 "source-absent seeded email-template key case only",
@@ -5910,8 +6273,7 @@ public sealed class MigrationCliTests
                 Assert.AreEqual(0, RunReconcile(package, report, connectionEnvironmentName, reconcile), reconcile.ToString());
             }
 
-            Assert.IsFalse(reportText.Contains("source-api-secret", StringComparison.Ordinal));
-            Assert.IsFalse(reportText.Contains("source-admin-secret", StringComparison.Ordinal));
+            Assert.IsFalse(reportText.Contains(sourceApiKey, StringComparison.Ordinal), "The report must not contain plaintext integration credentials.");
             Assert.IsFalse(reportText.Contains("target-postmark-secret", StringComparison.Ordinal));
             StringAssert.Contains(reportText, "promoted_existing");
             using (var reportDocument = JsonDocument.Parse(reportText))

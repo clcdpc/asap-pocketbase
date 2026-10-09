@@ -79,6 +79,28 @@ public sealed class MigrationPackageFile
 
 public static class MigrationPackageValidator
 {
+    private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> SourceReferenceFields =
+        new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["branding"] = IdentityFields("libraryOrganization"),
+            ["workflow_settings"] = IdentityFields("libraryOrganization", "outstandingTimeoutRejectionTemplate"),
+            ["ui_settings"] = IdentityFields("libraryOrganization"),
+            ["patron_library_settings"] = IdentityFields("libraryOrganization"),
+            ["library_settings"] = IdentityFields("libraryOrganization"),
+            ["material_formats"] = IdentityFields("libraryOrganization"),
+            ["format_claim_rules"] = IdentityFields("libraryOrganization", "staffUserId", "staffUser"),
+            ["email_templates"] = IdentityFields("libraryOrganization"),
+            ["rejection_templates"] = IdentityFields("libraryOrganization"),
+            ["title_requests"] = IdentityFields(
+                "formatRef", "statusRef", "closeReasonRef", "claimedByStaffUserId", "claimRuleId"),
+            ["title_request_tags"] = IdentityFields("titleRequest", "tag"),
+            ["title_request_events"] = IdentityFields("titleRequest", "fromStatus", "toStatus", "closeReason"),
+            ["email_delivery_events"] = IdentityFields("titleRequest", "emailTemplate"),
+            ["deleted_request_audit"] = IdentityFields("titleRequestId", "deletedByStaff"),
+            ["additional_copy_requests"] = IdentityFields(
+                "sourceTitleRequest", "createdByStaff", "closedByStaff", "claimedByStaffUserId")
+        };
+
     private static readonly HashSet<string> ReservedSystemFormatCodes = new(StringComparer.Ordinal)
     {
         "book", "audiobook_cd", "dvd", "music_cd", "ebook", "eaudiobook"
@@ -248,6 +270,7 @@ public static class MigrationPackageValidator
 
         var package = new ValidatedMigrationPackage(root, manifest);
         ValidateMaterialFormatCanonicalIdentities(package);
+        MigrationIndependentFrozenMetadataVerifier.Verify(package);
         return package;
     }
 
@@ -258,7 +281,7 @@ public static class MigrationPackageValidator
         var rows = MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats");
         var exactSystemSourceCodes = rows
             .Where(row => row.RequiredString("scope").Trim().Equals("system", StringComparison.OrdinalIgnoreCase))
-            .Select(row => row.RequiredString("code"))
+            .Select(SourceFormatCode)
             .ToHashSet(StringComparer.Ordinal);
         var systemCanonicalSourceCodes = exactSystemSourceCodes
             .Select(NormalizeFormatCode)
@@ -275,8 +298,18 @@ public static class MigrationPackageValidator
             var owner = scope == "system"
                 ? "1"
                 : ResolveSourceLibraryIdentity(row.RequiredString("libraryOrganization"), organizationsById, organizations);
-            var sourceCode = row.RequiredString("code");
+            var sourceCode = SourceFormatCode(row);
             var code = NormalizeFormatCode(sourceCode);
+            var editorCode = code.Trim().ToLowerInvariant();
+            if (!string.Equals(editorCode, code, StringComparison.Ordinal))
+            {
+                var errorCode = scope == "library" && ReservedSystemFormatCodes.Contains(editorCode)
+                    ? "format_library_seed_unsupported"
+                    : "format_code_unrepresentable";
+                throw new MigrationOperationException(
+                    errorCode,
+                    $"Material format {row.RequiredString("id")} has a code the current target settings/editor contract cannot preserve.");
+            }
             if (!identitiesByTargetCode.TryGetValue(code, out var existingIdentities))
             {
                 existingIdentities = [];
@@ -320,7 +353,10 @@ public static class MigrationPackageValidator
         return organization?.Int32("organizationId")?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? sourceReference;
     }
 
-    private static string NormalizeFormatCode(string value) => value.Trim().ToLowerInvariant() switch
+    private static string SourceFormatCode(SourceRow row) => row.Text("code") ??
+        throw new MigrationOperationException("format_code_invalid", "Material format code is missing.");
+
+    private static string NormalizeFormatCode(string value) => TrimJavascriptWhitespace(value).ToLowerInvariant() switch
     {
         "0" => "book",
         "1" => "ebook",
@@ -328,9 +364,30 @@ public static class MigrationPackageValidator
         "3" => "eaudiobook",
         "4" => "dvd",
         "5" => "music_cd",
-        var code when !string.IsNullOrWhiteSpace(code) => code,
+        var code when code.Length > 0 => code,
         _ => throw new MigrationOperationException("format_code_invalid", "Material format code is blank.")
     };
+
+    private static string TrimJavascriptWhitespace(string value)
+    {
+        var start = 0;
+        while (start < value.Length && IsJavascriptWhitespace(value[start]))
+        {
+            start++;
+        }
+        var end = value.Length;
+        while (end > start && IsJavascriptWhitespace(value[end - 1]))
+        {
+            end--;
+        }
+        return value[start..end];
+    }
+
+    private static bool IsJavascriptWhitespace(char value) => value is
+        '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or
+        '\u1680' or '\u2000' or '\u2001' or '\u2002' or '\u2003' or '\u2004' or '\u2005' or
+        '\u2006' or '\u2007' or '\u2008' or '\u2009' or '\u200A' or '\u2028' or '\u2029' or
+        '\u202F' or '\u205F' or '\u3000' or '\uFEFF';
 
     internal static string ComputePackageIdentitySha256(ValidatedMigrationPackage package) =>
         HashFile(Path.Combine(package.RootPath, "manifest.json"));
@@ -556,6 +613,8 @@ public static class MigrationPackageValidator
                         "package_domain_invalid",
                         $"Collection {collection.Name} contains a non-object row.");
                 }
+
+                ValidateSourceIdentityFields(collection.Name, row);
             }
 
             if (!observedCounts.TryAdd(collection.Name, collection.Value.GetArrayLength()))
@@ -572,6 +631,113 @@ public static class MigrationPackageValidator
                 $"Domain file {Path.GetFileName(path)} does not contain its complete collection set.");
         }
     }
+
+    private static void ValidateSourceIdentityFields(string collection, JsonElement row)
+    {
+        var sourceIdField = string.Equals(collection, "branding", StringComparison.OrdinalIgnoreCase)
+            ? "sourceRecordId"
+            : "id";
+        if (!TryGetIdentityProperty(row, sourceIdField, out var sourceId) ||
+            sourceId.ValueKind != JsonValueKind.String ||
+            !IsExactSourceIdentity(sourceId.GetString()!, allowEmpty: false))
+        {
+            throw InvalidSourceIdentity();
+        }
+
+        if (!SourceReferenceFields.TryGetValue(collection, out var referenceFields))
+        {
+            return;
+        }
+
+        foreach (var field in referenceFields)
+        {
+            if (!TryGetIdentityProperty(row, field, out var reference) ||
+                reference.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            {
+                continue;
+            }
+
+            if (string.Equals(field, "libraryOrganization", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!IsExactOrganizationReference(reference))
+                {
+                    throw InvalidSourceIdentity();
+                }
+                continue;
+            }
+
+            if (reference.ValueKind != JsonValueKind.String ||
+                !IsExactSourceIdentity(reference.GetString()!, allowEmpty: true))
+            {
+                throw InvalidSourceIdentity();
+            }
+        }
+    }
+
+    private static bool TryGetIdentityProperty(JsonElement row, string name, out JsonElement value)
+    {
+        foreach (var property in row.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static bool IsExactOrganizationReference(JsonElement reference)
+    {
+        if (reference.ValueKind == JsonValueKind.Number)
+        {
+            return reference.TryGetInt32(out _);
+        }
+        if (reference.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        return IsExactSourceIdentity(reference.GetString()!, allowEmpty: true);
+    }
+
+    private static bool IsExactSourceIdentity(string value, bool allowEmpty)
+    {
+        return (allowEmpty || value.Length > 0) &&
+            string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
+            string.Equals(value, TrimLegacySourceIdentity(value), StringComparison.Ordinal);
+    }
+
+    private static string TrimLegacySourceIdentity(string value)
+    {
+        var start = 0;
+        while (start < value.Length && IsLegacySourceIdentityWhitespace(value[start]))
+        {
+            start++;
+        }
+
+        var end = value.Length;
+        while (end > start && IsLegacySourceIdentityWhitespace(value[end - 1]))
+        {
+            end--;
+        }
+
+        return value[start..end];
+    }
+
+    private static bool IsLegacySourceIdentityWhitespace(char value) => value is
+        '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or
+        '\u1680' or '\u2000' or '\u2001' or '\u2002' or '\u2003' or '\u2004' or '\u2005' or
+        '\u2006' or '\u2007' or '\u2008' or '\u2009' or '\u200A' or '\u2028' or '\u2029' or
+        '\u202F' or '\u205F' or '\u3000' or '\uFEFF';
+
+    private static MigrationOperationException InvalidSourceIdentity() =>
+        new("package_domain_invalid", "A domain row contains a malformed source identity or relationship reference.");
+
+    private static IReadOnlySet<string> IdentityFields(params string[] names) =>
+        names.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private static IReadOnlySet<string> ExpectedCollections(string relativePath)
     {
@@ -738,6 +904,12 @@ public static class MigrationPackageValidator
             throw new MigrationOperationException(
                 "package_secret_forbidden",
                 $"Secret material must be represented only by presence metadata: {name}");
+        }
+        if (value.EnumerateObject().Any(property => property.Name is not ("hasValue" or "provenance" or "source")))
+        {
+            throw new MigrationOperationException(
+                "package_secret_forbidden",
+                "Secret presence metadata contains an unsupported field.");
         }
         if (!value.TryGetProperty("hasValue", out var hasValue) ||
             hasValue.ValueKind is not (JsonValueKind.True or JsonValueKind.False))

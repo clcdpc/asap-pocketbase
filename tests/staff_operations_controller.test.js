@@ -2,6 +2,15 @@ const assert = require('node:assert/strict');
 const { fixture } = require('./helpers/staff-controller.cjs');
 const actor = id => ({ id, tenantId: `tenant-${id}`, authenticationEmail: `${id}@example.org`,
   organizationId: 1, role: 'super_admin', version: 'v1' });
+const organizationCatalog = [
+  { id: 1, name: 'System', abbreviation: 'SYS', organizationCodeId: 1, parentOrganizationId: null, isActive: true, lastSyncedUtc: null, version: 'org-1' },
+  { id: 2, name: 'Library Two', abbreviation: 'L2', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, lastSyncedUtc: null, version: 'org-2' },
+  { id: 3, name: 'Library Three', abbreviation: 'L3', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, lastSyncedUtc: null, version: 'org-3' },
+  { id: 4, name: 'Library Four', abbreviation: 'L4', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, lastSyncedUtc: null, version: 'org-4' },
+  { id: 20, name: 'Branch Twenty', abbreviation: 'B20', organizationCodeId: 3, parentOrganizationId: 2, isActive: true, lastSyncedUtc: null, version: 'org-20' },
+  { id: 22, name: 'Inactive Branch', abbreviation: 'B22', organizationCodeId: 3, parentOrganizationId: 2, isActive: false, lastSyncedUtc: null, version: 'org-22' },
+  { id: 21, name: 'Unclassified Reference', abbreviation: null, organizationCodeId: null, parentOrganizationId: 2, isActive: true, lastSyncedUtc: null, version: 'org-21' }
+];
 (async () => {
   await fixture(async ({ load, get }) => {
     const { createSessionIdentity } = await load('session-identity');
@@ -12,7 +21,7 @@ const actor = id => ({ id, tenantId: `tenant-${id}`, authenticationEmail: `${id}
       onScopeChange() {}, clearReceipt() {}, onReceipt: (...value) => receipts.push(value),
       request: async (path, init = {}) => {
         if (init.method === 'POST') return new Promise(resolve => pending.push({ path, init, resolve }));
-        if (path.endsWith('/organizations')) return { data: [{ id: 2, name: 'A', isActive: true }] };
+        if (path.endsWith('/organizations')) return { data: organizationCatalog };
         return { items: [] };
       } };
     const first = createOperationsController(options); first.setStaff(session.preferences()); first.activate();
@@ -76,12 +85,16 @@ const actor = id => ({ id, tenantId: `tenant-${id}`, authenticationEmail: `${id}
             return { code: 'queued' };
           }
           paths.push(path);
-          if (path.endsWith('/organizations')) return { data: [{ id: 3, name: 'C', isActive: !retired || scenario !== 'inactive' }] };
+          if (path.endsWith('/organizations')) return { data: organizationCatalog.map(item => item.id === 3
+            ? { ...item, isActive: !retired || scenario !== 'inactive' } : item) };
           if (retired && scenario === 'exact review unavailable' && path.endsWith('organizationId=3')) throw new Error('Exact review unavailable');
           return { items: [] };
         } });
       controller.setStaff(identity.preferences()); controller.activate();
-      controller.setLibraries([{ id: 3, name: 'C' }]);
+      // Queue projections supply OrganizationChoice{id,name}, not organization summaries.
+      controller.setLibraries([{ id: 3, name: 'Library Three' }]);
+      assert.deepEqual([...get('#operations-scope').options].map(option => option.value), ['all', '3'],
+        'trusted queue choices retain the selectable library scope');
       get('#operations-scope').value = '3'; get('#operations-scope').dispatchEvent(new dom.window.Event('change'));
       await new Promise(resolve => setImmediate(resolve));
       await controller.run(scenario === 'email body' ? '/api/asap/staff/email-operations/71/retry'
@@ -129,7 +142,7 @@ const actor = id => ({ id, tenantId: `tenant-${id}`, authenticationEmail: `${id}
           onScopeChange() {}, clearReceipt() {}, onReceipt() {},
           request: async (path, init = {}) => {
             if (init.method === 'POST') { posts.push({ path, init }); throw new Error('Response lost'); }
-            if (path.endsWith('/organizations')) return { data: [{ id: 3, isActive: true }, { id: 4, isActive: true }] };
+            if (path.endsWith('/organizations')) return { data: organizationCatalog };
             return { items: [] };
           } };
         const first = createOperationsController(options); first.setStaff(session.preferences()); first.activate();
@@ -169,10 +182,13 @@ const actor = id => ({ id, tenantId: `tenant-${id}`, authenticationEmail: `${id}
         request: async (requestPath, init = {}) => {
           if (init.method === 'POST') { posts.push({ path: requestPath, init }); throw new Error('Response lost'); }
           reads.push(requestPath);
-          return requestPath.endsWith('/organizations') ? { data: [{ id: 3, isActive: true }] } : { items: [] };
+          return requestPath.endsWith('/organizations') ? { data: organizationCatalog } : { items: [] };
         } };
       const first = createOperationsController(options); first.setStaff(owner); first.activate();
-      first.setLibraries([{ id: 3, isActive: true }]);
+      // The queue/copy caller passes its restricted {id,name} projection.
+      first.setLibraries([{ id: 3, name: 'Library Three' }]);
+      assert.deepEqual([...get('#operations-scope').options].map(option => option.value), ['all', '3'],
+        'trusted choices preserve the captured library scope for exact review');
       get('#operations-scope').value = '3'; get('#operations-scope').dispatchEvent(new dom.window.Event('change'));
       await new Promise(resolve => setImmediate(resolve));
       const body = path.endsWith('/retry') ? { version: 'captured-v1' } : undefined;
@@ -232,7 +248,7 @@ const actor = id => ({ id, tenantId: `tenant-${id}`, authenticationEmail: `${id}
     const options = { root: get('#operations-view'), sessionIdentity: session, announce() {},
       onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
         if (init.method === 'POST') return new Promise(resolve => pending.push(resolve));
-        return path.endsWith('/organizations') ? { data: [{ id: 3, isActive: true }] } : { items: [] };
+        return path.endsWith('/organizations') ? { data: organizationCatalog } : { items: [] };
       } };
     const first = createOperationsController(options); first.setStaff(session.preferences()); first.activate();
     const saving = first.run('/api/asap/staff/email-operations/test', 'Reloaded operation'); first.dispose();
@@ -249,5 +265,114 @@ const actor = id => ({ id, tenantId: `tenant-${id}`, authenticationEmail: `${id}
     assert.equal(dom.window.sessionStorage.getItem(key), null, 'new retry clears its own exact record');
     second.dispose();
   });
-  console.log('Operations controller: 27 fixtures passed, including six authority cases, twelve actor-isolation cases, two preference restores and five exact-record races');
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createOperationsController } = await load('operations-controller');
+    const identity = createSessionIdentity(); identity.accept(actor('catalog-scope'));
+    const paths = [];
+    const key = `asap.staff.operation.${identity.actor().tenantId}.${identity.actor().id}.${encodeURIComponent(identity.actor().key)}`;
+    const saved = {
+      path: '/api/asap/staff/workflow/run-now',
+      message: 'Retained branch workflow',
+      scope: '20',
+      operationId: '74c093a8-6d8b-4f8d-b38a-65521235ee4a',
+      actorKey: identity.actor().key,
+      body: null
+    };
+    dom.window.sessionStorage.setItem(key, JSON.stringify(saved));
+    const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+      announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {},
+      request: async path => {
+        paths.push(path);
+        return path.endsWith('/organizations') ? { data: organizationCatalog } : { items: [] };
+      } });
+    controller.setStaff(identity.preferences()); controller.activate();
+    assert.equal(await controller.refresh(), true);
+    assert.deepEqual([...get('#operations-scope').options].map(option => option.value), ['all', '2', '3', '4'],
+      'active code-2 libraries remain selectable while system, branch, inactive and unclassified rows stay excluded');
+    assert.equal(get('#operations-outcome button'), null,
+      'a retained command scoped to an active branch is not reviewable as a library operation');
+    assert.equal(paths.some(path => path.includes('organizationId=20')), false,
+      'branch scope cannot trigger exact command review reads');
+    assert.equal(dom.window.sessionStorage.getItem(key), JSON.stringify(saved),
+      'filtered presentation preserves the captured command without authorizing it');
+    controller.dispose();
+  });
+  const status200Commands = [
+    { selector: '#run-workflow-now', path: '/api/asap/staff/workflow/run-now', message: 'Workflow run' },
+    { selector: '#run-weekly-now', path: '/api/asap/staff/workflow/weekly-summary/run-now?force=false', message: 'Weekly summary' },
+    { selector: '#send-test-email', path: '/api/asap/staff/email-operations/test', message: 'Test email' },
+    { retry: true, path: '/api/asap/staff/email-operations/71/retry', message: 'Email retry 71', body: { version: 'email-v1' } }
+  ];
+  for (const command of status200Commands) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createOperationsController } = await load('operations-controller');
+      const identity = createSessionIdentity();
+      const ownerA = identity.accept(actor('a'));
+      const posts = [], receipts = [];
+      const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+        announce() {}, onScopeChange() {}, clearReceipt() {}, onReceipt: (...args) => receipts.push(args),
+        request: async (path, init = {}) => {
+          if (init.method === 'POST') {
+            posts.push({ path, init });
+            throw Object.assign(new Error('HTTP 200 operation result is unknown.'), {
+              status: 200, outcomeUnknown: true
+            });
+          }
+          if (path.endsWith('/organizations')) return { data: organizationCatalog };
+          if (path.includes('/email-operations')) return { items: [
+            { id: '71', status: 'failed', deliveryClass: 'operational_test', version: 'email-v1',
+              lastErrorCode: 'mail_not_configured', canRetry: true }
+          ] };
+          return { items: [] };
+        } });
+      controller.setStaff(ownerA);
+      controller.setLibraries([{ id: 3, name: 'Library Three' }]);
+      controller.activate();
+      get('#operations-scope').value = '3';
+      get('#operations-scope').dispatchEvent(new dom.window.Event('change'));
+      await controller.refresh();
+
+      if (command.retry) {
+        const row = [...get('#email-operations-table').querySelectorAll('tr')]
+          .find(item => item.textContent.includes('71'));
+        assert.ok(row, 'retry-email witness loads the captured failed row');
+        row.querySelector('button').click();
+      } else {
+        get(command.selector).click();
+      }
+      for (let attempt = 0; attempt < 20 && posts.length === 0; attempt++) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      for (let attempt = 0; attempt < 5; attempt++) await new Promise(resolve => setImmediate(resolve));
+
+      assert.equal(posts.length, 1, `${command.message}: one uncertain POST is captured and never replayed`);
+      assert.ok(posts[0].path.startsWith(command.path), `${command.message}: dispatch uses its real command path`);
+      assert.equal(posts[0].init.body?.version, command.body?.version);
+      assert.equal(receipts.length, 1, `${command.message}: a status-200 unknown result creates one owner-bound receipt`);
+      assert.equal(receipts[0][1].id, ownerA.id);
+      assert.equal(receipts[0][2].outcome, 'uncertain');
+      assert.equal(receipts[0][2].scope, '3', 'receipt retains the scope captured at dispatch');
+
+      const keyA = `asap.staff.operation.${ownerA.tenantId}.${ownerA.id}.${encodeURIComponent(identity.actor().key)}`;
+      const rawA = dom.window.sessionStorage.getItem(keyA);
+      assert.ok(rawA, `${command.message}: uncertain dispatch evidence remains stored`);
+      const savedA = JSON.parse(rawA);
+      assert.equal(savedA.actorKey, identity.actor().key);
+      assert.equal(savedA.scope, '3');
+      assert.equal(savedA.path, command.path);
+      assert.equal(savedA.body?.version, command.body?.version);
+
+      identity.clear();
+      const ownerB = identity.accept(actor('b'));
+      controller.setStaff(ownerB);
+      const keyB = `asap.staff.operation.${ownerB.tenantId}.${ownerB.id}.${encodeURIComponent(identity.actor().key)}`;
+      assert.equal(dom.window.sessionStorage.getItem(keyB), null, 'replacement actor cannot adopt actor A command evidence');
+      assert.equal(dom.window.sessionStorage.getItem(keyA), rawA, 'actor B cannot clear actor A uncertain evidence');
+      assert.equal(posts.length, 1, 'actor replacement does not retry the uncertain command');
+      controller.dispose();
+    });
+  }
+  console.log('Operations controller: 32 fixtures passed, including four status-200 unknown command outcomes');
 })().catch(error => { console.error(error); process.exitCode = 1; });

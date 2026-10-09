@@ -39,12 +39,12 @@ public sealed partial class PatronJourneyTests
 
         try
         {
-            if (providerMode == "failure_uncancelled")
+            if (providerMode is "failure_cancelled" or "failure_uncancelled")
             {
                 var failure = await Assert.ThrowsExactlyAsync<PatronFlowException>(() =>
                     service.CreateAsync(session, Suggestion(title), cancellation.Token));
                 Assert.AreEqual(502, failure.StatusCode);
-                Assert.IsFalse(cancellation.IsCancellationRequested);
+                Assert.AreEqual(providerMode == "failure_cancelled", cancellation.IsCancellationRequested);
             }
             else
             {
@@ -120,12 +120,12 @@ public sealed partial class PatronJourneyTests
 
         try
         {
-            if (providerMode == "failure_uncancelled")
+            if (providerMode is "failure_cancelled" or "failure_uncancelled")
             {
                 var failure = await Assert.ThrowsExactlyAsync<PatronFlowException>(() =>
                     service.CreateForStaffAsync(actor, 2, input, cancellation.Token));
                 Assert.AreEqual(502, failure.StatusCode);
-                Assert.IsFalse(cancellation.IsCancellationRequested);
+                Assert.AreEqual(providerMode == "failure_cancelled", cancellation.IsCancellationRequested);
             }
             else
             {
@@ -167,7 +167,18 @@ public sealed partial class PatronJourneyTests
         var claimed = await ReadPreSendStateAsync(seeded.OutboxId);
         Assert.AreEqual("sending", claimed.Status, "Readiness is checked only after the SQL pre-send claim is acquired.");
         sender.ReleaseReadiness();
-        await Assert.ThrowsAsync<OperationCanceledException>(() => delivery);
+        switch (mode)
+        {
+            case "email_failure":
+                await Assert.ThrowsExactlyAsync<EmailOperationalException>(() => delivery);
+                break;
+            case "generic_failure":
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => delivery);
+                break;
+            default:
+                await Assert.ThrowsAsync<OperationCanceledException>(() => delivery);
+                break;
+        }
 
         var released = await ReadPreSendStateAsync(seeded.OutboxId);
         Assert.AreEqual("pending", released.Status);
@@ -206,14 +217,14 @@ public sealed partial class PatronJourneyTests
 
         try
         {
-            if (readinessMode == "failure_uncancelled")
+            if (readinessMode is "failure_cancelled" or "failure_uncancelled")
             {
                 Assert.AreEqual("notification_dependency_unavailable", (await service.AssignAsync(
                     actor,
                     seeded.Id,
                     new AssignTitleRequestInput(StaffVersion.Encode(seeded.RowVersion), actor.Id),
                     cancellation.Token)).Code);
-                Assert.IsFalse(cancellation.IsCancellationRequested);
+                Assert.AreEqual(readinessMode == "failure_cancelled", cancellation.IsCancellationRequested);
             }
             else
             {
@@ -300,12 +311,12 @@ public sealed partial class PatronJourneyTests
 
         try
         {
-            if (readinessMode == "failure_uncancelled")
+            if (readinessMode is "failure_cancelled" or "failure_uncancelled")
             {
                 Assert.AreEqual("notification_dependency_unavailable", (await RunAdditionalCopyReadinessMutationAsync(
                     mutation, service, actor, seeded.SourceRequestId, preview.Preview!.Version,
                     taskId, beforeTask, cancellation.Token)).Code);
-                Assert.IsFalse(cancellation.IsCancellationRequested);
+                Assert.AreEqual(readinessMode == "failure_cancelled", cancellation.IsCancellationRequested);
             }
             else
             {
@@ -396,11 +407,11 @@ public sealed partial class PatronJourneyTests
 
         try
         {
-            if (readinessMode == "failure_uncancelled")
+            if (readinessMode is "failure_cancelled" or "failure_uncancelled")
             {
                 Assert.AreEqual("email_transport_unavailable", (await service.QueueTestAsync(
                     actor, 2, cancellation.Token, operationId)).Code);
-                Assert.IsFalse(cancellation.IsCancellationRequested);
+                Assert.AreEqual(readinessMode == "failure_cancelled", cancellation.IsCancellationRequested);
             }
             else
             {

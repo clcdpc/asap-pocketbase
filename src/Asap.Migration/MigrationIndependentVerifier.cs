@@ -11,11 +11,18 @@ internal static class MigrationIndependentVerifier
         ValidatedMigrationPackage package,
         bool postmarkTokenProvisioned,
         long? bootstrapTargetStaffUserId = null,
-        bool bootstrapInserted = false)
+        bool bootstrapInserted = false,
+        string? externalConfigurationPath = null)
     {
+        var polarisRows = MigrationPackageReader.ReadRows(package, "polaris-settings.json", "polaris_settings");
+        var hasRawCredential = polarisRows.Any(row =>
+            row.Text("apiKey") is { Length: > 0 } || row.Text("adminPassword") is { Length: > 0 });
+        var credentialProtector = hasRawCredential
+            ? MigrationCredentialProtector.LoadForVerification(externalConfigurationPath)
+            : null;
         using var connection = new SqlConnection(connectionString);
         connection.Open();
-        Verify(connection, transaction: null, package, postmarkTokenProvisioned, bootstrapTargetStaffUserId, bootstrapInserted);
+        Verify(connection, transaction: null, package, postmarkTokenProvisioned, bootstrapTargetStaffUserId, bootstrapInserted, credentialProtector);
     }
 
     public static void Verify(
@@ -24,7 +31,8 @@ internal static class MigrationIndependentVerifier
         ValidatedMigrationPackage package,
         bool postmarkTokenProvisioned,
         long? bootstrapTargetStaffUserId = null,
-        bool bootstrapInserted = false)
+        bool bootstrapInserted = false,
+        MigrationCredentialProtector? credentialProtector = null)
     {
         var organizations = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations");
         var organizationsById = organizations.ToDictionary(
@@ -86,7 +94,12 @@ internal static class MigrationIndependentVerifier
             "email_delivery_event",
             MigrationPackageReader.ReadRows(package, "email-delivery-events.json", "email_delivery_events").Count);
         VerifyTotalMappingPopulation(connection, transaction, package);
-        MigrationIndependentConfigurationVerifier.Verify(connection, transaction, package, postmarkTokenProvisioned);
+        MigrationIndependentConfigurationVerifier.Verify(
+            connection,
+            transaction,
+            package,
+            postmarkTokenProvisioned,
+            credentialProtector);
         MigrationIndependentEntityVerifier.Verify(
             connection,
             transaction,
@@ -194,7 +207,7 @@ internal static class MigrationIndependentVerifier
     {
         var exactSystemSourceCodes = rows
             .Where(row => row.RequiredString("scope").Equals("system", StringComparison.OrdinalIgnoreCase))
-            .Select(row => row.RequiredString("code"))
+            .Select(row => row.Text("code") ?? string.Empty)
             .ToHashSet(StringComparer.Ordinal);
         foreach (var row in rows)
         {
@@ -207,7 +220,7 @@ internal static class MigrationIndependentVerifier
                 _ => Fail<int>("A source material format has an unsupported scope.")
             };
             var mapping = ReadFormatMapping(connection, transaction, sourceId);
-            var sourceCode = row.RequiredString("code");
+            var sourceCode = row.Text("code") ?? string.Empty;
             var expectedMappingEntity = expectedOwner == 1 || !exactSystemSourceCodes.Contains(sourceCode)
                 ? "material_format"
                 : "material_format_override";
@@ -315,7 +328,7 @@ internal static class MigrationIndependentVerifier
             return;
         }
 
-        var ownedExpectedLabel = string.IsNullOrEmpty(sourceLabel) ? row.RequiredString("code") : sourceLabel;
+        var ownedExpectedLabel = string.IsNullOrEmpty(sourceLabel) ? row.Text("code") ?? string.Empty : sourceLabel;
         using var ownedCommand = new SqlCommand(
             "SELECT [Label], [SortOrder], [IsEnabled] FROM [asap].[MaterialFormat] WHERE [Id] = @formatId;",
             connection,
@@ -627,16 +640,16 @@ internal static class MigrationIndependentVerifier
         var libraryRow = formatRows.FirstOrDefault(row =>
             row.RequiredString("scope").Equals("library", StringComparison.OrdinalIgnoreCase) &&
             ResolveLibraryId(row.RequiredString("libraryOrganization"), organizationsById, organizations) == libraryId &&
-            NormalizeCode(row.RequiredString("code")) == NormalizeCode(normalizedCode));
+            NormalizeCode(row.Text("code") ?? string.Empty) == NormalizeCode(normalizedCode));
         if (libraryRow is not null)
         {
-            return libraryRow.RequiredString("code");
+            return libraryRow.Text("code") ?? string.Empty;
         }
 
         var systemRow = formatRows.FirstOrDefault(row =>
             row.RequiredString("scope").Equals("system", StringComparison.OrdinalIgnoreCase) &&
-            NormalizeCode(row.RequiredString("code")) == NormalizeCode(normalizedCode));
-        return systemRow?.RequiredString("code") ?? NormalizeCode(normalizedCode);
+            NormalizeCode(row.Text("code") ?? string.Empty) == NormalizeCode(normalizedCode));
+        return systemRow?.Text("code") ?? NormalizeCode(normalizedCode);
     }
 
     private static bool IsLegacyBuiltinFormat(string code) =>
@@ -706,14 +719,14 @@ internal static class MigrationIndependentVerifier
                     ? ResolveLibraryId(sourceFormat.RequiredString("libraryOrganization"),
                         organizations.ToDictionary(item => item.RequiredString("id"), StringComparer.Ordinal), organizations)
                     : 1;
-                expectedFormatCode = NormalizeCode(sourceFormat.RequiredString("code"));
-                if (row.String("format") is { } scalarCode &&
+                expectedFormatCode = NormalizeCode(sourceFormat.Text("code") ?? string.Empty);
+                if (row.Text("format") is { } scalarCode && TrimLegacyFormatRuleText(scalarCode).Length > 0 &&
                     !string.Equals(NormalizeCode(scalarCode), expectedFormatCode, StringComparison.Ordinal))
                 {
                     Fail("A title request's scalar format and source format reference disagree.");
                 }
             }
-            else if (row.String("format") is { } scalarFormat)
+            else if (row.Text("format") is { } scalarFormat && TrimLegacyFormatRuleText(scalarFormat).Length > 0)
             {
                 expectedFormatCode = NormalizeCode(scalarFormat);
                 var effectiveFormat = ReadFormatByCode(connection, transaction, libraryId, expectedFormatCode);
@@ -808,7 +821,7 @@ internal static class MigrationIndependentVerifier
             {
                 Fail("An additional-copy request is scoped to a non-library organization.");
             }
-            var sourceFormatCode = row.String("format") is { } sourceFormat
+            var sourceFormatCode = row.Text("format") is { } sourceFormat && TrimLegacyFormatRuleText(sourceFormat).Length > 0
                 ? NormalizeCode(sourceFormat)
                 : null;
             long? expectedFormatId = null;
@@ -845,7 +858,7 @@ internal static class MigrationIndependentVerifier
                     : reader.IsDBNull(3) || reader.GetInt64(3) != expectedFormatId.Value ||
                       reader.IsDBNull(4) || reader.GetInt32(4) != expectedFormatOwner ||
                       reader.IsDBNull(5) || !string.Equals(NormalizeCode(reader.GetString(5)), sourceFormatCode, StringComparison.Ordinal) ||
-                      !string.Equals(reader.IsDBNull(6) ? null : reader.GetString(6), row.String("format"), StringComparison.Ordinal)))
+                      !string.Equals(reader.IsDBNull(6) ? null : reader.GetString(6), row.Text("format"), StringComparison.Ordinal)))
             {
                 Fail("A target additional-copy request does not preserve its source relation, format identity, and library ownership.");
             }
@@ -864,6 +877,7 @@ internal static class MigrationIndependentVerifier
             var sourceId = row.RequiredString("id");
             var bibId = row.PositiveInt32("bibid", "source_bib_invalid");
             var identifier = row.String("identifier");
+            var sourceIdentifierText = row.Text("identifier");
             var sourceStatus = row.String("isbnCheckStatus")?.Trim().ToLowerInvariant();
             var expectedStatus = sourceStatus switch
             {
@@ -889,7 +903,7 @@ internal static class MigrationIndependentVerifier
             command.Parameters.AddWithValue("@id", ReadMapping(connection, transaction, "title_request", sourceId));
             using var reader = command.ExecuteReader();
             if (!reader.Read() || NullableInt(reader, 0) != bibId || reader.GetBoolean(1) ||
-                NullableString(reader, 2) != expectedStatus || NullableString(reader, 3) != identifier ||
+                NullableString(reader, 2) != expectedStatus || NullableString(reader, 3) != sourceIdentifierText ||
                 NullableDateTime(reader, 4) != row.UtcDateTime("lastChecked") ||
                 NullableDateTime(reader, 5) != row.UtcDateTime("updated"))
             {
@@ -912,7 +926,7 @@ internal static class MigrationIndependentVerifier
             StringComparer.Ordinal);
         var exactSystemSourceCodes = rows
             .Where(item => item.RequiredString("scope").Equals("system", StringComparison.OrdinalIgnoreCase))
-            .Select(item => item.RequiredString("code"))
+            .Select(item => item.Text("code") ?? string.Empty)
             .ToHashSet(StringComparer.Ordinal);
         var targetSystemCodes = new HashSet<string>(systemSeedCodes, StringComparer.Ordinal);
         foreach (var sourceCode in exactSystemSourceCodes)
@@ -924,7 +938,7 @@ internal static class MigrationIndependentVerifier
         var expectedOverrides = new HashSet<(int LibraryId, string Code)>();
         foreach (var row in rows)
         {
-            var code = NormalizeCode(row.RequiredString("code"));
+            var code = NormalizeCode(row.Text("code") ?? string.Empty);
             var scope = row.RequiredString("scope");
             if (scope.Equals("system", StringComparison.OrdinalIgnoreCase))
             {
@@ -933,7 +947,7 @@ internal static class MigrationIndependentVerifier
             else if (scope.Equals("library", StringComparison.OrdinalIgnoreCase))
             {
                 var libraryId = ResolveLibraryId(row.RequiredString("libraryOrganization"), organizationsById, organizations);
-                if (exactSystemSourceCodes.Contains(row.RequiredString("code")))
+                if (exactSystemSourceCodes.Contains(row.Text("code") ?? string.Empty))
                 {
                     expectedOverrides.Add((libraryId, code));
                 }
@@ -959,8 +973,8 @@ internal static class MigrationIndependentVerifier
             var libraryOwnedCodes = rows
                 .Where(row => row.RequiredString("scope").Equals("library", StringComparison.OrdinalIgnoreCase) &&
                     ResolveLibraryId(row.RequiredString("libraryOrganization"), organizationsById, organizations) == libraryId)
-                .Where(row => !exactSystemSourceCodes.Contains(row.RequiredString("code")))
-                .Select(row => NormalizeCode(row.RequiredString("code")))
+                .Where(row => !exactSystemSourceCodes.Contains(row.Text("code") ?? string.Empty))
+                .Select(row => NormalizeCode(row.Text("code") ?? string.Empty))
                 .ToHashSet(StringComparer.Ordinal);
             foreach (var code in targetSystemCodes.Except(libraryOwnedCodes, StringComparer.Ordinal))
             {
@@ -968,7 +982,7 @@ internal static class MigrationIndependentVerifier
                 var expected = ExpectedLegacyFormatRule(rulesDocument.RootElement, sourceCode);
                 var sourceSystemFormat = rows.FirstOrDefault(row =>
                     row.RequiredString("scope").Equals("system", StringComparison.OrdinalIgnoreCase) &&
-                    NormalizeCode(row.RequiredString("code")) == code);
+                    NormalizeCode(row.Text("code") ?? string.Empty) == code);
                 var baseline = sourceSystemFormat is null
                     ? TargetSeedMaterialFormatDefaults(code)
                     : ExpectedLegacyMaterialFormatRule(sourceSystemFormat);
@@ -982,7 +996,7 @@ internal static class MigrationIndependentVerifier
         var systemSourceEnabled = new Dictionary<string, bool>(StringComparer.Ordinal);
         foreach (var sourceRow in rows.Where(row => row.RequiredString("scope").Equals("system", StringComparison.OrdinalIgnoreCase)))
         {
-            var code = NormalizeCode(sourceRow.RequiredString("code"));
+            var code = NormalizeCode(sourceRow.Text("code") ?? string.Empty);
             if (!systemSourceEnabled.TryAdd(code, sourceRow.Bool("enabled", false)))
             {
                 Fail("Source system material formats collide after target code normalization.");
@@ -1355,7 +1369,7 @@ internal static class MigrationIndependentVerifier
     private static DateTime? NullableDateTime(SqlDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetDateTime(ordinal);
 
-    private static string NormalizeCode(string value) => value.Trim().ToLowerInvariant() switch
+    private static string NormalizeCode(string value) => TrimLegacyFormatRuleText(value).ToLowerInvariant() switch
     {
         "0" => "book",
         "1" => "ebook",

@@ -74,14 +74,12 @@ public sealed partial class StaffPickupService
             branches = await patronProvider.GetPickupBranchesAsync(patron, operation.LibraryOrganizationId, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
         }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
         catch (PolarisOperationalException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new StaffPickupResult("pickup_provider_error");
         }
         if (patron.PatronId != operation.PatronId ||

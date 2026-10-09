@@ -50,9 +50,16 @@ public sealed partial class PatronJourneyTests
                     seeded.Id, seeded.RowVersion, cancellation.Token)).Code);
                 Assert.IsFalse(cancellation.IsCancellationRequested);
             }
+            else if (providerMode == "failure_cancelled")
+            {
+                Assert.AreEqual("hold_provider_error", (await placement.PlaceBackgroundAsync(
+                    seeded.Id, seeded.RowVersion, cancellation.Token)).Code,
+                    "A coincident caller cancellation must not erase the preflight provider-failure classification.");
+                Assert.IsTrue(cancellation.IsCancellationRequested);
+            }
             else
             {
-                await Assert.ThrowsAsync<OperationCanceledException>(() => placement.PlaceBackgroundAsync(
+                await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => placement.PlaceBackgroundAsync(
                     seeded.Id, seeded.RowVersion, cancellation.Token));
                 Assert.IsTrue(cancellation.IsCancellationRequested);
             }
@@ -78,7 +85,6 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    [DataRow("return_cancelled")]
     [DataRow("operation_cancelled")]
     [DataRow("failure_cancelled")]
     [DataRow("generic_failure_cancelled")]
@@ -102,8 +108,8 @@ public sealed partial class PatronJourneyTests
         using var cancellation = new CancellationTokenSource();
         var holdProvider = ScriptedHoldProvider.AmbiguousCreate();
         holdProvider.BlockCreate();
-        holdProvider.HoldAfterCreate = new PolarisHoldSnapshot(8124, 9001, 2, "Active", 101);
         var dispatcher = new RecordingOutboxDispatcher();
+        var domainFailureWasRecorded = providerMode == "failure_cancelled";
         await using var scopedFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
@@ -140,17 +146,6 @@ public sealed partial class PatronJourneyTests
             cancellation.Cancel();
             switch (providerMode)
             {
-                case "return_cancelled":
-                    holdProvider.CompleteBlockedCreate(new HoldProviderResult(
-                        HoldProviderOutcome.FinalSuccess,
-                        null,
-                        8124,
-                        null,
-                        null,
-                        2,
-                        1,
-                        "documented_create_success"));
-                    break;
                 case "operation_cancelled":
                     Assert.IsTrue(holdProvider.PendingCreate!.TrySetException(
                         new OperationCanceledException("Provider observed cancellation after the create marker.")));
@@ -166,7 +161,21 @@ public sealed partial class PatronJourneyTests
                 default:
                     throw new AssertFailedException($"Unexpected provider mode: {providerMode}");
             }
-            await Assert.ThrowsAsync<OperationCanceledException>(() => placing);
+            if (providerMode == "failure_cancelled")
+            {
+                var result = await placing;
+                Assert.AreEqual("hold_operator_required", result.Code,
+                    "A Polaris failure after dispatch must remain an uncertain operator outcome, not caller cancellation.");
+            }
+            else if (providerMode == "generic_failure_cancelled")
+            {
+                var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => placing);
+                Assert.AreEqual("Create failed after caller cancellation.", failure.Message);
+            }
+            else
+            {
+                await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => placing);
+            }
             Assert.IsTrue(cancellation.IsCancellationRequested);
             Assert.AreEqual(1, holdProvider.CreateCount);
 
@@ -179,11 +188,23 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual("pending_hold", request.Status);
                 CollectionAssert.AreEqual(before.RowVersion, request.RowVersion);
                 Assert.AreEqual(HoldOperationPhase.CreateStarted, operation.Phase);
-                Assert.AreEqual(HoldOperationState.InProgress, operation.State);
+                Assert.AreEqual(domainFailureWasRecorded ? HoldOperationState.OperatorRequired : HoldOperationState.InProgress,
+                    operation.State);
                 Assert.IsNotNull(operation.CreateStartedUtc);
-                Assert.IsNotNull(operation.OwnerToken);
-                Assert.IsNull(operation.CreateResponseObservedUtc);
+                Assert.AreEqual(!domainFailureWasRecorded, operation.OwnerToken.HasValue);
+                Assert.AreEqual(!domainFailureWasRecorded, operation.LeaseExpiresUtc.HasValue);
+                Assert.AreEqual(domainFailureWasRecorded, operation.CreateResponseObservedUtc.HasValue);
                 Assert.IsNull(operation.CompletedUtc);
+                if (domainFailureWasRecorded)
+                {
+                    Assert.AreEqual("ambiguous", operation.ResultCode);
+                    Assert.AreEqual("create_provider_exception", operation.OutcomeEvidenceKind);
+                }
+                else
+                {
+                    Assert.IsNull(operation.OutcomeEvidenceKind);
+                    Assert.IsNull(operation.ResultCode);
+                }
                 Assert.AreEqual(0, await verify.TitleRequestEvents.AsNoTracking()
                     .CountAsync(item => item.TitleRequestId == seeded.Id));
                 Assert.AreEqual(0, await verify.EmailOutbox.AsNoTracking()
@@ -191,9 +212,13 @@ public sealed partial class PatronJourneyTests
             }
             Assert.AreEqual(0, dispatcher.EnqueuedIds.Count);
 
-            await ExecuteNonQueryAsync(
-                "UPDATE [asap].[HoldPlacementOperation] SET [LeaseExpiresUtc] = DATEADD(second, -1, SYSUTCDATETIME()) WHERE [Id] = @id;",
-                ("@id", operationId));
+            if (!domainFailureWasRecorded)
+            {
+                await ExecuteNonQueryAsync(
+                    "UPDATE [asap].[HoldPlacementOperation] SET [LeaseExpiresUtc] = DATEADD(second, -1, SYSUTCDATETIME()) " +
+                    "WHERE [Id] = @id AND [State] = N'in_progress' AND [OwnerToken] IS NOT NULL AND [LeaseExpiresUtc] IS NOT NULL;",
+                    ("@id", operationId));
+            }
             var recovered = await placement.RecoverBackgroundOperationAsync(operationId, null, CancellationToken.None);
             Assert.AreEqual("hold_operator_required", recovered.Code);
             Assert.AreEqual(1, holdProvider.CreateCount, "Recovery must not replay the acquired create call.");
@@ -223,7 +248,6 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    [DataRow("return_cancelled")]
     [DataRow("operation_cancelled")]
     [DataRow("failure_cancelled")]
     [DataRow("generic_failure_cancelled")]
@@ -248,8 +272,8 @@ public sealed partial class PatronJourneyTests
         var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
         holdProvider.BlockCreate();
         holdProvider.BlockReply();
-        holdProvider.HoldAfterCreate = new PolarisHoldSnapshot(8125, 9001, 2, "Active", 101);
         var dispatcher = new RecordingOutboxDispatcher();
+        var domainFailureWasRecorded = providerMode == "failure_cancelled";
         await using var scopedFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
@@ -289,17 +313,6 @@ public sealed partial class PatronJourneyTests
             cancellation.Cancel();
             switch (providerMode)
             {
-                case "return_cancelled":
-                    holdProvider.CompleteBlockedReply(new HoldProviderResult(
-                        HoldProviderOutcome.FinalSuccess,
-                        holdProvider.RequestGuid,
-                        8125,
-                        "group-qualifier",
-                        "transaction-qualifier",
-                        2,
-                        1,
-                        "documented_reply_success"));
-                    break;
                 case "operation_cancelled":
                     Assert.IsTrue(holdProvider.PendingReply!.TrySetException(
                         new OperationCanceledException("Provider observed cancellation after the reply marker.")));
@@ -315,7 +328,21 @@ public sealed partial class PatronJourneyTests
                 default:
                     throw new AssertFailedException($"Unexpected provider mode: {providerMode}");
             }
-            await Assert.ThrowsAsync<OperationCanceledException>(() => placing);
+            if (providerMode == "failure_cancelled")
+            {
+                var result = await placing;
+                Assert.AreEqual("hold_operator_required", result.Code,
+                    "A Polaris failure after reply dispatch must remain an uncertain operator outcome, not caller cancellation.");
+            }
+            else if (providerMode == "generic_failure_cancelled")
+            {
+                var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => placing);
+                Assert.AreEqual("Reply failed after caller cancellation.", failure.Message);
+            }
+            else
+            {
+                await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => placing);
+            }
             Assert.IsTrue(cancellation.IsCancellationRequested);
             Assert.AreEqual(1, holdProvider.CreateCount);
             Assert.AreEqual(1, holdProvider.ReplyCount);
@@ -329,12 +356,26 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual("pending_hold", request.Status);
                 CollectionAssert.AreEqual(before.RowVersion, request.RowVersion);
                 Assert.AreEqual(HoldOperationPhase.ReplyStarted, operation.Phase);
-                Assert.AreEqual(HoldOperationState.InProgress, operation.State);
+                Assert.AreEqual(domainFailureWasRecorded ? HoldOperationState.OperatorRequired : HoldOperationState.InProgress,
+                    operation.State);
                 Assert.IsNotNull(operation.CreateResponseObservedUtc);
                 Assert.IsNotNull(operation.ReplyStartedUtc);
-                Assert.IsNotNull(operation.OwnerToken);
-                Assert.IsNull(operation.ReplyResponseObservedUtc);
+                Assert.AreEqual(!domainFailureWasRecorded, operation.OwnerToken.HasValue);
+                Assert.AreEqual(!domainFailureWasRecorded, operation.LeaseExpiresUtc.HasValue);
+                Assert.AreEqual(domainFailureWasRecorded, operation.ReplyResponseObservedUtc.HasValue);
                 Assert.IsNull(operation.CompletedUtc);
+                if (domainFailureWasRecorded)
+                {
+                    Assert.AreEqual("ambiguous", operation.ResultCode);
+                    Assert.AreEqual("reply_provider_exception", operation.OutcomeEvidenceKind);
+                }
+                else
+                {
+                    Assert.AreEqual("create_status_5_reply_required", operation.OutcomeEvidenceKind);
+                    Assert.AreEqual("reply_required", operation.ResultCode);
+                    Assert.AreEqual(3, operation.ProviderStatusType);
+                    Assert.AreEqual(5, operation.ProviderStatusValue);
+                }
                 Assert.AreEqual(0, await verify.TitleRequestEvents.AsNoTracking()
                     .CountAsync(item => item.TitleRequestId == seeded.Id));
                 Assert.AreEqual(0, await verify.EmailOutbox.AsNoTracking()
@@ -342,9 +383,13 @@ public sealed partial class PatronJourneyTests
             }
             Assert.AreEqual(0, dispatcher.EnqueuedIds.Count);
 
-            await ExecuteNonQueryAsync(
-                "UPDATE [asap].[HoldPlacementOperation] SET [LeaseExpiresUtc] = DATEADD(second, -1, SYSUTCDATETIME()) WHERE [Id] = @id;",
-                ("@id", operationId));
+            if (!domainFailureWasRecorded)
+            {
+                await ExecuteNonQueryAsync(
+                    "UPDATE [asap].[HoldPlacementOperation] SET [LeaseExpiresUtc] = DATEADD(second, -1, SYSUTCDATETIME()) " +
+                    "WHERE [Id] = @id AND [State] = N'in_progress' AND [OwnerToken] IS NOT NULL AND [LeaseExpiresUtc] IS NOT NULL;",
+                    ("@id", operationId));
+            }
             var recovered = await placement.RecoverBackgroundOperationAsync(operationId, null, CancellationToken.None);
             Assert.AreEqual("hold_operator_required", recovered.Code);
             Assert.AreEqual(1, holdProvider.CreateCount, "Recovery must not replay the acquired create call.");
@@ -446,11 +491,11 @@ public sealed partial class PatronJourneyTests
         try
         {
             var placement = scopedFactory.Services.GetRequiredService<HoldPlacementService>();
-            if (readinessMode == "failure_uncancelled")
+            if (readinessMode is "failure_uncancelled" or "failure_cancelled")
             {
                 Assert.AreEqual("hold_resolution_dependency_unavailable", (await placement.RecoverBackgroundOperationAsync(
                     operationId, null, cancellation.Token)).Code);
-                Assert.IsFalse(cancellation.IsCancellationRequested);
+                Assert.AreEqual(readinessMode == "failure_cancelled", cancellation.IsCancellationRequested);
             }
             else
             {
@@ -600,11 +645,11 @@ public sealed partial class PatronJourneyTests
                     services.AddSingleton<IEmailSender>(sender);
                 }));
             var workflow = scopedFactory.Services.GetRequiredService<WorkflowProcessingService>();
-            if (readinessMode == "failure_uncancelled")
+            if (readinessMode is "failure_cancelled" or "failure_uncancelled")
             {
                 Assert.AreEqual("operational_failure", (await workflow.SendWeeklyStaffSummaryAsync(
                     null, 2, cancellation.Token)).Code);
-                Assert.IsFalse(cancellation.IsCancellationRequested);
+                Assert.AreEqual(readinessMode == "failure_cancelled", cancellation.IsCancellationRequested);
             }
             else
             {
@@ -707,11 +752,11 @@ public sealed partial class PatronJourneyTests
                     services.AddSingleton<IEmailSender>(sender);
                 }));
             var workflow = scopedFactory.Services.GetRequiredService<WorkflowProcessingService>();
-            if (readinessMode == "failure_uncancelled")
+            if (readinessMode is "failure_cancelled" or "failure_uncancelled")
             {
                 Assert.AreEqual("operational_failure", (await workflow.ProcessWorkflowAsync(
                     scope, cancellation.Token)).Code);
-                Assert.IsFalse(cancellation.IsCancellationRequested);
+                Assert.AreEqual(readinessMode == "failure_cancelled", cancellation.IsCancellationRequested);
             }
             else
             {
@@ -787,9 +832,19 @@ public sealed partial class PatronJourneyTests
         var before = await ReadBibOwnershipRequestAsync(seeded.Id);
         try
         {
-            await Assert.ThrowsAsync<OperationCanceledException>(() => scopedFactory.Services
-                .GetRequiredService<WorkflowProcessingService>()
-                .ProcessIdentifierAsync(2, cancellation.Token));
+            if (providerMode == "failure_cancelled")
+            {
+                var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(() => scopedFactory.Services
+                    .GetRequiredService<WorkflowProcessingService>()
+                    .ProcessIdentifierAsync(2, cancellation.Token));
+                Assert.AreEqual("testing_dependency_failure", failure.Code);
+            }
+            else
+            {
+                await Assert.ThrowsAsync<OperationCanceledException>(() => scopedFactory.Services
+                    .GetRequiredService<WorkflowProcessingService>()
+                    .ProcessIdentifierAsync(2, cancellation.Token));
+            }
             Assert.IsTrue(cancellation.IsCancellationRequested);
             Assert.AreEqual(1, provider.IdentifierLookupCount);
             var after = await ReadBibOwnershipRequestAsync(seeded.Id);
@@ -836,11 +891,11 @@ public sealed partial class PatronJourneyTests
 
         try
         {
-            if (providerMode == "failure_uncancelled")
+            if (providerMode is "failure_cancelled" or "failure_uncancelled")
             {
                 Assert.AreEqual("bib_validation_unavailable", (await service.ActionAsync(
                     actor, seeded.Id, input, cancellation.Token)).Code);
-                Assert.IsFalse(cancellation.IsCancellationRequested);
+                Assert.AreEqual(providerMode == "failure_cancelled", cancellation.IsCancellationRequested);
             }
             else
             {
@@ -887,8 +942,16 @@ public sealed partial class PatronJourneyTests
             allowedPatronCodeIds = new[] { 2147483000 }
         }));
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => administration.SaveSettingsAsync(
-            actor, command, cancellation.Token));
+        if (providerMode == "failure_cancelled")
+        {
+            Assert.AreEqual("patron_codes_unavailable", (await administration.SaveSettingsAsync(
+                actor, command, cancellation.Token)).Code);
+        }
+        else
+        {
+            await Assert.ThrowsAsync<OperationCanceledException>(() => administration.SaveSettingsAsync(
+                actor, command, cancellation.Token));
+        }
         Assert.IsTrue(cancellation.IsCancellationRequested);
         Assert.AreEqual(1, referenceProvider.ReadCount);
         Assert.AreEqual(versionBefore, await ReadSettingsVersionAsync(actor));

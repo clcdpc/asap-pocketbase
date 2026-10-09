@@ -324,10 +324,12 @@ public static class AdministrationEndpoints
             limit ?? 100,
             cancellationToken));
 
-    private static IResult RunWorkflowNowAsync(
+    private static async Task<IResult> RunWorkflowNowAsync(
         HttpContext context,
         int? organizationId,
-        IBackgroundJobClient jobs)
+        IBackgroundJobClient jobs,
+        StaffEligibilityService staffEligibility,
+        CancellationToken cancellationToken)
     {
         var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
         if (!StaffEligibilityService.RoleMeets(actor.Role, StaffRoleRequirement.Admin) ||
@@ -336,16 +338,30 @@ public static class AdministrationEndpoints
             return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
         }
         var effectiveScope = actor.Role == StaffRole.SuperAdmin ? organizationId : actor.OrganizationId;
+        var authorizedScope = effectiveScope ?? LibraryScope.SystemOrganizationId;
+        var eligibility = await staffEligibility.EvaluateAsync(
+            new StaffIdentityEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId),
+            authorizedScope,
+            StaffRoleRequirement.Admin,
+            requireParticipation: true,
+            cancellationToken);
+        if (eligibility.Outcome != StaffEligibilityOutcome.Allowed)
+        {
+            return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+        }
+
         var evidence = new StaffJobEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId);
         var jobId = jobs.Enqueue<BackgroundWorkflowJobs>(job =>
-            job.ProcessManualWorkflowAsync(evidence, effectiveScope ?? LibraryScope.SystemOrganizationId, CancellationToken.None));
-        return Results.Accepted(value: new { code = "queued", jobId, organizationId = effectiveScope ?? LibraryScope.SystemOrganizationId });
+            job.ProcessManualWorkflowAsync(evidence, authorizedScope, CancellationToken.None));
+        return Results.Accepted(value: new { code = "queued", jobId, organizationId = authorizedScope });
     }
 
-    private static IResult RunWeeklySummaryNowAsync(
+    private static async Task<IResult> RunWeeklySummaryNowAsync(
         HttpContext context,
         int? organizationId,
         IBackgroundJobClient jobs,
+        StaffEligibilityService staffEligibility,
+        CancellationToken cancellationToken,
         bool force = false,
         Guid? operationId = null)
     {
@@ -357,6 +373,18 @@ public static class AdministrationEndpoints
         }
 
         var effectiveScope = actor.Role == StaffRole.SuperAdmin ? organizationId : actor.OrganizationId;
+        var authorizedScope = effectiveScope ?? LibraryScope.SystemOrganizationId;
+        var eligibility = await staffEligibility.EvaluateAsync(
+            new StaffIdentityEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId),
+            authorizedScope,
+            StaffRoleRequirement.Admin,
+            requireParticipation: true,
+            cancellationToken);
+        if (eligibility.Outcome != StaffEligibilityOutcome.Allowed)
+        {
+            return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+        }
+
         var evidence = new StaffJobEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId);
         if (!force)
         {
@@ -366,7 +394,7 @@ public static class AdministrationEndpoints
             {
                 code = "queued",
                 jobId = ordinaryJobId,
-                organizationId = effectiveScope ?? LibraryScope.SystemOrganizationId
+                organizationId = authorizedScope
             });
         }
 
@@ -383,7 +411,7 @@ public static class AdministrationEndpoints
             code = "queued",
             jobId,
             manualRunId,
-            organizationId = effectiveScope ?? LibraryScope.SystemOrganizationId
+            organizationId = authorizedScope
         });
     }
 

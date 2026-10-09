@@ -367,6 +367,10 @@ public sealed partial class AdministrationService(
                 });
         }
         await context.SaveChangesAsync(cancellationToken);
+        if (isReset && organizationId != LibraryScope.SystemOrganizationId)
+        {
+            await ValidateEffectiveRequiredSelectRulesAsync(context, organizationId, cancellationToken);
+        }
         var savedVersion = await ComputeSettingsVersionAsync(context, organizationId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new AdministrationResult(
@@ -417,6 +421,7 @@ public sealed partial class AdministrationService(
         }
         await ResetLibrarySettingsInTransactionAsync(context, organizationId, actor, cancellationToken);
         await context.SaveChangesAsync(cancellationToken);
+        await ValidateEffectiveRequiredSelectRulesAsync(context, organizationId, cancellationToken);
         var resetVersion = await ComputeSettingsVersionAsync(context, organizationId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new AdministrationResult("reset", new { orgId = organizationId.ToString(), version = resetVersion });
@@ -495,14 +500,8 @@ public sealed partial class AdministrationService(
             snapshots = await polarisProvider.GetOrganizationsAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
         }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            throw;
-        }
         catch (PolarisOperationalException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new AdministrationResult("polaris_unavailable", Message: "Polaris organizations could not be loaded.");
         }
         if (snapshots.Count == 0)
@@ -1135,15 +1134,9 @@ public sealed partial class AdministrationService(
         }
         catch (PolarisOperationalException exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return (null, new AdministrationResult(
                 "patron_codes_unavailable",
                 Message: exception.Message));
-        }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            throw;
         }
 
         var known = choices.Where(item => item.Id > 0).Select(item => item.Id).ToHashSet();

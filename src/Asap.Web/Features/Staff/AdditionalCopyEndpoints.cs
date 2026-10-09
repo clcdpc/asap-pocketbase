@@ -228,10 +228,13 @@ public static class AdditionalCopyEndpoints
         {
             return await service.GetAsync(Current(context), id.ToString(), claimClearedReason, cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
         // The task mutation committed; preserve that accepted outcome if the optional detail refresh fails.
         catch (Exception exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             loggerFactory.CreateLogger("Asap.Web.Features.Staff.AdditionalCopyEndpoints")
                 .LogError(exception, "Additional-copy detail refresh failed after task {RequestId} committed", id);
             return null;

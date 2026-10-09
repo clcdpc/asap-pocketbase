@@ -304,6 +304,196 @@ async function flush() {
     assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Saved; reload needed');
     assert.strictEqual(saveBar.classList.contains('attention'), true);
     dom.window.close();
+
+    for (const kind of ['save', 'reset']) {
+      for (const missing of ['code', 'data']) {
+        const witnessDom = new JSDOM(fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8'), {
+          url: 'http://localhost/staff/'
+        });
+        global.window = witnessDom.window;
+        global.document = witnessDom.window.document;
+        global.FormData = witnessDom.window.FormData;
+        global.Node = witnessDom.window.Node;
+        global.Event = witnessDom.window.Event;
+
+        let settingsReads = 0;
+        let mutationRequest;
+        let committed = 0;
+        witnessDom.window.confirm = () => true;
+        global.fetch = async (url, options = {}) => {
+          const requestUrl = String(url);
+          if (requestUrl.endsWith('/api/asap/staff/session')) {
+            return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
+          }
+          if (requestUrl.includes('/api/asap/staff/settings?orgId=2')) {
+            settingsReads += 1;
+            return response(200, settingsData('System login note', 'settings-v1'));
+          }
+          if (requestUrl.endsWith('/api/asap/staff/organizations')) {
+            return response(200, { code: 'ok', data: [
+              { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-1' },
+              { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-2' }
+            ] });
+          }
+          if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
+            return response(200, { code: 'ok', data: [] });
+          }
+          if ((kind === 'save' && requestUrl.endsWith('/api/asap/staff/settings')) ||
+              (kind === 'reset' && requestUrl.includes('/api/asap/staff/settings/reset?'))) {
+            mutationRequest = { path: requestUrl, options, body: JSON.parse(options.body) };
+            return response(200, missing === 'code'
+              ? { data: { version: 'after-v2' } }
+              : { code: kind === 'save' ? 'saved' : 'reset' });
+          }
+          throw new Error(`Unexpected request: ${requestUrl}`);
+        };
+
+        const witnessController = settingsModule.createSettingsController({
+          root: document.getElementById('settings-view'),
+          tab: document.getElementById('settings-view-tab'),
+          announce: () => {},
+          getStaff: () => ({ role: 'admin', organizationId: 2 }),
+          onCommitted: () => { committed += 1; }
+        });
+        witnessController.bind();
+        witnessController.setStaff({
+          id: '2', tenantId: 'tenant-1', objectId: 'object-2', role: 'admin', organizationId: 2
+        });
+        await witnessController.activate();
+        assert.strictEqual(settingsReads, 1, `${kind} ${missing}: fixture loads its initial authoritative settings once`);
+        const version = document.getElementById('settings-version');
+        assert.strictEqual(version.value, 'settings-v1');
+
+        if (kind === 'save') {
+          const overrideToggle = document.querySelector(
+            '[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle');
+          overrideToggle.checked = true;
+          overrideToggle.dispatchEvent(new witnessDom.window.Event('change', { bubbles: true }));
+          const loginNote = document.getElementById('patron-login-note');
+          loginNote.value = 'Unconfirmed saved note';
+          loginNote.dispatchEvent(new witnessDom.window.Event('input', { bubbles: true }));
+          document.getElementById('settings-form').dispatchEvent(new witnessDom.window.Event('submit', {
+            bubbles: true, cancelable: true
+          }));
+        } else {
+          document.getElementById('settings-reset').click();
+        }
+
+        for (let attempt = 0; attempt < 30; attempt++) await flush();
+        assert.ok(mutationRequest, `${kind} ${missing}: mutation was sent`);
+        assert.strictEqual(mutationRequest.options.method, 'POST');
+        assert.strictEqual(mutationRequest.body.version, 'settings-v1');
+        if (kind === 'save') {
+          assert.strictEqual(mutationRequest.body.patron.loginNote, 'Unconfirmed saved note');
+        } else {
+          assert.deepStrictEqual(Object.keys(mutationRequest.body).sort(), ['version']);
+        }
+        assert.strictEqual(witnessController.hasUnconfirmedOutcome(), true,
+          `${kind} ${missing}: an incomplete success envelope must remain unconfirmed`);
+        assert.strictEqual(witnessController.inspectDeparture().blocked, true);
+        assert.strictEqual(committed, 0, `${kind} ${missing}: incomplete envelope is never reported committed`);
+        assert.strictEqual(settingsReads, 1, `${kind} ${missing}: do not refresh as if success were authoritative`);
+        assert.strictEqual(version.value, 'settings-v1', `${kind} ${missing}: do not advance the accepted version`);
+        if (kind === 'save') {
+          assert.strictEqual(document.getElementById('patron-login-note').value, 'Unconfirmed saved note');
+          assert.strictEqual(witnessController.isDirty(), true, 'unconfirmed save retains the caller draft');
+        }
+        witnessController.dispose();
+        witnessDom.window.close();
+      }
+    }
+
+    const retiredDom = new JSDOM(fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8'), {
+      url: 'http://localhost/staff/'
+    });
+    global.window = retiredDom.window;
+    global.document = retiredDom.window.document;
+    global.FormData = retiredDom.window.FormData;
+    global.Node = retiredDom.window.Node;
+    global.Event = retiredDom.window.Event;
+    const retiredActor = {
+      id: '2', tenantId: 'tenant-1', objectId: 'object-2', role: 'admin', organizationId: 2
+    };
+    const replacementActor = { ...retiredActor, id: '3', objectId: 'object-3' };
+    const unconfirmed = [];
+    let settingsReads = 0;
+    let mutationPosts = 0;
+    let rejectMutationJson;
+    global.fetch = async (url, options = {}) => {
+      const requestUrl = String(url);
+      if (requestUrl.endsWith('/api/asap/staff/session')) {
+        return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
+      }
+      if (requestUrl.includes('/api/asap/staff/settings?orgId=2')) {
+        settingsReads += 1;
+        return response(200, settingsData('System login note', settingsReads === 1 ? 'actor-a-v1' : 'actor-b-v1'));
+      }
+      if (requestUrl.endsWith('/api/asap/staff/organizations')) {
+        return response(200, { code: 'ok', data: [
+          { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-1' },
+          { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-2' }
+        ] });
+      }
+      if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
+        return response(200, { code: 'ok', data: [] });
+      }
+      if (requestUrl.endsWith('/api/asap/staff/settings') && options.method === 'POST') {
+        mutationPosts += 1;
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: () => new Promise((resolve, reject) => { rejectMutationJson = reject; })
+        };
+      }
+      throw new Error(`Unexpected request: ${requestUrl}`);
+    };
+
+    let currentStaff = retiredActor;
+    const retiredController = settingsModule.createSettingsController({
+      root: document.getElementById('settings-view'),
+      tab: document.getElementById('settings-view-tab'),
+      announce: () => {},
+      getStaff: () => currentStaff,
+      onCommitted: () => { throw new Error('An unconfirmed response cannot commit settings.'); },
+      onUnconfirmed: (message, owner) => unconfirmed.push({ message, owner })
+    });
+    retiredController.bind();
+    retiredController.setStaff(retiredActor);
+    await retiredController.activate();
+    const retiredOverride = document.querySelector(
+      '[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle');
+    retiredOverride.checked = true;
+    retiredOverride.dispatchEvent(new retiredDom.window.Event('change', { bubbles: true }));
+    const retiredNote = document.getElementById('patron-login-note');
+    retiredNote.value = 'Actor A uncertain save';
+    retiredNote.dispatchEvent(new retiredDom.window.Event('input', { bubbles: true }));
+    document.getElementById('settings-form').dispatchEvent(new retiredDom.window.Event('submit', {
+      bubbles: true, cancelable: true
+    }));
+    for (let attempt = 0; attempt < 30 && mutationPosts === 0; attempt++) await flush();
+    assert.strictEqual(mutationPosts, 1, 'actor A has one actual settings mutation in flight');
+
+    currentStaff = replacementActor;
+    retiredController.setStaff(replacementActor);
+    await retiredController.activate();
+    assert.strictEqual(settingsReads, 2, 'replacement actor loads its own current settings');
+    assert.strictEqual(document.getElementById('settings-version').value, 'actor-b-v1');
+    rejectMutationJson(new SyntaxError('Response body was not JSON.'));
+    for (let attempt = 0; attempt < 30; attempt++) await flush();
+
+    assert.strictEqual(unconfirmed.length, 1, 'the status-200 malformed response remains an uncertain A-owned result');
+    assert.strictEqual(unconfirmed[0].owner.id, retiredActor.id);
+    assert.match(unconfirmed[0].message, /uncertain/i);
+    assert.strictEqual(retiredController.hasUnconfirmedOutcome(), false,
+      'late actor A evidence does not lock actor B settings');
+    assert.strictEqual(retiredController.isDirty(), false);
+    assert.strictEqual(document.getElementById('settings-version').value, 'actor-b-v1',
+      'actor A response cannot replace actor B authoritative settings');
+    assert.strictEqual(settingsReads, 2, 'uncertain actor A result is not treated as success and reloaded into actor B');
+    assert.strictEqual(mutationPosts, 1, 'the uncertain actor A save is never replayed automatically');
+    retiredController.dispose();
+    retiredDom.window.close();
     console.log('Settings save completion refreshes the baseline and leaves the form clean');
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });

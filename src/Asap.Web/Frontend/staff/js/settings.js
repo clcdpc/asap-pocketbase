@@ -3,6 +3,7 @@ import { createLatestLoad } from '../../shared/latest-load.js';
 import { createDraftScope } from './draft-scope.js';
 import { createSettingsDomainEditors } from './settings-domains.js';
 import { actorKey } from './session-identity.js';
+import { unconfirmedResponseError } from './mutation-outcome.js';
 
 const WORKFLOW_FIELDS = [
   ['suggestionLimit', 'suggestion-limit', 'number'],
@@ -538,7 +539,7 @@ export function createSettingsController({
   }
 
   function isUnconfirmedMutationFailure(error) {
-    return !error?.status || error.status === 408 || error.status >= 500 || isAbortError(error);
+    return error?.outcomeUnknown === true || !error?.status || error.status === 408 || error.status >= 500 || isAbortError(error);
   }
 
   function markUnconfirmedMutation(message) {
@@ -708,6 +709,17 @@ export function createSettingsController({
     return `Cleanup: ${Number(property(value, 'rulesDeactivated') || 0)} auto-claim rules deactivated; ` +
       `${Number(property(value, 'openTitleClaimsCleared') || 0)} open title claims cleared; ` +
       `${Number(property(value, 'openAdditionalCopyClaimsCleared') || 0)} open additional-copy claims cleared.`;
+  }
+
+  function validStaffLifecycleResponse(response, method) {
+    const user = response?.user;
+    const cleanup = response?.cleanup;
+    const cleanupCounts = ['rulesDeactivated', 'openTitleClaimsCleared', 'openAdditionalCopyClaimsCleared'];
+    return typeof user?.id === 'string' && /^[1-9]\d*$/.test(user.id) &&
+      typeof user.version === 'string' && user.version.length > 0 &&
+      cleanup !== null && typeof cleanup === 'object' && !Array.isArray(cleanup) &&
+      cleanupCounts.every(key => Number.isSafeInteger(cleanup[key]) && cleanup[key] >= 0) &&
+      (method !== 'DELETE' || user.active === false);
   }
 
   function setStaffStatus(message, kind = '') {
@@ -1428,7 +1440,8 @@ export function createSettingsController({
     setStaffStatus(successMessage.replace(/\.$/, '') + '...');
     try {
       const response = await authorizedJson(path, options);
-      const cleanup = response?.cleanup ?? response?.data?.cleanup ?? {};
+      if (!validStaffLifecycleResponse(response, options.method)) throw unconfirmedResponseError();
+      const cleanup = response.cleanup;
       const committedMessage = `${successMessage} ${cleanupSummary(cleanup)}`;
       recordCommitted(mutation, committedMessage);
       onStaffAccessCommitted(mutation.owner);
@@ -1732,6 +1745,9 @@ export function createSettingsController({
         method: 'POST',
         body: payload
       });
+      if (response?.code !== 'saved' || typeof response.data?.version !== 'string' || !response.data.version) {
+        throw unconfirmedResponseError();
+      }
       committed = true;
       recordCommitted(mutation, committedMessage(), mutation.context.scope);
       if (mutation.catalogChanged) onOrganizationCatalogCommitted(mutation.owner);
@@ -1805,6 +1821,9 @@ export function createSettingsController({
         method: 'POST',
         body: { version: state.data.version }
       });
+      if (response?.code !== 'reset' || typeof response.data?.version !== 'string' || !response.data.version) {
+        throw unconfirmedResponseError();
+      }
       committed = true;
       recordCommitted(mutation, 'Inherited overrides reset.', mutation.context.scope);
       if (!isSettingsOperationCurrent(mutation)) return;

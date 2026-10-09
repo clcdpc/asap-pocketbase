@@ -26,6 +26,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.SqlServer.Dac;
@@ -4672,6 +4673,7 @@ public sealed partial class PatronJourneyTests
         long actorId;
         long requestId;
         int initialIdentifierJobCount;
+        var storage = factory!.Services.GetRequiredService<JobStorage>();
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
@@ -4728,7 +4730,8 @@ public sealed partial class PatronJourneyTests
                    (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
                     WHERE [TitleRequestId] = r.[Id] AND [EventType] = N'identifier_retry_requested'),
                    (SELECT COUNT(*) FROM [HangFire].[Job]
-                    WHERE [InvocationData] LIKE N'%IdentifierLookupJobs%')
+                    WHERE [InvocationData] LIKE N'%IdentifierLookupJobs%'),
+                   r.[RowVersion]
             FROM [asap].[TitleRequest] r
             WHERE r.[Id] = @id;
             """,
@@ -4736,6 +4739,7 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@id", requestId);
         await using var result = await WithFixtureClock(command).ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
+        byte[] retryVersion = (byte[])result[7];
         Assert.AreEqual("pending", result.GetString(0));
         Assert.AreEqual(0, result.GetInt32(1));
         Assert.IsTrue(result.IsDBNull(2));
@@ -4743,6 +4747,50 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(result.IsDBNull(4));
         Assert.AreEqual(1, result.GetInt32(5));
         Assert.AreEqual(initialIdentifierJobCount + 1, result.GetInt32(6));
+
+        var matchingIdentifierJobIds = new List<string>();
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var commandForJob = connection.CreateCommand();
+            commandForJob.CommandText =
+                """
+                SELECT CONVERT(nvarchar(30), j.[Id])
+                FROM [HangFire].[Job] j
+                WHERE j.[InvocationData] LIKE N'%IdentifierLookupJobs%'
+                  AND EXISTS
+                  (
+                      SELECT 1
+                      FROM OPENJSON(j.[Arguments]) argument
+                      WHERE argument.[key] = N'0'
+                        AND TRY_CONVERT(bigint, argument.[value]) = @requestId
+                  );
+                """;
+            commandForJob.Parameters.AddWithValue("@requestId", requestId);
+            await using var jobs = await commandForJob.ExecuteReaderAsync();
+            while (await jobs.ReadAsync())
+            {
+                matchingIdentifierJobIds.Add(jobs.GetString(0));
+            }
+        }
+
+        Assert.HasCount(1, matchingIdentifierJobIds);
+        var storedJobId = matchingIdentifierJobIds.Single();
+        var storedJob = ReadEnqueuedHangfireJob(storage, storedJobId);
+        Assert.AreEqual(typeof(IdentifierLookupJobs), storedJob.Type);
+        Assert.AreEqual(nameof(IdentifierLookupJobs.ProcessAsync), storedJob.Method.Name);
+        Assert.AreEqual(5, storedJob.Args.Count);
+        Assert.AreEqual(requestId, Convert.ToInt64(storedJob.Args[0]));
+        Assert.AreEqual("9780000002110", storedJob.Args[1] as string);
+        Assert.AreEqual(2, Convert.ToInt32(storedJob.Args[2]));
+        CollectionAssert.AreEqual(retryVersion, (byte[])storedJob.Args[3]);
+        Assert.AreEqual(CancellationToken.None, (CancellationToken)storedJob.Args[4]);
+        var jobHistory = storage.GetMonitoringApi().JobDetails(storedJobId);
+        Assert.IsNotNull(jobHistory);
+        var enqueuedState = jobHistory!.History.FirstOrDefault(state =>
+            state.StateName == Hangfire.States.EnqueuedState.StateName);
+        Assert.IsNotNull(enqueuedState);
+        Assert.AreEqual("asap-identifier", enqueuedState!.Data["Queue"]);
     }
 
     [TestMethod]
@@ -8675,7 +8723,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task TimedOutOutboxDoesNotRetryBeforeLeaseBoundary()
+    public async Task TimedOutOutboxIsQuarantinedAfterLeaseBoundaryWithoutReplay()
     {
         var seeded = await SeedSensitiveOutboxAsync("timeout-boundary");
         var sender = new CancellationAwareTimeoutEmailSender();
@@ -8689,9 +8737,14 @@ public sealed partial class PatronJourneyTests
 
         await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
         Assert.AreEqual(1, sender.CallCount);
-        var timedOut = await ReadOutboxStateAsync(seeded.OutboxId);
+        var timedOut = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
         Assert.AreEqual("sending", timedOut.Status);
         Assert.AreEqual("provider_timeout", timedOut.LastErrorCode);
+        Assert.AreEqual(1, timedOut.AttemptCount);
+        Assert.IsNotNull(timedOut.LastAttemptUtc);
+        Assert.IsNotNull(timedOut.SendingStartedUtc);
+        Assert.IsNotNull(timedOut.LeaseId);
+        Assert.IsNotNull(timedOut.LeaseExpiresUtc);
 
         await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
         Assert.AreEqual(1, sender.CallCount, "A sending lease must not be claimed for an early retry.");
@@ -8702,16 +8755,38 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("sending", (await ReadOutboxStateAsync(seeded.OutboxId)).Status);
 
         await SetLeaseExpiryAsync(seeded.OutboxId, expired: true);
+        var expired = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
+        Assert.AreEqual("sending", expired.Status);
+        Assert.AreEqual(timedOut.AttemptCount, expired.AttemptCount);
+        Assert.AreEqual(timedOut.LastAttemptUtc, expired.LastAttemptUtc);
+        Assert.AreEqual(timedOut.SendingStartedUtc, expired.SendingStartedUtc);
+        Assert.AreEqual(timedOut.LeaseId, expired.LeaseId);
+        Assert.AreEqual(timedOut.LastErrorCode, expired.LastErrorCode);
+        Assert.AreEqual(timedOut.LastErrorDetail, expired.LastErrorDetail);
         await jobs.SweepAsync(CancellationToken.None);
-        CollectionAssert.Contains(dispatcher.EnqueuedIds, seeded.OutboxId);
-        Assert.AreEqual("pending", (await ReadOutboxStateAsync(seeded.OutboxId)).Status);
+        var quarantined = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
+        Assert.AreEqual("failed", quarantined.Status);
+        Assert.AreEqual(expired.LastErrorCode, quarantined.LastErrorCode,
+            "Quarantining an expired attempt preserves the original provider outcome evidence.");
+        Assert.AreEqual(expired.LastErrorDetail, quarantined.LastErrorDetail);
+        Assert.AreEqual(timedOut.AttemptCount, quarantined.AttemptCount);
+        Assert.AreEqual(timedOut.LastAttemptUtc, quarantined.LastAttemptUtc);
+        Assert.AreEqual(timedOut.SendingStartedUtc, quarantined.SendingStartedUtc);
+        Assert.IsNull(quarantined.ProviderMessageId);
+        Assert.IsNull(quarantined.NextAttemptUtc);
+        Assert.IsNull(quarantined.LeaseId);
+        Assert.IsNull(quarantined.LeaseExpiresUtc);
+        CollectionAssert.DoesNotContain(dispatcher!.EnqueuedIds, seeded.OutboxId);
 
         await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
-        Assert.AreEqual(2, sender.CallCount, "A new claim is allowed only after the ambiguity lease expires.");
+        Assert.AreEqual(1, sender.CallCount, "An expired provider attempt with unknown outcome is never replayed.");
+        AssertEmailOutcomeDispatchSnapshotEqual(
+            quarantined,
+            await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId));
     }
 
     [TestMethod]
-    public async Task StaleProviderCompletionCannotOverwriteNewLeaseCompletion()
+    public async Task LateProviderSuccessCannotOverwriteQuarantinedExpiredLease()
     {
         var seeded = await SeedSensitiveOutboxAsync("stale-completion");
         var sender = new FencedCompletionEmailSender();
@@ -8727,21 +8802,24 @@ public sealed partial class PatronJourneyTests
         await sender.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await SetLeaseExpiryAsync(seeded.OutboxId, expired: true);
         await jobs.SweepAsync(CancellationToken.None);
-        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
-
-        var completed = await ReadOutboxStateAsync(seeded.OutboxId);
-        Assert.AreEqual("sent", completed.Status);
-        Assert.AreEqual("new-owner-message", completed.ProviderMessageId);
+        var quarantined = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
+        Assert.AreEqual("failed", quarantined.Status);
+        Assert.AreEqual("ambiguous_expired_lease", quarantined.LastErrorCode);
+        Assert.IsNull(quarantined.ProviderMessageId);
+        Assert.AreEqual(1, quarantined.AttemptCount);
+        CollectionAssert.DoesNotContain(dispatcher!.EnqueuedIds, seeded.OutboxId);
 
         sender.CompleteFirstCall();
-        await firstDelivery;
-        var afterStaleCompletion = await ReadOutboxStateAsync(seeded.OutboxId);
-        Assert.AreEqual("sent", afterStaleCompletion.Status);
-        Assert.AreEqual("new-owner-message", afterStaleCompletion.ProviderMessageId);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await firstDelivery);
+        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+        AssertEmailOutcomeDispatchSnapshotEqual(
+            quarantined,
+            await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId));
+        CollectionAssert.DoesNotContain(dispatcher.EnqueuedIds, seeded.OutboxId);
     }
 
     [TestMethod]
-    public async Task StaleNotConfiguredResultCannotOverwriteNewLeaseCompletion()
+    public async Task LateNotConfiguredResultCannotOverwriteQuarantinedExpiredLease()
     {
         var seeded = await SeedSensitiveOutboxAsync("stale-not-configured");
         var sender = new FencedCompletionEmailSender();
@@ -8757,14 +8835,19 @@ public sealed partial class PatronJourneyTests
         await sender.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await SetLeaseExpiryAsync(seeded.OutboxId, expired: true);
         await jobs.SweepAsync(CancellationToken.None);
-        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
-        sender.CompleteFirstCall(EmailSendResult.NotConfigured);
-        await firstDelivery;
+        var quarantined = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
+        Assert.AreEqual("failed", quarantined.Status);
+        Assert.AreEqual("ambiguous_expired_lease", quarantined.LastErrorCode);
+        Assert.AreEqual(1, quarantined.AttemptCount);
+        CollectionAssert.DoesNotContain(dispatcher!.EnqueuedIds, seeded.OutboxId);
 
-        var completed = await ReadOutboxStateAsync(seeded.OutboxId);
-        Assert.AreEqual("sent", completed.Status);
-        Assert.AreEqual("new-owner-message", completed.ProviderMessageId);
-        Assert.IsNull(completed.LastErrorCode);
+        sender.CompleteFirstCall(EmailSendResult.NotConfigured);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await firstDelivery);
+        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+        AssertEmailOutcomeDispatchSnapshotEqual(
+            quarantined,
+            await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId));
+        CollectionAssert.DoesNotContain(dispatcher.EnqueuedIds, seeded.OutboxId);
     }
 
     [TestMethod]
@@ -10806,7 +10889,10 @@ public sealed partial class PatronJourneyTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private async Task<PolarisPatronProvider> CreatePolarisProviderAsync(HttpMessageHandler handler, string accessId = "test-access")
+    private async Task<PolarisPatronProvider> CreatePolarisProviderAsync(
+        HttpMessageHandler handler,
+        string accessId = "test-access",
+        ILogger<PolarisPatronProvider>? cleanupLogger = null)
     {
         var services = factory!.Services;
         var protector = services.GetRequiredService<IntegrationCredentialProtector>();
@@ -10837,7 +10923,9 @@ public sealed partial class PatronJourneyTests
         return new PolarisPatronProvider(
             services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
             protector,
-            new SingleClientFactory(new HttpClient(handler)), services.GetRequiredService<TimeProvider>());
+            new SingleClientFactory(new HttpClient(handler)),
+            services.GetRequiredService<TimeProvider>(),
+            cleanupLogger ?? services.GetRequiredService<ILogger<PolarisPatronProvider>>());
     }
 
     private async Task<SeededSensitiveOutbox> SeedSensitiveOutboxAsync(

@@ -78,7 +78,6 @@ public sealed partial class WorkflowProcessingService(
         }
         catch (Exception exception) when (exception is DbUpdateException or DbException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             logger.LogError(exception, "SQL failure stopped identifier processing.");
             return new WorkflowRunResult("sql_failure");
         }
@@ -131,7 +130,6 @@ public sealed partial class WorkflowProcessingService(
             }
             catch (Exception exception) when (exception is DbUpdateException or DbException)
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 logger.LogError(exception, "SQL failure stopped workflow processing.");
                 phaseResult = new WorkflowRunResult("sql_failure");
             }
@@ -330,14 +328,13 @@ public sealed partial class WorkflowProcessingService(
                 LocalCommit: lookup.QueueProgressVersion is not null,
                 ProgressVersion: lookup.QueueProgressVersion);
         }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        catch (PolarisOperationalException) when (cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            // Preserve the provider's actual failure before trying to record a row outcome or progress.
             throw;
         }
         catch (PolarisOperationalException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new WorkflowItemResult("operational_failure", Stop: true);
         }
     }
@@ -568,7 +565,6 @@ public sealed partial class WorkflowProcessingService(
         try { await context.SaveChangesAsync(cancellationToken); return true; }
         catch (DbUpdateConcurrencyException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return false;
         }
     }

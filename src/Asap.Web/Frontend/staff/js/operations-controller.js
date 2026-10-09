@@ -27,16 +27,18 @@ export function createOperationsController({ root, sessionIdentity, announce, on
 
   function setLibraries(organizations) {
       if (disposed) return;
-      libraries = organizations || [];
+      libraries = Array.isArray(organizations)
+        ? organizations.filter(item => Number(item?.id) > 1 && typeof item.name === 'string')
+        : [];
       const retained = state.operationMutation;
       if (retained?.scope !== 'all' && !libraries.some(item => String(item.id) === retained?.scope)) clearReview(retained);
       const operationScope = sessionIdentity.preferences()?.role === 'super_admin'
         ? state.operationsScope
         : String(sessionIdentity.preferences()?.organizationId);
-      const knownScopes = new Set(['all', ...(organizations || []).map(item => String(item.id))]);
+      const knownScopes = new Set(['all', ...libraries.map(item => String(item.id))]);
       const reconciledScope = knownScopes.has(String(operationScope)) ? String(operationScope) : 'all';
       dom.operationsScope.replaceChildren(element('option', { value: 'all', text: 'All libraries' }));
-      for (const organization of organizations || []) {
+      for (const organization of libraries) {
         dom.operationsScope.append(element('option', {
           value: organization.id,
           text: organization.name || organization.displayName || String(organization.id)
@@ -208,7 +210,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         { label: 'Type', key: 'deliveryClass' },
         { label: 'Error', render: row => element('span', { text: row.lastErrorCode || row.suppressionReason || 'None' }) },
         { label: 'Action', render: row => {
-          if (row.status !== 'failed') return element('span', { text: 'No action' });
+          if (row.status !== 'failed' || row.canRetry !== true) return element('span', { text: 'No action' });
           return commandButton('Retry', 'refresh', () => {
             if (active && projection === rendered && sessionIdentity.isCurrent(rendered.owner) && rendered.scope === state.operationsScope) void retryEmail(row);
           }, 'secondary-button');
@@ -240,7 +242,10 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== state.operationsScope) return false;
       const organizations = organizationResult?.data ?? organizationResult;
       if (sessionIdentity.preferences().role === 'super_admin' && Array.isArray(organizations)) {
-        setLibraries(organizations.filter(item => Number(item.id) > 1 && item.isActive));
+        const activeLibraries = organizations
+          .filter(item => Number(item.id) > 1 && item.organizationCodeId === 2 && item.isActive === true)
+          .map(item => ({ id: item.id, name: item.name || item.displayName || String(item.id) }));
+        setLibraries(activeLibraries);
         if (requestedScope !== state.operationsScope) return loadOperations(options);
       }
       renderOperations({ queue, email });
@@ -324,7 +329,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         if (!disposed && active && sessionIdentity.isCurrent(owner)) announce(`${committedMessage} Operations could not be refreshed.`, 'warning');
         return;
       }
-      const uncertain = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
+      const uncertain = error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
       if (uncertain) {
         operation.uncertain = true;
         // The record saved before dispatch already requires review on restore.

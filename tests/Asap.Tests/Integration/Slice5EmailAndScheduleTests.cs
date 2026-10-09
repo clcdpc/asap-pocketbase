@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Data;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
@@ -10,6 +11,7 @@ using Asap.Web.Infrastructure.Jobs;
 using Asap.Web.Infrastructure.Security;
 using Hangfire;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Asap.Tests.Integration;
@@ -119,7 +121,7 @@ public sealed partial class PatronJourneyTests
             DeliveryClass = "operational_test",
             Status = "failed",
             AttemptCount = 1,
-            LastErrorCode = "provider_failed",
+            LastErrorCode = "mail_not_configured",
             ToAddress = "retry@example.org",
             FromAddress = "system@example.org",
             Subject = "Retry test",
@@ -568,7 +570,7 @@ public sealed partial class PatronJourneyTests
                 BusinessKey = businessKey,
                 Status = "failed",
                 AttemptCount = 3,
-                LastErrorCode = "provider_failed",
+                LastErrorCode = "mail_not_configured",
                 ToAddress = "retry@example.org",
                 FromAddress = "system@example.org",
                 Subject = "Retry test",
@@ -657,7 +659,10 @@ public sealed partial class PatronJourneyTests
     public async Task EmailOperationsApiPreservesBigintIdentityThroughListAndRetry()
     {
         const long largeId = 9007199254740993;
+        const long dispatchedMarkerId = 9007199254740994;
         const string exactId = "9007199254740993";
+        const string exactDispatchedMarkerId = "9007199254740994";
+        var markerLeaseId = Guid.NewGuid();
         var actor = await ReadConfiguredSuperAdminAsync();
         using var client = factory!.CreateClient();
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
@@ -669,11 +674,47 @@ public sealed partial class PatronJourneyTests
                 ([Id], [OrganizationId], [DeliveryClass], [Status], [AttemptCount], [LastErrorCode],
                  [ToAddress], [FromAddress], [Subject], [BodyText], [CreatedUtc])
             VALUES
-                (@id, 1, N'operational_test', N'failed', 1, N'synthetic_failure',
-                 N'large-id@example.org', N'system@example.org', N'Large ID', N'Body', SYSUTCDATETIME());
+                (@id, 1, N'operational_test', N'failed', 1, N'mail_not_configured',
+                 N'large-id@example.org', N'system@example.org', N'Large ID', N'Body', SYSUTCDATETIME()),
+                (@markerId, 1, N'operational_test', N'failed', 1, N'mail_not_configured',
+                 N'dispatched-marker@example.org', N'system@example.org', N'Dispatch marker', N'Body', SYSUTCDATETIME());
+            UPDATE [asap].[EmailOutbox]
+            SET [SendingStartedUtc] = DATEADD(minute, -3, SYSUTCDATETIME()),
+                [LeaseId] = @leaseId,
+                [LeaseExpiresUtc] = DATEADD(minute, -2, SYSUTCDATETIME())
+            WHERE [Id] = @markerId;
             SET IDENTITY_INSERT [asap].[EmailOutbox] OFF;
             """,
-            ("@id", largeId));
+            ("@id", largeId), ("@markerId", dispatchedMarkerId), ("@leaseId", markerLeaseId));
+
+        async Task<(string Status, int Attempts, string? ErrorCode, string? ProviderMessageId,
+            DateTime? SendingStartedUtc, Guid? LeaseId, DateTime? LeaseExpiresUtc, DateTime? NextAttemptUtc,
+            byte[] RowVersion, int EventCount)> ReadDispatchedMarkerAsync()
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = new SqlCommand("""
+                SELECT [Status], [AttemptCount], [LastErrorCode], [ProviderMessageId], [SendingStartedUtc],
+                       [LeaseId], [LeaseExpiresUtc], [NextAttemptUtc], [RowVersion],
+                       (SELECT COUNT(*) FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] = outbox.[Id])
+                FROM [asap].[EmailOutbox] AS outbox WHERE outbox.[Id] = @id;
+                """, connection);
+            command.Parameters.Add("@id", SqlDbType.BigInt).Value = dispatchedMarkerId;
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            return (
+                reader.GetString(0),
+                reader.GetInt32(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetDateTime(4),
+                reader.IsDBNull(5) ? null : reader.GetGuid(5),
+                reader.IsDBNull(6) ? null : reader.GetDateTime(6),
+                reader.IsDBNull(7) ? null : reader.GetDateTime(7),
+                (byte[])reader.GetValue(8),
+                reader.GetInt32(9));
+        }
+
         try
         {
             using var list = await client.GetAsync("/api/asap/staff/email-operations?organizationId=1&status=failed");
@@ -682,6 +723,14 @@ public sealed partial class PatronJourneyTests
             var item = listJson.RootElement.GetProperty("items").EnumerateArray()
                 .Single(row => row.GetProperty("id").GetString() == exactId);
             Assert.AreEqual(JsonValueKind.String, item.GetProperty("id").ValueKind);
+            Assert.IsTrue(item.GetProperty("canRetry").GetBoolean(),
+                "mail_not_configured with no provider, sending, lease, expiry, or due marker is certified safe to retry");
+
+            var dispatchedMarker = listJson.RootElement.GetProperty("items").EnumerateArray()
+                .Single(row => row.GetProperty("id").GetString() == exactDispatchedMarkerId);
+            Assert.AreEqual(JsonValueKind.String, dispatchedMarker.GetProperty("id").ValueKind);
+            Assert.IsFalse(dispatchedMarker.GetProperty("canRetry").GetBoolean(),
+                "the same error code cannot erase persisted evidence that dispatch started");
 
             var version = item.GetProperty("version").GetString();
             using var retry = await client.PostAsJsonAsync(
@@ -691,12 +740,31 @@ public sealed partial class PatronJourneyTests
             var returnedId = retryJson.RootElement.GetProperty("data").GetProperty("id");
             Assert.AreEqual(JsonValueKind.String, returnedId.ValueKind);
             Assert.AreEqual(exactId, returnedId.GetString());
+
+            var beforeRejectedRetry = await ReadDispatchedMarkerAsync();
+            using var rejectedRetry = await client.PostAsJsonAsync(
+                $"/api/asap/staff/email-operations/{exactDispatchedMarkerId}/retry",
+                new { version = dispatchedMarker.GetProperty("version").GetString() });
+            Assert.AreEqual(HttpStatusCode.Conflict, rejectedRetry.StatusCode);
+            using var rejectedRetryJson = JsonDocument.Parse(await rejectedRetry.Content.ReadAsStringAsync());
+            Assert.AreEqual("email_not_retryable", rejectedRetryJson.RootElement.GetProperty("code").GetString());
+            var afterRejectedRetry = await ReadDispatchedMarkerAsync();
+            Assert.AreEqual(beforeRejectedRetry.Status, afterRejectedRetry.Status);
+            Assert.AreEqual(beforeRejectedRetry.Attempts, afterRejectedRetry.Attempts);
+            Assert.AreEqual(beforeRejectedRetry.ErrorCode, afterRejectedRetry.ErrorCode);
+            Assert.AreEqual(beforeRejectedRetry.ProviderMessageId, afterRejectedRetry.ProviderMessageId);
+            Assert.AreEqual(beforeRejectedRetry.SendingStartedUtc, afterRejectedRetry.SendingStartedUtc);
+            Assert.AreEqual(beforeRejectedRetry.LeaseId, afterRejectedRetry.LeaseId);
+            Assert.AreEqual(beforeRejectedRetry.LeaseExpiresUtc, afterRejectedRetry.LeaseExpiresUtc);
+            Assert.AreEqual(beforeRejectedRetry.NextAttemptUtc, afterRejectedRetry.NextAttemptUtc);
+            Assert.AreEqual(beforeRejectedRetry.EventCount, afterRejectedRetry.EventCount);
+            CollectionAssert.AreEqual(beforeRejectedRetry.RowVersion, afterRejectedRetry.RowVersion);
         }
         finally
         {
             await ExecuteNonQueryAsync(
-                "DELETE FROM [asap].[EmailOutbox] WHERE [Id] = @id; DBCC CHECKIDENT ('asap.EmailOutbox', RESEED);",
-                ("@id", largeId));
+                "DELETE FROM [asap].[EmailOutbox] WHERE [Id] IN (@id, @markerId); DBCC CHECKIDENT ('asap.EmailOutbox', RESEED);",
+                ("@id", largeId), ("@markerId", dispatchedMarkerId));
         }
     }
 
@@ -724,12 +792,29 @@ public sealed partial class PatronJourneyTests
                 ["asap-patron-session-cleanup"] = "PatronSessionCleanup",
                 ["asap-email-payload-cleanup"] = "EmailPayloadCleanup"
             };
+            var expectedJobs = new Dictionary<string, (Type Type, string Method, string Queue)>
+            {
+                ["asap-workflow-processing"] = (typeof(BackgroundWorkflowJobs), nameof(BackgroundWorkflowJobs.ProcessWorkflowAsync), "asap-workflow"),
+                ["asap-identifier-processing"] = (typeof(BackgroundWorkflowJobs), nameof(BackgroundWorkflowJobs.ProcessIdentifierAsync), "asap-identifier"),
+                ["asap-organization-refresh"] = (typeof(BackgroundWorkflowJobs), nameof(BackgroundWorkflowJobs.RefreshOrganizationsAsync), "asap-admin"),
+                ["asap-weekly-staff-summary"] = (typeof(BackgroundWorkflowJobs), nameof(BackgroundWorkflowJobs.SendWeeklyStaffSummaryAsync), "asap-admin"),
+                ["asap-email-outbox-sweep"] = (typeof(EmailOutboxJobs), nameof(EmailOutboxJobs.SweepAsync), "asap-email"),
+                ["asap-patron-session-cleanup"] = (typeof(BackgroundWorkflowJobs), nameof(BackgroundWorkflowJobs.CleanupSessionsAsync), "asap-admin"),
+                ["asap-email-payload-cleanup"] = (typeof(BackgroundWorkflowJobs), nameof(BackgroundWorkflowJobs.CleanupEmailPayloadsAsync), "asap-admin")
+            };
             foreach (var id in ids)
             {
                 var fields = connection.GetAllEntriesFromHash($"recurring-job:{id}");
                 Assert.IsTrue(expectedIds.TryGetValue(id, out var key));
                 Assert.AreEqual(expected[key], fields["Cron"]);
                 Assert.AreEqual(expectedTimeZone, fields["TimeZoneId"]);
+                Assert.IsTrue(expectedJobs.TryGetValue(id, out var expectedJob));
+                var storedRecurringJob = Hangfire.Storage.InvocationData.DeserializePayload(fields["Job"]).DeserializeJob();
+                Assert.AreEqual(expectedJob.Type, storedRecurringJob.Type);
+                Assert.AreEqual(expectedJob.Method, storedRecurringJob.Method.Name);
+                // Hangfire 1.8.25 keeps the RecurringJobOptions queue in the hash,
+                // while the explicit AddOrUpdate queue is serialized with the invocation.
+                Assert.AreEqual(expectedJob.Queue, storedRecurringJob.Queue);
             }
         }
         finally

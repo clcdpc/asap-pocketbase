@@ -618,8 +618,12 @@ public static class TitleRequestEndpoints
         {
             row = await views.GetAsync(Current(context), id.ToString(CultureInfo.InvariantCulture), cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The action is committed; caller cancellation only prevents this optional detail read.
+        }
         // The mutation committed; a detail-refresh failure must still return the accepted outcome.
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception)
         {
             loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
                 .LogError(exception, "Request detail refresh failed after action {RequestId} committed", id);
@@ -868,10 +872,13 @@ public static class TitleRequestEndpoints
         {
             return await views.GetAsync(Current(context), id.ToString(CultureInfo.InvariantCulture), cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
         // This read follows a committed mutation; log its failure and return explicit committed metadata.
         catch (Exception exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
                 .LogError(exception, "Request detail refresh failed after mutation {RequestId} committed", id);
             return null;

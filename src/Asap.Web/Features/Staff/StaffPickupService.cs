@@ -181,30 +181,25 @@ public sealed partial class StaffPickupService(
             pickupChanged = receipt is not null;
             oldName = receipt?.FromBranchName ?? oldName;
         }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
         catch (InvalidPickupSelectionException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new StaffPickupResult("invalid_pickup");
         }
         catch (PolarisOperationalException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new StaffPickupResult("pickup_provider_error");
         }
         catch (PickupMutationException exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new StaffPickupResult(exception.Code, PickupChanged: exception.PickupPreferenceChanged,
                 OperationId: exception.OperationId);
         }
         catch (PickupMutationBlockedException exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new StaffPickupResult(exception.Code);
         }
 
@@ -284,9 +279,8 @@ public sealed partial class StaffPickupService(
         catch (Exception exception) when (receipt is not null &&
                                         exception is SqlException or DbUpdateException or PickupMutationException)
         {
-            // The pre-dispatch journal remains pending if this local transaction
-            // rolls back. Cancellation propagates, also leaving that durable intent.
-            cancellationToken.ThrowIfCancellationRequested();
+            // A local persistence fault rolls back the request snapshot transaction;
+            // the durable pickup operation remains available for recovery.
             return LocalFailure("local_persistence_failed", receipt);
         }
     }

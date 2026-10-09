@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net.Mail;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
@@ -42,6 +43,15 @@ internal static class MigrationIndependentConfigurationVerifier
         ("eaudiobookMessage", "EaudiobookMessage")
     ];
 
+    private static readonly string[] ScopedWorkflowTextFields =
+    [
+        "suggestionLimitMessage",
+        "commonAuthorsLabel",
+        "commonAuthorsHelp",
+        "commonAuthorsMessage",
+        "patronCodeEligibilityMessage"
+    ];
+
     private static readonly (string Source, string Target)[] DuplicateLabelFields =
     [
         ("suggestion", "SuggestionStatusLabel"),
@@ -60,7 +70,8 @@ internal static class MigrationIndependentConfigurationVerifier
         SqlConnection connection,
         SqlTransaction? transaction,
         ValidatedMigrationPackage package,
-        bool postmarkTokenProvisioned)
+        bool postmarkTokenProvisioned,
+        MigrationCredentialProtector? credentialProtector)
     {
         var organizations = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations");
         var organizationIds = organizations.ToDictionary(
@@ -69,7 +80,7 @@ internal static class MigrationIndependentConfigurationVerifier
             StringComparer.Ordinal);
 
         VerifySystemSettings(connection, transaction, package);
-        VerifyPolarisSettings(connection, transaction, package);
+        VerifyPolarisSettings(connection, transaction, package, credentialProtector);
         VerifyEmailSettings(connection, transaction, package, organizationIds, postmarkTokenProvisioned);
         VerifyWorkflowSettings(connection, transaction, package, organizationIds);
         VerifyPatronSettings(connection, transaction, package, organizationIds);
@@ -256,8 +267,12 @@ internal static class MigrationIndependentConfigurationVerifier
         for (var index = 1; index <= 4; index++)
         {
             var expectedEnabled = system?.Bool($"externalSearch{index}Enabled", defaults[index - 1].Enabled) ?? defaults[index - 1].Enabled;
-            var expectedLabel = system?.Text($"externalSearch{index}Label") ?? defaults[index - 1].Label;
-            var expectedUrl = system?.Text($"externalSearch{index}UrlTemplate") ?? defaults[index - 1].Url;
+            var expectedLabel = system is null
+                ? defaults[index - 1].Label
+                : ExternalSearchText(system, $"externalSearch{index}Label", true, defaults[index - 1].Label);
+            var expectedUrl = system is null
+                ? defaults[index - 1].Url
+                : ExternalSearchText(system, $"externalSearch{index}UrlTemplate", true, defaults[index - 1].Url);
             Ensure(actualProviders.TryGetValue($"external_search_{index}", out var actual) &&
                 actual == (1, expectedEnabled, expectedLabel, expectedUrl, defaults[index - 1].SortOrder),
                 "external-search seeded/source provider identity, scope, values and order");
@@ -269,7 +284,9 @@ internal static class MigrationIndependentConfigurationVerifier
             var libraryId = ResolveLibrary(row.RequiredString("libraryOrganization"), organizationIds, package);
             for (var slot = 1; slot <= 4; slot++)
             {
-                if (row.HasValue($"externalSearch{slot}Enabled") || row.HasValue($"externalSearch{slot}Label") || row.HasValue($"externalSearch{slot}UrlTemplate"))
+                if (HasScopedWorkflowValue(row, $"externalSearch{slot}Enabled") ||
+                    HasScopedWorkflowValue(row, $"externalSearch{slot}Label") ||
+                    HasScopedWorkflowValue(row, $"externalSearch{slot}UrlTemplate"))
                 {
                     expectedOverrides.Add((libraryId, $"external_search_{slot}"));
                 }
@@ -288,6 +305,24 @@ internal static class MigrationIndependentConfigurationVerifier
             }
         }
         Ensure(actualOverrides.SetEquals(expectedOverrides), "exact external-search library override population");
+    }
+
+    // Match the pinned hasScopedWorkflowValue check while retaining the original text for comparison.
+    private static bool HasScopedWorkflowValue(SourceRow row, string field)
+    {
+        var value = row.Text(field);
+        return value is not null && TrimLegacyCustomFieldText(value).Length > 0;
+    }
+
+    private static string? ExternalSearchText(SourceRow row, string field, bool system, string defaultValue)
+    {
+        var value = row.Text(field);
+        if (system)
+        {
+            return string.IsNullOrEmpty(value) ? defaultValue : value;
+        }
+
+        return HasScopedWorkflowValue(row, field) ? value : null;
     }
 
     private static void VerifyEmailTemplatePopulation(
@@ -452,6 +487,8 @@ internal static class MigrationIndependentConfigurationVerifier
         var settings = runtime.GetProperty("settings");
         var expectedStaffUrl = settings.GetProperty("StaffApplicationUrl").GetProperty("value").GetString();
         var expectedIconPattern = settings.GetProperty("MaterialTypeIconUrlPattern").GetProperty("value").GetString();
+        var expectedBibPattern = ExpectedLeapBibPattern(source?.Text("leapBibUrlPattern"));
+        var expectedPatronPattern = ExpectedLeapPatronPattern(source?.Text("leapPatronUrlPattern"));
         const string defaultSystemNotEnabledMessage = "{{library}} does not currently participate in this suggestion service.";
         const string defaultMisconfiguredMessage = "The {{library}} suggestion system is currently misconfigured. Please contact staff.";
         var expectedSystemNotEnabledMessage = uiSystem?.Text("systemNotEnabledMessage") ?? defaultSystemNotEnabledMessage;
@@ -467,8 +504,8 @@ internal static class MigrationIndependentConfigurationVerifier
             Ensure(reader.Read(), "system settings row");
             Ensure(
                 Same(reader, 0, expectedStaffUrl) &&
-                Same(reader, 1, source?.String("leapBibUrlPattern")) &&
-                Same(reader, 2, source?.String("leapPatronUrlPattern")) &&
+                Same(reader, 1, expectedBibPattern) &&
+                Same(reader, 2, expectedPatronPattern) &&
                 Same(reader, 3, expectedIconPattern) &&
                 Same(reader, 4, expectedSystemNotEnabledMessage) &&
                 Same(reader, 5, defaultMisconfiguredMessage) &&
@@ -476,7 +513,7 @@ internal static class MigrationIndependentConfigurationVerifier
                 "system settings source fields and imported timestamp precedence");
         }
 
-        var expectedOrigins = Split(source?.String("patronEmbedAllowedOrigins"))
+        var expectedOrigins = SplitEmbedOriginsForOracle(source?.Text("patronEmbedAllowedOrigins"))
             .Select(NormalizeOriginForOracle)
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
@@ -508,7 +545,7 @@ internal static class MigrationIndependentConfigurationVerifier
 
     private static string NormalizeOriginForOracle(string value)
     {
-        var candidate = value.Trim();
+        var candidate = TrimLegacyCustomFieldText(value);
         if (candidate.Length == 0 || candidate.Any(char.IsWhiteSpace) ||
             candidate.IndexOfAny(['"', '\'', '`', ';', '\\']) >= 0)
         {
@@ -529,7 +566,6 @@ internal static class MigrationIndependentConfigurationVerifier
                 !wildcardAuthorityMatch.Groups["host"].Value.TrimEnd('.').Contains('.') ||
                 !Uri.TryCreate($"https://{authority}", UriKind.Absolute, out var wildcardUri) ||
                 wildcardUri.HostNameType != UriHostNameType.Dns ||
-                !IsDnsHostname(wildcardUri.Host) ||
                 wildcardUri.AbsolutePath != "/" ||
                 !string.IsNullOrEmpty(wildcardUri.Query) ||
                 !string.IsNullOrEmpty(wildcardUri.Fragment) ||
@@ -607,11 +643,21 @@ internal static class MigrationIndependentConfigurationVerifier
     private static void VerifyPolarisSettings(
         SqlConnection connection,
         SqlTransaction? transaction,
-        ValidatedMigrationPackage package)
+        ValidatedMigrationPackage package,
+        MigrationCredentialProtector? credentialProtector)
     {
         var rows = MigrationPackageReader.ReadRows(package, "polaris-settings.json", "polaris_settings");
         Ensure(rows.Count <= 1, "single Polaris settings source row");
         var source = rows.SingleOrDefault();
+        if (source is not null)
+        {
+            Ensure(
+                IsExpectedPolarisEndpointValue(source.Text("langId"), "1033") &&
+                IsExpectedPolarisEndpointValue(source.Text("appId"), "100"),
+                "source Polaris endpoint language and application defaults");
+        }
+        int? expectedWorkstationId = source is null ? null : ExpectedPolarisIdentity(source, "workstationId");
+        int? expectedSystemPolarisUserId = source is null ? null : ExpectedPolarisIdentity(source, "userId");
         using var command = new SqlCommand(
             "SELECT [Host], [AccessId], [ProtectedApiKey], [StaffDomain], [AdminUser], [ProtectedAdminPassword], [WorkstationId], [SystemPolarisUserId], [UpdatedUtc] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;",
             connection,
@@ -619,16 +665,187 @@ internal static class MigrationIndependentConfigurationVerifier
         using var reader = command.ExecuteReader();
         Ensure(reader.Read(), "Polaris settings row");
         Ensure(
-            Same(reader, 0, source?.String("host")) &&
-            Same(reader, 1, source?.String("accessId")) &&
-            reader.IsDBNull(2) == (source?.String("apiKey") is null) &&
-            Same(reader, 3, source?.String("staffDomain")) &&
-            Same(reader, 4, source?.String("adminUser")) &&
-            reader.IsDBNull(5) == (source?.String("adminPassword") is null) &&
-            NullableInt(reader, 6) == source?.PositiveInt32("workstationId", "source_polaris_identity_invalid") &&
-            NullableInt(reader, 7) == source?.PositiveInt32("userId", "source_polaris_identity_invalid") &&
+            Same(reader, 0, source is null ? null : ExpectedPolarisHost(source.Text("host"))) &&
+            Same(reader, 1, source is null ? null : ExpectedPolarisAccessId(source.Text("accessId"))) &&
+            ProtectedCredentialEquals(reader, 2, source?.Text("apiKey") is { Length: > 0 } apiKey ? apiKey : null, credentialProtector) &&
+            Same(reader, 3, ExpectedPolarisRawText(source?.Text("staffDomain"))) &&
+            Same(reader, 4, ExpectedPolarisRawText(source?.Text("adminUser"))) &&
+            ProtectedCredentialEquals(reader, 5, source?.Text("adminPassword") is { Length: > 0 } adminPassword ? adminPassword : null, credentialProtector) &&
+            NullableInt(reader, 6) == expectedWorkstationId &&
+            NullableInt(reader, 7) == expectedSystemPolarisUserId &&
             Same(reader, 8, source?.UtcDateTime("updated") ?? package.Manifest.ExportedAtUtc.UtcDateTime),
             "Polaris source fields, protected-secret presence and imported timestamp");
+    }
+
+    private static string? ExpectedPolarisHost(string? sourceHost)
+    {
+        if (string.IsNullOrEmpty(sourceHost))
+        {
+            return null;
+        }
+
+        var trimmedHost = sourceHost.TrimEnd('/');
+        if (HasUnsupportedHostScheme(trimmedHost))
+        {
+            return Fail<string?>("A source Polaris host cannot be represented by the target provider configuration.");
+        }
+
+        var effectiveHost = HasHttpScheme(trimmedHost) ? trimmedHost : $"https://{trimmedHost}";
+        if (effectiveHost.Length > 2048 ||
+            !string.Equals(effectiveHost, TrimLegacyCustomFieldText(effectiveHost), StringComparison.Ordinal) ||
+            !string.Equals(effectiveHost, effectiveHost.Trim(), StringComparison.Ordinal) ||
+            !Uri.TryCreate(effectiveHost, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("https" or "http") ||
+            string.IsNullOrWhiteSpace(uri.Host) ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment))
+        {
+            return Fail<string?>("A source Polaris host cannot be represented by the target provider configuration.");
+        }
+
+        return effectiveHost;
+    }
+
+    private static string ExpectedPolarisAccessId(string? sourceAccessId)
+    {
+        var effectiveAccessId = string.IsNullOrEmpty(sourceAccessId) ? "SuggestAPI" : sourceAccessId;
+        if (effectiveAccessId.Length > 256 || string.IsNullOrWhiteSpace(effectiveAccessId))
+        {
+            return Fail<string>("A source Polaris access identifier cannot be represented by the target provider configuration.");
+        }
+
+        return effectiveAccessId;
+    }
+
+    private static string? ExpectedPolarisRawText(string? value)
+    {
+        if (value is not null &&
+            (value.Length > 256 || value.Length > 0 && string.IsNullOrWhiteSpace(value)))
+        {
+            return Fail<string?>("A source Polaris text setting cannot be represented by the target provider configuration.");
+        }
+
+        return value;
+    }
+
+    private static int ExpectedPolarisIdentity(SourceRow source, string field)
+    {
+        var raw = source.Text(field);
+        if (string.IsNullOrEmpty(raw))
+        {
+            return 1;
+        }
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return Fail<int>("A source Polaris identity cannot be represented by the target provider configuration.");
+        }
+
+        return source.PositiveInt32(field, "source_polaris_identity_invalid") ??
+            Fail<int>("A source Polaris identity cannot be represented by the target provider configuration.");
+    }
+
+    private static bool IsExpectedPolarisEndpointValue(string? value, string expected) =>
+        string.IsNullOrEmpty(value) || string.Equals(value, expected, StringComparison.Ordinal);
+
+    private static bool HasHttpScheme(string value) =>
+        value.StartsWith("https://", StringComparison.Ordinal) ||
+        value.StartsWith("http://", StringComparison.Ordinal);
+
+    private static bool HasUnsupportedHostScheme(string value) =>
+        Regex.IsMatch(value, "^[A-Za-z][A-Za-z0-9+.-]*://", RegexOptions.CultureInvariant) &&
+        !HasHttpScheme(value);
+
+    private static string? ExpectedLeapBibPattern(string? pattern)
+    {
+        if (pattern is { Length: > 2048 })
+        {
+            return Fail<string?>("A source BIB research URL pattern exceeds target system settings capacity.");
+        }
+
+        return pattern;
+    }
+
+    private static string? ExpectedLeapPatronPattern(string? pattern)
+    {
+        if (pattern is null)
+        {
+            return null;
+        }
+        if (pattern.Length > 2048)
+        {
+            return Fail<string?>("A source patron research URL pattern exceeds target system settings capacity.");
+        }
+
+        var legacyValue = TrimLegacyCustomFieldText(pattern);
+        var targetValue = pattern.Trim();
+        if (HasTargetPatronResearchLookup(targetValue) &&
+            !string.Equals(legacyValue, targetValue, StringComparison.Ordinal))
+        {
+            return Fail<string?>("A source patron research URL pattern cannot be represented by target lookup behavior.");
+        }
+
+        return legacyValue.Length == 0 ? null : legacyValue;
+    }
+
+    private static bool HasTargetPatronResearchLookup(string? pattern)
+    {
+        var value = pattern?.Trim();
+        if (string.IsNullOrWhiteSpace(value) ||
+            !value.Contains("{{patron-id}}", StringComparison.Ordinal) &&
+            !value.Contains("{{patronId}}", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var hasUnsupportedToken = false;
+        var candidate = Regex.Replace(value, "\\{\\{([^{}]+)\\}\\}", match =>
+        {
+            if (match.Groups[1].Value is not ("title" or "identifier" or "bibid" or "patron-id" or "patronId"))
+            {
+                hasUnsupportedToken = true;
+                return string.Empty;
+            }
+            return "1";
+        });
+        if (hasUnsupportedToken || candidate.Contains("{{", StringComparison.Ordinal) ||
+            candidate.Contains("}}", StringComparison.Ordinal) ||
+            !Uri.TryCreate(candidate, UriKind.Absolute, out var url))
+        {
+            return false;
+        }
+
+        return (url.Scheme == Uri.UriSchemeHttp || url.Scheme == Uri.UriSchemeHttps) &&
+               string.IsNullOrEmpty(url.UserInfo);
+    }
+
+    private static bool ProtectedCredentialEquals(
+        SqlDataReader reader,
+        int ordinal,
+        string? sourceValue,
+        MigrationCredentialProtector? credentialProtector)
+    {
+        if (sourceValue is null)
+        {
+            return reader.IsDBNull(ordinal);
+        }
+        if (reader.IsDBNull(ordinal) || credentialProtector is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return string.Equals(
+                credentialProtector.Unprotect(reader.GetString(ordinal)),
+                sourceValue,
+                StringComparison.Ordinal);
+        }
+        catch (Exception exception) when (
+            exception is CryptographicException or ArgumentException or InvalidOperationException or FormatException)
+        {
+            return false;
+        }
     }
 
     private static void VerifyEmailSettings(
@@ -723,6 +940,8 @@ internal static class MigrationIndependentConfigurationVerifier
         {
             var organizationId = ResolveScopedOrganization(row, organizationIds, package);
             var system = organizationId == 1;
+            Ensure(UnrepresentableWorkflowTextField(row, system) is null,
+                "workflow text is representable by target patron configuration");
             var sourceTemplateId = row.String("outstandingTimeoutRejectionTemplate");
             var targetTemplateId = sourceTemplateId is null
                 ? (long?)null
@@ -758,7 +977,7 @@ internal static class MigrationIndependentConfigurationVerifier
                 Ensure(reader.Read(), "workflow settings row");
                 Ensure(
                     NullableInt(reader, 0) == (system ? row.Int32("suggestionLimit") ?? 5 : row.Int32("suggestionLimit")) &&
-                    Same(reader, 1, ScopedText(row, "suggestionLimitMessage", system)) &&
+                    Same(reader, 1, WorkflowScopedText(row, "suggestionLimitMessage", system)) &&
                 NullableBoolean(reader, 2) == (system ? row.Bool("outstandingTimeoutEnabled", false) : row.NullableBool("outstandingTimeoutEnabled")) &&
                     NullableInt(reader, 3) == (system ? row.Int32("outstandingTimeoutDays") ?? 30 : row.Int32("outstandingTimeoutDays")) &&
                 NullableBoolean(reader, 4) == (system ? row.Bool("outstandingTimeoutSendEmail", false) : row.NullableBool("outstandingTimeoutSendEmail")) &&
@@ -771,13 +990,13 @@ internal static class MigrationIndependentConfigurationVerifier
                     NullableInt(reader, 11) == (system ? row.Int32("additionalCopyTimeoutDays") ?? 14 : row.Int32("additionalCopyTimeoutDays")) &&
                 NullableBoolean(reader, 12) == (system ? row.Bool("autoPromote", false) : row.NullableBool("autoPromote")) &&
                 NullableBoolean(reader, 13) == (system ? row.Bool("commonAuthorsEnabled", false) : row.NullableBool("commonAuthorsEnabled")) &&
-                    Same(reader, 14, ScopedText(row, "commonAuthorsLabel", system)) &&
-                    Same(reader, 15, ScopedText(row, "commonAuthorsHelp", system)) &&
-                    Same(reader, 16, ScopedText(row, "commonAuthorsMessage", system)) &&
+                    Same(reader, 14, WorkflowScopedText(row, "commonAuthorsLabel", system)) &&
+                    Same(reader, 15, WorkflowScopedText(row, "commonAuthorsHelp", system)) &&
+                    Same(reader, 16, WorkflowScopedText(row, "commonAuthorsMessage", system)) &&
                 NullableBoolean(reader, 17) == (system ? row.Bool("allowPatronAutoholdOptOut", true) : row.NullableBool("allowPatronAutoholdOptOut")) &&
                 NullableBoolean(reader, 18) == (system ? row.Bool("allowAnyRegisteredCardLogin", false) : row.NullableBool("allowAnyRegisteredCardLogin")) &&
                 NullableBoolean(reader, 19) == (system ? row.Bool("patronCodeEligibilityEnabled", false) : row.NullableBool("patronCodeEligibilityEnabled")) &&
-                    Same(reader, 20, ScopedText(row, "patronCodeEligibilityMessage", system)) &&
+                    Same(reader, 20, WorkflowScopedText(row, "patronCodeEligibilityMessage", system)) &&
                     Same(reader, 21, row.UtcDateTime("updated") ?? package.Manifest.ExportedAtUtc.UtcDateTime),
                     "workflow setting values, nullability and imported timestamp");
             }
@@ -943,13 +1162,14 @@ internal static class MigrationIndependentConfigurationVerifier
             var enabledName = $"externalSearch{slot}Enabled";
             var labelName = $"externalSearch{slot}Label";
             var urlName = $"externalSearch{slot}UrlTemplate";
-            if (!system && !source.HasValue(enabledName) && !source.HasValue(labelName) && !source.HasValue(urlName))
+            if (!system && !HasScopedWorkflowValue(source, enabledName) &&
+                !HasScopedWorkflowValue(source, labelName) && !HasScopedWorkflowValue(source, urlName))
             {
                 continue;
             }
             var expectedEnabled = system ? source.Bool(enabledName, defaults[slot - 1].Enabled) : source.NullableBool(enabledName);
-            var expectedLabel = system ? source.Text(labelName) ?? defaults[slot - 1].Label : ScopedText(source, labelName, isSystem: false);
-            var expectedUrl = system ? source.Text(urlName) ?? defaults[slot - 1].Url : ScopedText(source, urlName, isSystem: false);
+            var expectedLabel = ExternalSearchText(source, labelName, system, defaults[slot - 1].Label);
+            var expectedUrl = ExternalSearchText(source, urlName, system, defaults[slot - 1].Url);
             var providerKey = $"external_search_{slot}";
             using var command = new SqlCommand(
                 system
@@ -984,7 +1204,7 @@ internal static class MigrationIndependentConfigurationVerifier
             {
                 if (isSystem || row.HasValue(source))
                 {
-                    values[target] = ScopedText(row, source, isSystem);
+                    values[target] = PatronUiScopedText(row, source, isSystem);
                 }
             }
             if (isSystem)
@@ -1017,8 +1237,18 @@ internal static class MigrationIndependentConfigurationVerifier
             modernOverrideOrganizations.Add(organizationId);
             expectedUpdated[organizationId] = row.UtcDateTime("updated") ?? package.Manifest.ExportedAtUtc.UtcDateTime;
             var values = GetExpectedPatronValues(expected, organizationId);
-            values["EbookMessage"] = ScopedText(row, "ebookMessage", isSystem: false);
-            values["EaudiobookMessage"] = ScopedText(row, "eaudiobookMessage", isSystem: false);
+            var ebookMessage = row.Text("ebookMessage");
+            if (!string.IsNullOrEmpty(ebookMessage))
+            {
+                Ensure(!string.IsNullOrWhiteSpace(ebookMessage), "modern eBook patron message target representability");
+                values["EbookMessage"] = ebookMessage;
+            }
+            var eaudiobookMessage = row.Text("eaudiobookMessage");
+            if (!string.IsNullOrEmpty(eaudiobookMessage))
+            {
+                Ensure(!string.IsNullOrWhiteSpace(eaudiobookMessage), "modern eAudiobook patron message target representability");
+                values["EaudiobookMessage"] = eaudiobookMessage;
+            }
             AddDuplicateLabels(values, null, ParseStringObject(row.JsonText("duplicateStatusLabels"), modernOverride: true), fromSystemRow: false);
             if (HasLegacyCustomFieldText(row.Text("publicationOptions")))
             {
@@ -1660,15 +1890,15 @@ internal static class MigrationIndependentConfigurationVerifier
         var libraryRow = sourceFormats.FirstOrDefault(row =>
             string.Equals(row.String("scope"), "library", StringComparison.OrdinalIgnoreCase) &&
             ResolveLibrary(row.RequiredString("libraryOrganization"), organizationIds, package) == libraryId &&
-            string.Equals(NormalizeFormatCode(row.RequiredString("code")), NormalizeFormatCode(targetCode), StringComparison.Ordinal));
+            string.Equals(NormalizeFormatCode(row.Text("code") ?? string.Empty), NormalizeFormatCode(targetCode), StringComparison.Ordinal));
         if (libraryRow is not null)
         {
-            return libraryRow.RequiredString("code");
+            return libraryRow.Text("code") ?? string.Empty;
         }
         var systemRow = sourceFormats.FirstOrDefault(row =>
             string.Equals(row.String("scope"), "system", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(NormalizeFormatCode(row.RequiredString("code")), NormalizeFormatCode(targetCode), StringComparison.Ordinal));
-        return systemRow?.RequiredString("code") ?? NormalizeFormatCode(targetCode);
+            string.Equals(NormalizeFormatCode(row.Text("code") ?? string.Empty), NormalizeFormatCode(targetCode), StringComparison.Ordinal));
+        return systemRow?.Text("code") ?? NormalizeFormatCode(targetCode);
     }
 
     private static (string Mode, string? Label) ExpectedCustomFieldRule(
@@ -1957,6 +2187,14 @@ internal static class MigrationIndependentConfigurationVerifier
                 .Where(value => value.Length > 0)
                 .ToArray();
 
+    private static IReadOnlyList<string> SplitEmbedOriginsForOracle(string? source) =>
+        source is null
+            ? []
+            : source.Split([',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Select(TrimLegacyCustomFieldText)
+                .Where(value => value.Length > 0)
+                .ToArray();
+
     private static IReadOnlyList<string> SplitCommonCreatorLines(string? source) =>
         source is null
             ? []
@@ -1992,10 +2230,40 @@ internal static class MigrationIndependentConfigurationVerifier
     private static bool HasLegacyCustomFieldText(string? value) =>
         value is not null && TrimLegacyCustomFieldText(value).Length > 0;
 
-    private static string? ScopedText(SourceRow row, string field, bool isSystem) =>
-        isSystem ? row.Text(field) : Meaningful(row.Text(field));
+    private static string? WorkflowScopedText(SourceRow row, string field, bool isSystem)
+    {
+        var value = row.Text(field);
+        return isSystem || HasPinnedWorkflowText(value) ? value : null;
+    }
 
-    private static string NormalizeFormatCode(string value) => value.Trim().ToLowerInvariant() switch
+    private static bool HasPinnedWorkflowText(string? value) =>
+        value is not null && TrimLegacyCustomFieldText(value).Length > 0;
+
+    private static string? UnrepresentableWorkflowTextField(SourceRow row, bool isSystem)
+    {
+        if (isSystem)
+        {
+            return null;
+        }
+
+        foreach (var field in ScopedWorkflowTextFields)
+        {
+            var value = row.Text(field);
+            if (HasPinnedWorkflowText(value) && string.IsNullOrWhiteSpace(value))
+            {
+                return field;
+            }
+        }
+        return null;
+    }
+
+    private static string? PatronUiScopedText(SourceRow row, string field, bool isSystem)
+    {
+        var value = row.Text(field);
+        return isSystem || !string.IsNullOrWhiteSpace(value) ? value : null;
+    }
+
+    private static string NormalizeFormatCode(string value) => TrimLegacyCustomFieldText(value).ToLowerInvariant() switch
     {
         "0" => "book",
         "1" => "ebook",
