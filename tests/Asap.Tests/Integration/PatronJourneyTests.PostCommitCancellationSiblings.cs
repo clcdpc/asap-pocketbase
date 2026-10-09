@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
@@ -423,33 +424,15 @@ public sealed partial class PatronJourneyTests
         var settings = await ConfigureCancellationEmailSettingsAsync();
         var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         string? originalStaffUrl = null;
+        var originalStaffUrlCaptured = false;
+        var originalWeeklyRecipientSettings = new Dictionary<long, (bool Enabled, string? Email)>();
         var barcode = $"weekly-cancel-{Guid.NewGuid():N}"[..35];
         var title = $"Weekly cancellation summary {Guid.NewGuid():N}";
-        using (var setup = await contexts.CreateDbContextAsync())
-        {
-            var system = await setup.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
-            originalStaffUrl = system.StaffApplicationUrl;
-            system.StaffApplicationUrl = "https://staff.example.org/staff/";
-            var recipient = await setup.StaffUsers.SingleAsync(item => item.Id == staff.Id);
-            recipient.WeeklyActionSummaryEnabled = true;
-            recipient.WeeklyActionSummaryEmail = "weekly-cancel@example.org";
-            var format = await setup.MaterialFormats.SingleAsync(item => item.Code == "book");
-            setup.TitleRequests.Add(new TitleRequest
-            {
-                LibraryOrganizationId = 2,
-                Barcode = barcode,
-                Title = title,
-                MaterialFormatId = format.Id,
-                Status = "suggestion",
-                CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
-                UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
-            });
-            await setup.SaveChangesAsync();
-        }
-
         var businessKeyPrefix = $"weekly-summary:{staff.Id}:";
         using var cancellation = new CancellationTokenSource();
         var dispatcher = new CancelAfterCommitOutboxDispatcher(dispatchMode);
+        Task<WorkflowRunResult>? execution = null;
+        Exception? primaryFailure = null;
         await using var scopedFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
@@ -460,9 +443,47 @@ public sealed partial class PatronJourneyTests
             }));
         try
         {
+            using (var setup = await contexts.CreateDbContextAsync())
+            {
+                var system = await setup.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+                originalStaffUrl = system.StaffApplicationUrl;
+                originalStaffUrlCaptured = true;
+                system.StaffApplicationUrl = "https://staff.example.org/staff/";
+
+                var recipient = await setup.StaffUsers.SingleAsync(item => item.Id == staff.Id);
+                originalWeeklyRecipientSettings[recipient.Id] =
+                    (recipient.WeeklyActionSummaryEnabled, recipient.WeeklyActionSummaryEmail);
+                foreach (var otherRecipient in await setup.StaffUsers.Where(item => item.Id != staff.Id &&
+                             item.IsActive && item.WeeklyActionSummaryEnabled &&
+                             (item.OrganizationId == 2 ||
+                              item.Role == StaffRole.SuperAdmin && item.OrganizationId == LibraryScope.SystemOrganizationId))
+                         .ToListAsync())
+                {
+                    originalWeeklyRecipientSettings[otherRecipient.Id] =
+                        (otherRecipient.WeeklyActionSummaryEnabled, otherRecipient.WeeklyActionSummaryEmail);
+                    otherRecipient.WeeklyActionSummaryEnabled = false;
+                }
+                recipient.WeeklyActionSummaryEnabled = true;
+                recipient.WeeklyActionSummaryEmail = "weekly-cancel@example.org";
+
+                var format = await setup.MaterialFormats.SingleAsync(item => item.Code == "book");
+                setup.TitleRequests.Add(new TitleRequest
+                {
+                    LibraryOrganizationId = 2,
+                    Barcode = barcode,
+                    Title = title,
+                    MaterialFormatId = format.Id,
+                    Status = "suggestion",
+                    CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                    UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
+                });
+                await setup.SaveChangesAsync();
+            }
+
             var workflow = scopedFactory.Services.GetRequiredService<WorkflowProcessingService>();
-            var execution = Task.Run(() => workflow.SendWeeklyStaffSummaryAsync(
+            var running = Task.Run(() => workflow.SendWeeklyStaffSummaryAsync(
                 null, 2, cancellation.Token));
+            execution = running;
             await dispatcher.EnqueueStarted.Task.WaitAsync(TimeSpan.FromSeconds(15));
             Assert.HasCount(1, dispatcher.EnqueuedIds);
             var committed = await ReadCommittedOutboxByIdAsync(dispatcher.EnqueuedIds.Single());
@@ -471,7 +492,7 @@ public sealed partial class PatronJourneyTests
 
             cancellation.Cancel();
             dispatcher.Release();
-            await Assert.ThrowsAsync<OperationCanceledException>(() => execution);
+            await Assert.ThrowsAsync<OperationCanceledException>(() => running);
 
             AssertOutboxStillPending(await ReadCommittedOutboxByIdAsync(dispatcher.EnqueuedIds.Single()));
             await using var verify = await contexts.CreateDbContextAsync();
@@ -480,21 +501,85 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("suggestion", await verify.TitleRequests.Where(item => item.Barcode == barcode)
                 .Select(item => item.Status).SingleAsync());
         }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+            throw;
+        }
         finally
         {
+            Exception? cleanupFailure = null;
+            cancellation.Cancel();
             dispatcher.Release();
-            await ExecuteNonQueryAsync(
-                "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix; DELETE FROM [asap].[TitleRequest] WHERE [Barcode] = @barcode;",
-                ("@prefix", businessKeyPrefix + "%"), ("@barcode", barcode));
-            await using var restore = await contexts.CreateDbContextAsync();
-            var system = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
-            system.StaffApplicationUrl = originalStaffUrl;
-            var recipient = await restore.StaffUsers.SingleAsync(item => item.Id == staff.Id);
-            recipient.WeeklyActionSummaryEnabled = false;
-            recipient.WeeklyActionSummaryEmail = null;
-            await restore.SaveChangesAsync();
-            await RestoreCancellationEmailSettingsAsync(settings);
-            await DeactivateCorrectiveStaffAsync(staff.Id);
+            if (execution is not null)
+            {
+                try
+                {
+                    await execution;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception exception)
+                {
+                    cleanupFailure ??= exception;
+                }
+            }
+
+            try
+            {
+                await ExecuteNonQueryAsync(
+                    "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix; DELETE FROM [asap].[TitleRequest] WHERE [Barcode] = @barcode;",
+                    ("@prefix", businessKeyPrefix + "%"), ("@barcode", barcode));
+            }
+            catch (Exception exception)
+            {
+                cleanupFailure ??= exception;
+            }
+
+            try
+            {
+                await using var restore = await contexts.CreateDbContextAsync();
+                if (originalStaffUrlCaptured)
+                {
+                    var system = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+                    system.StaffApplicationUrl = originalStaffUrl;
+                }
+                foreach (var (recipientId, original) in originalWeeklyRecipientSettings)
+                {
+                    var recipient = await restore.StaffUsers.SingleAsync(item => item.Id == recipientId);
+                    recipient.WeeklyActionSummaryEnabled = original.Enabled;
+                    recipient.WeeklyActionSummaryEmail = original.Email;
+                }
+                await restore.SaveChangesAsync();
+            }
+            catch (Exception exception)
+            {
+                cleanupFailure ??= exception;
+            }
+
+            try
+            {
+                await RestoreCancellationEmailSettingsAsync(settings);
+            }
+            catch (Exception exception)
+            {
+                cleanupFailure ??= exception;
+            }
+
+            try
+            {
+                await DeactivateCorrectiveStaffAsync(staff.Id);
+            }
+            catch (Exception exception)
+            {
+                cleanupFailure ??= exception;
+            }
+
+            if (primaryFailure is null && cleanupFailure is not null)
+            {
+                ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
+            }
         }
     }
 
