@@ -19,9 +19,17 @@ public sealed partial class PatronJourneyTests
     public async Task PublicSuggestionStaysAcceptedWhenIdentifierSqlFollowupFailsAndBigintIdsAreStrings()
     {
         const string triggerName = "[asap].[TR_Test_PublicIdentifierFollowupFailure]";
-        const string barcode = "20000000000001";
+        const string barcode = "349-sql-followup";
+        const int nativePatronId = 989801;
+        const string identifier = "9780000000002";
         var titleSuffix = Guid.NewGuid().ToString("N");
         var title = $"Post-commit Recovery {char.ToUpperInvariant(titleSuffix[0])}{titleSuffix[1..]}";
+        var provider = factory!.Services.GetRequiredService<DeterministicTestingPatronProvider>();
+        provider.AddPatron(
+            new PatronSnapshot(nativePatronId, barcode, "sql-followup@example.org", "Sql", "Followup",
+                1, "Adult", 101, 2, "Test Library", 101),
+            [new PickupBranch(101, "Main Library")], 2);
+        provider.SetIdentifierResult(identifier, 2, new(IdentifierLookupOutcome.Found, 9001));
         long previousIdentity;
         long desiredIdentity;
         await using (var identity = new SqlConnection(databaseConnectionString))
@@ -72,7 +80,7 @@ public sealed partial class PatronJourneyTests
                 format = "book",
                 title,
                 author = "Ada Example",
-                isbn = "9780000000001",
+                isbn = identifier,
                 publication = "Coming soon",
                 preferredPickupBranchId = 101,
                 autohold = true,
@@ -80,6 +88,10 @@ public sealed partial class PatronJourneyTests
             };
             using var created = await client.PostAsJsonAsync("/api/asap/patron/suggestions", payload);
             Assert.AreEqual(HttpStatusCode.Created, created.StatusCode, await created.Content.ReadAsStringAsync());
+            Assert.AreEqual(1, provider.Calls.Count(call =>
+                call.Operation == TestingPolarisOperation.IdentifierLookup &&
+                call.OrganizationId == 2 && call.Key == identifier),
+                "The configured Found response must reach the SQL identifier follow-up that the trigger rejects.");
             using var createdBody = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
             var idElement = createdBody.RootElement.GetProperty("id");
             Assert.AreEqual(JsonValueKind.String, idElement.ValueKind,
@@ -164,8 +176,9 @@ public sealed partial class PatronJourneyTests
             await ExecuteNonQueryAsync(
                 "DELETE FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = @id; " +
                 "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @id); " +
-                "DELETE FROM [asap].[TitleRequest] WHERE [Id] = @id;",
-                ("@id", requestId));
+                "DELETE FROM [asap].[TitleRequest] WHERE [Id] = @id; " +
+                "DELETE FROM [asap].[PatronSession] WHERE [Barcode] = @barcode;",
+                ("@id", requestId), ("@barcode", barcode));
             await ExecuteNonQueryAsync($"DBCC CHECKIDENT ('[asap].[TitleRequest]', RESEED, {previousIdentity});");
             try
             {
@@ -181,12 +194,17 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task PublicSuggestionStaysAcceptedWhenIdentifierProviderThrowsNonDbException()
     {
-        const string barcode = "20000000000001";
-        const string identifier = "9780000000001";
+        const string barcode = "349-nondb-followup";
+        const int nativePatronId = 989802;
+        const string identifier = "9780000000003";
         var titleSuffix = Guid.NewGuid().ToString("N");
         var title = $"Non-database Follow-up Recovery {titleSuffix}";
         var acceptedTitle = $"Non-database Follow-up Recovery {char.ToUpperInvariant(titleSuffix[0])}{titleSuffix[1..]}";
         var provider = factory!.Services.GetRequiredService<DeterministicTestingPatronProvider>();
+        provider.AddPatron(
+            new PatronSnapshot(nativePatronId, barcode, "nondb-followup@example.org", "NonDb", "Followup",
+                1, "Adult", 101, 2, "Test Library", 101),
+            [new PickupBranch(101, "Main Library")], 2);
         provider.SetFailure(
             new TestingPolarisCall(TestingPolarisOperation.IdentifierLookup, 2, identifier),
             new InvalidOperationException("Deterministic unexpected provider failure after commit."));
@@ -270,6 +288,7 @@ public sealed partial class PatronJourneyTests
                 DELETE FROM [asap].[EmailOutbox]
                     WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @requestId);
                 DELETE FROM [asap].[TitleRequest] WHERE [Id] = @requestId;
+                DELETE FROM [asap].[PatronSession] WHERE [Barcode] = @barcode;
                 """, ("@barcode", barcode), ("@title", title));
             try
             {
