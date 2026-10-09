@@ -20,8 +20,7 @@ public sealed partial class AdministrationService
         JsonElement systemSection,
         CancellationToken cancellationToken)
     {
-        if (!TryGetAny(systemSection, out var value, "patronEmbedAllowedOrigins") &&
-            !TryGetAny(payload, out value, "patronEmbedAllowedOrigins", "origins"))
+        if (!TryGetAtRootOrSection(payload, systemSection, out var value, "patronEmbedAllowedOrigins", "origins"))
         {
             return;
         }
@@ -100,18 +99,19 @@ public sealed partial class AdministrationService
     private static async Task ApplyWholeSetsAsync(
         AsapDbContext context,
         int organizationId,
+        JsonElement payload,
         JsonElement workflow,
         JsonElement patron,
         CancellationToken cancellationToken)
     {
-        if (TryGetAny(workflow, out var creators, "commonAuthorsList", "commonCreators", "commonCreatorsList"))
+        if (TryGetAtRootOrSection(payload, workflow, out var creators, "commonAuthorsList", "commonCreators", "commonCreatorsList"))
         {
             var values = ParseValues(creators);
             await ReplaceCommonCreatorsAsync(context, organizationId, values,
                 creators.ValueKind == JsonValueKind.Null, cancellationToken);
         }
 
-        if (TryGetAny(workflow, out var patronCodes, "allowedPatronCodeIds", "patronCodeIds"))
+        if (TryGetAtRootOrSection(payload, workflow, out var patronCodes, "allowedPatronCodeIds", "patronCodeIds"))
         {
             if (!TryParsePatronCodeIds(patronCodes, out var values))
             {
@@ -121,7 +121,7 @@ public sealed partial class AdministrationService
                 patronCodes.ValueKind == JsonValueKind.Null, cancellationToken);
         }
 
-        if (TryGetAny(patron, out var publicationOptions, "publicationOptions", "publicationOptionSet"))
+        if (TryGetAtRootOrSection(payload, patron, out var publicationOptions, "publicationOptions", "publicationOptionSet"))
         {
             var values = ParseOptions(publicationOptions);
             await ReplacePublicationOptionsAsync(context, organizationId, values,
@@ -421,7 +421,9 @@ public sealed partial class AdministrationService
         var hasRules = TryGetAny(payload, out var rulesValue, "formatRules", "patronFormatRules") ||
                        TryGetAny(patron, out rulesValue, "formatRules", "patronFormatRules");
         if (!hasFormats && !hasRules &&
-            !TryGetAny(patron, out _, "formatLabels", "formatOrder", "availableFormats"))
+            !TryGetAtRootOrSection(payload, patron, out _, "formatLabels") &&
+            !TryGetAtRootOrSection(payload, patron, out _, "formatOrder") &&
+            !TryGetAtRootOrSection(payload, patron, out _, "availableFormats"))
         {
             return;
         }
@@ -490,7 +492,7 @@ public sealed partial class AdministrationService
                 }
             }
         }
-        await ApplyLegacyFormatMapsAsync(context, organizationId, patron, systemFormats, customFormats, cancellationToken);
+        await ApplyLegacyFormatMapsAsync(context, organizationId, payload, patron, systemFormats, customFormats, cancellationToken);
     }
 
     private static async Task ApplyFormatObjectAsync(
@@ -669,19 +671,20 @@ public sealed partial class AdministrationService
     private static async Task ApplyLegacyFormatMapsAsync(
         AsapDbContext context,
         int organizationId,
+        JsonElement payload,
         JsonElement patron,
         IReadOnlyList<MaterialFormat> systemFormats,
         IReadOnlyList<MaterialFormat> customFormats,
         CancellationToken cancellationToken)
     {
-        var hasLabels = TryGetAny(patron, out var labelValue, "formatLabels");
+        var hasLabels = TryGetAtRootOrSection(payload, patron, out var labelValue, "formatLabels");
         if (hasLabels && labelValue.ValueKind != JsonValueKind.Object)
         {
             throw new AdministrationInputException("Format labels must be an object.");
         }
         var labels = hasLabels ? labelValue : default;
-        var order = TryGetAny(patron, out var orderValue, "formatOrder") ? ParseValues(orderValue) : [];
-        var available = TryGetAny(patron, out var availableValue, "availableFormats")
+        var order = TryGetAtRootOrSection(payload, patron, out var orderValue, "formatOrder") ? ParseValues(orderValue) : [];
+        var available = TryGetAtRootOrSection(payload, patron, out var availableValue, "availableFormats")
             ? ParseValues(availableValue).ToHashSet(StringComparer.Ordinal)
             : null;
         var formats = systemFormats.Concat(customFormats).ToArray();

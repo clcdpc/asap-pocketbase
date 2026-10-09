@@ -17,6 +17,8 @@ public sealed partial class PatronJourneyTests
     [DataRow("wrong_kind", "{\"PAPIErrorCode\":\"0\",\"PatronItemsOutGetRows\":[]}")]
     [DataRow("bad_row", "{\"PAPIErrorCode\":0,\"PatronItemsOutGetRows\":[{\"BibID\":\"9001\"}]}")]
     [DataRow("duplicate_id", "{\"PAPIErrorCode\":0,\"PatronItemsOutGetRows\":[{\"BibID\":9001,\"bibid\":9002}]}")]
+    [DataRow("duplicate_envelope_code", "{\"PAPIErrorCode\":0,\"papierrorcode\":0,\"PatronItemsOutGetRows\":[{\"BibID\":9001}]}")]
+    [DataRow("mixed_valid_invalid_rows", "{\"PAPIErrorCode\":0,\"PatronItemsOutGetRows\":[{\"BibID\":9001},{\"BibID\":\"9002\"}]}")]
     [DataRow("typed_rows_defaulted", "{\"PAPIErrorCode\":0,\"PatronItemsOutGetRows\":null}")]
     public async Task PolarisPinnedSerializerRejectsMalformedCheckoutIdentity(string _, string content)
     {
@@ -39,6 +41,48 @@ public sealed partial class PatronJourneyTests
         var result = await provider.GetPatronCheckoutsAsync("20000000000001", 2, CancellationToken.None);
 
         Assert.AreEqual(9001, result.Single().BibId);
+        Assert.AreEqual(1, handler.OperationCalls);
+    }
+
+    [TestMethod]
+    [DataRow("", null)]
+    [DataRow("\"PickupBranchID\":0", null)]
+    [DataRow("\"PickupBranchID\":1", null)]
+    [DataRow("\"PickupBranchID\":102", 102)]
+    public async Task PolarisPinnedHoldRowsPreserveOptionalVerifiedPickupEvidence(
+        string pickupProperty,
+        int? expectedPickupBranchId)
+    {
+        var pickup = string.IsNullOrEmpty(pickupProperty) ? string.Empty : "," + pickupProperty;
+        var content = "{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{" +
+            "\"HoldRequestID\":8451,\"BibID\":99001,\"StatusID\":3,\"StatusDescription\":\"Active\"" +
+            pickup + "}]}";
+        var handler = new ProviderBoundaryHandler((_, _) => Task.FromResult(BoundaryResponse(content)));
+        var provider = await CreatePolarisProviderAsync(handler, "hold-pickup-evidence-" + Guid.NewGuid().ToString("N"));
+
+        var holds = await provider.GetPatronHoldsAsync("20000000000001", 2, CancellationToken.None);
+
+        Assert.AreEqual(expectedPickupBranchId, holds.Single().PickupBranchId);
+        Assert.AreEqual(1, handler.OperationCalls);
+    }
+
+    [TestMethod]
+    [DataRow("\"PickupBranchID\":\"102\"")]
+    [DataRow("\"PickupBranchID\":null")]
+    [DataRow("\"PickupBranchID\":-1")]
+    [DataRow("\"PickupBranchID\":102.5")]
+    [DataRow("\"PickupBranchID\":102,\"pickupbranchid\":102")]
+    public async Task PolarisPinnedHoldRowsRejectMalformedOptionalPickupEvidence(string pickupProperties)
+    {
+        var content = "{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{" +
+            "\"HoldRequestID\":8451,\"BibID\":99001,\"StatusID\":3,\"StatusDescription\":\"Active\"," +
+            pickupProperties + "}]}";
+        var handler = new ProviderBoundaryHandler((_, _) => Task.FromResult(BoundaryResponse(content)));
+        var provider = await CreatePolarisProviderAsync(handler, "hold-bad-pickup-evidence-" + Guid.NewGuid().ToString("N"));
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(() => provider.GetPatronHoldsAsync(
+            "20000000000001", 2, CancellationToken.None));
+
         Assert.AreEqual(1, handler.OperationCalls);
     }
 

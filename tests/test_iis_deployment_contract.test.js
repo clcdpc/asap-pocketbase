@@ -46,7 +46,7 @@ assert.ok(!workflow.includes('\n    concurrency:'), 'build-test-package must not
 assert.ok(workflow.includes('Generate ephemeral SQL test credentials'), 'CI SQL credentials should be generated per run');
 assert.ok(!workflow.includes('Asap_Slice0_SQL_2026'), 'CI must not retain the historical hard-coded SQL password');
 assert.ok(workflow.includes('ref: ${{ github.sha }}'), 'the hosted job should check out the exact event SHA');
-assert.ok(workflow.includes('--minimum-expected-tests 910'), 'the non-browser real-SQL partition must guard the current discovered test count');
+assert.ok(workflow.includes('--minimum-expected-tests 928'), 'the non-browser real-SQL partition must guard the current discovered test count');
 const nonBrowserFilter = workflow.match(/--filter\s*'([^']+)'/)?.[1];
 assert.ok(nonBrowserFilter, 'the non-browser real-SQL partition must explicitly exclude browser journeys');
 const nonBrowserFilterTerms = nonBrowserFilter.split('&');

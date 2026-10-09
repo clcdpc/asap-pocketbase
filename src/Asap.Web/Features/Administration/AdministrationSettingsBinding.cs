@@ -252,8 +252,11 @@ public static class AdministrationSettingsBinding
             error ??= "settings_payload_invalid";
         }
         if (hasPatronSection &&
-            ((HasAnyDirectProperty(payload, "formats", "materialFormats", "formatLabels", "formatOrder", "availableFormats") &&
-              HasAnyDirectProperty(patron, "formats", "materialFormats", "formatLabels", "formatOrder", "availableFormats")) ||
+            ((HasAnyDirectProperty(payload, "formats", "materialFormats") &&
+              HasAnyDirectProperty(patron, "formats", "materialFormats")) ||
+             (HasAnyDirectProperty(payload, "formatLabels") && HasAnyDirectProperty(patron, "formatLabels")) ||
+             (HasAnyDirectProperty(payload, "formatOrder") && HasAnyDirectProperty(patron, "formatOrder")) ||
+             (HasAnyDirectProperty(payload, "availableFormats") && HasAnyDirectProperty(patron, "availableFormats")) ||
              (HasAnyDirectProperty(payload, "customFields", "additionalFieldDefinitions") &&
               HasAnyDirectProperty(patron, "customFields", "additionalFieldDefinitions")) ||
              (HasAnyDirectProperty(payload, "formatRules", "patronFormatRules") &&
@@ -350,7 +353,7 @@ public static class AdministrationSettingsBinding
             ((HasAnyDirectProperty(payload, "enabledLibraryOrgIds", "enabledLibraries") &&
               HasAnyDirectProperty(system, "enabledLibraryOrgIds", "enabledLibraries")) ||
              (HasAnyDirectProperty(payload, "patronEmbedAllowedOrigins", "origins") &&
-              HasAnyDirectProperty(system, "patronEmbedAllowedOrigins"))))
+              HasAnyDirectProperty(system, "patronEmbedAllowedOrigins", "origins"))))
         {
             error ??= "settings_payload_invalid";
         }

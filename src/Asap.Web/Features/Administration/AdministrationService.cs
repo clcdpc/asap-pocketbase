@@ -1089,11 +1089,7 @@ public sealed partial class AdministrationService(
         CancellationToken cancellationToken)
     {
         var workflow = GetObject(payload, "workflow");
-        if (workflow.ValueKind == JsonValueKind.Undefined)
-        {
-            workflow = payload;
-        }
-        if (!TryGetAny(workflow, out var value, "allowedPatronCodeIds", "patronCodeIds"))
+        if (!TryGetAtRootOrSection(payload, workflow, out var value, "allowedPatronCodeIds", "patronCodeIds"))
         {
             return (null, null);
         }
@@ -1351,6 +1347,20 @@ public sealed partial class AdministrationService(
 
         value = default;
         return false;
+    }
+
+    private static bool TryGetAtRootOrSection(
+        JsonElement root,
+        JsonElement section,
+        out JsonElement value,
+        params string[] names)
+    {
+        if (TryGetAny(root, out value, names))
+        {
+            return true;
+        }
+
+        return TryGetAny(section, out value, names);
     }
 
     private static string? GetString(JsonElement root, string name)

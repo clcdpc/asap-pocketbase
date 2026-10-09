@@ -1427,6 +1427,8 @@ internal static class MigrationConfigurationImporter
             ReconcileCustomFields(
                 connection,
                 transaction,
+                package,
+                organizationIds,
                 organizationId,
                 row,
                 counter);
@@ -1653,6 +1655,8 @@ internal static class MigrationConfigurationImporter
     private static void ReconcileCustomFields(
         SqlConnection connection,
         SqlTransaction transaction,
+        ValidatedMigrationPackage package,
+        IReadOnlyDictionary<string, int> organizationIds,
         int organizationId,
         SourceRow row,
         ReconciliationCounter counter)
@@ -1739,6 +1743,13 @@ internal static class MigrationConfigurationImporter
         }
 
         var scopedFormats = ReadScopedFormats(connection, transaction, organizationId);
+        var effectiveSourceCodes = ReadEffectiveSourceFormatCodes(
+            connection,
+            transaction,
+            package,
+            organizationId,
+            organizationIds,
+            scopedFormats);
         var effectiveFormats = scopedFormats
             .GroupBy(format => format.Code, StringComparer.OrdinalIgnoreCase)
             .Select(group => group
@@ -1762,7 +1773,7 @@ internal static class MigrationConfigurationImporter
                         : 0;
                 var expectedRule = ResolveCustomFieldRule(
                     formatRules,
-                    format.Code,
+                    effectiveSourceCodes.GetValueOrDefault(format.Code, format.Code),
                     fieldKey,
                     RequiredJsonString(definition, "type", "custom_fields_invalid"),
                     JsonBool(definition, "enabled", true),

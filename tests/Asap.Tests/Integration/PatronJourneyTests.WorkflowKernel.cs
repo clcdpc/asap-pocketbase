@@ -485,12 +485,14 @@ public sealed partial class PatronJourneyTests
                 services.AddSingleton<IStaffPolarisProvider>(provider);
             }));
 
-        var pending = await SeedPendingHoldRequestAsync("workflow-phase-stop", scope);
+        var registeredBranchId = checked(scope + 1);
+        var pending = await SeedPendingHoldRequestAsync("workflow-phase-stop", scope, registeredBranchId);
         var pendingBarcode = await ReadStringAsync(
             "SELECT [Barcode] FROM [asap].[TitleRequest] WHERE [Id]=@id;", "@id", pending.RequestId);
         workflowFactory.Services.GetRequiredService<DeterministicTestingPatronProvider>().AddPatron(
             new PatronSnapshot(7001, pendingBarcode, "workflow@example.org", "Test", "Workflow",
-                1, "Adult", 101, scope, "Isolated fulfillment library", 101), [new(101, "Main Library")], scope);
+                1, "Adult", registeredBranchId, scope, "Isolated fulfillment library", registeredBranchId),
+            [new(registeredBranchId, "Registered Branch")], scope);
         var placed = await SeedCompletedHoldIdentityAsync(
             "workflow-phase-stop-later",
             $"2000000000{Random.Shared.Next(100000, 999999)}",
@@ -569,6 +571,11 @@ public sealed partial class PatronJourneyTests
             Id = 3494, DisplayName = "Isolated fulfillment library",
             OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
         });
+        context.Organizations.Add(new Organization
+        {
+            Id = 3495, DisplayName = "Isolated registered patron branch",
+            OrganizationCodeId = 3, ParentOrganizationId = 3494, IsActive = true
+        });
         await context.SaveChangesAsync();
         return 3494;
     }
@@ -578,6 +585,7 @@ public sealed partial class PatronJourneyTests
         await using var context = await factory!.Services
             .GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync();
         await context.QueueProgress.Where(item => item.ScopeOrganizationId == scope).ExecuteDeleteAsync();
+        await context.Organizations.Where(item => item.Id == scope + 1).ExecuteDeleteAsync();
         await context.Organizations.Where(item => item.Id == scope).ExecuteDeleteAsync();
     }
 
@@ -619,7 +627,11 @@ public sealed partial class PatronJourneyTests
         await WithFixtureClock(command).ExecuteNonQueryAsync();
     }
 
-    private async Task<(long RequestId, byte[] RowVersion)> SeedPendingHoldRequestAsync(string key, int scope = 2)
+    private async Task<(long RequestId, byte[] RowVersion)> SeedPendingHoldRequestAsync(
+        string key,
+        int scope = 2,
+        int? patronOrganizationId = 101,
+        int bibId = 99001)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -628,9 +640,9 @@ public sealed partial class PatronJourneyTests
             """
             DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
             INSERT INTO [asap].[TitleRequest]
-                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
+                ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                  [CreatedUtc], [UpdatedUtc])
-            VALUES (@scope, @barcode, @title, 1, @formatId, N'pending_hold', N'99001', 1,
+            VALUES (@scope, @patronOrganizationId, @barcode, @title, 1, @formatId, N'pending_hold', @bibId, 1,
                     DATEADD(day, -1, SYSUTCDATETIME()), SYSUTCDATETIME());
             SELECT CAST(SCOPE_IDENTITY() AS bigint), [RowVersion]
             FROM [asap].[TitleRequest]
@@ -639,6 +651,8 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@barcode", $"2000000000{Random.Shared.Next(100000, 999999)}");
         command.Parameters.AddWithValue("@title", $"Pending hold {key} {Guid.NewGuid():N}");
         command.Parameters.AddWithValue("@scope", scope);
+        command.Parameters.AddWithValue("@patronOrganizationId", (object?)patronOrganizationId ?? DBNull.Value);
+        command.Parameters.Add("@bibId", SqlDbType.Int).Value = bibId;
         await using var reader = await command.ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
         return (reader.GetInt64(0), (byte[])reader[1]);

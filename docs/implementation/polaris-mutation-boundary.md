@@ -17,14 +17,29 @@ only a registered organization above system scope 1. An explicit zero or system
 1 means no usable current branch and maps to `null`, without invoking the
 omission fallback. A positive branch above 1 remains its native integer ID.
 Malformed, duplicate or negative fields fail closed; no additional undocumented
-sentinel semantics are inferred.
+sentinel semantics are inferred. The snapshot also retains whether the source
+field was omitted, explicit-invalid, or a current positive preference, so hold
+placement cannot confuse the legacy projection with a supplied value.
 
 [PAPI pickup choices](https://documentation.iii.com/polaris/PAPI/7.8/PAPIService/PatronPickupBranchesGet.htm)
 are branch-level locations. ASAP's system organization 1 cannot be selected as
-an operational branch. The provider, hold/pickup service guards and pickup
-journal constraint all enforce this distinction. Imported request snapshots
-retain source provenance; they do not supply the live preference or authorize
-a write. Mutation entry points refresh current provider data.
+an operational branch. Before a new hold, the service refreshes the patron and
+pickup list; a positive current preference must appear in that list. Only a
+genuinely omitted preference may fall back to the registered branch, and only
+when that branch appears in the current eligible list. Explicit zero/system 1
+does not fall back and prevents the create marker. Branch identity is not
+library authorization: the registered branch supplies the PAPI hold member
+context, while active code-2 library scope and current policy govern permission.
+Imported request snapshots retain source provenance; they do not supply the
+live preference or authorize a write.
+
+Existing-hold adoption treats the hold-list `PickupBranchID` as optional
+metadata. When present, the raw value must be one unique integer matching the
+pinned SDK model; omission and explicit 0/system-1 values are stored as unknown
+(`NULL`), while malformed, duplicate, coerced or negative values reject the
+hold read. The current patron registration cannot establish an earlier hold's
+original `RequestingOrgID`, so adoption leaves that request-context snapshot
+NULL.
 
 The prior native journal constraint allowed system 1 in previous/observed
 preferences. DACPAC pre-deployment canonicalizes those fields to NULL before

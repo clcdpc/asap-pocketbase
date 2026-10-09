@@ -100,8 +100,10 @@ public sealed partial class PatronJourneyTests
             await db.Entry(row).ReloadAsync();
             var settings = await db.PolarisSettings.SingleAsync(item => item.OrganizationId == 1);
             var conversation = Guid.Parse("84cf5f4b-4d38-4a28-bcc7-e903f77bc80a");
-            var create = new HoldCreateCommand(patronId, bibId, branchId + 1, organizationId, settings.WorkstationId!.Value, settings.SystemPolarisUserId!.Value);
-            var reply = new HoldReplyCommand(conversation, "group", "qualifier", organizationId);
+            var nativeRequestingOrganizationId = snapshot.PatronOrganizationId;
+            var create = new HoldCreateCommand(patronId, bibId, branchId + 1, nativeRequestingOrganizationId,
+                settings.WorkstationId!.Value, settings.SystemPolarisUserId!.Value);
+            var reply = new HoldReplyCommand(conversation, "group", "qualifier", nativeRequestingOrganizationId);
             provider.ExpectCreate(create, new(HoldProviderOutcome.ReplyRequired, conversation, null, "group", "qualifier", 3, 5, "declared_reply"));
             provider.ExpectReply(reply, new(HoldProviderOutcome.FinalSuccess, conversation, 50000 + organizationId, "group", "qualifier", 2, 1, "declared_success"));
             var placed = await scopedFactory.Services.GetRequiredService<HoldPlacementService>().PlaceBackgroundAsync(row.Id, row.RowVersion, CancellationToken.None);
@@ -112,10 +114,20 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("completed", (await scopedFactory.Services.GetRequiredService<WorkflowProcessingService>().ProcessWorkflowAsync(organizationId)).Code);
             Assert.AreEqual(create, provider.CreateCommands.Single());
             Assert.AreEqual(reply, provider.ReplyCommands.Single());
+            Assert.AreEqual(snapshot.PatronOrganizationId, provider.CreateCommands.Single().RequestingOrganizationId,
+                "Hold writes use the patron's native registration, not the selected servicing library.");
+            Assert.AreEqual(snapshot.PatronOrganizationId, provider.ReplyCommands.Single().RequestingOrganizationId,
+                "The reply preserves the native registration captured by hold creation.");
             provider.VerifyNoOutstandingWrites();
             Assert.AreEqual(1, provider.Calls.Count(call => call.Operation == TestingPolarisOperation.PickupUpdate));
-            Assert.IsTrue(provider.Calls.Where(call => call.Operation != TestingPolarisOperation.Authenticate)
-                .All(call => call.OrganizationId == organizationId), "Every member operation must use the selected scope, even when home differs.");
+            Assert.IsTrue(provider.Calls.Where(call => call.Operation is not TestingPolarisOperation.Authenticate and
+                    not TestingPolarisOperation.HoldCreate and not TestingPolarisOperation.HoldReply)
+                .All(call => call.OrganizationId == organizationId),
+                "Read, search, pickup, and fulfillment operations retain the selected servicing scope.");
+            Assert.AreEqual(2, provider.Calls.Count(call =>
+                    (call.Operation is TestingPolarisOperation.HoldCreate or TestingPolarisOperation.HoldReply) &&
+                    call.OrganizationId == snapshot.PatronOrganizationId),
+                "Both hold mutations use the registered native branch context.");
         }
         finally
         {

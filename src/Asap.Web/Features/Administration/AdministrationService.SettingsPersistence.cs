@@ -297,7 +297,7 @@ public sealed partial class AdministrationService
         {
             context.EmailSettings.Add(email);
         }
-        await ApplyWholeSetsAsync(context, organizationId, workflowSection, patronSection, cancellationToken);
+        await ApplyWholeSetsAsync(context, organizationId, payload, workflowSection, patronSection, cancellationToken);
         await ApplyProvidersAsync(context, organizationId, workflowSection, payload, cancellationToken);
         await ApplyFormatsAsync(context, organizationId, payload, patronSection, cancellationToken);
         await ApplyCustomFieldsAsync(context, organizationId, patronSection, payload, cancellationToken);

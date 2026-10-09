@@ -40,6 +40,27 @@ public sealed partial class PatronJourneyTests
             organization.IsActive = true;
             await context.SaveChangesAsync();
         }
+
+        var branchId = checked(organizationId + 1);
+        var branch = await context.Organizations.SingleOrDefaultAsync(item => item.Id == branchId);
+        if (branch is null)
+        {
+            context.Organizations.Add(new Organization
+            {
+                Id = branchId,
+                DisplayName = "Slice 5 registered patron branch",
+                OrganizationCodeId = 3,
+                ParentOrganizationId = organizationId,
+                IsActive = true
+            });
+        }
+        else
+        {
+            branch.OrganizationCodeId = 3;
+            branch.ParentOrganizationId = organizationId;
+            branch.IsActive = true;
+        }
+        await context.SaveChangesAsync();
     }
 
     [TestMethod]
@@ -180,6 +201,7 @@ public sealed partial class PatronJourneyTests
             var request = new TitleRequest
             {
                 LibraryOrganizationId = scope,
+                PatronOrganizationId = scope == 2 ? 101 : checked(scope + 1),
                 Barcode = $"slice5-fairness-{Guid.NewGuid():N}-{index}",
                 Title = $"Slice 5 fairness {queueName} {index}",
                 Author = "Slice Five",
@@ -220,6 +242,7 @@ public sealed partial class PatronJourneyTests
                 requests.Add(new TitleRequest
                 {
                     LibraryOrganizationId = scope,
+                    PatronOrganizationId = scope == 2 ? 101 : checked(scope + 1),
                     Barcode = $"slice5-recovery-{Guid.NewGuid():N}-{index}",
                     Title = $"Slice 5 recovery {index}",
                     MaterialFormatId = format.Id,
@@ -325,11 +348,17 @@ public sealed partial class PatronJourneyTests
 
         public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken cancellationToken) => RefreshAsync(barcode, 2, cancellationToken);
 
-        public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken) =>
-            Task.FromResult(new PatronSnapshot(7105, barcode, "fairness@example.org", "Fair", "Tester", 1, "Standard", 2, 2, "Library", 101));
+        public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var effectiveLibraryId = organizationId > 1 ? organizationId : 2;
+            var registrationOrganizationId = effectiveLibraryId == 2 ? 101 : checked(effectiveLibraryId + 1);
+            return Task.FromResult(new PatronSnapshot(7105, barcode, "fairness@example.org", "Fair", "Tester",
+                1, "Standard", registrationOrganizationId, effectiveLibraryId, "Library", registrationOrganizationId));
+        }
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, int organizationId, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<PickupBranch>>([]);
+            Task.FromResult<IReadOnlyList<PickupBranch>>([new PickupBranch(patron.PatronOrganizationId, "Registered Library")]);
 
         public Task UpdatePreferredPickupBranchAsync(string barcode, int pickupBranchId, int organizationId, CancellationToken cancellationToken) => Task.CompletedTask;
 

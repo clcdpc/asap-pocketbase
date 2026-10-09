@@ -13,13 +13,112 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
-    public async Task PinnedCheckoutProtocolFailureCannotFulfillTheMatchingRequest()
+    public async Task PinnedHoldAdoptionSnapshotsOnlyVerifiedOptionalPickupEvidence()
+    {
+        var cases = new (string Name, string PickupProperties, int? ExpectedPickupBranchId, bool Adopted)[]
+        {
+            ("missing", string.Empty, null, true),
+            ("zero", "\"PickupBranchID\":0", null, true),
+            ("positive", "\"PickupBranchID\":102", 102, true),
+            ("coerced", "\"PickupBranchID\":\"102\"", null, false),
+            ("fractional", "\"PickupBranchID\":102.5", null, false),
+            ("duplicate", "\"PickupBranchID\":102,\"pickupbranchid\":102", null, false)
+        };
+
+        foreach (var testCase in cases)
+        {
+            var bibId = Random.Shared.Next(930_000, 999_999);
+            var seeded = await SeedPendingHoldRequestAsync(
+                "pinned-hold-adoption-" + testCase.Name,
+                bibId: bibId);
+            var barcode = await ReadProviderRequestBarcodeAsync(seeded.RequestId);
+            var handler = new HoldConversationPapiHandler(aliasesAgree: true, barcode: barcode)
+            {
+                HoldResponseOverride = "{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[{" +
+                    $"\"HoldRequestID\":8451,\"BibID\":{bibId},\"StatusID\":3,\"StatusDescription\":\"Active\"" +
+                    (string.IsNullOrEmpty(testCase.PickupProperties) ? string.Empty : "," + testCase.PickupProperties) +
+                    "}]}"
+            };
+            var provider = await CreatePolarisProviderAsync(
+                handler,
+                "hold-adoption-" + testCase.Name + "-" + Guid.NewGuid().ToString("N"));
+            await using var scoped = factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(provider);
+                services.AddSingleton<IStaffPolarisProvider>(provider);
+            }));
+            var contexts = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+            int eventCountBefore;
+            int outboxCountBefore;
+            await using (var before = await contexts.CreateDbContextAsync())
+            {
+                eventCountBefore = await before.TitleRequestEvents.CountAsync(item =>
+                    item.TitleRequestId == seeded.RequestId);
+                outboxCountBefore = await before.EmailOutbox.CountAsync();
+            }
+
+            try
+            {
+                var result = await scoped.Services.GetRequiredService<HoldPlacementService>()
+                    .PlaceBackgroundAsync(seeded.RequestId, seeded.RowVersion, CancellationToken.None);
+
+                Assert.AreEqual(1, handler.HoldReadCalls,
+                    "The SQL adoption path must consume the production pinned PAPI hold-list response.");
+                Assert.AreEqual(0, handler.CreateCalls,
+                    "Existing-hold adoption is read-only and must not dispatch a create.");
+                Assert.AreEqual(0, handler.ReplyCalls,
+                    "Adoption records an existing result and has no create conversation to reply to.");
+                await using var verify = await contexts.CreateDbContextAsync();
+                var request = await verify.TitleRequests.SingleAsync(item => item.Id == seeded.RequestId);
+                var operation = await verify.HoldPlacementOperations.SingleAsync(item =>
+                    item.TitleRequestId == seeded.RequestId);
+                if (testCase.Adopted)
+                {
+                    Assert.AreEqual("updated", result.Code);
+                    Assert.AreEqual(RequestStatus.HoldPlaced, request.Status);
+                    Assert.AreEqual("succeeded", operation.State);
+                    Assert.AreEqual("result_recorded", operation.Phase);
+                    Assert.AreEqual("existing_hold_adoption", operation.OutcomeEvidenceKind);
+                    Assert.AreEqual(8451, operation.PolarisHoldId);
+                    Assert.AreEqual(testCase.ExpectedPickupBranchId, operation.PickupBranchIdSnapshot);
+                    Assert.IsNull(operation.RequestingOrganizationIdSnapshot,
+                        "The current patron registration cannot establish the original create route for an already-existing hold.");
+                }
+                else
+                {
+                    Assert.AreEqual("hold_provider_error", result.Code);
+                    Assert.AreEqual(RequestStatus.PendingHold, request.Status);
+                    Assert.AreEqual("failed", operation.State);
+                    Assert.AreEqual("acquired", operation.Phase);
+                    Assert.AreEqual("provider_read_error", operation.LastErrorCode);
+                    Assert.IsNull(operation.CreateStartedUtc);
+                    Assert.IsNull(operation.ReplyStartedUtc);
+                    Assert.IsNull(operation.PolarisHoldId);
+                    Assert.IsNull(operation.PickupBranchIdSnapshot);
+                    Assert.AreEqual(eventCountBefore, await verify.TitleRequestEvents.CountAsync(item =>
+                        item.TitleRequestId == seeded.RequestId));
+                    Assert.AreEqual(outboxCountBefore, await verify.EmailOutbox.CountAsync());
+                }
+            }
+            finally
+            {
+                await DeleteRequestAsync(seeded.RequestId);
+            }
+        }
+    }
+
+    [TestMethod]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronItemsOutGetRows\":[{\"BibID\":\"9909\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"papierrorcode\":0,\"PatronItemsOutGetRows\":[{\"BibID\":9909}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronItemsOutGetRows\":[{\"BibID\":9909},{\"BibID\":\"9909\"}]}")]
+    public async Task PinnedCheckoutProtocolFailureCannotFulfillTheMatchingRequest(string checkoutContent)
     {
         const int bibId = 9909;
         const int organizationId = 3898;
         var barcode = $"2000000000{Random.Shared.Next(100000, 999999)}";
-        var handler = new WorkflowCheckoutProtocolHandler(
-            $"{{\"PAPIErrorCode\":0,\"PatronItemsOutGetRows\":[{{\"BibID\":\"{bibId}\"}}]}}");
+        var handler = new WorkflowCheckoutProtocolHandler(checkoutContent.Replace("9909", bibId.ToString(), StringComparison.Ordinal));
         var provider = await CreatePolarisProviderAsync(handler, "checkout-workflow-" + Guid.NewGuid().ToString("N"));
         await using var scoped = factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
         {
@@ -76,11 +175,79 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task PinnedHoldQualifierAliasFlowsIntoTheExactReplyAndDurableJournalSnapshot()
+    [DataRow(0)]
+    [DataRow(1)]
+    public async Task PinnedExplicitNoPickupSentinelCannotFallBackToRegisteredBranch(int sentinel)
+    {
+        var seeded = await SeedPendingHoldRequestAsync("pinned-explicit-pickup-sentinel");
+        var barcode = await ReadProviderRequestBarcodeAsync(seeded.RequestId);
+        var handler = new HoldConversationPapiHandler(
+            aliasesAgree: true,
+            barcode: barcode,
+            rawPickupPreference: $"\"RequestPickupBranchID\":{sentinel}");
+        var provider = await CreatePolarisProviderAsync(handler, "hold-pickup-sentinel-" + Guid.NewGuid().ToString("N"));
+        await using var scoped = factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IPatronProvider>();
+            services.RemoveAll<IStaffPolarisProvider>();
+            services.AddSingleton<IPatronProvider>(provider);
+            services.AddSingleton<IStaffPolarisProvider>(provider);
+        }));
+        var contexts = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        int eventCountBefore;
+        int outboxCountBefore;
+        await using (var before = await contexts.CreateDbContextAsync())
+        {
+            eventCountBefore = await before.TitleRequestEvents.CountAsync(item => item.TitleRequestId == seeded.RequestId);
+            outboxCountBefore = await before.EmailOutbox.CountAsync();
+        }
+
+        try
+        {
+            var result = await scoped.Services.GetRequiredService<HoldPlacementService>().PlaceAsync(
+                actor,
+                seeded.RequestId,
+                new VersionInput(StaffVersion.Encode(seeded.RowVersion)),
+                CancellationToken.None);
+
+            Assert.AreEqual("pickup_invalid", result.Code);
+            Assert.IsNotNull(result.OperationId);
+            Assert.AreEqual(0, handler.CreateCalls, "An explicit no-pickup sentinel must not use the registered-branch fallback.");
+            Assert.AreEqual(0, handler.ReplyCalls);
+            await using var verify = await contexts.CreateDbContextAsync();
+            var request = await verify.TitleRequests.SingleAsync(item => item.Id == seeded.RequestId);
+            var operation = await verify.HoldPlacementOperations.SingleAsync(item => item.Id == result.OperationId.Value);
+            Assert.AreEqual(RequestStatus.PendingHold, request.Status);
+            Assert.AreEqual(HoldOperationState.NoHold, operation.State);
+            Assert.AreEqual(HoldOperationPhase.Acquired, operation.Phase);
+            Assert.AreEqual("pickup_invalid", operation.LastErrorCode);
+            Assert.IsNull(operation.CreateStartedUtc);
+            Assert.IsNull(operation.PickupBranchIdSnapshot);
+            Assert.IsNull(operation.PolarisRequestGuid);
+            Assert.AreEqual(eventCountBefore, await verify.TitleRequestEvents.CountAsync(item => item.TitleRequestId == seeded.RequestId));
+            Assert.AreEqual(outboxCountBefore, await verify.EmailOutbox.CountAsync());
+        }
+        finally
+        {
+            await DeleteRequestAsync(seeded.RequestId);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("\"RequestPickupBranchID\":102", 102)]
+    [DataRow("", 101)]
+    public async Task PinnedHoldQualifierAliasFlowsIntoTheExactReplyAndDurableJournalSnapshot(
+        string rawPickupPreference,
+        int expectedPickupBranchId)
     {
         var seeded = await SeedPendingHoldRequestAsync("pinned-provider-conversation");
         var barcode = await ReadProviderRequestBarcodeAsync(seeded.RequestId);
-        var handler = new HoldConversationPapiHandler(aliasesAgree: true, barcode: barcode);
+        var handler = new HoldConversationPapiHandler(
+            aliasesAgree: true, barcode: barcode, rawPickupPreference: rawPickupPreference);
+        handler.PickupPreferenceAfterCreate = expectedPickupBranchId == 101
+            ? "\"RequestPickupBranchID\":102"
+            : "\"RequestPickupBranchID\":101";
         var provider = await CreatePolarisProviderAsync(handler, "hold-conversation-" + Guid.NewGuid().ToString("N"));
         await using var scoped = factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
         {
@@ -108,6 +275,8 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("updated", placed.Code);
             Assert.AreEqual(1, handler.CreateCalls);
             Assert.AreEqual(1, handler.ReplyCalls);
+            Assert.AreEqual(3, handler.BasicDataCalls,
+                "The default changes after the create marker, so reply and finalization must use the frozen journal snapshot without another patron refresh.");
             Assert.IsNotNull(handler.ReplyBody, "The create response's exact qualifier must be sent in the reply.");
             using (var replyBody = JsonDocument.Parse(handler.ReplyBody!))
             {
@@ -119,16 +288,27 @@ public sealed partial class PatronJourneyTests
                     GetJsonStringPropertyIgnoreCase(replyBody.RootElement, "TxnQualifier"));
                 Assert.IsFalse(replyBody.RootElement.TryGetProperty("RequestGUID", out _),
                     "The pinned reply serializer carries the request GUID in the URL, not the body.");
-                Assert.AreEqual(2, replyBody.RootElement.GetProperty("RequestingOrgID").GetInt32());
+                Assert.AreEqual(101, replyBody.RootElement.GetProperty("RequestingOrgID").GetInt32());
                 Assert.AreEqual(1, replyBody.RootElement.GetProperty("Answer").GetInt32());
                 Assert.AreEqual(3, replyBody.RootElement.GetProperty("State").GetInt32());
             }
             Assert.IsNotNull(handler.ReplyUri);
             Assert.IsTrue(Uri.TryCreate(handler.ReplyUri, UriKind.Absolute, out var replyUri));
             Assert.IsTrue(replyUri!.AbsolutePath.EndsWith(
-                "/holdrequest/" + HoldConversationPapiHandler.Conversation,
+                "/101/holdrequest/" + HoldConversationPapiHandler.Conversation,
                 StringComparison.OrdinalIgnoreCase),
-                "The exact conversation GUID must be bound to the reply request URI.");
+                "The native registration selects the reply member route, with the exact conversation GUID in its URI.");
+            Assert.IsNotNull(handler.CreateUri);
+            Assert.IsTrue(Uri.TryCreate(handler.CreateUri, UriKind.Absolute, out var createUri));
+            Assert.IsTrue(createUri!.AbsolutePath.EndsWith("/101/holdrequest", StringComparison.OrdinalIgnoreCase),
+                "The native registration selects the create member route.");
+            Assert.IsNotNull(handler.CreateBody);
+            using (var createBody = JsonDocument.Parse(handler.CreateBody!))
+            {
+                Assert.AreEqual(101, createBody.RootElement.GetProperty("RequestingOrgID").GetInt32());
+                Assert.AreEqual(expectedPickupBranchId, createBody.RootElement.GetProperty("PickupOrgID").GetInt32(),
+                    "A live current preference wins; only an omitted preference falls back to the registered branch.");
+            }
 
             await using var verify = await contexts.CreateDbContextAsync();
             var operation = await verify.HoldPlacementOperations.SingleAsync(item =>
@@ -136,6 +316,8 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HoldConversationPapiHandler.Conversation, operation.PolarisRequestGuid);
             Assert.AreEqual(HoldConversationPapiHandler.GroupQualifier, operation.TxnGroupQualifier);
             Assert.AreEqual(HoldConversationPapiHandler.TransactionQualifier, operation.TxnQualifier);
+            Assert.AreEqual(101, operation.RequestingOrganizationIdSnapshot);
+            Assert.AreEqual(expectedPickupBranchId, operation.PickupBranchIdSnapshot);
             Assert.AreEqual(RequestStatus.HoldPlaced,
                 (await verify.TitleRequests.SingleAsync(item => item.Id == seeded.RequestId)).Status);
             Assert.AreEqual(eventCountBefore + 1, await verify.TitleRequestEvents.CountAsync(item =>
@@ -393,15 +575,23 @@ public sealed partial class PatronJourneyTests
         bool aliasesAgree,
         string barcode,
         string? createResponseOverride = null,
-        string? replyResponseOverride = null) : HttpMessageHandler
+        string? replyResponseOverride = null,
+        string rawPickupPreference = "\"RequestPickupBranchID\":102") : HttpMessageHandler
     {
         public static readonly Guid Conversation = Guid.Parse("c2f29019-c3ea-43dc-9b21-a04389ed00a1");
         public const string GroupQualifier = "durable-group";
         public const string TransactionQualifier = "durable-transaction";
         public string? ReplyBody { get; private set; }
         public string? ReplyUri { get; private set; }
+        public string? CreateBody { get; private set; }
+        public string? CreateUri { get; private set; }
         public int CreateCalls { get; private set; }
         public int ReplyCalls { get; private set; }
+        public int BasicDataCalls { get; private set; }
+        public int HoldReadCalls { get; private set; }
+        public string? PickupPreferenceAfterCreate { get; set; }
+        public string? HoldResponseOverride { get; set; }
+        private string? currentPickupPreference = rawPickupPreference;
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -416,23 +606,38 @@ public sealed partial class PatronJourneyTests
             }
             else if (path.EndsWith("/basicdata", StringComparison.Ordinal))
             {
+                BasicDataCalls++;
                 content = "{\"PAPIErrorCode\":0,\"PatronBasicData\":{" +
-                          $"\"PatronID\":7001,\"Barcode\":\"{barcode}\",\"PatronOrgID\":2," +
-                          "\"PatronCodeID\":1,\"RequestPickupBranchID\":101}}";
+                          $"\"PatronID\":7001,\"Barcode\":\"{barcode}\",\"PatronOrgID\":101," +
+                          "\"PatronCodeID\":1" +
+                          (string.IsNullOrEmpty(currentPickupPreference) ? string.Empty : "," + currentPickupPreference) + "}}";
             }
             else if (path.Contains("/organizations/", StringComparison.Ordinal))
             {
                 content = "{\"PAPIErrorCode\":0,\"OrganizationsGetRows\":[" +
                           "{\"OrganizationID\":1,\"OrganizationCodeID\":1,\"ParentOrganizationID\":null}," +
-                          "{\"OrganizationID\":2,\"OrganizationCodeID\":2,\"ParentOrganizationID\":1,\"Name\":\"Test Library\"}]}";
+                          "{\"OrganizationID\":2,\"OrganizationCodeID\":2,\"ParentOrganizationID\":1,\"Name\":\"Test Library\"}," +
+                          "{\"OrganizationID\":101,\"OrganizationCodeID\":3,\"ParentOrganizationID\":2,\"Name\":\"Registered Branch\"}," +
+                          "{\"OrganizationID\":102,\"OrganizationCodeID\":3,\"ParentOrganizationID\":2,\"Name\":\"Live Pickup Branch\"}]}";
+            }
+            else if (path.EndsWith("/pickupbranches", StringComparison.Ordinal))
+            {
+                content = "{\"PAPIErrorCode\":1,\"PickupBranchesRows\":[{\"ID\":101},{\"ID\":102}]}";
             }
             else if (path.Contains("/holdrequests/", StringComparison.Ordinal))
             {
-                content = "{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[]}";
+                HoldReadCalls++;
+                content = HoldResponseOverride ?? "{\"PAPIErrorCode\":0,\"PatronHoldRequestsGetRows\":[]}";
             }
             else if (path.EndsWith("/holdrequest", StringComparison.Ordinal))
             {
                 CreateCalls++;
+                CreateUri = request.RequestUri!.ToString();
+                CreateBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+                if (PickupPreferenceAfterCreate is not null)
+                {
+                    currentPickupPreference = PickupPreferenceAfterCreate;
+                }
                 content = createResponseOverride ?? ("{\"PAPIErrorCode\":0,\"StatusType\":3,\"StatusValue\":5," +
                           $"\"RequestGUID\":\"{Conversation}\",\"TxnGroupQualifer\":\"{GroupQualifier}\"," +
                           $"\"TxnGroupQualifier\":\"{(aliasesAgree ? GroupQualifier : "wrong-group")}\"," +

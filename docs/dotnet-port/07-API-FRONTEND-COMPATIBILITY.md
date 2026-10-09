@@ -239,6 +239,8 @@ Where a library setting inherits from system defaults, the UI must make the dist
 
 For whole-set settings, the write payload distinguishes three actions: omit the collection property to make no edit, send `null` at library scope to reset the override and resume inheritance, or send `[]` to persist an intentional empty replacement. At system scope, `null` and `[]` both clear common creators and publication options to an empty system set; system patron-code `null` is rejected, so use `[]` to clear that set. Clearing every row in an editor is therefore different from selecting **Use system default**. An empty allowed-patron-code set remains a valid empty configuration set; current eligibility behavior treats an empty allowed-ID list as no code restriction, independently of whether that set is inherited or library-owned.
 
+The Settings POST accepts the supported collection aliases at the root or in their corresponding `workflow`, `patron`, and `systemSettings` sections. A collection supplied beside an unrelated section still applies; supplying the same collection in both root and section locations is invalid. This includes root common-creator and patron-code sets beside `workflow`, root publication options and legacy format maps beside `patron`, and `systemSettings.origins` as an alias for `systemSettings.patronEmbedAllowedOrigins`.
+
 Ordinary inheritable text controls should normalize blank library input to **Use system default** where current behavior treats blank as fallback; do not introduce a hidden explicit-empty override state.
 
 Secret fields are never populated with the actual secret. A blank entry preserves existing value; explicit **Clear** has separate semantics/confirmation.

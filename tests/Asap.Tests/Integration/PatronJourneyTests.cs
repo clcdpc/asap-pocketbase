@@ -5327,7 +5327,8 @@ public sealed partial class PatronJourneyTests
         await verify.OpenAsync();
         await using var command = new SqlCommand(
             """
-            SELECT [State], [Phase], [PolarisHoldId], [OutcomeEvidenceKind], [CreateStartedUtc], [ReplyStartedUtc]
+            SELECT [State], [Phase], [PolarisHoldId], [OutcomeEvidenceKind], [CreateStartedUtc], [ReplyStartedUtc],
+                   [PickupBranchIdSnapshot], [RequestingOrganizationIdSnapshot]
             FROM [asap].[HoldPlacementOperation]
             WHERE [TitleRequestId] = @id;
             """,
@@ -5341,6 +5342,9 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("existing_hold_adoption", result.GetString(3));
         Assert.IsTrue(result.IsDBNull(4));
         Assert.IsTrue(result.IsDBNull(5));
+        Assert.AreEqual(101, result.GetInt32(6), "Adoption records the exact pickup of the existing hold.");
+        Assert.IsTrue(result.IsDBNull(7),
+            "The adopted hold's original create route is unknown; the current patron registration is not historical evidence.");
     }
 
     [TestMethod]
@@ -5750,14 +5754,29 @@ public sealed partial class PatronJourneyTests
         using var get = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
         using var getBody = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
         var operation = getBody.RootElement.GetProperty("holdOperation");
+        Assert.IsTrue(StaffVersion.TryDecode(getBody.RootElement.GetProperty("version").GetString(),
+            out var originalRequestRowVersion));
+        Assert.IsTrue(StaffVersion.TryDecode(operation.GetProperty("version").GetString(),
+            out var originalOperationRowVersion));
 
         using var reconcile = await client.PostAsJsonAsync(
             $"/api/asap/staff/hold-operations/{operation.GetProperty("id").GetString()}/reconcile",
             new { version = operation.GetProperty("version").GetString() });
-        Assert.AreEqual(requestingOrganizationId == 2 ? HttpStatusCode.OK : HttpStatusCode.Conflict,
+        var replyAllowed = requestingOrganizationId > 1;
+        Assert.AreEqual(replyAllowed ? HttpStatusCode.OK : HttpStatusCode.Conflict,
             reconcile.StatusCode, await reconcile.Content.ReadAsStringAsync());
         Assert.AreEqual(0, holdProvider.CreateCount);
-        Assert.AreEqual(requestingOrganizationId == 2 ? 1 : 0, holdProvider.ReplyCount);
+        Assert.AreEqual(replyAllowed ? 1 : 0, holdProvider.ReplyCount);
+        if (replyAllowed)
+        {
+            Assert.AreEqual(requestingOrganizationId, holdProvider.LastReplyCommand!.RequestingOrganizationId,
+                "Reply must use the immutable native member route stored by the dispatched create.");
+        }
+        else
+        {
+            Assert.IsNull(holdProvider.LastReplyCommand,
+                "A system-scope sentinel is not a valid native reply route.");
+        }
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
@@ -5766,8 +5785,13 @@ public sealed partial class PatronJourneyTests
             SELECT request.[Status], operation.[State], operation.[Phase], operation.[ExecutionEpoch],
                    operation.[ReplyStartedUtc], operation.[ReplyResponseObservedUtc], operation.[PolarisHoldId],
                    operation.[RecoveryAttemptCount],
+                   operation.[RequestingOrganizationIdSnapshot],
                    (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
-                    WHERE [TitleRequestId] = @requestId AND [EventType] = N'hold_placed')
+                    WHERE [TitleRequestId] = @requestId AND [EventType] = N'hold_placed'),
+                   (SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = @requestId),
+                   (SELECT COUNT(*) FROM [asap].[EmailOutbox]
+                    WHERE [BusinessKey] LIKE CONCAT(N'title-hold-placed:', @requestId, N':%')),
+                   request.[RowVersion], operation.[RowVersion]
             FROM [asap].[TitleRequest] request
             JOIN [asap].[HoldPlacementOperation] operation ON operation.[TitleRequestId] = request.[Id]
             WHERE request.[Id] = @requestId;
@@ -5776,7 +5800,15 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@requestId", requestId);
         await using var result = await command.ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
-        if (requestingOrganizationId != 2)
+        Assert.AreEqual(requestingOrganizationId, result.GetInt32(8),
+            "The journal must retain the original requesting organization, independent of servicing scope.");
+        var requestRowVersionUnchanged = originalRequestRowVersion.SequenceEqual((byte[])result[12]);
+        var operationRowVersionUnchanged = originalOperationRowVersion.SequenceEqual((byte[])result[13]);
+        Assert.AreEqual(!replyAllowed, requestRowVersionUnchanged,
+            "Only a successful reply may transition the request row.");
+        Assert.IsFalse(operationRowVersionUnchanged,
+            "The operation rowversion must advance when reply-ready work succeeds or is fenced for operator review.");
+        if (requestingOrganizationId == 1)
         {
             Assert.AreEqual("pending_hold", result.GetString(0));
             Assert.AreEqual("operator_required", result.GetString(1));
@@ -5784,7 +5816,9 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(result.IsDBNull(4));
             Assert.IsTrue(result.IsDBNull(5));
             Assert.IsTrue(result.IsDBNull(6));
-            Assert.AreEqual(0, result.GetInt32(8));
+            Assert.AreEqual(0, result.GetInt32(9));
+            Assert.AreEqual(0, result.GetInt32(10));
+            Assert.AreEqual(0, result.GetInt32(11));
             return;
         }
         Assert.AreEqual("hold_placed", result.GetString(0));
@@ -5795,7 +5829,9 @@ public sealed partial class PatronJourneyTests
         Assert.IsFalse(result.IsDBNull(5));
         Assert.AreEqual(8123, result.GetInt32(6));
         Assert.AreEqual(1, result.GetInt32(7));
-        Assert.AreEqual(1, result.GetInt32(8));
+        Assert.AreEqual(1, result.GetInt32(9));
+        Assert.AreEqual(1, result.GetInt32(10));
+        Assert.AreEqual(1, result.GetInt32(11));
     }
 
     [TestMethod]
@@ -7781,6 +7817,8 @@ public sealed partial class PatronJourneyTests
 
         Assert.AreEqual(8, holds.Single().StatusId);
         Assert.AreEqual("Unclaimed", holds.Single().StatusDescription);
+        Assert.IsNull(holds.Single().PickupBranchId,
+            "A terminal hold remains valid when this optional pickup field is omitted.");
         Assert.IsTrue(HoldPlacementService.IsTerminal(holds.Single().StatusId));
     }
 
@@ -7796,6 +7834,8 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(9001, holds.Single().BibId);
         Assert.AreEqual(6, holds.Single().StatusId);
         Assert.AreEqual("Held", holds.Single().StatusDescription);
+        Assert.IsNull(holds.Single().PickupBranchId,
+            "Compatible numeric-string identity fields do not make an omitted optional pickup fabricated evidence.");
     }
 
     [TestMethod]
@@ -8280,10 +8320,10 @@ public sealed partial class PatronJourneyTests
     {
         var cases = new[]
         {
-            (RequestField: "\"RequestPickupBranchID\":200,", Expected: (int?)200),
-            (RequestField: string.Empty, Expected: (int?)300),
-            (RequestField: "\"RequestPickupBranchID\":0,", Expected: (int?)null),
-            (RequestField: "\"RequestPickupBranchID\":1,", Expected: (int?)null)
+            (RequestField: "\"RequestPickupBranchID\":200,", Expected: (int?)200, State: PatronPickupPreferenceState.Current),
+            (RequestField: string.Empty, Expected: (int?)300, State: PatronPickupPreferenceState.Absent),
+            (RequestField: "\"RequestPickupBranchID\":0,", Expected: (int?)null, State: PatronPickupPreferenceState.ExplicitInvalid),
+            (RequestField: "\"RequestPickupBranchID\":1,", Expected: (int?)null, State: PatronPickupPreferenceState.ExplicitInvalid)
         };
 
         foreach (var testCase in cases)
@@ -8305,6 +8345,7 @@ public sealed partial class PatronJourneyTests
                 CancellationToken.None);
 
             Assert.AreEqual(testCase.Expected, patron.PreferredPickupBranchId, testCase.RequestField);
+            Assert.AreEqual(testCase.State, patron.EffectivePickupPreferenceState, testCase.RequestField);
             Assert.AreEqual(3, handler.RequestCount);
         }
     }
@@ -9559,7 +9600,11 @@ public sealed partial class PatronJourneyTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private static async Task<long> SeedPendingHoldRequestAsync(string title, string barcode, int bibId)
+    private static async Task<long> SeedPendingHoldRequestAsync(
+        string title,
+        string barcode,
+        int bibId,
+        int? patronOrganizationId = 101)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -9568,9 +9613,9 @@ public sealed partial class PatronJourneyTests
             DECLARE @formatId bigint = (
                 SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
             INSERT INTO [asap].[TitleRequest]
-                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
+                ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-            VALUES (2, @barcode, @title, 1, @formatId, N'pending_hold', @bibId, 1,
+            VALUES (2, @patronOrganizationId, @barcode, @title, 1, @formatId, N'pending_hold', @bibId, 1,
                     101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
             SELECT CONVERT(bigint, SCOPE_IDENTITY());
             """,
@@ -9578,6 +9623,7 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@title", title);
         command.Parameters.AddWithValue("@barcode", barcode);
         command.Parameters.AddWithValue("@bibId", bibId);
+        command.Parameters.AddWithValue("@patronOrganizationId", (object?)patronOrganizationId ?? DBNull.Value);
         return Convert.ToInt64(await command.ExecuteScalarAsync());
     }
 
@@ -11557,6 +11603,7 @@ public sealed partial class PatronJourneyTests
         public Guid RequestGuid { get; } = Guid.NewGuid();
         public int CreateCount { get; private set; }
         public int ReplyCount { get; private set; }
+        public HoldReplyCommand? LastReplyCommand { get; private set; }
         public int HoldReadCount { get; private set; }
         public IReadOnlyList<PolarisHoldSnapshot> Holds { get; set; } = [];
         public Exception? HoldReadException { get; set; }
@@ -11661,6 +11708,7 @@ public sealed partial class PatronJourneyTests
                 RefreshStarted.TrySetResult();
                 await PendingRefresh.Task.WaitAsync(cancellationToken);
             }
+            var registrationOrganizationId = organizationId == 2 ? 101 : organizationId;
             return new PatronSnapshot(
                 7105,
                 barcode,
@@ -11669,16 +11717,17 @@ public sealed partial class PatronJourneyTests
                 "Patron",
                 1,
                 "Adult",
-                101,
-                2,
+                registrationOrganizationId,
+                organizationId > 1 ? organizationId : 2,
                 "Test Library",
-                101);
+                registrationOrganizationId);
         }
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
             PatronSnapshot patron,
             int organizationId, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<PickupBranch>>([new PickupBranch(101, "Main Library")]);
+            Task.FromResult<IReadOnlyList<PickupBranch>>([
+                new PickupBranch(patron.PatronOrganizationId, "Registered Branch")]);
 
         public Task UpdatePreferredPickupBranchAsync(
             string barcode,
@@ -11733,6 +11782,7 @@ public sealed partial class PatronJourneyTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             ReplyCount++;
+            LastReplyCommand = command;
             if (ReplyException is not null) throw ReplyException;
             Assert.AreEqual(RequestGuid, command.RequestGuid);
             Assert.AreEqual("group-qualifier", command.TxnGroupQualifier);

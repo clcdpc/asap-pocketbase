@@ -593,7 +593,9 @@ public sealed partial class PolarisPatronProvider(
                     item.BibID,
                     item.StatusID,
                     Clean(item.StatusDescription),
-                    item.PickupBranchID,
+                    item.PickupBranchID > PolarisConfigurationValidation.SystemOrganizationId
+                        ? item.PickupBranchID
+                        : null,
                     barcode))
                 .ToList();
         }
@@ -657,6 +659,38 @@ public sealed partial class PolarisPatronProvider(
                 !TryGetUniqueProperty(row, "BibID", out var bibIdElement) ||
                 !TryReadPositiveInt32(bibIdElement, out var bibId) ||
                 bibId != model.BibID)
+            {
+                return false;
+            }
+
+            var hasPickupBranchId = false;
+            var pickupBranchIdElement = default(JsonElement);
+            foreach (var property in row.EnumerateObject())
+            {
+                if (!string.Equals(property.Name, "PickupBranchID", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (hasPickupBranchId)
+                {
+                    return false;
+                }
+
+                hasPickupBranchId = true;
+                pickupBranchIdElement = property.Value;
+            }
+
+            if (!hasPickupBranchId)
+            {
+                if (model.PickupBranchID != 0)
+                {
+                    return false;
+                }
+            }
+            else if (pickupBranchIdElement.ValueKind != JsonValueKind.Number ||
+                     !pickupBranchIdElement.TryGetInt32(out var pickupBranchId) ||
+                     pickupBranchId < 0 || pickupBranchId != model.PickupBranchID)
             {
                 return false;
             }
@@ -975,6 +1009,11 @@ public sealed partial class PolarisPatronProvider(
             ?? throw new PolarisOperationalException(
                 "polaris_home_library_missing",
                 "The patron home library could not be resolved from Polaris.");
+        var preferredPickupBranchId = ResolvePreferredPickupId(
+            patron.RequestPickupBranchID,
+            patronOrganizationId,
+            rawContent,
+            out var pickupPreferenceState);
         return new PatronSnapshot(
             patronId,
             currentBarcode,
@@ -986,9 +1025,10 @@ public sealed partial class PolarisPatronProvider(
             patronOrganizationId,
             home.Id,
             home.DisplayName ?? home.Name ?? home.Abbreviation ?? home.Id.ToString(),
-            ResolvePreferredPickupId(patron.RequestPickupBranchID, patronOrganizationId, rawContent),
+            preferredPickupBranchId,
             formerBarcode,
-            requireBarcodeAlias ? Clean(barcode) : null);
+            requireBarcodeAlias ? Clean(barcode) : null,
+            pickupPreferenceState);
     }
 
     private static async Task<IReadOnlyList<NativeOrganization>> LoadOrganizationsAsync(
@@ -1818,8 +1858,10 @@ public sealed partial class PolarisPatronProvider(
     private static int? ResolvePreferredPickupId(
         int requestPickupBranchId,
         int patronOrganizationId,
-        string rawContent)
+        string rawContent,
+        out PatronPickupPreferenceState pickupPreferenceState)
     {
+        pickupPreferenceState = PatronPickupPreferenceState.Absent;
         using var document = JsonDocument.Parse(rawContent);
         if (!TryGetUniqueProperty(document.RootElement, "PatronBasicData", out var patron) ||
             patron.ValueKind != JsonValueKind.Object || HasDuplicateProperties(patron))
@@ -1828,9 +1870,19 @@ public sealed partial class PolarisPatronProvider(
         }
         if (!TryGetUniqueProperty(patron, "RequestPickupBranchID", out var value))
         {
-            // Preserve the established registered-branch fallback for responses
-            // that omit the field added in PAPI 6.7. It never falls back to system 1.
-            return patronOrganizationId > PolarisConfigurationValidation.SystemOrganizationId ? patronOrganizationId : null;
+            if (requestPickupBranchId != 0)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_pickup_preference_invalid",
+                    "Polaris returned an inconsistent pickup preference.");
+            }
+
+            // Keep the established basic-data projection: an omitted field uses
+            // the registered branch. The explicit state lets hold placement
+            // distinguish this fallback from a supplied preference.
+            return patronOrganizationId > PolarisConfigurationValidation.SystemOrganizationId
+                ? patronOrganizationId
+                : null;
         }
         if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var id) ||
             id < 0 || id != requestPickupBranchId)
@@ -1839,7 +1891,14 @@ public sealed partial class PolarisPatronProvider(
             // negative values instead of inventing provider semantics for them.
             throw new PolarisOperationalException("polaris_pickup_preference_invalid", "Polaris returned an invalid pickup preference.");
         }
-        // Zero is no usable preference; organization 1 is system scope, not a branch.
+
+        pickupPreferenceState = id > PolarisConfigurationValidation.SystemOrganizationId
+            ? PatronPickupPreferenceState.Current
+            : PatronPickupPreferenceState.ExplicitInvalid;
+        // Explicit zero and system scope are not absence. Preserve them as an
+        // unusable preference state so hold placement cannot silently reroute
+        // to the registered branch. Other patron flows retain their existing
+        // nullable preference projection.
         return id > PolarisConfigurationValidation.SystemOrganizationId ? id : null;
     }
 

@@ -2438,12 +2438,34 @@ public sealed class MigrationCliTests
                 {
                     var directRules = JsonSerializer.Serialize(new Dictionary<string, object?>
                     {
-                        [sourceCode] = new Dictionary<string, object?>()
+                        [sourceCode] = new Dictionary<string, object?>
+                        {
+                            ["customFields"] = new Dictionary<string, object?>
+                            {
+                                ["audience"] = new Dictionary<string, object?>
+                                {
+                                    ["mode"] = "required",
+                                    ["label"] = $"Direct {sourceCode}"
+                                }
+                            }
+                        }
                     });
-                    const string bookFallbackRules = """{"book":{}}""";
-                    var package = CreateMinimalPackage(
-                        caseRoot,
-                        $$"""
+                    var invalidDirectRules = JsonSerializer.Serialize(new Dictionary<string, object?>
+                    {
+                        [sourceCode] = new Dictionary<string, object?>
+                        {
+                            ["customFields"] = new Dictionary<string, object?>
+                            {
+                                ["audience"] = new Dictionary<string, object?>
+                                {
+                                    ["mode"] = 1
+                                }
+                            }
+                        }
+                    });
+                    const string bookFallbackRules = """{"book":{"customFields":{"audience":{"mode":"optional","label":"Book fallback"}}}}""";
+                    const string definitions = """[{"key":"audience","label":"Audience","type":"text","enabled":true,"sortOrder":10}]""";
+                    string CreateAdditionalSql(string directRuleJson) => $$"""
                         INSERT INTO [polaris_organizations] VALUES
                             ('pb-org-3', '3', 'Book Fallback Library', 'FALLBACK', 1, 2, 1);
                         CREATE TABLE [material_formats]
@@ -2465,11 +2487,25 @@ public sealed class MigrationCliTests
                             [created] TEXT, [updated] TEXT
                         );
                         INSERT INTO [patron_settings_overrides] VALUES
-                            ('direct-rule', '2', '{{directRules}}', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
-                            ('book-fallback', '3', '{{bookFallbackRules}}', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
-                        """);
+                            ('direct-rule', '2', '{{directRuleJson}}', '{{definitions}}', '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                            ('book-fallback', '3', '{{bookFallbackRules}}', '{{definitions}}', '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                        """;
+                    var invalidRoot = Path.Combine(caseRoot, "invalid");
+                    Directory.CreateDirectory(invalidRoot);
+                    var invalidPackage = CreateMinimalPackage(invalidRoot, CreateAdditionalSql(invalidDirectRules));
+                    var package = CreateMinimalPackage(caseRoot, CreateAdditionalSql(directRules));
                     DeployDacpac(master, databaseName);
                     Environment.SetEnvironmentVariable(environmentName, target);
+                    var invalidReportPath = Path.Combine(invalidRoot, "report.json");
+                    using (var invalidImportError = new StringWriter())
+                    {
+                        Assert.AreEqual(1, RunImport(invalidPackage, invalidReportPath, environmentName, tenantId, invalidImportError));
+                        StringAssert.Contains(invalidImportError.ToString(), "custom_field_rule_invalid");
+                    }
+                    Assert.IsFalse(File.Exists(invalidReportPath));
+                    Assert.IsFalse(File.Exists(invalidReportPath + ".pending"));
+                    await AssertFreshImportTargetAsync(target);
+
                     var reportPath = Path.Combine(caseRoot, "report.json");
                     using (var importError = new StringWriter())
                     {
@@ -2480,10 +2516,43 @@ public sealed class MigrationCliTests
                     await connection.OpenAsync();
                     Assert.AreEqual(1, await ScalarAsync(
                         connection,
+                        $"SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND m.[Code] = N'book' AND f.[FieldKey] = N'audience' AND r.[Mode] = N'required' AND r.[LabelOverride] = N'Direct {sourceCode}';"));
+                    Assert.AreEqual(1, await ScalarAsync(
+                        connection,
+                        "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] f ON f.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] m ON m.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 3 AND m.[Code] = N'book' AND f.[FieldKey] = N'audience' AND r.[Mode] = N'optional' AND r.[LabelOverride] = N'Book fallback';"));
+                    using (var initialReconcileError = new StringWriter())
+                    {
+                        Assert.AreEqual(0, RunReconcile(package, reportPath, environmentName, initialReconcileError), initialReconcileError.ToString());
+                    }
+                    Assert.AreEqual(1, await ScalarAsync(
+                        connection,
                         "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 2 AND f.[Code] = N'book' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'optional' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Author' AND COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]) = N'Identifier' AND COALESCE(o.[PublicationMode], f.[PublicationMode]) = N'optional' AND COALESCE(o.[PublicationLabel], f.[PublicationLabel]) = N'Publication';"));
                     Assert.AreEqual(1, await ScalarAsync(
                         connection,
                         "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] o JOIN [asap].[MaterialFormat] f ON f.[Id] = o.[MaterialFormatId] WHERE o.[LibraryOrganizationId] = 3 AND f.[Code] = N'book' AND COALESCE(o.[AuthorMode], f.[AuthorMode]) = N'required' AND COALESCE(o.[AuthorLabel], f.[AuthorLabel]) = N'Author' AND COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]) = N'Identifier number' AND COALESCE(o.[PublicationMode], f.[PublicationMode]) = N'required' AND COALESCE(o.[PublicationLabel], f.[PublicationLabel]) = N'Publication Timing';"));
+
+                    await using (var corruptCustomFieldRule = connection.CreateCommand())
+                    {
+                        corruptCustomFieldRule.CommandText = "UPDATE r SET [Mode] = N'optional' FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] c ON c.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] f ON f.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND c.[FieldKey] = N'audience' AND f.[Code] = N'book';";
+                        Assert.AreEqual(1, await corruptCustomFieldRule.ExecuteNonQueryAsync());
+                    }
+                    RefreshReportFingerprint(reportPath, target);
+                    using (var customFieldRuleReconcileError = new StringWriter())
+                    {
+                        Assert.AreEqual(1, RunReconcile(package, reportPath, environmentName, customFieldRuleReconcileError));
+                        StringAssert.Contains(
+                            customFieldRuleReconcileError.ToString(),
+                            "An imported custom-field rule differs from the independently derived source normalization.");
+                    }
+                    Assert.AreEqual(1, await ScalarAsync(
+                        connection,
+                        $"SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] c ON c.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] f ON f.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND c.[FieldKey] = N'audience' AND f.[Code] = N'book' AND r.[Mode] = N'optional' AND r.[LabelOverride] = N'Direct {sourceCode}';"));
+                    await using (var restoreCustomFieldRule = connection.CreateCommand())
+                    {
+                        restoreCustomFieldRule.CommandText = "UPDATE r SET [Mode] = N'required' FROM [asap].[MaterialFormatCustomFieldRule] r JOIN [asap].[PatronCustomField] c ON c.[Id] = r.[PatronCustomFieldId] JOIN [asap].[MaterialFormat] f ON f.[Id] = r.[MaterialFormatId] WHERE r.[LibraryOrganizationId] = 2 AND c.[FieldKey] = N'audience' AND f.[Code] = N'book';";
+                        Assert.AreEqual(1, await restoreCustomFieldRule.ExecuteNonQueryAsync());
+                    }
+                    RefreshReportFingerprint(reportPath, target);
 
                     await using (var corruptRule = connection.CreateCommand())
                     {

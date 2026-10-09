@@ -42,8 +42,14 @@ public sealed record PatronSnapshot(
     string HomeLibraryOrganizationName,
     int? PreferredPickupBranchId,
     string? FormerBarcode = null,
-    string? RequestedBarcode = null)
+    string? RequestedBarcode = null,
+    PatronPickupPreferenceState? PickupPreferenceState = null)
 {
+    public PatronPickupPreferenceState EffectivePickupPreferenceState =>
+        PickupPreferenceState ?? (PreferredPickupBranchId.HasValue
+            ? PatronPickupPreferenceState.Current
+            : PatronPickupPreferenceState.Absent);
+
     public IReadOnlyList<string> KnownBarcodeAliases
     {
         get
@@ -62,6 +68,13 @@ public sealed record PatronSnapshot(
             return aliases;
         }
     }
+}
+
+public enum PatronPickupPreferenceState
+{
+    Current,
+    Absent,
+    ExplicitInvalid
 }
 
 public sealed record PickupBranch(int Id, string Label);

@@ -760,8 +760,8 @@ TitleRequestId bigint NOT NULL FK TitleRequest
 PatronBarcodeSnapshot nvarchar(...) NOT NULL
 PatronIdSnapshot int NULL
 BibIdSnapshot int NOT NULL
-PickupBranchIdSnapshot int NULL
-RequestingOrganizationIdSnapshot int NULL
+PickupBranchIdSnapshot int NULL                  -- verified PAPI pickup at create marker or existing hold; NULL when unknown
+RequestingOrganizationIdSnapshot int NULL        -- native PatronOrgID sent as PAPI RequestingOrgID; NULL for adopted holds with unknown original route
 WorkstationIdSnapshot int NULL
 PolarisUserIdSnapshot int NULL
 AttemptNumber int NOT NULL

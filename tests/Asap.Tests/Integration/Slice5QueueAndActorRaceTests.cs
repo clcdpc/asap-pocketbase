@@ -144,7 +144,7 @@ public sealed partial class PatronJourneyTests
         await EnsureManualActorOrganizationAsync(scope);
         var admin = await CreateCorrectiveStaffAsync(superAdmin, "admin", scope);
         var actor = await ReadCorrectiveStaffAsync(admin);
-        var seeded = await SeedPendingHoldRequestAsync("manual-actor-final-boundary", scope);
+        var seeded = await SeedPendingHoldRequestAsync("manual-actor-final-boundary", scope, scope);
         await PrepareSingleItemCycleAsync(QueueNames.HoldPlacement, scope, seeded.RequestId);
         try
         {

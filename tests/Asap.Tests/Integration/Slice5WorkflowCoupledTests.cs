@@ -86,6 +86,17 @@ public sealed partial class PatronJourneyTests
         var contextFactory = lowCapFactory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var seed = await SeedCoupledRowsAsync(
             contextFactory, scope: 1, recoveryCount: 1, placementCount: 1, requestLibraryOrganizationId: 2);
+        long legacyRecoveryRequestId;
+        await using (var legacyRecoveryContext = await contextFactory.CreateDbContextAsync())
+        {
+            legacyRecoveryRequestId = await legacyRecoveryContext.HoldPlacementOperations
+                .Where(item => item.Id == seed.OperationIds.Single())
+                .Select(item => item.TitleRequestId)
+                .SingleAsync();
+            var request = await legacyRecoveryContext.TitleRequests.SingleAsync(item => item.Id == legacyRecoveryRequestId);
+            request.PatronOrganizationId = null;
+            await legacyRecoveryContext.SaveChangesAsync();
+        }
         await IsolateOtherWorkflowQueuesAsync(contextFactory, QueueNames.HoldRecovery, scope: 1);
         await IsolateOtherWorkflowQueuesAsync(contextFactory, QueueNames.HoldPlacement, scope: 1);
         var wasActive = await SetOrganizationActiveAsync(contextFactory, 2, false);
@@ -98,8 +109,15 @@ public sealed partial class PatronJourneyTests
                 "Inactive recovery may finish its acquired operation; inactive new placement must not call Polaris.");
 
             await using var verify = await contextFactory.CreateDbContextAsync();
-            Assert.IsTrue(await verify.HoldPlacementOperations.AsNoTracking()
-                .Where(item => seed.OperationIds.Contains(item.Id)).AllAsync(item => item.CompletedUtc.HasValue));
+            var recoveredOperation = await verify.HoldPlacementOperations.AsNoTracking()
+                .SingleAsync(item => item.Id == seed.OperationIds.Single());
+            Assert.IsTrue(recoveredOperation.CompletedUtc.HasValue);
+            Assert.AreEqual(101, recoveredOperation.RequestingOrganizationIdSnapshot,
+                "Recovery uses current verified provider routing while retaining the unknown historical request registration.");
+            Assert.IsNull(await verify.TitleRequests.AsNoTracking()
+                .Where(item => item.Id == legacyRecoveryRequestId)
+                .Select(item => item.PatronOrganizationId).SingleAsync(),
+                "Recovery may use current provider evidence without fabricating a missing historical registration.");
             Assert.AreEqual("pending_hold", await verify.TitleRequests.AsNoTracking()
                 .Where(item => seed.PlacementRequestIds.Contains(item.Id)).Select(item => item.Status).SingleAsync());
         }
@@ -121,9 +139,11 @@ public sealed partial class PatronJourneyTests
         var format = await context.MaterialFormats.SingleAsync(item => item.Code == "book");
         var baseUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-10);
         var requestScope = requestLibraryOrganizationId ?? scope;
+        var registeredBranchId = requestScope == 2 ? 101 : checked(requestScope + 1);
         var recoveryRequests = Enumerable.Range(0, recoveryCount).Select(index => new TitleRequest
         {
             LibraryOrganizationId = requestScope,
+            PatronOrganizationId = registeredBranchId,
             Barcode = $"s5-cr-{Guid.NewGuid():N}",
             Title = $"Slice 5 coupled recovery {index}",
             MaterialFormatId = format.Id,
@@ -138,6 +158,7 @@ public sealed partial class PatronJourneyTests
         var placementRequests = Enumerable.Range(0, placementCount).Select(index => new TitleRequest
         {
             LibraryOrganizationId = requestScope,
+            PatronOrganizationId = registeredBranchId,
             Barcode = $"s5-cp-{Guid.NewGuid():N}",
             Title = $"Slice 5 coupled placement {index}",
             MaterialFormatId = format.Id,

@@ -391,6 +391,356 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task RootCollectionLocationsApplyBesideUnrelatedSectionsAndRejectMalformedAliasesAtomically()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var formatCode = $"s1_location_{suffix}";
+        var publicationKey = $"s1_publication_{suffix}";
+        var origin = $"https://s1-{suffix}.example.org";
+        var auditBefore = await ReadAuditHighWatermarkAsync();
+        await ExecuteNonQueryAsync("""
+            INSERT INTO [asap].[MaterialFormat]
+                ([OwnerOrganizationId], [Code], [Label], [SortOrder], [IsEnabled], [CreatedUtc], [UpdatedUtc])
+            VALUES (2, @code, N'Original S1 format', 9870, 1, SYSUTCDATETIME(), SYSUTCDATETIME());
+            """, ("@code", formatCode));
+
+        HttpClient? client = null;
+        JsonDocument? originalLibrary = null;
+        JsonDocument? originalSystem = null;
+        try
+        {
+            var actor = await ReadConfiguredSuperAdminAsync();
+            client = factory!.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            originalLibrary = await ReadSettingsDocumentAsync(client, "2");
+            originalSystem = await ReadSettingsDocumentAsync(client, "system");
+
+            var originalLibraryStored = originalLibrary.RootElement.GetProperty("stored");
+            var originalLibraryCodes = originalLibraryStored.GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
+                .GetProperty("values").EnumerateArray().Select(item => item.GetInt32()).ToHashSet();
+            using var codeChoicesResponse = await client.GetAsync("/api/asap/staff/polaris/patron-codes?orgId=2");
+            var codeChoicesBody = await codeChoicesResponse.Content.ReadAsStringAsync();
+            Assert.AreEqual(HttpStatusCode.OK, codeChoicesResponse.StatusCode, codeChoicesBody);
+            using var codeChoices = JsonDocument.Parse(codeChoicesBody);
+            var knownPatronCodes = codeChoices.RootElement.GetProperty("data").EnumerateArray()
+                .Select(item => item.GetProperty("id").GetInt32()).Where(id => id > 0).Distinct().ToArray();
+            Assert.IsTrue(knownPatronCodes.Length > 0, "The deterministic provider must expose at least one patron-code choice.");
+            var knownPatronCode = knownPatronCodes[0];
+            var unknownPatronCode = int.MaxValue;
+            while (knownPatronCodes.Contains(unknownPatronCode) || originalLibraryCodes.Contains(unknownPatronCode))
+            {
+                unknownPatronCode--;
+            }
+            var originalFormats = originalLibraryStored.GetProperty("formats");
+            var enabledFormatCodes = originalFormats.EnumerateArray()
+                .Where(item => item.GetProperty("isEnabled").GetBoolean() &&
+                               item.GetProperty("code").GetString() != formatCode)
+                .Select(item => item.GetProperty("code").GetString()!)
+                .ToArray();
+            var libraryPayload = new JsonObject
+            {
+                ["orgId"] = "2",
+                ["version"] = originalLibrary.RootElement.GetProperty("version").GetString(),
+                ["workflow"] = new JsonObject { ["suggestionLimitMessage"] = "S1 unrelated workflow edit" },
+                ["patron"] = new JsonObject { ["pageTitle"] = "S1 unrelated patron edit" },
+                ["commonAuthorsList"] = new JsonArray(JsonValue.Create("S1 root creator")),
+                ["allowedPatronCodeIds"] = new JsonArray(JsonValue.Create(knownPatronCode)),
+                ["publicationOptionSet"] = new JsonArray(new JsonObject
+                {
+                    ["id"] = publicationKey,
+                    ["label"] = "S1 root publication option",
+                    ["enabled"] = true,
+                    ["sortOrder"] = 10
+                }),
+                ["formatLabels"] = new JsonObject { [formatCode] = "S1 root format label" },
+                ["formatOrder"] = new JsonArray(JsonValue.Create(formatCode)),
+                ["availableFormats"] = new JsonArray(enabledFormatCodes.Select(code => JsonValue.Create(code)).ToArray())
+            };
+            using (var savedLibrary = await PostSettingsJsonAsync(client, libraryPayload.ToJsonString()))
+            {
+                Assert.AreEqual(HttpStatusCode.OK, savedLibrary.StatusCode, await savedLibrary.Content.ReadAsStringAsync());
+            }
+
+            using var savedLibrarySettings = await ReadSettingsDocumentAsync(client, "2");
+            var savedLibraryStored = savedLibrarySettings.RootElement.GetProperty("stored");
+            var savedLibraryOverride = savedLibraryStored.GetProperty("libraryOverride");
+            var savedCreators = savedLibraryOverride.GetProperty("commonCreators");
+            Assert.IsTrue(savedCreators.GetProperty("exists").GetBoolean());
+            CollectionAssert.AreEqual(new[] { "S1 root creator" }, savedCreators.GetProperty("values")
+                .EnumerateArray().Select(item => item.GetProperty("value").GetString()).ToArray());
+            var savedCodes = savedLibraryOverride.GetProperty("allowedPatronCodeIds");
+            Assert.IsTrue(savedCodes.GetProperty("exists").GetBoolean());
+            CollectionAssert.AreEqual(new[] { knownPatronCode }, savedCodes.GetProperty("values")
+                .EnumerateArray().Select(item => item.GetInt32()).ToArray());
+            var savedOptions = savedLibraryOverride.GetProperty("publicationOptions");
+            Assert.IsTrue(savedOptions.GetProperty("exists").GetBoolean());
+            Assert.AreEqual(publicationKey, savedOptions.GetProperty("values")[0].GetProperty("id").GetString());
+            var savedFormat = savedLibraryStored.GetProperty("formats").EnumerateArray()
+                .Single(item => item.GetProperty("code").GetString() == formatCode);
+            Assert.AreEqual("S1 root format label", savedFormat.GetProperty("label").GetString());
+            Assert.AreEqual(10, savedFormat.GetProperty("sortOrder").GetInt32());
+            Assert.IsFalse(savedFormat.GetProperty("isEnabled").GetBoolean());
+            Assert.AreEqual("S1 unrelated workflow edit", savedLibraryStored.GetProperty("workflow")
+                .GetProperty("suggestionLimitMessage").GetString());
+            Assert.AreEqual("S1 unrelated patron edit", savedLibraryStored.GetProperty("patron")
+                .GetProperty("pageTitle").GetString());
+
+            Assert.AreEqual(1, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] = 2 AND [Value] = N'S1 root creator';"));
+            var codeRows = await ReadPatronCodeRowsAsync(2);
+            Assert.AreEqual(1, codeRows.SetCount);
+            CollectionAssert.AreEqual(new[] { knownPatronCode }, codeRows.Values);
+            Assert.AreEqual(1, await ReadCountAsync($"SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 2 AND [OptionKey] = N'{publicationKey}' AND [Label] = N'S1 root publication option';"));
+            Assert.AreEqual(1, await ReadCountAsync($"SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 2 AND [Code] = N'{formatCode}' AND [Label] = N'S1 root format label' AND [SortOrder] = 10 AND [IsEnabled] = 0;"));
+
+            var otherFormatCode = originalFormats.EnumerateArray()
+                .Select(item => item.GetProperty("code").GetString()!)
+                .FirstOrDefault(code => code != formatCode);
+            Assert.IsNotNull(otherFormatCode, "The deterministic catalog must include another format for a distinct order position.");
+            var mixedAvailabilityCodes = enabledFormatCodes.Append(formatCode).Distinct(StringComparer.Ordinal).ToArray();
+            var rootLabelPatronMapsPayload = new JsonObject
+            {
+                ["orgId"] = "2",
+                ["version"] = savedLibrarySettings.RootElement.GetProperty("version").GetString(),
+                ["formatLabels"] = new JsonObject { [formatCode] = "S1 root split label" },
+                ["patron"] = new JsonObject
+                {
+                    ["formatOrder"] = new JsonArray(JsonValue.Create(otherFormatCode), JsonValue.Create(formatCode)),
+                    ["availableFormats"] = new JsonArray(mixedAvailabilityCodes.Select(code => JsonValue.Create(code)).ToArray())
+                }
+            };
+            using (var savedRootLabelPatronMaps = await PostSettingsJsonAsync(client, rootLabelPatronMapsPayload.ToJsonString()))
+            {
+                Assert.AreEqual(HttpStatusCode.OK, savedRootLabelPatronMaps.StatusCode,
+                    await savedRootLabelPatronMaps.Content.ReadAsStringAsync());
+            }
+            using var firstMixedLocationSettings = await ReadSettingsDocumentAsync(client, "2");
+            var firstMixedLocationFormat = firstMixedLocationSettings.RootElement.GetProperty("stored").GetProperty("formats")
+                .EnumerateArray().Single(item => item.GetProperty("code").GetString() == formatCode);
+            Assert.AreEqual("S1 root split label", firstMixedLocationFormat.GetProperty("label").GetString());
+            Assert.AreEqual(20, firstMixedLocationFormat.GetProperty("sortOrder").GetInt32());
+            Assert.IsTrue(firstMixedLocationFormat.GetProperty("isEnabled").GetBoolean());
+            Assert.AreEqual(1, await ReadCountAsync($"SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 2 AND [Code] = N'{formatCode}' AND [Label] = N'S1 root split label' AND [SortOrder] = 20 AND [IsEnabled] = 1;"));
+
+            var patronLabelRootOrderPayload = new JsonObject
+            {
+                ["orgId"] = "2",
+                ["version"] = firstMixedLocationSettings.RootElement.GetProperty("version").GetString(),
+                ["formatOrder"] = new JsonArray(JsonValue.Create(formatCode)),
+                ["patron"] = new JsonObject
+                {
+                    ["formatLabels"] = new JsonObject { [formatCode] = "S1 patron split label" }
+                }
+            };
+            using (var savedPatronLabelRootOrder = await PostSettingsJsonAsync(client, patronLabelRootOrderPayload.ToJsonString()))
+            {
+                Assert.AreEqual(HttpStatusCode.OK, savedPatronLabelRootOrder.StatusCode,
+                    await savedPatronLabelRootOrder.Content.ReadAsStringAsync());
+            }
+            using (var secondMixedLocationSettings = await ReadSettingsDocumentAsync(client, "2"))
+            {
+                var secondMixedLocationFormat = secondMixedLocationSettings.RootElement.GetProperty("stored").GetProperty("formats")
+                    .EnumerateArray().Single(item => item.GetProperty("code").GetString() == formatCode);
+                Assert.AreEqual("S1 patron split label", secondMixedLocationFormat.GetProperty("label").GetString());
+                Assert.AreEqual(10, secondMixedLocationFormat.GetProperty("sortOrder").GetInt32());
+                Assert.IsTrue(secondMixedLocationFormat.GetProperty("isEnabled").GetBoolean());
+            }
+            Assert.AreEqual(1, await ReadCountAsync($"SELECT COUNT(*) FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 2 AND [Code] = N'{formatCode}' AND [Label] = N'S1 patron split label' AND [SortOrder] = 10 AND [IsEnabled] = 1;"));
+
+            var systemVersion = originalSystem.RootElement.GetProperty("version").GetString()!;
+            var originsPayload = new JsonObject
+            {
+                ["orgId"] = "system",
+                ["version"] = systemVersion,
+                ["systemSettings"] = new JsonObject { ["origins"] = new JsonArray(JsonValue.Create(origin)) }
+            };
+            using (var savedOrigins = await PostSettingsJsonAsync(client, originsPayload.ToJsonString()))
+            {
+                Assert.AreEqual(HttpStatusCode.OK, savedOrigins.StatusCode, await savedOrigins.Content.ReadAsStringAsync());
+            }
+            using (var savedSystemSettings = await ReadSettingsDocumentAsync(client, "system"))
+            {
+                CollectionAssert.Contains(savedSystemSettings.RootElement.GetProperty("stored").GetProperty("systemSettings")
+                    .GetProperty("patronEmbedAllowedOrigins").EnumerateArray().Select(item => item.GetString()).ToArray(), origin);
+            }
+            Assert.AreEqual(1, await ReadCountAsync($"SELECT COUNT(*) FROM [asap].[PatronEmbedAllowedOrigin] WHERE [OrganizationId] = 1 AND [Origin] = N'{origin}' AND [NormalizedOrigin] = N'{origin}';"));
+
+            using var libraryBeforeRejected = await ReadSettingsDocumentAsync(client, "2");
+            using var systemBeforeRejected = await ReadSettingsDocumentAsync(client, "system");
+            var libraryVersion = libraryBeforeRejected.RootElement.GetProperty("version").GetString()!;
+            var systemVersionBeforeRejected = systemBeforeRejected.RootElement.GetProperty("version").GetString()!;
+            var libraryStoredBeforeRejected = libraryBeforeRejected.RootElement.GetProperty("stored").GetRawText();
+            var systemStoredBeforeRejected = systemBeforeRejected.RootElement.GetProperty("stored").GetRawText();
+            var auditBeforeRejected = await ReadAuditHighWatermarkAsync();
+            var sessionsBeforeRejected = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PatronSession];");
+            var activeSessionsBeforeRejected = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PatronSession] WHERE [RevokedUtc] IS NULL;");
+            var requestEventsBeforeRejected = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[TitleRequestEvent];");
+            var outboxBeforeRejected = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];");
+            var malformedLibraryCollections = new (string Name, string Section, string RootName, string RootJson)[]
+            {
+                ("root creators", "workflow", "commonCreators", "[\" \"]"),
+                ("root patron codes", "workflow", "patronCodeIds", "[0]"),
+                ("unknown root patron code", "workflow", "patronCodeIds", JsonSerializer.Serialize(new[] { unknownPatronCode })),
+                ("root publication options", "patron", "publicationOptions", "[{}]"),
+                ("root format labels", "patron", "formatLabels", "{\"book\":123}"),
+                ("root format order", "patron", "formatOrder", "[\"not_a_format\"]"),
+                ("root available formats", "patron", "availableFormats", "[\"not_a_format\"]")
+            };
+            foreach (var (name, sectionName, rootName, rootJson) in malformedLibraryCollections)
+            {
+                var payload = new JsonObject
+                {
+                    ["orgId"] = "2",
+                    ["version"] = libraryVersion,
+                    [sectionName] = sectionName == "workflow"
+                        ? new JsonObject { ["suggestionLimitMessage"] = "S1 unrelated workflow edit" }
+                        : new JsonObject { ["pageTitle"] = "S1 unrelated patron edit" },
+                    [rootName] = JsonNode.Parse(rootJson)
+                };
+                using var response = await PostSettingsJsonAsync(client, payload.ToJsonString());
+                var responseBody = await response.Content.ReadAsStringAsync();
+                Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode,
+                    $"Malformed {name} beside an unrelated section was accepted: {responseBody}");
+                if (name == "unknown root patron code")
+                {
+                    using var error = JsonDocument.Parse(responseBody);
+                    Assert.AreEqual("patron_code_unknown", error.RootElement.GetProperty("code").GetString());
+                }
+            }
+
+            var malformedOrigins = new JsonObject
+            {
+                ["orgId"] = "system",
+                ["version"] = systemVersionBeforeRejected,
+                ["systemSettings"] = new JsonObject { ["origins"] = new JsonArray(JsonValue.Create(42)) }
+            };
+            using (var response = await PostSettingsJsonAsync(client, malformedOrigins.ToJsonString()))
+            {
+                Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode,
+                    $"Malformed nested origins alias was accepted: {await response.Content.ReadAsStringAsync()}");
+            }
+            var conflictingOrigins = new JsonObject
+            {
+                ["orgId"] = "system",
+                ["version"] = systemVersionBeforeRejected,
+                ["patronEmbedAllowedOrigins"] = new JsonArray(JsonValue.Create("https://root-s1.example.org")),
+                ["systemSettings"] = new JsonObject { ["origins"] = new JsonArray(JsonValue.Create("https://nested-s1.example.org")) }
+            };
+            using (var response = await PostSettingsJsonAsync(client, conflictingOrigins.ToJsonString()))
+            {
+                Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode,
+                    $"Root and nested origin aliases were accepted together: {await response.Content.ReadAsStringAsync()}");
+            }
+
+            using (var libraryAfterRejected = await ReadSettingsDocumentAsync(client, "2"))
+            {
+                Assert.AreEqual(libraryVersion, libraryAfterRejected.RootElement.GetProperty("version").GetString());
+                Assert.AreEqual(libraryStoredBeforeRejected, libraryAfterRejected.RootElement.GetProperty("stored").GetRawText());
+            }
+            using (var systemAfterRejected = await ReadSettingsDocumentAsync(client, "system"))
+            {
+                Assert.AreEqual(systemVersionBeforeRejected, systemAfterRejected.RootElement.GetProperty("version").GetString());
+                Assert.AreEqual(systemStoredBeforeRejected, systemAfterRejected.RootElement.GetProperty("stored").GetRawText());
+            }
+            Assert.AreEqual(auditBeforeRejected, await ReadAuditHighWatermarkAsync());
+            Assert.AreEqual(sessionsBeforeRejected, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PatronSession];"));
+            Assert.AreEqual(activeSessionsBeforeRejected, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PatronSession] WHERE [RevokedUtc] IS NULL;"));
+            Assert.AreEqual(requestEventsBeforeRejected, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[TitleRequestEvent];"));
+            Assert.AreEqual(outboxBeforeRejected, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];"));
+        }
+        finally
+        {
+            try
+            {
+                if (client is not null && originalLibrary is not null)
+                {
+                    await RestoreLibrarySettingsAsync(client, originalLibrary.RootElement);
+                }
+            }
+            finally
+            {
+                try
+                {
+                    if (client is not null && originalSystem is not null)
+                    {
+                        await RestoreSystemOriginsAsync(client, originalSystem.RootElement);
+                    }
+                }
+                finally
+                {
+                    originalLibrary?.Dispose();
+                    originalSystem?.Dispose();
+                    client?.Dispose();
+                    await ExecuteNonQueryAsync("DELETE FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 2 AND [Code] = @code; DELETE FROM [asap].[AdministrativeAudit] WHERE [Id] > @auditBefore;",
+                        ("@code", formatCode), ("@auditBefore", auditBefore));
+                }
+            }
+        }
+
+        static JsonNode? SnapshotValues(JsonElement snapshot, Func<JsonElement, JsonNode?> projection) =>
+            snapshot.GetProperty("exists").GetBoolean() ? projection(snapshot.GetProperty("values")) : null;
+
+        static JsonNode? NullableProperty(JsonElement section, string name) =>
+            section.ValueKind == JsonValueKind.Object && section.TryGetProperty(name, out var value)
+                ? JsonNode.Parse(value.GetRawText())
+                : null;
+
+        async Task RestoreLibrarySettingsAsync(HttpClient httpClient, JsonElement original)
+        {
+            var stored = original.GetProperty("stored");
+            var libraryOverride = stored.GetProperty("libraryOverride");
+            var creators = SnapshotValues(libraryOverride.GetProperty("commonCreators"), values =>
+            {
+                var array = new JsonArray();
+                foreach (var value in values.EnumerateArray())
+                {
+                    array.Add(JsonValue.Create(value.GetProperty("value").GetString()));
+                }
+                return array;
+            });
+            var patronCodes = SnapshotValues(libraryOverride.GetProperty("allowedPatronCodeIds"), values => JsonNode.Parse(values.GetRawText()));
+            var publicationOptions = SnapshotValues(libraryOverride.GetProperty("publicationOptions"), values => JsonNode.Parse(values.GetRawText()));
+            using var current = await ReadSettingsDocumentAsync(httpClient, "2");
+            var payload = new JsonObject
+            {
+                ["orgId"] = "2",
+                ["version"] = current.RootElement.GetProperty("version").GetString(),
+                ["workflow"] = new JsonObject
+                {
+                    ["commonAuthorsList"] = creators,
+                    ["allowedPatronCodeIds"] = patronCodes,
+                    ["suggestionLimitMessage"] = NullableProperty(libraryOverride.GetProperty("workflow"), "suggestionLimitMessage")
+                },
+                ["patron"] = new JsonObject
+                {
+                    ["publicationOptions"] = publicationOptions,
+                    ["pageTitle"] = NullableProperty(libraryOverride.GetProperty("patron"), "pageTitle")
+                },
+                ["formats"] = JsonNode.Parse(stored.GetProperty("formats").GetRawText())
+            };
+            using var response = await PostSettingsJsonAsync(httpClient, payload.ToJsonString());
+            Assert.AreEqual(HttpStatusCode.OK, response.StatusCode,
+                $"Restoring library settings failed: {await response.Content.ReadAsStringAsync()}");
+        }
+
+        async Task RestoreSystemOriginsAsync(HttpClient httpClient, JsonElement original)
+        {
+            var origins = JsonNode.Parse(original.GetProperty("stored").GetProperty("systemSettings")
+                .GetProperty("patronEmbedAllowedOrigins").GetRawText());
+            using var current = await ReadSettingsDocumentAsync(httpClient, "system");
+            var payload = new JsonObject
+            {
+                ["orgId"] = "system",
+                ["version"] = current.RootElement.GetProperty("version").GetString(),
+                ["systemSettings"] = new JsonObject { ["patronEmbedAllowedOrigins"] = origins }
+            };
+            using var response = await PostSettingsJsonAsync(httpClient, payload.ToJsonString());
+            Assert.AreEqual(HttpStatusCode.OK, response.StatusCode,
+                $"Restoring system origins failed: {await response.Content.ReadAsStringAsync()}");
+        }
+    }
+
+    [TestMethod]
     public async Task SettingsRejectsCollectionsRepeatedAcrossSupportedLocationsAtomically()
     {
         var actor = await ReadConfiguredSuperAdminAsync();
