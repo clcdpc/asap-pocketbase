@@ -135,6 +135,11 @@ package JSON objects and schema-owned JSON fields such as format rules and
 custom-field snapshots. Ordinary title, notes, label, and other text is never
 decoded just because it resembles JSON, so literal text containing
 duplicate-looking keys remains text.
+Publication options are schema-owned when their trimmed text starts with `[`: after
+decoding, every object is checked recursively for exact, escaped-equivalent, and
+case-insensitive duplicate properties, including nested properties. Both the
+importer preflight and the independent verifier enforce this policy. Newline
+labels and ordinary text outside this recognized array branch stay text.
 For a disabled custom field the pinned source behavior is `hidden`; an enabled
 select with no enabled options and an incoming `required` rule is imported as
 `optional`, preserving the definitions and option identities.
@@ -222,6 +227,35 @@ report fingerprint alone cannot authorize recovery. If SQL does not contain a
 complete, matching import, report recovery fails closed.
 An exception returned by SQL Server during commit has an ambiguous outcome; do
 not assume rollback or retry until the target is inspected.
+
+`reconcile` and `recover-report` check the **stopped, pre-activation import
+snapshot**. Complete import, report promotion/recovery, and reconciliation before
+enabling the web host, background workers, or any other target writer. These
+commands do not reconcile an activated application's evolving database. Stopping
+an already activated application does not recreate the original import snapshot.
+Retain the accepted package/report as cutover evidence; validate later operations
+through application journals, audits, and the backup/recovery process. Runtime
+rows cause `reconciliation_requires_pre_activation_target`, which states the
+command's lifecycle limitation rather than declaring valid later activity corrupt.
+No operational rows are deleted or rewritten by these commands.
+
+The independent population inventory is:
+
+| Target population | Import expectation and lifecycle |
+| --- | --- |
+| `PatronSession`, `EmailOutbox`, `QueueProgress`, `HoldPlacementOperation`, `PickupPreferenceOperation`, `AdministrativeAudit` | Empty on the fresh target and throughout import/reconcile/immediate report recovery. Import creates none. Legitimate application activity may populate them after activation. All six are checked independently of report fingerprints. |
+| Organizations, staff, requests, additional copies, deleted-request audit, email-delivery history, formats/overrides/rules, workflow tags/joins, branding, and configuration rows/sets/options | Exact source-derived populations plus documented DACPAC seeds and migration transformations. Legacy mappings bind imported source identities. |
+| `TitleRequestEvent` | Exact source events plus independently justified claim-normalization annotations and placed-BIB protection markers. |
+| `StaffUser` bootstrap exception | Only when source staff lack a usable active email-authenticated super-admin, and only for the configured normalized authentication identity: promote/reactivate its source-mapped row or insert one if there is no source match. A report cannot authorize bootstrap. Promotion changes only UPN/normalized UPN, role, organization and activity; all other source fields remain exact. Inserted display/contact/default preferences must match operator configuration and the documented insertion policy. |
+| `SchemaVersion`, `DeploymentState` | DACPAC/deployment-owned structural state; import pins the schema version and seed timestamp. Deployment metadata may exist from stopped-host preparation and is captured by the fingerprint, not treated as excluded application activity. |
+| `[HangFire]` | Separate deployment/job-schema owner, outside the `[asap]` migration snapshot. Workers remain stopped until cutover activation. |
+
+For the five workflow integers, pinned `workflows.js` applies `getInt(...) ||` the
+fixed defaults `5`, `30`, `14`, `14`, `14` after selecting the scoped value.
+Import stores a system zero as that default. An explicit library zero also stores
+that literal default as an override, even when the system has a different value;
+only a null/missing library value inherits the system setting. Import and the
+independent verifier derive this behavior separately from the pinned source.
 
 The final semantic check independently derives source-owned projections for
 organizations, formats and sparse overrides, custom definitions/options/rules,

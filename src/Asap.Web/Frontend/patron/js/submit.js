@@ -90,7 +90,7 @@ export async function handleSuggestionSubmit(event) {
     }
     if (handleSessionExpired(err)) return;
 
-    if (err.status === 409) {
+    if (err.status === 409 && err.response?.duplicate?.id) {
       renderConflict(err.response || {}, err.message);
       return;
     }

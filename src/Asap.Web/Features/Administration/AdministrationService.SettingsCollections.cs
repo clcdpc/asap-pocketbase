@@ -380,12 +380,18 @@ public sealed partial class AdministrationService
                 continue;
             }
 
-            var desiredEnabled = input.IsEnabled ?? provider.IsEnabled;
-            var desiredLabel = input.Label is null ? provider.Label : Clean(input.Label) ?? provider.Label;
-            var desiredUrl = input.UrlTemplate is null ? provider.UrlTemplate : Clean(input.UrlTemplate) ?? provider.UrlTemplate;
-            bool? nextEnabled = desiredEnabled == provider.IsEnabled ? null : desiredEnabled;
-            var nextLabel = string.Equals(desiredLabel, provider.Label, StringComparison.Ordinal) ? null : desiredLabel;
-            var nextUrl = string.Equals(desiredUrl, provider.UrlTemplate, StringComparison.Ordinal) ? null : desiredUrl;
+            var desiredEnabled = input.IsEnabled ?? existing?.IsEnabled ?? provider.IsEnabled;
+            bool? nextEnabled = input.HasIsEnabled && !input.IsEnabled.HasValue
+                ? null
+                : desiredEnabled == (existing?.IsEnabled ?? provider.IsEnabled)
+                    ? existing?.IsEnabled
+                    : desiredEnabled == provider.IsEnabled ? null : desiredEnabled;
+            var nextLabel = input.HasLabel
+                ? UpdatedStringOverride(existing?.Label, provider.Label, Clean(input.Label))
+                : existing?.Label;
+            var nextUrl = input.HasUrlTemplate
+                ? UpdatedStringOverride(existing?.UrlTemplate, provider.UrlTemplate, Clean(input.UrlTemplate))
+                : existing?.UrlTemplate;
             if (nextEnabled is null && nextLabel is null && nextUrl is null)
             {
                 if (existing is not null)
@@ -551,6 +557,7 @@ public sealed partial class AdministrationService
             else
             {
                 EnsureUniqueFormatTarget(seenFormatTargets, target);
+                ValidateSubmittedFormatVersion(item, target.RowVersion);
             }
             ApplyOwnedFormat(target, item, allowCode: false);
             if (GetBool(item, "deleted") == true || GetBool(item, "delete") == true)
@@ -607,6 +614,7 @@ public sealed partial class AdministrationService
             else
             {
                 EnsureUniqueFormatTarget(seenFormatTargets, custom);
+                ValidateSubmittedFormatVersion(item, custom.RowVersion);
             }
             ApplyOwnedFormat(custom, item, allowCode: false);
             return;
@@ -630,6 +638,7 @@ public sealed partial class AdministrationService
 
         var existing = await context.MaterialFormatOverrides
             .SingleOrDefaultAsync(itemRow => itemRow.LibraryOrganizationId == organizationId && itemRow.MaterialFormatId == system.Id, cancellationToken);
+        ValidateSubmittedFormatVersion(item, existing?.RowVersion ?? system.RowVersion);
         if (GetBool(item, "reset") == true || GetBool(item, "useSystemDefault") == true || GetBool(item, "overridden") == false)
         {
             if (existing is not null)
@@ -656,6 +665,19 @@ public sealed partial class AdministrationService
         else if (wasDetached)
         {
             context.MaterialFormatOverrides.Add(existing);
+        }
+    }
+
+    private static void ValidateSubmittedFormatVersion(JsonElement item, byte[] currentVersion)
+    {
+        if (!HasProperty(item, "version"))
+        {
+            return;
+        }
+        if (!StaffVersion.TryDecode(ReadOptionalString(item, "version"), out var submittedVersion) ||
+            !submittedVersion.SequenceEqual(currentVersion))
+        {
+            throw new DbUpdateConcurrencyException("The submitted material format version is stale or invalid.");
         }
     }
 
@@ -742,15 +764,15 @@ public sealed partial class AdministrationService
                 row ??= new MaterialFormatOverride { LibraryOrganizationId = organizationId, MaterialFormatId = format.Id };
                 if (itemLabel is not null)
                 {
-                    row.Label = Same(itemLabel, format.Label) ? null : Clean(itemLabel);
+                    row.Label = UpdatedStringOverride(row.Label, format.Label, Clean(itemLabel));
                 }
 
-                if (itemOrder.HasValue)
+                if (itemOrder.HasValue && itemOrder.Value != (row.SortOrder ?? format.SortOrder))
                 {
                     row.SortOrder = itemOrder.Value == format.SortOrder ? null : itemOrder.Value;
                 }
 
-                if (itemEnabled.HasValue)
+                if (itemEnabled.HasValue && itemEnabled.Value != (row.IsEnabled ?? format.IsEnabled))
                 {
                     row.IsEnabled = itemEnabled.Value == format.IsEnabled ? null : itemEnabled.Value;
                 }
@@ -1693,7 +1715,11 @@ public sealed partial class AdministrationService
 
         if (HasProperty(item, "messageBehavior"))
         {
-            row.MessageBehavior = NormalizeMessageBehavior(GetString(item, "messageBehavior"));
+            var behavior = NormalizeMessageBehavior(GetString(item, "messageBehavior"));
+            if (!Same(behavior, row.MessageBehavior ?? "none"))
+            {
+                row.MessageBehavior = behavior;
+            }
         }
 
         if (HasProperty(item, "message"))
@@ -1736,16 +1762,20 @@ public sealed partial class AdministrationService
         ValidateFormatInput(item);
         if (HasProperty(item, "label"))
         {
-            row.Label = Same(GetString(item, "label"), baseline.Label) ? null : Clean(GetString(item, "label"));
+            row.Label = UpdatedStringOverride(row.Label, baseline.Label, Clean(GetString(item, "label")));
         }
 
         if (GetInt(item, "sortOrder").HasValue)
         {
-            row.SortOrder = GetInt(item, "sortOrder") == baseline.SortOrder ? null : GetInt(item, "sortOrder");
+            var value = GetInt(item, "sortOrder")!.Value;
+            if (value != (row.SortOrder ?? baseline.SortOrder))
+            {
+                row.SortOrder = value == baseline.SortOrder ? null : value;
+            }
         }
 
         var enabled = GetBool(item, "isEnabled") ?? GetBool(item, "enabled");
-        if (enabled.HasValue)
+        if (enabled.HasValue && enabled.Value != (row.IsEnabled ?? baseline.IsEnabled))
         {
             row.IsEnabled = enabled.Value == baseline.IsEnabled ? null : enabled.Value;
         }
@@ -1753,17 +1783,21 @@ public sealed partial class AdministrationService
         if (HasProperty(item, "messageBehavior"))
         {
             var value = NormalizeMessageBehavior(GetString(item, "messageBehavior"));
-            row.MessageBehavior = Same(value, baseline.MessageBehavior ?? "none") ? null : value;
+            row.MessageBehavior = UpdatedStringOverride(row.MessageBehavior, baseline.MessageBehavior ?? "none", value);
         }
         if (HasProperty(item, "message"))
         {
             var value = Clean(GetString(item, "message"));
-            row.Message = Same(value, Clean(baseline.Message)) ? null : value;
+            row.Message = UpdatedStringOverride(row.Message, Clean(baseline.Message), value);
         }
-        ApplyOverrideField(item, "title", baseline.TitleMode ?? "required", baseline.TitleLabel ?? "Title", value => row.TitleMode = value.Mode, value => row.TitleLabel = value.Label);
-        ApplyOverrideField(item, "author", baseline.AuthorMode ?? "optional", baseline.AuthorLabel ?? "Author", value => row.AuthorMode = value.Mode, value => row.AuthorLabel = value.Label);
-        ApplyOverrideField(item, "identifier", baseline.IdentifierMode ?? "optional", baseline.IdentifierLabel ?? "Identifier number", value => row.IdentifierMode = value.Mode, value => row.IdentifierLabel = value.Label);
-        ApplyOverrideField(item, "publication", baseline.PublicationMode ?? "optional", baseline.PublicationLabel ?? "Publication Timing", value => row.PublicationMode = value.Mode, value => row.PublicationLabel = value.Label);
+        ApplyOverrideField(item, "title", baseline.TitleMode ?? "required", baseline.TitleLabel ?? "Title",
+            row.TitleMode, row.TitleLabel, value => row.TitleMode = value, value => row.TitleLabel = value);
+        ApplyOverrideField(item, "author", baseline.AuthorMode ?? "optional", baseline.AuthorLabel ?? "Author",
+            row.AuthorMode, row.AuthorLabel, value => row.AuthorMode = value, value => row.AuthorLabel = value);
+        ApplyOverrideField(item, "identifier", baseline.IdentifierMode ?? "optional", baseline.IdentifierLabel ?? "Identifier number",
+            row.IdentifierMode, row.IdentifierLabel, value => row.IdentifierMode = value, value => row.IdentifierLabel = value);
+        ApplyOverrideField(item, "publication", baseline.PublicationMode ?? "optional", baseline.PublicationLabel ?? "Publication Timing",
+            row.PublicationMode, row.PublicationLabel, value => row.PublicationMode = value, value => row.PublicationLabel = value);
     }
 
     private static void ApplyOwnedField(
@@ -1790,8 +1824,15 @@ public sealed partial class AdministrationService
         var mode = NormalizeFieldMode(modeInput ?? defaultMode, forceRequired);
         var label = Clean(labelInput) ?? defaultLabel;
         var value = (Mode: mode, Label: label);
-        modeSetter(value);
-        labelSetter(value);
+        // An unchanged effective default must preserve the owned row's nullable raw value.
+        if (!Same(mode, defaultMode))
+        {
+            modeSetter(value);
+        }
+        if (!Same(label, defaultLabel))
+        {
+            labelSetter(value);
+        }
     }
 
     private static void ApplyOverrideField(
@@ -1799,8 +1840,10 @@ public sealed partial class AdministrationService
         string name,
         string baselineMode,
         string baselineLabel,
-        Action<(string Mode, string Label)> modeSetter,
-        Action<(string Mode, string Label)> labelSetter)
+        string? currentMode,
+        string? currentLabel,
+        Action<string?> modeSetter,
+        Action<string?> labelSetter)
     {
         if (!TryGetAny(item, out var field, name))
         {
@@ -1814,10 +1857,19 @@ public sealed partial class AdministrationService
 
         var modeInput = ReadOptionalString(field, "mode");
         var labelInput = ReadOptionalString(field, "label");
-        var mode = NormalizeFieldMode(modeInput ?? baselineMode, name == "title");
-        var label = Clean(labelInput) ?? baselineLabel;
-        modeSetter((Same(mode, baselineMode) ? null! : mode, Same(label, baselineLabel) ? null! : label));
-        labelSetter((Same(mode, baselineMode) ? null! : mode, Same(label, baselineLabel) ? null! : label));
+        var mode = HasProperty(field, "mode") && modeInput is null
+            ? null
+            : UpdatedStringOverride(currentMode, baselineMode,
+                NormalizeFieldMode(modeInput ?? currentMode ?? baselineMode, name == "title"));
+        var label = HasProperty(field, "label") ? Clean(labelInput) : currentLabel ?? baselineLabel;
+        modeSetter(mode);
+        labelSetter(UpdatedStringOverride(currentLabel, baselineLabel, label));
+    }
+
+    private static string? UpdatedStringOverride(string? current, string? baseline, string? desired)
+    {
+        // Matching effective values do not express reset intent, even after the system default converges.
+        return Same(desired, current ?? baseline) ? current : Same(desired, baseline) ? null : desired;
     }
 
     private static string NormalizeMessageBehavior(string? value)
@@ -1970,7 +2022,10 @@ public sealed partial class AdministrationService
                 ReadOptionalString(item, "urlTemplate", "url"),
                 ReadOptionalBoolean(item, "reset", "useSystemDefault") == true,
                 ReadOptionalBoolean(item, "overridden"),
-                ReadOptionalInt(item, "sortOrder")));
+                ReadOptionalInt(item, "sortOrder"),
+                HasProperty(item, "isEnabled") || HasProperty(item, "enabled"),
+                HasProperty(item, "label"),
+                HasProperty(item, "urlTemplate") || HasProperty(item, "url")));
         }
         return result;
     }
@@ -1991,7 +2046,10 @@ public sealed partial class AdministrationService
                 continue;
             }
 
-            result.Add(new ProviderInput($"external_search_{index}", null, enabled, label, url, false, null, index * 10));
+            result.Add(new ProviderInput($"external_search_{index}", null, enabled, label, url, false, null, index * 10,
+                HasProperty(workflow, $"externalSearch{index}Enabled") || HasProperty(payload, $"externalSearch{index}Enabled"),
+                HasProperty(workflow, $"externalSearch{index}Label") || HasProperty(payload, $"externalSearch{index}Label"),
+                HasProperty(workflow, $"externalSearch{index}UrlTemplate") || HasProperty(payload, $"externalSearch{index}UrlTemplate")));
         }
         return result;
     }
@@ -2602,7 +2660,10 @@ public sealed partial class AdministrationService
         string? UrlTemplate,
         bool Reset,
         bool? Overridden,
-        int? SortOrder);
+        int? SortOrder,
+        bool HasIsEnabled,
+        bool HasLabel,
+        bool HasUrlTemplate);
 
     private sealed record EffectiveRejectionTemplate(
         long ReferenceId,

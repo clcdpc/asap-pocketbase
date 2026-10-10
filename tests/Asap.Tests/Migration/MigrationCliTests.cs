@@ -1225,7 +1225,7 @@ public sealed partial class MigrationCliTests
                     ],
                     TextWriter.Null,
                     queueDriftError));
-                StringAssert.Contains(queueDriftError.ToString(), "QueueProgress runtime count changed");
+                StringAssert.Contains(queueDriftError.ToString(), "reconciliation_requires_pre_activation_target");
             }
             await using (var clearCycle = connection.CreateCommand())
             {
@@ -3348,7 +3348,7 @@ public sealed partial class MigrationCliTests
             using (var error = new StringWriter())
             {
                 Assert.AreEqual(1, RunRecoverReport(package, reportPath, connectionEnvironmentName, error));
-                StringAssert.Contains(error.ToString(), "target count queue_progress differs from source-derived expectations");
+                StringAssert.Contains(error.ToString(), "reconciliation_requires_pre_activation_target");
             }
             Assert.AreEqual(queuedFingerprint, ComputeTargetFingerprintForTest(target), "Recovery must reject importer-excluded queue state without mutating it.");
             Assert.IsTrue(File.Exists(pendingPath));

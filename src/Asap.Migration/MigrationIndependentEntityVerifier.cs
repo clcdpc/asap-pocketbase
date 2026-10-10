@@ -30,7 +30,8 @@ internal static class MigrationIndependentEntityVerifier
         SqlTransaction? transaction,
         ValidatedMigrationPackage package,
         long? bootstrapTargetStaffUserId = null,
-        bool bootstrapInserted = false)
+        bool bootstrapInserted = false,
+        string? externalConfigurationPath = null)
     {
         var staff = MigrationPackageReader.ReadRows(package, "staff-users.json", "staff_users");
         var requests = MigrationPackageReader.ReadRows(package, "title-requests.json", "title_requests");
@@ -63,7 +64,10 @@ internal static class MigrationIndependentEntityVerifier
         var templateIds = ReadMappings(connection, transaction, "email_template", templateRows);
         var formatIds = ReadFormatMappings(connection, transaction, formats);
 
-        VerifyStaff(connection, transaction, staff, staffIds, organizationIds, package, bootstrapTargetStaffUserId, bootstrapInserted);
+        var bootstrap = MigrationIndependentBootstrapVerifier.Derive(connection, transaction, package, externalConfigurationPath);
+        Ensure(bootstrap?.TargetStaffUserId == bootstrapTargetStaffUserId && (bootstrap?.Inserted ?? false) == bootstrapInserted,
+            "bootstrap authority derived from source necessity and configured identity");
+        VerifyStaff(connection, transaction, staff, staffIds, organizationIds, package, bootstrap);
         VerifyWorkflowTags(connection, transaction, tags, tagIds);
         VerifyAutoClaimRules(connection, transaction, autoClaims, claimRuleIds, staffIds, organizationIds, package);
         VerifyRequests(connection, transaction, package, requests, requestIds, staffIds, claimRuleIds, formatIds, organizations, autoClaims);
@@ -379,8 +383,7 @@ internal static class MigrationIndependentEntityVerifier
         IReadOnlyDictionary<string, long> mappings,
         IReadOnlyDictionary<string, int> organizationIds,
         ValidatedMigrationPackage package,
-        long? bootstrapTargetStaffUserId,
-        bool bootstrapInserted)
+        ExpectedMigrationBootstrap? bootstrap)
     {
         var expectedIds = new HashSet<long>();
         foreach (var row in rows)
@@ -404,10 +407,13 @@ internal static class MigrationIndependentEntityVerifier
                 transaction);
             command.Parameters.AddWithValue("@id", targetId);
             using var reader = command.ExecuteReader();
-            var bootstrapMutated = bootstrapTargetStaffUserId == targetId;
+            var bootstrapMutated = bootstrap?.TargetStaffUserId == targetId;
             Ensure(reader.Read() && reader.IsDBNull(0) && reader.IsDBNull(1) &&
-                (bootstrapMutated || (Same(reader, 2, authenticationEmail) && Same(reader, 3, authenticationEmail?.ToUpperInvariant()) &&
-                    Same(reader, 6, role) && reader.GetInt32(7) == organizationId && reader.GetBoolean(8) == row.Bool("active"))) &&
+                Same(reader, 2, bootstrapMutated ? bootstrap!.AuthenticationEmail : authenticationEmail) &&
+                Same(reader, 3, (bootstrapMutated ? bootstrap!.AuthenticationEmail : authenticationEmail)?.ToUpperInvariant()) &&
+                Same(reader, 6, bootstrapMutated ? "super_admin" : role) &&
+                reader.GetInt32(7) == (bootstrapMutated ? 1 : organizationId) &&
+                reader.GetBoolean(8) == (bootstrapMutated || row.Bool("active")) &&
                 Same(reader, 4, row.String("displayName") ?? row.String("username")) &&
                 Same(reader, 5, notificationEmail) &&
                 reader.GetBoolean(9) == row.Bool("weekly_action_summary_enabled") &&
@@ -417,34 +423,29 @@ internal static class MigrationIndependentEntityVerifier
                 reader.GetBoolean(13) == row.Bool("default_mine_unclaimed_filter") &&
                 Same(reader, 14, row.UtcDateTime("lastLogin")),
                 "staff source fields and pinned authentication-email transform");
-            if (bootstrapMutated)
-            {
-                Ensure(reader.GetString(6) == "super_admin" && reader.GetInt32(7) == 1 && reader.GetBoolean(8),
-                    "operator-authorized bootstrap staff scope");
-            }
         }
 
-        if (bootstrapInserted)
+        if (bootstrap is { Inserted: true })
         {
-            var bootstrapStaffUserId = bootstrapTargetStaffUserId ??
-                Fail<long>("An operator-created bootstrap staff row has no target identity.");
+            var bootstrapStaffUserId = bootstrap.TargetStaffUserId;
             Ensure(expectedIds.Add(bootstrapStaffUserId), "single operator-created bootstrap staff row");
-            using var bootstrap = new SqlCommand(
-                "SELECT [EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName], [Role], [OrganizationId], [IsActive], [WeeklyActionSummaryEnabled], [PurchaseReminderDefault], [AdditionalCopyReminderDefault], [DefaultMineUnclaimedFilter], [LastLoginUtc] FROM [asap].[StaffUser] WHERE [Id] = @id;",
+            using var bootstrapCommand = new SqlCommand(
+                "SELECT [EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName], [Role], [OrganizationId], [IsActive], [WeeklyActionSummaryEnabled], [PurchaseReminderDefault], [AdditionalCopyReminderDefault], [DefaultMineUnclaimedFilter], [LastLoginUtc], [DisplayName], [NotificationEmail], [WeeklyActionSummaryEmail] FROM [asap].[StaffUser] WHERE [Id] = @id;",
                 connection,
                 transaction);
-            bootstrap.Parameters.AddWithValue("@id", bootstrapStaffUserId);
-            using var reader = bootstrap.ExecuteReader();
-            Ensure(reader.Read() && reader.IsDBNull(0) && reader.IsDBNull(1) && !reader.IsDBNull(2) &&
-                reader.GetString(2).IndexOf('@') >= 0 &&
-                Same(reader, 3, reader.GetString(2).ToUpperInvariant()) &&
+            bootstrapCommand.Parameters.AddWithValue("@id", bootstrapStaffUserId);
+            using var reader = bootstrapCommand.ExecuteReader();
+            Ensure(reader.Read() && reader.IsDBNull(0) && reader.IsDBNull(1) &&
+                Same(reader, 2, bootstrap.AuthenticationEmail) &&
+                Same(reader, 3, bootstrap.AuthenticationEmail.ToUpperInvariant()) &&
                 Same(reader, 4, "super_admin") && reader.GetInt32(5) == 1 && reader.GetBoolean(6) &&
-                !reader.GetBoolean(7) && !reader.GetBoolean(8) && !reader.GetBoolean(9) && !reader.GetBoolean(10) && reader.IsDBNull(11),
+                !reader.GetBoolean(7) && !reader.GetBoolean(8) && !reader.GetBoolean(9) && !reader.GetBoolean(10) && reader.IsDBNull(11) &&
+                Same(reader, 12, bootstrap.DisplayName) && Same(reader, 13, bootstrap.NotificationEmail) && reader.IsDBNull(14),
                 "operator-created bootstrap staff scope and default preferences");
         }
         else
         {
-            Ensure(bootstrapTargetStaffUserId is null || expectedIds.Contains(bootstrapTargetStaffUserId.Value),
+            Ensure(bootstrap is null || expectedIds.Contains(bootstrap.TargetStaffUserId),
                 "bootstrap promotion maps to source staff identity");
         }
 

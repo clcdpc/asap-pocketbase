@@ -1331,7 +1331,7 @@ internal static class MigrationConfigurationImporter
                 connection,
                 transaction);
             command.Parameters.AddWithValue("@organizationId", organizationId);
-            command.Parameters.AddWithValue("@suggestionLimit", Db(isSystem ? row.Int32("suggestionLimit") ?? 5 : row.Int32("suggestionLimit")));
+            command.Parameters.AddWithValue("@suggestionLimit", Db(Int(row, "suggestionLimit", isSystem, 5)));
             command.Parameters.AddWithValue("@suggestionLimitMessage", Db(WorkflowScopedText(row, "suggestionLimitMessage", isSystem)));
             command.Parameters.AddWithValue("@outstandingEnabled", Db(Bool(row, "outstandingTimeoutEnabled", isSystem, false)));
             command.Parameters.AddWithValue("@outstandingDays", Db(Int(row, "outstandingTimeoutDays", isSystem, 30)));
@@ -1961,7 +1961,7 @@ internal static class MigrationConfigurationImporter
             {
                 EnsureConfiguration(reader.Read(), "workflow settings");
                 matches =
-                    IntEquals(reader, 0, isSystem ? row.Int32("suggestionLimit") ?? 5 : row.Int32("suggestionLimit")) &&
+                    IntEquals(reader, 0, Int(row, "suggestionLimit", isSystem, 5)) &&
                     StringEquals(reader, 1, WorkflowScopedText(row, "suggestionLimitMessage", isSystem)) &&
                     BoolEquals(reader, 2, Bool(row, "outstandingTimeoutEnabled", isSystem, false)) &&
                     IntEquals(reader, 3, Int(row, "outstandingTimeoutDays", isSystem, 30)) &&
@@ -3112,6 +3112,7 @@ internal static class MigrationConfigurationImporter
             try
             {
                 using var document = JsonDocument.Parse(trimmed);
+                MigrationPackageValidator.EnsureNoDuplicateProperties(document.RootElement, "publication_options_invalid");
                 if (document.RootElement.ValueKind != JsonValueKind.Array)
                 {
                     throw new MigrationOperationException(
@@ -4050,8 +4051,13 @@ internal static class MigrationConfigurationImporter
     private static bool? Bool(SourceRow row, string field, bool isSystem, bool defaultValue) =>
         row.HasValue(field) ? row.Bool(field) : isSystem ? defaultValue : null;
 
-    private static int? Int(SourceRow row, string field, bool isSystem, int defaultValue) =>
-        row.Int32(field) ?? (isSystem ? defaultValue : null);
+    private static int? Int(SourceRow row, string field, bool isSystem, int defaultValue)
+    {
+        // Pinned workflows.js selects a present library value before applying getInt(...) || default.
+        // Explicit zero is the fixed default at that scope; only absence inherits the system value.
+        var value = row.Int32(field);
+        return value == 0 ? defaultValue : value ?? (isSystem ? defaultValue : null);
+    }
 
     private static string? PatronUiScopedText(SourceRow row, string field, bool isSystem)
     {

@@ -14,6 +14,8 @@ namespace Asap.Web.Features.Administration;
 
 public sealed partial class AdministrationService
 {
+    private sealed record SettingsFormatMetadata(int OwnerOrganizationId, bool Overridden, string Version);
+
     private static SystemSettingsView ToSystemSettings(
         SystemSettings row,
         IReadOnlyList<string> origins,
@@ -138,7 +140,9 @@ public sealed partial class AdministrationService
     private static object ToEffectiveConfiguration(
         EffectivePatronConfiguration row,
         WorkflowSettings systemWorkflow,
-        WorkflowSettings? libraryWorkflow) => new
+        WorkflowSettings? libraryWorkflow,
+        IReadOnlySet<long> overriddenProviderIds,
+        IReadOnlyDictionary<long, SettingsFormatMetadata> formatMetadata) => new
     {
         workflow = ToEffectiveWorkflow(systemWorkflow, libraryWorkflow),
         row.OrganizationId,
@@ -173,7 +177,8 @@ public sealed partial class AdministrationService
             isEnabled = item.IsEnabled,
             label = item.Label,
             urlTemplate = item.UrlTemplate,
-            sortOrder = item.SortOrder
+            sortOrder = item.SortOrder,
+            overridden = overriddenProviderIds.Contains(item.Id)
         }).ToArray(),
         row.PublicationOptions,
         row.CommonCreators,
@@ -185,6 +190,9 @@ public sealed partial class AdministrationService
         {
             id = item.Id.ToString(),
             code = item.Code,
+            ownerOrganizationId = formatMetadata[item.Id].OwnerOrganizationId.ToString(),
+            overridden = formatMetadata[item.Id].Overridden,
+            version = formatMetadata[item.Id].Version,
             label = item.Label,
             sortOrder = item.SortOrder,
             isEnabled = item.IsEnabled,
@@ -378,6 +386,7 @@ public sealed partial class AdministrationService
                 isEnabled = (bool?)item.IsEnabled,
                 label = item.Label,
                 urlTemplate = item.UrlTemplate,
+                sortOrder = item.SortOrder,
                 version = StaffVersion.Encode(item.RowVersion)
             }).ToArray();
         }
@@ -490,7 +499,8 @@ public sealed partial class AdministrationService
         }).ToArray();
     }
 
-    private static async Task<IReadOnlyList<object>> LoadProvidersAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
+    private static async Task<(IReadOnlyList<object> Rows, IReadOnlySet<long> OverriddenIds)> LoadProvidersAsync(
+        AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
         var providers = await context.ExternalSearchProviders.AsNoTracking()
             .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
@@ -502,7 +512,7 @@ public sealed partial class AdministrationService
                 .Where(item => item.LibraryOrganizationId == organizationId)
                 .ToListAsync(cancellationToken);
         var byId = overrides.ToDictionary(item => item.ExternalSearchProviderId);
-        return providers.Select(provider =>
+        var rows = providers.Select(provider =>
         {
             byId.TryGetValue(provider.Id, out var value);
             return (object)new
@@ -516,6 +526,7 @@ public sealed partial class AdministrationService
                 overridden = value is not null
             };
         }).ToArray();
+        return (rows, byId.Keys.ToHashSet());
     }
 
     private static async Task<IReadOnlyList<object>> LoadRawCustomFieldRulesAsync(
@@ -550,7 +561,8 @@ public sealed partial class AdministrationService
             .ToArray();
     }
 
-    private static async Task<IReadOnlyList<object>> LoadFormatsAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
+    private static async Task<(IReadOnlyList<object> Rows, IReadOnlyDictionary<long, SettingsFormatMetadata> Metadata)> LoadFormatsAsync(
+        AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
         var formats = await context.MaterialFormats.AsNoTracking()
             .Where(item => item.OwnerOrganizationId == LibraryScope.SystemOrganizationId || item.OwnerOrganizationId == organizationId)
@@ -562,7 +574,10 @@ public sealed partial class AdministrationService
                 .Where(item => item.LibraryOrganizationId == organizationId)
                 .ToListAsync(cancellationToken);
         var byId = overrides.ToDictionary(item => item.MaterialFormatId);
-        return formats.Select(format =>
+        var metadata = formats.ToDictionary(item => item.Id, item =>
+            new SettingsFormatMetadata(item.OwnerOrganizationId, byId.ContainsKey(item.Id),
+                StaffVersion.Encode(byId.TryGetValue(item.Id, out var value) ? value.RowVersion : item.RowVersion)));
+        var rows = formats.Select(format =>
         {
             byId.TryGetValue(format.Id, out var value);
             return (object)new
@@ -587,6 +602,7 @@ public sealed partial class AdministrationService
                 version = value is null ? StaffVersion.Encode(format.RowVersion) : StaffVersion.Encode(value.RowVersion)
             };
         }).ToArray();
+        return (rows, metadata);
     }
 
     private static async Task<IReadOnlyList<object>> LoadCustomFieldsAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)

@@ -22,7 +22,7 @@ internal static class MigrationIndependentVerifier
             : null;
         using var connection = new SqlConnection(connectionString);
         connection.Open();
-        Verify(connection, transaction: null, package, postmarkTokenProvisioned, bootstrapTargetStaffUserId, bootstrapInserted, credentialProtector);
+        Verify(connection, transaction: null, package, postmarkTokenProvisioned, bootstrapTargetStaffUserId, bootstrapInserted, credentialProtector, externalConfigurationPath);
     }
 
     public static void Verify(
@@ -32,8 +32,10 @@ internal static class MigrationIndependentVerifier
         bool postmarkTokenProvisioned,
         long? bootstrapTargetStaffUserId = null,
         bool bootstrapInserted = false,
-        MigrationCredentialProtector? credentialProtector = null)
+        MigrationCredentialProtector? credentialProtector = null,
+        string? externalConfigurationPath = null)
     {
+        VerifyPreActivationPopulations(connection, transaction);
         var organizations = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations");
         var organizationsById = organizations.ToDictionary(
             row => row.RequiredString("id"),
@@ -105,7 +107,27 @@ internal static class MigrationIndependentVerifier
             transaction,
             package,
             bootstrapTargetStaffUserId,
-            bootstrapInserted);
+            bootstrapInserted,
+            externalConfigurationPath);
+    }
+
+    private static void VerifyPreActivationPopulations(SqlConnection connection, SqlTransaction? transaction)
+    {
+        // These six populations are never imported. Reconcile/recover-report verify the
+        // stopped, pre-activation import snapshot, not a live post-cutover database.
+        foreach (var table in new[]
+        {
+            "PatronSession", "EmailOutbox", "QueueProgress", "HoldPlacementOperation",
+            "PickupPreferenceOperation", "AdministrativeAudit"
+        })
+        {
+            using var command = new SqlCommand($"SELECT COUNT_BIG(*) FROM [asap].[{table}];", connection, transaction);
+            if (Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
+            {
+                throw new MigrationOperationException("reconciliation_requires_pre_activation_target",
+                    $"Migration snapshot verification requires the stopped pre-activation target; excluded {table} rows are present. Reconcile and report recovery are not post-activation integrity checks.");
+            }
+        }
     }
 
     private static void VerifyOrganizations(

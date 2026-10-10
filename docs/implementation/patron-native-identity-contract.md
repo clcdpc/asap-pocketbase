@@ -14,6 +14,21 @@ use a request's positive native ID when present; historic requests with a null
 identity may use a verified barcode lookup without receiving a guessed identity
 snapshot.
 
+Patron notifications selected from a provider refresh correlate the observed
+positive native ID to every saved nonnull native ID on the locked request and,
+any applicable successful hold journal, including the operation being completed.
+Both saved barcodes must remain
+provider-verified current or former aliases. A conflicting native ID suppresses
+the notification with `native_patron_identity_mismatch`; an unverified provider
+identity or alias suppresses it with `patron_identity_unverified`. If neither
+the request nor the applicable hold journal has a saved native ID, a refreshed
+barcode alone cannot prove historical ownership: mail is terminally suppressed
+with `native_patron_identity_unavailable`. No guessed ID is written to history.
+The suppressed outbox does not retain the uncorrelated patron's destination or
+template data. Business actions and known hold success remain authoritative and
+complete normally. An immutable recipient snapshot captured at original
+acceptance, such as submission or timeout mail, is a separate existing contract.
+
 Fulfillment correlates checkout or terminal hold evidence to a fresh,
 provider-verified patron refresh for the request barcode. The live positive
 native ID must match every non-null native ID stored on the request and its

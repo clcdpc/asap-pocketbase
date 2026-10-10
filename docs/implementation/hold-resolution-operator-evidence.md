@@ -76,6 +76,14 @@ fresh prechecks. No resolution authorizes guessing a final ID or replaying an
 uncertain create/reply. The selected CLC adapter still has no established
 automatic GUID-to-final-ID correlation capability.
 
+Hold mail describes the frozen operation pickup. New create intent records the
+provider-verified pickup ID and name together in the existing detail evidence.
+Completion, recorded-result recovery and successful resolution prefer that name
+only when its ID agrees with the operation. Existing-hold adoption and older
+journals may resolve a name from the organization cache by that exact pickup ID.
+If no reliable name exists, mail confirms placement without naming a location;
+it never substitutes the request's historical preferred pickup name.
+
 Synthetic tests exercise this local acceptance/fencing contract with modeled
 operator evidence. They do not prove live provider guarantees or rehearsal
 worker quiescence. Real provider, Entra, operations and release validation gates

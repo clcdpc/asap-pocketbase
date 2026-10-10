@@ -236,7 +236,7 @@ public sealed partial class PatronSuggestionService(
         var pickupReceipt = await ChangePickupForSuggestionAsync(patron, configuration.OrganizationId,
             selectedBranch, pickupBranches, "patron_suggestion", null,
             (connection, transaction, token) => ValidatePublicPickupIntentAsync(
-                session, patron, connection, transaction, token),
+                session, patron, input, suggestion, connection, transaction, token),
             cancellationToken);
         long requestId = 0;
         long? outboxId = null;
@@ -286,6 +286,7 @@ public sealed partial class PatronSuggestionService(
                         session,
                         patron,
                         selectedBranch,
+                        input,
                         suggestion,
                         configuration,
                         autoClaimCandidate,
@@ -432,7 +433,7 @@ public sealed partial class PatronSuggestionService(
             pickupReceipt = await ChangePickupForSuggestionAsync(patron, organizationId,
                 selectedBranch, pickupBranches, "staff_suggestion", actor.Id,
                 (connection, transaction, token) => ValidateStaffPickupIntentAsync(
-                    actor, organizationId, patron, connection, transaction, token),
+                    actor, organizationId, patron, input, prepared.Suggestion, connection, transaction, token),
                 cancellationToken);
             pickupUpdated = pickupReceipt is not null;
             pickupChanged = pickupUpdated;
@@ -614,6 +615,8 @@ public sealed partial class PatronSuggestionService(
     private async Task ValidatePublicPickupIntentAsync(
         PatronSessionContext session,
         PatronSnapshot patron,
+        PatronSuggestionInput input,
+        ValidatedSuggestion capturedSuggestion,
         SqlConnection connection,
         SqlTransaction transaction,
         CancellationToken cancellationToken)
@@ -622,6 +625,11 @@ public sealed partial class PatronSuggestionService(
             connection, transaction, session.EffectiveOrganizationId,
             patron.HomeLibraryOrganizationId, cancellationToken);
         await EnsureCurrentPatronSessionAsync(connection, transaction, session, cancellationToken);
+        var configuration = await LoadCurrentPublicConfigurationAsync(
+            connection, transaction, session.EffectiveOrganizationId, cancellationToken);
+        ValidateCurrentPublicSubmission(input, capturedSuggestion, configuration);
+        await LockAndValidateFormatAsync(connection, transaction, session.EffectiveOrganizationId,
+            capturedSuggestion, cancellationToken);
 
         var policy = await LoadCurrentPatronSubmissionPolicyAsync(
             connection, transaction, session.EffectiveOrganizationId, patron.PatronCodeId, cancellationToken);
@@ -635,6 +643,8 @@ public sealed partial class PatronSuggestionService(
         CurrentStaff actor,
         int organizationId,
         PatronSnapshot patron,
+        StaffSuggestionInput input,
+        ValidatedSuggestion capturedSuggestion,
         SqlConnection connection,
         SqlTransaction transaction,
         CancellationToken cancellationToken)
@@ -685,6 +695,21 @@ public sealed partial class PatronSuggestionService(
                 new { code = "patron_home_library_inactive" });
         }
         EnforceStaffPatronEligibility(configuration, patron);
+        ValidatedSuggestion currentSuggestion;
+        try
+        {
+            currentSuggestion = Validate(new PatronSuggestionInput(
+                input.Format, input.Title, input.Author, input.Identifier, input.Publication,
+                input.PreferredPickupBranchId, input.Autohold, input.CustomFields),
+                configuration, allowInformationalMessage: true, forcedAutoHold: input.Autohold ?? true,
+                exactPublicationDate: input.ExactPublicationDate, notes: input.Notes,
+                verifiedBibId: capturedSuggestion.VerifiedBibId);
+        }
+        catch (PatronFlowException exception) when (exception.StatusCode == 400)
+        {
+            throw SubmissionConfigurationChanged(exception);
+        }
+        EnsureSameAcceptedSubmission(capturedSuggestion, currentSuggestion);
     }
 
     private static void RequireStaffPatronIdentity(

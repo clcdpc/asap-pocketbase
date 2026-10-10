@@ -656,7 +656,7 @@ public sealed class HoldPlacementService(
                 context,
                 request,
                 operation,
-                patron?.Email,
+                patron,
                 readiness.IsConfigured,
                 now,
                 cancellationToken);
@@ -1196,6 +1196,7 @@ public sealed class HoldPlacementService(
 
         var createStart = await MarkCreateStartedAsync(
             owner, actor, manualActorEvidence, patron, pickup.BranchId.Value,
+            eligiblePickupBranches.FirstOrDefault(branch => branch.Id == pickup.BranchId.Value)?.Label,
             organizationId, settings, activeSameBib, cancellationToken);
         if (createStart != "started")
         {
@@ -1402,13 +1403,19 @@ public sealed class HoldPlacementService(
         StaffIdentityEvidence? manualActorEvidence,
         PatronSnapshot patron,
         int pickupBranchId,
+        string? pickupBranchName,
         int organizationId,
         PolarisSettings settings,
         IReadOnlyList<PolarisHoldSnapshot> baseline,
         CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var detail = JsonSerializer.Serialize(new { preexistingHoldIds = baseline.Select(item => item.HoldRequestId).Order().ToArray() });
+        var detail = JsonSerializer.Serialize(new
+        {
+            preexistingHoldIds = baseline.Select(item => item.HoldRequestId).Order().ToArray(),
+            pickupBranchId,
+            pickupBranchName = Clean(pickupBranchName)
+        });
         return await MarkProviderStartedAsync(
             context, owner, actor, manualActorEvidence, HoldOperationPhase.Acquired,
             async () => await context.Database.ExecuteSqlInterpolatedAsync(
@@ -1731,7 +1738,7 @@ public sealed class HoldPlacementService(
         {
             return new HoldPlacementResult("not_found", owner.Id, ProviderOutcomeRecorded: true);
         }
-            patron ??= await TryRefreshPatronAsync(snapshot.PatronBarcodeSnapshot, requestSnapshot.LibraryOrganizationId, cancellationToken);
+        patron ??= await TryRefreshPatronAsync(snapshot.PatronBarcodeSnapshot, requestSnapshot.LibraryOrganizationId, cancellationToken);
         EmailTransportReadiness readiness;
         try
         {
@@ -1856,7 +1863,7 @@ public sealed class HoldPlacementService(
             operation.LastRecoveryUtc = now;
         }
 
-        var outbox = await AddPatronHoldOutboxAsync(context, request, operation, patron?.Email, readiness.IsConfigured, now, cancellationToken);
+        var outbox = await AddPatronHoldOutboxAsync(context, request, operation, patron, readiness.IsConfigured, now, cancellationToken);
         await context.SaveChangesAsync(cancellationToken);
         outboxId = outbox?.Status == "pending" ? outbox.Id : null;
         await transaction.CommitAsync(cancellationToken);
@@ -1897,7 +1904,7 @@ public sealed class HoldPlacementService(
         AsapDbContext context,
         TitleRequest request,
         HoldPlacementOperation operation,
-        string? recipient,
+        PatronSnapshot? patron,
         bool transportConfigured,
         DateTime now,
         CancellationToken cancellationToken)
@@ -1908,24 +1915,36 @@ public sealed class HoldPlacementService(
             .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
         var from = Clean(library?.FromAddress) ?? Clean(system?.FromAddress);
         var fromName = Clean(library?.FromName) ?? Clean(system?.FromName);
-        var to = StaffEmail.TryNormalize(recipient, out var normalized) ? normalized : null;
-        string? suppression = null;
-        if (to is null)
+        var suppression = PatronNotificationIdentity.SuppressionReason(patron, request, operation);
+        var to = suppression is null && StaffEmail.TryNormalize(patron?.Email, out var normalized) ? normalized : null;
+        if (suppression is null && to is null)
         {
             suppression = "recipient_missing_or_invalid";
         }
-        else if (!recipientDomainPolicy.IsAllowed(to))
+        else if (suppression is null && !recipientDomainPolicy.IsAllowed(to!))
         {
             suppression = "recipient_domain_not_allowed";
         }
-        else if (from is null)
+        else if (suppression is null && from is null)
         {
             suppression = "sender_missing";
         }
-        else if (!transportConfigured)
+        else if (suppression is null && !transportConfigured)
         {
             suppression = "mail_not_configured";
         }
+
+        var pickupName = FrozenPickupName(operation);
+        if (pickupName is null && operation.PickupBranchIdSnapshot.HasValue)
+        {
+            pickupName = Clean(await context.Organizations.AsNoTracking()
+                .Where(item => item.Id == operation.PickupBranchIdSnapshot.Value)
+                .Select(item => item.DisplayName)
+                .SingleOrDefaultAsync(cancellationToken));
+        }
+        var body = pickupName is null
+            ? $"A hold has been placed for {request.Title}."
+            : $"A hold has been placed for {request.Title} at {pickupName}.";
 
         var outbox = new EmailOutbox
         {
@@ -1936,7 +1955,7 @@ public sealed class HoldPlacementService(
             FromAddress = from,
             FromName = fromName,
             Subject = $"Hold placed: {request.Title}",
-            BodyText = $"A hold has been placed for {request.Title} at {request.PreferredPickupBranchName ?? "your selected pickup location"}.",
+            BodyText = body,
             Status = suppression is null ? "pending" : "suppressed",
             SuppressionReason = suppression,
             NextAttemptUtc = suppression is null ? now : null,
@@ -1945,6 +1964,33 @@ public sealed class HoldPlacementService(
         };
         context.EmailOutbox.Add(outbox);
         return outbox;
+    }
+
+    private static string? FrozenPickupName(HoldPlacementOperation operation)
+    {
+        if (!operation.PickupBranchIdSnapshot.HasValue || string.IsNullOrWhiteSpace(operation.DetailJson))
+        {
+            return null;
+        }
+        try
+        {
+            using var detail = JsonDocument.Parse(operation.DetailJson);
+            if (detail.RootElement.ValueKind == JsonValueKind.Object &&
+                detail.RootElement.TryGetProperty("pickupBranchId", out var id) &&
+                id.ValueKind == JsonValueKind.Number && id.TryGetInt32(out var pickupBranchId) &&
+                pickupBranchId == operation.PickupBranchIdSnapshot.Value &&
+                detail.RootElement.TryGetProperty("pickupBranchName", out var name) &&
+                name.ValueKind == JsonValueKind.String)
+            {
+                return Clean(name.GetString());
+            }
+        }
+        catch (JsonException)
+        {
+            // Older journals may not contain this optional display evidence.
+        }
+
+        return null;
     }
 
     private async Task<HoldPlacementResult> FinishLocalFailureAsync(

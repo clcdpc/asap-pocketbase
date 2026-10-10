@@ -34,6 +34,7 @@ public static class MigrationReconciler
         "organizations", "staff_users", "format_auto_claim_rules", "title_requests",
         "additional_copy_requests", "deleted_request_audit", "title_request_events", "legacy_mappings",
         "patron_sessions", "email_outbox", "queue_progress", "hold_placement_operations",
+        "pickup_preference_operations", "administrative_audit",
         "claim_migration_annotations", "placed_bib_protection_markers",
         "additional_copy_claim_migration_annotations", "invalid_active_claim_rules",
         "invalid_open_title_request_claims", "invalid_open_additional_copy_claims", "invalid_found_requests",
@@ -184,6 +185,7 @@ public static class MigrationReconciler
         }
         var postmarkTokenProvisioned = tokenTransformations[0].GetProperty("postmarkTokenProvisioned").GetBoolean();
 
+        MigrationIndependentBootstrapVerifier.VerifyReport(connectionString, package, report, externalConfigurationPath);
         var bootstrapTransformations = report.GetProperty("transformations").EnumerateArray()
             .Where(item => item.GetProperty("entity").GetString() == "migration_bootstrap_super_admin")
             .ToArray();
@@ -1976,6 +1978,7 @@ public static class MigrationReconciler
         if (trimmed.StartsWith("[", StringComparison.Ordinal))
         {
             using var document = JsonDocument.Parse(trimmed);
+            MigrationPackageValidator.EnsureNoDuplicateProperties(document.RootElement, "publication_options_invalid");
             if (document.RootElement.ValueKind != JsonValueKind.Array)
             {
                 throw ReportMismatch("Publication options are not an array.");
@@ -2692,6 +2695,8 @@ public static class MigrationReconciler
             ["email_outbox"] = 0,
             ["queue_progress"] = 0,
             ["hold_placement_operations"] = 0,
+            ["pickup_preference_operations"] = 0,
+            ["administrative_audit"] = 0,
             ["claim_migration_annotations"] = titleClaims,
             ["placed_bib_protection_markers"] = placement.ProtectedRequests,
             ["additional_copy_claim_migration_annotations"] = copyClaims,
@@ -2721,6 +2726,8 @@ public static class MigrationReconciler
             ["email_outbox"] = "SELECT COUNT(*) FROM [asap].[EmailOutbox];",
             ["queue_progress"] = "SELECT COUNT(*) FROM [asap].[QueueProgress];",
             ["hold_placement_operations"] = "SELECT COUNT(*) FROM [asap].[HoldPlacementOperation];",
+            ["pickup_preference_operations"] = "SELECT COUNT(*) FROM [asap].[PickupPreferenceOperation];",
+            ["administrative_audit"] = "SELECT COUNT(*) FROM [asap].[AdministrativeAudit];",
             ["claim_migration_annotations"] = "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND JSON_VALUE([MetadataJson], '$.transform') = N'claim_attribution_normalization_v1';",
             ["placed_bib_protection_markers"] = "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND JSON_VALUE([MetadataJson], '$.legacyBibProtection') = N'true' AND JSON_VALUE([MetadataJson], '$.transform') = N'placed_bib_protection_v1';",
             ["additional_copy_claim_migration_annotations"] = "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] WHERE [Notes] LIKE N'%[[]ASAP migration:additional_copy_claim_v1]%';",

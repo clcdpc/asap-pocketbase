@@ -25,6 +25,8 @@ const { JSDOM } = require('jsdom');
         id: '7',
         code: 'book',
         ownerOrganizationId: 1,
+        overridden: false,
+        version: 'AAAAAAAAAAE=',
         label: 'Book',
         isEnabled: true,
         messageBehavior: 'none',

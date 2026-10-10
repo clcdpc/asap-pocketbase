@@ -131,9 +131,306 @@ async function runLibraryRuleCompletenessEditor(page, axeSource, args, report) {
   await scan(page, axeSource, args.artifactRoot, report, 'mobile');
 }
 
+async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings, waitForSettingsReady) {
+  const read = (scope = args.scopeId) => page.evaluate(async scope => {
+    const response = await fetch(`/api/asap/staff/settings?orgId=${encodeURIComponent(scope)}`);
+    if (!response.ok) throw new Error(`Settings GET ${response.status}`);
+    return response.json();
+  }, scope);
+  const initial = await read();
+  const providerId = key => initial.effective.externalSearchProviders.find(item => item.key === key).id;
+  const formatId = code => initial.effective.formats.find(item => item.code === code).id;
+  const keyA = `audit_provider_a_${args.formatCode}`;
+  const keyB = `audit_provider_b_${args.formatCode}`;
+  const codeA = `audit_format_a_${args.formatCode}`;
+  const codeB = `audit_format_b_${args.formatCode}`;
+  const customCode = `audit_custom_${args.formatCode}`;
+  const sparseCode = `audit_sparse_${args.formatCode}`;
+  const inheritedCode = `audit_inherited_${args.formatCode}`;
+  const providerA = providerId(keyA);
+  const providerB = providerId(keyB);
+  const formatA = formatId(codeA);
+  const formatB = formatId(codeB);
+  const customId = formatId(customCode);
+  const sparseId = formatId(sparseCode);
+  const rawProvider = (data, id) => data.stored.libraryOverride.providers.find(item => item.id === id);
+  const rawFormat = (data, id) => data.stored.libraryOverride.formats.find(item => item.materialFormatId === id);
+  const rawOwned = (data, id) => data.stored.libraryOverride.formats.find(item => item.id === id && item.kind === 'custom');
+  const initialSparse = rawOwned(initial, sparseId);
+  let untouchedProvider = rawProvider(initial, providerB);
+  let untouchedFormat = rawFormat(initial, formatB);
+  const systemProviderB = initial.stored.configuredSystem.providers.find(item => item.id === providerB);
+  const systemFormatB = initial.stored.configuredSystem.formats.find(item => item.id === formatB);
+  for (const field of ['label', 'isEnabled', 'urlTemplate']) {
+    assert.equal(untouchedProvider[field], systemProviderB[field], 'An API-created library override must survive a later matching system default.');
+  }
+  for (const field of ['label', 'sortOrder', 'isEnabled', 'messageBehavior', 'message', 'authorMode', 'authorLabel']) {
+    assert.equal(untouchedFormat[field], systemFormatB[field], 'The fixture must contain a real converged persisted format override.');
+  }
+  for (const id of [providerA, providerB]) {
+    assert.equal(initial.effective.externalSearchProviders.find(item => item.id === id).overridden, true,
+      'The production Settings GET must preserve actual provider override state.');
+  }
+  for (const id of [formatA, formatB]) {
+    const row = initial.effective.formats.find(item => item.id === id);
+    assert.equal(row.overridden, true);
+    assert.equal(row.version, rawFormat(initial, id).version);
+  }
+  assert.equal(initial.effective.formats.find(item => item.code === inheritedCode).overridden, false);
+  assert.equal(initial.effective.formats.find(item => item.id === customId).ownerOrganizationId, args.scopeId);
+  assert.equal(initial.effective.formats.find(item => item.id === customId).version,
+    initial.stored.libraryOverride.formats.find(item => item.id === customId && item.kind === 'custom').version);
+  for (const name of ['messageBehavior', 'titleMode', 'titleLabel', 'authorMode', 'authorLabel',
+    'identifierMode', 'identifierLabel', 'publicationMode', 'publicationLabel']) {
+    assert.equal(initialSparse[name], null, 'The active owned witness must retain nullable raw default fields.');
+  }
+
+  await page.locator('#settings-nav-workflow').click();
+  await page.locator(`#external-search-provider-editor [data-provider-id="${providerA}"] input`).nth(1)
+    .fill('Changed provider A');
+  let payload = await saveSettings();
+  assert.equal(payload.providers.find(item => item.id === providerB).reset, false);
+  let current = await read();
+  assert.deepEqual(rawProvider(current, providerB), untouchedProvider, 'Untouched provider SQL row/version must survive sibling save.');
+
+  await page.locator('#settings-nav-patron').click();
+  await page.locator(`#material-formats-editor [data-format-id="${formatA}"] input`).nth(1)
+    .fill('Changed format A');
+  payload = await saveSettings();
+  assert.equal(payload.formats.find(item => item.id === formatB).reset, false);
+  current = await read();
+  assert.deepEqual(rawFormat(current, formatB), untouchedFormat, 'Untouched format SQL row/version must survive sibling save.');
+  assert.deepEqual(rawOwned(current, sparseId), initialSparse, 'Untouched active owned SQL row/version must survive sibling save.');
+
+  await page.locator(`#material-formats-editor [data-format-id="${customId}"] input`).nth(1)
+    .fill('Changed owned format');
+  payload = await saveSettings();
+  const savedCustom = payload.formats.find(item => item.id === customId);
+  assert.equal(savedCustom.ownerOrganizationId, Number(args.scopeId));
+  assert.equal(savedCustom.version, initial.effective.formats.find(item => item.id === customId).version);
+  current = await read();
+  assert.equal(current.effective.formats.find(item => item.id === customId).label, 'Changed owned format');
+  const beforeStaleOwned = current;
+  const postVersionWitness = (body, method = 'POST', path = '/api/asap/staff/settings') =>
+    page.evaluate(async ({ body, method, path }) => {
+      const session = await (await fetch('/api/asap/staff/session')).json();
+      const response = await fetch(path, {
+        method, headers: { 'content-type': 'application/json', 'X-ASAP-Antiforgery': session.antiforgeryToken },
+        ...(method === 'POST' ? { body: JSON.stringify(body) } : {})
+      });
+      return { status: response.status, body: await response.json() };
+    }, { body, method, path });
+  let rejected = await postVersionWitness({
+    orgId: args.scopeId, version: current.version,
+    patron: { loginNote: 'Must roll back with stale owned row' },
+    formats: [{ ...savedCustom, label: 'Stale owned overwrite' }]
+  });
+  assert.equal(rejected.status, 409);
+  assert.equal(rejected.body.code, 'stale_version');
+  assert.deepEqual(await read(), beforeStaleOwned, 'A stale individual owned-format version must roll back the entire Settings mutation.');
+  rejected = await postVersionWitness(null, 'DELETE',
+    `/api/asap/staff/settings/formats/${customId}?version=${encodeURIComponent(savedCustom.version)}`);
+  assert.equal(rejected.status, 409);
+  assert.equal(rejected.body.code, 'stale_version');
+  assert.deepEqual(await read(), beforeStaleOwned);
+  rejected = await postVersionWitness({
+    orgId: args.scopeId, version: current.version,
+    patron: { loginNote: 'Must roll back with contradictory owner' },
+    formats: [{ ...current.effective.formats.find(item => item.id === customId), ownerOrganizationId: 1 }]
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.code, 'settings_invalid');
+  assert.deepEqual(await read(), beforeStaleOwned);
+
+  await page.locator(`#material-formats-editor [data-format-id="${formatA}"] .settings-domain-override-toggle`).uncheck();
+  payload = await saveSettings();
+  assert.equal(payload.formats.find(item => item.id === formatA).reset, true);
+  current = await read();
+  assert.equal(rawFormat(current, formatA), undefined);
+  assert.deepEqual(rawFormat(current, formatB), untouchedFormat);
+  assert.deepEqual(rawProvider(current, providerB), untouchedProvider);
+
+  await page.locator('[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle').check();
+  await page.locator('#patron-login-note').fill('Unrelated scalar metadata witness');
+  payload = await saveSettings();
+  assert.equal(Object.hasOwn(payload, 'providers'), false);
+  assert.equal(Object.hasOwn(payload, 'formats'), false);
+  assert.equal(Object.hasOwn(payload, 'formatRules'), false);
+
+  const stale = await page.evaluate(async staleData => {
+    const session = await (await fetch('/api/asap/staff/session')).json();
+    const response = await fetch('/api/asap/staff/settings', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'X-ASAP-Antiforgery': session.antiforgeryToken },
+      body: JSON.stringify({ orgId: staleData.orgId, version: staleData.version, providers: [] })
+    });
+    return { status: response.status, body: await response.json() };
+  }, initial);
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.code, 'stale_version');
+
+  const deletePromise = page.waitForResponse(response => response.request().method() === 'DELETE' &&
+    new URL(response.url()).pathname === `/api/asap/staff/settings/formats/${customId}`);
+  await page.locator(`#material-formats-editor [data-format-id="${customId}"] button[aria-label="Delete"]`).click();
+  await saveSettings();
+  const deletion = await deletePromise;
+  assert.equal(deletion.status(), 200, await deletion.text());
+  current = await read();
+  assert.equal(current.effective.formats.some(item => item.id === customId), false);
+  assert.deepEqual(rawFormat(current, formatB), untouchedFormat);
+  assert.deepEqual(rawProvider(current, providerB), untouchedProvider);
+
+  const beforeProviderEdit = untouchedProvider;
+  await page.locator('#settings-nav-workflow').click();
+  await page.locator(`#external-search-provider-editor [data-provider-id="${providerB}"] input`).nth(1)
+    .fill('Changed pinned provider B');
+  await saveSettings();
+  current = await read();
+  untouchedProvider = rawProvider(current, providerB);
+  assert.deepEqual({ ...untouchedProvider, label: beforeProviderEdit.label, version: beforeProviderEdit.version }, beforeProviderEdit,
+    'Editing one provider field must preserve the other explicit converged fields.');
+  assert.equal(untouchedProvider.label, 'Changed pinned provider B');
+  assert.notEqual(untouchedProvider.version, beforeProviderEdit.version);
+
+  const beforeFormatEdit = untouchedFormat;
+  await page.locator('#settings-nav-patron').click();
+  await page.locator(`#material-formats-editor [data-format-id="${formatB}"] input`).nth(1)
+    .fill('Changed pinned format B');
+  await saveSettings();
+  current = await read();
+  untouchedFormat = rawFormat(current, formatB);
+  assert.deepEqual({ ...untouchedFormat, label: beforeFormatEdit.label, version: beforeFormatEdit.version }, beforeFormatEdit,
+    'Editing one format field must preserve explicit converged order, enablement, message, and field rules.');
+  assert.equal(untouchedFormat.label, 'Changed pinned format B');
+  assert.notEqual(untouchedFormat.version, beforeFormatEdit.version);
+
+  const system = await read('system');
+  const systemFormat = system.effective.formats.find(item => item.id === formatB);
+  const changedBase = await postVersionWitness({
+    orgId: 'system', version: system.version,
+    providers: [{ id: providerB, key: keyB, label: 'Later system provider B', isEnabled: true,
+      urlTemplate: 'https://catalog.example.org/later-b?q={query}' }],
+    formats: [{ id: formatB, code: codeB, ownerOrganizationId: 1, version: systemFormat.version,
+      label: 'Later system format B', sortOrder: 9730, isEnabled: true, messageBehavior: 'none', message: null,
+      author: { mode: 'optional', label: 'Later system creator B' } }]
+  });
+  assert.equal(changedBase.status, 200);
+  assert.equal(changedBase.body.code, 'saved');
+  current = await read();
+  assert.deepEqual(rawProvider(current, providerB), untouchedProvider);
+  assert.deepEqual(rawFormat(current, formatB), untouchedFormat);
+  const resolvedProviderB = current.effective.externalSearchProviders.find(item => item.id === providerB);
+  for (const field of ['label', 'isEnabled', 'urlTemplate']) assert.equal(resolvedProviderB[field], untouchedProvider[field]);
+  const resolvedFormatB = current.effective.formats.find(item => item.id === formatB);
+  for (const field of ['label', 'sortOrder', 'isEnabled', 'messageBehavior', 'message']) assert.equal(resolvedFormatB[field], untouchedFormat[field]);
+  assert.equal(resolvedFormatB.author.mode, untouchedFormat.authorMode);
+  assert.equal(resolvedFormatB.author.label, untouchedFormat.authorLabel);
+
+  await page.reload({ waitUntil: 'networkidle' });
+  await waitForSettingsReady(args.scopeId);
+  const beforeProviderClear = untouchedProvider;
+  await page.locator('#settings-nav-workflow').click();
+  const providerRow = page.locator(`#external-search-provider-editor [data-provider-id="${providerB}"]`);
+  await providerRow.locator('input').nth(1).fill('');
+  await providerRow.locator('input').nth(2).fill('');
+  payload = await saveSettings();
+  assert.equal(payload.providers.find(item => item.id === providerB).label, null);
+  assert.equal(payload.providers.find(item => item.id === providerB).urlTemplate, null);
+  current = await read();
+  untouchedProvider = rawProvider(current, providerB);
+  assert.equal(untouchedProvider.label, null, 'Clearing ordinary provider text in the shipped editor must resume inheritance.');
+  assert.equal(untouchedProvider.urlTemplate, null);
+  assert.deepEqual({ ...untouchedProvider, label: beforeProviderClear.label, urlTemplate: beforeProviderClear.urlTemplate,
+    version: beforeProviderClear.version }, beforeProviderClear, 'Clearing provider text must preserve its explicit enabled value.');
+  assert.equal(current.effective.externalSearchProviders.find(item => item.id === providerB).label, 'Later system provider B');
+  assert.equal(current.effective.externalSearchProviders.find(item => item.id === providerB).urlTemplate,
+    'https://catalog.example.org/later-b?q={query}');
+
+  const beforeAuthorLabelClear = untouchedFormat;
+  await page.locator('#settings-nav-patron').click();
+  await page.locator(`#format-rules-editor [data-rule-code="${codeB}"] [data-format-label="author"]`).fill('');
+  await saveSettings();
+  current = await read();
+  untouchedFormat = rawFormat(current, formatB);
+  assert.equal(untouchedFormat.authorLabel, null);
+  assert.deepEqual({ ...untouchedFormat, authorLabel: beforeAuthorLabelClear.authorLabel,
+    version: beforeAuthorLabelClear.version }, beforeAuthorLabelClear, 'Clearing a format field label preserves its explicit mode and other format fields.');
+  assert.equal(current.effective.formats.find(item => item.id === formatB).author.label, 'Later system creator B');
+
+  assert.deepEqual(rawOwned(current, sparseId), initialSparse,
+    'Editing inherited field rules must preserve every untouched active owned nullable field and version.');
+  await page.locator(`#format-rules-editor [data-rule-code="${sparseCode}"] [data-format-label="author"]`)
+    .fill('Changed sparse creator');
+  await saveSettings();
+  current = await read();
+  const changedSparse = rawOwned(current, sparseId);
+  assert.equal(changedSparse.authorLabel, 'Changed sparse creator');
+  assert.notEqual(changedSparse.version, initialSparse.version);
+  assert.deepEqual({ ...changedSparse, authorLabel: initialSparse.authorLabel, version: initialSparse.version }, initialSparse,
+    'An intentional owned label edit must preserve its other nullable raw default fields.');
+
+  const beforePartialProvider = rawProvider(current, providerA);
+  let partial = await postVersionWitness({ orgId: args.scopeId, version: current.version,
+    providers: [{ id: providerA, isEnabled: false }] });
+  assert.equal(partial.status, 200);
+  current = await read();
+  assert.equal(rawProvider(current, providerA).isEnabled, false);
+  assert.equal(rawProvider(current, providerA).label, beforePartialProvider.label, 'Omitted provider fields must preserve existing overrides.');
+  partial = await postVersionWitness({ orgId: args.scopeId, version: current.version,
+    providers: [{ id: providerA, isEnabled: null }] });
+  assert.equal(partial.status, 200);
+  current = await read();
+  assert.deepEqual({ ...rawProvider(current, providerA), version: beforePartialProvider.version }, beforePartialProvider,
+    'A supplied null enabled value must clear that provider field without clearing omitted text fields.');
+
+  const beforeNullRule = untouchedFormat;
+  partial = await postVersionWitness({ orgId: args.scopeId, version: current.version,
+    formats: [{ id: formatB, code: codeB, ownerOrganizationId: 1, version: beforeNullRule.version,
+      author: { mode: null, label: null } }] });
+  assert.equal(partial.status, 200);
+  current = await read();
+  untouchedFormat = rawFormat(current, formatB);
+  assert.equal(untouchedFormat.authorMode, null);
+  assert.equal(untouchedFormat.authorLabel, null);
+  assert.deepEqual({ ...untouchedFormat, authorMode: beforeNullRule.authorMode, version: beforeNullRule.version }, beforeNullRule,
+    'Supplied null built-in field values resume inheritance and preserve omitted format fields.');
+
+  for (const corruption of ['provider-override', 'format-owner', 'format-version', 'format-override']) {
+    const before = await read();
+    let posts = 0;
+    const listener = request => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/settings') posts++;
+    };
+    page.on('request', listener);
+    await page.route('**/api/asap/staff/settings?*', async route => {
+      if (route.request().method() !== 'GET') return route.continue();
+      const response = await route.fetch();
+      const data = await response.json();
+      if (corruption === 'provider-override') delete data.effective.externalSearchProviders.find(item => item.id === providerB).overridden;
+      else if (corruption === 'format-owner') data.effective.formats.find(item => item.id === formatB).ownerOrganizationId = args.scopeId;
+      else if (corruption === 'format-version') delete data.effective.formats.find(item => item.id === formatB).version;
+      else data.effective.formats.find(item => item.id === formatB).overridden = false;
+      await route.fulfill({ status: response.status(), contentType: 'application/json', body: JSON.stringify(data) });
+    });
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForSettingsReady(args.scopeId);
+    await page.locator('#settings-nav-patron').click();
+    await page.locator('#patron-login-note').fill(`Blocked ${corruption}`);
+    await page.locator('#settings-save').click();
+    await page.locator('#settings-message.error').waitFor();
+    assert.match(await page.locator('#settings-message').textContent(), /metadata snapshot is malformed/);
+    assert.equal(posts, 0, 'Malformed metadata must block the shipped editor before a destructive POST.');
+    await page.unroute('**/api/asap/staff/settings?*');
+    page.off('request', listener);
+    assert.deepEqual(await read(), before, 'Blocked metadata must leave authoritative SQL/audit/version unchanged.');
+  }
+  await page.reload({ waitUntil: 'networkidle' });
+  await waitForSettingsReady(args.scopeId);
+  report.libraryOverrideMetadataRoundTrip = true;
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
-  if (!['full', 'system-format-rule', 'library-rule-partial-snapshot', 'library-rule-missing-row'].includes(args.mode)) {
+  if (!['full', 'system-format-rule', 'library-rule-partial-snapshot', 'library-rule-missing-row', 'library-metadata'].includes(args.mode)) {
     throw new Error(`Unsupported settings browser mode: ${args.mode}`);
   }
   if (args.mode.startsWith('library-rule-') && (!args.formatCode || args.scopeId === 'system')) {
@@ -237,16 +534,17 @@ async function main() {
     const saveSettings = async () => {
       const responsePromise = page.waitForResponse(candidate => candidate.request().method() === 'POST' &&
         new URL(candidate.url()).pathname === '/api/asap/staff/settings');
-      await page.locator('#settings-save').click();
       let saved;
       try {
-        saved = await responsePromise;
+        [, saved] = await Promise.all([page.locator('#settings-save').click(), responsePromise]);
       } catch (error) {
         const settingsMessage = (await page.locator('#settings-message').textContent().catch(() => ''))?.trim();
         throw new Error(`Settings save did not receive an HTTP response; settings message: ${settingsMessage || '(empty)'}. ${error.message}`);
       }
       assert.equal(saved.status(), 200, await saved.text());
-      await page.locator('#settings-message').filter({ hasText: 'Settings saved.' }).waitFor();
+      await page.locator('#settings-message').filter({
+        hasText: /^Settings saved\.(?: Format deletions confirmed: \d+ of \d+\.)?$/
+      }).waitFor();
       return postedPayloads.at(-1);
     };
 
@@ -266,9 +564,20 @@ async function main() {
         'The settings editor became ready for the wrong scope.');
     };
 
-    const initialScope = args.mode.startsWith('library-rule-') ? args.scopeId : 'system';
+    const initialScope = args.mode.startsWith('library-') ? args.scopeId : 'system';
     await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=${encodeURIComponent(initialScope)}#settings-start`, { waitUntil: 'networkidle' });
     await waitForSettingsReady(initialScope);
+    if (args.mode === 'library-metadata') {
+      await runLibraryOverrideMetadataEditor(page, args, report, saveSettings, waitForSettingsReady);
+      await scan(page, axeSource, args.artifactRoot, report, 'desktop');
+      await page.setViewportSize({ width: 390, height: 844 });
+      await scan(page, axeSource, args.artifactRoot, report, 'mobile');
+      assert.deepEqual(pageErrors, [], 'The library metadata journey raised browser errors.');
+      assert.equal(traffic.externalRequests, 0, 'The library metadata journey requested external assets.');
+      await page.close();
+      await context.close();
+      return;
+    }
     if (args.mode === 'system-format-rule') {
       await runSystemFormatRuleEditor(page, report, waitForSettingsReady);
       await scan(page, axeSource, args.artifactRoot, report, 'desktop');

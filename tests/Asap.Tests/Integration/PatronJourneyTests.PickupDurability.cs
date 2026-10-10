@@ -682,6 +682,7 @@ public sealed partial class PatronJourneyTests
         public int FirstBranch => OrganizationId * 100 + 1;
         public int SecondBranch => FirstBranch + 1;
         public int PatronId { get; set; }
+        public int? PatronCodeId { get; set; } = 1;
         public int HomeLibraryOrganizationId { get; set; }
         public int? Current { get; set; }
         public int Writes { get; private set; }
@@ -699,7 +700,7 @@ public sealed partial class PatronJourneyTests
             }
             Check(barcode, OrganizationId, token);
             return Task.FromResult(new PatronSnapshot(PatronId, CurrentBarcode, "pickup@example.org",
-                "Pickup", "Patron", 1, "Adult", FirstBranch, HomeLibraryOrganizationId, "Pickup library", Current,
+                "Pickup", "Patron", PatronCodeId, "Adult", FirstBranch, HomeLibraryOrganizationId, "Pickup library", Current,
                 FormerBarcode, RequestedBarcode));
         }
         public Task<IdentifierLookupResult> LookupIdentifierAsync(string identifier, int context, CancellationToken token)
@@ -728,7 +729,7 @@ public sealed partial class PatronJourneyTests
             var requestedBarcode = RequestedBarcode ??
                 (!string.Equals(barcode, CurrentBarcode, StringComparison.OrdinalIgnoreCase) ? barcode : null);
             return new PatronSnapshot(PatronId, CurrentBarcode, "pickup@example.org",
-                "Pickup", "Patron", 1, "Adult", FirstBranch, HomeLibraryOrganizationId, "Pickup library", Current,
+                "Pickup", "Patron", PatronCodeId, "Adult", FirstBranch, HomeLibraryOrganizationId, "Pickup library", Current,
                 FormerBarcode, requestedBarcode);
         }
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, int context, CancellationToken token)

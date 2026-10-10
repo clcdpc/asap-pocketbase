@@ -99,26 +99,31 @@ public sealed partial class PatronSuggestionService
         }
 
         EnforceStaffPatronEligibility(currentConfiguration, patron);
-        var currentSuggestion = Validate(
-            new PatronSuggestionInput(
-                input.Format,
-                input.Title,
-                input.Author,
-                input.Identifier,
-                input.Publication,
-                input.PreferredPickupBranchId,
-                input.Autohold,
-                input.CustomFields),
-            currentConfiguration,
-            allowInformationalMessage: true,
-            forcedAutoHold: input.Autohold ?? true,
-            exactPublicationDate: input.ExactPublicationDate,
-            notes: input.Notes,
-            verifiedBibId: preProviderSuggestion.VerifiedBibId);
-        if (currentSuggestion.Format.Id != preProviderSuggestion.Format.Id)
+        ValidatedSuggestion currentSuggestion;
+        try
         {
-            throw FormatChanged();
+            currentSuggestion = Validate(
+                new PatronSuggestionInput(
+                    input.Format,
+                    input.Title,
+                    input.Author,
+                    input.Identifier,
+                    input.Publication,
+                    input.PreferredPickupBranchId,
+                    input.Autohold,
+                    input.CustomFields),
+                currentConfiguration,
+                allowInformationalMessage: true,
+                forcedAutoHold: input.Autohold ?? true,
+                exactPublicationDate: input.ExactPublicationDate,
+                notes: input.Notes,
+                verifiedBibId: preProviderSuggestion.VerifiedBibId);
         }
+        catch (PatronFlowException exception) when (exception.StatusCode == 400)
+        {
+            throw SubmissionConfigurationChanged(exception);
+        }
+        EnsureSameAcceptedSubmission(preProviderSuggestion, currentSuggestion);
 
         var autoClaimTarget = await LockAutoClaimTargetAsync(
             connection,
@@ -261,6 +266,7 @@ public sealed partial class PatronSuggestionService
         PatronSessionContext session,
         PatronSnapshot patron,
         PickupBranch selectedBranch,
+        PatronSuggestionInput input,
         ValidatedSuggestion suggestion,
         EffectivePatronConfiguration configuration,
         AutoClaimCandidate? autoClaimCandidate,
@@ -292,6 +298,11 @@ public sealed partial class PatronSuggestionService
             patron.HomeLibraryOrganizationId,
             cancellationToken);
         await EnsureCurrentPatronSessionAsync(connection, transaction, session, cancellationToken);
+        // Settings writes take these same organization locks. Read the complete
+        // current configuration on this transaction before accepting original input.
+        configuration = await LoadCurrentPublicConfigurationAsync(
+            connection, transaction, configuration.OrganizationId, cancellationToken);
+        ValidateCurrentPublicSubmission(input, suggestion, configuration);
         CurrentPatronSubmissionPolicy? currentPatronPolicy = null;
         if (enforcePatronLimit)
         {
@@ -439,6 +450,16 @@ public sealed partial class PatronSuggestionService
             requestId, patron.PatronId, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return (requestId, email.OutboxId, email.Status, rowVersion);
+    }
+
+    private async Task<EffectivePatronConfiguration> LoadCurrentPublicConfigurationAsync(
+        SqlConnection connection, SqlTransaction transaction, int organizationId, CancellationToken cancellationToken)
+    {
+        await using var context = new AsapDbContext(
+            new DbContextOptionsBuilder<AsapDbContext>().UseSqlServer(connection).Options);
+        await context.Database.UseTransactionAsync(transaction, cancellationToken);
+        return await configurationService.GetAsync(context, organizationId, cancellationToken)
+            ?? throw new PatronFlowException(403, "Your library could not be determined.");
     }
 
     private static async Task LockAndValidateOrganizationAsync(
@@ -616,11 +637,11 @@ public sealed partial class PatronSuggestionService
         }
     }
 
-    private static PatronFlowException FormatChanged() =>
-        new(
-            409,
-            "The selected material format changed while the suggestion was being submitted. Refresh the form and try again.",
-            new { code = "material_format_changed" });
+    private static PatronFlowException FormatChanged()
+    {
+        const string message = "The selected material format changed while the suggestion was being submitted. Refresh the form and try again.";
+        return new PatronFlowException(409, message, new { code = "material_format_changed", message });
+    }
 
     private async Task<CurrentPatronSubmissionPolicy> LoadCurrentPatronSubmissionPolicyAsync(
         SqlConnection connection,

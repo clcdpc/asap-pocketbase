@@ -275,6 +275,69 @@ function validateFormats(values, description) {
   }
 }
 
+function validateRawFormats(values, description) {
+  const overrides = values.filter(value => property(value, 'kind') === 'systemOverride');
+  validateFormats(values.filter(value => property(value, 'kind') !== 'systemOverride'), description);
+  const identities = new Set();
+  for (const value of overrides) {
+    const id = property(value, 'materialFormatId');
+    if (!validPositiveIdentity(id) || identities.has(String(id)) ||
+        String(property(value, 'ownerOrganizationId')) !== '1' ||
+        typeof property(value, 'version') !== 'string' || !clean(property(value, 'version')) ||
+        property(value, 'code') !== null) {
+      throw new Error(`The ${description} snapshot is malformed. Reload settings before saving.`);
+    }
+    identities.add(String(id));
+  }
+}
+
+function validateCollectionMetadata(stored, configured, libraryOverride, effective, system, organizationId) {
+  const providerOverrides = new Set(array(property(libraryOverride, 'providers')).map(value => String(property(value, 'id'))));
+  const storedProviders = new Map(property(stored, 'providers').map(value => [String(property(value, 'id')), value]));
+  for (const value of property(effective, 'externalSearchProviders')) {
+    const id = String(property(value, 'id'));
+    const storedValue = storedProviders.get(id);
+    const overridden = property(value, 'overridden');
+    if (!storedValue || typeof overridden !== 'boolean' ||
+        overridden !== (!system && providerOverrides.has(id)) ||
+        property(storedValue, 'overridden') !== overridden) {
+      throw new Error('The effective provider override metadata snapshot is malformed. Reload settings before saving.');
+    }
+  }
+  if (storedProviders.size !== property(effective, 'externalSearchProviders').length) {
+    throw new Error('The effective provider override metadata snapshot is incomplete. Reload settings before saving.');
+  }
+  const owned = new Map(property(configured, 'formats').map(value => [String(property(value, 'id')), value]));
+  const overrides = new Map();
+  for (const value of array(property(libraryOverride, 'formats'))) {
+    if (property(value, 'kind') === 'systemOverride') overrides.set(String(property(value, 'materialFormatId')), value);
+    else owned.set(String(property(value, 'id')), value);
+  }
+  const storedFormats = new Map(property(stored, 'formats').map(value => [String(property(value, 'id')), value]));
+  for (const value of property(effective, 'formats')) {
+    const id = String(property(value, 'id'));
+    const original = owned.get(id);
+    const storedValue = storedFormats.get(id);
+    const override = overrides.get(id);
+    const owner = String(property(value, 'ownerOrganizationId'));
+    const version = property(value, 'version');
+    const overridden = property(value, 'overridden');
+    if (!original || !storedValue || !['1', String(organizationId)].includes(owner) ||
+        owner !== String(property(original, 'ownerOrganizationId')) ||
+        owner !== String(property(storedValue, 'ownerOrganizationId')) ||
+        typeof overridden !== 'boolean' || overridden !== Boolean(override) ||
+        property(storedValue, 'overridden') !== overridden ||
+        typeof version !== 'string' || !clean(version) ||
+        version !== property(override || original, 'version') || version !== property(storedValue, 'version')) {
+      throw new Error('The effective format owner, version, or override metadata snapshot is malformed. Reload settings before saving.');
+    }
+  }
+  if (storedFormats.size !== property(effective, 'formats').length ||
+      [...overrides.keys()].some(id => !storedFormats.has(id))) {
+    throw new Error('The effective format metadata snapshot is incomplete. Reload settings before saving.');
+  }
+}
+
 function validateTemplates(values, description) {
   const keys = new Set();
   for (const template of values) {
@@ -366,11 +429,13 @@ function validateEditorSnapshot(data, system) {
   ]) validateProviders(collection, description);
   validateProviders(property(libraryOverride, 'providers') || [], 'library override provider');
   for (const [collection, description] of [
-    [property(configured, 'formats'), 'system format'],
     [property(stored, 'formats'), 'stored format'],
     [property(effective, 'formats'), 'effective format']
   ]) validateFormats(collection, description);
-  if (!system) validateFormats(property(libraryOverride, 'formats'), 'library override format');
+  validateRawFormats(property(configured, 'formats'), 'system format');
+  if (!system) validateRawFormats(property(libraryOverride, 'formats'), 'library override format');
+  validateCollectionMetadata(stored, configured, libraryOverride, effective, system,
+    system ? 1 : property(data, 'orgId'));
   for (const [collection, description] of [
     [property(configured, 'templates'), 'system template'],
     [property(stored, 'templates'), 'stored template']
@@ -769,7 +834,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         className: 'settings-editor-row settings-provider-row',
         'data-domain-row': 'true',
         'data-provider-id': id || '',
-        'data-provider-key': value.key || ''
+        'data-provider-key': value.key || '',
+        'data-provider-sort-order': numeric(value.sortOrder, (index + 1) * 10)
       }, [
         field('Provider key', key),
         field('Label', element('input', { type: 'text', value: value.label || '', 'data-domain-editable': 'true' })),
@@ -797,7 +863,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         label: clean(inputs[1]?.value),
         urlTemplate: clean(inputs[2]?.value),
         isEnabled: Boolean(row.querySelector('input[type="checkbox"]:not(.settings-domain-override-toggle)')?.checked),
-        sortOrder: (index + 1) * 10,
+        sortOrder: numeric(row.dataset.providerSortOrder, (index + 1) * 10),
         overridden: state.system || Boolean(override?.checked),
         reset: !state.system && Boolean(override) && !override.checked
       };
@@ -842,7 +908,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         'data-domain-row': 'true',
         'data-format-id': value.id || '',
         'data-format-owner': value.ownerOrganizationId,
-        'data-format-version': value.version || ''
+        'data-format-version': value.version || '',
+        'data-format-sort-order': value.sortOrder
       }, [
         field('Code', code),
         field('Label', element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true' })),
@@ -888,7 +955,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         code,
         ownerOrganizationId: owner,
         label: clean(inputs[1]?.value) || code,
-        sortOrder: (index + 1) * 10,
+        sortOrder: numeric(row.dataset.formatSortOrder, (index + 1) * 10),
         isEnabled: Boolean(row.querySelector('input[type="checkbox"]:not(.settings-domain-override-toggle)')?.checked),
         overridden: state.system || owner === currentOrganizationId() || Boolean(override?.checked),
         reset: !state.system && owner !== currentOrganizationId() && Boolean(override) && !override.checked
@@ -1261,6 +1328,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     const next = index + offset;
     if (next < 0 || next >= values.length) return;
     [values[index], values[next]] = [values[next], values[index]];
+    if (name === 'formats' || name === 'providers') {
+      values.forEach((value, order) => { value.sortOrder = (order + 1) * 10; });
+    }
     renderDomain(name, values);
     if (name === 'fields') renderRules(rules);
     onChange();

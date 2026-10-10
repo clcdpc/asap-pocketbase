@@ -121,6 +121,7 @@ public sealed partial class PatronJourneyTests
         TitleRequest NewRequest(string status) => new()
         {
             LibraryOrganizationId = 2, MaterialFormatId = format.Id, Barcode = barcode, Title = $"Scoped mail {Guid.NewGuid():N}",
+            PatronIdSnapshot = 7105,
             Status = status, BibId = status == "pending_hold" ? 9001 : null,
             BibIdStaffVerified = status == "pending_hold", AutoHold = true, PreferredPickupBranchId = 101,
             PreferredPickupBranchName = "Main Library", IsbnCheckStatus = status == "pending_hold" ? "found" : "not_found", CreatedUtc = now, UpdatedUtc = now,

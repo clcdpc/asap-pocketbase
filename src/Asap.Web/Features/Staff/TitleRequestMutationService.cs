@@ -381,13 +381,8 @@ public sealed class TitleRequestMutationService(
         {
             try
             {
-                var refreshed = await patronProvider.RefreshAsync(notificationRequest.Barcode, notificationRequest.LibraryOrganizationId, cancellationToken);
+                currentPatron = await patronProvider.RefreshAsync(notificationRequest.Barcode, notificationRequest.LibraryOrganizationId, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-                if (refreshed is not null &&
-                    string.Equals(refreshed.Barcode, notificationRequest.Barcode, StringComparison.Ordinal))
-                {
-                    currentPatron = refreshed;
-                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -1409,7 +1404,9 @@ public sealed class TitleRequestMutationService(
             .Where(item => item.Id == request.MaterialFormatId)
             .Select(item => item.Label)
             .SingleAsync(cancellationToken);
-        var patron = currentPatron ?? new PatronSnapshot(0, request.Barcode, null,
+        var notificationOperation = await LatestSuccessfulHoldForNotificationAsync(context, request.Id, cancellationToken);
+        var identitySuppression = PatronNotificationIdentity.SuppressionReason(currentPatron, request, notificationOperation);
+        var patron = identitySuppression is null ? currentPatron! : new PatronSnapshot(0, request.Barcode, null,
             request.NameFirst, request.NameLast, request.PatronCodeId,
             request.PatronCodeDescription, request.PatronOrganizationId ?? 0,
             request.LibraryOrganizationId, request.LibraryNameSnapshot ?? string.Empty,
@@ -1422,10 +1419,10 @@ public sealed class TitleRequestMutationService(
             .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
         var fromAddress = Clean(libraryEmail?.FromAddress) ?? Clean(systemEmail?.FromAddress);
         var fromName = Clean(libraryEmail?.FromName) ?? Clean(systemEmail?.FromName);
-        var toAddress = Clean(currentPatron?.Email);
-        string? suppressionReason = currentPatron is null ? "patron_refresh_unavailable" :
+        var toAddress = identitySuppression is null ? Clean(currentPatron?.Email) : null;
+        string? suppressionReason = identitySuppression ?? (
             systemTemplate?.IsHidden == true || libraryTemplate?.IsHidden == true
-                ? "template_hidden" : null;
+                ? "template_hidden" : null);
         if (suppressionReason is null && (toAddress is null || !MailAddress.TryCreate(toAddress, out var parsed) ||
             parsed.Address != toAddress))
         {
@@ -1479,7 +1476,9 @@ public sealed class TitleRequestMutationService(
             .Where(item => item.Id == request.MaterialFormatId)
             .Select(item => item.Label)
             .SingleAsync(cancellationToken);
-        var patron = currentPatron ?? new PatronSnapshot(0, request.Barcode, null,
+        var notificationOperation = await LatestSuccessfulHoldForNotificationAsync(context, request.Id, cancellationToken);
+        var identitySuppression = PatronNotificationIdentity.SuppressionReason(currentPatron, request, notificationOperation);
+        var patron = identitySuppression is null ? currentPatron! : new PatronSnapshot(0, request.Barcode, null,
             request.NameFirst, request.NameLast, request.PatronCodeId,
             request.PatronCodeDescription, request.PatronOrganizationId ?? 0,
             request.LibraryOrganizationId, request.LibraryNameSnapshot ?? string.Empty,
@@ -1493,9 +1492,8 @@ public sealed class TitleRequestMutationService(
             .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
         var fromAddress = Clean(library?.FromAddress) ?? Clean(system?.FromAddress);
         var fromName = Clean(library?.FromName) ?? Clean(system?.FromName);
-        var toAddress = Clean(currentPatron?.Email);
-        string? suppressionReason = currentPatron is null ? "patron_refresh_unavailable" :
-            template.IsHidden ? "template_hidden" : null;
+        var toAddress = identitySuppression is null ? Clean(currentPatron?.Email) : null;
+        string? suppressionReason = identitySuppression ?? (template.IsHidden ? "template_hidden" : null);
         if (suppressionReason is null && (toAddress is null || !MailAddress.TryCreate(toAddress, out var parsed) ||
             parsed.Address != toAddress))
         {
@@ -1535,6 +1533,15 @@ public sealed class TitleRequestMutationService(
         await context.SaveChangesAsync(cancellationToken);
         return outbox;
     }
+
+    private static Task<HoldPlacementOperation?> LatestSuccessfulHoldForNotificationAsync(
+        AsapDbContext context,
+        long requestId,
+        CancellationToken cancellationToken) =>
+        context.HoldPlacementOperations.AsNoTracking()
+            .Where(item => item.TitleRequestId == requestId && item.State == HoldOperationState.Succeeded)
+            .OrderByDescending(item => item.AttemptNumber)
+            .FirstOrDefaultAsync(cancellationToken);
 
     private void Dispatch(EmailOutbox? outbox, CancellationToken cancellationToken)
     {

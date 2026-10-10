@@ -308,7 +308,8 @@ public static class MigrationImporter
                 postmarkToken is not null,
                 bootstrapMutatedStaffUserId,
                 importedCounts.GetValueOrDefault("migration_bootstrap_staff_users") == 1,
-                credentialProtector);
+                credentialProtector,
+                options.ExternalConfigurationPath);
             VerifyUsableSuperAdministrator(
                 connection,
                 transaction,
@@ -3837,6 +3838,8 @@ public static class MigrationImporter
             ["email_outbox"] = Scalar(connection, transaction, "SELECT COUNT(*) FROM [asap].[EmailOutbox];"),
             ["queue_progress"] = Scalar(connection, transaction, "SELECT COUNT(*) FROM [asap].[QueueProgress];"),
             ["hold_placement_operations"] = Scalar(connection, transaction, "SELECT COUNT(*) FROM [asap].[HoldPlacementOperation];"),
+            ["pickup_preference_operations"] = Scalar(connection, transaction, "SELECT COUNT(*) FROM [asap].[PickupPreferenceOperation];"),
+            ["administrative_audit"] = Scalar(connection, transaction, "SELECT COUNT(*) FROM [asap].[AdministrativeAudit];"),
             ["invalid_active_claim_rules"] = ScalarWithAllowedTenants(connection, transaction,
                 """
                 SELECT COUNT(*)
@@ -3886,6 +3889,7 @@ public static class MigrationImporter
             counts["placed_bib_protection_markers"] != importedCounts.GetValueOrDefault("placed_bib_protection_markers") ||
             counts["additional_copy_claim_migration_annotations"] != importedCounts.GetValueOrDefault("additional_copy_claim_migration_annotations") ||
             counts["patron_sessions"] != 0 || counts["email_outbox"] != 0 || counts["queue_progress"] != 0 ||
+            counts["hold_placement_operations"] != 0 || counts["pickup_preference_operations"] != 0 || counts["administrative_audit"] != 0 ||
             counts["invalid_active_claim_rules"] != 0 || counts["invalid_open_title_request_claims"] != 0 ||
             counts["invalid_open_additional_copy_claims"] != 0 ||
             counts["invalid_found_requests"] != 0)

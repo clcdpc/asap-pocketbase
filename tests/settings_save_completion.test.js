@@ -288,9 +288,9 @@ async function flush() {
     assert.strictEqual(saveBar.classList.contains('attention'), true);
 
     formatRows = [
-      { id: '9007199254740991', version: 'format-v1', code: 'local_one', label: 'Local one', ownerOrganizationId: 2, isEnabled: true, customFields: {} },
-      { id: '9007199254740992', version: 'format-v2', code: 'local_two', label: 'Local two', ownerOrganizationId: 2, isEnabled: true, customFields: {} },
-      { id: '9007199254740994', version: 'format-v3', code: 'local_three', label: 'Local three', ownerOrganizationId: 2, isEnabled: true, customFields: {} }
+      { id: '9007199254740991', version: 'format-v1', code: 'local_one', label: 'Local one', ownerOrganizationId: 2, overridden: false, isEnabled: true, customFields: {} },
+      { id: '9007199254740992', version: 'format-v2', code: 'local_two', label: 'Local two', ownerOrganizationId: 2, overridden: false, isEnabled: true, customFields: {} },
+      { id: '9007199254740994', version: 'format-v3', code: 'local_three', label: 'Local three', ownerOrganizationId: 2, overridden: false, isEnabled: true, customFields: {} }
     ];
     refreshFailureStatus = 0;
     document.getElementById('settings-refresh').click();

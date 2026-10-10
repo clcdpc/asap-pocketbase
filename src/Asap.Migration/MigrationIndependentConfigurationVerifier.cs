@@ -976,18 +976,18 @@ internal static class MigrationIndependentConfigurationVerifier
                 using var reader = command.ExecuteReader();
                 Ensure(reader.Read(), "workflow settings row");
                 Ensure(
-                    NullableInt(reader, 0) == (system ? row.Int32("suggestionLimit") ?? 5 : row.Int32("suggestionLimit")) &&
+                    NullableInt(reader, 0) == ExpectedWorkflowInteger(row, "suggestionLimit", system, 5) &&
                     Same(reader, 1, WorkflowScopedText(row, "suggestionLimitMessage", system)) &&
                 NullableBoolean(reader, 2) == (system ? row.Bool("outstandingTimeoutEnabled", false) : row.NullableBool("outstandingTimeoutEnabled")) &&
-                    NullableInt(reader, 3) == (system ? row.Int32("outstandingTimeoutDays") ?? 30 : row.Int32("outstandingTimeoutDays")) &&
+                    NullableInt(reader, 3) == ExpectedWorkflowInteger(row, "outstandingTimeoutDays", system, 30) &&
                 NullableBoolean(reader, 4) == (system ? row.Bool("outstandingTimeoutSendEmail", false) : row.NullableBool("outstandingTimeoutSendEmail")) &&
                     NullableLong(reader, 5) == targetTemplateId &&
                 NullableBoolean(reader, 6) == (system ? row.Bool("holdPickupTimeoutEnabled", false) : row.NullableBool("holdPickupTimeoutEnabled")) &&
-                    NullableInt(reader, 7) == (system ? row.Int32("holdPickupTimeoutDays") ?? 14 : row.Int32("holdPickupTimeoutDays")) &&
+                    NullableInt(reader, 7) == ExpectedWorkflowInteger(row, "holdPickupTimeoutDays", system, 14) &&
                 NullableBoolean(reader, 8) == (system ? row.Bool("pendingHoldTimeoutEnabled", false) : row.NullableBool("pendingHoldTimeoutEnabled")) &&
-                    NullableInt(reader, 9) == (system ? row.Int32("pendingHoldTimeoutDays") ?? 14 : row.Int32("pendingHoldTimeoutDays")) &&
+                    NullableInt(reader, 9) == ExpectedWorkflowInteger(row, "pendingHoldTimeoutDays", system, 14) &&
                 NullableBoolean(reader, 10) == (system ? row.Bool("additionalCopyTimeoutEnabled", false) : row.NullableBool("additionalCopyTimeoutEnabled")) &&
-                    NullableInt(reader, 11) == (system ? row.Int32("additionalCopyTimeoutDays") ?? 14 : row.Int32("additionalCopyTimeoutDays")) &&
+                    NullableInt(reader, 11) == ExpectedWorkflowInteger(row, "additionalCopyTimeoutDays", system, 14) &&
                 NullableBoolean(reader, 12) == (system ? row.Bool("autoPromote", false) : row.NullableBool("autoPromote")) &&
                 NullableBoolean(reader, 13) == (system ? row.Bool("commonAuthorsEnabled", false) : row.NullableBool("commonAuthorsEnabled")) &&
                     Same(reader, 14, WorkflowScopedText(row, "commonAuthorsLabel", system)) &&
@@ -1422,6 +1422,7 @@ internal static class MigrationIndependentConfigurationVerifier
         if (trimmed.StartsWith("[", StringComparison.Ordinal))
         {
             using var document = JsonDocument.Parse(trimmed);
+            VerifyPublicationPropertyUniqueness(document.RootElement);
             Ensure(document.RootElement.ValueKind == JsonValueKind.Array, "publication option array");
             var index = 0;
             var seenIds = new HashSet<string>(StringComparer.Ordinal);
@@ -1474,6 +1475,38 @@ internal static class MigrationIndependentConfigurationVerifier
             return isSystem ? SystemPublicationOptionDefaults() : [];
         }
         return result.OrderBy(option => option.SortOrder).ToArray();
+    }
+
+    private static int? ExpectedWorkflowInteger(SourceRow row, string field, bool system, int fixedFallback)
+    {
+        var configured = row.Int32(field);
+        if (!configured.HasValue)
+        {
+            return system ? fixedFallback : null;
+        }
+        return configured.Value != 0 ? configured.Value : fixedFallback;
+    }
+
+    private static void VerifyPublicationPropertyUniqueness(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+            {
+                VerifyPublicationPropertyUniqueness(item);
+            }
+            return;
+        }
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in value.EnumerateObject())
+        {
+            Ensure(names.Add(property.Name), "publication option duplicate JSON property");
+            VerifyPublicationPropertyUniqueness(property.Value);
+        }
     }
 
     private static string PublicationKey(string label, string fallback) =>

@@ -92,6 +92,7 @@ public sealed partial class PatronJourneyTests
         {
             LibraryOrganizationId = libraryId,
             Barcode = $"2{Guid.NewGuid():N}"[..14],
+            PatronIdSnapshot = 7001,
             Email = email,
             NameFirst = "Pat",
             Title = title,

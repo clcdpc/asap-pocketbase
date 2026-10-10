@@ -1739,6 +1739,13 @@ export function createSettingsController({
       dom.saveLogo.focus();
       return;
     }
+    let payload;
+    try {
+      payload = collectPayload();
+    } catch (error) {
+      notify(error.message || 'The settings are invalid. Reload settings before saving.', 'error');
+      return;
+    }
     const mutation = beginSettingsMutation('administration-settings-save', settingsDraft);
     if (!mutation) return;
     state.saving = true;
@@ -1751,7 +1758,6 @@ export function createSettingsController({
       ? `Settings saved. Format deletions confirmed: ${deletedFormatCount} of ${totalFormatDeletes}.`
       : 'Settings saved.';
     try {
-      const payload = collectPayload();
       // System saves replace the authoritative participation set as well as configuration.
       mutation.catalogChanged = Array.isArray(payload.systemSettings?.enabledLibraryOrgIds);
       const deletedFormats = state.pendingDeletedFormats.slice();

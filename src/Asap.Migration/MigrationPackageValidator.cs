@@ -615,6 +615,7 @@ public static class MigrationPackageValidator
                 }
 
                 ValidateSourceIdentityFields(collection.Name, row);
+                ValidateDecodedPublicationProperties(collection.Name, row);
             }
 
             if (!observedCounts.TryAdd(collection.Name, collection.Value.GetArrayLength()))
@@ -629,6 +630,33 @@ public static class MigrationPackageValidator
             throw new MigrationOperationException(
                 "package_domain_invalid",
                 $"Domain file {Path.GetFileName(path)} does not contain its complete collection set.");
+        }
+    }
+
+    private static void ValidateDecodedPublicationProperties(string collection, JsonElement row)
+    {
+        var modernOverride = collection.Equals("patron_settings_overrides", StringComparison.OrdinalIgnoreCase);
+        var systemUi = collection.Equals("ui_settings", StringComparison.OrdinalIgnoreCase) &&
+            TryGetIdentityProperty(row, "scope", out var scope) && scope.ValueKind == JsonValueKind.String &&
+            string.Equals(scope.GetString()?.Trim(), "system", StringComparison.OrdinalIgnoreCase);
+        if ((!modernOverride && !systemUi) ||
+            !TryGetIdentityProperty(row, "publicationOptions", out var options) || options.ValueKind != JsonValueKind.String)
+        {
+            return;
+        }
+        var text = TrimJavascriptWhitespace(options.GetString()!);
+        if (!text.StartsWith("[", StringComparison.Ordinal))
+        {
+            return;
+        }
+        try
+        {
+            using var decoded = JsonDocument.Parse(text);
+            EnsureNoDuplicateProperties(decoded.RootElement, "publication_options_invalid");
+        }
+        catch (JsonException)
+        {
+            throw new MigrationOperationException("publication_options_invalid", "Publication options contain invalid JSON.");
         }
     }
 

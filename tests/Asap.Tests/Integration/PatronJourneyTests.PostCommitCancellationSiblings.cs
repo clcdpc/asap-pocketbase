@@ -31,6 +31,12 @@ public sealed partial class PatronJourneyTests
         var settings = await ConfigureCancellationEmailSettingsAsync();
         var seeded = await SeedBibOwnershipRequestAsync(
             $"post-commit-{Guid.NewGuid():N}", null, false, status: "suggestion");
+        await using (var setup = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync())
+        {
+            var request = await setup.TitleRequests.SingleAsync(item => item.Id == seeded.Id);
+            request.PatronIdSnapshot = 7001;
+            await setup.SaveChangesAsync();
+        }
         var title = await ReadCancellationTitleRequestSnapshotAsync(seeded.Id);
         using var cancellation = new CancellationTokenSource();
         var dispatcher = new CancelAfterCommitOutboxDispatcher(dispatchMode);

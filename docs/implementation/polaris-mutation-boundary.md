@@ -94,3 +94,40 @@ Real SQL and actual-package recording-handler tests cover these boundaries,
 including NULL journaling, all three HTTP entry points, disconnect-after-write
 reconciliation, null concurrency, authentication failures, programming defects,
 cancellation and no-effect completion. Ordinary tests make no live PAPI calls.
+
+## PR #377 residual provider investigations
+
+INV-001 remains an external contract uncertainty. The pinned SDK's
+[`OrganizationsGetAsync`](https://github.com/clcdpc/polaris-api-csharp/blob/c89d9e604fdf9c1a21012c639f8baa9e1e80d214/src/polaris-api-csharp/Methods/OrganizationsGet.cs)
+performs a single organization-scoped GET. The vendor's
+[`OrganizationsGet` contract](https://documentation.iii.com/polaris/PAPI/7.1/PAPIService/PAPIServiceOrganizationsGet.htm)
+describes type filtering and the returned row count, but establishes no
+deletion/tombstone or deployed access-filtering guarantee. This evidence does
+not establish that omission is a reliable loss-of-authority signal. Both
+manual sync and scheduled refresh preserve an omitted row's prior
+classification, activity and LastSyncedUtc; SQL staff authority can therefore
+continue without a new observation. Operators can explicitly deactivate a
+library, which revokes sessions and fences new mutations; observed
+reclassification also removes library authority while preserving references.
+No automatic omission deactivation is implemented. A safe policy requires the
+deployed service/version and access-filter contract, plus a confirmed full
+snapshot followed by omission. This is a release/operator evidence requirement,
+not a newly proven implementation defect.
+
+INV-002 also remains a documented remote-observation risk. SQL authority at
+pickup intent uses the last provider-verified patron snapshot. Public and staff
+suggestion final acceptance refresh again, but that refresh follows pickup
+processing. `ProviderRegistrationChangedDuringReadinessIsRejectedAtFinalAcceptance`
+changes actual provider home, code and native identity during readiness and
+checks both no-PUT rejection and truthful partial outcomes after a known PUT.
+It does not assert that remote authorization is atomic. Branch selection uses
+the earlier verified eligible list; later eligibility can change remotely.
+The pinned
+[`PatronUpdateAsync`](https://github.com/clcdpc/polaris-api-csharp/blob/c89d9e604fdf9c1a21012c639f8baa9e1e80d214/src/polaris-api-csharp/Methods/PatronUpdate.cs)
+addresses a barcode and supplies pickup data, without an expected native ID,
+registration version or conditional identity argument. Another read could
+narrow this gap but cannot eliminate it. The deployed barcode reassignment and
+former-alias resolution semantics, server-side policy checks, and any supported
+conditional/stable-identity API must be established before changing this
+policy. Deterministic tests are evidence of local boundary behavior, not of
+deployed Polaris semantics. No unsupported conditional write is invented.

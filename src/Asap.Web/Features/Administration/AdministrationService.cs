@@ -126,8 +126,8 @@ public sealed partial class AdministrationService(
             .ToArrayAsync(cancellationToken);
         var enabledLibraryOrgIds = libraryOrganizations.Where(item => item.IsActive).Select(item => item.Id).ToArray();
         var libraryOrgIds = libraryOrganizations.Select(item => item.Id).ToArray();
-        var providers = await LoadProvidersAsync(context, organizationId, cancellationToken);
-        var formats = await LoadFormatsAsync(context, organizationId, cancellationToken);
+        var (providers, overriddenProviderIds) = await LoadProvidersAsync(context, organizationId, cancellationToken);
+        var (formats, formatMetadata) = await LoadFormatsAsync(context, organizationId, cancellationToken);
         var customFields = organizationId == LibraryScope.SystemOrganizationId
             ? []
             : await LoadCustomFieldsAsync(context, organizationId, cancellationToken);
@@ -217,7 +217,8 @@ public sealed partial class AdministrationService(
             branding = ToBranding(branding)
         };
 
-        var effectiveDto = ToEffectiveConfiguration(effective, systemWorkflow, libraryWorkflow);
+        var effectiveDto = ToEffectiveConfiguration(effective, systemWorkflow, libraryWorkflow,
+            overriddenProviderIds, formatMetadata);
         var result = new AdministrationResult(
             "ok",
             new
@@ -341,11 +342,19 @@ public sealed partial class AdministrationService(
         }
         else
         {
-            if (organizationId == LibraryScope.SystemOrganizationId)
+            try
             {
-                await ApplySystemSettingsAsync(context, command, cancellationToken);
+                if (organizationId == LibraryScope.SystemOrganizationId)
+                {
+                    await ApplySystemSettingsAsync(context, command, cancellationToken);
+                }
+                await ApplyScopedSettingsAsync(context, organizationId, command, cancellationToken);
             }
-            await ApplyScopedSettingsAsync(context, organizationId, command, cancellationToken);
+            catch (DbUpdateConcurrencyException)
+            {
+                return new AdministrationResult("stale_version",
+                    Message: "A submitted settings row changed. Reload before saving.");
+            }
         }
 
         if (!isReset)

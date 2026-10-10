@@ -133,6 +133,46 @@ async function until(predicate, message) {
     }
 
     await login('20000000000901');
+    for (const scenario of [
+      { code: 'submission_configuration_changed', message: 'The suggestion form changed. Refresh the form and try again.' },
+      { code: 'material_format_changed', message: 'The selected material format changed. Refresh the form and try again.' },
+      { code: 'request_not_created_pickup_changed', message: 'The pickup preference changed, but the suggestion was not created.' }
+    ]) {
+      fillDraft('20000000000901');
+      const before = readOwnerState();
+      const rejected = submit.handleSuggestionSubmit({ preventDefault() {} });
+      await until(() => pendingSubmission !== null, `${scenario.code} submission did not start`);
+      const dispatched = pendingSubmission;
+      pendingSubmission = null;
+      dispatched.resolve(response(409, scenario));
+      await rejected;
+      assert.equal(document.getElementById('step-form').classList.contains('hidden'), false,
+        `${scenario.code} must keep the draft in the form instead of claiming an existing submission.`);
+      assert.equal(document.getElementById('step-conflict').classList.contains('hidden'), true);
+      assert.equal(document.getElementById('submit-error').textContent, scenario.message);
+      assert.equal(document.activeElement, document.getElementById('submit-error'));
+      assert.equal(document.getElementById('title').value, before.title);
+      assert.equal(document.getElementById('submit-btn').disabled, false);
+      await auth.logout();
+      await login('20000000000901');
+    }
+
+    fillDraft('20000000000901');
+    const duplicateSubmission = submit.handleSuggestionSubmit({ preventDefault() {} });
+    await until(() => pendingSubmission !== null, 'The real duplicate control did not start');
+    const duplicateRequest = pendingSubmission;
+    pendingSubmission = null;
+    duplicateRequest.resolve(response(409, {
+      message: 'This patron already has this suggestion.', conflictTitle: 'Already Submitted',
+      conflictMessage: 'This title is already being reviewed.',
+      duplicate: { id: '9007199254740993', status: 'suggestion', title: 'Existing title' }
+    }));
+    await duplicateSubmission;
+    assert.equal(document.getElementById('step-conflict').classList.contains('hidden'), false);
+    assert.equal(document.getElementById('conflict-title').textContent, 'Already Submitted');
+    await auth.logout();
+    await login('20000000000901');
+
     for (const id of ['9007199254740993', '9223372036854775807']) {
       fillDraft('20000000000901');
       const accepted = submit.handleSuggestionSubmit({ preventDefault() {} });

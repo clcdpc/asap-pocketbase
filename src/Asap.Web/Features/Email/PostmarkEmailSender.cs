@@ -59,7 +59,7 @@ public sealed class PostmarkEmailSender(
 
         await using var content = await response.Content.ReadAsStreamAsync(timeout.Token);
         using var result = await JsonDocument.ParseAsync(content, cancellationToken: timeout.Token);
-        if (result.RootElement.ValueKind != JsonValueKind.Object ||
+        if (!HasUniqueObjectProperties(result.RootElement) ||
             !result.RootElement.TryGetProperty("ID", out var id) ||
             id.ValueKind != JsonValueKind.Number || !id.TryGetInt64(out var serverId) || serverId <= 0)
         {
@@ -118,8 +118,11 @@ public sealed class PostmarkEmailSender(
                 content = await response.Content.ReadAsStreamAsync(cancellationToken);
                 using var result = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken);
                 var root = result.RootElement;
-                if (!root.TryGetProperty("ErrorCode", out var errorCode) || errorCode.GetInt32() != 0 ||
+                if (!HasUniqueObjectProperties(root) ||
+                    !root.TryGetProperty("ErrorCode", out var errorCode) ||
+                    errorCode.ValueKind != JsonValueKind.Number || !errorCode.TryGetInt32(out var code) || code != 0 ||
                     !root.TryGetProperty("MessageID", out var messageId) ||
+                    messageId.ValueKind != JsonValueKind.String ||
                     string.IsNullOrWhiteSpace(messageId.GetString()))
                 {
                     throw new InvalidOperationException("Postmark did not confirm email acceptance.");
@@ -153,6 +156,24 @@ public sealed class PostmarkEmailSender(
                 LogCleanupFailure(cleanupFailure);
             }
         }
+    }
+
+    private static bool HasUniqueObjectProperties(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!names.Add(property.Name))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void LogCleanupFailure(Exception exception)

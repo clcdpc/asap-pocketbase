@@ -46,7 +46,7 @@ assert.ok(!workflow.includes('\n    concurrency:'), 'build-test-package must not
 assert.ok(workflow.includes('Generate ephemeral SQL test credentials'), 'CI SQL credentials should be generated per run');
 assert.ok(!workflow.includes('Asap_Slice0_SQL_2026'), 'CI must not retain the historical hard-coded SQL password');
 assert.ok(workflow.includes('ref: ${{ github.sha }}'), 'the hosted job should check out the exact event SHA');
-assert.ok(workflow.includes('--minimum-expected-tests 1231'), 'the non-browser real-SQL partition must guard the current discovered test count');
+assert.ok(workflow.includes('--minimum-expected-tests 1357'), 'the non-browser real-SQL partition must guard the current discovered test count');
 const nonBrowserFilter = workflow.match(/--filter\s*'([^']+)'/)?.[1];
 assert.ok(nonBrowserFilter, 'the non-browser real-SQL partition must explicitly exclude browser journeys');
 const nonBrowserFilterTerms = nonBrowserFilter.split('&');
@@ -58,13 +58,13 @@ const nonBrowserIncludes = nonBrowserFilterTerms
   .map((term) => term.slice('FullyQualifiedName~'.length));
 const browserJourneys = [...browserRunner.matchAll(/'FullyQualifiedName~([^']+)'/g)]
   .map((match) => match[1]);
-assert.equal(browserJourneys.length, 6, 'the browser partition must contain all six current discovered browser journeys');
+assert.equal(browserJourneys.length, 7, 'the browser partition must contain all seven current discovered browser journeys');
 assert.equal(nonBrowserIncludes.length, 0, 'the non-browser partition should include all discovered tests except explicit browser exclusions');
 assert.equal(new Set(browserJourneys).size, browserJourneys.length, 'the browser partition must not list a journey twice');
 assert.deepStrictEqual(
   [...browserExclusions].sort(),
   [...browserJourneys].sort(),
-  'the non-browser partition must exclude exactly the six browser journeys'
+  'the non-browser partition must exclude exactly the seven browser journeys'
 );
 assert.equal(
   new Set(browserExclusions).size,
@@ -75,8 +75,8 @@ assert.ok(
   nonBrowserIncludes.every((name) => !browserJourneys.includes(name)),
   'the browser and non-browser partitions must be disjoint'
 );
-assert.match(browserRunner, /'--minimum-expected-tests',\s*'6'/,
-  'the browser runner must guard all six discovered browser journeys');
+assert.match(browserRunner, /'--minimum-expected-tests',\s*'7'/,
+  'the browser runner must guard all seven discovered browser journeys');
 assert.ok(workflow.includes('run: npm test'), 'the frontend test gate must remain');
 assert.ok(workflow.includes('dotnet publish src/Asap.Web/Asap.Web.csproj'), 'Web publish must remain a hosted check');
 assert.ok(workflow.includes('dotnet publish src/Asap.Migration/Asap.Migration.csproj'), 'native migration publish check must remain');
