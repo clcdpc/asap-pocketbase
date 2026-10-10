@@ -46,6 +46,53 @@ function isCanonicalPositiveInt64Id(value) {
     (value.length < 19 || value.length === 19 && value <= '9223372036854775807');
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasStringProperties(value, properties) {
+  return isRecord(value) && properties.every(property => typeof value[property] === 'string');
+}
+
+function isStringMap(value) {
+  return isRecord(value) && Object.values(value).every(item => typeof item === 'string');
+}
+
+function hasValidAdditionalField(value) {
+  if (!hasStringProperties(value, ['id', 'key', 'type', 'label']) ||
+      typeof value.enabled !== 'boolean' ||
+      value.helpText !== null && typeof value.helpText !== 'string' ||
+      !Array.isArray(value.options)) {
+    return false;
+  }
+
+  return value.options.every(option =>
+    hasStringProperties(option, ['id', 'label']) && typeof option.enabled === 'boolean');
+}
+
+function hasValidPatronConfiguration(value) {
+  if (!hasStringProperties(value, [
+    'pageTitle', 'barcodeLabel', 'pinLabel', 'loginPrompt', 'loginNote', 'suggestionFormNote',
+    'noEmailMessage', 'successTitle', 'successMessage', 'alreadySubmittedMessage',
+    'misconfiguredMessage', 'ebookMessage', 'eaudiobookMessage', 'commonAuthorsList',
+    'commonAuthorsLabel', 'commonAuthorsHelp', 'commonAuthorsMessage', 'externalSearch1Label',
+    'externalSearch1UrlTemplate', 'externalSearch2Label', 'externalSearch2UrlTemplate',
+    'externalSearch3Label', 'externalSearch3UrlTemplate', 'externalSearch4Label',
+    'externalSearch4UrlTemplate', 'logoUrl', 'logoAlt', 'systemNotEnabledMessage', 'library'
+  ]) || !isStringMap(value.duplicateStatusLabels) || !isStringMap(value.formatLabels) ||
+      !isRecord(value.formatRules) ||
+      !Array.isArray(value.publicationOptions) || !value.publicationOptions.every(item => typeof item === 'string') ||
+      !Array.isArray(value.availableFormats) || !value.availableFormats.every(item => typeof item === 'string') ||
+      !Array.isArray(value.additionalFieldDefinitions) || !value.additionalFieldDefinitions.every(hasValidAdditionalField)) {
+    return false;
+  }
+
+  return [
+    'commonAuthorsEnabled', 'externalSearch1Enabled', 'externalSearch2Enabled',
+    'externalSearch3Enabled', 'externalSearch4Enabled', 'allowPatronAutoholdOptOut', 'systemNotEnabled'
+  ].every(property => typeof value[property] === 'boolean');
+}
+
 function hasValidPatronSession(data, requireToken) {
   const tokenIsValid = !requireToken ||
     typeof data?.token === 'string' && data.token.trim().length > 0;
@@ -59,7 +106,8 @@ function hasValidPatronSession(data, requireToken) {
     Array.isArray(data?.pickupBranches) &&
     data.pickupBranches.every(branch => branch && typeof branch === 'object' && !Array.isArray(branch) &&
       isPositiveInt32(branch.id) && typeof branch.label === 'string') &&
-    selectedBranchIsValid;
+    selectedBranchIsValid &&
+    hasValidPatronConfiguration(data?.ui_text);
 }
 
 export function loginPatron(payload) {

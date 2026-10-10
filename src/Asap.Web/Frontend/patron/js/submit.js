@@ -61,6 +61,17 @@ export async function handleSuggestionSubmit(event) {
     showSubmitError('Choose a preferred pickup location before submitting.');
     return;
   }
+  const formatSelect = byId('format');
+  const availableFormats = Array.isArray(uiConfig.availableFormats)
+    ? uiConfig.availableFormats
+    : Array.from(formatSelect?.options || []).map(option => option.value);
+  const selectedFormat = formatSelect?.value || '';
+  if (!selectedFormat || !availableFormats.includes(selectedFormat)) {
+    showSubmitError(availableFormats.length === 0
+      ? 'No suggestion formats are currently available. Please contact your library.'
+      : 'Choose an available material format before submitting.');
+    return;
+  }
   const operation = captureAuthOperation();
   const token = authToken;
   setSubmitBusy(true);

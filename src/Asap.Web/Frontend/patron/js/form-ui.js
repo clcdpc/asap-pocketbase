@@ -192,7 +192,7 @@ export function updateFormatLabels() {
   const select = formatSelect;
   if (!select) return;
 
-  if (available && available.length > 0) {
+  if (Array.isArray(available)) {
     replaceChildren(select, ...available.map(key => optionNode(key, labels[key] || key)));
   } else {
     Array.from(select.options).forEach(option => {

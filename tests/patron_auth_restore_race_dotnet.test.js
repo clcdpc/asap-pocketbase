@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { JSDOM } = require('jsdom');
+const { patronSession, patronUiText } = require('./helpers/patron-session-fixture');
 
 function response(status, body) {
   return {
@@ -15,17 +16,21 @@ function response(status, body) {
 }
 
 function session(barcode, token, overrides = {}) {
-  return {
-    token,
-    barcode,
-    email: barcode + '@example.org',
-    preferredPickupBranchId: 101,
-    selectedPickupBranchId: 101,
-    pickupBranches: [{ id: 101, label: 'Main Library' }],
-    record: { email: barcode + '@example.org', libraryOrgId: 2 },
-    effectiveLibraryOrgId: 2,
-    ...overrides
+  return patronSession(barcode, token, overrides);
+}
+
+function aLibraryUiText() {
+  const configuration = patronUiText('A', {
+    customField: { key: 'a_subject', label: 'A Subject', ruleLabel: null, mode: 'required' }
+  });
+  configuration.formatRules.library_a_format = {
+    ...configuration.formatRules.book,
+    fields: { ...configuration.formatRules.book.fields },
+    customFields: { ...configuration.formatRules.book.customFields }
   };
+  configuration.formatLabels.library_a_format = 'A Special Format';
+  configuration.availableFormats = ['library_a_format', 'ebook'];
+  return configuration;
 }
 
 (async () => {
@@ -49,6 +54,8 @@ function session(barcode, token, overrides = {}) {
     sessionStorage.setItem('asap_patron_token', 'token-A');
 
     let pendingRestore;
+    let loginResponseOverride = null;
+    let suggestionRequests = 0;
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
       if (requestUrl.endsWith('/api/asap/patron/session')) {
@@ -58,15 +65,153 @@ function session(barcode, token, overrides = {}) {
       }
       if (requestUrl.endsWith('/api/asap/patron/login')) {
         const data = JSON.parse(options.body);
-        return response(200, session(data.username, 'token-' + data.username));
+        return response(200, loginResponseOverride || session(data.username, 'token-' + data.username));
+      }
+      if (requestUrl.endsWith('/api/asap/patron/logout')) return response(204, null);
+      if (requestUrl.endsWith('/api/asap/patron/suggestions')) {
+        suggestionRequests++;
+        return response(201, { id: '1', successTitle: 'Saved', successMessage: 'Saved' });
+      }
+      throw new Error('Unexpected request: ' + requestUrl);
+    };
+    const initialFetch = global.fetch;
+
+    const auth = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'auth.js')).href);
+    const state = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'state.js')).href);
+    const config = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'config.js')).href);
+    const submit = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'submit.js')).href);
+    const barcode = document.getElementById('barcode');
+    const pin = document.getElementById('pin');
+
+    let queuedLoginPayload;
+    let queuedRestorePayload;
+    global.fetch = async (url, options = {}) => {
+      const requestUrl = String(url);
+      if (requestUrl.endsWith('/api/asap/patron/login')) return response(200, queuedLoginPayload);
+      if (requestUrl.endsWith('/api/asap/patron/session')) return response(200, queuedRestorePayload);
+      if (requestUrl.endsWith('/api/asap/patron/logout')) return response(204, null);
+      if (requestUrl.endsWith('/api/asap/patron/suggestions')) {
+        suggestionRequests++;
+        return response(201, { id: '1', successTitle: 'Saved', successMessage: 'Saved' });
       }
       throw new Error('Unexpected request: ' + requestUrl);
     };
 
-    const auth = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'auth.js')).href);
-    const state = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'state.js')).href);
-    const barcode = document.getElementById('barcode');
-    const pin = document.getElementById('pin');
+    const invalidUiTextCases = [
+      { name: 'missing ui_text', create: () => undefined },
+      { name: 'null ui_text', create: () => null },
+      { name: 'array ui_text', create: () => [] },
+      { name: 'partial ui_text', create: () => ({ pageTitle: 'B Material Suggestion' }) },
+      { name: 'object availableFormats', create: () => patronUiText('B', { availableFormats: {} }) },
+      { name: 'array formatRules', create: () => patronUiText('B', { formatRules: [] }) }
+    ];
+    const aUiText = aLibraryUiText();
+    function uiSnapshot() {
+      return {
+        pageTitle: document.title,
+        heading: document.getElementById('main-title').textContent,
+        displayedBarcode: document.getElementById('display-barcode').textContent,
+        formatOptions: Array.from(document.getElementById('format').options)
+          .map(option => [option.value, option.textContent]),
+        publicationOptions: Array.from(document.getElementById('publication').options)
+          .map(option => option.value),
+        customFields: Array.from(document.querySelectorAll('.custom-field-row'))
+          .map(row => [row.dataset.customFieldKey, row.querySelector('.custom-field-input').required])
+      };
+    }
+
+    for (const channel of ['login', 'restore']) {
+      for (const invalidUiText of invalidUiTextCases) {
+        state.setAuthToken('');
+        queuedLoginPayload = session('A20000000000921', 'token-A20000000000921', { ui_text: aUiText });
+        barcode.value = 'A20000000000921';
+        pin.value = '1234';
+        await auth.handleLoginSubmit({ preventDefault() {} });
+        assert.strictEqual(state.authToken, 'token-A20000000000921', `${channel}: A session starts with a complete producer-shaped snapshot`);
+        const expectedUi = uiSnapshot();
+
+        const invalidPayload = session('B20000000000922', channel === 'restore' ? null : 'token-B20000000000922', {
+          effectiveLibraryOrgId: 3,
+          ui_text: invalidUiText.create()
+        });
+        if (invalidUiText.name === 'missing ui_text') delete invalidPayload.ui_text;
+
+        if (channel === 'login') {
+          await auth.logout();
+          queuedLoginPayload = invalidPayload;
+          barcode.value = 'B20000000000922';
+          pin.value = '1234';
+          await auth.handleLoginSubmit({ preventDefault() {} });
+        } else {
+          queuedRestorePayload = invalidPayload;
+          await auth.restoreSession();
+        }
+
+        assert.strictEqual(state.authToken, '', `${channel} rejects ${invalidUiText.name} before establishing B`);
+        assert.strictEqual(sessionStorage.getItem('asap_patron_token'), null,
+          `${channel} ${invalidUiText.name} cannot persist B's token`);
+        assert.strictEqual(document.getElementById('step-form').classList.contains('hidden'), true,
+          `${channel} ${invalidUiText.name} cannot open B's suggestion form`);
+        assert.deepStrictEqual(uiSnapshot(), expectedUi,
+          `${channel} ${invalidUiText.name} cannot replace A's identity or configuration DOM`);
+      }
+    }
+    global.fetch = initialFetch;
+
+    // A complete no-format login must clear the preceding A configuration.
+    state.setAuthToken('');
+    loginResponseOverride = session('F20000000000900', 'token-F20000000000900', {
+      ui_text: patronUiText('Fresh', { availableFormats: [] })
+    });
+    barcode.value = 'F20000000000900';
+    pin.value = '1234';
+    await auth.handleLoginSubmit({ preventDefault() {} });
+    assert.strictEqual(config.uiConfig.pageTitle, 'Fresh Material Suggestion');
+    assert.deepStrictEqual(Array.from(document.getElementById('format').options), [],
+      'a complete no-format session snapshot clears the previous format options');
+    assert.strictEqual(document.getElementById('format').checkValidity(), false,
+      'an empty required format selector cannot validate a suggestion');
+    const freshSuggestionCount = suggestionRequests;
+    await submit.handleSuggestionSubmit({ preventDefault() {} });
+    assert.strictEqual(suggestionRequests, freshSuggestionCount,
+      'an empty enabled-format list cannot dispatch a suggestion');
+    assert.match(document.getElementById('submit-error').textContent, /format.*available/i,
+      'an empty enabled-format list explains why submission is unavailable');
+    await auth.logout();
+
+    // An empty list from library B must replace library A's options and custom fields.
+    loginResponseOverride = session('A20000000000911', 'token-A20000000000911', {
+      ui_text: aLibraryUiText()
+    });
+    barcode.value = 'A20000000000911';
+    pin.value = '1234';
+    await auth.handleLoginSubmit({ preventDefault() {} });
+    assert.deepStrictEqual(Array.from(document.getElementById('format').options).map(option => option.value), ['library_a_format', 'ebook']);
+    assert.strictEqual(document.getElementById('format').options[0].textContent, 'A Special Format');
+    assert.deepStrictEqual(Array.from(document.querySelectorAll('.custom-field-row')).map(row => row.dataset.customFieldKey), ['a_subject']);
+    assert.deepStrictEqual(Array.from(document.getElementById('publication').options).map(option => option.value), ['A publication']);
+    await auth.logout();
+
+    loginResponseOverride = session('B20000000000912', 'token-B20000000000912', {
+      effectiveLibraryOrgId: 3,
+      ui_text: patronUiText('B', { availableFormats: [] })
+    });
+    barcode.value = 'B20000000000912';
+    pin.value = '1234';
+    await auth.handleLoginSubmit({ preventDefault() {} });
+    assert.strictEqual(config.uiConfig.pageTitle, 'B Material Suggestion');
+    assert.deepStrictEqual(Array.from(document.getElementById('format').options), [],
+      'library B empty formats replace library A options');
+    assert.deepStrictEqual(Array.from(document.querySelectorAll('.custom-field-row')), [],
+      'library B empty custom fields remove library A fields');
+    assert.deepStrictEqual(Array.from(document.getElementById('publication').options).map(option => option.value), ['B publication']);
+    const libraryBSuggestionCount = suggestionRequests;
+    await submit.handleSuggestionSubmit({ preventDefault() {} });
+    assert.strictEqual(suggestionRequests, libraryBSuggestionCount,
+      'library B with no enabled formats cannot dispatch a suggestion');
+    await auth.logout();
+    loginResponseOverride = null;
+    state.setAuthToken('token-A');
 
     const restoreA = auth.restoreSession();
     await Promise.resolve();

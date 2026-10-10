@@ -207,6 +207,186 @@ async function runUnknownOutcome(browser, baseOrigin, artifactRoot, axeSource, r
   }
 }
 
+async function runScopedConfigurationGuards(browser, baseOrigin, artifactRoot, axeSource, report) {
+  const scoped = JSON.parse(await fs.readFile(path.join(artifactRoot, 'patron-session-scope.json'), 'utf8'));
+  const { context, page, traffic, pageErrors } = await openPage(browser, baseOrigin);
+  let malformedLoginResponses = 0;
+  let serverIssuedTokenPresent = false;
+  let suggestionPostCount = 0;
+
+  const malformedLoginRoute = async route => {
+    const request = route.request();
+    const payload = request.postDataJSON();
+    if (payload?.username !== scoped.barcode ||
+        String(payload?.libraryOrgId) !== String(scoped.libraryOrgId) ||
+        malformedLoginResponses > 0) {
+      return route.continue();
+    }
+
+    malformedLoginResponses += 1;
+    const response = await route.fetch();
+    const session = await response.json();
+    assert.equal(response.status(), 200, 'The actual B login endpoint should issue its normal HTTP session response.');
+    assert.equal(session.effectiveLibraryOrgId, scoped.libraryOrgId);
+    assert.equal(session.ui_text.library, scoped.libraryName);
+    assert.equal(session.ui_text.pageTitle, scoped.pageTitle);
+    assert.deepEqual(session.ui_text.availableFormats, [],
+      'The real producer should return the Settings-owned empty format list.');
+    serverIssuedTokenPresent = typeof session.token === 'string' && session.token.trim().length > 0;
+    assert.equal(serverIssuedTokenPresent, true,
+      'route.fetch reaches the real server, which may and does issue a token before the browser rejects this response.');
+
+    const incomplete = { ...session };
+    delete incomplete.ui_text;
+    await route.fulfill({ response, body: JSON.stringify(incomplete) });
+  };
+  await page.route('**/api/asap/patron/login', malformedLoginRoute);
+  await page.route('**/api/asap/patron/suggestions', async route => {
+    suggestionPostCount += 1;
+    return route.continue();
+  });
+
+  try {
+    const barcodeA = '20000000000901';
+    await login(page, barcodeA);
+    const uiA = await readVisibleLibraryUi(page);
+    assert.ok(uiA.formatOptions.length > 0, 'A must have real available formats before switching scope.');
+
+    await page.locator('#step-form .btn-logout').click();
+    await page.locator('#step-login:not(.hidden)').waitFor();
+    assert.ok(!(await page.evaluate(() => sessionStorage.getItem('asap_patron_token'))),
+      'A logout must clear the browser token before testing B login acceptance.');
+    await page.evaluate(libraryOrgId => {
+      const url = new URL(location.href);
+      url.searchParams.set('libraryOrgId', String(libraryOrgId));
+      history.replaceState(history.state, '', url.toString());
+    }, scoped.libraryOrgId);
+
+    await page.locator('#barcode').fill(scoped.barcode);
+    await page.locator('#pin').fill('1234');
+    await page.locator('#pin').press('Enter');
+    await page.locator('#login-error').waitFor({ state: 'visible' });
+    assert.equal(malformedLoginResponses, 1, 'Exactly one real B login response should have ui_text removed.');
+
+    const malformedState = await page.evaluate(() => ({
+      loginVisible: !document.querySelector('#step-login').classList.contains('hidden'),
+      formVisible: !document.querySelector('#step-form').classList.contains('hidden'),
+      loginError: document.querySelector('#login-error').textContent.trim(),
+      displayBarcode: document.querySelector('#display-barcode').textContent.trim(),
+      token: sessionStorage.getItem('asap_patron_token'),
+      storedLibraryId: localStorage.getItem('asap_patron_library_org_id'),
+      pageTitle: document.title,
+      heading: document.querySelector('#main-title').textContent.trim(),
+      barcodeLabel: document.querySelector('#lbl-barcode-login').textContent.trim(),
+      formatOptions: [...document.querySelector('#format').options].map(option => ({
+        value: option.value,
+        label: option.textContent.trim()
+      }))
+    }));
+    assert.equal(malformedState.loginVisible, true, 'An incomplete session response must leave B on the login step.');
+    assert.equal(malformedState.formVisible, false, 'An incomplete session response must not establish B identity.');
+    assert.equal(malformedState.loginError, 'The server returned an invalid response body.',
+      'Session shape rejection should use the established shared-helper public error contract.');
+    assert.ok(!malformedState.token, 'The server-issued token must not be stored by the client.');
+    assert.equal(malformedState.displayBarcode, barcodeA, 'B identity must not replace the last established patron display.');
+    assert.equal(malformedState.storedLibraryId, '2', 'B scope must not replace the client library identity on rejection.');
+    assert.deepEqual({
+      pageTitle: malformedState.pageTitle,
+      heading: malformedState.heading,
+      barcodeLabel: malformedState.barcodeLabel,
+      formatOptions: malformedState.formatOptions
+    }, uiA, 'A UI configuration must remain intact when the malformed B response is rejected.');
+    await scan(page, axeSource, artifactRoot, 'missing-session-ui-text-retains-a-ui', report);
+    report.configurationGuards.push({
+      scenario: 'real-session-missing-ui-text',
+      serverIssuedTokenPresent,
+      clientTokenStored: Boolean(malformedState.token),
+      bIdentityEstablished: malformedState.formVisible || malformedState.displayBarcode === scoped.barcode ||
+        malformedState.storedLibraryId === String(scoped.libraryOrgId),
+      aUiRetained: true
+    });
+
+    const fullLoginResponsePromise = page.waitForResponse(response => {
+      const request = response.request();
+      if (request.method() !== 'POST' || new URL(response.url()).pathname !== '/api/asap/patron/login') {
+        return false;
+      }
+      const payload = request.postDataJSON();
+      return payload?.username === scoped.barcode &&
+        String(payload?.libraryOrgId) === String(scoped.libraryOrgId);
+    });
+    // If an earlier assertion fails, context teardown must not replace it with an unhandled waiter rejection.
+    void fullLoginResponsePromise.catch(() => {});
+    await login(page, scoped.barcode);
+    const fullLoginResponse = await fullLoginResponsePromise;
+    assert.equal(fullLoginResponse.status(), 200, 'The unmodified B login should use the actual HTTP endpoint.');
+    const fullSession = await fullLoginResponse.json();
+    assert.equal(fullSession.effectiveLibraryOrgId, scoped.libraryOrgId);
+    assert.equal(fullSession.ui_text.pageTitle, scoped.pageTitle);
+    assert.deepEqual(fullSession.ui_text.availableFormats, [],
+      'The complete producer response should preserve the saved empty format list.');
+
+    const emptyFormatState = await page.evaluate(() => ({
+      formVisible: !document.querySelector('#step-form').classList.contains('hidden'),
+      displayBarcode: document.querySelector('#display-barcode').textContent.trim(),
+      pageTitle: document.title,
+      heading: document.querySelector('#main-title').textContent.trim(),
+      token: sessionStorage.getItem('asap_patron_token'),
+      storedLibraryId: localStorage.getItem('asap_patron_library_org_id'),
+      pickupBranch: document.querySelector('#preferred-pickup-branch').value,
+      optionCount: document.querySelector('#format').options.length,
+      formatValid: document.querySelector('#format').checkValidity()
+    }));
+    assert.equal(emptyFormatState.formVisible, true);
+    assert.equal(emptyFormatState.displayBarcode, scoped.barcode);
+    assert.equal(emptyFormatState.token, fullSession.token,
+      'The complete producer token should be the token established by the client.');
+    assert.equal(emptyFormatState.storedLibraryId, String(scoped.libraryOrgId));
+    assert.equal(emptyFormatState.pageTitle, scoped.pageTitle);
+    assert.equal(emptyFormatState.heading, scoped.pageTitle,
+      'The scoped B heading should replace A UI from the complete session snapshot.');
+    assert.equal(emptyFormatState.optionCount, 0, 'An authoritative empty B format list must clear A options.');
+    assert.equal(emptyFormatState.formatValid, false,
+      'The required format select must be invalid when the complete B configuration has no formats.');
+    assert.equal(emptyFormatState.pickupBranch, '101', 'The empty-format submit control needs a valid pickup branch.');
+
+    await page.locator('#suggestion-form').evaluate(form =>
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    await page.locator('#submit-error').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#submit-error').textContent(), /No suggestion formats are currently available/i);
+    assert.equal(suggestionPostCount, 0,
+      'Directly invoking the submit handler with no currently enabled format must not dispatch a suggestion POST.');
+    await scan(page, axeSource, artifactRoot, 'settings-empty-formats-block-submit', report);
+    report.configurationGuards.push({
+      scenario: 'settings-empty-formats',
+      effectiveLibraryOrgId: fullSession.effectiveLibraryOrgId,
+      availableFormats: fullSession.ui_text.availableFormats,
+      optionCount: emptyFormatState.optionCount,
+      suggestionPostCount
+    });
+
+    await page.locator('#step-form .btn-logout').click();
+    await page.locator('#step-login:not(.hidden)').waitFor();
+    assert.deepEqual(pageErrors, [], 'Scoped session configuration controls raised an uncaught browser error.');
+    assert.equal(traffic.externalRequests, 0,
+      `Scoped session configuration controls requested external resources: ${traffic.externalUrls.join(', ')}`);
+  } finally {
+    await context.close();
+  }
+}
+
+async function readVisibleLibraryUi(page) {
+  return page.evaluate(() => ({
+    pageTitle: document.title,
+    heading: document.querySelector('#main-title').textContent.trim(),
+    barcodeLabel: document.querySelector('#lbl-barcode-login').textContent.trim(),
+    formatOptions: [...document.querySelector('#format').options].map(option => ({
+      value: option.value,
+      label: option.textContent.trim()
+    }))
+  }));
+}
+
 async function loadBrowserDependencies() {
   const { chromium } = require('playwright');
   const axePath = require.resolve('axe-core/axe.min.js');
@@ -219,14 +399,16 @@ async function main() {
   const { chromium, axeSource } = await loadBrowserDependencies();
   const executablePath = process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH;
   const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
-  const report = { races: [], unknownOutcomes: [], states: [] };
+  const report = { races: [], unknownOutcomes: [], configurationGuards: [], states: [] };
   try {
     for (const [status, scenario] of [[201, 'accepted'], [409, 'conflict'], [400, 'validation'], [500, 'server-error'], ['abort', 'cancelled']]) {
       await runStaleResponse(browser, baseOrigin, artifactRoot, axeSource, status, scenario, report);
     }
     await runUnknownOutcome(browser, baseOrigin, artifactRoot, axeSource, report);
+    await runScopedConfigurationGuards(browser, baseOrigin, artifactRoot, axeSource, report);
     assert.equal(report.races.length, 5, 'Expected all stale submission completion paths.');
     assert.equal(report.unknownOutcomes.length, 1, 'Expected the malformed accepted response guard.');
+    assert.equal(report.configurationGuards.length, 2, 'Expected both scoped session configuration controls.');
     await fs.writeFile(path.join(artifactRoot, 'browser-results.json'), JSON.stringify(report, null, 2), 'utf8');
   } finally {
     await browser.close();

@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { JSDOM } = require('jsdom');
+const { patronSession } = require('./helpers/patron-session-fixture');
 
 const frontend = path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend');
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-patron-submit-race-'));
@@ -25,16 +26,7 @@ function response(status, body, parseError = null) {
 }
 
 function loginBody(barcode, token) {
-  return {
-    token,
-    barcode,
-    email: `${barcode}@example.org`,
-    record: { email: `${barcode}@example.org`, libraryOrgId: 2 },
-    effectiveLibraryOrgId: 2,
-    preferredPickupBranchId: 101,
-    selectedPickupBranchId: 101,
-    pickupBranches: [{ id: 101, label: 'Main Library' }]
-  };
+  return patronSession(barcode, token);
 }
 
 async function until(predicate, message) {

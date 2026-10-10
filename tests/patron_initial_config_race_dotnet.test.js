@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { JSDOM } = require('jsdom');
+const { patronSession, patronUiText } = require('./helpers/patron-session-fixture');
 
 function response(status, body) {
   return {
@@ -14,22 +15,8 @@ function response(status, body) {
   };
 }
 
-function uiText(prefix) {
-  return {
-    pageTitle: prefix + ' Material Suggestion',
-    publicationOptions: [prefix + ' publication'],
-    formatRules: {
-      book: {
-        messageBehavior: 'none',
-        fields: {
-          title: { mode: 'required', label: prefix + ' Title' },
-          author: { mode: 'required', label: 'Author' },
-          identifier: { mode: 'optional', label: 'Identifier' },
-          publication: { mode: 'required', label: 'Publication Timing' }
-        }
-      }
-    }
-  };
+function uiText(prefix, overrides = {}) {
+  return patronUiText(prefix, overrides);
 }
 
 (async () => {
@@ -55,29 +42,23 @@ function uiText(prefix) {
     let initialConfigRequested;
     const initialConfigStarted = new Promise(resolve => { initialConfigRequested = resolve; });
     let submittedPayload;
+    let suggestionRequests = 0;
+    let loginResponseOverride = null;
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
       if (requestUrl.includes('/api/asap/config?')) {
         initialConfigRequested();
-        return new Promise(resolve => {
-          releaseInitialConfig = () => resolve(response(200, { ui_text: uiText('Old') }));
-        });
+        return new Promise(resolve => { releaseInitialConfig = () => resolve(response(200, uiText('Old'))); });
       }
       if (requestUrl.endsWith('/api/asap/patron/login')) {
         const data = JSON.parse(options.body);
-        return response(200, {
-          token: 'new-token',
-          barcode: data.username,
-          email: 'new@example.org',
-          effectiveLibraryOrgId: 2,
-          selectedPickupBranchId: 101,
-          pickupBranches: [{ id: 101, label: 'New Library' }],
-          ui_text: uiText('New')
-        });
+        return response(200, loginResponseOverride || patronSession(data.username, 'new-token', { ui_text: uiText('New') }));
       }
+      if (requestUrl.endsWith('/api/asap/patron/logout')) return response(204, null);
       if (requestUrl.endsWith('/api/asap/patron/suggestions')) {
+        suggestionRequests++;
         submittedPayload = JSON.parse(options.body);
-        return response(201, { ui_text: uiText('New'), successTitle: 'Submitted' });
+        return response(201, { id: '1', successTitle: 'Submitted', successMessage: 'B success updated.' });
       }
       throw new Error('Unexpected request: ' + requestUrl);
     };
@@ -85,6 +66,27 @@ function uiText(prefix) {
     const bootstrap = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'bootstrap.js')).href);
     const auth = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'auth.js')).href);
     const submit = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'submit.js')).href);
+
+    // Exercise a new page before bootstrap has loaded any server configuration.
+    loginResponseOverride = patronSession('F20000000000901', 'fresh-empty-format-token', {
+      effectiveLibraryOrgId: 3,
+      ui_text: uiText('Fresh No Formats', { availableFormats: [] })
+    });
+    document.getElementById('barcode').value = 'F20000000000901';
+    document.getElementById('pin').value = '1234';
+    await auth.handleLoginSubmit({ preventDefault() {} });
+    assert.strictEqual(document.title, 'Fresh No Formats Material Suggestion');
+    assert.deepStrictEqual(Array.from(document.getElementById('format').options), [],
+      'a fresh page clears its static format options when a complete login snapshot has no enabled formats');
+    assert.strictEqual(document.getElementById('format').checkValidity(), false);
+    const beforeFreshNoFormatSubmit = suggestionRequests;
+    await submit.handleSuggestionSubmit({ preventDefault() {} });
+    assert.strictEqual(suggestionRequests, beforeFreshNoFormatSubmit,
+      'a fresh page with no enabled formats cannot dispatch a suggestion');
+    assert.match(document.getElementById('submit-error').textContent, /format.*available/i);
+    await auth.logout();
+    loginResponseOverride = null;
+
     const initialization = bootstrap.initPatronApp();
     await initialConfigStarted;
 
@@ -110,6 +112,30 @@ function uiText(prefix) {
     await submit.handleSuggestionSubmit({ preventDefault() {} });
     assert.strictEqual(submittedPayload.publication, 'New publication');
     assert.strictEqual(submittedPayload.format, 'book');
+    assert.strictEqual(document.getElementById('success-title').textContent, 'Submitted',
+      'a partial submission success message remains an intentional configuration update');
+    assert.strictEqual(document.title, 'New Material Suggestion',
+      'a partial success update does not replace the authenticated library configuration');
+
+    await auth.logout();
+    loginResponseOverride = patronSession('C20000000000903', 'empty-format-token', {
+      effectiveLibraryOrgId: 3,
+      ui_text: uiText('No Formats', { availableFormats: [] })
+    });
+    document.getElementById('barcode').value = 'C20000000000903';
+    document.getElementById('pin').value = '1234';
+    await auth.handleLoginSubmit({ preventDefault() {} });
+    assert.strictEqual(document.title, 'No Formats Material Suggestion');
+    assert.deepStrictEqual(Array.from(document.getElementById('format').options), [],
+      'a valid complete B snapshot with an empty availableFormats array clears prior options');
+    assert.strictEqual(document.getElementById('format').checkValidity(), false,
+      'an empty enabled-format list keeps the required format selection invalid');
+    const beforeUnavailableFormatSubmit = suggestionRequests;
+    await submit.handleSuggestionSubmit({ preventDefault() {} });
+    assert.strictEqual(suggestionRequests, beforeUnavailableFormatSubmit,
+      'an empty enabled-format list cannot dispatch a suggestion through the direct submit handler');
+    assert.match(document.getElementById('submit-error').textContent, /format.*available/i,
+      'the patron sees why submission is unavailable when there are no enabled formats');
 
     console.log('Patron initial configuration race regression checks passed');
   } finally {
