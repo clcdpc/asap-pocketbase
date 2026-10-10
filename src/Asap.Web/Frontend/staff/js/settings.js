@@ -127,6 +127,14 @@ function meaningful(value) {
     (typeof value !== 'string' || value.trim() !== '');
 }
 
+function isNonemptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isNonnegativeInt32(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 2147483647;
+}
+
 function clean(value) {
   if (value === null || value === undefined) return null;
   const result = String(value).trim();
@@ -570,6 +578,7 @@ export function createSettingsController({
   function cancelSettingsOperations() {
     scopePreparation = null;
     cancelPolarisTest();
+    dom.syncOrganizations.disabled = false;
     contextGeneration += 1; drafts.dispose(); drafts = createDraftScope();
     settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
     staffDrafts.clear(); rosterDrafts.clear(); staffCreateDraft = null;
@@ -711,12 +720,13 @@ export function createSettingsController({
       `${Number(property(value, 'openAdditionalCopyClaimsCleared') || 0)} open additional-copy claims cleared.`;
   }
 
-  function validStaffLifecycleResponse(response, method) {
+  function validStaffLifecycleResponse(response, method, expectedStaffId) {
     const user = response?.user;
     const cleanup = response?.cleanup;
     const cleanupCounts = ['rulesDeactivated', 'openTitleClaimsCleared', 'openAdditionalCopyClaimsCleared'];
     return typeof user?.id === 'string' && /^[1-9]\d*$/.test(user.id) &&
       typeof user.version === 'string' && user.version.length > 0 &&
+      (expectedStaffId === null || user.id === String(expectedStaffId)) &&
       cleanup !== null && typeof cleanup === 'object' && !Array.isArray(cleanup) &&
       cleanupCounts.every(key => Number.isSafeInteger(cleanup[key]) && cleanup[key] >= 0) &&
       (method !== 'DELETE' || user.active === false);
@@ -1440,7 +1450,7 @@ export function createSettingsController({
     setStaffStatus(successMessage.replace(/\.$/, '') + '...');
     try {
       const response = await authorizedJson(path, options);
-      if (!validStaffLifecycleResponse(response, options.method)) throw unconfirmedResponseError();
+      if (!validStaffLifecycleResponse(response, options.method, staffId)) throw unconfirmedResponseError();
       const cleanup = response.cleanup;
       const committedMessage = `${successMessage} ${cleanupSummary(cleanup)}`;
       recordCommitted(mutation, committedMessage);
@@ -1745,7 +1755,8 @@ export function createSettingsController({
         method: 'POST',
         body: payload
       });
-      if (response?.code !== 'saved' || typeof response.data?.version !== 'string' || !response.data.version) {
+      if (response?.code !== 'saved' || response.data?.orgId !== mutation.context.scope ||
+          !isNonemptyString(response.data?.version)) {
         throw unconfirmedResponseError();
       }
       committed = true;
@@ -1761,9 +1772,12 @@ export function createSettingsController({
         if (!isSettingsOperationCurrent(mutation)) return;
         const id = encodeURIComponent(String(format.id));
         const version = encodeURIComponent(String(format.version || ''));
-        await authorizedJson(`/api/asap/staff/settings/formats/${id}?version=${version}`, {
+        const deletion = await authorizedJson(`/api/asap/staff/settings/formats/${id}?version=${version}`, {
           method: 'DELETE'
         });
+        if (deletion?.code !== 'format_deleted' || deletion.data?.formatId !== String(format.id)) {
+          throw unconfirmedResponseError();
+        }
         deletedFormatCount += 1;
         recordCommitted(mutation, committedMessage(), mutation.context.scope);
       }
@@ -1821,7 +1835,8 @@ export function createSettingsController({
         method: 'POST',
         body: { version: state.data.version }
       });
-      if (response?.code !== 'reset' || typeof response.data?.version !== 'string' || !response.data.version) {
+      if (response?.code !== 'reset' || response.data?.orgId !== mutation.context.scope ||
+          !isNonemptyString(response.data?.version)) {
         throw unconfirmedResponseError();
       }
       committed = true;
@@ -1883,6 +1898,11 @@ export function createSettingsController({
         method: 'POST',
         body
       });
+      const mutationOrganizationId = mutation.context.scope === 'system' ? 1 : Number(mutation.context.scope);
+      if (response?.code !== 'branding_saved' || response.data?.organizationId !== mutationOrganizationId ||
+          response.data?.hasLogo !== !clear || !isNonemptyString(response.data?.version)) {
+        throw unconfirmedResponseError();
+      }
       committed = true;
       recordCommitted(mutation, clear ? 'Logo cleared.' : 'Logo saved.', mutation.context.scope);
       if (!isSettingsOperationCurrent(mutation)) return;
@@ -1942,7 +1962,11 @@ export function createSettingsController({
         signal: operation.signal
       });
       if (!isSettingsOperationCurrent(operation)) return;
-      const data = response.data || {};
+      if (response?.code !== 'polaris_connected' || response.data?.connected !== true ||
+          !isNonnegativeInt32(response.data?.organizationCount)) {
+        throw new Error('Polaris connection response is incomplete.');
+      }
+      const data = response.data;
       dom.polarisResult.textContent = data.connected
         ? `Connected; ${data.organizationCount || 0} organizations available.`
         : `Polaris is unavailable${data.errorCode ? ` (${data.errorCode})` : ''}.`;
@@ -1968,10 +1992,14 @@ export function createSettingsController({
         method: 'POST',
         body: {}
       });
+      if (response?.code !== 'synced' || !isNonnegativeInt32(response.data?.received) ||
+          !isNonnegativeInt32(response.data?.changed)) {
+        throw unconfirmedResponseError();
+      }
       recordCommitted(mutation, 'Polaris organizations synchronized.', 'system');
       onOrganizationCatalogCommitted(mutation.owner);
       if (!isSettingsOperationCurrent(mutation)) return;
-      dom.syncResult.textContent = `Synchronized ${response.data?.received || 0} organizations.`;
+      dom.syncResult.textContent = `Synchronized ${response.data.received} organizations.`;
       const refreshed = await load({ silent: true, owner: mutation });
       if (isSettingsOperationCurrent(mutation)) notify(refreshed
         ? 'Polaris organizations synchronized.'
@@ -1993,10 +2021,15 @@ export function createSettingsController({
     const mutation = beginSettingsMutation('administration-settings-participation', null);
     if (!mutation) return;
     try {
-      await authorizedJson(`/api/asap/staff/organizations/${encodeURIComponent(organization.id)}/${active ? 'activate' : 'deactivate'}`, {
+      const response = await authorizedJson(`/api/asap/staff/organizations/${encodeURIComponent(organization.id)}/${active ? 'activate' : 'deactivate'}`, {
         method: 'POST',
         body: { version: organization.version }
       });
+      if (response?.code !== (active ? 'activated' : 'deactivated') ||
+          response.data?.organizationId !== Number(organization.id) ||
+          !isNonnegativeInt32(response.data?.revokedPatronSessions) || !isNonemptyString(response.data?.version)) {
+        throw unconfirmedResponseError();
+      }
       const committedMessage = `${organization.name} ${active ? 'activated' : 'deactivated'}.`;
       recordCommitted(mutation, committedMessage, String(organization.id));
       onOrganizationCatalogCommitted(mutation.owner, { id: organization.id, active });

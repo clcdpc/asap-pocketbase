@@ -37,11 +37,31 @@ export function loadPatronConfig(path) {
   return request(path);
 }
 
+function isPositiveInt32(value) {
+  return Number.isInteger(value) && value > 0 && value <= 2147483647;
+}
+
+function hasValidPatronSession(data, requireToken) {
+  const tokenIsValid = !requireToken ||
+    typeof data?.token === 'string' && data.token.trim().length > 0;
+  const selectedBranchIsValid = !Object.prototype.hasOwnProperty.call(data || {}, 'selectedPickupBranchId') ||
+    data.selectedPickupBranchId === null || isPositiveInt32(data.selectedPickupBranchId);
+
+  return tokenIsValid &&
+    typeof data?.barcode === 'string' && data.barcode.trim().length > 0 &&
+    Number.isInteger(data?.effectiveLibraryOrgId) && data.effectiveLibraryOrgId > 1 &&
+    data.effectiveLibraryOrgId <= 2147483647 &&
+    Array.isArray(data?.pickupBranches) &&
+    data.pickupBranches.every(branch => branch && typeof branch === 'object' && !Array.isArray(branch) &&
+      isPositiveInt32(branch.id) && typeof branch.label === 'string') &&
+    selectedBranchIsValid;
+}
+
 export function loginPatron(payload) {
   return request('/api/asap/patron/login', {
     method: 'POST',
     validateResponse: data => {
-      if (typeof data?.token !== 'string' || !data.token || typeof data?.barcode !== 'string') {
+      if (!hasValidPatronSession(data, true)) {
         throw new Error('Login response is incomplete.');
       }
     },
@@ -63,7 +83,13 @@ export function submitSuggestion(payload) {
 }
 
 export function restorePatronSession() {
-  return request('/api/asap/patron/session');
+  return request('/api/asap/patron/session', {
+    validateResponse: data => {
+      if (!hasValidPatronSession(data, false)) {
+        throw new Error('Current patron information is incomplete.');
+      }
+    }
+  });
 }
 
 export function logoutPatron() {

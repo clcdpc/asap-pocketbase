@@ -2747,8 +2747,11 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     let posts = 0;
     const operationRoute = async route => {
       posts += 1; dispatched.resolve(); await release.promise;
+      const requestUrl = new URL(route.request().url());
       await route.fulfill({ status: 202, contentType: 'application/json',
-        body: JSON.stringify({ code: 'queued', manualRunId: 'browser-run' }) });
+        body: JSON.stringify({ code: 'queued', jobId: 'browser-weekly-job',
+          organizationId: Number(requestUrl.searchParams.get('organizationId') || 1),
+          manualRunId: requestUrl.searchParams.get('operationId') }) });
     };
     await page.route('**/api/asap/staff/workflow/weekly-summary/run-now?*', operationRoute);
     await page.evaluate(() => {
@@ -3335,7 +3338,9 @@ async function runSettingsUnconfirmedSessionCase(browser, args) {
       signalStarted();
       await gate;
       await route.fulfill({ status: 200, contentType: 'application/json',
-        body: JSON.stringify({ code: 'saved', data: { version: 'pending-upload' } }) })
+        body: JSON.stringify({ code: 'branding_saved', data: {
+          organizationId: 2, hasLogo: true, version: 'pending-upload'
+        } }) })
         .catch(error => { if (!/closed|handled|aborted/i.test(error.message)) throw error; });
     });
     await page.locator('#save-branding-logo').click();

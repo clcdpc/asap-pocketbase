@@ -65,7 +65,17 @@ async function verify(mode) {
       if (options.method === 'POST') {
         posts += 1;
         revokeOnRefresh = true;
-        return response(202, { code: 'queued', manualRunId: '9007199254740995' });
+        const parsed = new URL(url, 'https://localhost');
+        if (parsed.pathname === '/api/asap/staff/workflow/run-now') {
+          return response(202, { code: 'queued', jobId: '9007199254740995', organizationId: 1 });
+        }
+        const retry = parsed.pathname.match(/^\/api\/asap\/staff\/email-operations\/(\d+)\/retry$/);
+        if (retry) {
+          return response(202, { code: 'queued', data: {
+            id: retry[1], dispatchDelayed: false, version: 'email-version-v2'
+          } });
+        }
+        throw new Error(`Unexpected operations POST ${url}`);
       }
       throw new Error(`Unexpected request ${url}`);
     };
@@ -81,7 +91,7 @@ async function verify(mode) {
       `${mode} post-commit 401 must hide workspace`);
     assert.equal(posts, 1);
     const message = document.getElementById('signed-out-message').textContent;
-    assert.match(message, mode === 'run' ? /Run 9007199254740995 queued/ :
+    assert.match(message, mode === 'run' ? /Workflow run queued/ :
       /Email retry 9007199254740993 queued/);
     assert.match(message, /Sign in again to review/);
     assert.doesNotMatch(message, /Your staff session ended or no longer has access/);

@@ -190,16 +190,19 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         if (requestUrl === '/api/asap/staff/users' && options.method === 'POST') {
           const body = JSON.parse(options.body);
           postBodies.push(body);
-          const saved = staffUser(30 + postBodies.length, {
-            userPrincipalName: body.email,
-            displayName: null,
-            notificationEmail: body.email,
-            role: body.role,
-            organizationId: body.organizationId,
-            active: true,
-            version: `created-${postBodies.length}`
-          });
-          users = [saved, ...users.map(user => user.userPrincipalName.toLowerCase() === body.email.toLowerCase() ? { ...user, active: true } : user)];
+          const existing = users.find(user => user.userPrincipalName.toLowerCase() === body.email.toLowerCase());
+          const saved = existing && !existing.active
+            ? { ...existing, role: body.role, organizationId: body.organizationId, active: true, version: `reactivated-${existing.id}` }
+            : staffUser(30 + postBodies.length, {
+              userPrincipalName: body.email,
+              displayName: null,
+              notificationEmail: body.email,
+              role: body.role,
+              organizationId: body.organizationId,
+              active: true,
+              version: `created-${postBodies.length}`
+            });
+          users = [saved, ...users.filter(user => user.id !== saved.id)];
           return response(201, {
             user: saved,
             cleanup: { rulesDeactivated: 2, openTitleClaimsCleared: 3, openAdditionalCopyClaimsCleared: 4 }
@@ -209,21 +212,21 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
           if (loseProfileResponse) throw new Error('Lost staff profile response');
           patchBody = JSON.parse(options.body);
           return response(200, {
-            user: { ...users[0], userPrincipalName: patchBody.email, version: 'patched-20' },
+            user: { ...users.find(user => user.id === '20'), userPrincipalName: patchBody.email, version: 'patched-20' },
             cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 }
           });
         }
         if (requestUrl === '/api/asap/staff/users/20/role') {
           roleBody = JSON.parse(options.body);
           return response(200, {
-            user: { ...users[0], role: roleBody.role, organizationId: roleBody.organizationId, version: 'role-20' },
+            user: { ...users.find(user => user.id === '20'), role: roleBody.role, organizationId: roleBody.organizationId, version: 'role-20' },
             cleanup: { rulesDeactivated: 1, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 }
           });
         }
         if (requestUrl === '/api/asap/staff/users/20' && options.method === 'DELETE') {
           deleteBody = JSON.parse(options.body);
           return response(200, {
-            user: { ...users[0], active: false, version: 'inactive-20' },
+            user: { ...users.find(user => user.id === '20'), active: false, version: 'inactive-20' },
             cleanup: { rulesDeactivated: 5, openTitleClaimsCleared: 6, openAdditionalCopyClaimsCleared: 7 }
           });
         }
@@ -472,6 +475,171 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.strictEqual(document.getElementById('staff-add-organization').disabled, true);
     assert.strictEqual([...document.querySelectorAll('.settings-staff-row button')].some(button => button.textContent === 'Rebind identity'), false);
     admin.dom.window.close();
+
+    for (const action of ['metadata', 'role', 'deactivate', 'reactivate']) {
+      const activeTargetId = '9223372036854775806';
+      const inactiveTargetId = '9223372036854775805';
+      const otherUserId = '9223372036854775807';
+      const roster = [
+        staffUser(activeTargetId, { displayName: 'Ada Admin', role: 'admin', version: 'target-v1' }),
+        staffUser(inactiveTargetId, { displayName: 'Inactive Selector', active: false, version: 'inactive-v1' }),
+        staffUser(otherUserId, { displayName: 'Unrelated User', version: 'other-v1' })
+      ];
+      const commits = [];
+      let rosterReads = 0;
+      let mutationRequest;
+      const lifecycle = await setupController(settingsModule, frontendRoot, superStaff,
+        async (url, options = {}) => {
+          const requestUrl = String(url);
+          if (requestUrl.includes('/api/asap/staff/settings?orgId=')) return response(200, settingsData('system'));
+          if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, { code: 'ok', data: [
+            { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-v1' },
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-v2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-v3' }
+          ] });
+          if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
+          if (requestUrl === '/api/asap/staff/audit?limit=50') return response(200, { code: 'ok', data: [] });
+          if (requestUrl === '/api/asap/staff/users' && (options.method || 'GET') === 'GET') {
+            rosterReads += 1;
+            return response(200, { canAssignSuperAdmin: true, users: roster });
+          }
+          const user = staffUser(otherUserId, {
+            displayName: 'Unrelated User',
+            active: action !== 'deactivate',
+            version: `wrong-target-${action}`
+          });
+          const cleanup = { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 };
+          const requestedId = action === 'reactivate' ? inactiveTargetId : activeTargetId;
+          const expectedRequest = action === 'metadata'
+            ? requestUrl === `/api/asap/staff/users/${requestedId}` && options.method === 'PATCH'
+            : action === 'role'
+              ? requestUrl === `/api/asap/staff/users/${requestedId}/role` && options.method === 'POST'
+              : action === 'deactivate'
+                ? requestUrl === `/api/asap/staff/users/${requestedId}` && options.method === 'DELETE'
+                : requestUrl === '/api/asap/staff/users' && options.method === 'POST';
+          if (expectedRequest) {
+            mutationRequest = { requestUrl, options };
+            return response(200, { user, cleanup });
+          }
+          throw new Error(`Unexpected ${action} request: ${requestUrl}`);
+        }, { onCommitted: (...args) => commits.push(args) });
+
+      document.getElementById('settings-nav-staff').click();
+      await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff access loaded'));
+      const targetId = action === 'reactivate' ? inactiveTargetId : activeTargetId;
+      const targetRow = [...document.querySelectorAll('.settings-staff-row')]
+        .find(row => row.textContent.includes(`ID ${targetId}`));
+      assert.ok(targetRow, `${action}: the requested staff row is present`);
+      if (action === 'metadata') {
+        const email = targetRow.querySelector('input[type="email"]');
+        email.value = 'draft-kept@example.org';
+        email.dispatchEvent(new lifecycle.dom.window.Event('input', { bubbles: true }));
+        [...targetRow.querySelectorAll('button')].find(button => button.textContent === 'Save profile').click();
+      } else if (action === 'role' || action === 'reactivate') {
+        const role = targetRow.querySelector('select[aria-label^="Role"]');
+        role.value = action === 'role' ? 'staff' : 'admin';
+        role.dispatchEvent(new lifecycle.dom.window.Event('change', { bubbles: true }));
+        [...targetRow.querySelectorAll('button')]
+          .find(button => button.textContent === (action === 'role' ? 'Update access' : 'Reactivate')).click();
+      } else {
+        [...targetRow.querySelectorAll('button')].find(button => button.textContent === 'Deactivate').click();
+      }
+      await waitFor(() => Boolean(mutationRequest));
+      await flush(); await flush();
+      assert.equal(rosterReads, 1, `${action}: wrong-user evidence cannot authorize the follow-up roster refresh`);
+      assert.equal(commits.length, 0, `${action}: a response for another staff ID is not committed`);
+      assert.equal(lifecycle.controller.hasUnconfirmedOutcome(), true,
+        `${action}: wrong-user response requires authoritative roster review`);
+      assert.equal(lifecycle.controller.inspectDeparture().blocked, true);
+      const currentTargetRow = [...document.querySelectorAll('.settings-staff-row')]
+        .find(row => row.textContent.includes(`ID ${targetId}`));
+      if (action === 'metadata') {
+        assert.equal(currentTargetRow.querySelector('input[type="email"]').value, 'draft-kept@example.org',
+          'metadata draft remains available after a mismatched target receipt');
+      } else if (action === 'role' || action === 'reactivate') {
+        assert.equal(currentTargetRow.querySelector('select[aria-label^="Role"]').value,
+          action === 'role' ? 'staff' : 'admin', 'access draft remains available after a mismatched target receipt');
+      }
+      const unrelatedRow = [...document.querySelectorAll('.settings-staff-row')]
+        .find(row => row.textContent.includes(`ID ${otherUserId}`));
+      assert.ok(unrelatedRow);
+      assert.equal(unrelatedRow.querySelector('.settings-cleanup-result'), null,
+        `${action}: cleanup evidence is never presented for the unrelated returned user`);
+      lifecycle.controller.dispose();
+      lifecycle.dom.window.close();
+    }
+
+    for (const transfer of ['setStaff', 'signout']) {
+      const actorA = { id: '41', tenantId: 'sync-a', authenticationEmail: 'a@example.org',
+        role: 'super_admin', organizationId: 1 };
+      const actorB = { id: '42', tenantId: 'sync-b', authenticationEmail: 'b@example.org',
+        role: 'super_admin', organizationId: 1 };
+      let currentOwner = actorA;
+      const syncReleases = [];
+      const receiptOwners = [];
+      const catalogCallbackOwners = [];
+      const acceptedCatalogOwners = [];
+      const sync = await setupController(settingsModule, frontendRoot, actorA,
+        async (url, options = {}) => {
+          const requestUrl = String(url);
+          if (requestUrl.endsWith('/api/asap/staff/session')) return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
+          if (requestUrl.includes('/api/asap/staff/settings?orgId=')) return response(200, settingsData('system'));
+          if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, { code: 'ok', data: [
+            { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-v1' },
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-v2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-v3' }
+          ] });
+          if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
+          if (requestUrl.endsWith('/api/asap/staff/organizations/sync') && options.method === 'POST') {
+            return new Promise(resolve => syncReleases.push(() => resolve(response(200, {
+              code: 'synced', data: { received: 3, changed: 2 }
+            }))));
+          }
+          throw new Error(`Unexpected organization-sync request: ${requestUrl}`);
+        }, {
+          onCommitted: (_message, owner) => receiptOwners.push(owner),
+          onOrganizationCatalogCommitted: owner => {
+            catalogCallbackOwners.push(owner);
+            if (owner === currentOwner) acceptedCatalogOwners.push(owner);
+          }
+        });
+
+      const button = document.getElementById('btn-sync-organizations');
+      button.click();
+      await waitFor(() => syncReleases.length === 1);
+      assert.equal(button.disabled, true, 'the current owner’s sync is disabled while its request is pending');
+      if (transfer === 'signout') {
+        currentOwner = null;
+        sync.controller.signedOut();
+      }
+      currentOwner = actorB;
+      sync.controller.setStaff(actorB);
+      await sync.controller.activate();
+      const canStartReplacementSync = !button.disabled;
+      if (canStartReplacementSync) {
+        button.click();
+        await waitFor(() => syncReleases.length === 2);
+      }
+      syncReleases[0]();
+      for (let attempt = 0; attempt < 8; attempt++) await flush();
+      const replacementSyncStillOwnsDisabledState = syncReleases.length === 2 && button.disabled;
+      const replacementMessageBeforeItsResult = document.getElementById('organizations-sync-result').textContent;
+      if (syncReleases.length === 2) {
+        syncReleases[1]();
+        await waitFor(() => document.getElementById('organizations-sync-result').textContent.includes('Synchronized 3 organizations'));
+      }
+      assert.equal(canStartReplacementSync, true,
+        `${transfer}: the new owner can start its own sync without waiting for the retired request`);
+      assert.equal(replacementSyncStillOwnsDisabledState, true,
+        `${transfer}: the retired completion cannot unlock a newer pending sync`);
+      assert.equal(replacementMessageBeforeItsResult, '', `${transfer}: the retired result does not paint success into the new owner`);
+      assert.deepStrictEqual(receiptOwners, [actorA, actorB], `${transfer}: each known response retains its captured owner`);
+      assert.deepStrictEqual(catalogCallbackOwners, [actorA, actorB]);
+      assert.deepStrictEqual(acceptedCatalogOwners, [actorB], `${transfer}: stale catalog callback cannot affect the replacement owner`);
+      assert.equal(button.disabled, false, `${transfer}: the replacement sync releases its own busy state`);
+      sync.controller.dispose();
+      sync.dom.window.close();
+    }
 
     console.log('Settings Staff Access roster, lifecycle, audit, and scope checks passed');
   } finally {

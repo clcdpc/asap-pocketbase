@@ -36,6 +36,30 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
   assert.deepEqual(request.options.body ? JSON.parse(request.options.body) : null, expectedBody);
 }
 
+function operationResult(url) {
+  const parsed = new URL(url, 'https://localhost');
+  const { pathname, searchParams } = parsed;
+  const organizationId = Number(searchParams.get('organizationId') || 1);
+  if (pathname === '/api/asap/staff/workflow/run-now' ||
+      pathname === '/api/asap/staff/workflow/weekly-summary/run-now') {
+    const data = { jobId: 'workflow-job-1', organizationId };
+    if (searchParams.get('force') === 'true') data.manualRunId = searchParams.get('operationId');
+    return response(202, { code: 'queued', ...data });
+  }
+  if (pathname === '/api/asap/staff/email-operations/test') {
+    return response(202, { code: 'queued', data: {
+      id: '9007199254740995', code: null, dispatchDelayed: false, version: 'email-test-v1'
+    } });
+  }
+  const retry = pathname.match(/^\/api\/asap\/staff\/email-operations\/(\d+)\/retry$/);
+  if (retry) {
+    return response(202, { code: 'queued', data: {
+      id: retry[1], dispatchDelayed: false, version: 'email-retry-v1'
+    } });
+  }
+  throw new Error(`Unexpected operation POST ${url}`);
+}
+
 (async () => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-operations-ui-'));
   let dom;
@@ -125,7 +149,7 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
       if (url.includes('/api/asap/staff/additional-copies?')) {
         return response(200, { scope: 'all', status: 'open', items: [], availableLibraries: activeLibraries });
       }
-      if (options.method === 'POST') return response(202, { code: 'queued', manualRunId: url.includes('force=true') ? 'forced-run-1' : undefined });
+      if (options.method === 'POST') return operationResult(url);
       throw new Error(`Unexpected request ${url}`);
     };
 

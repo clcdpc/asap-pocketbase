@@ -253,6 +253,12 @@ Secret fields are never populated with the actual secret. A blank entry preserve
 
 A library-level **Reset inherited overrides** action affects only inherited configuration. Library-owned custom fields, custom formats, custom rejection templates, and auto-claim rules must remain intact and must not be visually presented as if they inherit from system defaults.
 
+### Frontend mutation and session confirmations
+
+An HTTP 2xx is transport success, not by itself a commit receipt. Settings mutations require their endpoint's success code and matching returned identity/version; organization sync also requires nonnegative counts, logo save/clear requires `hasLogo` to match the requested action, and format deletion requires the exact decimal-string format ID. Known-target Staff Access mutations also require the returned user ID to match the requested target exactly. The read-only Polaris diagnostic is successful only with `polaris_connected`, `connected: true`, and a valid organization count. Workflow acknowledgements carry a nonempty root-level `jobId` and the requested organization ID; forced weekly runs also echo the request's GUID `operationId` as `manualRunId`. Email acknowledgements require the exact decimal-string operation ID and version, with replay status consistent with suppression state.
+
+Patron login and session restoration require a nonempty barcode, a native integer effective library ID greater than one, and a pickup-branch array with positive integer IDs and string labels. Login requires a nonempty session token; restoration does not consume or require a token. A malformed or contradictory success body after dispatch remains unresolved and retains its recovery evidence rather than triggering a blind replay. If a Settings save is already confirmed before a later optional action becomes uncertain, keep that commit and count only individually confirmed follow-up actions. A Settings context or staff-owner change releases the retired owner's sync busy control immediately; its eventual completion cannot release a replacement owner's active sync.
+
 ## 16. Existing behavior intentionally retained
 
 Unless a slice discovers a documented defect, preserve:

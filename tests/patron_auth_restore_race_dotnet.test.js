@@ -14,7 +14,7 @@ function response(status, body) {
   };
 }
 
-function session(barcode, token) {
+function session(barcode, token, overrides = {}) {
   return {
     token,
     barcode,
@@ -23,7 +23,8 @@ function session(barcode, token) {
     selectedPickupBranchId: 101,
     pickupBranches: [{ id: 101, label: 'Main Library' }],
     record: { email: barcode + '@example.org', libraryOrgId: 2 },
-    effectiveLibraryOrgId: 2
+    effectiveLibraryOrgId: 2,
+    ...overrides
   };
 }
 
@@ -77,19 +78,33 @@ function session(barcode, token) {
 
     pendingRestore(response(200, session('A20000000000901', null)));
     await restoreA;
-    assert.strictEqual(document.getElementById('display-barcode').textContent, 'B20000000000902', 'stale successful restore must not replace the newer login UI');
-    assert.strictEqual(sessionStorage.getItem('asap_patron_token'), 'token-B20000000000902', 'stale successful restore must not replace the newer token');
+    assert.strictEqual(document.getElementById('display-barcode').textContent, 'B20000000000902', 'stale valid restore must not replace the newer login UI');
+    assert.strictEqual(sessionStorage.getItem('asap_patron_token'), 'token-B20000000000902', 'stale valid restore must not replace the newer token');
+
+    const invalidRestoreA = auth.restoreSession();
+    await Promise.resolve();
+    barcode.value = 'C20000000000903';
+    pin.value = '1234';
+    await auth.handleLoginSubmit({ preventDefault() {} });
+    pendingRestore(response(200, session('A20000000000901', null, {
+      pickupBranches: [{ id: '101', label: 'Main Library' }]
+    })));
+    await invalidRestoreA;
+    assert.strictEqual(document.getElementById('display-barcode').textContent, 'C20000000000903',
+      'stale invalid restore must not replace the newer login UI');
+    assert.strictEqual(sessionStorage.getItem('asap_patron_token'), 'token-C20000000000903',
+      'stale invalid restore must not replace the newer token');
 
     const restoreB = auth.restoreSession();
     await Promise.resolve();
-    barcode.value = 'C20000000000903';
+    barcode.value = 'D20000000000904';
     pin.value = '1234';
     await auth.handleLoginSubmit({ preventDefault() {} });
     pendingRestore(response(401, { message: 'expired' }));
     await restoreB;
 
-    assert.strictEqual(document.getElementById('display-barcode').textContent, 'C20000000000903', 'stale failed restore must not replace the newer login UI');
-    assert.strictEqual(sessionStorage.getItem('asap_patron_token'), 'token-C20000000000903', 'stale failed restore must not clear the newer token');
+    assert.strictEqual(document.getElementById('display-barcode').textContent, 'D20000000000904', 'stale failed restore must not replace the newer login UI');
+    assert.strictEqual(sessionStorage.getItem('asap_patron_token'), 'token-D20000000000904', 'stale failed restore must not clear the newer token');
     assert.strictEqual(document.getElementById('step-form').classList.contains('hidden'), false, 'stale failed restore must not return the newer session to login');
 
     state.setAuthToken('token-A');
@@ -121,6 +136,80 @@ function session(barcode, token) {
     await loginD;
     assert.strictEqual(document.getElementById('display-barcode').textContent, 'D20000000000904');
     assert.strictEqual(sessionStorage.getItem('asap_patron_token'), 'token-D20000000000904');
+
+    state.setAuthToken('token-invalid-restore');
+    global.fetch = async url => {
+      if (String(url).endsWith('/api/asap/patron/session')) return response(200, {});
+      if (String(url).endsWith('/api/asap/patron/logout')) return response(204, null);
+      if (String(url).endsWith('/api/asap/patron/login')) {
+        return response(200, session('E20000000000905', 'token-E20000000000905', {
+          effectiveLibraryOrgId: '2'
+        }));
+      }
+      throw new Error('Unexpected request: ' + url);
+    };
+    const priorInvalidRestoreBarcode = document.getElementById('display-barcode').textContent;
+    await auth.restoreSession();
+    assert.strictEqual(sessionStorage.getItem('asap_patron_token'), null,
+      'an empty restore envelope cannot establish a patron session');
+    assert.strictEqual(state.authToken, '', 'an invalid restore clears the active token');
+    assert.strictEqual(document.getElementById('display-barcode').textContent, priorInvalidRestoreBarcode,
+      'an invalid restore cannot replace the prior, now-hidden identity');
+    assert.strictEqual(document.getElementById('step-form').classList.contains('hidden'), true,
+      'an invalid restore remains at login');
+    assert.strictEqual(document.getElementById('login-error').classList.contains('hidden'), false);
+
+    barcode.value = 'E20000000000905';
+    pin.value = '1234';
+    const priorInvalidLoginBarcode = document.getElementById('display-barcode').textContent;
+    await auth.handleLoginSubmit({ preventDefault() {} });
+    assert.strictEqual(sessionStorage.getItem('asap_patron_token'), null,
+      'a login with a string organization id is not accepted as a valid session');
+    assert.strictEqual(state.authToken, '', 'a malformed login cannot establish the active token');
+    assert.strictEqual(document.getElementById('display-barcode').textContent, priorInvalidLoginBarcode,
+      'a malformed successful login cannot replace the prior, hidden identity');
+    assert.strictEqual(document.getElementById('step-form').classList.contains('hidden'), true,
+      'a malformed successful login remains at login');
+    assert.strictEqual(document.getElementById('login-error').classList.contains('hidden'), false);
+
+    let restorePayload;
+    global.fetch = async url => {
+      if (String(url).endsWith('/api/asap/patron/session')) return response(200, restorePayload);
+      throw new Error('Unexpected request: ' + url);
+    };
+    for (const [label, selectedPickupBranchId, omitSelected, omitToken] of [
+      ['omitted selected branch and token', undefined, true, true],
+      ['null selected branch', null, false, false]
+    ]) {
+      state.setAuthToken(`token-valid-${label}`);
+      restorePayload = session(`F20000000000${omitSelected ? '906' : '907'}`, null, {
+        pickupBranches: [], selectedPickupBranchId
+      });
+      if (omitSelected) delete restorePayload.selectedPickupBranchId;
+      if (omitToken) delete restorePayload.token;
+      await auth.restoreSession();
+      assert.strictEqual(document.getElementById('display-barcode').textContent,
+        restorePayload.barcode, `${label}: restore accepts the valid session and empty branch list`);
+      assert.strictEqual(document.getElementById('step-form').classList.contains('hidden'), false,
+        `${label}: restore can establish the patron view`);
+    }
+
+    for (const selectedPickupBranchId of [0, -1]) {
+      state.setAuthToken(`token-invalid-selected-${selectedPickupBranchId}`);
+      restorePayload = session('G20000000000908', null, {
+        pickupBranches: [], selectedPickupBranchId
+      });
+      const priorBarcode = document.getElementById('display-barcode').textContent;
+      await auth.restoreSession();
+      assert.strictEqual(sessionStorage.getItem('asap_patron_token'), null,
+        `selected pickup branch ${selectedPickupBranchId} is not a valid restored session`);
+      assert.strictEqual(state.authToken, '',
+        `selected pickup branch ${selectedPickupBranchId} cannot establish the active token`);
+      assert.strictEqual(document.getElementById('display-barcode').textContent, priorBarcode,
+        `selected pickup branch ${selectedPickupBranchId} cannot replace the prior, hidden identity`);
+      assert.strictEqual(document.getElementById('step-form').classList.contains('hidden'), true);
+      assert.strictEqual(document.getElementById('login-error').classList.contains('hidden'), false);
+    }
 
     console.log('Patron auth restore race regression checks passed');
   } finally {

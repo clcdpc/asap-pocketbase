@@ -75,7 +75,7 @@ async function runInvalidCatalogCase(settings, organizationBody, expectedMessage
       if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
       if (requestUrl.endsWith('/api/asap/staff/settings')) {
         settingsPosts++;
-        return response(200, { code: 'saved', data: { version: 'settings-v2' } });
+        return response(200, { code: 'saved', data: { orgId: 'system', version: 'settings-v2' } });
       }
       throw new Error(`Unexpected request: ${requestUrl}`);
     };

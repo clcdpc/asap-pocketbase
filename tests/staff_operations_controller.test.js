@@ -11,6 +11,20 @@ const organizationCatalog = [
   { id: 22, name: 'Inactive Branch', abbreviation: 'B22', organizationCodeId: 3, parentOrganizationId: 2, isActive: false, lastSyncedUtc: null, version: 'org-22' },
   { id: 21, name: 'Unclassified Reference', abbreviation: null, organizationCodeId: null, parentOrganizationId: 2, isActive: true, lastSyncedUtc: null, version: 'org-21' }
 ];
+function committedOperationResult(path) {
+  const url = new URL(path, 'https://localhost');
+  if (url.pathname.endsWith('/email-operations/test')) {
+    return { code: 'queued', data: { id: '9007199254740993', code: null,
+      dispatchDelayed: false, version: 'email-test-v1' } };
+  }
+  if (url.pathname.endsWith('/retry')) {
+    const id = url.pathname.split('/').at(-2);
+    return { code: 'queued', data: { id, dispatchDelayed: false, version: 'email-retry-v1' } };
+  }
+  const data = { jobId: 'hangfire-job-1', organizationId: Number(url.searchParams.get('organizationId') || 1) };
+  if (url.searchParams.get('force') === 'true') data.manualRunId = url.searchParams.get('operationId');
+  return { code: 'queued', ...data };
+}
 (async () => {
   await fixture(async ({ load, get }) => {
     const { createSessionIdentity } = await load('session-identity');
@@ -35,12 +49,12 @@ const organizationCatalog = [
     const savingB = second.run('/api/asap/staff/email-operations/test', 'B email');
     const bKey = `asap.staff.operation.tenant-b.b.${encodeURIComponent(session.actor().key)}`;
     const bRecord = window.sessionStorage.getItem(bKey);
-    pending[0].resolve({ code: 'queued' }); await savingA;
+    pending[0].resolve(committedOperationResult(pending[0].path)); await savingA;
     assert.equal(window.sessionStorage.getItem(bKey), bRecord, 'A cannot clear B captured recovery');
     assert.equal(get('#send-test-email').disabled, true, 'old actor cannot release new actor controls');
     assert.equal(receipts[0][2].outcome, 'committed');
     assert.equal(session.isCurrent(receipts[0][1]), false);
-    pending[1].resolve({ code: 'queued' }); await savingB;
+    pending[1].resolve(committedOperationResult(pending[1].path)); await savingB;
     assert.equal(window.sessionStorage.getItem(bKey), null);
     assert.equal(get('#send-test-email').disabled, false);
     second.dispose();
@@ -56,7 +70,7 @@ const organizationCatalog = [
     const reads = [], notices = [], receipts = [];
     const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: session,
       announce: message => notices.push(message), onScopeChange() {}, clearReceipt() {}, onReceipt: (...args) => receipts.push(args),
-      request: async (path, init = {}) => init.method === 'POST' ? { code: 'queued' }
+      request: async (path, init = {}) => init.method === 'POST' ? committedOperationResult(path)
         : new Promise(resolve => reads.push(resolve)) });
     controller.setStaff(session.preferences()); controller.activate();
     const running = controller.run('/api/asap/staff/email-operations/test', 'A email');
@@ -82,7 +96,7 @@ const organizationCatalog = [
           if (init.method === 'POST') {
             posts.push({ path, init });
             if (uncertain) throw new Error('Response lost');
-            return { code: 'queued' };
+              return committedOperationResult(path);
           }
           paths.push(path);
           if (path.endsWith('/organizations')) return { data: organizationCatalog.map(item => item.id === 3
@@ -224,7 +238,9 @@ const organizationCatalog = [
         let complete, reject;
         const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: session,
           announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {},
-          request: () => new Promise((resolve, fail) => { complete = resolve; reject = fail; }) });
+          request: path => new Promise((resolve, fail) => {
+            complete = () => resolve(committedOperationResult(path)); reject = fail;
+          }) });
         controller.setStaff(session.preferences()); controller.activate();
         const saving = controller.run('/api/asap/staff/email-operations/test', 'Pending operation');
         const key = `asap.staff.operation.${sameIdActor.tenantId}.${sameIdActor.id}.${encodeURIComponent(session.actor().key)}`;
@@ -233,7 +249,7 @@ const organizationCatalog = [
         const next = JSON.stringify({ ...saved, ...(replacement === 'foreign'
           ? { actorKey: 'another-actor' } : { message: 'Newer record' }) });
         dom.window.sessionStorage.setItem(key, next); controller.dispose();
-        if (outcome === 'committed') complete({ code: 'queued' });
+        if (outcome === 'committed') complete();
         else reject(new Error('Response lost'));
         await saving;
         assert.equal(dom.window.sessionStorage.getItem(key), next, `${outcome} cannot remove or rewrite a ${replacement} record`);
@@ -247,7 +263,7 @@ const organizationCatalog = [
     const pending = [];
     const options = { root: get('#operations-view'), sessionIdentity: session, announce() {},
       onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
-        if (init.method === 'POST') return new Promise(resolve => pending.push(resolve));
+        if (init.method === 'POST') return new Promise(resolve => pending.push({ path, resolve }));
         return path.endsWith('/organizations') ? { data: organizationCatalog } : { items: [] };
       } };
     const first = createOperationsController(options); first.setStaff(session.preferences()); first.activate();
@@ -259,9 +275,9 @@ const organizationCatalog = [
     const newerRaw = dom.window.sessionStorage.getItem(key), newer = JSON.parse(newerRaw);
     assert.equal(newer.operationId, original.operationId, 'reload retry preserves immutable command identity');
     assert.notEqual(newer.recordId, original.recordId, 'each dispatch owns distinct durable evidence');
-    pending[0]({ code: 'queued' }); await saving;
+    pending[0].resolve(committedOperationResult(pending[0].path)); await saving;
     assert.equal(dom.window.sessionStorage.getItem(key), newerRaw, 'pre-reload completion cannot clear a newer retry of the same operation');
-    pending[1]({ code: 'queued' }); await new Promise(resolve => setImmediate(resolve));
+    pending[1].resolve(committedOperationResult(pending[1].path)); await new Promise(resolve => setImmediate(resolve));
     assert.equal(dom.window.sessionStorage.getItem(key), null, 'new retry clears its own exact record');
     second.dispose();
   });
@@ -374,5 +390,100 @@ const organizationCatalog = [
       controller.dispose();
     });
   }
-  console.log('Operations controller: 32 fixtures passed, including four status-200 unknown command outcomes');
+  const invalidAcknowledgements = [
+    { name: 'workflow result without a job id', path: '/api/asap/staff/workflow/run-now',
+      result: { code: 'queued', organizationId: 1 } },
+    { name: 'workflow result for a different scope', path: '/api/asap/staff/workflow/run-now',
+      result: { code: 'queued', jobId: 'job-1', organizationId: 2 } },
+    { name: 'forced weekly result for a different operation id', path: '/api/asap/staff/workflow/weekly-summary/run-now?force=true',
+      result: { code: 'queued', jobId: 'job-1', organizationId: 1,
+        manualRunId: '00000000-0000-4000-8000-000000000000' } },
+    { name: 'workflow cannot return the email-only suppressed code', path: '/api/asap/staff/workflow/run-now',
+      result: { code: 'suppressed', jobId: 'job-1', organizationId: 1 } },
+    { name: 'email test result missing its version', path: '/api/asap/staff/email-operations/test',
+      result: { code: 'queued', data: { id: '9007199254740993', dispatchDelayed: false } } },
+    { name: 'email replay missing its prior status', path: '/api/asap/staff/email-operations/test',
+      result: { code: 'queued', data: { id: '9007199254740993', version: 'email-v2', replayed: true } } },
+    { name: 'email retry result with a different bigint id', path: '/api/asap/staff/email-operations/9007199254740993/retry',
+      body: { version: 'email-v1' },
+      result: { code: 'queued', data: { id: '9007199254740992', version: 'email-v2', dispatchDelayed: false } } }
+  ];
+  for (const invalid of invalidAcknowledgements) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createOperationsController } = await load('operations-controller');
+      const identity = createSessionIdentity();
+      const owner = identity.accept(actor('shape'));
+      const posts = [], receipts = [];
+      const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+        announce() {}, onScopeChange() {}, clearReceipt() {}, onReceipt: (...args) => receipts.push(args),
+        request: async (path, init = {}) => {
+          if (init.method === 'POST') { posts.push({ path, init }); return invalid.result; }
+          if (path.endsWith('/organizations')) return { data: organizationCatalog };
+          if (path.includes('/email-operations')) return { items: [
+            { id: '9007199254740993', status: 'failed', deliveryClass: 'business_event',
+              lastErrorCode: 'mail_not_configured', canRetry: true, version: 'email-v1' }
+          ] };
+          return { items: [] };
+        } });
+      controller.setStaff(owner); controller.activate();
+      await controller.run(invalid.path, invalid.name, null, invalid.body);
+      assert.equal(posts.length, 1, `${invalid.name}: exactly one dispatch is made`);
+      assert.equal(receipts.length, 1, `${invalid.name}: malformed 2xx retains a single owner-bound receipt`);
+      assert.equal(receipts[0][1].id, owner.id);
+      assert.equal(receipts[0][2].outcome, 'uncertain', `${invalid.name}: malformed 2xx is not committed`);
+      assert.equal(get('#operations-outcome').hidden, false);
+      assert.equal(get('#operations-outcome button'), null, `${invalid.name}: no retry before authoritative review`);
+      for (const selector of ['#run-workflow-now', '#run-weekly-now', '#force-weekly-now', '#send-test-email']) {
+        assert.equal(get(selector).disabled, true, `${invalid.name}: controls remain guarded`);
+      }
+      const key = `asap.staff.operation.${owner.tenantId}.${owner.id}.${encodeURIComponent(identity.actor().key)}`;
+      const raw = dom.window.sessionStorage.getItem(key);
+      assert.ok(raw, `${invalid.name}: operation identity remains durably reviewable`);
+      const saved = JSON.parse(raw);
+      assert.equal(saved.path, invalid.path);
+      assert.equal(saved.body?.version, invalid.body?.version);
+      if (invalid.path.includes('force=true')) {
+        assert.equal(new URL(posts[0].path, 'https://localhost').searchParams.get('operationId'), saved.operationId,
+          'the forced result is checked against the exact persisted operation identity');
+      }
+      if (invalid.path.endsWith('/retry')) {
+        assert.equal(posts[0].path, invalid.path);
+        assert.equal(posts[0].init.body.version, 'email-v1');
+      }
+      await controller.run(invalid.path, invalid.name, null, invalid.body);
+      assert.equal(posts.length, 1, `${invalid.name}: a malformed response cannot cause a blind second POST`);
+      assert.equal(dom.window.sessionStorage.getItem(key), raw,
+        `${invalid.name}: malformed response preserves exact captured identity`);
+      controller.dispose();
+    });
+  }
+  for (const result of [
+    { code: 'suppressed', data: { id: '9007199254740993', code: 'mail_not_configured',
+      dispatchDelayed: false, version: 'email-suppressed-v1' } },
+    { code: 'queued', data: { id: '9007199254740993', code: null, version: 'email-replay-v1',
+      replayed: true, status: 'pending' } }
+  ]) {
+    await fixture(async ({ load, get }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createOperationsController } = await load('operations-controller');
+      const identity = createSessionIdentity(); const owner = identity.accept(actor('shape-positive'));
+      const receipts = [];
+      const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+        announce() {}, onScopeChange() {}, clearReceipt() {}, onReceipt: (...args) => receipts.push(args),
+        request: async (path, init = {}) => {
+          if (init.method === 'POST') return result;
+          if (path.endsWith('/organizations')) return { data: organizationCatalog };
+          return { items: [] };
+        } });
+      controller.setStaff(owner); controller.activate();
+      await controller.run('/api/asap/staff/email-operations/test', 'Test email');
+      assert.equal(receipts.length, 1);
+      assert.equal(receipts[0][2].outcome, 'committed', 'canonical suppression and replay envelopes remain valid outcomes');
+      if (result.code === 'suppressed') assert.match(receipts[0][0], /suppressed; no email was sent/i);
+      else assert.match(receipts[0][0], /already recorded as pending\. Review email operation 9007199254740993/i);
+      controller.dispose();
+    });
+  }
+  console.log('Operations controller: canonical and malformed command outcome fixtures passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

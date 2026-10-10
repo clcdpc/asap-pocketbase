@@ -11,6 +11,11 @@ const operationStorageKey = staff => `asap.staff.operation.${staff.tenantId || '
 const id = '9007199254740993';
 const response = (status, body) => ({ ok: status < 400, status,
   statusText: status < 400 ? 'OK' : 'Request failed', json: async () => body });
+function queuedWorkflowAcknowledgement(parsed) {
+  const data = { jobId: 'workflow-job-1', organizationId: Number(parsed.searchParams.get('organizationId') || 1) };
+  if (parsed.searchParams.get('force') === 'true') data.manualRunId = parsed.searchParams.get('operationId');
+  return { code: 'queued', ...data };
+}
 const settle = async () => { await new Promise(resolve => setTimeout(resolve, 45)); };
 const systemOrganization = { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1,
   parentOrganizationId: null, isActive: true, version: 'org-1-v1' };
@@ -174,7 +179,7 @@ async function fixture(route, journey, options = {}) {
       if (pathname.endsWith('/workflow/queues') || pathname.endsWith('/email-operations')) return response(200, { items: [] });
       if (init.method === 'DELETE') return operationResponse ? operationResponse() : response(200, { deleted: true });
       if (init.method === 'POST') {
-        if (operationResponse) return operationResponse();
+        if (operationResponse) return operationResponse({ url, init, parsed, pathname });
         if (pathname.startsWith('/api/asap/staff/additional-copies/')) {
           copyRequest = { ...copyRequest, version: 'copy-v2' };
           return response(200, { committed: true, request: copyRequest, finalStatus: copyRequest.status });
@@ -626,7 +631,8 @@ for (const status of [202, 400]) {
     ui.get('#run-workflow-now').click();
     await until(() => resolve, 'manual operation started');
     assert.equal(ui.get('#send-test-email').disabled, true);
-    resolve(response(status, { code: status === 202 ? 'queued' : 'invalid_operation' }));
+    resolve(response(status, status === 202 ? queuedWorkflowAcknowledgement(new URL(
+      ui.calls.find(call => call.init.method === 'POST').url, 'https://localhost')) : { code: 'invalid_operation' }));
     await until(() => !ui.get('#send-test-email').disabled, 'authoritative outcome releases guard');
     assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 1);
   }));
@@ -640,7 +646,7 @@ test('uncertain forced operation requires review and reuses its identity', () =>
   ui.get('[data-view="operations"]').click(); await settle();
   assert.equal(ui.get('#send-test-email').disabled, true);
   await until(() => ui.get('#operations-outcome button'), 'review enables only the same operation retry');
-  ui.setOperation(() => response(202, { code: 'queued' }));
+  ui.setOperation(({ parsed }) => response(202, queuedWorkflowAcknowledgement(parsed)));
   ui.get('#operations-outcome button').click();
   await until(() => !ui.get('#send-test-email').disabled, 'safe retry confirmed');
   const posts = ui.calls.filter(call => call.init.method === 'POST');
@@ -655,7 +661,7 @@ test('reload preserves an unresolved operation and retries only its recorded ide
     assert.equal(ui.get('#send-test-email').disabled, true);
     assert.equal(ui.get('#force-weekly-now').disabled, true);
     await until(() => ui.get('#operations-outcome button'), 'current Operations reviewed after reload');
-    ui.setOperation(() => response(202, { code: 'queued' }));
+    ui.setOperation(({ parsed }) => response(202, queuedWorkflowAcknowledgement(parsed)));
     ui.get('#operations-outcome button').click();
     await until(() => !ui.get('#send-test-email').disabled, 'recorded operation resolved');
     const posts = ui.calls.filter(call => call.init.method === 'POST');
@@ -686,7 +692,7 @@ for (const [component, change] of [['email', { authenticationEmail: 'replacement
         ui.get('#refresh-operations').click(); await settle();
         assert.equal(ui.get('#operations-outcome button'), null, 'current review cannot claim foreign recovery');
         assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
-        ui.setOperation(() => response(202, { code: 'queued' }));
+        ui.setOperation(({ parsed }) => response(202, queuedWorkflowAcknowledgement(parsed)));
         ui.get('#run-workflow-now').click();
         await until(() => ui.calls.some(call => call.init.method === 'POST') && !ui.get('#send-test-email').disabled,
           'replacement can complete its own operation');
@@ -1818,6 +1824,7 @@ for (const commit of ['library save', 'system save', 'library reset']) {
   test(`confirmed ${commit} invalidates Title configuration even when Settings refresh fails`, () =>
     fixture(`?stage=settings&settingsScope=${commit === 'system save' ? 'system' : '2'}`, async ui => {
       let committed = false, failRefresh = true, configurationReads = 0, reloads = 0;
+      const expectedOrgId = commit === 'system save' ? 'system' : '2';
       ui.setApi(({ pathname, init }) => {
         if (pathname === '/api/asap/config') {
           configurationReads++;
@@ -1826,8 +1833,8 @@ for (const commit of ['library save', 'system save', 'library reset']) {
         if ((pathname.endsWith('/settings') || pathname.endsWith('/settings/reset')) && init.method === 'POST') {
           committed = true;
           return pathname.endsWith('/settings/reset')
-            ? response(200, { code: 'reset', data: { version: 'settings-v2' } })
-            : response(200, { code: 'saved', data: { version: 'settings-v2' } });
+            ? response(200, { code: 'reset', data: { orgId: expectedOrgId, version: 'settings-v2' } })
+            : response(200, { code: 'saved', data: { orgId: expectedOrgId, version: 'settings-v2' } });
         }
         if (pathname.endsWith('/settings') && committed) {
           reloads++;
@@ -2023,8 +2030,9 @@ for (const review of ['unauthenticated', 'active', 'unavailable']) {
 
 test('same-actor Profile revision preserves an Operations attempt started before preference refresh', () =>
   fixture('?stage=operations', async ui => {
-    let completeOperation;
-    ui.setApi(({ pathname, init }) => {
+    let completeOperation, operationUrl;
+    ui.setApi(({ pathname, parsed }) => {
+      if (pathname.endsWith('/workflow/run-now')) operationUrl = parsed;
       if (pathname.endsWith('/workflow/run-now')) return new Promise(done => { completeOperation = done; });
       if (pathname.endsWith('/profile')) {
         ui.setStaff({ version: 'actor-v2', weeklyActionSummaryEmail: 'updated@example.org' });
@@ -2035,7 +2043,7 @@ test('same-actor Profile revision preserves an Operations attempt started before
     ui.get('[data-view="profile"]').click(); await settle();
     ui.edit('#weekly-email', 'updated@example.org'); submitProfile(ui);
     await until(() => /Profile saved\./.test(ui.get('#app-status').textContent), 'preferences refreshed');
-    completeOperation(response(202, { code: 'queued' })); await settle();
+    completeOperation(response(202, queuedWorkflowAcknowledgement(operationUrl))); await settle();
     assert.equal(ui.params().get('stage'), 'profile');
     assert.equal(ui.get('#weekly-email').value, 'updated@example.org');
     ui.get('[data-view="operations"]').click(); await settle();
@@ -2262,7 +2270,7 @@ for (const copy of [false, true]) {
             changed = true;
             return uncertain
               ? response(503, { data: { version: 'v2' }, message: 'Lost configuration response' })
-              : response(200, { code: 'saved', data: { version: 'v2' } });
+              : response(200, { code: 'saved', data: { orgId: 'system', version: 'v2' } });
           }
           if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
             queueReads++;
@@ -2301,7 +2309,10 @@ for (const copy of [false, true]) {
       fixture(`?stage=settings&settingsScope=${settingsScope}`, async ui => {
         let committed = false, queueReads = 0;
         ui.setApi(({ pathname, init, parsed }) => {
-          if (pathname.endsWith('/settings') && init.method === 'POST') { committed = true; return response(200, { code: 'saved', data: { version: 'v2' } }); }
+          if (pathname.endsWith('/settings') && init.method === 'POST') {
+            committed = true;
+            return response(200, { code: 'saved', data: { orgId: JSON.parse(init.body).orgId, version: 'v2' } });
+          }
           if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
             queueReads++;
             const item = copy ? ui.readCopyRequest() : ui.readRequest();
@@ -2352,7 +2363,9 @@ for (const copy of [false, true]) {
             const rows = catalog(); ui.setOrganizations(rows); return response(200, { code: 'ok', data: rows });
           }
           if (pathname.endsWith('/organizations/2/deactivate')) {
-            committed = true; ui.setOrganizations(catalog()); return response(200, { data: {} });
+            committed = true; ui.setOrganizations(catalog()); return response(200, { code: 'deactivated', data: {
+              organizationId: 2, revokedPatronSessions: 0, version: 'org-2-v2'
+            } });
           }
           if (pathname.endsWith('/settings') && committed && failed) return response(503, { message: 'Settings unavailable' });
           if (pathname.endsWith('/title-requests') || pathname.endsWith('/additional-copies')) {
@@ -2402,8 +2415,15 @@ for (const action of ['activation', 'sync']) {
         if (pathname.endsWith('/organizations')) {
           const rows = catalog(); ui.setOrganizations(rows); return response(200, { code: 'ok', data: rows });
         }
-        if (pathname.endsWith('/organizations/3/activate') || pathname.endsWith('/organizations/sync')) {
-          committed = true; ui.setOrganizations(catalog()); return response(200, { data: { received: 2 } });
+        if (pathname.endsWith('/organizations/3/activate')) {
+          committed = true; ui.setOrganizations(catalog()); return response(200, { code: 'activated', data: {
+            organizationId: 3, revokedPatronSessions: 0, version: 'org-3-v2'
+          } });
+        }
+        if (pathname.endsWith('/organizations/sync')) {
+          committed = true; ui.setOrganizations(catalog()); return response(200, { code: 'synced', data: {
+            received: 3, changed: 2
+          } });
         }
         if (pathname.endsWith('/title-requests')) return response(200, {
           scope: parsed.searchParams.get('scope'), items: [ui.readRequest()], organizations: libraries().filter(item => item.isActive) });
@@ -2428,6 +2448,51 @@ for (const action of ['activation', 'sync']) {
       ]) }));
 }
 
+for (const invalid of [
+  { action: 'sync', body: { code: 'synced', data: { received: 3, changed: -1 } } },
+  { action: 'sync', body: { code: 'synced', data: { received: '3', changed: 2 } } },
+  { action: 'sync', body: { code: 'activated', data: { received: 3, changed: 2 } } },
+  { action: 'activation', body: { code: 'activated', data: { organizationId: 4, revokedPatronSessions: 0, version: 'org-v2' } } },
+  { action: 'activation', body: { code: 'activated', data: { organizationId: 3, revokedPatronSessions: -1, version: 'org-v2' } } },
+  { action: 'activation', body: { code: 'activated', data: { organizationId: 3, revokedPatronSessions: 0, version: '' } } }
+]) {
+  test(`organization ${invalid.action} rejects an invalid success acknowledgement`, () =>
+    fixture('?stage=settings&settingsScope=system', async ui => {
+      let mutations = 0;
+      const organizationsBefore = ui.calls.filter(call => new URL(call.url, 'https://localhost').pathname.endsWith('/organizations')).length;
+      ui.setApi(({ pathname }) => {
+        if (pathname.endsWith('/organizations/sync') || pathname.endsWith('/organizations/3/activate')) {
+          mutations++;
+          return response(200, invalid.body);
+        }
+      });
+      if (invalid.action === 'activation') {
+        await until(() => ui.get('[aria-label="Activate Library B"]'), 'inactive organization action available');
+        ui.allowDiscard();
+        ui.get('[aria-label="Activate Library B"]').click();
+      } else {
+        await until(() => !ui.get('#settings-form').hidden, 'system settings loaded');
+        ui.get('#btn-sync-organizations').click();
+      }
+      await until(() => mutations === 1 && !ui.get('#settings-form').hasAttribute('aria-busy'),
+        'invalid acknowledgement leaves the command attempt settled');
+      assert.equal(mutations, 1);
+      assert.equal(ui.calls.filter(call => new URL(call.url, 'https://localhost').pathname.endsWith('/organizations')).length,
+        organizationsBefore, 'an invalid acknowledgement does not accept or refresh the organization catalog');
+      assert.doesNotMatch(ui.get('#settings-message').textContent,
+        invalid.action === 'sync' ? /synchronized/i : /activated/i,
+        'invalid data cannot present the operation as committed');
+      assert.match(ui.get('#settings-message').textContent, /uncertain|confirm/i,
+        'the invalid 2xx requires an authoritative reload before retry');
+      if (invalid.action === 'activation') ui.get('[aria-label="Activate Library B"]').click();
+      else ui.get('#btn-sync-organizations').click();
+      await settle();
+      assert.equal(mutations, 1, 'an unconfirmed organization mutation is never blindly replayed');
+    }, { organizations: organizationCatalog([
+      libraryOrganization(2, 'Library A'), libraryOrganization(3, 'Library B', false)
+    ]) }));
+}
+
 test('authoritative projections: unavailable organization review keeps retired rows unavailable until retry', () =>
   fixture('?stage=suggestion&scope=2', async ui => {
     let committed = false, available = false, queueReads = 0;
@@ -2440,7 +2505,7 @@ test('authoritative projections: unavailable organization review keeps retired r
         const rows = catalog(); ui.setOrganizations(rows); return response(200, { code: 'ok', data: rows });
       }
       if (pathname.endsWith('/organizations/sync')) {
-        committed = true; ui.setOrganizations(catalog()); return response(200, { data: { received: 1 } });
+        committed = true; ui.setOrganizations(catalog()); return response(200, { code: 'synced', data: { received: 3, changed: 1 } });
       }
       if (pathname.endsWith('/title-requests')) {
         queueReads++;
@@ -2475,7 +2540,7 @@ test('authoritative projections: system save participation retires the selected 
       }
       if (pathname.endsWith('/settings') && init.method === 'POST') {
         assert.deepEqual(JSON.parse(init.body).systemSettings.enabledLibraryOrgIds, [3]);
-        committed = true; ui.setOrganizations(catalog()); return response(200, { code: 'saved', data: { version: 'v2' } });
+        committed = true; ui.setOrganizations(catalog()); return response(200, { code: 'saved', data: { orgId: 'system', version: 'v2' } });
       }
       if (pathname.endsWith('/settings') && committed) return response(503, { message: 'Settings reload unavailable' });
       if (pathname.endsWith('/title-requests')) {
@@ -2676,7 +2741,9 @@ for (const view of ['queue', 'additional-copies']) {
       fixture('?stage=settings&settingsScope=system', async ui => {
         let retired = false, available = true, complete;
         ui.setApi(({ pathname }) => {
-          if (pathname.endsWith('/organizations/sync')) { retired = true; return response(200, { data: { received: 2 } }); }
+          if (pathname.endsWith('/organizations/sync')) {
+            retired = true; return response(200, { code: 'synced', data: { received: 3, changed: 1 } });
+          }
           if (pathname.endsWith('/organizations') && retired && !available) return response(503, { message: 'Catalog unavailable' });
         });
         ui.get('#btn-sync-organizations').click();
@@ -2764,7 +2831,10 @@ test('authoritative projections: email readiness refresh survives failed Setting
   fixture('?stage=settings&settingsScope=system', async ui => {
     let committed = false, readinessReads = 0;
     ui.setApi(({ pathname, init }) => {
-      if (pathname.endsWith('/settings') && init.method === 'POST') { committed = true; return response(200, { code: 'saved', data: { version: 'v2' } }); }
+      if (pathname.endsWith('/settings') && init.method === 'POST') {
+        committed = true;
+        return response(200, { code: 'saved', data: { orgId: 'system', version: 'v2' } });
+      }
       if (pathname.endsWith('/settings') && committed) return response(503, { message: 'Settings review unavailable' });
       if (pathname.endsWith('/email-readiness')) {
         readinessReads++;

@@ -83,7 +83,7 @@ async function flush() {
         fromName = payload.email.fromName ?? fromName;
         if (payload.email.clearPostmarkToken) hasToken = false;
         version += 1;
-        return response(200, { code: 'saved', data: { version: `v${version}` } });
+        return response(200, { code: 'saved', data: { orgId: 'system', version: `v${version}` } });
       }
       throw new Error(`Unexpected request: ${requestUrl}`);
     };

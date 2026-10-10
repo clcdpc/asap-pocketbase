@@ -134,7 +134,7 @@ async function flush() {
         saveBodies.push(saveBody);
         librarySetsExist = saveBodies.length === 1;
         if (saveBodies.length === 1) saveCompleted();
-        return response(200, { code: 'saved', data: { version: 'library-2-saved' } });
+        return response(200, { code: 'saved', data: { orgId: '2', version: 'library-2-saved' } });
       }
       throw new Error(`Unexpected request: ${requestUrl}`);
     };

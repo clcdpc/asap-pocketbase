@@ -151,7 +151,7 @@ async function flush() {
           saveStarted?.();
           return new Promise(resolve => { releaseSave = () => resolve(
             outcome === 'success'
-              ? response(200, { code: 'saved', data: { version: 'library-2-saved' } })
+              ? response(200, { code: 'saved', data: { version: 'library-2-saved', orgId: '2' } })
               : response(409, { code: 'stale_version', message: 'The library settings are stale.' })
           ); });
         }
@@ -478,7 +478,11 @@ async function flush() {
         if (requestUrl.endsWith('/settings') && options.method === 'POST') {
           posts.push(options); return new Promise((resolve, reject) => { complete = resolve; fail = reject; });
         }
-        if (requestUrl.includes('/settings?')) return response(200, settingsData(1, 'replacement-version', 'Replacement'));
+        if (requestUrl.includes('/settings?')) {
+          const data = settingsData(1, 'replacement-version', 'Replacement');
+          data.orgId = 'system';
+          return response(200, data);
+        }
         if (requestUrl.endsWith('/organizations')) return response(200, []);
         if (requestUrl.includes('/patron-codes?')) return response(200, { data: [] });
         throw new Error(`Unexpected request: ${requestUrl}`);
@@ -496,7 +500,7 @@ async function flush() {
       const replacement = settingsModule.createSettingsController(options); replacement.bind();
       replacement.setStaff({ id: '2', tenantId: 'tenant-b', authenticationEmail: 'b@example.org', role: 'super_admin', organizationId: 1 });
       await replacement.activate(); first.dispose();
-      if (outcome === 'committed') complete(response(200, { code: 'saved', data: { version: 'old-commit-version' } }));
+      if (outcome === 'committed') complete(response(200, { code: 'saved', data: { version: 'old-commit-version', orgId: 'system' } }));
       else fail(new Error('Lost response'));
       await flush(); await flush();
       assert.equal(receipts.at(-1)[1].id, '1'); assert.equal(receipts.at(-1)[2].outcome, outcome, 'record old attempt truth before presentation checks');
@@ -515,7 +519,11 @@ async function flush() {
       global.fetch = async (url, options = {}) => {
         if (url.endsWith('/session')) return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
         if (url.endsWith('/settings') && options.method === 'POST') return new Promise((resolve, reject) => { complete = resolve; fail = reject; });
-        if (url.includes('/settings?')) return response(200, settingsData(1, 'current-version', 'Current'));
+        if (url.includes('/settings?')) {
+          const data = settingsData(1, 'current-version', 'Current');
+          data.orgId = 'system';
+          return response(200, data);
+        }
         if (url.endsWith('/organizations')) return response(200, []);
         if (url.includes('/patron-codes?')) return response(200, { data: [] });
         throw new Error(`Unexpected request: ${url}`);
@@ -533,7 +541,7 @@ async function flush() {
       controller.setStaff({ ...owner, authenticationEmail: undefined });
       assert.equal(controller.hasPendingMutation(), false, 'principal-name fallback cannot adopt a command from different authentication evidence');
       await controller.activate();
-      if (outcome === 'committed') complete(response(200, { code: 'saved', data: { version: 'old-actor-version' } }));
+      if (outcome === 'committed') complete(response(200, { code: 'saved', data: { version: 'old-actor-version', orgId: 'system' } }));
       else fail(new Error('Old actor response lost'));
       await flush(); await flush();
       assert.equal(receipts.at(-1)[1], owner); assert.equal(receipts.at(-1)[2].outcome, outcome);
