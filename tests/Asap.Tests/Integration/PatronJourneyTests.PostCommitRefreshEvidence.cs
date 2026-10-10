@@ -60,6 +60,10 @@ public sealed partial class PatronJourneyTests
                     staffVerified: false,
                     status: "suggestion");
                 titleRequestId = seeded.Id;
+                if (mutation == "action")
+                {
+                    await SetRequestNativePatronIdAsync(titleRequestId, 7001);
+                }
                 var before = await ReadCancellationTitleRequestSnapshotAsync(titleRequestId);
                 Assert.AreEqual("suggestion", before.Status);
                 titleBeforeEventCount = before.EventCount;

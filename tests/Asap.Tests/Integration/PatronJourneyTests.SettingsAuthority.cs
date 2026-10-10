@@ -796,6 +796,20 @@ public sealed partial class PatronJourneyTests
             var patronCodes = SnapshotValues(libraryOverride.GetProperty("allowedPatronCodeIds"), values => JsonNode.Parse(values.GetRawText()));
             var publicationOptions = SnapshotValues(libraryOverride.GetProperty("publicationOptions"), values => JsonNode.Parse(values.GetRawText()));
             using var current = await ReadSettingsDocumentAsync(httpClient, "2");
+            var currentFormats = current.RootElement.GetProperty("stored").GetProperty("formats").EnumerateArray().ToArray();
+            var restoredFormats = new JsonArray();
+            foreach (var originalFormat in stored.GetProperty("formats").EnumerateArray())
+            {
+                var matchingFormats = currentFormats.Where(item =>
+                    item.GetProperty("id").GetString() == originalFormat.GetProperty("id").GetString() &&
+                    item.GetProperty("ownerOrganizationId").GetRawText() == originalFormat.GetProperty("ownerOrganizationId").GetRawText() &&
+                    item.GetProperty("code").GetString() == originalFormat.GetProperty("code").GetString()).ToArray();
+                Assert.AreEqual(1, matchingFormats.Length,
+                    "Every restored format must retain its exact ID, owner, and code.");
+                var restoredFormat = JsonNode.Parse(originalFormat.GetRawText())!.AsObject();
+                restoredFormat["version"] = matchingFormats[0].GetProperty("version").GetString();
+                restoredFormats.Add(restoredFormat);
+            }
             var payload = new JsonObject
             {
                 ["orgId"] = "2",
@@ -811,7 +825,7 @@ public sealed partial class PatronJourneyTests
                     ["publicationOptions"] = publicationOptions,
                     ["pageTitle"] = NullableProperty(libraryOverride.GetProperty("patron"), "pageTitle")
                 },
-                ["formats"] = JsonNode.Parse(stored.GetProperty("formats").GetRawText())
+                ["formats"] = restoredFormats
             };
             using var response = await PostSettingsJsonAsync(httpClient, payload.ToJsonString());
             Assert.AreEqual(HttpStatusCode.OK, response.StatusCode,

@@ -1092,15 +1092,19 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
           element('strong', { text: 'Custom field rules' }),
           ...customFieldKeys.map(key => {
             const fieldValue = customFieldsByKey.get(key);
+            const fieldLabel = fieldValue?.label || `Retired field (${key})`;
             const current = value.customFields[key] || { mode: 'hidden', labelOverride: null };
             return element('div', { className: 'settings-custom-rule-row', 'data-custom-rule-key': key }, [
-              element('span', { text: fieldValue?.label || `Retired field (${key})` }),
+              element('span', { text: fieldLabel }),
               select([
                 { value: 'hidden', label: 'Hidden' },
                 { value: 'optional', label: 'Optional' },
                 { value: 'required', label: 'Required' }
-              ], current.mode, { 'data-custom-rule-property': 'mode', 'data-domain-editable': 'true' }),
-              element('input', { type: 'text', value: current.labelOverride || '', placeholder: 'Label override', 'data-custom-rule-property': 'labelOverride', 'data-domain-editable': 'true' })
+              ], current.mode, { 'data-custom-rule-property': 'mode', 'data-domain-editable': 'true',
+                'aria-label': `${fieldLabel} mode for ${value.code}` }),
+              element('input', { type: 'text', value: current.labelOverride || '', placeholder: 'Label override',
+                'data-custom-rule-property': 'labelOverride', 'data-domain-editable': 'true',
+                'aria-label': `${fieldLabel} label override for ${value.code}` })
             ]);
           })
         ])

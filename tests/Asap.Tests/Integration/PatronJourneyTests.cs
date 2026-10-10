@@ -6763,9 +6763,9 @@ public sealed partial class PatronJourneyTests
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 DECLARE @requestId bigint = SCOPE_IDENTITY();
                 INSERT INTO [asap].[HoldPlacementOperation]
-                    ([TitleRequestId], [PatronBarcodeSnapshot], [BibIdSnapshot], [PickupBranchIdSnapshot],
+                    ([TitleRequestId], [PatronBarcodeSnapshot], [PatronIdSnapshot], [BibIdSnapshot], [PickupBranchIdSnapshot],
                      [AttemptNumber], [State], [Phase], [ExecutionEpoch], [RequestStartedUtc], [ResultCode], [LastErrorCode])
-                VALUES (@requestId, N'20000000002116', N'9011', 101, 1, N'operator_required', N'create_started', 2,
+                VALUES (@requestId, N'20000000002116', 9116, N'9011', 101, 1, N'operator_required', N'create_started', 2,
                         DATEADD(minute, -5, SYSUTCDATETIME()), N'ambiguous', N'provider_timeout');
                 SELECT @actorId, @requestId;
                 """;
@@ -11727,6 +11727,7 @@ public sealed partial class PatronJourneyTests
         }
 
         public Guid RequestGuid { get; } = Guid.NewGuid();
+        public int PatronId { get; set; } = 7105;
         public int CreateCount { get; private set; }
         public int ReplyCount { get; private set; }
         public HoldReplyCommand? LastReplyCommand { get; private set; }
@@ -11836,7 +11837,7 @@ public sealed partial class PatronJourneyTests
             }
             var registrationOrganizationId = organizationId == 2 ? 101 : organizationId;
             return new PatronSnapshot(
-                7105,
+                PatronId,
                 barcode,
                 "hold-patron@example.org",
                 "Hold",

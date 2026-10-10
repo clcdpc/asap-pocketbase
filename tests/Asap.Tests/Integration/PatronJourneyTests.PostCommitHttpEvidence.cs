@@ -69,6 +69,7 @@ public sealed partial class PatronJourneyTests
                 titleRequestId = seeded.Id;
                 if (mutation == "action")
                 {
+                    await SetRequestNativePatronIdAsync(titleRequestId, 7001);
                     await using var context = await factory.Services
                         .GetRequiredService<IDbContextFactory<AsapDbContext>>()
                         .CreateDbContextAsync();

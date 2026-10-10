@@ -387,6 +387,7 @@ public sealed partial class PatronJourneyTests
             {
                 TitleRequestId = request.Id,
                 PatronBarcodeSnapshot = request.Barcode,
+                PatronIdSnapshot = 7105,
                 BibIdSnapshot = 9011,
                 PickupBranchIdSnapshot = 101,
                 AttemptNumber = 1,

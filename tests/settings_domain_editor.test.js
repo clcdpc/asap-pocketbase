@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { JSDOM } = require('jsdom');
+const axe = require('axe-core');
 
 (async () => {
   const repositoryRoot = path.join(__dirname, '..');
@@ -160,7 +161,25 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(codeEditor.querySelector('select').value, '2');
     const existingRules = document.querySelectorAll('#format-rules-editor [data-custom-rule-key]');
     assert.strictEqual(existingRules.length, 2);
+    function ruleControlNames(row) {
+      axe.setup(document);
+      try {
+        // This DOM fixture leaves inactive panels hidden; browser journeys scan the visible panels with axe.
+        return {
+          mode: axe.commons.text.accessibleText(row.querySelector('[data-custom-rule-property="mode"]'), { includeHidden: true }),
+          labelOverride: axe.commons.text.accessibleText(row.querySelector('[data-custom-rule-property="labelOverride"]'), { includeHidden: true })
+        };
+      } finally {
+        axe.teardown();
+      }
+    }
+    assert.deepStrictEqual(ruleControlNames(document.querySelector('#format-rules-editor [data-custom-rule-key="pickup_location"]')), {
+      mode: 'Pickup location mode for book', labelOverride: 'Pickup location label override for book'
+    });
     const retiredRule = document.querySelector('#format-rules-editor [data-custom-rule-key="retired_type"]');
+    assert.deepStrictEqual(ruleControlNames(retiredRule), {
+      mode: 'Retired type mode for book', labelOverride: 'Retired type label override for book'
+    });
     assert.strictEqual(retiredRule.querySelector('[data-custom-rule-property="mode"]').value, 'optional');
     assert.strictEqual(retiredRule.querySelector('[data-custom-rule-property="labelOverride"]').value, 'Historical field label');
     const initialValues = editors.collect().values;
@@ -171,6 +190,9 @@ const { JSDOM } = require('jsdom');
 
     document.getElementById('add-custom-field').click();
     assert.strictEqual(document.querySelectorAll('#format-rules-editor [data-custom-rule-key]').length, 3);
+    assert.deepStrictEqual(ruleControlNames(document.querySelector('#format-rules-editor [data-custom-rule-key="field_3"]')), {
+      mode: 'New field mode for book', labelOverride: 'New field label override for book'
+    });
     const afterDynamicAdd = editors.collect().values;
     assert.deepStrictEqual(afterDynamicAdd.codes, ['2']);
     assert.strictEqual(afterDynamicAdd.fields[2].key, 'field_3');
@@ -184,6 +206,9 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(afterRename.rules[0].customFields.field_3, undefined);
     assert.strictEqual(afterRename.rules[0].customFields.selected_at.mode, 'hidden');
     assert.strictEqual(afterRename.fields[2].key, 'selected_at');
+    assert.deepStrictEqual(ruleControlNames(document.querySelector('#format-rules-editor [data-custom-rule-key="selected_at"]')), {
+      mode: 'New field mode for book', labelOverride: 'New field label override for book'
+    });
 
     editors.populate({ ...data, autoClaimStaff: [] }, false);
     document.getElementById('add-auto-claim-rule').click();
