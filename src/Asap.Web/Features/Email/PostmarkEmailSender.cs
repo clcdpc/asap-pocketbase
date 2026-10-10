@@ -5,13 +5,15 @@ using System.Text.Json;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Asap.Web.Features.Email;
 
 public sealed class PostmarkEmailSender(
     IDbContextFactory<AsapDbContext> contextFactory,
     IntegrationCredentialProtector credentialProtector,
-    IHttpClientFactory httpClientFactory) : IEmailSender
+    IHttpClientFactory httpClientFactory,
+    ILogger<PostmarkEmailSender> logger) : IEmailSender
 {
     private static readonly Uri SendUri = new("https://api.postmarkapp.com/email");
     private static readonly Uri ServerUri = new("https://api.postmarkapp.com/server");
@@ -101,23 +103,70 @@ public sealed class PostmarkEmailSender(
             Content = new StringContent(body, Encoding.UTF8, "application/json")
         };
         request.Headers.TryAddWithoutValidation("X-Postmark-Server-Token", token);
-        using var response = await httpClientFactory.CreateClient("Postmark")
+        var response = await httpClientFactory.CreateClient("Postmark")
             .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        try
         {
-            throw new InvalidOperationException("Postmark rejected the email request.");
-        }
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException("Postmark rejected the email request.");
+            }
 
-        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var result = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken);
-        var root = result.RootElement;
-        if (!root.TryGetProperty("ErrorCode", out var errorCode) || errorCode.GetInt32() != 0 ||
-            !root.TryGetProperty("MessageID", out var messageId) ||
-            string.IsNullOrWhiteSpace(messageId.GetString()))
-        {
-            throw new InvalidOperationException("Postmark did not confirm email acceptance.");
+            Stream? content = null;
+            try
+            {
+                content = await response.Content.ReadAsStreamAsync(cancellationToken);
+                using var result = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken);
+                var root = result.RootElement;
+                if (!root.TryGetProperty("ErrorCode", out var errorCode) || errorCode.GetInt32() != 0 ||
+                    !root.TryGetProperty("MessageID", out var messageId) ||
+                    string.IsNullOrWhiteSpace(messageId.GetString()))
+                {
+                    throw new InvalidOperationException("Postmark did not confirm email acceptance.");
+                }
+
+                return new EmailSendResult(messageId.GetString()!);
+            }
+            finally
+            {
+                if (content is not null)
+                {
+                    try
+                    {
+                        await content.DisposeAsync();
+                    }
+                    catch (Exception cleanupFailure)
+                    {
+                        LogCleanupFailure(cleanupFailure);
+                    }
+                }
+            }
         }
-        return new EmailSendResult(messageId.GetString()!);
+        finally
+        {
+            try
+            {
+                response.Dispose();
+            }
+            catch (Exception cleanupFailure)
+            {
+                LogCleanupFailure(cleanupFailure);
+            }
+        }
+    }
+
+    private void LogCleanupFailure(Exception exception)
+    {
+        try
+        {
+            logger.LogWarning(
+                "Postmark response cleanup failed ({FailureType}).",
+                exception.GetType().Name);
+        }
+        catch
+        {
+            // Cleanup diagnostics must not replace the provider result or a primary response failure.
+        }
     }
 
     private async Task<string?> ReadSystemTokenAsync(CancellationToken cancellationToken)

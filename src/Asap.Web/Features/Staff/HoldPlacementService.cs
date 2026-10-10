@@ -2051,6 +2051,7 @@ public sealed class HoldPlacementService(
         using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         execution.CancelAfter(ProviderTimeout);
         var heartbeat = HeartbeatAsync(owner, execution);
+        Exception? providerFailure = null;
         try
         {
             var result = await call(execution.Token);
@@ -2061,8 +2062,11 @@ public sealed class HoldPlacementService(
 
             return result;
         }
-        catch (OperationCanceledException) when (execution.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException exception) when (
+            execution.IsCancellationRequested &&
+            !cancellationToken.IsCancellationRequested)
         {
+            providerFailure = exception;
             if (heartbeat.OwnershipLost)
             {
                 throw new OwnershipLostException();
@@ -2070,10 +2074,32 @@ public sealed class HoldPlacementService(
 
             throw new ProviderCallTimeoutException();
         }
+        catch (Exception exception)
+        {
+            providerFailure = exception;
+            throw;
+        }
         finally
         {
             execution.Cancel();
-            await heartbeat.Completion;
+            try
+            {
+                await heartbeat.Completion;
+            }
+            catch (Exception heartbeatFailure) when (providerFailure is not null)
+            {
+                try
+                {
+                    logger.LogWarning(
+                        "Hold placement lease heartbeat failed while provider work for operation {OperationId} was already failing ({FailureType}).",
+                        owner.Id,
+                        heartbeatFailure.GetType().Name);
+                }
+                catch
+                {
+                    // Logging must not replace the primary provider failure.
+                }
+            }
         }
     }
 
@@ -2095,7 +2121,7 @@ public sealed class HoldPlacementService(
                     }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (execution.IsCancellationRequested)
             {
             }
         }, CancellationToken.None);

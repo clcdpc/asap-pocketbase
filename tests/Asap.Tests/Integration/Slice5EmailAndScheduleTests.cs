@@ -13,6 +13,7 @@ using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Asap.Tests.Integration;
 
@@ -323,7 +324,11 @@ public sealed partial class PatronJourneyTests
                     Encoding.UTF8, "application/json")
             };
         }));
-        var sender = new PostmarkEmailSender(contextFactory, protector, new SingleHttpClientFactory(client));
+        var sender = new PostmarkEmailSender(
+            contextFactory,
+            protector,
+            new SingleHttpClientFactory(client),
+            NullLogger<PostmarkEmailSender>.Instance);
         var actor = await ReadConfiguredSuperAdminAsync();
         var operations = new EmailOperationsService(contextFactory,
             factory.Services.GetRequiredService<IEmailOutboxDispatcher>(), sender,

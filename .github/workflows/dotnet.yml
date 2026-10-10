@@ -94,7 +94,7 @@ jobs:
       - name: Run .NET and real SQL tests (non-browser partition)
         run: >-
           dotnet test --project tests/Asap.Tests/Asap.Tests.csproj
-          --configuration Release --no-build --minimum-expected-tests 1222
+          --configuration Release --no-build --minimum-expected-tests 1231
           --filter
           'FullyQualifiedName!~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport&FullyQualifiedName!~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers&FullyQualifiedName!~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures&FullyQualifiedName!~PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses&FullyQualifiedName!~StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp&FullyQualifiedName!~SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp'
 

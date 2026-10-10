@@ -6,6 +6,7 @@ using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Jobs;
 using Asap.Web.Infrastructure.Testing;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -242,6 +243,342 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
+            await DeleteEmailOutboxByBusinessKeyAsync($"title-hold-placed:{seeded.Id}:1");
+            await DeleteRequestAsync(seeded.Id);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task HoldHeartbeatSqlFailurePreservesPrimaryCreateFault(bool cancelCaller)
+    {
+        var seeded = await SeedBibOwnershipRequestAsync(
+            $"hold-heartbeat-primary-{Guid.NewGuid():N}",
+            9001,
+            staffVerified: true,
+            isbnCheckStatus: "found",
+            status: "pending_hold",
+            autoHold: true);
+        await using (var setup = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+                         .CreateDbContextAsync())
+        {
+            var request = await setup.TitleRequests.SingleAsync(item => item.Id == seeded.Id);
+            request.PatronIdSnapshot = 7105;
+            await setup.SaveChangesAsync();
+        }
+
+        var before = await ReadBibOwnershipRequestAsync(seeded.Id);
+        using var cancellation = new CancellationTokenSource();
+        var holdProvider = ScriptedHoldProvider.AmbiguousCreate();
+        holdProvider.BlockCreate();
+        var localDispatcher = new RecordingOutboxDispatcher();
+        var heartbeatFixture = CreateHoldHeartbeatFailureFixture();
+        await using var scopedFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.AddSingleton<IPatronProvider>(holdProvider);
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IStaffPolarisProvider>(holdProvider);
+                services.RemoveAll<IEmailSender>();
+                services.AddSingleton<IEmailSender>(new MutableReadinessEmailSender(isConfigured: false));
+                services.RemoveAll<IEmailOutboxDispatcher>();
+                services.AddSingleton<IEmailOutboxDispatcher>(localDispatcher);
+            }));
+
+        Task<HoldPlacementResult>? placing = null;
+        long operationId = 0;
+        try
+        {
+            var placement = scopedFactory.Services.GetRequiredService<HoldPlacementService>();
+            placing = placement.PlaceBackgroundAsync(seeded.Id, before.RowVersion, cancellation.Token);
+            await holdProvider.CreateStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Guid? markerOwner;
+            long markerEpoch;
+            DateTime? markerLease;
+            byte[] markerRowVersion;
+            await using (var marker = await factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+                             .CreateDbContextAsync())
+            {
+                var request = await marker.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == seeded.Id);
+                var operation = await marker.HoldPlacementOperations.AsNoTracking()
+                    .SingleAsync(item => item.TitleRequestId == seeded.Id);
+                operationId = operation.Id;
+                Assert.AreEqual("pending_hold", request.Status);
+                CollectionAssert.AreEqual(before.RowVersion, request.RowVersion);
+                Assert.AreEqual(HoldOperationPhase.CreateStarted, operation.Phase);
+                Assert.AreEqual(HoldOperationState.InProgress, operation.State);
+                Assert.IsNotNull(operation.CreateStartedUtc);
+                Assert.IsNull(operation.CreateResponseObservedUtc);
+                Assert.IsNotNull(operation.OwnerToken);
+                Assert.IsNotNull(operation.LeaseExpiresUtc);
+                Assert.IsTrue(operation.LeaseExpiresUtc > timeProvider!.GetUtcNow().UtcDateTime);
+                markerOwner = operation.OwnerToken;
+                markerEpoch = operation.ExecutionEpoch;
+                markerLease = operation.LeaseExpiresUtc;
+                markerRowVersion = operation.RowVersion.ToArray();
+                Assert.AreEqual(0, await marker.TitleRequestEvents.AsNoTracking()
+                    .CountAsync(item => item.TitleRequestId == seeded.Id));
+                Assert.AreEqual(0, await marker.EmailOutbox.AsNoTracking()
+                    .CountAsync(item => item.BusinessKey == $"title-hold-placed:{seeded.Id}:1"));
+            }
+
+            var primedSequenceValue = await InstallHoldHeartbeatFailureTriggerAsync(heartbeatFixture, operationId);
+            await WaitForHoldHeartbeatFailureAsync(heartbeatFixture, primedSequenceValue);
+            if (cancelCaller)
+            {
+                cancellation.Cancel();
+            }
+            var primaryFailure = new InvalidOperationException("primary-create-provider-fault");
+            Assert.IsTrue(holdProvider.PendingCreate!.TrySetException(primaryFailure));
+            var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => placing!);
+            Assert.AreSame(primaryFailure, failure);
+            Assert.AreEqual("primary-create-provider-fault", failure.Message);
+            Assert.AreEqual(cancelCaller, cancellation.IsCancellationRequested);
+            Assert.AreEqual(1, holdProvider.CreateCount);
+            Assert.AreEqual(0, holdProvider.ReplyCount);
+
+            await DropHoldHeartbeatFailureFixtureAsync(heartbeatFixture);
+            await using (var verify = await factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+                             .CreateDbContextAsync())
+            {
+                var request = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == seeded.Id);
+                var operation = await verify.HoldPlacementOperations.AsNoTracking()
+                    .SingleAsync(item => item.Id == operationId);
+                Assert.AreEqual("pending_hold", request.Status);
+                CollectionAssert.AreEqual(before.RowVersion, request.RowVersion);
+                Assert.AreEqual(HoldOperationPhase.CreateStarted, operation.Phase);
+                Assert.AreEqual(HoldOperationState.InProgress, operation.State);
+                Assert.IsNotNull(operation.CreateStartedUtc);
+                Assert.IsNull(operation.CreateResponseObservedUtc);
+                Assert.AreEqual(markerOwner, operation.OwnerToken);
+                Assert.AreEqual(markerEpoch, operation.ExecutionEpoch);
+                Assert.AreEqual(markerLease, operation.LeaseExpiresUtc);
+                CollectionAssert.AreEqual(markerRowVersion, operation.RowVersion);
+                Assert.IsNull(operation.PolarisRequestGuid);
+                Assert.IsNull(operation.PolarisHoldId);
+                Assert.AreEqual(0, await verify.TitleRequestEvents.AsNoTracking()
+                    .CountAsync(item => item.TitleRequestId == seeded.Id));
+                Assert.AreEqual(0, await verify.EmailOutbox.AsNoTracking()
+                    .CountAsync(item => item.BusinessKey == $"title-hold-placed:{seeded.Id}:1"));
+            }
+            Assert.AreEqual(0, localDispatcher.EnqueuedIds.Count);
+
+            Assert.AreEqual(1, await ExpireHoldOperationLeaseAsync(operationId));
+            var recovered = await placement.RecoverBackgroundOperationAsync(
+                operationId, null, CancellationToken.None);
+            Assert.AreEqual("hold_operator_required", recovered.Code);
+            Assert.AreEqual(1, holdProvider.CreateCount,
+                "Recovery must preserve the unknown provider outcome and never repeat the create.");
+            Assert.AreEqual(0, holdProvider.ReplyCount);
+            await using (var verifyRecovery = await factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+                             .CreateDbContextAsync())
+            {
+                var request = await verifyRecovery.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == seeded.Id);
+                var operation = await verifyRecovery.HoldPlacementOperations.AsNoTracking()
+                    .SingleAsync(item => item.Id == operationId);
+                Assert.AreEqual("pending_hold", request.Status);
+                CollectionAssert.AreEqual(before.RowVersion, request.RowVersion);
+                Assert.AreEqual(HoldOperationPhase.CreateStarted, operation.Phase);
+                Assert.AreEqual(HoldOperationState.OperatorRequired, operation.State);
+                Assert.IsNull(operation.OwnerToken);
+                Assert.IsNull(operation.LeaseExpiresUtc);
+                Assert.IsNotNull(operation.CreateStartedUtc);
+                Assert.AreEqual(0, await verifyRecovery.TitleRequestEvents.AsNoTracking()
+                    .CountAsync(item => item.TitleRequestId == seeded.Id));
+                Assert.AreEqual(0, await verifyRecovery.EmailOutbox.AsNoTracking()
+                    .CountAsync(item => item.BusinessKey == $"title-hold-placed:{seeded.Id}:1"));
+            }
+        }
+        finally
+        {
+            if (holdProvider.PendingCreate is not null && !holdProvider.PendingCreate.Task.IsCompleted)
+            {
+                holdProvider.CompleteBlockedCreateWithConfiguredResult();
+            }
+            if (placing is not null)
+            {
+                try
+                {
+                    await placing.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                catch (Exception)
+                {
+                    // Preserve the assertion failure while best-effort draining a released fixture task.
+                }
+            }
+            await DropHoldHeartbeatFailureFixtureAsync(heartbeatFixture);
+            await DeleteEmailOutboxByBusinessKeyAsync($"title-hold-placed:{seeded.Id}:1");
+            await DeleteRequestAsync(seeded.Id);
+        }
+    }
+
+    [TestMethod]
+    public async Task HoldHeartbeatSqlFailureKeepsRecordedCreateResultRecoverable()
+    {
+        var seeded = await SeedBibOwnershipRequestAsync(
+            $"hold-heartbeat-result-{Guid.NewGuid():N}",
+            9001,
+            staffVerified: true,
+            isbnCheckStatus: "found",
+            status: "pending_hold",
+            autoHold: true);
+        await using (var setup = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+                         .CreateDbContextAsync())
+        {
+            var request = await setup.TitleRequests.SingleAsync(item => item.Id == seeded.Id);
+            request.PatronIdSnapshot = 7105;
+            await setup.SaveChangesAsync();
+        }
+
+        var before = await ReadBibOwnershipRequestAsync(seeded.Id);
+        var holdProvider = ScriptedHoldProvider.AmbiguousCreate();
+        holdProvider.BlockCreate();
+        var localDispatcher = new RecordingOutboxDispatcher();
+        var heartbeatFixture = CreateHoldHeartbeatFailureFixture();
+        await using var scopedFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.AddSingleton<IPatronProvider>(holdProvider);
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IStaffPolarisProvider>(holdProvider);
+                services.RemoveAll<IEmailSender>();
+                services.AddSingleton<IEmailSender>(new MutableReadinessEmailSender(isConfigured: false));
+                services.RemoveAll<IEmailOutboxDispatcher>();
+                services.AddSingleton<IEmailOutboxDispatcher>(localDispatcher);
+            }));
+
+        Task<HoldPlacementResult>? placing = null;
+        long operationId = 0;
+        try
+        {
+            var placement = scopedFactory.Services.GetRequiredService<HoldPlacementService>();
+            placing = placement.PlaceBackgroundAsync(seeded.Id, before.RowVersion, CancellationToken.None);
+            await holdProvider.CreateStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Guid? markerOwner;
+            long markerEpoch;
+            DateTime? markerLease;
+            await using (var marker = await factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+                             .CreateDbContextAsync())
+            {
+                var request = await marker.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == seeded.Id);
+                var operation = await marker.HoldPlacementOperations.AsNoTracking()
+                    .SingleAsync(item => item.TitleRequestId == seeded.Id);
+                operationId = operation.Id;
+                Assert.AreEqual("pending_hold", request.Status);
+                CollectionAssert.AreEqual(before.RowVersion, request.RowVersion);
+                Assert.AreEqual(HoldOperationPhase.CreateStarted, operation.Phase);
+                Assert.AreEqual(HoldOperationState.InProgress, operation.State);
+                Assert.IsNotNull(operation.CreateStartedUtc);
+                Assert.IsNull(operation.CreateResponseObservedUtc);
+                Assert.IsNotNull(operation.OwnerToken);
+                Assert.IsNotNull(operation.LeaseExpiresUtc);
+                markerOwner = operation.OwnerToken;
+                markerEpoch = operation.ExecutionEpoch;
+                markerLease = operation.LeaseExpiresUtc;
+                Assert.AreEqual(0, await marker.TitleRequestEvents.AsNoTracking()
+                    .CountAsync(item => item.TitleRequestId == seeded.Id));
+                Assert.AreEqual(0, await marker.EmailOutbox.AsNoTracking()
+                    .CountAsync(item => item.BusinessKey == $"title-hold-placed:{seeded.Id}:1"));
+            }
+
+            var primedSequenceValue = await InstallHoldHeartbeatFailureTriggerAsync(heartbeatFixture, operationId);
+            await WaitForHoldHeartbeatFailureAsync(heartbeatFixture, primedSequenceValue);
+            var knownSuccess = new HoldProviderResult(
+                HoldProviderOutcome.FinalSuccess,
+                holdProvider.RequestGuid,
+                8131,
+                null,
+                null,
+                2,
+                1,
+                "documented_create_success");
+            Assert.IsTrue(holdProvider.PendingCreate!.TrySetResult(knownSuccess));
+            var heartbeatFailure = await Assert.ThrowsExactlyAsync<SqlException>(() => placing!);
+            Assert.AreEqual(51004, heartbeatFailure.Number);
+            Assert.AreEqual(1, holdProvider.CreateCount);
+            Assert.AreEqual(0, holdProvider.ReplyCount);
+            await DropHoldHeartbeatFailureFixtureAsync(heartbeatFixture);
+
+            await using (var verifyRecorded = await factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+                             .CreateDbContextAsync())
+            {
+                var request = await verifyRecorded.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == seeded.Id);
+                var operation = await verifyRecorded.HoldPlacementOperations.AsNoTracking()
+                    .SingleAsync(item => item.Id == operationId);
+                Assert.AreEqual("pending_hold", request.Status);
+                CollectionAssert.AreEqual(before.RowVersion, request.RowVersion);
+                Assert.AreEqual(HoldOperationPhase.ResultRecorded, operation.Phase);
+                Assert.AreEqual(HoldOperationState.InProgress, operation.State);
+                Assert.IsNotNull(operation.CreateStartedUtc);
+                Assert.IsNotNull(operation.CreateResponseObservedUtc);
+                Assert.AreEqual(holdProvider.RequestGuid, operation.PolarisRequestGuid);
+                Assert.AreEqual(8131, operation.PolarisHoldId);
+                Assert.AreEqual(2, operation.ProviderStatusType);
+                Assert.AreEqual(1, operation.ProviderStatusValue);
+                Assert.AreEqual("success", operation.ResultCode);
+                Assert.AreEqual("documented_create_success", operation.OutcomeEvidenceKind);
+                Assert.AreEqual(markerOwner, operation.OwnerToken);
+                Assert.AreEqual(markerEpoch, operation.ExecutionEpoch);
+                Assert.AreEqual(markerLease, operation.LeaseExpiresUtc);
+                Assert.IsNull(operation.CompletedUtc);
+                Assert.AreEqual(0, await verifyRecorded.TitleRequestEvents.AsNoTracking()
+                    .CountAsync(item => item.TitleRequestId == seeded.Id));
+                Assert.AreEqual(0, await verifyRecorded.EmailOutbox.AsNoTracking()
+                    .CountAsync(item => item.BusinessKey == $"title-hold-placed:{seeded.Id}:1"));
+            }
+
+            Assert.AreEqual(1, await ExpireHoldOperationLeaseAsync(operationId));
+            var recovered = await placement.RecoverBackgroundOperationAsync(
+                operationId, null, CancellationToken.None);
+            Assert.AreEqual("updated", recovered.Code);
+            Assert.AreEqual(1, holdProvider.CreateCount,
+                "Recovery must complete the stored create response without repeating the provider create.");
+            Assert.AreEqual(0, holdProvider.ReplyCount);
+            Assert.AreEqual(0, localDispatcher.EnqueuedIds.Count);
+            await using (var verifyRecovery = await factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+                             .CreateDbContextAsync())
+            {
+                var request = await verifyRecovery.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == seeded.Id);
+                var operation = await verifyRecovery.HoldPlacementOperations.AsNoTracking()
+                    .SingleAsync(item => item.Id == operationId);
+                Assert.AreEqual("hold_placed", request.Status);
+                Assert.AreEqual(HoldOperationState.Succeeded, operation.State);
+                Assert.AreEqual(HoldOperationPhase.ResultRecorded, operation.Phase);
+                Assert.IsNotNull(operation.CompletedUtc);
+                Assert.IsNull(operation.OwnerToken);
+                Assert.IsNull(operation.LeaseExpiresUtc);
+                Assert.AreEqual(holdProvider.RequestGuid, operation.PolarisRequestGuid);
+                Assert.AreEqual(8131, operation.PolarisHoldId);
+                Assert.AreEqual(1, await verifyRecovery.TitleRequestEvents.AsNoTracking()
+                    .CountAsync(item => item.TitleRequestId == seeded.Id && item.EventType == "hold_placed"));
+                var outbox = await verifyRecovery.EmailOutbox.AsNoTracking()
+                    .SingleAsync(item => item.BusinessKey == $"title-hold-placed:{seeded.Id}:1");
+                Assert.AreEqual("suppressed", outbox.Status);
+            }
+        }
+        finally
+        {
+            if (holdProvider.PendingCreate is not null && !holdProvider.PendingCreate.Task.IsCompleted)
+            {
+                holdProvider.CompleteBlockedCreateWithConfiguredResult();
+            }
+            if (placing is not null)
+            {
+                try
+                {
+                    await placing.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                catch (Exception)
+                {
+                    // Preserve the assertion failure while best-effort draining a released fixture task.
+                }
+            }
+            await DropHoldHeartbeatFailureFixtureAsync(heartbeatFixture);
             await DeleteEmailOutboxByBusinessKeyAsync($"title-hold-placed:{seeded.Id}:1");
             await DeleteRequestAsync(seeded.Id);
         }
@@ -965,6 +1302,115 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("ok", result.Code);
         return JsonSerializer.SerializeToElement(result.Data).GetProperty("version").GetString()!;
     }
+
+    private static HoldHeartbeatFailureFixture CreateHoldHeartbeatFailureFixture()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        return new HoldHeartbeatFailureFixture(
+            $"TR_Test_HoldHeartbeat_{suffix}",
+            $"Seq_Test_HoldHeartbeat_{suffix}");
+    }
+
+    private static async Task<long> InstallHoldHeartbeatFailureTriggerAsync(
+        HoldHeartbeatFailureFixture fixture,
+        long operationId)
+    {
+        await ExecuteNonQueryAsync(
+            $"CREATE SEQUENCE [asap].[{fixture.SequenceName}] AS bigint START WITH 1 INCREMENT BY 1 NO CACHE;");
+        long primedValue;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = new SqlCommand(
+                $"SELECT NEXT VALUE FOR [asap].[{fixture.SequenceName}];", connection);
+            primedValue = Convert.ToInt64(await command.ExecuteScalarAsync());
+        }
+
+        await ExecuteNonQueryAsync(
+            $"""
+            CREATE TRIGGER [asap].[{fixture.TriggerName}]
+            ON [asap].[HoldPlacementOperation]
+            AFTER UPDATE
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+                IF EXISTS (
+                    SELECT 1
+                    FROM inserted AS [i]
+                    JOIN deleted AS [d] ON [d].[Id] = [i].[Id]
+                    WHERE [i].[Id] = {operationId}
+                      AND [i].[State] = N'in_progress' AND [d].[State] = N'in_progress'
+                      AND [i].[Phase] = N'create_started' AND [d].[Phase] = N'create_started'
+                      AND [i].[OwnerToken] IS NOT NULL AND [i].[OwnerToken] = [d].[OwnerToken]
+                      AND [i].[ExecutionEpoch] = [d].[ExecutionEpoch]
+                      AND [i].[LeaseExpiresUtc] > [d].[LeaseExpiresUtc])
+                BEGIN
+                    DECLARE @sequenceWitness bigint;
+                    SELECT @sequenceWitness = NEXT VALUE FOR [asap].[{fixture.SequenceName}];
+                    THROW 51004, 'test_hold_heartbeat_sql_failure', 1;
+                END;
+            END;
+            """);
+        return primedValue;
+    }
+
+    private static async Task WaitForHoldHeartbeatFailureAsync(
+        HoldHeartbeatFailureFixture fixture,
+        long primedValue)
+    {
+        var timeout = DateTime.UtcNow.AddSeconds(50);
+        while (DateTime.UtcNow < timeout)
+        {
+            var currentValue = await ReadHoldHeartbeatSequenceValueAsync(fixture.SequenceName);
+            if (currentValue > primedValue)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(250));
+                Assert.AreEqual(currentValue, await ReadHoldHeartbeatSequenceValueAsync(fixture.SequenceName),
+                    "The single heartbeat trigger must fail once, not repeatedly mutate the fixture.");
+                return;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(250));
+        }
+
+        throw new AssertFailedException("The real hold lease heartbeat did not reach the test SQL trigger within 50 seconds.");
+    }
+
+    private static async Task<long> ReadHoldHeartbeatSequenceValueAsync(string sequenceName)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "SELECT CONVERT(bigint, [current_value]) FROM sys.sequences " +
+            "WHERE [name] = @name AND [schema_id] = SCHEMA_ID(N'asap');",
+            connection);
+        command.Parameters.Add("@name", System.Data.SqlDbType.NVarChar, 128).Value = sequenceName;
+        var value = await command.ExecuteScalarAsync();
+        Assert.IsNotNull(value, "The test heartbeat sequence must remain present while it is observed.");
+        return Convert.ToInt64(value);
+    }
+
+    private static async Task DropHoldHeartbeatFailureFixtureAsync(HoldHeartbeatFailureFixture fixture)
+    {
+        await ExecuteNonQueryAsync($"DROP TRIGGER IF EXISTS [asap].[{fixture.TriggerName}];");
+        await ExecuteNonQueryAsync($"DROP SEQUENCE IF EXISTS [asap].[{fixture.SequenceName}];");
+    }
+
+    private static async Task<int> ExpireHoldOperationLeaseAsync(long operationId)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "UPDATE [asap].[HoldPlacementOperation] " +
+            "SET [LeaseExpiresUtc] = DATEADD(second, -1, SYSUTCDATETIME()) " +
+            "WHERE [Id] = @id AND [State] = N'in_progress' AND [OwnerToken] IS NOT NULL " +
+            "AND [LeaseExpiresUtc] IS NOT NULL;",
+            connection);
+        command.Parameters.Add("@id", System.Data.SqlDbType.BigInt).Value = operationId;
+        return await command.ExecuteNonQueryAsync();
+    }
+
+    private sealed record HoldHeartbeatFailureFixture(string TriggerName, string SequenceName);
 
     private sealed class CancelAfterPatronCodeReadProvider(
         CancellationTokenSource cancellation,

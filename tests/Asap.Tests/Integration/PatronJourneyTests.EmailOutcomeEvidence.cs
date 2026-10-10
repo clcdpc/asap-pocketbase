@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
@@ -8,11 +9,216 @@ using Asap.Web.Infrastructure.Security;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Asap.Tests.Integration;
 
 public sealed partial class PatronJourneyTests
 {
+    private const string AcceptedCleanupMessageId = "9cb60d5b-ff51-4bb2-8ee5-2becf4132c48";
+
+    [TestMethod]
+    [DataRow("response_content", false)]
+    [DataRow("response_content", true)]
+    [DataRow("response_stream", false)]
+    [DataRow("response_stream", true)]
+    public async Task PostmarkAcceptedResultSurvivesResponseCleanupFailureAndCannotBeReplayed(
+        string cleanupMode,
+        bool cancelCallerAtCleanup)
+    {
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var credentialProtector = factory.Services.GetRequiredService<IntegrationCredentialProtector>();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var seeded = await SeedSensitiveOutboxAsync($"accepted-cleanup-{Guid.NewGuid():N}");
+        using var cancellation = new CancellationTokenSource();
+        var cleanup = new PostmarkCleanupResponseFixture(
+            cleanupMode,
+            "{\"ErrorCode\":0,\"MessageID\":\"9cb60d5b-ff51-4bb2-8ee5-2becf4132c48\"}",
+            cancelCallerAtCleanup ? cancellation : null);
+        var postCount = 0;
+        EmailOutcomeSystemSettingsSnapshot? settings = null;
+
+        using var client = new HttpClient(new EmailOutcomePostmarkHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Get && request.RequestUri?.AbsolutePath == "/server")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        "{\"ID\":42,\"DeliveryType\":\"Live\"}", Encoding.UTF8, "application/json")
+                });
+            }
+
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/email")
+            {
+                Interlocked.Increment(ref postCount);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = cleanup.Content
+                });
+            }
+
+            return Task.FromException<HttpResponseMessage>(
+                new InvalidOperationException(
+                    $"Unexpected Postmark request: {request.Method} {request.RequestUri?.AbsolutePath}."));
+        }));
+
+        try
+        {
+            settings = await ConfigureEmailOutcomePostmarkAsync(contextFactory, credentialProtector);
+            var sender = new PostmarkEmailSender(
+                contextFactory,
+                credentialProtector,
+                new EmailOutcomeHttpClientFactory(client),
+                NullLogger<PostmarkEmailSender>.Instance);
+            var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
+            var before = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
+            Assert.AreEqual("pending", before.Status);
+            Assert.AreEqual(0, before.AttemptCount);
+            Assert.IsNull(before.SendingStartedUtc);
+            Assert.IsNull(before.LeaseId);
+            var beforeCounts = await ReadEmailOutcomeRelatedCountsAsync(
+                contextFactory, seeded.OutboxId, before.BusinessKey!);
+            Assert.AreEqual(1, beforeCounts.OutboxRows);
+            Assert.AreEqual(0, beforeCounts.DeliveryEvents);
+
+            await jobs.DeliverAsync(seeded.OutboxId, cancellation.Token);
+
+            Assert.AreEqual(cancelCallerAtCleanup, cancellation.IsCancellationRequested);
+            Assert.AreEqual(1, Volatile.Read(ref postCount));
+            Assert.AreEqual(1, cleanup.CleanupCount,
+                "The selected real response-content or parsed response-stream cleanup must run exactly once.");
+            Assert.IsTrue(cleanup.CleanupFaultObserved,
+                "The test must exercise a cleanup fault after the Postmark response body was parsed.");
+            var sent = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
+            Assert.AreEqual("sent", sent.Status);
+            Assert.AreEqual(AcceptedCleanupMessageId, sent.ProviderMessageId);
+            Assert.AreEqual(1, sent.AttemptCount);
+            Assert.IsNull(sent.LastErrorCode);
+            Assert.IsNull(sent.LastErrorDetail);
+            Assert.IsNull(sent.SendingStartedUtc);
+            Assert.IsNull(sent.LeaseId);
+            Assert.IsNull(sent.LeaseExpiresUtc);
+            Assert.IsNotNull(sent.LastAttemptUtc);
+            Assert.AreNotEqual(Convert.ToHexString(before.RowVersion), Convert.ToHexString(sent.RowVersion));
+            var sentCounts = await ReadEmailOutcomeRelatedCountsAsync(
+                contextFactory, seeded.OutboxId, sent.BusinessKey!);
+            Assert.AreEqual(beforeCounts.OutboxRows, sentCounts.OutboxRows);
+
+            await jobs.SweepAsync(CancellationToken.None);
+            CollectionAssert.DoesNotContain(dispatcher!.EnqueuedIds, seeded.OutboxId);
+
+            var operations = new EmailOperationsService(
+                contextFactory,
+                dispatcher,
+                sender,
+                factory.Services.GetRequiredService<RecipientDomainPolicy>(),
+                timeProvider!,
+                factory.Services.GetRequiredService<StaffEligibilityService>());
+            var retry = await operations.RetryAsync(
+                actor,
+                seeded.OutboxId,
+                StaffVersion.Encode(sent.RowVersion),
+                CancellationToken.None);
+            Assert.AreEqual("email_not_retryable", retry.Code);
+
+            await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+            Assert.AreEqual(1, Volatile.Read(ref postCount));
+            AssertEmailOutcomeDispatchSnapshotEqual(
+                sent,
+                await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId));
+            var afterCounts = await ReadEmailOutcomeRelatedCountsAsync(
+                contextFactory, seeded.OutboxId, sent.BusinessKey!);
+            Assert.AreEqual(sentCounts.OutboxRows, afterCounts.OutboxRows);
+            Assert.AreEqual(sentCounts.DeliveryEvents, afterCounts.DeliveryEvents);
+        }
+        finally
+        {
+            try
+            {
+                await DeleteEmailOutcomeFixtureAsync(seeded);
+            }
+            finally
+            {
+                if (settings is not null)
+                {
+                    await RestoreEmailOutcomePostmarkAsync(contextFactory, settings);
+                }
+            }
+        }
+    }
+
+    [TestMethod]
+    [DataRow("response_content")]
+    [DataRow("response_stream")]
+    public async Task PostmarkParserFailureRemainsPrimaryWhenResponseCleanupAlsoFails(string cleanupMode)
+    {
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var credentialProtector = factory.Services.GetRequiredService<IntegrationCredentialProtector>();
+        using var cancellation = new CancellationTokenSource();
+        var cleanup = new PostmarkCleanupResponseFixture(
+            cleanupMode,
+            "{\"ErrorCode\":0,",
+            cancellation);
+        var postCount = 0;
+        EmailOutcomeSystemSettingsSnapshot? settings = null;
+
+        using var client = new HttpClient(new EmailOutcomePostmarkHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/email")
+            {
+                Interlocked.Increment(ref postCount);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = cleanup.Content
+                });
+            }
+
+            return Task.FromException<HttpResponseMessage>(
+                new InvalidOperationException(
+                    $"Unexpected Postmark request: {request.Method} {request.RequestUri?.AbsolutePath}."));
+        }));
+
+        try
+        {
+            settings = await ConfigureEmailOutcomePostmarkAsync(contextFactory, credentialProtector);
+            var sender = new PostmarkEmailSender(
+                contextFactory,
+                credentialProtector,
+                new EmailOutcomeHttpClientFactory(client),
+                NullLogger<PostmarkEmailSender>.Instance);
+            var parserFailure = await Assert.ThrowsAsync<JsonException>(() => sender.SendAsync(
+                new EmailEnvelope(
+                    1,
+                    2,
+                    null,
+                    "recipient@example.org",
+                    "sender@example.org",
+                    null,
+                    "Cleanup boundary test",
+                    "Test message body",
+                    null),
+                cancellation.Token));
+
+            Assert.IsNotNull(parserFailure);
+            Assert.AreEqual(0L, parserFailure.LineNumber);
+            Assert.AreEqual(14L, parserFailure.BytePositionInLine);
+            Assert.IsTrue(cancellation.IsCancellationRequested,
+                "The caller is canceled only when parsed-response cleanup begins.");
+            Assert.AreEqual(1, Volatile.Read(ref postCount));
+            Assert.AreEqual(1, cleanup.CleanupCount,
+                "The selected cleanup hook must run after the malformed body has been read.");
+            Assert.IsTrue(cleanup.CleanupFaultObserved);
+        }
+        finally
+        {
+            if (settings is not null)
+            {
+                await RestoreEmailOutcomePostmarkAsync(contextFactory, settings);
+            }
+        }
+    }
+
     [TestMethod]
     public async Task AcceptedPostmarkResultIsRecordedAfterCallerCancellationAndNeverRetried()
     {
@@ -58,7 +264,8 @@ public sealed partial class PatronJourneyTests
             var postmarkSender = new PostmarkEmailSender(
                 contextFactory,
                 credentialProtector,
-                new EmailOutcomeHttpClientFactory(client));
+                new EmailOutcomeHttpClientFactory(client),
+                NullLogger<PostmarkEmailSender>.Instance);
             var sender = new EmailOutcomeCancelAfterAcceptedSender(postmarkSender, cancellation);
             var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
             var before = await ReadEmailOutcomeSnapshotAsync(seeded.OutboxId);
@@ -166,7 +373,8 @@ public sealed partial class PatronJourneyTests
             var postmarkSender = new PostmarkEmailSender(
                 contextFactory,
                 credentialProtector,
-                new EmailOutcomeHttpClientFactory(client));
+                new EmailOutcomeHttpClientFactory(client),
+                NullLogger<PostmarkEmailSender>.Instance);
             var sender = new EmailOutcomeCancelAfterAcceptedSender(postmarkSender, cancellation);
             var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
             var before = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
@@ -289,7 +497,8 @@ public sealed partial class PatronJourneyTests
             var sender = new PostmarkEmailSender(
                 contextFactory,
                 credentialProtector,
-                new EmailOutcomeHttpClientFactory(client));
+                new EmailOutcomeHttpClientFactory(client),
+                NullLogger<PostmarkEmailSender>.Instance);
             var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
             var before = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
             Assert.AreEqual("pending", before.Status);
@@ -622,6 +831,90 @@ public sealed partial class PatronJourneyTests
         Guid? LeaseId,
         DateTime? LeaseExpiresUtc,
         byte[] RowVersion);
+
+    private sealed class PostmarkCleanupResponseFixture
+    {
+        private readonly PostmarkCleanupFaultContent? responseContent;
+        private readonly PostmarkCleanupFaultStream? responseStream;
+
+        public PostmarkCleanupResponseFixture(
+            string cleanupMode,
+            string responseBody,
+            CancellationTokenSource? cancellation)
+        {
+            if (cleanupMode == "response_content")
+            {
+                responseContent = new PostmarkCleanupFaultContent(responseBody, cancellation);
+                Content = responseContent;
+            }
+            else if (cleanupMode == "response_stream")
+            {
+                responseStream = new PostmarkCleanupFaultStream(responseBody, cancellation);
+                Content = new StreamContent(responseStream);
+            }
+            else
+            {
+                throw new AssertFailedException($"Unknown Postmark cleanup mode: {cleanupMode}.");
+            }
+        }
+
+        public HttpContent Content { get; }
+
+        public int CleanupCount => responseContent?.DisposeCount ?? responseStream?.DisposeAsyncCount ?? 0;
+
+        public bool CleanupFaultObserved => responseContent?.FaultObserved ?? responseStream?.FaultObserved ?? false;
+    }
+
+    private sealed class PostmarkCleanupFaultContent(
+        string responseBody,
+        CancellationTokenSource? cancellation)
+        : StringContent(responseBody, Encoding.UTF8, "application/json")
+    {
+        private int disposeCount;
+        private int faultObserved;
+
+        public int DisposeCount => Volatile.Read(ref disposeCount);
+
+        public bool FaultObserved => Volatile.Read(ref faultObserved) != 0;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (!disposing)
+            {
+                base.Dispose(false);
+                return;
+            }
+
+            Interlocked.Increment(ref disposeCount);
+            base.Dispose(true);
+            cancellation?.Cancel();
+            Volatile.Write(ref faultObserved, 1);
+            throw new InvalidOperationException("Test-only Postmark response content cleanup fault.");
+        }
+    }
+
+    private sealed class PostmarkCleanupFaultStream(
+        string responseBody,
+        CancellationTokenSource? cancellation)
+        : MemoryStream(Encoding.UTF8.GetBytes(responseBody), writable: false)
+    {
+        private int disposeAsyncCount;
+        private int faultObserved;
+
+        public int DisposeAsyncCount => Volatile.Read(ref disposeAsyncCount);
+
+        public bool FaultObserved => Volatile.Read(ref faultObserved) != 0;
+
+        public override ValueTask DisposeAsync()
+        {
+            Interlocked.Increment(ref disposeAsyncCount);
+            base.Dispose(true);
+            cancellation?.Cancel();
+            Volatile.Write(ref faultObserved, 1);
+            return ValueTask.FromException(
+                new InvalidOperationException("Test-only Postmark parsed response stream cleanup fault."));
+        }
+    }
 
     private sealed class EmailOutcomePostmarkHandler(
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond) : HttpMessageHandler
