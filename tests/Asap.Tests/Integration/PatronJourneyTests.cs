@@ -10953,7 +10953,9 @@ public sealed partial class PatronJourneyTests
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            UPDATE [asap].[Organization] SET [IsActive] = 1 WHERE [Id] = 2;
+            UPDATE [asap].[Organization]
+            SET [IsActive] = 1
+            WHERE [Id] = 2 AND @authorizationOrganizationId = 2;
             DECLARE @staff TABLE ([Id] bigint);
             INSERT INTO [asap].[StaffUser]
                 ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],

@@ -57,6 +57,7 @@ async function verify(mode) {
       if (url.includes('/email-operations') && options.method !== 'POST') {
         return response(200, { items: [{
           id: '9007199254740993', status: 'failed', deliveryClass: 'business_event',
+          lastErrorCode: 'mail_not_configured', canRetry: true,
           createdUtc: '2026-09-14T12:00:00Z', version: 'email-version'
         }] });
       }

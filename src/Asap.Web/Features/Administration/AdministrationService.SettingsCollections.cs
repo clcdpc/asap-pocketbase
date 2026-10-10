@@ -2304,14 +2304,29 @@ public sealed partial class AdministrationService
 
     private static string? ReadCollectionEntryValue(JsonElement item)
     {
-        var identity = ReadOptionalCollectionIdentity(item, "id", "key");
-        var value = ReadOptionalString(item, "value");
-        var name = ReadOptionalString(item, "name");
-        if (value is not null && name is not null && !string.Equals(value, name, StringComparison.Ordinal))
+        string? result = null;
+        foreach (var name in new[] { "id", "key", "value", "name" })
         {
-            throw new AdministrationInputException("A collection value contains conflicting text values.");
+            if (!TryGetAny(item, out var value, name) || value.ValueKind == JsonValueKind.Null)
+            {
+                continue;
+            }
+
+            if (value.ValueKind != JsonValueKind.String)
+            {
+                throw new AdministrationInputException("Collection value aliases must be strings or null.");
+            }
+
+            var current = value.GetString();
+            if (result is not null && !string.Equals(result, current, StringComparison.Ordinal))
+            {
+                throw new AdministrationInputException("Collection value aliases contain conflicting text.");
+            }
+
+            result = current;
         }
-        return identity ?? value ?? name;
+
+        return result;
     }
 
     private static string? ReadOptionalString(JsonElement root, params string[] names)

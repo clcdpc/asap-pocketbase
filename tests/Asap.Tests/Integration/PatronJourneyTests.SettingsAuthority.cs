@@ -287,6 +287,39 @@ public sealed partial class PatronJourneyTests
 
         using var library = await ReadSettingsDocumentAsync(client, "2");
         var libraryVersion = library.RootElement.GetProperty("version").GetString()!;
+        var libraryStoredBefore = library.RootElement.GetProperty("stored").GetRawText();
+        var formatCodes = library.RootElement.GetProperty("stored").GetProperty("formats")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("code").GetString()!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        Assert.IsTrue(formatCodes.Length >= 2, "The deterministic format catalog must contain two codes for alias conflicts.");
+
+        using var system = await ReadSettingsDocumentAsync(client, "system");
+        var systemVersion = system.RootElement.GetProperty("version").GetString()!;
+        var systemStoredBefore = system.RootElement.GetProperty("stored").GetRawText();
+        var sessionsBefore = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PatronSession];");
+        var activeSessionsBefore = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PatronSession] WHERE [RevokedUtc] IS NULL;");
+        var eventsBefore = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[TitleRequestEvent];");
+        var outboxBefore = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];");
+
+        async Task AssertRejectedSettingsLeftNoEffectsAsync(string caseName)
+        {
+            using var libraryAfter = await ReadSettingsDocumentAsync(client, "2");
+            Assert.AreEqual(libraryVersion, libraryAfter.RootElement.GetProperty("version").GetString(), caseName);
+            Assert.AreEqual(libraryStoredBefore, libraryAfter.RootElement.GetProperty("stored").GetRawText(), caseName);
+
+            using var systemAfter = await ReadSettingsDocumentAsync(client, "system");
+            Assert.AreEqual(systemVersion, systemAfter.RootElement.GetProperty("version").GetString(), caseName);
+            Assert.AreEqual(systemStoredBefore, systemAfter.RootElement.GetProperty("stored").GetRawText(), caseName);
+            Assert.AreEqual(auditBefore, await ReadAuditHighWatermarkAsync(), caseName);
+            Assert.AreEqual(sessionsBefore, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PatronSession];"), caseName);
+            Assert.AreEqual(activeSessionsBefore,
+                await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PatronSession] WHERE [RevokedUtc] IS NULL;"), caseName);
+            Assert.AreEqual(eventsBefore, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[TitleRequestEvent];"), caseName);
+            Assert.AreEqual(outboxBefore, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];"), caseName);
+        }
+
         var malformedLibraryCollections = new (string Name, string Json)[]
         {
             ("common creators", "{\"workflow\":{\"commonAuthorsList\":[null]}}"),
@@ -335,22 +368,60 @@ public sealed partial class PatronJourneyTests
             ("legacy format order unknown code", "{\"ui_text\":{\"formatOrder\":[\"not_a_format\"]}}"),
             ("legacy available formats unknown code", "{\"ui_text\":{\"availableFormats\":[\"not_a_format\"]}}")
         };
-        foreach (var (name, json) in malformedLibraryCollections)
+        var malformedTextualAliases = new (string Name, string Json)[]
+        {
+            ("common creator numeric identity beside text", new JsonObject
+            {
+                ["workflow"] = new JsonObject
+                {
+                    ["commonAuthorsList"] = new JsonArray(new JsonObject
+                    {
+                        ["id"] = 42,
+                        ["value"] = "Alias text must remain textual"
+                    })
+                }
+            }.ToJsonString()),
+            ("common creator identity conflicts with text", new JsonObject
+            {
+                ["workflow"] = new JsonObject
+                {
+                    ["commonAuthorsList"] = new JsonArray(new JsonObject
+                    {
+                        ["id"] = "Creator identity",
+                        ["value"] = "Different creator text"
+                    })
+                }
+            }.ToJsonString()),
+            ("format order identity conflicts with text", new JsonObject
+            {
+                ["formatOrder"] = new JsonArray(new JsonObject
+                {
+                    ["id"] = formatCodes[0],
+                    ["value"] = formatCodes[1]
+                })
+            }.ToJsonString()),
+            ("available format key conflicts with text", new JsonObject
+            {
+                ["availableFormats"] = new JsonArray(new JsonObject
+                {
+                    ["key"] = formatCodes[0],
+                    ["name"] = formatCodes[1]
+                })
+            }.ToJsonString())
+        };
+        foreach (var (name, json) in malformedLibraryCollections.Concat(malformedTextualAliases))
         {
             var payload = JsonNode.Parse(json)!.AsObject();
             payload["orgId"] = "2";
             payload["version"] = libraryVersion;
+            var workflow = payload["workflow"] as JsonObject ?? new JsonObject();
+            workflow["suggestionLimitMessage"] = "This valid scalar must roll back with the malformed collection.";
+            payload["workflow"] = workflow;
             using var response = await PostSettingsJsonAsync(client, payload.ToJsonString());
             Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode,
                 $"Malformed {name} replacement: {await response.Content.ReadAsStringAsync()}");
+            await AssertRejectedSettingsLeftNoEffectsAsync($"Malformed {name} replacement");
         }
-
-        using var libraryAfter = await ReadSettingsDocumentAsync(client, "2");
-        Assert.AreEqual(libraryVersion, libraryAfter.RootElement.GetProperty("version").GetString());
-        Assert.AreEqual(auditBefore, await ReadAuditHighWatermarkAsync());
-
-        using var system = await ReadSettingsDocumentAsync(client, "system");
-        var systemVersion = system.RootElement.GetProperty("version").GetString()!;
         var malformedSystemCollections = new (string Name, string Json)[]
         {
             ("embed origins", "{\"origins\":[{}]}"),
@@ -367,11 +438,8 @@ public sealed partial class PatronJourneyTests
             using var response = await PostSettingsJsonAsync(client, payload.ToJsonString());
             Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode,
                 $"Malformed {name} replacement: {await response.Content.ReadAsStringAsync()}");
+            await AssertRejectedSettingsLeftNoEffectsAsync($"Malformed {name} replacement");
         }
-
-        using var systemAfter = await ReadSettingsDocumentAsync(client, "system");
-        Assert.AreEqual(systemVersion, systemAfter.RootElement.GetProperty("version").GetString());
-        Assert.AreEqual(auditBefore, await ReadAuditHighWatermarkAsync());
 
         var libraryOnlySystemCollections = new (string Name, string Json)[]
         {
@@ -386,10 +454,8 @@ public sealed partial class PatronJourneyTests
             using var response = await PostSettingsJsonAsync(client, payload.ToJsonString());
             Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode,
                 $"System-only {name} were accepted in a library save: {await response.Content.ReadAsStringAsync()}");
+            await AssertRejectedSettingsLeftNoEffectsAsync($"System-only {name} in a library save");
         }
-        using var libraryAfterSystemOnly = await ReadSettingsDocumentAsync(client, "2");
-        Assert.AreEqual(libraryVersion, libraryAfterSystemOnly.RootElement.GetProperty("version").GetString());
-        Assert.AreEqual(auditBefore, await ReadAuditHighWatermarkAsync());
     }
 
     [TestMethod]
@@ -446,7 +512,21 @@ public sealed partial class PatronJourneyTests
                 ["version"] = originalLibrary.RootElement.GetProperty("version").GetString(),
                 ["workflow"] = new JsonObject { ["suggestionLimitMessage"] = "S1 unrelated workflow edit" },
                 ["patron"] = new JsonObject { ["pageTitle"] = "S1 unrelated patron edit" },
-                ["commonAuthorsList"] = new JsonArray(JsonValue.Create("S1 root creator")),
+                ["commonAuthorsList"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["id"] = "S1 root creator",
+                        ["key"] = "S1 root creator",
+                        ["value"] = "S1 root creator",
+                        ["name"] = "S1 root creator"
+                    },
+                    new JsonObject
+                    {
+                        ["id"] = null,
+                        ["key"] = null,
+                        ["value"] = "S1 fallback creator",
+                        ["name"] = "S1 fallback creator"
+                    }),
                 ["allowedPatronCodeIds"] = new JsonArray(JsonValue.Create(knownPatronCode)),
                 ["publicationOptionSet"] = new JsonArray(new JsonObject
                 {
@@ -456,8 +536,20 @@ public sealed partial class PatronJourneyTests
                     ["sortOrder"] = 10
                 }),
                 ["formatLabels"] = new JsonObject { [formatCode] = "S1 root format label" },
-                ["formatOrder"] = new JsonArray(JsonValue.Create(formatCode)),
-                ["availableFormats"] = new JsonArray(enabledFormatCodes.Select(code => JsonValue.Create(code)).ToArray())
+                ["formatOrder"] = new JsonArray(new JsonObject
+                {
+                    ["id"] = null,
+                    ["key"] = null,
+                    ["value"] = formatCode,
+                    ["name"] = formatCode
+                }),
+                ["availableFormats"] = new JsonArray(enabledFormatCodes.Select(code => (JsonNode?)new JsonObject
+                {
+                    ["id"] = null,
+                    ["key"] = null,
+                    ["value"] = code,
+                    ["name"] = code
+                }).ToArray())
             };
             using (var savedLibrary = await PostSettingsJsonAsync(client, libraryPayload.ToJsonString()))
             {
@@ -469,7 +561,7 @@ public sealed partial class PatronJourneyTests
             var savedLibraryOverride = savedLibraryStored.GetProperty("libraryOverride");
             var savedCreators = savedLibraryOverride.GetProperty("commonCreators");
             Assert.IsTrue(savedCreators.GetProperty("exists").GetBoolean());
-            CollectionAssert.AreEqual(new[] { "S1 root creator" }, savedCreators.GetProperty("values")
+            CollectionAssert.AreEqual(new[] { "S1 root creator", "S1 fallback creator" }, savedCreators.GetProperty("values")
                 .EnumerateArray().Select(item => item.GetProperty("value").GetString()).ToArray());
             var savedCodes = savedLibraryOverride.GetProperty("allowedPatronCodeIds");
             Assert.IsTrue(savedCodes.GetProperty("exists").GetBoolean());
@@ -489,6 +581,7 @@ public sealed partial class PatronJourneyTests
                 .GetProperty("pageTitle").GetString());
 
             Assert.AreEqual(1, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] = 2 AND [Value] = N'S1 root creator';"));
+            Assert.AreEqual(1, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] = 2 AND [Value] = N'S1 fallback creator';"));
             var codeRows = await ReadPatronCodeRowsAsync(2);
             Assert.AreEqual(1, codeRows.SetCount);
             CollectionAssert.AreEqual(new[] { knownPatronCode }, codeRows.Values);

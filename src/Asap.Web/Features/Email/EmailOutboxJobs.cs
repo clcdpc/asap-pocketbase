@@ -382,12 +382,26 @@ public sealed class EmailOutboxJobs(
             NormalizedUserPrincipalName = NullableString(reader, 2),
             Role = reader.GetString(3), OrganizationId = reader.GetInt32(4), IsActive = reader.GetBoolean(5)
         };
-        return StaffEligibilityService.IsAssignmentEligible(row, claim.AuthorizationOrganizationId.Value) &&
-               StaffEmail.MatchesAuthenticationEmail(row, claim.RecipientAuthenticationEmail) &&
-               string.Equals(NullableString(reader, 0)?.Trim(), claim.ToAddress.Trim(), StringComparison.OrdinalIgnoreCase)
+        return IsCurrentRecipientIdentityAndAddress(claim, row, NullableString(reader, 0))
             ? null
             : "recipient_authorization_changed";
     }
+
+    private static bool IsCurrentRecipientIdentityAndAddress(
+        ClaimedEmail claim,
+        StaffUser row,
+        string? currentAddress) =>
+        claim.AuthorizationOrganizationId.HasValue &&
+        !string.IsNullOrWhiteSpace(claim.RecipientAuthenticationEmail) &&
+        StaffEligibilityService.IsAssignmentEligible(row, claim.AuthorizationOrganizationId.Value) &&
+        StaffEmail.MatchesAuthenticationEmail(row, claim.RecipientAuthenticationEmail) &&
+        string.Equals(currentAddress?.Trim(), claim.ToAddress.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsEligibleRecipientOrganization(
+        int organizationId,
+        int? organizationCodeId,
+        bool isActive) =>
+        isActive && (organizationId == 1 || organizationId > 1 && organizationCodeId == 2);
 
     private Task CompleteAsync(
         ClaimedEmail claim,
@@ -557,6 +571,28 @@ public sealed class EmailOutboxJobs(
     {
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted,
+            cancellationToken);
+
+        if (claim.DeliveryClass == "staff_authorization_sensitive" &&
+            !await IsCurrentSensitiveRecipientAuthorizedAtIntentAsync(connection, transaction, claim, cancellationToken))
+        {
+            var suppressed = await SuppressChangedRecipientAtIntentAsync(
+                connection,
+                transaction,
+                claim,
+                cancellationToken);
+            if (!suppressed)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+                return null;
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return null;
+        }
+
         await using var command = new SqlCommand(
             """
             UPDATE [asap].[EmailOutbox]
@@ -568,10 +604,141 @@ public sealed class EmailOutboxJobs(
               AND [LastErrorCode] = N'pre_send_check_pending'
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
-            connection);
+            connection,
+            transaction);
         AddFence(command, claim);
         var version = await command.ExecuteScalarAsync(cancellationToken) as byte[];
-        return version is null ? null : claim with { RowVersion = version };
+        if (version is null)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return null;
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return claim with { RowVersion = version };
+    }
+
+    private async Task<bool> IsCurrentSensitiveRecipientAuthorizedAtIntentAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        ClaimedEmail claim,
+        CancellationToken cancellationToken)
+    {
+        if (!claim.RecipientStaffUserId.HasValue ||
+            string.IsNullOrWhiteSpace(claim.RecipientAuthenticationEmail) ||
+            !claim.AuthorizationOrganizationId.HasValue)
+        {
+            return false;
+        }
+
+        var authorizationOrganizationId = claim.AuthorizationOrganizationId.Value;
+        var organizations = new Dictionary<int, (int? OrganizationCodeId, bool IsActive)>();
+        foreach (var organizationId in new[] { 1, authorizationOrganizationId }.Distinct().OrderBy(id => id))
+        {
+            await using var organizationCommand = new SqlCommand(
+                """
+                SELECT [OrganizationCodeId], [IsActive]
+                FROM [asap].[Organization] WITH (UPDLOCK, HOLDLOCK, ROWLOCK)
+                WHERE [Id] = @organizationId;
+                """,
+                connection,
+                transaction);
+            organizationCommand.Parameters.Add("@organizationId", SqlDbType.Int).Value = organizationId;
+            await using var organizationReader = await organizationCommand.ExecuteReaderAsync(cancellationToken);
+            if (await organizationReader.ReadAsync(cancellationToken))
+            {
+                organizations.Add(
+                    organizationId,
+                    (NullableInt32(organizationReader, 0), organizationReader.GetBoolean(1)));
+            }
+        }
+
+        if (!organizations.TryGetValue(authorizationOrganizationId, out var target) ||
+            !IsEligibleRecipientOrganization(
+                authorizationOrganizationId,
+                target.OrganizationCodeId,
+                target.IsActive))
+        {
+            return false;
+        }
+
+        await using var staffCommand = new SqlCommand(
+            """
+            SELECT
+                CASE
+                    WHEN @addressKind = N'weekly_summary' AND staff.[WeeklyActionSummaryEnabled] = 1
+                        THEN COALESCE(NULLIF(LTRIM(RTRIM(staff.[WeeklyActionSummaryEmail])), N''), staff.[NotificationEmail])
+                    WHEN @addressKind = N'notification_email' THEN staff.[NotificationEmail]
+                    ELSE NULL
+                END,
+                staff.[UserPrincipalName], staff.[NormalizedUserPrincipalName],
+                staff.[Role], staff.[OrganizationId], staff.[IsActive]
+            FROM [asap].[StaffUser] AS staff WITH (UPDLOCK, HOLDLOCK, ROWLOCK)
+            WHERE staff.[Id] = @staffUserId;
+            """,
+            connection,
+            transaction);
+        staffCommand.Parameters.Add("@addressKind", SqlDbType.NVarChar, 32).Value = claim.RecipientAddressKind!;
+        staffCommand.Parameters.Add("@staffUserId", SqlDbType.BigInt).Value = claim.RecipientStaffUserId.Value;
+        await using var staffReader = await staffCommand.ExecuteReaderAsync(cancellationToken);
+        if (!await staffReader.ReadAsync(cancellationToken))
+        {
+            return false;
+        }
+
+        var row = new StaffUser
+        {
+            Id = claim.RecipientStaffUserId.Value,
+            UserPrincipalName = NullableString(staffReader, 1),
+            NormalizedUserPrincipalName = NullableString(staffReader, 2),
+            Role = staffReader.GetString(3),
+            OrganizationId = staffReader.GetInt32(4),
+            IsActive = staffReader.GetBoolean(5)
+        };
+        if (!organizations.TryGetValue(row.OrganizationId, out var owner) ||
+            !IsEligibleRecipientOrganization(row.OrganizationId, owner.OrganizationCodeId, owner.IsActive))
+        {
+            return false;
+        }
+
+        return IsCurrentRecipientIdentityAndAddress(claim, row, NullableString(staffReader, 0));
+    }
+
+    private async Task<bool> SuppressChangedRecipientAtIntentAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        ClaimedEmail claim,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            UPDATE [asap].[EmailOutbox]
+            SET [Status] = N'suppressed',
+                [SuppressionReason] = N'recipient_authorization_changed',
+                [SuppressedUtc] = @now,
+                [LastErrorCode] = NULL,
+                [LastErrorDetail] = NULL,
+                [NextAttemptUtc] = NULL,
+                [SendingStartedUtc] = NULL,
+                [LeaseId] = NULL,
+                [LeaseExpiresUtc] = NULL
+            OUTPUT inserted.[Id]
+            WHERE [Id] = @id AND [Status] = N'sending'
+              AND [LeaseId] = @leaseId AND [RowVersion] = @rowVersion
+              AND [LastErrorCode] = N'pre_send_check_pending'
+              AND [LeaseExpiresUtc] > SYSUTCDATETIME();
+            """,
+            connection,
+            transaction);
+        command.Parameters.Add("@now", SqlDbType.DateTime2).Value = timeProvider.GetUtcNow().UtcDateTime;
+        AddFence(command, claim);
+        var suppressedId = await command.ExecuteScalarAsync(cancellationToken);
+        if (suppressedId is null || suppressedId is DBNull)
+        {
+            return false;
+        }
+
+        return Convert.ToInt64(suppressedId) == claim.Id;
     }
 
     private async Task FinalizeKnownOutcomeAsync(

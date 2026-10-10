@@ -1879,7 +1879,8 @@ for (const kind of ['Title', 'Additional Copy']) {
           const body = JSON.parse(init.body);
           assert.equal(body.email, current.authenticationEmail); assert.equal(body.version, 'actor-v1');
           ui.setStaff({ displayName: body.displayName, notificationEmail: body.notificationEmail, version: 'actor-v2' });
-          saved = true; return response(200, { user: { ...ui.readStaff(), active: true } });
+          saved = true; return response(200, { user: { ...ui.readStaff(), active: true },
+            cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 } });
         }
         if (pathname === '/api/asap/config') { configurationReads++; return response(200, { availableFormats: ['book'], formatLabels: { book: 'Cached configuration' } }); }
         if (init.method === 'DELETE') {
@@ -1950,7 +1951,8 @@ for (const boundary of ['authenticationEmail', 'role', 'organizationId']) {
         if (pathname.endsWith(boundary === 'authenticationEmail' ? '/users/20' : '/users/20/role') && ['PATCH', 'POST'].includes(init.method)) {
           ui.setStaff(boundary === 'authenticationEmail' ? { authenticationEmail: 'changed@example.org', version: 'access-v2' }
             : boundary === 'role' ? { role: 'staff', version: 'access-v2' } : { organizationId: 2, version: 'access-v2' });
-          return response(200, { user: ui.readStaff() });
+          return response(200, { user: ui.readStaff(),
+            cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 } });
         }
       });
       ui.get('[data-settings-panel="staff"]').click(); await until(() => ui.get('.settings-staff-row'), 'own roster');
@@ -2201,7 +2203,10 @@ for (const copy of [false, true]) {
           if (pathname.endsWith('/users/21') && ['DELETE', 'PATCH'].includes(init.method)) {
             committed = true;
             if (change === 'unconfirmed cleanup review') return response(503, { message: 'Committed response lost' });
-            return response(200, { user: staffB, cleanup: { openTitleClaimsCleared: 1, openAdditionalCopyClaimsCleared: 1 } });
+            return response(200, { user: { ...staffB, active: init.method !== 'DELETE' },
+              cleanup: init.method === 'DELETE'
+                ? { rulesDeactivated: 0, openTitleClaimsCleared: 1, openAdditionalCopyClaimsCleared: 1 }
+                : { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 } });
           }
           if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
             queueReads++;
