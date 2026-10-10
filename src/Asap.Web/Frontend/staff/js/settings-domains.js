@@ -385,17 +385,26 @@ function validateEditorSnapshot(data, system) {
       throw new Error('The embed-origin snapshot is malformed. Reload settings before saving.');
     }
   }
-  for (const [choices, description] of [
-    [property(data, 'patronCodeChoices'), 'patron-code choices'],
-    [property(data, 'autoClaimStaff'), 'auto-claim staff']
-  ]) {
-    if (!Array.isArray(choices)) throw new Error(`The ${description} snapshot is incomplete. Reload settings before saving.`);
-    for (const choice of choices) {
-      if (!isRecord(choice) || !normalizePatronCodeId(property(choice, 'id')) ||
-          typeof property(choice, 'description') !== 'string' && description === 'patron-code choices' ||
-          typeof property(choice, 'label') !== 'string' && description === 'auto-claim staff') {
-        throw new Error(`The ${description} snapshot is malformed. Reload settings before saving.`);
-      }
+  const patronCodeChoices = property(data, 'patronCodeChoices');
+  if (!Array.isArray(patronCodeChoices)) {
+    throw new Error('The patron-code choices snapshot is incomplete. Reload settings before saving.');
+  }
+  for (const choice of patronCodeChoices) {
+    if (!isRecord(choice) || !normalizePatronCodeId(property(choice, 'id')) ||
+        typeof property(choice, 'description') !== 'string') {
+      throw new Error('The patron-code choices snapshot is malformed. Reload settings before saving.');
+    }
+  }
+
+  const autoClaimStaff = property(data, 'autoClaimStaff');
+  if (!Array.isArray(autoClaimStaff)) {
+    throw new Error('The auto-claim staff snapshot is incomplete. Reload settings before saving.');
+  }
+  for (const staff of autoClaimStaff) {
+    const id = property(staff, 'id');
+    if (!isRecord(staff) || typeof id !== 'string' || !/^[1-9]\d*$/.test(id) ||
+        !validPositiveIdentity(id) || typeof property(staff, 'label') !== 'string') {
+      throw new Error('The auto-claim staff snapshot is malformed. Reload settings before saving.');
     }
   }
 

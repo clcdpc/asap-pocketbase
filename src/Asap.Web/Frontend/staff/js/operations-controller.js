@@ -124,6 +124,11 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     return Number.isInteger(value) && value >= -2147483648 && value <= 2147483647;
   }
 
+  function isCanonicalPositiveInt64Id(value) {
+    return typeof value === 'string' && /^[1-9]\d*$/.test(value) &&
+      (value.length < 19 || value.length === 19 && value <= '9223372036854775807');
+  }
+
   function hasConfirmedResult(result, operation) {
     const path = operation.path;
     if (path.startsWith('/api/asap/staff/workflow/')) {
@@ -144,7 +149,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     const data = result?.data;
     if (!data || typeof data !== 'object' || Array.isArray(data) ||
         !['queued', ...(isTest ? ['suppressed'] : [])].includes(result?.code) ||
-        typeof data.id !== 'string' || !/^[1-9]\d*$/.test(data.id) ||
+        !isCanonicalPositiveInt64Id(data.id) ||
         !hasNonemptyString(data.version)) return false;
 
     if (isRetry) {

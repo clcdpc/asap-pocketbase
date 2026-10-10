@@ -156,6 +156,8 @@ async function main() {
     systemParticipationRoundTrip: false, unrelatedSystemSavePreservedParticipation: false,
     systemPatronCodesRoundTrip: false, systemUnrelatedSavePreservedPatronCodes: false,
     libraryPatronCodesRoundTrip: false, libraryUnrelatedSavePreservedPatronCodes: false,
+    libraryAutoClaimRuleBigintRoundTrip: false, libraryUnrelatedSavePreservedAutoClaimRules: false,
+    libraryInitialScalarSavePreservedAutoClaimRules: false,
     libraryEmptyPatronCodeReplacementRoundTrip: false, libraryPatronCodeResetRoundTrip: false,
     wildcardOriginNormalized: false, systemFormatRuleRoundTrip: false, systemFormatRulePost: null,
     systemFormatRulePostCount: 0,
@@ -233,10 +235,16 @@ async function main() {
     }
 
     const saveSettings = async () => {
-      const response = page.waitForResponse(candidate => candidate.request().method() === 'POST' &&
+      const responsePromise = page.waitForResponse(candidate => candidate.request().method() === 'POST' &&
         new URL(candidate.url()).pathname === '/api/asap/staff/settings');
       await page.locator('#settings-save').click();
-      const saved = await response;
+      let saved;
+      try {
+        saved = await responsePromise;
+      } catch (error) {
+        const settingsMessage = (await page.locator('#settings-message').textContent().catch(() => ''))?.trim();
+        throw new Error(`Settings save did not receive an HTTP response; settings message: ${settingsMessage || '(empty)'}. ${error.message}`);
+      }
       assert.equal(saved.status(), 200, await saved.text());
       await page.locator('#settings-message').filter({ hasText: 'Settings saved.' }).waitFor();
       return postedPayloads.at(-1);
@@ -350,12 +358,49 @@ async function main() {
     report.systemUnrelatedSavePreservedPatronCodes = true;
     report.wildcardOriginNormalized = true;
 
+    const autoClaimStaffId = '9007199254740993';
+    const librarySettingsResponse = page.waitForResponse(candidate => {
+      const url = new URL(candidate.url());
+      return candidate.request().method() === 'GET' && url.pathname === '/api/asap/staff/settings' &&
+        url.searchParams.get('orgId') === '2';
+    });
     await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=2#settings-patron`, { waitUntil: 'networkidle' });
     await waitForSettingsReady('2');
+    const initialLibrarySettings = await (await librarySettingsResponse).json();
+    assert.equal(initialLibrarySettings.autoClaimStaff.some(staff => staff.id === autoClaimStaffId), true,
+      'The actual library settings snapshot must load the exact eligible SQL bigint staff identity before any save.');
+    const originalAutoClaimRules = initialLibrarySettings.stored.autoClaimRules
+      .filter(rule => rule.active !== false)
+      .map(rule => ({ materialFormatId: rule.materialFormatId, staffUserId: rule.staffUserId }));
 
-    await page.waitForFunction(() => document.getElementById('settings-scope')?.value === '2');
+    await page.locator('#settings-nav-patron').click();
+    const initialLoginNoteToggle = page.locator('[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle');
+    if (!await initialLoginNoteToggle.isChecked()) await initialLoginNoteToggle.check();
+    await page.locator('#patron-login-note').fill('Initial unrelated library scalar edit');
+    const initialScalarPayload = await saveSettings();
+    assert.equal(initialScalarPayload.patron.loginNote, 'Initial unrelated library scalar edit');
+    for (const collection of ['autoClaimRules', 'customFields', 'formatRules', 'formats', 'providers', 'templates']) {
+      assert.equal(Object.hasOwn(initialScalarPayload, collection), false,
+        `An unrelated scalar save must omit the unchanged ${collection} replacement collection.`);
+    }
+    assert.equal(Object.hasOwn(initialScalarPayload.workflow, 'allowedPatronCodeIds'), false,
+      'An unrelated scalar save must omit the unchanged patron-code replacement collection.');
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForSettingsReady('2');
+    await page.locator('#settings-nav-patron').click();
+    assert.equal(await page.locator('#patron-login-note').inputValue(), 'Initial unrelated library scalar edit',
+      'The unrelated library scalar must remain authoritative after reload.');
+    const initialAutoClaimRulesAfterScalar = await page.locator('#format-claim-rules-editor [data-domain-row]').evaluateAll(rows => rows.map(row => {
+      const selects = row.querySelectorAll('select');
+      return { materialFormatId: selects[0]?.value || '', staffUserId: selects[1]?.value || '' };
+    }));
+    assert.deepEqual(initialAutoClaimRulesAfterScalar, originalAutoClaimRules,
+      'An unrelated scalar save and authoritative reload must preserve every original active auto-claim rule.');
+    report.libraryInitialScalarSavePreservedAutoClaimRules = true;
 
     await page.locator('#settings-nav-workflow').click();
+    await page.waitForFunction(() => document.getElementById('settings-scope')?.value === '2');
+
     const useSystemCodes = page.locator('#patron-codes-use-system');
     if (await useSystemCodes.isChecked()) await useSystemCodes.uncheck();
     const libraryCodeRows = page.locator('#patron-codes-editor [data-domain-row] select');
@@ -363,6 +408,37 @@ async function main() {
       'The library override must begin with numeric IDs 1 and 2.');
     await page.locator('#add-patron-code').click();
     await libraryCodeRows.last().selectOption('3');
+
+    await page.locator('#settings-nav-patron').click();
+    const autoClaimEditor = page.locator('#format-claim-rules-editor');
+    const existingAutoClaimRules = await autoClaimEditor.locator('[data-domain-row]').evaluateAll(rows => rows.map(row => {
+      const selects = row.querySelectorAll('select');
+      return { materialFormatId: selects[0]?.value || '', staffUserId: selects[1]?.value || '' };
+    }));
+    const existingAutoClaimFormatIds = new Set(existingAutoClaimRules.map(rule => rule.materialFormatId));
+    await page.locator('#add-auto-claim-rule').click();
+    const autoClaimRow = page.locator('#format-claim-rules-editor [data-domain-row]').last();
+    const autoClaimSelects = autoClaimRow.locator('select');
+    const availableAutoClaimFormats = await autoClaimSelects.nth(0).locator('option').evaluateAll(options =>
+      options.filter(option => option.value).map(option => ({
+        id: option.value,
+        code: option.textContent.trim().match(/\(([^()]*)\)$/)?.[1] || ''
+      })));
+    const systemAutoClaimCodes = new Set(['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook']);
+    const autoClaimFormat = availableAutoClaimFormats.find(option => systemAutoClaimCodes.has(option.code) &&
+      !existingAutoClaimFormatIds.has(option.id));
+    assert.ok(autoClaimFormat,
+      'The fixture must expose an unused System format so the new library rule does not replace an existing rule.');
+    const autoClaimFormatId = autoClaimFormat.id;
+    const autoClaimFormatCode = autoClaimFormat.code;
+    await autoClaimSelects.nth(0).selectOption(autoClaimFormatId);
+    const exactStaffOption = await autoClaimSelects.nth(1).locator('option').evaluateAll((options, staffId) =>
+      options.some(option => option.value === staffId), autoClaimStaffId);
+    assert.equal(exactStaffOption, true,
+      'The SQL bigint catalog identity must be present as an exact staff-option string.');
+    await autoClaimSelects.nth(1).selectOption(autoClaimStaffId);
+    assert.equal(await autoClaimSelects.nth(1).inputValue(), autoClaimStaffId,
+      'The editor must retain the exact decimal SQL bigint staff identity.');
 
     await page.locator('#settings-nav-patron').click();
     const fields = page.locator('#additional-fields-editor [data-domain-row]');
@@ -392,6 +468,16 @@ async function main() {
     const submitted = await saveSettings();
     postedPayload = submitted;
     assert.deepEqual(postedPayload.workflow.allowedPatronCodeIds, [1, 2, 3]);
+    assert.equal(postedPayload.autoClaimRules.length, existingAutoClaimRules.length + 1,
+      'Adding a rule must retain every pre-existing active library rule.');
+    for (const existingRule of existingAutoClaimRules) {
+      assert.ok(postedPayload.autoClaimRules.some(rule => rule.materialFormatId === existingRule.materialFormatId &&
+        rule.staffUserId === existingRule.staffUserId && rule.active === true),
+      `Adding a rule must preserve existing auto-claim format ${existingRule.materialFormatId}.`);
+    }
+    assert.ok(postedPayload.autoClaimRules.some(rule => rule.materialFormatId === autoClaimFormatId &&
+      rule.staffUserId === autoClaimStaffId && rule.active === true),
+    'Saving the library auto-claim rule must submit the exact SQL bigint staff ID.');
     const submittedField = postedPayload.customFields.find(field => field.key === 'browser_select');
     assert.ok(submittedField, 'The dynamically added custom field was missing from the submitted payload.');
     assert.deepEqual(submittedField.options.map(option => option.id), ['zeta', 'alpha']);
@@ -407,6 +493,22 @@ async function main() {
     assert.equal(await page.locator('#patron-codes-use-system').isChecked(), false);
     assert.deepEqual(await page.locator('#patron-codes-editor [data-domain-row] select')
       .evaluateAll(selects => selects.map(select => select.value)), ['1', '2', '3']);
+    await page.locator('#settings-nav-patron').click();
+    const reloadedAutoClaimRules = await autoClaimEditor.locator('[data-domain-row]').evaluateAll(rows => rows.map(row => {
+      const selects = row.querySelectorAll('select');
+      return { materialFormatId: selects[0]?.value || '', staffUserId: selects[1]?.value || '' };
+    }));
+    assert.equal(reloadedAutoClaimRules.length, existingAutoClaimRules.length + 1,
+      'The authoritative reload must retain the pre-existing active rules and the new rule.');
+    for (const existingRule of existingAutoClaimRules) {
+      assert.ok(reloadedAutoClaimRules.some(rule => rule.materialFormatId === existingRule.materialFormatId &&
+        rule.staffUserId === existingRule.staffUserId),
+      `Reloading must preserve existing auto-claim format ${existingRule.materialFormatId}.`);
+    }
+    assert.ok(reloadedAutoClaimRules.some(rule => rule.materialFormatId === autoClaimFormatId &&
+      rule.staffUserId === autoClaimStaffId),
+      'Reloading the real settings endpoint must preserve the exact SQL bigint staff ID.');
+    report.libraryAutoClaimRuleBigintRoundTrip = true;
     report.libraryPatronCodesRoundTrip = true;
     await page.locator('#settings-nav-patron').click();
     const reloadedFields = page.locator('#additional-fields-editor [data-domain-row]');
@@ -427,6 +529,8 @@ async function main() {
     const unrelatedLibraryPayload = await saveSettings();
     assert.equal(unrelatedLibraryPayload.patron.loginNote, 'Unrelated library setting edit',
       'The unrelated edit must intentionally override the inherited login note.');
+    assert.equal(Object.hasOwn(unrelatedLibraryPayload, 'autoClaimRules'), false,
+      'An unrelated scalar edit must omit the auto-claim replacement collection.');
     assert.equal(Object.hasOwn(unrelatedLibraryPayload.workflow, 'allowedPatronCodeIds'), false,
       'An unrelated library edit must omit the patron-code replacement key.');
     await page.reload({ waitUntil: 'networkidle' });
@@ -435,8 +539,23 @@ async function main() {
     assert.deepEqual(await page.locator('#patron-codes-editor [data-domain-row] select')
       .evaluateAll(selects => selects.map(select => select.value)), ['1', '2', '3'],
     'The unrelated library edit must preserve its complete numeric patron-code override.');
+    await page.locator('#settings-nav-patron').click();
+    const preservedAutoClaimRules = await autoClaimEditor.locator('[data-domain-row]').evaluateAll(rows => rows.map(row => {
+      const selects = row.querySelectorAll('select');
+      return { materialFormatId: selects[0]?.value || '', staffUserId: selects[1]?.value || '' };
+    }));
+    assert.equal(preservedAutoClaimRules.length, existingAutoClaimRules.length + 1,
+      'An unrelated save and authoritative reload must preserve the complete active auto-claim rule set.');
+    for (const expectedRule of [...existingAutoClaimRules, { materialFormatId: autoClaimFormatId, staffUserId: autoClaimStaffId }]) {
+      assert.ok(preservedAutoClaimRules.some(rule => rule.materialFormatId === expectedRule.materialFormatId &&
+        rule.staffUserId === expectedRule.staffUserId),
+      `An unrelated save must preserve auto-claim format ${expectedRule.materialFormatId}.`);
+    }
+    report.libraryUnrelatedSavePreservedAutoClaimRules = true;
+    report.libraryAutoClaimFormatCode = autoClaimFormatCode;
     report.libraryUnrelatedSavePreservedPatronCodes = true;
 
+    await page.locator('#settings-nav-workflow').click();
     await page.locator('#patron-codes-clear-all').click();
     const emptyLibraryCodesPayload = await saveSettings();
     assert.deepEqual(emptyLibraryCodesPayload.workflow.allowedPatronCodeIds, [],
@@ -482,6 +601,9 @@ async function main() {
   assert.equal(report.systemUnrelatedSavePreservedPatronCodes, true);
   assert.equal(report.libraryPatronCodesRoundTrip, true);
   assert.equal(report.libraryUnrelatedSavePreservedPatronCodes, true);
+  assert.equal(report.libraryAutoClaimRuleBigintRoundTrip, true);
+  assert.equal(report.libraryUnrelatedSavePreservedAutoClaimRules, true);
+  assert.equal(report.libraryInitialScalarSavePreservedAutoClaimRules, true);
   assert.equal(report.libraryEmptyPatronCodeReplacementRoundTrip, true);
   assert.equal(report.libraryPatronCodeResetRoundTrip, true);
   assert.equal(report.wildcardOriginNormalized, true);

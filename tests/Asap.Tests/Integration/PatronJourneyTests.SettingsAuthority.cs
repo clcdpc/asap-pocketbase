@@ -2609,6 +2609,10 @@ public sealed partial class PatronJourneyTests
         factory!.UseKestrel(0);
         const string retiredKey = "authority_retired";
         const string dynamicKey = "browser_select";
+        const long autoClaimStaffId = 9_007_199_254_740_993L;
+        long originalStaffUserIdentity = 0;
+        var autoClaimFormatCode = string.Empty;
+        var restoreStaffIdentitySql = string.Empty;
         var originalSystemCodes = await ReadPatronCodeRowsAsync(1);
         var originalCodes = await ReadPatronCodeRowsAsync(2);
         var originalOrganizationActive = await ReadCountAsync("SELECT CONVERT(int, [IsActive]) FROM [asap].[Organization] WHERE [Id] = 2;");
@@ -2654,6 +2658,57 @@ public sealed partial class PatronJourneyTests
 
         try
         {
+            using var bootstrapClient = factory.CreateClient();
+            using var bootstrapResponse = await bootstrapClient.GetAsync("/");
+            await using (var identity = new SqlConnection(databaseConnectionString))
+            {
+                await identity.OpenAsync();
+                await using var command = identity.CreateCommand();
+                command.CommandText = "SELECT CONVERT(bigint, IDENT_CURRENT(N'[asap].[StaffUser]'));";
+                originalStaffUserIdentity = Convert.ToInt64(await command.ExecuteScalarAsync());
+            }
+            restoreStaffIdentitySql = $"""
+                IF CONVERT(bigint, IDENT_CURRENT(N'[asap].[StaffUser]')) = {autoClaimStaffId}
+                BEGIN
+                    DBCC CHECKIDENT ('[asap].[StaffUser]', RESEED, {originalStaffUserIdentity});
+                END;
+                """;
+            var autoClaimStaffUpn = $"settings-bigint-{Guid.NewGuid():N}@example.org";
+            await ExecuteNonQueryAsync("""
+                BEGIN TRANSACTION;
+                BEGIN TRY
+                    SET IDENTITY_INSERT [asap].[StaffUser] ON;
+                    INSERT INTO [asap].[StaffUser]
+                        ([Id], [UserPrincipalName], [NormalizedUserPrincipalName], [DisplayName], [Role], [OrganizationId], [IsActive])
+                    VALUES (@staffId, @upn, UPPER(@upn), N'Bigint Auto Claim Staff', N'staff', 2, 1);
+                    SET IDENTITY_INSERT [asap].[StaffUser] OFF;
+                    COMMIT TRANSACTION;
+                END TRY
+                BEGIN CATCH
+                    IF XACT_STATE() <> 0 ROLLBACK TRANSACTION;
+                    SET IDENTITY_INSERT [asap].[StaffUser] OFF;
+                    THROW;
+                END CATCH;
+                """, ("@staffId", autoClaimStaffId), ("@upn", autoClaimStaffUpn));
+
+            var originalAutoClaimRows = new List<(long Id, long FormatId, long? StaffId, bool Active)>();
+            await using (var connection = new SqlConnection(databaseConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var command = new SqlCommand("""
+                    SELECT [Id], [MaterialFormatId], [StaffUserId], [IsActive]
+                    FROM [asap].[FormatAutoClaimRule]
+                    WHERE [LibraryOrganizationId] = 2
+                    ORDER BY [Id];
+                    """, connection);
+                await using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    originalAutoClaimRows.Add((reader.GetInt64(0), reader.GetInt64(1),
+                        reader.IsDBNull(2) ? null : reader.GetInt64(2), reader.GetBoolean(3)));
+                }
+            }
+
             var actor = await ReadConfiguredSuperAdminAsync();
             using var client = factory.CreateClient();
             var baseAddress = client.BaseAddress
@@ -2697,6 +2752,12 @@ public sealed partial class PatronJourneyTests
                 Assert.IsTrue(report.RootElement.GetProperty("systemUnrelatedSavePreservedPatronCodes").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("libraryPatronCodesRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("libraryUnrelatedSavePreservedPatronCodes").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("libraryAutoClaimRuleBigintRoundTrip").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("libraryUnrelatedSavePreservedAutoClaimRules").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("libraryInitialScalarSavePreservedAutoClaimRules").GetBoolean());
+                autoClaimFormatCode = report.RootElement.GetProperty("libraryAutoClaimFormatCode").GetString() ?? string.Empty;
+                Assert.IsFalse(string.IsNullOrWhiteSpace(autoClaimFormatCode),
+                    "The browser journey must report the exact selected unused format for SQL verification.");
                 Assert.IsTrue(report.RootElement.GetProperty("libraryEmptyPatronCodeReplacementRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("libraryPatronCodeResetRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("wildcardOriginNormalized").GetBoolean());
@@ -2728,11 +2789,50 @@ public sealed partial class PatronJourneyTests
                     WHERE [OrganizationId] = 1 AND [Origin] = N'https://*.domain.example' AND
                           [NormalizedOrigin] = N'https://*.domain.example';
                     """));
+                await using var autoClaimRule = connection.CreateCommand();
+                autoClaimRule.CommandText = """
+                    SELECT COUNT(*)
+                    FROM [asap].[FormatAutoClaimRule] ruleRow
+                    JOIN [asap].[MaterialFormat] formatRow ON formatRow.[Id] = ruleRow.[MaterialFormatId]
+                    WHERE ruleRow.[LibraryOrganizationId] = 2 AND ruleRow.[StaffUserId] = @staffId
+                      AND ruleRow.[IsActive] = 1 AND formatRow.[OwnerOrganizationId] = 1
+                      AND formatRow.[Code] = @formatCode;
+                    """;
+                autoClaimRule.Parameters.AddWithValue("@staffId", autoClaimStaffId);
+                autoClaimRule.Parameters.AddWithValue("@formatCode", autoClaimFormatCode);
+                Assert.AreEqual(1, Convert.ToInt32(await autoClaimRule.ExecuteScalarAsync()));
             }
+            var currentAutoClaimRows = new List<(long Id, long FormatId, long? StaffId, bool Active)>();
+            await using (var connection = new SqlConnection(databaseConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var command = new SqlCommand("""
+                    SELECT [Id], [MaterialFormatId], [StaffUserId], [IsActive]
+                    FROM [asap].[FormatAutoClaimRule]
+                    WHERE [LibraryOrganizationId] = 2
+                    ORDER BY [Id];
+                    """, connection);
+                await using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    currentAutoClaimRows.Add((reader.GetInt64(0), reader.GetInt64(1),
+                        reader.IsDBNull(2) ? null : reader.GetInt64(2), reader.GetBoolean(3)));
+                }
+            }
+            Assert.AreEqual(originalAutoClaimRows.Count + 1, currentAutoClaimRows.Count,
+                "Adding one rule must retain every existing library auto-claim row, including inactive history.");
+            CollectionAssert.AreEqual(originalAutoClaimRows.ToArray(), currentAutoClaimRows
+                .Where(item => item.StaffId != autoClaimStaffId).ToArray(),
+                "Saving the new bigint rule must preserve every pre-existing active and inactive SQL rule row.");
 
             AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
             client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
             using var saved = await ReadSettingsDocumentAsync(client, "2");
+            var savedAutoClaimRule = saved.RootElement.GetProperty("stored").GetProperty("autoClaimRules")
+                .EnumerateArray().Single(item => item.GetProperty("staffUserId").GetString() ==
+                    autoClaimStaffId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            Assert.AreEqual(autoClaimStaffId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                savedAutoClaimRule.GetProperty("staffUserId").GetString());
             var fields = saved.RootElement.GetProperty("stored").GetProperty("customFields").EnumerateArray().ToArray();
             var retiredField = fields.Single(item => item.GetProperty("key").GetString() == retiredKey);
             var dynamicField = fields.Single(item => item.GetProperty("key").GetString() == dynamicKey);
@@ -2761,7 +2861,10 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
-            await ExecuteNonQueryAsync("""
+            await ExecuteNonQueryAsync($"""
+                DELETE FROM [asap].[FormatAutoClaimRule]
+                WHERE [LibraryOrganizationId] = 2 AND [StaffUserId] = @staffId;
+                DELETE FROM [asap].[StaffUser] WHERE [Id] = @staffId;
                 DELETE ruleRow
                 FROM [asap].[MaterialFormatCustomFieldRule] ruleRow
                 JOIN [asap].[PatronCustomField] field ON field.[Id] = ruleRow.[PatronCustomFieldId]
@@ -2775,7 +2878,9 @@ public sealed partial class PatronJourneyTests
                 UPDATE [asap].[Organization] SET [IsActive] = @organizationActive WHERE [Id] = 2;
                 DELETE FROM [asap].[Organization] WHERE [Id] IN (3, 4);
                 DELETE FROM [asap].[AdministrativeAudit] WHERE [Id] > @auditBefore;
-                """, ("@organizationActive", originalOrganizationActive), ("@auditBefore", auditBefore));
+                {restoreStaffIdentitySql}
+                """, ("@organizationActive", originalOrganizationActive), ("@auditBefore", auditBefore),
+                ("@staffId", autoClaimStaffId));
             await RestoreSystemOriginRowsAsync(originalOrigins);
             await RestorePatronCodeRowsAsync(1, originalSystemCodes);
             await RestorePatronCodeRowsAsync(2, originalCodes);

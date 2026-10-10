@@ -193,6 +193,47 @@ const { JSDOM } = require('jsdom');
       'An incomplete visible auto-claim row must block settings collection and the save request.');
     editors.dispose();
 
+    for (const staffId of ['2147483648', '9007199254740993', '9223372036854775807']) {
+      const bigintStaffData = JSON.parse(JSON.stringify(data));
+      bigintStaffData.autoClaimStaff = [{ id: staffId, label: `Staff ${staffId}` }];
+      bigintStaffData.stored.autoClaimRules = [{ materialFormatId: '7', staffUserId: staffId, active: true }];
+      const bigintStaffRoot = root.cloneNode(true);
+      const bigintStaffEditors = module.createSettingsDomainEditors({ root: bigintStaffRoot });
+      bigintStaffEditors.populate(bigintStaffData, false);
+      const staffSelect = bigintStaffRoot.querySelectorAll('#format-claim-rules-editor [data-domain-row] select')[1];
+      assert.ok(staffSelect, `Auto-claim staff ${staffId} must have a rendered rule control.`);
+      assert.equal(staffSelect.value, staffId, 'A SQL bigint staff ID must remain an exact decimal string in the editor.');
+      assert.deepStrictEqual(bigintStaffEditors.collect().values.claims, [
+        { materialFormatId: '7', staffUserId: staffId, active: true }
+      ]);
+      bigintStaffEditors.dispose();
+    }
+
+    for (const invalidStaff of [
+      { name: 'zero auto-claim staff ID', id: '0' },
+      { name: 'noncanonical auto-claim staff ID', id: '01' },
+      { name: 'above-Int64 auto-claim staff ID', id: '9223372036854775808' },
+      { name: 'unsafe numeric auto-claim staff ID', id: 9007199254740992 },
+      { name: 'numeric auto-claim staff ID', id: 42 }
+    ]) {
+      const malformedStaffData = JSON.parse(JSON.stringify(data));
+      malformedStaffData.autoClaimStaff = [{ id: invalidStaff.id, label: `Invalid ${invalidStaff.name}` }];
+      const malformedStaffEditors = module.createSettingsDomainEditors({ root: root.cloneNode(true) });
+      malformedStaffEditors.populate(malformedStaffData, false);
+      assert.throws(() => malformedStaffEditors.collect(),
+        /auto-claim staff snapshot is malformed/,
+        `${invalidStaff.name} must be rejected without broadening the accepted SQL bigint string contract.`);
+      malformedStaffEditors.dispose();
+    }
+
+    const oversizedPatronCodeData = JSON.parse(JSON.stringify(data));
+    oversizedPatronCodeData.patronCodeChoices = [{ id: 2147483648, description: 'Not a Polaris Int32 code' }];
+    const oversizedPatronCodeEditors = module.createSettingsDomainEditors({ root: root.cloneNode(true) });
+    oversizedPatronCodeEditors.populate(oversizedPatronCodeData, false);
+    assert.throws(() => oversizedPatronCodeEditors.collect(), /patron-code choices snapshot is malformed/,
+      'The broader SQL bigint staff identity contract must not broaden native Int32 patron-code IDs.');
+    oversizedPatronCodeEditors.dispose();
+
     const malformedEditors = module.createSettingsDomainEditors({ root });
     malformedEditors.populate({
       ...data,

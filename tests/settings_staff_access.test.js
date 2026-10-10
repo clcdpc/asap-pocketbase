@@ -193,7 +193,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
           const existing = users.find(user => user.userPrincipalName.toLowerCase() === body.email.toLowerCase());
           const saved = existing && !existing.active
             ? { ...existing, role: body.role, organizationId: body.organizationId, active: true, version: `reactivated-${existing.id}` }
-            : staffUser(30 + postBodies.length, {
+            : staffUser(postBodies.length === 1 ? '9223372036854775807' : 30 + postBodies.length, {
               userPrincipalName: body.email,
               displayName: null,
               notificationEmail: body.email,
@@ -297,6 +297,11 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       organizationId: 2
     });
     await waitFor(() => document.getElementById('staff-access-status').textContent.includes('2 auto-claim rules deactivated'));
+    const largeCreatedRow = [...document.querySelectorAll('.settings-staff-row')]
+      .find(row => row.textContent.includes('ID 9223372036854775807'));
+    assert.ok(largeCreatedRow, 'A confirmed staff-create receipt preserves the exact Int64-max ID string.');
+    assert.ok(largeCreatedRow.querySelector('.settings-cleanup-result'),
+      'Cleanup evidence remains attached to the exact large returned staff identity.');
 
     let activeRow = [...document.querySelectorAll('.settings-staff-row')]
       .find(row => row.textContent.includes('Ada Admin'));
@@ -379,7 +384,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
 
     dom.window.close();
 
-    for (const missingEvidence of ['id', 'version', 'cleanup']) {
+    for (const missingEvidence of ['id', 'version', 'cleanup', 'id-zero', 'id-leading-zero', 'id-overflow', 'id-number']) {
       const lifecycleRequests = [];
       const lifecycleCommits = [];
       let createBody;
@@ -407,6 +412,10 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
             createBody = JSON.parse(options.body);
             const user = staffUser(40, { userPrincipalName: createBody.email, version: 'created-v1' });
             if (missingEvidence === 'id') delete user.id;
+            if (missingEvidence === 'id-zero') user.id = '0';
+            if (missingEvidence === 'id-leading-zero') user.id = '040';
+            if (missingEvidence === 'id-overflow') user.id = '9223372036854775808';
+            if (missingEvidence === 'id-number') user.id = 40;
             if (missingEvidence === 'version') delete user.version;
             const envelope = { user,
               cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 } };

@@ -135,6 +135,11 @@ function isNonnegativeInt32(value) {
   return Number.isInteger(value) && value >= 0 && value <= 2147483647;
 }
 
+function isCanonicalPositiveInt64Id(value) {
+  return typeof value === 'string' && /^[1-9]\d*$/.test(value) &&
+    (value.length < 19 || value.length === 19 && value <= '9223372036854775807');
+}
+
 function clean(value) {
   if (value === null || value === undefined) return null;
   const result = String(value).trim();
@@ -724,7 +729,7 @@ export function createSettingsController({
     const user = response?.user;
     const cleanup = response?.cleanup;
     const cleanupCounts = ['rulesDeactivated', 'openTitleClaimsCleared', 'openAdditionalCopyClaimsCleared'];
-    return typeof user?.id === 'string' && /^[1-9]\d*$/.test(user.id) &&
+    return isCanonicalPositiveInt64Id(user?.id) &&
       typeof user.version === 'string' && user.version.length > 0 &&
       (expectedStaffId === null || user.id === String(expectedStaffId)) &&
       cleanup !== null && typeof cleanup === 'object' && !Array.isArray(cleanup) &&

@@ -41,6 +41,11 @@ function isPositiveInt32(value) {
   return Number.isInteger(value) && value > 0 && value <= 2147483647;
 }
 
+function isCanonicalPositiveInt64Id(value) {
+  return typeof value === 'string' && /^[1-9]\d*$/.test(value) &&
+    (value.length < 19 || value.length === 19 && value <= '9223372036854775807');
+}
+
 function hasValidPatronSession(data, requireToken) {
   const tokenIsValid = !requireToken ||
     typeof data?.token === 'string' && data.token.trim().length > 0;
@@ -72,8 +77,8 @@ export function loginPatron(payload) {
 export function submitSuggestion(payload) {
   return request('/api/asap/patron/suggestions', {
     method: 'POST',
-    validateResponse: data => {
-      if (typeof data?.id !== 'string' || !/^[0-9]+$/.test(data.id) ||
+    validateResponse: (data, response) => {
+      if (response?.status !== 201 || !isCanonicalPositiveInt64Id(data?.id) ||
           typeof data?.successTitle !== 'string' || typeof data?.successMessage !== 'string') {
         throw new Error('Suggestion response is incomplete.');
       }

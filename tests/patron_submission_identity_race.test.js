@@ -141,20 +141,55 @@ async function until(predicate, message) {
     }
 
     await login('20000000000901');
-    // A current submission with an invalid 201 body may already be committed. Keep its
-    // submit action closed to prevent a blind second POST until the user establishes a new session.
-    fillDraft('20000000000901');
-    const malformed = submit.handleSuggestionSubmit({ preventDefault() {} });
-    await until(() => pendingSubmission !== null, 'Malformed-response submission did not start');
-    const malformedRequest = pendingSubmission;
-    pendingSubmission = null;
-    malformedRequest.resolve(response(201, null, new SyntaxError('truncated success JSON')));
-    await malformed;
-    assert.equal(document.getElementById('submit-btn').disabled, true);
-    assert.match(document.getElementById('submit-error').textContent, /Please do not submit again/);
-    const requestsBeforeRepeat = submissionCount;
-    await submit.handleSuggestionSubmit({ preventDefault() {} });
-    assert.equal(submissionCount, requestsBeforeRepeat, 'unknown committed outcomes cannot trigger a duplicate POST');
+    for (const id of ['9007199254740993', '9223372036854775807']) {
+      fillDraft('20000000000901');
+      const accepted = submit.handleSuggestionSubmit({ preventDefault() {} });
+      await until(() => pendingSubmission !== null, `Valid SQL bigint ID ${id} submission did not start`);
+      const acceptedRequest = pendingSubmission;
+      pendingSubmission = null;
+      acceptedRequest.resolve(response(201, { id, successTitle: 'Saved', successMessage: 'Saved' }));
+      await accepted;
+      assert.equal(document.getElementById('step-success').classList.contains('hidden'), false,
+        `Canonical SQL bigint ID ${id} from HTTP 201 remains a confirmed submission.`);
+      await auth.logout();
+      await login('20000000000901');
+    }
+
+    // Successful status alone is not evidence that the server's SQL bigint receipt is valid.
+    // Each malformed 2xx could already have committed, so keep it unknown and block a blind retry.
+    const malformedSuccesses = [
+      { name: 'zero ID', status: 201, id: '0' },
+      { name: 'noncanonical ID', status: 201, id: '01' },
+      { name: 'overflow ID', status: 201, id: '9223372036854775808' },
+      { name: 'numeric ID', status: 201, id: 9007199254740993 },
+      { name: 'unexpected HTTP 200', status: 200, id: '9223372036854775807' },
+      { name: 'unexpected HTTP 202', status: 202, id: '9007199254740993' },
+      { name: 'malformed JSON', status: 201, parseError: new SyntaxError('truncated success JSON') }
+    ];
+    for (const [index, scenario] of malformedSuccesses.entries()) {
+      fillDraft('20000000000901');
+      const pending = submit.handleSuggestionSubmit({ preventDefault() {} });
+      await until(() => pendingSubmission !== null, `${scenario.name} submission did not start`);
+      const dispatched = pendingSubmission;
+      pendingSubmission = null;
+      const body = { id: scenario.id, successTitle: 'Saved', successMessage: 'Saved' };
+      dispatched.resolve(response(scenario.status, body, scenario.parseError || null));
+      await pending;
+      assert.equal(document.getElementById('step-success').classList.contains('hidden'), true,
+        `${scenario.name} must not render a confirmed submission.`);
+      assert.equal(document.getElementById('submit-btn').disabled, true,
+        `${scenario.name} may have committed and must block an automatic second POST.`);
+      assert.match(document.getElementById('submit-error').textContent, /Please do not submit again/,
+        `${scenario.name} must explain that the outcome is unconfirmed.`);
+      const requestsBeforeRepeat = submissionCount;
+      await submit.handleSuggestionSubmit({ preventDefault() {} });
+      assert.equal(submissionCount, requestsBeforeRepeat,
+        `${scenario.name}: unknown committed outcomes cannot trigger a duplicate POST`);
+      if (index < malformedSuccesses.length - 1) {
+        await auth.logout();
+        await login('20000000000901');
+      }
+    }
 
     await auth.logout();
     await login('20000000000903');

@@ -406,7 +406,18 @@ function committedOperationResult(path) {
       result: { code: 'queued', data: { id: '9007199254740993', version: 'email-v2', replayed: true } } },
     { name: 'email retry result with a different bigint id', path: '/api/asap/staff/email-operations/9007199254740993/retry',
       body: { version: 'email-v1' },
-      result: { code: 'queued', data: { id: '9007199254740992', version: 'email-v2', dispatchDelayed: false } } }
+      result: { code: 'queued', data: { id: '9007199254740992', version: 'email-v2', dispatchDelayed: false } } },
+    { name: 'email test result with a zero bigint id', path: '/api/asap/staff/email-operations/test',
+      result: { code: 'queued', data: { id: '0', code: null, dispatchDelayed: false, version: 'email-v2' } } },
+    { name: 'email test result with a noncanonical bigint id', path: '/api/asap/staff/email-operations/test',
+      result: { code: 'queued', data: { id: '01', code: null, dispatchDelayed: false, version: 'email-v2' } } },
+    { name: 'email test result with an overflowing bigint id', path: '/api/asap/staff/email-operations/test',
+      result: { code: 'queued', data: { id: '9223372036854775808', code: null, dispatchDelayed: false, version: 'email-v2' } } },
+    { name: 'email test result with a numeric id', path: '/api/asap/staff/email-operations/test',
+      result: { code: 'queued', data: { id: 42, code: null, dispatchDelayed: false, version: 'email-v2' } } },
+    { name: 'email retry with an overflowing path and matching result id',
+      path: '/api/asap/staff/email-operations/9223372036854775808/retry', body: { version: 'email-v1' },
+      result: { code: 'queued', data: { id: '9223372036854775808', version: 'email-v2', dispatchDelayed: false } } }
   ];
   for (const invalid of invalidAcknowledgements) {
     await fixture(async ({ load, get, dom }) => {
@@ -431,7 +442,7 @@ function committedOperationResult(path) {
       assert.equal(posts.length, 1, `${invalid.name}: exactly one dispatch is made`);
       assert.equal(receipts.length, 1, `${invalid.name}: malformed 2xx retains a single owner-bound receipt`);
       assert.equal(receipts[0][1].id, owner.id);
-      assert.equal(receipts[0][2].outcome, 'uncertain', `${invalid.name}: malformed 2xx is not committed`);
+      assert.equal(receipts[0][2].outcome, 'uncertain', `${invalid.name}: malformed 2xx is not confirmed`);
       assert.equal(get('#operations-outcome').hidden, false);
       assert.equal(get('#operations-outcome button'), null, `${invalid.name}: no retry before authoritative review`);
       for (const selector of ['#run-workflow-now', '#run-weekly-now', '#force-weekly-now', '#send-test-email']) {
@@ -462,6 +473,8 @@ function committedOperationResult(path) {
     { code: 'suppressed', data: { id: '9007199254740993', code: 'mail_not_configured',
       dispatchDelayed: false, version: 'email-suppressed-v1' } },
     { code: 'queued', data: { id: '9007199254740993', code: null, version: 'email-replay-v1',
+      replayed: true, status: 'pending' } },
+    { code: 'queued', data: { id: '9223372036854775807', code: null, version: 'email-max-id-v1',
       replayed: true, status: 'pending' } }
   ]) {
     await fixture(async ({ load, get }) => {
@@ -481,7 +494,7 @@ function committedOperationResult(path) {
       assert.equal(receipts.length, 1);
       assert.equal(receipts[0][2].outcome, 'committed', 'canonical suppression and replay envelopes remain valid outcomes');
       if (result.code === 'suppressed') assert.match(receipts[0][0], /suppressed; no email was sent/i);
-      else assert.match(receipts[0][0], /already recorded as pending\. Review email operation 9007199254740993/i);
+      else assert.match(receipts[0][0], new RegExp(`already recorded as pending\\. Review email operation ${result.data.id}`, 'i'));
       controller.dispose();
     });
   }
