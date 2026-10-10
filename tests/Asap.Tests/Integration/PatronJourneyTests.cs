@@ -8112,7 +8112,10 @@ public sealed partial class PatronJourneyTests
         var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
             await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
 
-        Assert.AreEqual("polaris_bib_validation_protocol_failed", failure.Code);
+        Assert.AreEqual(
+            "polaris_bib_validation_protocol_failed",
+            failure.Code,
+            $"Original provider exception type: {failure.InnerException?.GetType().FullName ?? "<none>"}.");
     }
 
     [TestMethod]

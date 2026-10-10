@@ -1808,7 +1808,14 @@ public static class MigrationImporter
                 $"Additional-copy request {sourceId} has no creation timestamp.");
             var updatedUtc = row.UtcDateTime("updated") ?? createdUtc;
             var closedUtc = row.UtcDateTime("closedAt");
-            var closedDisplayName = row.Text("closedByUsername");
+            var sourceCreatedByDisplayName = row.Text("createdByUsername");
+            var createdByDisplayName = string.IsNullOrEmpty(sourceCreatedByDisplayName)
+                ? null
+                : sourceCreatedByDisplayName;
+            var sourceClosedByDisplayName = row.Text("closedByUsername");
+            var closedDisplayName = string.IsNullOrEmpty(sourceClosedByDisplayName)
+                ? null
+                : sourceClosedByDisplayName;
             if ((status == "closed") != closedUtc.HasValue)
             {
                 throw new MigrationOperationException(
@@ -1874,7 +1881,7 @@ public static class MigrationImporter
                     staffIds,
                     "additional_copy_creator_reference_invalid",
                     "additional-copy creator staff")));
-            command.Parameters.AddWithValue("@createdByDisplayName", DbString(row.Text("createdByUsername")));
+            command.Parameters.AddWithValue("@createdByDisplayName", DbString(createdByDisplayName));
             AddDateTime2Parameter(command, "@createdUtc", createdUtc);
             AddDateTime2Parameter(command, "@updatedUtc", updatedUtc);
             command.Parameters.AddWithValue("@claimedByStaffUserId", DbValue(claim.StaffUserId));
@@ -3112,6 +3119,14 @@ public static class MigrationImporter
         {
             var sourceId = row.RequiredString("id");
             var status = NormalizeAdditionalCopyStatus(row.RequiredString("status"));
+            var sourceCreatedByDisplayName = row.Text("createdByUsername");
+            var createdByDisplayName = string.IsNullOrEmpty(sourceCreatedByDisplayName)
+                ? null
+                : sourceCreatedByDisplayName;
+            var sourceClosedByDisplayName = row.Text("closedByUsername");
+            var closedByDisplayName = string.IsNullOrEmpty(sourceClosedByDisplayName)
+                ? null
+                : sourceClosedByDisplayName;
             var expectedClaim = ResolveAdditionalCopyClaim(
                 connection,
                 transaction,
@@ -3168,7 +3183,7 @@ public static class MigrationImporter
                     staffIds,
                     "additional_copy_creator_reference_invalid",
                     "additional-copy creator staff")) &&
-                StringEquals(reader, 13, row.Text("createdByUsername")) &&
+                StringEquals(reader, 13, createdByDisplayName) &&
                 DateEquals(reader, 14, createdUtc) &&
                 DateEquals(reader, 15, row.UtcDateTime("updated") ?? createdUtc) &&
                 LongEquals(reader, 16, expectedClaim.StaffUserId) &&
@@ -3181,7 +3196,7 @@ public static class MigrationImporter
                     staffIds,
                     "additional_copy_closer_reference_invalid",
                     "additional-copy closer staff")) &&
-                 StringEquals(reader, 22, row.Text("closedByUsername")) &&
+                 StringEquals(reader, 22, closedByDisplayName) &&
                  DateEquals(reader, 23, row.UtcDateTime("closedAt")) &&
                  StringEquals(reader, 24, row.String("legacyId")),
                 "additional-copy request");

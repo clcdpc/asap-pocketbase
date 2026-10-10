@@ -663,6 +663,14 @@ internal static class MigrationIndependentEntityVerifier
             var notes = AdditionalCopyNotes(row, claim, exportedAtUtc);
             var created = row.UtcDateTime("created") ?? Fail<DateTime>("An additional-copy creation time is missing.");
             var updated = row.UtcDateTime("updated") ?? created;
+            var sourceCreatedByDisplayName = row.Text("createdByUsername");
+            var createdByDisplayName = string.IsNullOrEmpty(sourceCreatedByDisplayName)
+                ? null
+                : sourceCreatedByDisplayName;
+            var sourceClosedByDisplayName = row.Text("closedByUsername");
+            var closedByDisplayName = string.IsNullOrEmpty(sourceClosedByDisplayName)
+                ? null
+                : sourceClosedByDisplayName;
             using var command = new SqlCommand(
                 "SELECT [LegacyId], [SourceTitleRequestId], [LibraryOrganizationId], [LibraryNameSnapshot], [BibId], [Title], [Author], [Identifier], [Publication], [MaterialFormatId], [FormatSnapshot], [Status], [Notes], [CreatedByStaffUserId], [CreatedByDisplayName], [CreatedUtc], [UpdatedUtc], [ClaimedByStaffUserId], [ClaimedByDisplayName], [ClaimedAtUtc], [ClaimType], [ClaimRuleId], [ClosedByStaffUserId], [ClosedByDisplayName], [ClosedUtc] FROM [asap].[AdditionalCopyRequest] WHERE [Id] = @id;",
                 connection,
@@ -676,11 +684,11 @@ internal static class MigrationIndependentEntityVerifier
                 Same(reader, 8, row.Text("publication")) && NullableLong(reader, 9) == formatId &&
                 Same(reader, 10, row.Text("format")) && Same(reader, 11, status) && Same(reader, 12, notes) &&
                 NullableLong(reader, 13) == MapOptional(row.String("createdByStaff"), staffIds) &&
-                Same(reader, 14, row.Text("createdByUsername")) && Same(reader, 15, created) && Same(reader, 16, updated) &&
+                Same(reader, 14, createdByDisplayName) && Same(reader, 15, created) && Same(reader, 16, updated) &&
                 NullableLong(reader, 17) == claim.StaffUserId && Same(reader, 18, claim.DisplayName) &&
                 Same(reader, 19, claim.ClaimedAtUtc) && reader.IsDBNull(20) && reader.IsDBNull(21) &&
                 NullableLong(reader, 22) == MapOptional(row.String("closedByStaff"), staffIds) &&
-                Same(reader, 23, row.Text("closedByUsername")) && Same(reader, 24, row.UtcDateTime("closedAt")),
+                Same(reader, 23, closedByDisplayName) && Same(reader, 24, row.UtcDateTime("closedAt")),
                 "complete additional-copy history and claim transform");
         }
         Ensure(TargetIds(connection, transaction, "SELECT [Id] FROM [asap].[AdditionalCopyRequest];").SetEquals(expectedIds),

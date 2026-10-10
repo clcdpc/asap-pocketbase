@@ -5512,9 +5512,11 @@ public sealed partial class MigrationCliTests
             await using var command = connection.CreateCommand();
             command.CommandText =
                 """
-                SELECT [BibId], [Publication], [CreatedUtc], [UpdatedUtc], [ClosedUtc],
-                       [ClosedByStaffUserId], [ClosedByDisplayName], [ClaimType], [ClaimRuleId]
-                FROM [asap].[AdditionalCopyRequest];
+                SELECT copy.[BibId], copy.[Publication], copy.[CreatedUtc], copy.[UpdatedUtc], copy.[ClosedUtc],
+                       copy.[ClosedByStaffUserId], copy.[ClosedByDisplayName], copy.[ClaimType], copy.[ClaimRuleId]
+                FROM [asap].[LegacyPocketBaseMapping] mapping
+                JOIN [asap].[AdditionalCopyRequest] copy ON copy.[Id] = mapping.[NewId]
+                WHERE mapping.[EntityType] = N'additional_copy' AND mapping.[PocketBaseId] = N'copy-boundary';
                 """;
             await using var reader = await command.ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());

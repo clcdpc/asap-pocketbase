@@ -608,9 +608,15 @@ public sealed partial class PolarisPatronProvider(
         {
             throw;
         }
-        catch (Exception exception) when (IsExpectedProviderFailure(exception))
+        catch (Exception exception) when (
+            exception is Newtonsoft.Json.JsonException or System.Text.Json.JsonException)
         {
-            throw Operational("polaris_bib_validation_failed", exception);
+            throw Operational("polaris_bib_validation_protocol_failed", exception);
+        }
+        catch (Exception exception) when (
+            exception is HttpRequestException or TimeoutException or OperationCanceledException)
+        {
+            throw Operational("polaris_bib_validation_transport_failed", exception);
         }
     }
 
@@ -1006,10 +1012,22 @@ public sealed partial class PolarisPatronProvider(
         bool requireBarcodeAlias,
         CancellationToken cancellationToken)
     {
-        var response = await client.CallAsync(() => client.PatronBasicDataGetAsync(
-            barcode,
-            pin,
-            cancellationToken: cancellationToken), cancellationToken);
+        IRestResponse<PatronBasicDataGetResult> response;
+        try
+        {
+            response = await client.CallAsync(() => client.PatronBasicDataGetAsync(
+                barcode,
+                pin,
+                cancellationToken: cancellationToken), cancellationToken);
+        }
+        catch (Newtonsoft.Json.JsonException exception)
+        {
+            throw Operational("polaris_patron_protocol_failed", exception);
+        }
+        catch (System.Text.Json.JsonException exception)
+        {
+            throw Operational("polaris_patron_protocol_failed", exception);
+        }
         var rawContent = response.Response?.Content ?? string.Empty;
         var result = response.Data;
         var patron = result?.PatronBasicData;

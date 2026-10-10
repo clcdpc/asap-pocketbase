@@ -224,6 +224,8 @@ Clearing removes the effective StaffUser FK, display-name snapshot, claim time, 
 
 For closed TitleRequests/AdditionalCopyRequests, keep historical claimant fields and a mapped StaffUser FK even if the user is now inactive/out-of-scope. If unmapped, retain the display/time/type attribution with null FK and report the historical mapping conversion; do not pretend it is an operational claim. Closed records are not reopened or otherwise normalized as open work during import. Runtime AdditionalCopy reopening later applies section 20.1 of the porting spec.
 
+AdditionalCopy creator and closer display-name snapshots are optional attribution: source `null` or `""` maps to SQL `NULL`, while every nonempty source string is preserved exactly, including whitespace. Reopened copies retain no closer staff ID, display name, or timestamp; do not infer an actor from the snapshot.
+
 Reconciliation must join every non-null open claimant to the current target StaffUser and prove activity, valid identity/trust, and role/library scope (same library or system super-admin), **not just FK existence**. Report exact converted/preserved counts by request type, library, and reason, separately from closed-history conversions and invalid-rule normalization. All unchanged historical fields and deliberate cleared fields must match the transform report.
 
 ### 6.4 Events
