@@ -106,7 +106,9 @@ export function populatePublicationOptions(options) {
   const select = byId('publication');
   if (!select) return;
   const currentValue = select.value;
-  const optionNodes = publicationOptions.map(option => optionNode(option, option));
+  const optionNodes = publicationOptions.length > 0
+    ? [optionNode('', 'Select publication timing...'), ...publicationOptions.map(option => optionNode(option, option))]
+    : [];
   replaceChildren(select, ...optionNodes);
   if (publicationOptions.includes(currentValue)) {
     select.value = currentValue;

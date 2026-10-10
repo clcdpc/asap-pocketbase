@@ -189,7 +189,7 @@ function aLibraryUiText() {
     assert.deepStrictEqual(Array.from(document.getElementById('format').options).map(option => option.value), ['library_a_format', 'ebook']);
     assert.strictEqual(document.getElementById('format').options[0].textContent, 'A Special Format');
     assert.deepStrictEqual(Array.from(document.querySelectorAll('.custom-field-row')).map(row => row.dataset.customFieldKey), ['a_subject']);
-    assert.deepStrictEqual(Array.from(document.getElementById('publication').options).map(option => option.value), ['A publication']);
+    assert.deepStrictEqual(Array.from(document.getElementById('publication').options).map(option => option.value), ['', 'A publication']);
     await auth.logout();
 
     loginResponseOverride = session('B20000000000912', 'token-B20000000000912', {
@@ -204,7 +204,7 @@ function aLibraryUiText() {
       'library B empty formats replace library A options');
     assert.deepStrictEqual(Array.from(document.querySelectorAll('.custom-field-row')), [],
       'library B empty custom fields remove library A fields');
-    assert.deepStrictEqual(Array.from(document.getElementById('publication').options).map(option => option.value), ['B publication']);
+    assert.deepStrictEqual(Array.from(document.getElementById('publication').options).map(option => option.value), ['', 'B publication']);
     const libraryBSuggestionCount = suggestionRequests;
     await submit.handleSuggestionSubmit({ preventDefault() {} });
     assert.strictEqual(suggestionRequests, libraryBSuggestionCount,

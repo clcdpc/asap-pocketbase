@@ -1,4 +1,4 @@
-import { suggestionForm, authToken, setSubmitOutcomeUnknown, submitOutcomeUnknown } from './state.js';
+import { suggestionForm, authToken, setSubmitOutcomeUnknown, submitOutcomeUnknown, submitInProgress, setSubmitInProgress } from './state.js';
 import { submitSuggestion } from './api.js';
 import { applySuccessConfig, defaultUiText, uiConfig } from './config.js';
 import { renderConflictMessage, renderSuccessMessage } from './form-ui.js';
@@ -9,9 +9,11 @@ import { captureAuthOperation, handleSessionExpired, isCurrentAuthContext } from
 import { collectCustomFieldValues } from './custom-fields.js';
 
 export function setSubmitBusy(isBusy) {
+  setSubmitInProgress(isBusy);
   const btn = byId('submit-btn');
   if (!btn) return;
-  btn.disabled = Boolean(isBusy || submitOutcomeUnknown);
+  const pickup = byId('preferred-pickup-branch');
+  btn.disabled = Boolean(isBusy || submitOutcomeUnknown || pickup && !pickup.value);
   btn.textContent = isBusy ? 'Submitting...' : submitOutcomeUnknown ? 'Submission status unknown' : 'Submit';
 }
 
@@ -55,7 +57,7 @@ export function renderConflict(result, fallbackMessage) {
 
 export async function handleSuggestionSubmit(event) {
   event.preventDefault();
-  if (submitOutcomeUnknown) return;
+  if (submitInProgress || submitOutcomeUnknown) return;
   const pickupSelect = byId('preferred-pickup-branch');
   if (pickupSelect && !pickupSelect.value) {
     showSubmitError('Choose a preferred pickup location before submitting.');

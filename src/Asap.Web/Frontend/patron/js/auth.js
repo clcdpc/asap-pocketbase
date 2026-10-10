@@ -1,6 +1,6 @@
 import { loginForm, suggestionForm } from './state.js';
 import { loginPatron, logoutPatron, restorePatronSession, SessionExpiredError } from './api.js';
-import { authToken, setAuthToken, setSubmitOutcomeUnknown } from './state.js';
+import { authToken, setAuthToken, setSubmitOutcomeUnknown, submitOutcomeUnknown, submitInProgress, setSubmitInProgress } from './state.js';
 import { applyLoadedUiText, uiConfig } from './config.js';
 import { applyUiConfig, updateFormatUI } from './form-ui.js';
 import { showLoginStep, showSuggestionStep } from './steps.js';
@@ -113,13 +113,13 @@ function populatePickupSelector(result) {
     warning.classList.toggle('hidden', !message);
   }
   if (submitBtn) {
-    submitBtn.disabled = !hasValidSelection || branches.length === 0;
+    submitBtn.disabled = submitInProgress || submitOutcomeUnknown || !hasValidSelection || branches.length === 0;
   }
 
   if (!select.dataset.pickupBound) {
     select.addEventListener('change', () => {
       const ok = !!select.value;
-      if (submitBtn) submitBtn.disabled = !ok;
+      if (submitBtn) submitBtn.disabled = submitInProgress || submitOutcomeUnknown || !ok;
     });
     select.dataset.pickupBound = 'true';
   }
@@ -171,6 +171,7 @@ export async function logout() {
 function clearPatronState() {
   setAuthToken('');
   setSubmitOutcomeUnknown(false);
+  setSubmitInProgress(false);
   const submitButton = byId('submit-btn');
   if (submitButton) {
     submitButton.disabled = false;

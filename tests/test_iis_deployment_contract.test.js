@@ -58,7 +58,7 @@ const nonBrowserIncludes = nonBrowserFilterTerms
   .map((term) => term.slice('FullyQualifiedName~'.length));
 const browserJourneys = [...browserRunner.matchAll(/'FullyQualifiedName~([^']+)'/g)]
   .map((match) => match[1]);
-assert.equal(browserJourneys.length, 7, 'the browser partition must contain all seven current discovered browser journeys');
+assert.equal(browserJourneys.length, 8, 'the browser partition must contain all eight current discovered browser journeys');
 assert.equal(nonBrowserIncludes.length, 0, 'the non-browser partition should include all discovered tests except explicit browser exclusions');
 assert.equal(new Set(browserJourneys).size, browserJourneys.length, 'the browser partition must not list a journey twice');
 assert.deepStrictEqual(
@@ -75,8 +75,8 @@ assert.ok(
   nonBrowserIncludes.every((name) => !browserJourneys.includes(name)),
   'the browser and non-browser partitions must be disjoint'
 );
-assert.match(browserRunner, /'--minimum-expected-tests',\s*'7'/,
-  'the browser runner must guard all seven discovered browser journeys');
+assert.match(browserRunner, /'--minimum-expected-tests',\s*'8'/,
+  'the browser runner must guard all eight discovered browser journeys');
 assert.ok(workflow.includes('run: npm test'), 'the frontend test gate must remain');
 assert.ok(workflow.includes('dotnet publish src/Asap.Web/Asap.Web.csproj'), 'Web publish must remain a hosted check');
 assert.ok(workflow.includes('dotnet publish src/Asap.Migration/Asap.Migration.csproj'), 'native migration publish check must remain');

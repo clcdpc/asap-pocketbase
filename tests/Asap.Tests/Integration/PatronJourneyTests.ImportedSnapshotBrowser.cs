@@ -110,6 +110,17 @@ public sealed partial class PatronJourneyTests
             INSERT INTO [format_claim_rules] VALUES
                 ({{quoteSql(importedAutoClaimRuleSourceId)}}, '2', {{quoteSql(importedLibraryFormatCode)}},
                  'pb-staff-imported-local', 1, '{{sourceCreated}}', '{{sourceCreated}}');
+            CREATE TABLE [ui_settings] ([id] TEXT PRIMARY KEY, [scope] TEXT, [publicationOptions] TEXT);
+            INSERT INTO [ui_settings] VALUES ('ui-system', 'system', '["Coming soon","System-only publication"]');
+            CREATE TABLE [workflow_settings]
+            (
+                [id] TEXT PRIMARY KEY, [scope] TEXT, [libraryOrganization] TEXT,
+                [suggestionLimit] INTEGER, [outstandingTimeoutDays] INTEGER, [holdPickupTimeoutDays] INTEGER,
+                [pendingHoldTimeoutDays] INTEGER, [additionalCopyTimeoutDays] INTEGER, [allowPatronAutoholdOptOut] INTEGER
+            );
+            INSERT INTO [workflow_settings] VALUES
+                ('workflow-system', 'system', NULL, 9, 0, 0, 0, 0, 0),
+                ('workflow-library', 'library', 'pb-org-2', 0, 0, 0, 0, 0, 1);
             CREATE TABLE [patron_settings_overrides]
             (
                 [id] TEXT NOT NULL PRIMARY KEY, [orgId] TEXT NOT NULL,
@@ -118,7 +129,7 @@ public sealed partial class PatronJourneyTests
                 [created] TEXT, [updated] TEXT
             );
             INSERT INTO [patron_settings_overrides] VALUES
-                ('patron-override-2', '2', NULL, NULL, {{quoteSql(rulesJson)}}, {{quoteSql(fieldsJson)}},
+                ('patron-override-2', '2', NULL, '["Coming soon","Imported local publication"]', {{quoteSql(rulesJson)}}, {{quoteSql(fieldsJson)}},
                  NULL, NULL, '{{sourceCreated}}', '{{sourceCreated}}');
             CREATE TABLE [title_requests]
             (
@@ -135,6 +146,32 @@ public sealed partial class PatronJourneyTests
                 ('imported-request-without-history', '2', 'fmt-book', 'A20000000001002', NULL, 'Grace', 'Reader',
                  'Imported request without retired value', 'G. Writer', '9780000000102', 'Coming soon', 1, 'suggestion',
                  {{quoteSql("{}")}}, '{{sourceCreated}}', '{{sourceCreated}}');
+            ALTER TABLE [title_requests] ADD [bibid] TEXT;
+            ALTER TABLE [title_requests] ADD [closeReason] TEXT;
+            INSERT INTO [title_requests]
+                ([id], [libraryOrgId], [formatRef], [barcode], [title], [author], [publication],
+                 [autohold], [status], [bibid], [closeReason], [customFields], [created], [updated])
+            VALUES ('imported-held-history', '2', 'fmt-book', 'A20000000001003', 'Imported protected history',
+                    'Historical Author', 'Coming soon', 0, 'closed', '9001', 'manual', '{}', '{{sourceCreated}}', '{{sourceCreated}}');
+            CREATE TABLE [title_request_events]
+            (
+                [id] TEXT PRIMARY KEY, [titleRequest] TEXT, [eventType] TEXT, [fromStatus] TEXT,
+                [toStatus] TEXT, [closeReason] TEXT, [actorType] TEXT, [actorName] TEXT,
+                [message] TEXT, [metadata] TEXT, [created] TEXT
+            );
+            INSERT INTO [title_request_events] VALUES
+                ('imported-held-event', 'imported-held-history', 'hold_placed', NULL, NULL, NULL,
+                 'system', NULL, 'Historical placement', '{"bibId":"9001"}', '{{sourceCreated}}');
+            CREATE TABLE [additional_copy_requests]
+            (
+                [id] TEXT PRIMARY KEY, [sourceTitleRequest] TEXT, [libraryOrgId] TEXT, [libraryOrgName] TEXT,
+                [bibid] TEXT, [title] TEXT, [author] TEXT, [format] TEXT, [publication] TEXT,
+                [status] TEXT, [created] TEXT, [updated] TEXT
+            );
+            INSERT INTO [additional_copy_requests] VALUES
+                ('imported-copy', 'imported-held-history', '2', 'Frozen imported library', '9001',
+                 'Frozen imported copy', 'Historical Copy Author', 'book', 'Coming soon',
+                 'open', '{{sourceCreated}}', '{{sourceCreated}}');
             """;
         Directory.CreateDirectory(root);
 
@@ -162,7 +199,7 @@ public sealed partial class PatronJourneyTests
             using (var importReport = JsonDocument.Parse(await File.ReadAllTextAsync(importReportPath)))
             {
                 Assert.IsTrue(importReport.RootElement.GetProperty("reconciliationPassed").GetBoolean());
-                Assert.AreEqual(2, importReport.RootElement.GetProperty("importedCounts").GetProperty("title_requests").GetInt32());
+                Assert.AreEqual(3, importReport.RootElement.GetProperty("importedCounts").GetProperty("title_requests").GetInt32());
             }
 
             var importedSettings = TestConfigurationFactory.Create(allowedDomains: ["example.org"]);
@@ -273,6 +310,8 @@ public sealed partial class PatronJourneyTests
             }
 
             var tenantId = Guid.Parse(importedSettings.Authentication.Entra.InitialSuperAdmin.TenantId!);
+            await VerifyImportedFunctionalRuntimeAsync(importedFactory, contextFactory, target, actorId,
+                tenantId, actorEmail, fieldKey, retiredSelectKey, importedLibraryFormatId, importedAutoClaimRuleId);
             using (var apiClient = importedFactory.CreateClient())
             {
                 AddTestingStaffHeaders(apiClient, actorId, tenantId, actorEmail);
@@ -343,12 +382,9 @@ public sealed partial class PatronJourneyTests
             resetClient.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(resetClient));
             await using (var seedOverrides = await contextFactory.CreateDbContextAsync())
             {
-                seedOverrides.WorkflowSettings.Add(new WorkflowSettings
-                {
-                    OrganizationId = 2,
-                    SuggestionLimitMessage = "Temporary imported browser override",
-                    UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
-                });
+                var workflow = await seedOverrides.WorkflowSettings.SingleAsync(item => item.OrganizationId == 2);
+                workflow.SuggestionLimitMessage = "Temporary imported browser override";
+                workflow.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
                 seedOverrides.MaterialFormatOverrides.Add(new MaterialFormatOverride
                 {
                     LibraryOrganizationId = 2,

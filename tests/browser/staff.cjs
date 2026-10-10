@@ -3689,6 +3689,69 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
   } finally { await context.close(); }
 }
 
+async function runRejectionNotificationAndReopen(browser, args, axeSource, report) {
+  const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
+  const pathname = `/api/asap/staff/title-requests/${args.staleTitleBId}/action`;
+  const detailURL = `${args.baseOrigin}/api/asap/staff/title-requests/${args.staleTitleBId}`;
+  try {
+    await page.goto(`${args.baseOrigin}/staff/?request=${args.staleTitleBId}`, { waitUntil: 'networkidle' });
+    await page.locator('#request-dialog[open]').waitFor();
+    const before = await (await context.request.get(detailURL)).json();
+    async function chooseRejection() {
+      await page.getByRole('button', { name: 'Reject', exact: true }).click();
+      await page.getByLabel('Rejection template', { exact: true }).selectOption({ label: 'Browser acceptance rejection' });
+      await page.locator('.action-choice button[type="submit"]:not([disabled])').waitFor();
+    }
+    async function action(button, status) {
+      const responsePromise = page.waitForResponse(response => response.request().method() === 'POST' &&
+        new URL(response.url()).pathname === pathname);
+      page.once('dialog', dialog => dialog.accept());
+      await button.click();
+      const response = await responsePromise;
+      const body = await response.json();
+      assert.equal(response.status(), status, JSON.stringify(body));
+      return body;
+    }
+    await chooseRejection();
+    const edited = await mutate(context, args.baseOrigin, pathname,
+      { action: 'edit', version: before.version, notes: 'Concurrent staff note' });
+    assert.equal(edited.status(), 200, await edited.text());
+    const concurrentWinner = await (await context.request.get(detailURL)).json();
+    const stale = await action(page.locator('.action-choice button[type="submit"]'), 409);
+    assert.equal(stale.code, 'stale_version');
+    await page.locator('#app-status').filter({ hasText: /changed|stale|reload|review/i }).waitFor();
+    assert.deepEqual(await (await context.request.get(detailURL)).json(), concurrentWinner,
+      'A stale rejection must preserve the current version, notes, history and capabilities.');
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'rejection-stale-version');
+    await chooseRejection();
+    const accepted = await action(page.locator('.action-choice button[type="submit"]'), 200);
+    assert.equal(accepted.committed, true);
+    assert.equal(accepted.notificationStatus, 'queued');
+    await page.locator('#request-dialog .status-badge').filter({ hasText: 'Closed' }).waitFor();
+    await page.locator('#app-status').filter({ hasText: /Rejection email queued; delivery is pending/ }).waitFor();
+    assert.match(await page.locator('.request-activity').textContent(), /Selected rejection template: Browser acceptance rejection/);
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'rejection-queued');
+    await action(page.getByRole('button', { name: 'Reopen', exact: true }), 200);
+    await page.locator('#request-dialog .status-badge').filter({ hasText: 'Suggestion' }).waitFor();
+    const reopened = await (await context.request.get(detailURL)).json();
+    assert.equal(reopened.claimedByStaffUserId, args.superIdentity.staffId);
+    assert.equal(reopened.claimType, 'manual');
+    assert.equal(reopened.claimRuleId, null);
+    await action(page.getByRole('button', { name: 'Close silently', exact: true }), 200);
+    await page.locator('#request-dialog .status-badge').filter({ hasText: 'Closed' }).waitFor();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'rejection-reopen-silent-close');
+    report.rejectionNotificationAndReopen = true;
+    assert.deepEqual(pageErrors, []);
+    assert.equal(traffic.externalRequests, 0);
+  } finally {
+    await context.close();
+  }
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
   await fs.mkdir(args.artifactRoot, { recursive: true });
@@ -3716,7 +3779,8 @@ async function main() {
     await runCurrentStaffPreferenceRevisions(browser, args, axeSource, report);
     await runSettingsLayout(browser, args, axeSource, report);
     await runOperationalCatalogCommits(browser, args, axeSource, report);
-    assert.equal(report.states.length, 58, 'Expected fifty-eight major staff browser states');
+    await runRejectionNotificationAndReopen(browser, args, axeSource, report);
+    assert.equal(report.states.length, 61, 'Expected sixty-one major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),

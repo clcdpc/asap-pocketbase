@@ -1,17 +1,38 @@
 # Browser acceptance suite
 
 `npm run test:browser` is the full browser-suite entry point. It selects the
-three existing real-SQL integration journeys and runs them through the same
+eight real-SQL integration cases and runs them through the same
 Testing Kestrel fixtures used by the .NET test suite:
 
 - `patron.cjs`: 10 desktop/mobile patron states and 3 authentication/session
   race scenarios.
-- `staff.cjs`: 54 desktop/mobile staff states covering scope, recovery,
+- `staff.cjs`: 61 desktop/mobile staff states covering scope, recovery,
   queue, analytics, assignment, stale mutations, draft guards, route/history
   round trips, repeated Operations actions, keyboard workflows, current-actor
-  revisions and operational catalog retirement/reactivation after Settings commits.
+  revisions, operational catalog retirement/reactivation after Settings commits,
+  and stale rejection, queued notification, reopen and silent close.
 - `legacy-links.cjs`: 18 desktop/mobile success and failure states covering
   shared, numeric, and type-qualified request links.
+- `patron-submit-session.cjs`: controlled frontend response/session races.
+  These simulate suggestion replies; they do not prove a server commit.
+- `staff-request-contracts.cjs`: real request
+  editing and imported historical snapshots. The owning fixture exports,
+  imports and reconciles before starting the app. It also checks imported
+  effective configuration, staff authority, protected holds, additional-copy
+  links and new submission/automatic claiming through HTTP and SQL.
+- `settings.cjs`: real Settings
+  GET/editor POST/reload, ownership, override metadata and lossless identity.
+- `functional-acceptance.cjs`: real Settings editor to patron form to SQL,
+  required/hidden/optional fields, stale Settings writes, validation failures,
+  one pickup write, committed response loss, patron switching, a current
+  configuration change at a server barrier, weekly limit, revoked session,
+  recovery and captured outbox delivery. Responses are forwarded from the
+  actual server before being delayed or lost; pre-dispatch failure aborts
+  the request. No fabricated JSON replaces an endpoint in this runner.
+
+The eight selected cases are named explicitly in `run.cjs`; several own more
+than one Node runner. Other .NET cases also contain embedded browser checks.
+Counts refer to discovered .NET cases, not scanned states or assertions.
 
 Each integration journey provisions its isolated SQL fixture, starts the Testing app with
 deterministic providers, and tears down the host and browser in test cleanup.

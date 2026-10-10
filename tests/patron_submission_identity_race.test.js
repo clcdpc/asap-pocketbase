@@ -26,7 +26,9 @@ function response(status, body, parseError = null) {
 }
 
 function loginBody(barcode, token) {
-  return patronSession(barcode, token);
+  const result = patronSession(barcode, token);
+  result.pickupBranches.push({ id: 102, label: 'North branch' });
+  return result;
 }
 
 async function until(predicate, message) {
@@ -52,6 +54,28 @@ async function until(predicate, message) {
 
     const auth = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'auth.js')));
     const submit = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'submit.js')));
+    const custom = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'custom-fields.js')));
+    const rules = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'form-rules.js')));
+    const formUi = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'form-ui.js')));
+    custom.renderCustomFields([{ key: 'optional_choice', type: 'select', label: 'Audience', enabled: true,
+      options: [{ id: 'adult', label: 'Adult', enabled: true }, { id: 'child', label: 'Child', enabled: true },
+        { id: 'retired', label: 'Retired', enabled: false }] }], { optional_choice: { mode: 'optional' } });
+    const optionalChoice = document.getElementById('custom-field-optional_choice');
+    assert.equal(optionalChoice.value, '', 'An optional select must not submit an unsolicited first option');
+    optionalChoice.value = 'child';
+    optionalChoice.value = '';
+    assert.equal(custom.collectCustomFieldValues().optional_choice, '', 'An optional select can be explicitly cleared');
+    assert.equal([...optionalChoice.options].some(option => option.value === 'retired'), false);
+    const normalized = rules.normalizeFormatRule('book', { customFields: {
+      optional_choice: { mode: 'optional', label: 'Format-specific audience' } } }, null, null, []);
+    assert.equal(normalized.customFields.optional_choice.label, 'Format-specific audience',
+      'The configured format label must reach the patron control');
+    formUi.populatePublicationOptions(['First publication', 'Second publication']);
+    const publicationChoice = document.getElementById('publication');
+    assert.equal(publicationChoice.value, '', 'Publication may remain unselected');
+    publicationChoice.value = 'Second publication';
+    publicationChoice.value = '';
+    assert.ok([...publicationChoice.options].some(option => option.value === ''), 'Publication may be cleared through the UI');
     let pendingSubmission = null;
     let submissionCount = 0;
     global.fetch = async (url, options = {}) => {
@@ -97,6 +121,26 @@ async function until(predicate, message) {
       };
     }
 
+    await login('20000000000901');
+    fillDraft('20000000000901');
+    const pendingOnce = submit.handleSuggestionSubmit({ preventDefault() {} });
+    await until(() => pendingSubmission !== null, 'The pending submission control did not start');
+    const pickup = document.getElementById('preferred-pickup-branch');
+    pickup.value = '102';
+    pickup.dispatchEvent(new Event('change', { bubbles: true }));
+    assert.equal(document.getElementById('submit-btn').disabled, true,
+      'Changing pickup must not unlock an in-flight submission');
+    const countBeforeRepeat = submissionCount;
+    const repeatedPending = submit.handleSuggestionSubmit({ preventDefault() {} });
+    await new Promise(setImmediate);
+    assert.equal(submissionCount, countBeforeRepeat, 'The handler must reject repeated submit events while pending');
+    await repeatedPending;
+    const firstRequest = pendingSubmission;
+    pendingSubmission = null;
+    firstRequest.resolve(response(201, { id: '9007199254740993', successTitle: 'Saved once', successMessage: 'Saved once' }));
+    await pendingOnce;
+    assert.equal(document.getElementById('step-success').classList.contains('hidden'), false);
+    await auth.logout();
     await login('20000000000901');
     for (const scenario of [
       { name: '201', response: response(201, { id: '9007199254740993', successTitle: 'A', successMessage: 'A' }) },
@@ -211,12 +255,19 @@ async function until(predicate, message) {
         `${scenario.name} must not render a confirmed submission.`);
       assert.equal(document.getElementById('submit-btn').disabled, true,
         `${scenario.name} may have committed and must block an automatic second POST.`);
+      const pickup = document.getElementById('preferred-pickup-branch');
+      pickup.value = '102';
+      pickup.dispatchEvent(new Event('change', { bubbles: true }));
+      assert.equal(document.getElementById('submit-btn').disabled, true,
+        `${scenario.name}: pickup changes must preserve the unknown-outcome lock`);
       assert.match(document.getElementById('submit-error').textContent, /Please do not submit again/,
         `${scenario.name} must explain that the outcome is unconfirmed.`);
       const requestsBeforeRepeat = submissionCount;
-      await submit.handleSuggestionSubmit({ preventDefault() {} });
+      const repeatedUnknown = submit.handleSuggestionSubmit({ preventDefault() {} });
+      await new Promise(setImmediate);
       assert.equal(submissionCount, requestsBeforeRepeat,
         `${scenario.name}: unknown committed outcomes cannot trigger a duplicate POST`);
+      await repeatedUnknown;
       if (index < malformedSuccesses.length - 1) {
         await auth.logout();
         await login('20000000000901');

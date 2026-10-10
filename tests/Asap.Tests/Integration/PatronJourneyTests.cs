@@ -412,6 +412,14 @@ public sealed partial class PatronJourneyTests
             Guid.Parse(identity.TenantId!),
             Guid.Parse(identity.ObjectId!),
             staffObjectId);
+        await ExecuteNonQueryAsync("""
+            UPDATE [asap].[TitleRequest] SET [PatronIdSnapshot] = 9912, [Email] = N'old-recipient@example.org'
+            WHERE [Id] = @requestId;
+            INSERT INTO [asap].[EmailTemplate]
+                ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+            VALUES (2, N'rejection:browser_acceptance', N'Browser acceptance rejection',
+                    N'Browser rejected: {{title}}', N'Hello {{firstName}}, we declined {{title}}.', 0, 1, 997);
+            """, ("@requestId", seeded.StaleTitleBId));
         await using (var linkContext = await contextFactory.CreateDbContextAsync())
         {
             var systemLinks = await linkContext.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
@@ -517,7 +525,8 @@ public sealed partial class PatronJourneyTests
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(58, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(61, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.IsTrue(report.RootElement.GetProperty("rejectionNotificationAndReopen").GetBoolean());
             var analytics = report.RootElement.GetProperty("analytics");
             Assert.AreEqual("all", analytics.GetProperty("desktopSuperAdminScope").GetString());
             Assert.AreEqual("last90", analytics.GetProperty("desktopRange").GetString());
@@ -686,9 +695,54 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(1, copyState.GetInt32(4));
         Assert.AreEqual(1, copyState.GetInt32(5));
         Assert.AreEqual(0, copyState.GetInt32(6));
+        await copyState.CloseAsync();
+        await using (var accepted = await contextFactory.CreateDbContextAsync())
+        {
+            var rejectedRequest = await accepted.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == seeded.StaleTitleBId);
+            Assert.AreEqual("closed", rejectedRequest.Status);
+            Assert.AreEqual("Silently Closed", rejectedRequest.CloseReason);
+            Assert.AreEqual(seeded.SuperId, rejectedRequest.ClaimedByStaffUserId);
+            Assert.AreEqual("manual", rejectedRequest.ClaimType);
+            Assert.IsNull(rejectedRequest.ClaimRuleId);
+            Assert.AreEqual("Concurrent staff note", rejectedRequest.Notes);
+            var events = await accepted.TitleRequestEvents.AsNoTracking()
+                .Where(item => item.TitleRequestId == seeded.StaleTitleBId).ToArrayAsync();
+            Assert.AreEqual(1, events.Count(item => item.EventType == "rejection_template_selected"));
+            foreach (var action in new[] { "reject", "reopen", "silentClose" })
+            {
+                Assert.AreEqual(1, events.Count(item => item.EventType == "status_changed" &&
+                    HasAction(item.MetadataJson!, action)));
+            }
+            static bool HasAction(string metadata, string action)
+            {
+                using var document = JsonDocument.Parse(metadata);
+                return document.RootElement.GetProperty("action").GetString() == action;
+            }
+            var rejection = await accepted.EmailOutbox.AsNoTracking().SingleAsync(item =>
+                item.BusinessKey != null && item.BusinessKey.StartsWith($"rejection:{seeded.StaleTitleBId}:"));
+            Assert.AreEqual("20000000002912@example.org", rejection.ToAddress,
+                "The current, verified native patron owns the notification rather than the historical recipient.");
+            Assert.AreEqual("Browser rejected: Stale title assignment B", rejection.Subject);
+            Assert.AreEqual("Hello Test, we declined Stale title assignment B.", rejection.BodyText);
+            Assert.AreEqual("pending", rejection.Status);
+            Assert.AreEqual("business_event", rejection.DeliveryClass);
+            Assert.AreEqual("asap@example.org", rejection.FromAddress);
+            var sender = (RecordingEmailSender)factory.Services.GetRequiredService<IEmailSender>();
+            var jobs = factory.Services.GetRequiredService<EmailOutboxJobs>();
+            await jobs.DeliverAsync(rejection.Id, CancellationToken.None);
+            await jobs.DeliverAsync(rejection.Id, CancellationToken.None);
+            var envelope = sender.Envelopes.Single(item => item.OutboxId == rejection.Id);
+            Assert.AreEqual(rejection.ToAddress, envelope.ToAddress);
+            Assert.AreEqual(rejection.FromAddress, envelope.FromAddress);
+            Assert.AreEqual(rejection.Subject, envelope.Subject);
+            Assert.AreEqual(rejection.BodyText, envelope.BodyText);
+            Assert.AreEqual(1, await accepted.EmailOutbox.AsNoTracking().CountAsync(item =>
+                item.Id == rejection.Id && item.Status == "sent" && item.ProviderMessageId == "test-message"));
+        }
         }
         finally
         {
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 2 AND [TemplateKey] = N'rejection:browser_acceptance';");
             await using var restore = await contextFactory.CreateDbContextAsync();
             var settings = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
             settings.LeapBibUrlPattern = originalSettings.LeapBibUrlPattern;

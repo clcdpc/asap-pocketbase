@@ -97,14 +97,14 @@ function uiText(prefix, overrides = {}) {
     assert.strictEqual(document.title, 'New Material Suggestion');
     assert.deepStrictEqual(
       Array.from(document.getElementById('publication').options).map(option => option.value),
-      ['New publication']);
+      ['', 'New publication']);
 
     releaseInitialConfig();
     await initialization;
     assert.strictEqual(document.title, 'New Material Suggestion', 'late initial config must not replace the authenticated library config');
     assert.deepStrictEqual(
       Array.from(document.getElementById('publication').options).map(option => option.value),
-      ['New publication']);
+      ['', 'New publication']);
 
     document.getElementById('format').value = 'book';
     document.getElementById('title').value = 'New title';
