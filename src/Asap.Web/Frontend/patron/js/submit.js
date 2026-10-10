@@ -1,18 +1,20 @@
-import { suggestionForm } from './state.js';
+import { suggestionForm, authToken, setSubmitOutcomeUnknown, submitOutcomeUnknown, submitInProgress, setSubmitInProgress } from './state.js';
 import { submitSuggestion } from './api.js';
 import { applySuccessConfig, defaultUiText, uiConfig } from './config.js';
 import { renderConflictMessage, renderSuccessMessage } from './form-ui.js';
 import { showConflictStep, showSuccessStep } from './steps.js';
 import { byId, setText, setVisible } from './dom.js';
 import { escapeHtml, sanitizeHtml, applyPatronTextPlaceholders } from './html.js';
-import { handleSessionExpired } from './auth.js';
+import { captureAuthOperation, handleSessionExpired, isCurrentAuthContext } from './auth.js';
 import { collectCustomFieldValues } from './custom-fields.js';
 
 export function setSubmitBusy(isBusy) {
+  setSubmitInProgress(isBusy);
   const btn = byId('submit-btn');
   if (!btn) return;
-  btn.disabled = Boolean(isBusy);
-  btn.textContent = isBusy ? 'Submitting...' : 'Submit';
+  const pickup = byId('preferred-pickup-branch');
+  btn.disabled = Boolean(isBusy || submitOutcomeUnknown || pickup && !pickup.value);
+  btn.textContent = isBusy ? 'Submitting...' : submitOutcomeUnknown ? 'Submission status unknown' : 'Submit';
 }
 
 export function showSubmitError(message) {
@@ -55,20 +57,42 @@ export function renderConflict(result, fallbackMessage) {
 
 export async function handleSuggestionSubmit(event) {
   event.preventDefault();
+  if (submitInProgress || submitOutcomeUnknown) return;
   const pickupSelect = byId('preferred-pickup-branch');
   if (pickupSelect && !pickupSelect.value) {
     showSubmitError('Choose a preferred pickup location before submitting.');
     return;
   }
+  const formatSelect = byId('format');
+  const availableFormats = Array.isArray(uiConfig.availableFormats)
+    ? uiConfig.availableFormats
+    : Array.from(formatSelect?.options || []).map(option => option.value);
+  const selectedFormat = formatSelect?.value || '';
+  if (!selectedFormat || !availableFormats.includes(selectedFormat)) {
+    showSubmitError(availableFormats.length === 0
+      ? 'No suggestion formats are currently available. Please contact your library.'
+      : 'Choose an available material format before submitting.');
+    return;
+  }
+  const operation = captureAuthOperation();
+  const token = authToken;
   setSubmitBusy(true);
   setVisible('submit-error', false);
 
   try {
-    renderSuccess(await submitSuggestion(collectSuggestionPayload()));
+    const result = await submitSuggestion(collectSuggestionPayload());
+    if (!isCurrentAuthContext(operation, token)) return;
+    renderSuccess(result);
   } catch (err) {
+    if (!isCurrentAuthContext(operation, token)) return;
+    if (err.outcomeUnknown) {
+      setSubmitOutcomeUnknown(true);
+      showSubmitError('We could not confirm whether your suggestion was saved. Please do not submit again; contact your library for help.');
+      return;
+    }
     if (handleSessionExpired(err)) return;
 
-    if (err.status === 409) {
+    if (err.status === 409 && err.response?.duplicate?.id) {
       renderConflict(err.response || {}, err.message);
       return;
     }
@@ -79,7 +103,7 @@ export async function handleSuggestionSubmit(event) {
       showSubmitError(err.message || 'Error. Please try again');
     }
   } finally {
-    setSubmitBusy(false);
+    if (isCurrentAuthContext(operation, token)) setSubmitBusy(false);
   }
 }
 

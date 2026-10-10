@@ -297,10 +297,15 @@ public sealed partial class AdministrationService
         {
             context.EmailSettings.Add(email);
         }
-        await ApplyWholeSetsAsync(context, organizationId, workflowSection, patronSection, cancellationToken);
+        await ApplyWholeSetsAsync(context, organizationId, payload, workflowSection, patronSection, cancellationToken);
         await ApplyProvidersAsync(context, organizationId, workflowSection, payload, cancellationToken);
         await ApplyFormatsAsync(context, organizationId, payload, patronSection, cancellationToken);
         await ApplyCustomFieldsAsync(context, organizationId, patronSection, payload, cancellationToken);
+        await context.SaveChangesAsync(cancellationToken);
+        if (HasEffectiveFormatOrCustomFieldEdits(payload, patronSection))
+        {
+            await ValidateEffectiveRequiredSelectRulesAsync(context, organizationId, cancellationToken);
+        }
         await ApplyAutoClaimRulesAsync(context, organizationId, payload, cancellationToken);
         await ApplyTemplatesAsync(context, organizationId, payload, cancellationToken);
         await ValidateRejectionTemplateReferencesAsync(context, organizationId, cancellationToken);

@@ -1,16 +1,17 @@
 using System.Net.Mail;
+using System.Text.Json.Serialization;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace Asap.Web.Features.Staff;
 
 public sealed record StaffProfileInput(
-    string? Version,
-    bool WeeklyActionSummaryEnabled,
-    string? WeeklyActionSummaryEmail,
-    bool PurchaseReminderDefault,
-    bool AdditionalCopyReminderDefault,
-    bool DefaultMineUnclaimedFilter);
+    [property: JsonRequired] string? Version,
+    [property: JsonRequired] bool WeeklyActionSummaryEnabled,
+    [property: JsonRequired] string? WeeklyActionSummaryEmail,
+    [property: JsonRequired] bool PurchaseReminderDefault,
+    [property: JsonRequired] bool AdditionalCopyReminderDefault,
+    [property: JsonRequired] bool DefaultMineUnclaimedFilter);
 
 public sealed record StaffMutationResult(string Code, CurrentStaff? Staff = null);
 

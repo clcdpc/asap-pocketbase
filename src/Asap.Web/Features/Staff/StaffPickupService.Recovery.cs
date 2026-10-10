@@ -70,13 +70,20 @@ public sealed partial class StaffPickupService
         try
         {
             patron = await patronProvider.RefreshAsync(operation.Barcode, operation.LibraryOrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             branches = await patronProvider.GetPickupBranchesAsync(patron, operation.LibraryOrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (PolarisOperationalException)
         {
             return new StaffPickupResult("pickup_provider_error");
         }
-        if (patron.PatronId != operation.PatronId || patron.Barcode != operation.Barcode ||
+        if (patron.PatronId != operation.PatronId ||
+            !patron.KnownBarcodeAliases.Contains(operation.Barcode, StringComparer.OrdinalIgnoreCase) ||
             patron.PreferredPickupBranchId != input.CurrentPreferredPickupBranchIdAtLoad)
         {
             return new StaffPickupResult("pickup_changed_since_load");
@@ -141,7 +148,7 @@ public sealed partial class StaffPickupService
         PickupRecoveryRow operation, byte[]? expectedVersion, CancellationToken cancellationToken)
     {
         if (!await PatronMutationLock.TryAcquireAsync((SqlConnection)context.Database.GetDbConnection(),
-                (SqlTransaction)transaction.GetDbTransaction(), operation.Barcode, cancellationToken))
+                (SqlTransaction)transaction.GetDbTransaction(), operation.PatronId, [operation.Barcode], cancellationToken))
         {
             return new LockedPickup("pickup_reconciliation_required");
         }
@@ -171,7 +178,7 @@ public sealed partial class StaffPickupService
             $"SELECT * FROM [asap].[TitleRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {requestId}")
             .SingleOrDefaultAsync(cancellationToken);
         if (request is null || request.LibraryOrganizationId != operation.LibraryOrganizationId ||
-            request.Barcode != operation.Barcode)
+            request.PatronIdSnapshot is > 0 && request.PatronIdSnapshot != operation.PatronId)
         {
             return new LockedPickup("not_found");
         }

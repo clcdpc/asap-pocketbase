@@ -105,6 +105,10 @@ async function flush() {
     window.confirm = () => true;
 
     const settingsRequests = [];
+    const organizations = [
+      { id: 1, name: 'System', organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'system-v1' },
+      { id: 2, name: 'Library Two', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'library-v1' }
+    ];
     let saveBody;
     const saveBodies = [];
     let librarySetsExist = false;
@@ -120,7 +124,7 @@ async function flush() {
         return response(200, settingsData(librarySetsExist));
       }
       if (requestUrl.endsWith('/api/asap/staff/organizations')) {
-        return response(200, []);
+        return response(200, { code: 'ok', data: organizations });
       }
       if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
         return response(200, { code: 'ok', data: [] });
@@ -130,7 +134,7 @@ async function flush() {
         saveBodies.push(saveBody);
         librarySetsExist = saveBodies.length === 1;
         if (saveBodies.length === 1) saveCompleted();
-        return response(200, { code: 'saved', data: { version: 'library-2-saved' } });
+        return response(200, { code: 'saved', data: { orgId: '2', version: 'library-2-saved' } });
       }
       throw new Error(`Unexpected request: ${requestUrl}`);
     };

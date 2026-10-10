@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Data;
 using System.Diagnostics;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -25,6 +26,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.SqlServer.Dac;
@@ -238,7 +240,13 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(HttpStatusCode.Created, submission.StatusCode, await submission.Content.ReadAsStringAsync());
 
         using var submissionDocument = JsonDocument.Parse(await submission.Content.ReadAsStringAsync());
-        var requestId = submissionDocument.RootElement.GetProperty("id").GetInt64();
+        var requestIdElement = submissionDocument.RootElement.GetProperty("id");
+        Assert.AreEqual(JsonValueKind.String, requestIdElement.ValueKind);
+        var requestIdText = requestIdElement.GetString();
+        Assert.IsNotNull(requestIdText);
+        Assert.IsTrue(long.TryParse(requestIdText, System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out var requestId));
+        Assert.AreEqual(requestId.ToString(System.Globalization.CultureInfo.InvariantCulture), requestIdText);
         Assert.HasCount(1, dispatcher!.EnqueuedIds);
 
         await using (var connection = new SqlConnection(databaseConnectionString))
@@ -404,6 +412,14 @@ public sealed partial class PatronJourneyTests
             Guid.Parse(identity.TenantId!),
             Guid.Parse(identity.ObjectId!),
             staffObjectId);
+        await ExecuteNonQueryAsync("""
+            UPDATE [asap].[TitleRequest] SET [PatronIdSnapshot] = 9912, [Email] = N'old-recipient@example.org'
+            WHERE [Id] = @requestId;
+            INSERT INTO [asap].[EmailTemplate]
+                ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+            VALUES (2, N'rejection:browser_acceptance', N'Browser acceptance rejection',
+                    N'Browser rejected: {{title}}', N'Hello {{firstName}}, we declined {{title}}.', 0, 1, 997);
+            """, ("@requestId", seeded.StaleTitleBId));
         await using (var linkContext = await contextFactory.CreateDbContextAsync())
         {
             var systemLinks = await linkContext.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
@@ -509,7 +525,8 @@ public sealed partial class PatronJourneyTests
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(58, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(61, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.IsTrue(report.RootElement.GetProperty("rejectionNotificationAndReopen").GetBoolean());
             var analytics = report.RootElement.GetProperty("analytics");
             Assert.AreEqual("all", analytics.GetProperty("desktopSuperAdminScope").GetString());
             Assert.AreEqual("last90", analytics.GetProperty("desktopRange").GetString());
@@ -678,9 +695,54 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(1, copyState.GetInt32(4));
         Assert.AreEqual(1, copyState.GetInt32(5));
         Assert.AreEqual(0, copyState.GetInt32(6));
+        await copyState.CloseAsync();
+        await using (var accepted = await contextFactory.CreateDbContextAsync())
+        {
+            var rejectedRequest = await accepted.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == seeded.StaleTitleBId);
+            Assert.AreEqual("closed", rejectedRequest.Status);
+            Assert.AreEqual("Silently Closed", rejectedRequest.CloseReason);
+            Assert.AreEqual(seeded.SuperId, rejectedRequest.ClaimedByStaffUserId);
+            Assert.AreEqual("manual", rejectedRequest.ClaimType);
+            Assert.IsNull(rejectedRequest.ClaimRuleId);
+            Assert.AreEqual("Concurrent staff note", rejectedRequest.Notes);
+            var events = await accepted.TitleRequestEvents.AsNoTracking()
+                .Where(item => item.TitleRequestId == seeded.StaleTitleBId).ToArrayAsync();
+            Assert.AreEqual(1, events.Count(item => item.EventType == "rejection_template_selected"));
+            foreach (var action in new[] { "reject", "reopen", "silentClose" })
+            {
+                Assert.AreEqual(1, events.Count(item => item.EventType == "status_changed" &&
+                    HasAction(item.MetadataJson!, action)));
+            }
+            static bool HasAction(string metadata, string action)
+            {
+                using var document = JsonDocument.Parse(metadata);
+                return document.RootElement.GetProperty("action").GetString() == action;
+            }
+            var rejection = await accepted.EmailOutbox.AsNoTracking().SingleAsync(item =>
+                item.BusinessKey != null && item.BusinessKey.StartsWith($"rejection:{seeded.StaleTitleBId}:"));
+            Assert.AreEqual("20000000002912@example.org", rejection.ToAddress,
+                "The current, verified native patron owns the notification rather than the historical recipient.");
+            Assert.AreEqual("Browser rejected: Stale title assignment B", rejection.Subject);
+            Assert.AreEqual("Hello Test, we declined Stale title assignment B.", rejection.BodyText);
+            Assert.AreEqual("pending", rejection.Status);
+            Assert.AreEqual("business_event", rejection.DeliveryClass);
+            Assert.AreEqual("asap@example.org", rejection.FromAddress);
+            var sender = (RecordingEmailSender)factory.Services.GetRequiredService<IEmailSender>();
+            var jobs = factory.Services.GetRequiredService<EmailOutboxJobs>();
+            await jobs.DeliverAsync(rejection.Id, CancellationToken.None);
+            await jobs.DeliverAsync(rejection.Id, CancellationToken.None);
+            var envelope = sender.Envelopes.Single(item => item.OutboxId == rejection.Id);
+            Assert.AreEqual(rejection.ToAddress, envelope.ToAddress);
+            Assert.AreEqual(rejection.FromAddress, envelope.FromAddress);
+            Assert.AreEqual(rejection.Subject, envelope.Subject);
+            Assert.AreEqual(rejection.BodyText, envelope.BodyText);
+            Assert.AreEqual(1, await accepted.EmailOutbox.AsNoTracking().CountAsync(item =>
+                item.Id == rejection.Id && item.Status == "sent" && item.ProviderMessageId == "test-message"));
+        }
         }
         finally
         {
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 2 AND [TemplateKey] = N'rejection:browser_acceptance';");
             await using var restore = await contextFactory.CreateDbContextAsync();
             var settings = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
             settings.LeapBibUrlPattern = originalSettings.LeapBibUrlPattern;
@@ -1023,7 +1085,8 @@ public sealed partial class PatronJourneyTests
                     ([OrganizationId], [Origin], [NormalizedOrigin], [CreatedUtc])
                 VALUES
                     (1, N'https://*.plain.example.org', N'https://*.plain.example.org', SYSUTCDATETIME()),
-                    (1, N'https://*.ported.example.org:8443', N'https://*.ported.example.org:8443', SYSUTCDATETIME());
+                    (1, N'https://*.ported.example.org:8443', N'https://*.ported.example.org:8443', SYSUTCDATETIME()),
+                    (1, N'https://*.legacy.example.org:443', N'https://*.legacy.example.org:443', SYSUTCDATETIME());
                 """;
             await seed.ExecuteNonQueryAsync();
         }
@@ -1032,7 +1095,7 @@ public sealed partial class PatronJourneyTests
         {
             using var client = factory!.CreateClient();
             const string storedDirective =
-                "'self' https://*.plain.example.org https://*.ported.example.org:8443";
+                "'self' https://*.legacy.example.org:443 https://*.plain.example.org https://*.ported.example.org:8443";
             var cases = new[]
             {
                 new
@@ -1054,15 +1117,47 @@ public sealed partial class PatronJourneyTests
                 {
                     Referer = "https://child.ported.example.org/path",
                     Expected = storedDirective
+                },
+                new
+                {
+                    Referer = "https://child.legacy.example.org:443/path",
+                    Expected = $"{storedDirective} https://child.legacy.example.org:443"
+                },
+                new
+                {
+                    Referer = "https://child.legacy.example.org/path",
+                    Expected = storedDirective
+                },
+                new
+                {
+                    Referer = "https://child.legacy.example.org:444/path",
+                    Expected = storedDirective
                 }
             };
 
             foreach (var item in cases)
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, "/patron/");
-                Assert.IsTrue(request.Headers.TryAddWithoutValidation("Referer", item.Referer));
-                using var response = await client.SendAsync(request);
-                Assert.AreEqual(item.Expected, FrameAncestorsDirective(response), item.Referer);
+                if (item.Referer == "https://child.legacy.example.org:443/path")
+                {
+                    var context = await factory.Server.SendAsync(context =>
+                    {
+                        context.Request.Method = "GET";
+                        context.Request.Path = "/patron/";
+                        context.Request.Headers["Referer"] = item.Referer;
+                    });
+                    Assert.AreEqual((int)HttpStatusCode.OK, context.Response.StatusCode);
+                    var policy = context.Response.Headers["Content-Security-Policy"].ToString();
+                    var directive = Regex.Match(policy, @"frame-ancestors ([^;]+);");
+                    Assert.IsTrue(directive.Success, policy);
+                    Assert.AreEqual(item.Expected, directive.Groups[1].Value, item.Referer);
+                }
+                else
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, "/patron/");
+                    Assert.IsTrue(request.Headers.TryAddWithoutValidation("Referer", item.Referer));
+                    using var response = await client.SendAsync(request);
+                    Assert.AreEqual(item.Expected, FrameAncestorsDirective(response), item.Referer);
+                }
             }
         }
         finally
@@ -1834,8 +1929,9 @@ public sealed partial class PatronJourneyTests
             await using var seed = connection.CreateCommand();
             seed.CommandText =
                 """
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (8830, N'Empty Code Override Library', N'ECL', 1);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (8830, N'Empty Code Override Library', N'ECL', 2, 1, 1);
                 SELECT COUNT(*) FROM [asap].[PatronCodeEligibilityMember]
                 WHERE [OrganizationId] = 1 AND [PatronCodeId] = N'1';
                 """;
@@ -1925,9 +2021,10 @@ public sealed partial class PatronJourneyTests
             previousStaffUrl = (await seed.ExecuteScalarAsync()) as string;
             seed.CommandText =
                 """
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (8828, N'Patron Link Library', N'PLL', 1),
-                       (8829, N'Foreign Code Library', N'FCL', 1);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (8828, N'Patron Link Library', N'PLL', 2, 1, 1),
+                       (8829, N'Foreign Code Library', N'FCL', 2, 1, 1);
                 INSERT INTO [asap].[PatronCodeEligibilitySet] ([OrganizationId]) VALUES (8828), (8829);
                 INSERT INTO [asap].[PatronCodeEligibilityMember] ([OrganizationId], [PatronCodeId])
                 VALUES (8828, 8828), (8829, 8829);
@@ -2615,8 +2712,9 @@ public sealed partial class PatronJourneyTests
                 """
                 DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = 91320)
-                    INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                    VALUES (91320, N'Role contraction library', N'RCL', 1);
+                    INSERT INTO [asap].[Organization]
+                        ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                    VALUES (91320, N'Role contraction library', N'RCL', 2, 1, 1);
                 INSERT INTO [asap].[StaffUser]
                     ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
                      [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive])
@@ -3103,13 +3201,7 @@ public sealed partial class PatronJourneyTests
             new Dictionary<string, string?>());
 
         var submissionFirst = await SeedLifecycleAutoClaimRaceAsync("automatic-first");
-        var firstSession = new PatronSessionContext(
-            0,
-            "20000000002041",
-            2,
-            2,
-            2,
-            DateTime.UtcNow.AddHours(1));
+        var firstSession = await IssueTestPatronSessionAsync("20000000002041");
         PatronSuggestionResult firstResult;
         await using (var blockerConnection = new SqlConnection(databaseConnectionString))
         {
@@ -3155,13 +3247,7 @@ public sealed partial class PatronJourneyTests
             expectedCleanupEvents: 1);
 
         var lifecycleFirst = await SeedLifecycleAutoClaimRaceAsync("lifecycle-first");
-        var secondSession = new PatronSessionContext(
-            0,
-            "20000000002042",
-            2,
-            2,
-            2,
-            DateTime.UtcNow.AddHours(1));
+        var secondSession = await IssueTestPatronSessionAsync("20000000002042");
         PatronSuggestionResult secondResult;
         await using (var blockerConnection = new SqlConnection(databaseConnectionString))
         {
@@ -3199,6 +3285,8 @@ public sealed partial class PatronJourneyTests
             secondResult.Id,
             expectedAssignedEvents: 0,
             expectedCleanupEvents: 0);
+        await DeleteTestPatronSessionAsync(firstSession.Id);
+        await DeleteTestPatronSessionAsync(secondSession.Id);
     }
 
     [TestMethod]
@@ -3318,8 +3406,9 @@ public sealed partial class PatronJourneyTests
                 """
                 IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = 82)
                 BEGIN
-                    INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                    VALUES (82, N'Candidate Foreign Library', N'CFL', 1);
+                    INSERT INTO [asap].[Organization]
+                        ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                    VALUES (82, N'Candidate Foreign Library', N'CFL', 2, 1, 1);
                 END;
 
                 DECLARE @superId bigint = (
@@ -4638,6 +4727,7 @@ public sealed partial class PatronJourneyTests
         long actorId;
         long requestId;
         int initialIdentifierJobCount;
+        var storage = factory!.Services.GetRequiredService<JobStorage>();
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
@@ -4694,7 +4784,8 @@ public sealed partial class PatronJourneyTests
                    (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
                     WHERE [TitleRequestId] = r.[Id] AND [EventType] = N'identifier_retry_requested'),
                    (SELECT COUNT(*) FROM [HangFire].[Job]
-                    WHERE [InvocationData] LIKE N'%IdentifierLookupJobs%')
+                    WHERE [InvocationData] LIKE N'%IdentifierLookupJobs%'),
+                   r.[RowVersion]
             FROM [asap].[TitleRequest] r
             WHERE r.[Id] = @id;
             """,
@@ -4702,6 +4793,7 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@id", requestId);
         await using var result = await WithFixtureClock(command).ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
+        byte[] retryVersion = (byte[])result[7];
         Assert.AreEqual("pending", result.GetString(0));
         Assert.AreEqual(0, result.GetInt32(1));
         Assert.IsTrue(result.IsDBNull(2));
@@ -4709,6 +4801,50 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(result.IsDBNull(4));
         Assert.AreEqual(1, result.GetInt32(5));
         Assert.AreEqual(initialIdentifierJobCount + 1, result.GetInt32(6));
+
+        var matchingIdentifierJobIds = new List<string>();
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var commandForJob = connection.CreateCommand();
+            commandForJob.CommandText =
+                """
+                SELECT CONVERT(nvarchar(30), j.[Id])
+                FROM [HangFire].[Job] j
+                WHERE j.[InvocationData] LIKE N'%IdentifierLookupJobs%'
+                  AND EXISTS
+                  (
+                      SELECT 1
+                      FROM OPENJSON(j.[Arguments]) argument
+                      WHERE argument.[key] = N'0'
+                        AND TRY_CONVERT(bigint, argument.[value]) = @requestId
+                  );
+                """;
+            commandForJob.Parameters.AddWithValue("@requestId", requestId);
+            await using var jobs = await commandForJob.ExecuteReaderAsync();
+            while (await jobs.ReadAsync())
+            {
+                matchingIdentifierJobIds.Add(jobs.GetString(0));
+            }
+        }
+
+        Assert.HasCount(1, matchingIdentifierJobIds);
+        var storedJobId = matchingIdentifierJobIds.Single();
+        var storedJob = ReadEnqueuedHangfireJob(storage, storedJobId);
+        Assert.AreEqual(typeof(IdentifierLookupJobs), storedJob.Type);
+        Assert.AreEqual(nameof(IdentifierLookupJobs.ProcessAsync), storedJob.Method.Name);
+        Assert.AreEqual(5, storedJob.Args.Count);
+        Assert.AreEqual(requestId, Convert.ToInt64(storedJob.Args[0]));
+        Assert.AreEqual("9780000002110", storedJob.Args[1] as string);
+        Assert.AreEqual(2, Convert.ToInt32(storedJob.Args[2]));
+        CollectionAssert.AreEqual(retryVersion, (byte[])storedJob.Args[3]);
+        Assert.AreEqual(CancellationToken.None, (CancellationToken)storedJob.Args[4]);
+        var jobHistory = storage.GetMonitoringApi().JobDetails(storedJobId);
+        Assert.IsNotNull(jobHistory);
+        var enqueuedState = jobHistory!.History.FirstOrDefault(state =>
+            state.StateName == Hangfire.States.EnqueuedState.StateName);
+        Assert.IsNotNull(enqueuedState);
+        Assert.AreEqual("asap-identifier", enqueuedState!.Data["Queue"]);
     }
 
     [TestMethod]
@@ -5326,7 +5462,8 @@ public sealed partial class PatronJourneyTests
         await verify.OpenAsync();
         await using var command = new SqlCommand(
             """
-            SELECT [State], [Phase], [PolarisHoldId], [OutcomeEvidenceKind], [CreateStartedUtc], [ReplyStartedUtc]
+            SELECT [State], [Phase], [PolarisHoldId], [OutcomeEvidenceKind], [CreateStartedUtc], [ReplyStartedUtc],
+                   [PickupBranchIdSnapshot], [RequestingOrganizationIdSnapshot]
             FROM [asap].[HoldPlacementOperation]
             WHERE [TitleRequestId] = @id;
             """,
@@ -5340,6 +5477,9 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("existing_hold_adoption", result.GetString(3));
         Assert.IsTrue(result.IsDBNull(4));
         Assert.IsTrue(result.IsDBNull(5));
+        Assert.AreEqual(101, result.GetInt32(6), "Adoption records the exact pickup of the existing hold.");
+        Assert.IsTrue(result.IsDBNull(7),
+            "The adopted hold's original create route is unknown; the current patron registration is not historical evidence.");
     }
 
     [TestMethod]
@@ -5535,8 +5675,9 @@ public sealed partial class PatronJourneyTests
                     SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (91211, N'Inactive recovery library', N'IRL', 0);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (91211, N'Inactive recovery library', N'IRL', 2, 1, 0);
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
@@ -5748,14 +5889,29 @@ public sealed partial class PatronJourneyTests
         using var get = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
         using var getBody = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
         var operation = getBody.RootElement.GetProperty("holdOperation");
+        Assert.IsTrue(StaffVersion.TryDecode(getBody.RootElement.GetProperty("version").GetString(),
+            out var originalRequestRowVersion));
+        Assert.IsTrue(StaffVersion.TryDecode(operation.GetProperty("version").GetString(),
+            out var originalOperationRowVersion));
 
         using var reconcile = await client.PostAsJsonAsync(
             $"/api/asap/staff/hold-operations/{operation.GetProperty("id").GetString()}/reconcile",
             new { version = operation.GetProperty("version").GetString() });
-        Assert.AreEqual(requestingOrganizationId == 2 ? HttpStatusCode.OK : HttpStatusCode.Conflict,
+        var replyAllowed = requestingOrganizationId > 1;
+        Assert.AreEqual(replyAllowed ? HttpStatusCode.OK : HttpStatusCode.Conflict,
             reconcile.StatusCode, await reconcile.Content.ReadAsStringAsync());
         Assert.AreEqual(0, holdProvider.CreateCount);
-        Assert.AreEqual(requestingOrganizationId == 2 ? 1 : 0, holdProvider.ReplyCount);
+        Assert.AreEqual(replyAllowed ? 1 : 0, holdProvider.ReplyCount);
+        if (replyAllowed)
+        {
+            Assert.AreEqual(requestingOrganizationId, holdProvider.LastReplyCommand!.RequestingOrganizationId,
+                "Reply must use the immutable native member route stored by the dispatched create.");
+        }
+        else
+        {
+            Assert.IsNull(holdProvider.LastReplyCommand,
+                "A system-scope sentinel is not a valid native reply route.");
+        }
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
@@ -5764,8 +5920,13 @@ public sealed partial class PatronJourneyTests
             SELECT request.[Status], operation.[State], operation.[Phase], operation.[ExecutionEpoch],
                    operation.[ReplyStartedUtc], operation.[ReplyResponseObservedUtc], operation.[PolarisHoldId],
                    operation.[RecoveryAttemptCount],
+                   operation.[RequestingOrganizationIdSnapshot],
                    (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
-                    WHERE [TitleRequestId] = @requestId AND [EventType] = N'hold_placed')
+                    WHERE [TitleRequestId] = @requestId AND [EventType] = N'hold_placed'),
+                   (SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = @requestId),
+                   (SELECT COUNT(*) FROM [asap].[EmailOutbox]
+                    WHERE [BusinessKey] LIKE CONCAT(N'title-hold-placed:', @requestId, N':%')),
+                   request.[RowVersion], operation.[RowVersion]
             FROM [asap].[TitleRequest] request
             JOIN [asap].[HoldPlacementOperation] operation ON operation.[TitleRequestId] = request.[Id]
             WHERE request.[Id] = @requestId;
@@ -5774,7 +5935,15 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@requestId", requestId);
         await using var result = await command.ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
-        if (requestingOrganizationId != 2)
+        Assert.AreEqual(requestingOrganizationId, result.GetInt32(8),
+            "The journal must retain the original requesting organization, independent of servicing scope.");
+        var requestRowVersionUnchanged = originalRequestRowVersion.SequenceEqual((byte[])result[12]);
+        var operationRowVersionUnchanged = originalOperationRowVersion.SequenceEqual((byte[])result[13]);
+        Assert.AreEqual(!replyAllowed, requestRowVersionUnchanged,
+            "Only a successful reply may transition the request row.");
+        Assert.IsFalse(operationRowVersionUnchanged,
+            "The operation rowversion must advance when reply-ready work succeeds or is fenced for operator review.");
+        if (requestingOrganizationId == 1)
         {
             Assert.AreEqual("pending_hold", result.GetString(0));
             Assert.AreEqual("operator_required", result.GetString(1));
@@ -5782,7 +5951,9 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(result.IsDBNull(4));
             Assert.IsTrue(result.IsDBNull(5));
             Assert.IsTrue(result.IsDBNull(6));
-            Assert.AreEqual(0, result.GetInt32(8));
+            Assert.AreEqual(0, result.GetInt32(9));
+            Assert.AreEqual(0, result.GetInt32(10));
+            Assert.AreEqual(0, result.GetInt32(11));
             return;
         }
         Assert.AreEqual("hold_placed", result.GetString(0));
@@ -5793,7 +5964,9 @@ public sealed partial class PatronJourneyTests
         Assert.IsFalse(result.IsDBNull(5));
         Assert.AreEqual(8123, result.GetInt32(6));
         Assert.AreEqual(1, result.GetInt32(7));
-        Assert.AreEqual(1, result.GetInt32(8));
+        Assert.AreEqual(1, result.GetInt32(9));
+        Assert.AreEqual(1, result.GetInt32(10));
+        Assert.AreEqual(1, result.GetInt32(11));
     }
 
     [TestMethod]
@@ -6385,8 +6558,9 @@ public sealed partial class PatronJourneyTests
             await using var seedOrganization = connection.CreateCommand();
             seedOrganization.CommandText =
                 """
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (@id, N'Inactive identity library', N'IIL', 0);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (@id, N'Inactive identity library', N'IIL', 2, 1, 0);
                 """;
             seedOrganization.Parameters.AddWithValue("@id", inactiveOrganizationId);
             Assert.AreEqual(1, await seedOrganization.ExecuteNonQueryAsync());
@@ -6643,9 +6817,9 @@ public sealed partial class PatronJourneyTests
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 DECLARE @requestId bigint = SCOPE_IDENTITY();
                 INSERT INTO [asap].[HoldPlacementOperation]
-                    ([TitleRequestId], [PatronBarcodeSnapshot], [BibIdSnapshot], [PickupBranchIdSnapshot],
+                    ([TitleRequestId], [PatronBarcodeSnapshot], [PatronIdSnapshot], [BibIdSnapshot], [PickupBranchIdSnapshot],
                      [AttemptNumber], [State], [Phase], [ExecutionEpoch], [RequestStartedUtc], [ResultCode], [LastErrorCode])
-                VALUES (@requestId, N'20000000002116', N'9011', 101, 1, N'operator_required', N'create_started', 2,
+                VALUES (@requestId, N'20000000002116', 9116, N'9011', 101, 1, N'operator_required', N'create_started', 2,
                         DATEADD(minute, -5, SYSUTCDATETIME()), N'ambiguous', N'provider_timeout');
                 SELECT @actorId, @requestId;
                 """;
@@ -7778,6 +7952,8 @@ public sealed partial class PatronJourneyTests
 
         Assert.AreEqual(8, holds.Single().StatusId);
         Assert.AreEqual("Unclaimed", holds.Single().StatusDescription);
+        Assert.IsNull(holds.Single().PickupBranchId,
+            "A terminal hold remains valid when this optional pickup field is omitted.");
         Assert.IsTrue(HoldPlacementService.IsTerminal(holds.Single().StatusId));
     }
 
@@ -7793,6 +7969,8 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(9001, holds.Single().BibId);
         Assert.AreEqual(6, holds.Single().StatusId);
         Assert.AreEqual("Held", holds.Single().StatusDescription);
+        Assert.IsNull(holds.Single().PickupBranchId,
+            "Compatible numeric-string identity fields do not make an omitted optional pickup fabricated evidence.");
     }
 
     [TestMethod]
@@ -7988,7 +8166,10 @@ public sealed partial class PatronJourneyTests
         var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
             await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
 
-        Assert.AreEqual("polaris_bib_validation_protocol_failed", failure.Code);
+        Assert.AreEqual(
+            "polaris_bib_validation_protocol_failed",
+            failure.Code,
+            $"Original provider exception type: {failure.InnerException?.GetType().FullName ?? "<none>"}.");
     }
 
     [TestMethod]
@@ -8152,6 +8333,8 @@ public sealed partial class PatronJourneyTests
     [DataRow(200, "{}")]
     [DataRow(200, "not-json")]
     [DataRow(200, "{\"PAPIErrorCode\":0}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-1,\"PatronID\":\"7001\"}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-1,\"PatronID\":7001,\"patronid\":7002}")]
     public async Task PolarisAuthenticationTreatsTransportAndProtocolFailuresAsOperational(
         int statusCode,
         string content)
@@ -8275,10 +8458,10 @@ public sealed partial class PatronJourneyTests
     {
         var cases = new[]
         {
-            (RequestField: "\"RequestPickupBranchID\":200,", Expected: (int?)200),
-            (RequestField: string.Empty, Expected: (int?)300),
-            (RequestField: "\"RequestPickupBranchID\":0,", Expected: (int?)null),
-            (RequestField: "\"RequestPickupBranchID\":1,", Expected: (int?)null)
+            (RequestField: "\"RequestPickupBranchID\":200,", Expected: (int?)200, State: PatronPickupPreferenceState.Current),
+            (RequestField: string.Empty, Expected: (int?)300, State: PatronPickupPreferenceState.Absent),
+            (RequestField: "\"RequestPickupBranchID\":0,", Expected: (int?)null, State: PatronPickupPreferenceState.ExplicitInvalid),
+            (RequestField: "\"RequestPickupBranchID\":1,", Expected: (int?)null, State: PatronPickupPreferenceState.ExplicitInvalid)
         };
 
         foreach (var testCase in cases)
@@ -8300,6 +8483,7 @@ public sealed partial class PatronJourneyTests
                 CancellationToken.None);
 
             Assert.AreEqual(testCase.Expected, patron.PreferredPickupBranchId, testCase.RequestField);
+            Assert.AreEqual(testCase.State, patron.EffectivePickupPreferenceState, testCase.RequestField);
             Assert.AreEqual(3, handler.RequestCount);
         }
     }
@@ -8409,8 +8593,9 @@ public sealed partial class PatronJourneyTests
             organization.CommandText =
                 """
                 IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = @id)
-                    INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                    VALUES (@id, N'Other sensitive library', N'OSL', 1);
+                    INSERT INTO [asap].[Organization]
+                        ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                    VALUES (@id, N'Other sensitive library', N'OSL', 2, 1, 1);
                 """;
             organization.Parameters.AddWithValue("@id", otherOrganizationId);
             await organization.ExecuteNonQueryAsync();
@@ -8595,7 +8780,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task TimedOutOutboxDoesNotRetryBeforeLeaseBoundary()
+    public async Task TimedOutOutboxIsQuarantinedAfterLeaseBoundaryWithoutReplay()
     {
         var seeded = await SeedSensitiveOutboxAsync("timeout-boundary");
         var sender = new CancellationAwareTimeoutEmailSender();
@@ -8609,9 +8794,14 @@ public sealed partial class PatronJourneyTests
 
         await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
         Assert.AreEqual(1, sender.CallCount);
-        var timedOut = await ReadOutboxStateAsync(seeded.OutboxId);
+        var timedOut = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
         Assert.AreEqual("sending", timedOut.Status);
         Assert.AreEqual("provider_timeout", timedOut.LastErrorCode);
+        Assert.AreEqual(1, timedOut.AttemptCount);
+        Assert.IsNotNull(timedOut.LastAttemptUtc);
+        Assert.IsNotNull(timedOut.SendingStartedUtc);
+        Assert.IsNotNull(timedOut.LeaseId);
+        Assert.IsNotNull(timedOut.LeaseExpiresUtc);
 
         await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
         Assert.AreEqual(1, sender.CallCount, "A sending lease must not be claimed for an early retry.");
@@ -8622,16 +8812,38 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("sending", (await ReadOutboxStateAsync(seeded.OutboxId)).Status);
 
         await SetLeaseExpiryAsync(seeded.OutboxId, expired: true);
+        var expired = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
+        Assert.AreEqual("sending", expired.Status);
+        Assert.AreEqual(timedOut.AttemptCount, expired.AttemptCount);
+        Assert.AreEqual(timedOut.LastAttemptUtc, expired.LastAttemptUtc);
+        Assert.AreEqual(timedOut.SendingStartedUtc, expired.SendingStartedUtc);
+        Assert.AreEqual(timedOut.LeaseId, expired.LeaseId);
+        Assert.AreEqual(timedOut.LastErrorCode, expired.LastErrorCode);
+        Assert.AreEqual(timedOut.LastErrorDetail, expired.LastErrorDetail);
         await jobs.SweepAsync(CancellationToken.None);
-        CollectionAssert.Contains(dispatcher.EnqueuedIds, seeded.OutboxId);
-        Assert.AreEqual("pending", (await ReadOutboxStateAsync(seeded.OutboxId)).Status);
+        var quarantined = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
+        Assert.AreEqual("failed", quarantined.Status);
+        Assert.AreEqual(expired.LastErrorCode, quarantined.LastErrorCode,
+            "Quarantining an expired attempt preserves the original provider outcome evidence.");
+        Assert.AreEqual(expired.LastErrorDetail, quarantined.LastErrorDetail);
+        Assert.AreEqual(timedOut.AttemptCount, quarantined.AttemptCount);
+        Assert.AreEqual(timedOut.LastAttemptUtc, quarantined.LastAttemptUtc);
+        Assert.AreEqual(timedOut.SendingStartedUtc, quarantined.SendingStartedUtc);
+        Assert.IsNull(quarantined.ProviderMessageId);
+        Assert.IsNull(quarantined.NextAttemptUtc);
+        Assert.IsNull(quarantined.LeaseId);
+        Assert.IsNull(quarantined.LeaseExpiresUtc);
+        CollectionAssert.DoesNotContain(dispatcher!.EnqueuedIds, seeded.OutboxId);
 
         await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
-        Assert.AreEqual(2, sender.CallCount, "A new claim is allowed only after the ambiguity lease expires.");
+        Assert.AreEqual(1, sender.CallCount, "An expired provider attempt with unknown outcome is never replayed.");
+        AssertEmailOutcomeDispatchSnapshotEqual(
+            quarantined,
+            await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId));
     }
 
     [TestMethod]
-    public async Task StaleProviderCompletionCannotOverwriteNewLeaseCompletion()
+    public async Task LateProviderSuccessCannotOverwriteQuarantinedExpiredLease()
     {
         var seeded = await SeedSensitiveOutboxAsync("stale-completion");
         var sender = new FencedCompletionEmailSender();
@@ -8647,21 +8859,24 @@ public sealed partial class PatronJourneyTests
         await sender.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await SetLeaseExpiryAsync(seeded.OutboxId, expired: true);
         await jobs.SweepAsync(CancellationToken.None);
-        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
-
-        var completed = await ReadOutboxStateAsync(seeded.OutboxId);
-        Assert.AreEqual("sent", completed.Status);
-        Assert.AreEqual("new-owner-message", completed.ProviderMessageId);
+        var quarantined = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
+        Assert.AreEqual("failed", quarantined.Status);
+        Assert.AreEqual("ambiguous_expired_lease", quarantined.LastErrorCode);
+        Assert.IsNull(quarantined.ProviderMessageId);
+        Assert.AreEqual(1, quarantined.AttemptCount);
+        CollectionAssert.DoesNotContain(dispatcher!.EnqueuedIds, seeded.OutboxId);
 
         sender.CompleteFirstCall();
-        await firstDelivery;
-        var afterStaleCompletion = await ReadOutboxStateAsync(seeded.OutboxId);
-        Assert.AreEqual("sent", afterStaleCompletion.Status);
-        Assert.AreEqual("new-owner-message", afterStaleCompletion.ProviderMessageId);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await firstDelivery);
+        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+        AssertEmailOutcomeDispatchSnapshotEqual(
+            quarantined,
+            await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId));
+        CollectionAssert.DoesNotContain(dispatcher.EnqueuedIds, seeded.OutboxId);
     }
 
     [TestMethod]
-    public async Task StaleNotConfiguredResultCannotOverwriteNewLeaseCompletion()
+    public async Task LateNotConfiguredResultCannotOverwriteQuarantinedExpiredLease()
     {
         var seeded = await SeedSensitiveOutboxAsync("stale-not-configured");
         var sender = new FencedCompletionEmailSender();
@@ -8677,14 +8892,19 @@ public sealed partial class PatronJourneyTests
         await sender.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await SetLeaseExpiryAsync(seeded.OutboxId, expired: true);
         await jobs.SweepAsync(CancellationToken.None);
-        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
-        sender.CompleteFirstCall(EmailSendResult.NotConfigured);
-        await firstDelivery;
+        var quarantined = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
+        Assert.AreEqual("failed", quarantined.Status);
+        Assert.AreEqual("ambiguous_expired_lease", quarantined.LastErrorCode);
+        Assert.AreEqual(1, quarantined.AttemptCount);
+        CollectionAssert.DoesNotContain(dispatcher!.EnqueuedIds, seeded.OutboxId);
 
-        var completed = await ReadOutboxStateAsync(seeded.OutboxId);
-        Assert.AreEqual("sent", completed.Status);
-        Assert.AreEqual("new-owner-message", completed.ProviderMessageId);
-        Assert.IsNull(completed.LastErrorCode);
+        sender.CompleteFirstCall(EmailSendResult.NotConfigured);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await firstDelivery);
+        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+        AssertEmailOutcomeDispatchSnapshotEqual(
+            quarantined,
+            await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId));
+        CollectionAssert.DoesNotContain(dispatcher.EnqueuedIds, seeded.OutboxId);
     }
 
     [TestMethod]
@@ -8694,14 +8914,9 @@ public sealed partial class PatronJourneyTests
         var blockedSuggestionService = CreatePatronSuggestionService(
             allowedDomains: ["allowed.invalid"],
             blockedDispatcher);
+        var blockedSession = await IssueTestPatronSessionAsync("20000000000040");
         var blockedResult = await blockedSuggestionService.CreateAsync(
-            new PatronSessionContext(
-                9001,
-                "20000000000040",
-                2,
-                2,
-                2,
-                DateTime.UtcNow.AddHours(1)),
+            blockedSession,
             Suggestion("Initially Blocked Domain"),
             CancellationToken.None);
         var initiallyBlockedOutboxId = await FindSubmissionOutboxIdAsync(blockedResult.Id);
@@ -8723,14 +8938,9 @@ public sealed partial class PatronJourneyTests
         var allowedSuggestionService = CreatePatronSuggestionService(
             allowedDomains: ["example.org"],
             allowedDispatcher);
+        var allowedSession = await IssueTestPatronSessionAsync("20000000000041");
         var queuedResult = await allowedSuggestionService.CreateAsync(
-            new PatronSessionContext(
-                9002,
-                "20000000000041",
-                2,
-                2,
-                2,
-                DateTime.UtcNow.AddHours(1)),
+            allowedSession,
             Suggestion("Allowed Then Blocked Domain"),
             CancellationToken.None);
         var queuedOutboxId = await FindSubmissionOutboxIdAsync(queuedResult.Id);
@@ -8747,6 +8957,8 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(0, senderAfterTightening.Envelopes.Count);
         Assert.AreEqual("suppressed", suppressedAtSend.Status);
         Assert.AreEqual("recipient_domain_not_allowed", suppressedAtSend.SuppressionReason);
+        await DeleteTestPatronSessionAsync(blockedSession.Id);
+        await DeleteTestPatronSessionAsync(allowedSession.Id);
     }
 
     [TestMethod]
@@ -8759,14 +8971,9 @@ public sealed partial class PatronJourneyTests
             localDispatcher,
             sender);
 
+        var session = await IssueTestPatronSessionAsync("20000000000050");
         var result = await service.CreateAsync(
-            new PatronSessionContext(
-                9010,
-                "20000000000050",
-                2,
-                2,
-                2,
-                DateTime.UtcNow.AddHours(1)),
+            session,
             Suggestion($"Unavailable Transport {Guid.NewGuid():N}"),
             CancellationToken.None);
 
@@ -8775,6 +8982,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("suppressed", outbox.Status);
         Assert.AreEqual("mail_not_configured", outbox.SuppressionReason);
         Assert.AreEqual(0, localDispatcher.EnqueuedIds.Count);
+        await DeleteTestPatronSessionAsync(session.Id);
     }
 
     [TestMethod]
@@ -8783,14 +8991,9 @@ public sealed partial class PatronJourneyTests
         var localDispatcher = new RecordingOutboxDispatcher();
         var sender = new MutableReadinessEmailSender(isConfigured: true);
         var service = CreatePatronSuggestionService(["example.org"], localDispatcher, sender);
+        var session = await IssueTestPatronSessionAsync("20000000000051");
         var result = await service.CreateAsync(
-            new PatronSessionContext(
-                9011,
-                "20000000000051",
-                2,
-                2,
-                2,
-                DateTime.UtcNow.AddHours(1)),
+            session,
             Suggestion($"Readiness Lost {Guid.NewGuid():N}"),
             CancellationToken.None);
         var outboxId = await FindSubmissionOutboxIdAsync(result.Id);
@@ -8803,6 +9006,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(0, sender.SendCount);
         Assert.AreEqual("failed", outbox.Status);
         Assert.AreEqual("mail_not_configured", outbox.LastErrorCode);
+        await DeleteTestPatronSessionAsync(session.Id);
     }
 
     [TestMethod]
@@ -9026,7 +9230,9 @@ public sealed partial class PatronJourneyTests
             "Duplicate Identifier &lt;Winner&gt; is Library declined via identifier number.",
             root.GetProperty("conflictMessage").GetString());
         var duplicate = root.GetProperty("duplicate");
-        Assert.AreEqual(identifierRequestId, duplicate.GetProperty("id").GetInt64());
+        var duplicateId = duplicate.GetProperty("id");
+        Assert.AreEqual(JsonValueKind.String, duplicateId.ValueKind);
+        Assert.AreEqual(identifierRequestId.ToString(System.Globalization.CultureInfo.InvariantCulture), duplicateId.GetString());
         Assert.AreEqual("Identifier <Winner>", duplicate.GetProperty("title").GetString());
         Assert.AreEqual("First Author", duplicate.GetProperty("author").GetString());
         Assert.AreEqual("book", duplicate.GetProperty("format").GetString());
@@ -9038,130 +9244,315 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task CrossPatronIdentifierDuplicateCommitsTagAndExactSystemNote()
     {
-        await using (var connection = new SqlConnection(databaseConnectionString))
+        const int currentPatronId = 980011;
+        var currentBarcode = $"349-cross-{Guid.NewGuid():N}";
+        const string crossPatronNote = "Tagged as a duplicate suggestion because another patron has a suggestion with the same identifier number.";
+        var legacyIdentifier = $"CROSS-PATRON-LEGACY-{Guid.NewGuid():N}";
+        var reassignedIdentifier = $"CROSS-PATRON-REASSIGNED-{Guid.NewGuid():N}";
+        var candidateIds = new List<long>();
+        var requestIds = new List<long>();
+        try
         {
+            candidateIds.Add(await SeedDuplicateCandidateAsync("20000000000010", legacyIdentifier, null));
+
+            var provider = factory!.Services.GetRequiredService<DeterministicTestingPatronProvider>();
+            provider.AddPatron(
+                new PatronSnapshot(currentPatronId, currentBarcode, "cross-patron@example.org", "Cross", "Patron",
+                    1, "Adult", 101, 2, "Test Library", 101),
+                [new PickupBranch(101, "Main Library")], 2);
+            provider.SetIdentifierResult(legacyIdentifier, 2, new(IdentifierLookupOutcome.DefinitiveNotFound));
+            provider.SetIdentifierResult(reassignedIdentifier, 2, new(IdentifierLookupOutcome.DefinitiveNotFound));
+            using var client = factory.CreateClient();
+            var login = await client.PostAsJsonAsync(
+                "/api/asap/patron/login",
+                new { barcode = currentBarcode, pin = "1234", libraryOrgId = 2 });
+            using var loginDocument = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                "Bearer",
+                loginDocument.RootElement.GetProperty("token").GetString());
+
+            using var legacyResponse = await SubmitSuggestionAsync(client, legacyIdentifier, "Legacy Cross Patron Request");
+            Assert.AreEqual(HttpStatusCode.Created, legacyResponse.StatusCode, await legacyResponse.Content.ReadAsStringAsync());
+            var legacyRequestId = await ReadCreatedRequestIdAsync(legacyResponse);
+            requestIds.Add(legacyRequestId);
+            var legacyDuplicate = await ReadDuplicateResultAsync(legacyRequestId);
+            CollectionAssert.Contains(legacyDuplicate.Notes.Split(["\r\n"], StringSplitOptions.None), crossPatronNote, legacyDuplicate.Notes);
+            Assert.AreEqual(1, legacyDuplicate.DuplicateTagCount);
+            Assert.AreEqual(currentPatronId, legacyDuplicate.PatronIdSnapshot);
+
+            // A positive snapshot must also identify another patron when the barcode was later reused.
+            candidateIds.Add(await SeedDuplicateCandidateAsync(currentBarcode, reassignedIdentifier, 980012));
+            using var reassignedResponse = await SubmitSuggestionAsync(client, reassignedIdentifier, "Reassigned Barcode Request");
+            Assert.AreEqual(HttpStatusCode.Created, reassignedResponse.StatusCode, await reassignedResponse.Content.ReadAsStringAsync());
+            var reassignedRequestId = await ReadCreatedRequestIdAsync(reassignedResponse);
+            requestIds.Add(reassignedRequestId);
+            var reassignedDuplicate = await ReadDuplicateResultAsync(reassignedRequestId);
+            CollectionAssert.Contains(reassignedDuplicate.Notes.Split(["\r\n"], StringSplitOptions.None), crossPatronNote, reassignedDuplicate.Notes);
+            Assert.AreEqual(1, reassignedDuplicate.DuplicateTagCount);
+            Assert.AreEqual(currentPatronId, reassignedDuplicate.PatronIdSnapshot);
+        }
+        finally
+        {
+            await using (var discover = new SqlConnection(databaseConnectionString))
+            {
+                await discover.OpenAsync();
+                await using var findRequests = discover.CreateCommand();
+                findRequests.CommandText =
+                    "SELECT [Id] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 2 AND [Barcode] = @barcode " +
+                    "AND [Title] IN (N'Legacy Cross Patron Request', N'Reassigned Barcode Request') " +
+                    "AND [Identifier] IN (@legacy, @reassigned);";
+                findRequests.Parameters.Add("@barcode", SqlDbType.NVarChar, 50).Value = currentBarcode;
+                findRequests.Parameters.Add("@legacy", SqlDbType.NVarChar, 100).Value = legacyIdentifier;
+                findRequests.Parameters.Add("@reassigned", SqlDbType.NVarChar, 100).Value = reassignedIdentifier;
+                await using var rows = await findRequests.ExecuteReaderAsync();
+                while (await rows.ReadAsync())
+                {
+                    var requestId = rows.GetInt64(0);
+                    if (!requestIds.Contains(requestId))
+                    {
+                        requestIds.Add(requestId);
+                    }
+                }
+            }
+            await using (var cleanup = new SqlConnection(databaseConnectionString))
+            {
+                await cleanup.OpenAsync();
+                await using var removeOutbox = cleanup.CreateCommand();
+                removeOutbox.CommandText =
+                    "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @requestId);";
+                removeOutbox.Parameters.Add("@requestId", SqlDbType.BigInt);
+                foreach (var requestId in requestIds)
+                {
+                    removeOutbox.Parameters["@requestId"].Value = requestId;
+                    await removeOutbox.ExecuteNonQueryAsync();
+                }
+            }
+            foreach (var requestId in requestIds)
+            {
+                await DeleteRequestAsync(requestId);
+            }
+            await DeleteTestPatronSessionAsyncByBarcode(currentBarcode);
+            if (candidateIds.Count > 0)
+            {
+                await using var cleanup = new SqlConnection(databaseConnectionString);
+                await cleanup.OpenAsync();
+                await using var removeCandidates = cleanup.CreateCommand();
+                removeCandidates.CommandText = $"DELETE FROM [asap].[TitleRequest] WHERE [Id] IN ({string.Join(",", candidateIds.Select((_, index) => $"@candidate{index}"))});";
+                for (var index = 0; index < candidateIds.Count; index++)
+                {
+                    removeCandidates.Parameters.AddWithValue($"@candidate{index}", candidateIds[index]);
+                }
+                await removeCandidates.ExecuteNonQueryAsync();
+            }
+        }
+
+        async Task<long> SeedDuplicateCandidateAsync(string barcode, string identifier, int? patronIdSnapshot)
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
             await connection.OpenAsync();
             await using var command = connection.CreateCommand();
             command.CommandText =
                 """
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [Author], [Identifier],
+                    ([LibraryOrganizationId], [PatronOrganizationId], [PatronIdSnapshot], [Barcode], [Title], [Author], [Identifier],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
                      [AutoHold], [MaterialFormatId], [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
+                OUTPUT INSERTED.[Id]
                 VALUES
-                    (2, 101, N'20000000000010', N'Existing Other Patron Request', N'Existing Author', N'CROSS-PATRON-ID',
+                    (2, 101, @patronIdSnapshot, @barcode, N'Existing Other Patron Request', N'Existing Author', @identifier,
                      101, N'Main Library', N'Test Library', 1,
                      (SELECT [Id] FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book'),
                      N'suggestion', N'not_found', DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(day, -1, SYSUTCDATETIME()));
                 """;
-            await command.ExecuteNonQueryAsync();
+            command.Parameters.Add("@patronIdSnapshot", SqlDbType.Int).Value = patronIdSnapshot is > 0
+                ? patronIdSnapshot.Value
+                : DBNull.Value;
+            command.Parameters.Add("@barcode", SqlDbType.NVarChar, 50).Value = barcode;
+            command.Parameters.Add("@identifier", SqlDbType.NVarChar, 100).Value = identifier;
+            return Convert.ToInt64(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        using var client = factory!.CreateClient();
-        var login = await client.PostAsJsonAsync(
-            "/api/asap/patron/login",
-            new { barcode = "20000000000011", pin = "1234", libraryOrgId = 2 });
-        using var loginDocument = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
-            "Bearer",
-            loginDocument.RootElement.GetProperty("token").GetString());
+        static Task<HttpResponseMessage> SubmitSuggestionAsync(HttpClient client, string identifier, string title) =>
+            client.PostAsJsonAsync(
+                "/api/asap/patron/suggestions",
+                new
+                {
+                    format = "book",
+                    title,
+                    author = "New Author",
+                    isbn = identifier,
+                    publication = "Coming soon",
+                    preferredPickupBranchId = 101,
+                    autohold = true,
+                    customFields = new Dictionary<string, string?>()
+                });
 
-        var response = await client.PostAsJsonAsync(
-            "/api/asap/patron/suggestions",
-            new
-            {
-                format = "book",
-                title = "A New Cross Patron Request",
-                author = "New Author",
-                isbn = "CROSS-PATRON-ID",
-                publication = "Coming soon",
-                preferredPickupBranchId = 101,
-                autohold = true,
-                customFields = new Dictionary<string, string?>()
-            });
+        static async Task<long> ReadCreatedRequestIdAsync(HttpResponseMessage response)
+        {
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            return long.Parse(document.RootElement.GetProperty("id").GetString()!, System.Globalization.CultureInfo.InvariantCulture);
+        }
 
-        Assert.AreEqual(HttpStatusCode.Created, response.StatusCode, await response.Content.ReadAsStringAsync());
-        await using var verify = new SqlConnection(databaseConnectionString);
-        await verify.OpenAsync();
-        await using var verifyCommand = verify.CreateCommand();
-        verifyCommand.CommandText =
-            """
-            SELECT request.[Notes], COUNT(tag.[Id])
-            FROM [asap].[TitleRequest] AS request
-            LEFT JOIN [asap].[TitleRequestWorkflowTag] AS requestTag ON requestTag.[TitleRequestId] = request.[Id]
-            LEFT JOIN [asap].[WorkflowTag] AS tag
-              ON tag.[Id] = requestTag.[WorkflowTagId] AND tag.[Code] = N'duplicate_suggestion'
-            WHERE request.[LibraryOrganizationId] = 2 AND request.[Barcode] = N'20000000000011'
-            GROUP BY request.[Notes];
-            """;
-        await using var reader = await verifyCommand.ExecuteReaderAsync();
-        Assert.IsTrue(await reader.ReadAsync());
-        CollectionAssert.Contains(
-            reader.GetString(0).Split(["\r\n"], StringSplitOptions.None),
-            "Tagged as a duplicate suggestion because another patron has a suggestion with the same identifier number.",
-            reader.GetString(0));
-        Assert.AreEqual(1, reader.GetInt32(1));
+        async Task<(string Notes, int DuplicateTagCount, int? PatronIdSnapshot)> ReadDuplicateResultAsync(long requestId)
+        {
+            await using var verify = new SqlConnection(databaseConnectionString);
+            await verify.OpenAsync();
+            await using var command = verify.CreateCommand();
+            command.CommandText =
+                """
+                SELECT request.[Notes], COUNT(tag.[Id]), request.[PatronIdSnapshot]
+                FROM [asap].[TitleRequest] AS request
+                LEFT JOIN [asap].[TitleRequestWorkflowTag] AS requestTag ON requestTag.[TitleRequestId] = request.[Id]
+                LEFT JOIN [asap].[WorkflowTag] AS tag
+                  ON tag.[Id] = requestTag.[WorkflowTagId] AND tag.[Code] = N'duplicate_suggestion'
+                WHERE request.[Id] = @id
+                GROUP BY request.[Notes], request.[PatronIdSnapshot];
+                """;
+            command.Parameters.AddWithValue("@id", requestId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            return (reader.GetString(0), reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetInt32(2));
+        }
     }
 
     [TestMethod]
     public async Task WeeklyLimitUsesSevenBusinessCalendarDaysAcrossSpringGap()
     {
-        timeProvider!.SetUtcNow(new DateTimeOffset(2030, 3, 17, 6, 30, 0, TimeSpan.Zero));
+        int? originalLimit;
+        string? originalMessage;
+        DateTime originalUpdatedUtc;
+        bool hadSettings;
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
-            await using var command = connection.CreateCommand();
-            command.CommandText =
-                """
-                IF EXISTS (SELECT 1 FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 2)
-                    UPDATE [asap].[WorkflowSettings]
-                    SET [SuggestionLimit] = 1,
-                        [SuggestionLimitMessage] = N'Available after {{next_available_date}}.',
-                        [UpdatedUtc] = SYSUTCDATETIME()
-                    WHERE [OrganizationId] = 2;
-                ELSE
-                    INSERT INTO [asap].[WorkflowSettings]
-                        ([OrganizationId], [SuggestionLimit], [SuggestionLimitMessage], [UpdatedUtc])
-                    VALUES
-                        (2, 1, N'Available after {{next_available_date}}.', SYSUTCDATETIME());
-
-                INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [Author], [Identifier],
-                     [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
-                     [AutoHold], [MaterialFormatId], [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES
-                    (2, 101, N'20000000000020', N'Outside Calendar Window', N'Test Author', N'OLD-LIMIT-ID',
-                     101, N'Main Library', N'Test Library', 1,
-                     (SELECT [Id] FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book'),
-                     N'suggestion', N'not_found', '2030-03-10T07:00:00Z', '2030-03-10T07:00:00Z');
-                """;
-            await command.ExecuteNonQueryAsync();
+            await using var read = connection.CreateCommand();
+            read.CommandText = "SELECT [SuggestionLimit], [SuggestionLimitMessage], [UpdatedUtc] FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 2;";
+            await using var reader = await read.ExecuteReaderAsync();
+            hadSettings = await reader.ReadAsync();
+            originalLimit = hadSettings && !reader.IsDBNull(0) ? reader.GetInt32(0) : null;
+            originalMessage = hadSettings && !reader.IsDBNull(1) ? reader.GetString(1) : null;
+            originalUpdatedUtc = hadSettings ? reader.GetDateTime(2) : default;
         }
 
-        using var client = factory!.CreateClient();
-        var login = await client.PostAsJsonAsync(
-            "/api/asap/patron/login",
-            new { barcode = "20000000000020", pin = "1234", libraryOrgId = 2 });
-        using var loginDocument = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
-            "Bearer",
-            loginDocument.RootElement.GetProperty("token").GetString());
-
-        var response = await client.PostAsJsonAsync(
-            "/api/asap/patron/suggestions",
-            new
+        long? seededRequestId = null;
+        long? submittedRequestId = null;
+        var barcode = $"349-weekly-{Guid.NewGuid():N}";
+        try
+        {
+            timeProvider!.SetUtcNow(new DateTimeOffset(2030, 3, 17, 6, 30, 0, TimeSpan.Zero));
+            var provider = factory!.Services.GetRequiredService<DeterministicTestingPatronProvider>();
+            provider.AddPatron(
+                new PatronSnapshot(989020, barcode, "weekly-limit@example.org", "Weekly", "Limit",
+                    1, "Adult", 101, 2, "Test Library", 101),
+                [new PickupBranch(101, "Main Library")], 2);
+            provider.SetIdentifierResult("NEW-LIMIT-ID", 2, new(IdentifierLookupOutcome.DefinitiveNotFound));
+            await using (var connection = new SqlConnection(databaseConnectionString))
             {
-                format = "book",
-                title = "Inside New Calendar Window",
-                author = "Test Author",
-                isbn = "NEW-LIMIT-ID",
-                publication = "Coming soon",
-                preferredPickupBranchId = 101,
-                autohold = true,
-                customFields = new Dictionary<string, string?>()
-            });
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    IF EXISTS (SELECT 1 FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 2)
+                        UPDATE [asap].[WorkflowSettings]
+                        SET [SuggestionLimit] = 1,
+                            [SuggestionLimitMessage] = N'Available after {{next_available_date}}.',
+                            [UpdatedUtc] = SYSUTCDATETIME()
+                        WHERE [OrganizationId] = 2;
+                    ELSE
+                        INSERT INTO [asap].[WorkflowSettings]
+                            ([OrganizationId], [SuggestionLimit], [SuggestionLimitMessage], [UpdatedUtc])
+                        VALUES
+                            (2, 1, N'Available after {{next_available_date}}.', SYSUTCDATETIME());
 
-        Assert.AreEqual(HttpStatusCode.Created, response.StatusCode, await response.Content.ReadAsStringAsync());
+                    INSERT INTO [asap].[TitleRequest]
+                        ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [Author], [Identifier],
+                         [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
+                         [AutoHold], [MaterialFormatId], [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
+                    OUTPUT INSERTED.[Id]
+                    VALUES
+                        (2, 101, @barcode, N'Outside Calendar Window', N'Test Author', N'OLD-LIMIT-ID',
+                         101, N'Main Library', N'Test Library', 1,
+                         (SELECT [Id] FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book'),
+                         N'suggestion', N'not_found', '2030-03-10T07:00:00Z', '2030-03-10T07:00:00Z');
+                    """;
+                command.Parameters.Add("@barcode", SqlDbType.NVarChar, 50).Value = barcode;
+                seededRequestId = Convert.ToInt64(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            using var client = factory!.CreateClient();
+            var login = await client.PostAsJsonAsync(
+                "/api/asap/patron/login",
+                new { barcode, pin = "1234", libraryOrgId = 2 });
+            using var loginDocument = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                "Bearer",
+                loginDocument.RootElement.GetProperty("token").GetString());
+
+            var response = await client.PostAsJsonAsync(
+                "/api/asap/patron/suggestions",
+                new
+                {
+                    format = "book",
+                    title = "Inside New Calendar Window",
+                    author = "Test Author",
+                    isbn = "NEW-LIMIT-ID",
+                    publication = "Coming soon",
+                    preferredPickupBranchId = 101,
+                    autohold = true,
+                    customFields = new Dictionary<string, string?>()
+                });
+
+            Assert.AreEqual(HttpStatusCode.Created, response.StatusCode, await response.Content.ReadAsStringAsync());
+            using var submittedDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            submittedRequestId = long.Parse(
+                submittedDocument.RootElement.GetProperty("id").GetString()!,
+                System.Globalization.CultureInfo.InvariantCulture);
+        }
+        finally
+        {
+            await DeleteTestPatronSessionAsyncByBarcode(barcode);
+            var requestIds = new HashSet<long>(new[] { seededRequestId, submittedRequestId }.OfType<long>());
+            await using (var discover = new SqlConnection(databaseConnectionString))
+            {
+                await discover.OpenAsync();
+                await using var findRequests = discover.CreateCommand();
+                findRequests.CommandText =
+                    "SELECT [Id] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 2 AND [Barcode] = @barcode " +
+                    "AND [Identifier] IN (N'OLD-LIMIT-ID', N'NEW-LIMIT-ID');";
+                findRequests.Parameters.Add("@barcode", SqlDbType.NVarChar, 50).Value = barcode;
+                await using var rows = await findRequests.ExecuteReaderAsync();
+                while (await rows.ReadAsync())
+                {
+                    requestIds.Add(rows.GetInt64(0));
+                }
+            }
+            foreach (var requestId in requestIds)
+            {
+                await using (var cleanup = new SqlConnection(databaseConnectionString))
+                {
+                    await cleanup.OpenAsync();
+                    await using var removeOutbox = new SqlCommand(
+                        "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @id);",
+                        cleanup);
+                    removeOutbox.Parameters.AddWithValue("@id", requestId);
+                    await removeOutbox.ExecuteNonQueryAsync();
+                }
+                await DeleteRequestAsync(requestId);
+            }
+            await using var restore = new SqlConnection(databaseConnectionString);
+            await restore.OpenAsync();
+            await using var command = restore.CreateCommand();
+            command.CommandText = hadSettings
+                ? "UPDATE [asap].[WorkflowSettings] SET [SuggestionLimit] = @limit, [SuggestionLimitMessage] = @message, [UpdatedUtc] = @updated WHERE [OrganizationId] = 2;"
+                : "DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 2;";
+            if (hadSettings)
+            {
+                command.Parameters.Add("@limit", SqlDbType.Int).Value = originalLimit is { } limit ? limit : DBNull.Value;
+                command.Parameters.Add("@message", SqlDbType.NVarChar, -1).Value = originalMessage is { } message ? message : DBNull.Value;
+                command.Parameters.Add("@updated", SqlDbType.DateTime2).Value = originalUpdatedUtc;
+            }
+            await command.ExecuteNonQueryAsync();
+        }
     }
 
     private static async Task<string> WriteStaffConfigurationAsync(
@@ -9382,7 +9773,11 @@ public sealed partial class PatronJourneyTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private static async Task<long> SeedPendingHoldRequestAsync(string title, string barcode, int bibId)
+    private static async Task<long> SeedPendingHoldRequestAsync(
+        string title,
+        string barcode,
+        int bibId,
+        int? patronOrganizationId = 101)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -9391,9 +9786,9 @@ public sealed partial class PatronJourneyTests
             DECLARE @formatId bigint = (
                 SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
             INSERT INTO [asap].[TitleRequest]
-                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
+                ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-            VALUES (2, @barcode, @title, 1, @formatId, N'pending_hold', @bibId, 1,
+            VALUES (2, @patronOrganizationId, @barcode, @title, 1, @formatId, N'pending_hold', @bibId, 1,
                     101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
             SELECT CONVERT(bigint, SCOPE_IDENTITY());
             """,
@@ -9401,6 +9796,7 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@title", title);
         command.Parameters.AddWithValue("@barcode", barcode);
         command.Parameters.AddWithValue("@bibId", bibId);
+        command.Parameters.AddWithValue("@patronOrganizationId", (object?)patronOrganizationId ?? DBNull.Value);
         return Convert.ToInt64(await command.ExecuteScalarAsync());
     }
 
@@ -9979,8 +10375,9 @@ public sealed partial class PatronJourneyTests
             """
             IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id]=83)
             BEGIN
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (83, N'Additional Copy Race Library', N'ACR', 1);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (83, N'Additional Copy Race Library', N'ACR', 2, 1, 1);
             END;
             INSERT INTO [asap].[StaffUser]
                 ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
@@ -10179,8 +10576,9 @@ public sealed partial class PatronJourneyTests
             """
             IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = 82)
             BEGIN
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (82, N'Other Browser Library', N'OBR', 1);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (82, N'Other Browser Library', N'OBR', 2, 1, 1);
             END;
 
             UPDATE [asap].[SystemSettings]
@@ -10493,10 +10891,12 @@ public sealed partial class PatronJourneyTests
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-            VALUES (2, N'Test Library', N'TEST', 1);
-            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-            VALUES (101, N'Main Library Branch', N'MAIN', 0);
+            INSERT INTO [asap].[Organization]
+                ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+            VALUES (2, N'Test Library', N'TEST', 2, 1, 1);
+            INSERT INTO [asap].[Organization]
+                ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+            VALUES (101, N'Main Library Branch', N'MAIN', 3, 2, 0);
             UPDATE [asap].[PolarisSettings]
             SET [WorkstationId] = 99, [SystemPolarisUserId] = 42 WHERE [OrganizationId] = 1;
             UPDATE [asap].[EmailSettings]
@@ -10546,7 +10946,10 @@ public sealed partial class PatronJourneyTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private async Task<PolarisPatronProvider> CreatePolarisProviderAsync(HttpMessageHandler handler, string accessId = "test-access")
+    private async Task<PolarisPatronProvider> CreatePolarisProviderAsync(
+        HttpMessageHandler handler,
+        string accessId = "test-access",
+        ILogger<PolarisPatronProvider>? cleanupLogger = null)
     {
         var services = factory!.Services;
         var protector = services.GetRequiredService<IntegrationCredentialProtector>();
@@ -10577,7 +10980,9 @@ public sealed partial class PatronJourneyTests
         return new PolarisPatronProvider(
             services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
             protector,
-            new SingleClientFactory(new HttpClient(handler)), services.GetRequiredService<TimeProvider>());
+            new SingleClientFactory(new HttpClient(handler)),
+            services.GetRequiredService<TimeProvider>(),
+            cleanupLogger ?? services.GetRequiredService<ILogger<PolarisPatronProvider>>());
     }
 
     private async Task<SeededSensitiveOutbox> SeedSensitiveOutboxAsync(
@@ -10602,7 +11007,9 @@ public sealed partial class PatronJourneyTests
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            UPDATE [asap].[Organization] SET [IsActive] = 1 WHERE [Id] = 2;
+            UPDATE [asap].[Organization]
+            SET [IsActive] = 1
+            WHERE [Id] = 2 AND @authorizationOrganizationId = 2;
             DECLARE @staff TABLE ([Id] bigint);
             INSERT INTO [asap].[StaffUser]
                 ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
@@ -10935,11 +11342,13 @@ public sealed partial class PatronJourneyTests
             """
             IF EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = @id)
                 UPDATE [asap].[Organization]
-                SET [DisplayName] = @name, [Abbreviation] = @abbreviation, [IsActive] = 1
+                SET [DisplayName] = @name, [Abbreviation] = @abbreviation,
+                    [OrganizationCodeId] = 2, [ParentOrganizationId] = 1, [IsActive] = 1
                 WHERE [Id] = @id;
             ELSE
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-                VALUES (@id, @name, @abbreviation, 1);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (@id, @name, @abbreviation, 2, 1, 1);
             """;
         command.Parameters.AddWithValue("@id", organizationId);
         command.Parameters.AddWithValue("@name", name);
@@ -11201,7 +11610,8 @@ public sealed partial class PatronJourneyTests
 
         public Task<IReadOnlyList<PolarisOrganizationSnapshot>> GetOrganizationsAsync(
             CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<PolarisOrganizationSnapshot>>([]);
+            Task.FromResult<IReadOnlyList<PolarisOrganizationSnapshot>>(
+                [new(1, "System", null, 1, null), new(2, "Test Library", "Test", 2, 1)]);
 
         public Task<IReadOnlyList<PolarisPatronCodeSnapshot>> GetPatronCodesAsync(
             CancellationToken cancellationToken) =>
@@ -11371,8 +11781,10 @@ public sealed partial class PatronJourneyTests
         }
 
         public Guid RequestGuid { get; } = Guid.NewGuid();
+        public int PatronId { get; set; } = 7105;
         public int CreateCount { get; private set; }
         public int ReplyCount { get; private set; }
+        public HoldReplyCommand? LastReplyCommand { get; private set; }
         public int HoldReadCount { get; private set; }
         public IReadOnlyList<PolarisHoldSnapshot> Holds { get; set; } = [];
         public Exception? HoldReadException { get; set; }
@@ -11477,24 +11889,26 @@ public sealed partial class PatronJourneyTests
                 RefreshStarted.TrySetResult();
                 await PendingRefresh.Task.WaitAsync(cancellationToken);
             }
+            var registrationOrganizationId = organizationId == 2 ? 101 : organizationId;
             return new PatronSnapshot(
-                7105,
+                PatronId,
                 barcode,
                 "hold-patron@example.org",
                 "Hold",
                 "Patron",
                 1,
                 "Adult",
-                101,
-                2,
+                registrationOrganizationId,
+                organizationId > 1 ? organizationId : 2,
                 "Test Library",
-                101);
+                registrationOrganizationId);
         }
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
             PatronSnapshot patron,
             int organizationId, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<PickupBranch>>([new PickupBranch(101, "Main Library")]);
+            Task.FromResult<IReadOnlyList<PickupBranch>>([
+                new PickupBranch(patron.PatronOrganizationId, "Registered Branch")]);
 
         public Task UpdatePreferredPickupBranchAsync(
             string barcode,
@@ -11549,6 +11963,7 @@ public sealed partial class PatronJourneyTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             ReplyCount++;
+            LastReplyCommand = command;
             if (ReplyException is not null) throw ReplyException;
             Assert.AreEqual(RequestGuid, command.RequestGuid);
             Assert.AreEqual("group-qualifier", command.TxnGroupQualifier);

@@ -9,6 +9,7 @@ using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.SqlClient;
 
 namespace Asap.Web.Infrastructure.Jobs;
 
@@ -42,7 +43,7 @@ public sealed partial class WorkflowProcessingService
                 IsolationLevel.ReadCommitted, cancellationToken);
             var auditScope = scopeOrganizationId ?? LibraryScope.SystemOrganizationId;
             if (!await LockManualOrganizationsAsync(auditContext, manualActorEvidence, auditScope, cancellationToken) ||
-                auditContext.Organizations.Local.Single(item => item.Id == auditScope).IsActive != true ||
+                !OrganizationAuthority.IsActiveScope(auditContext.Organizations.Local.Single(item => item.Id == auditScope)) ||
                 !await IsManualActorAllowedLockedAsync(auditContext, manualActorEvidence, auditScope, cancellationToken))
             {
                 return new WorkflowRunResult("staff_scope_forbidden", ManualRunId: manualRunId);
@@ -71,7 +72,8 @@ public sealed partial class WorkflowProcessingService
 
         await using var readContext = await contextFactory.CreateDbContextAsync(cancellationToken);
         var organizations = await readContext.Organizations.AsNoTracking()
-            .Where(item => item.IsActive && item.Id > 1 &&
+            .Where(item => item.IsActive && item.Id > LibraryScope.SystemOrganizationId &&
+                           item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId &&
                            (!scopeOrganizationId.HasValue || item.Id == scopeOrganizationId.Value))
             .ToListAsync(cancellationToken);
         var organizationIds = organizations.Select(item => item.Id).ToHashSet();
@@ -121,6 +123,7 @@ public sealed partial class WorkflowProcessingService
             try
             {
                 readiness = await emailSender.CheckReadinessAsync(authorizationOrganizationId, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
@@ -211,9 +214,9 @@ public sealed partial class WorkflowProcessingService
                 await context.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 createdCount++;
-                DispatchCommittedOutbox(outbox);
+                DispatchCommittedOutbox(outbox, cancellationToken);
             }
-            catch (DbUpdateException exception) when (exception.InnerException is DbException)
+            catch (DbUpdateException exception) when (exception.InnerException is SqlException { Number: 2601 or 2627 })
             {
                 logger.LogInformation(exception, "Weekly summary duplicate or concurrent recipient mutation was ignored.");
             }
@@ -242,6 +245,7 @@ public sealed partial class WorkflowProcessingService
                 try
                 {
                     readiness = await emailSender.CheckReadinessAsync(candidate.LibraryOrganizationId, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
@@ -277,7 +281,7 @@ public sealed partial class WorkflowProcessingService
         var code = "skipped";
         var changed = false;
         EmailOutbox? pendingOutbox = null;
-        if (organization?.IsActive == true && request is not null &&
+        if (organization is not null && OrganizationAuthority.IsActiveLibrary(organization) && request is not null &&
             request.LibraryOrganizationId == candidate.LibraryOrganizationId &&
             request.RowVersion.SequenceEqual(candidate.RowVersion) &&
             request.Status == StatusFor(family))
@@ -329,17 +333,24 @@ public sealed partial class WorkflowProcessingService
             cancellationToken);
         if (result.LocalCommit)
         {
-            DispatchCommittedOutbox(pendingOutbox);
+            DispatchCommittedOutbox(pendingOutbox, cancellationToken);
         }
         return result;
     }
 
-    private void DispatchCommittedOutbox(EmailOutbox? outbox)
+    private void DispatchCommittedOutbox(EmailOutbox? outbox, CancellationToken cancellationToken)
     {
         if (outbox?.Status != "pending")
         {
             return;
         }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            logger.LogInformation("Email outbox {OutboxId} awaits the scheduled sweep after caller cancellation.", outbox.Id);
+            return;
+        }
+
         try
         {
             outboxDispatcher.Enqueue(outbox.Id);
@@ -383,7 +394,7 @@ public sealed partial class WorkflowProcessingService
                 .SingleOrDefaultAsync(cancellationToken);
         var code = "skipped";
         var changed = false;
-        if (organization?.IsActive == true && request is not null &&
+        if (organization is not null && OrganizationAuthority.IsActiveLibrary(organization) && request is not null &&
             request.LibraryOrganizationId == candidate.LibraryOrganizationId &&
             request.RowVersion.SequenceEqual(candidate.RowVersion) &&
             request.Status == "open")

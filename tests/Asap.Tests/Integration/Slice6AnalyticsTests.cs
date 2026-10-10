@@ -209,9 +209,10 @@ public sealed partial class PatronJourneyTests
             DECLARE @formatId bigint = (
                 SELECT TOP (1) [Id] FROM [asap].[MaterialFormat]
                 WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book');
-            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
-            VALUES (@organizationA, N'Analytics A ' + @suffix, N'AN-A', 1),
-                   (@organizationB, N'Analytics B ' + @suffix, N'AN-B', 1);
+            INSERT INTO [asap].[Organization]
+                ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+            VALUES (@organizationA, N'Analytics A ' + @suffix, N'AN-A', 2, 1, 1),
+                   (@organizationB, N'Analytics B ' + @suffix, N'AN-B', 2, 1, 1);
 
             DECLARE @t1 bigint, @t2 bigint, @t3 bigint, @t4 bigint, @t5 bigint, @t6 bigint, @t7 bigint, @t8 bigint;
             INSERT INTO [asap].[TitleRequest]

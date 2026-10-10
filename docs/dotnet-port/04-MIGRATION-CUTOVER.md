@@ -29,11 +29,12 @@ Export creates a normalized UTF-8 JSON directory/package plus manifest. The expo
 
 ### Import/reconcile - new .NET server
 
-Transfer the normalized package through the trusted administrative path to the new ASAP server. Run `Asap.Migration validate/import/reconcile` there against the pre-provisioned empty SQL database. `validate` may omit external configuration when only package structure is being checked, but `import` and `reconcile` currently require the ACLed target external configuration path:
+Transfer the normalized package through the trusted administrative path to the new ASAP server. Run `Asap.Migration validate/import/reconcile` there against the pre-provisioned empty schema-12 SQL database. `validate` may omit external configuration when only package structure is being checked, but `import`, `reconcile`, and `recover-report` require the ACLed target external configuration path:
 
 ```text
 Asap.Migration import ... --external-config <path>
 Asap.Migration reconcile ... --external-config <path>
+Asap.Migration recover-report ... --external-config <path>
 ```
 
 The required external configuration is the target operational configuration used for schedule and processing-limit parity; do not substitute a package-local or guessed file.
@@ -115,9 +116,10 @@ The export shape should expose PocketBase IDs needed to resolve relationships du
 
 ## 5. Import execution model
 
-- Target database must be a fresh schema-10 migration target for the one-time import: the intended DACPAC may already be deployed and deterministic structural/static seed rows such as `SchemaVersion`, `DeploymentState`, and app-owned taxonomy/default scaffolding may exist, but runtime/business/bootstrap rows (`StaffUser`, requests, imported configuration-domain rows, outbox, etc.) must be empty. Schema 7 is the native Polaris pre-release reset boundary: pre-7 databases are recreated from the current DACPAC and sources are re-exported with the current migration contract. All nonblank legacy BIB IDs are parsed once as positive Int32, so "9001" and "09001" reconcile to the same identity; malformed, zero, negative, and overflow values block import. BIB verification/provenance remains independent of that canonicalization. The final target must never have been used for production-hostname preflight.
+- Target database must be a fresh schema-12 migration target for the one-time import: the intended DACPAC may already be deployed and deterministic structural/static seed rows such as `SchemaVersion`, `DeploymentState`, and app-owned taxonomy/default scaffolding may exist, but runtime/business/bootstrap rows (`StaffUser`, requests, imported configuration-domain rows, outbox, etc.) must be empty. Native schemas 7 through 11 upgrade in place to 12; pre-7 databases are recreated from the current DACPAC and sources are re-exported with the current migration contract. All nonblank legacy BIB IDs are parsed once as positive Int32, so "9001" and "09001" reconcile to the same identity; malformed, zero, negative, and overflow values block import. BIB verification/provenance remains independent of that canonicalization. The final target must never have been used for production-hostname preflight.
 - Deploy the `BibIdStaffVerified` column before the first source import into that fresh target. Adding its `DEFAULT (0)` to an existing database would give every preexisting BIB an unverified value without recovering its provenance; that is not a supported authority backfill. The cutover path recreates the pre-cutover target, imports every `TitleRequest` with an explicit classified value, and does not start the identifier worker until reconciliation passes. After import, ordinary DACPAC upgrades preserve the stored field values.
 - If import fails, reset/recreate target and rerun; do not create a complicated resume-in-place engine.
+- The importer writes its package-identified pending reconciliation report before SQL commit, then atomically promotes it after SQL confirms commit. The report includes a SHA-256 hash of SQL Server's reported server name and current database name, which binds recovery to that SQL identity without recording a connection alias, endpoint, or credentials; it does not attest to machine identity or distinguish aliases that resolve to the same SQL identity. The complete target fingerprint includes protected ciphertext values but records only the digest in the report. `import_report_prepare_failed` means the pending report was not written and SQL was not committed. `import_committed_report_failed` means SQL did commit: do not retry import; resolve the report-path failure and run `recover-report` with the same package and target. Recovery is read-only with respect to SQL, independently rechecks source relationships, target state, complete typed transformation entries, counts, package identity, and commit state, and safely accepts an already recovered report. If `Commit` itself throws, its outcome is ambiguous; inspect the target and use recovery only when its independent checks prove a complete import. A report fingerprint alone does not authorize recovery.
 - Execute dependency-ordered phases.
 - Use a transaction per coherent phase rather than one giant transaction if data size/operability favors bounded phases.
 - Stop immediately on a structural/semantic blocker.
@@ -126,12 +128,51 @@ The export shape should expose PocketBase IDs needed to resolve relationships du
 
 A dry-run/preflight mode should validate source values and mappings before target mutation wherever practical.
 
+The report recovery oracle independently derives the source-owned SQL projection
+from the immutable package and read-only SQL queries. It covers exact
+populations, identities, relationships, values, and authorized transforms for
+organization, material-format, settings/template, custom-field, staff,
+title-request/copy, claim, tag, branding, deleted-audit, request-event, and
+email-delivery families. It does not call importer resolvers or reconciliation
+to derive its expected values, and a refreshed target fingerprint cannot
+authorize field drift. Protected Polaris credentials and the target provider
+token are explicit presence-only/operator-provisioned boundaries; the oracle
+does not claim plaintext equality or expose protected values, ciphertext, or
+secret hashes. Imported `datetime2(7)` timestamps preserve exact source or
+manifest UTC ticks.
+
+Configuration preflight parses embed origins from their raw authority before
+SQL, including rejecting empty/nondecimal/out-of-range ports, malformed DNS or
+IPv6 authorities, user information, paths, and remote HTTP. It preserves the
+pinned legacy accepted forms and source spelling decision for explicit `:443`.
+Template relationships must be editable under target scope rules: system
+templates do not have override parents, ordinary library overrides retain the
+same system key, rejection overrides point only to a system rejection-template
+row, and workflow timeouts select rejection rows in system or the selected
+library scope. An explicit ordinary source parent whose key differs is refused
+as an unsupported target lineage shape; the legacy ordinary-email runtime
+ignored that edge for effective lookup, while the target editor requires
+parent identity and key to agree.
+Ordinary source templates using the target-reserved `rejection:` prefix are
+refused because target rejection policy classifies by that prefix while the
+pinned source keeps ordinary and rejection templates in separate collections.
+The SQL target compares template keys case-insensitively; migration refuses
+case-only collisions with the seeded `suggestion_submitted` identity, implicit
+ordinary-template parents, or rejection-template identities that would merge
+separate source rows. Workflow-tag codes preserve exact source case except for
+the pinned display-label aliases; case-only collisions with another source
+tag or a static seed are unsupported. Noncolliding custom casing remains
+unchanged. Numeric `libraryOrganization` fallback references retain the
+importer's integer syntax, including a leading `+`, and must still resolve to
+a source organization classified as code-2 library.
+
 ## 6. Binding transformation rules
 
 ### 6.1 Organizations
 
 - Polaris Organization ID is the durable target key.
-- System organization `1` maps to target Organization `1`.
+- System organization `1` maps to target Organization `1` and remains active even when its legacy participation flag is false.
+- Preserve the native Polaris organization-code and parent IDs. An organization above ID `1` is an authoritative library only when its native code is `2`; code-3 branches and rows with absent or unrecognized type codes remain reference rows but import inactive. Do not infer library authority from `enabledForPatrons` alone. Preserve every ID and existing relationship, including branch references in request history.
 - Historically referenced libraries that are no longer participating are still inserted as inactive Organization rows, using historical metadata where available, so request/staff/history FKs remain valid. Staff/admin relationships to those organizations remain valid regardless of `Organization.IsActive`; usability is an authorization concern, not a migration FK rule.
 - Newly discovered/current but non-participating libraries are not implicitly activated by migration.
 
@@ -183,6 +224,8 @@ Clearing removes the effective StaffUser FK, display-name snapshot, claim time, 
 
 For closed TitleRequests/AdditionalCopyRequests, keep historical claimant fields and a mapped StaffUser FK even if the user is now inactive/out-of-scope. If unmapped, retain the display/time/type attribution with null FK and report the historical mapping conversion; do not pretend it is an operational claim. Closed records are not reopened or otherwise normalized as open work during import. Runtime AdditionalCopy reopening later applies section 20.1 of the porting spec.
 
+AdditionalCopy creator and closer display-name snapshots are optional attribution: source `null` or `""` maps to SQL `NULL`, while every nonempty source string is preserved exactly, including whitespace. Reopened copies retain no closer staff ID, display name, or timestamp; do not infer an actor from the snapshot.
+
 Reconciliation must join every non-null open claimant to the current target StaffUser and prove activity, valid identity/trust, and role/library scope (same library or system super-admin), **not just FK existence**. Report exact converted/preserved counts by request type, library, and reason, separately from closed-history conversions and invalid-rule normalization. All unchanged historical fields and deliberate cleared fields must match the transform report.
 
 ### 6.4 Events
@@ -206,13 +249,14 @@ Map known aliases to target constrained values. Unknown values that cannot be se
 - `StaffApplicationUrl` is a mandatory explicit resolver test. Current runtime behavior is: a meaningful persisted `system_settings.staffUrl` wins; if blank, `ASAP_STAFF_URL` is checked; then `ASAP_PUBLIC_URL`; then the runtime localhost fallback. Separately, the helper used when synthesizing/initializing a missing system record uses `ASAP_STAFF_URL`, then `ASAP_BASE_URL`, then localhost. The snapshotter must exercise the actual pinned resolver path for the frozen database state rather than flattening these two paths into an invented fallback order.
 - For each system/global field represented in the runtime-fallback snapshot, import/reconcile the frozen effective value rather than a blank raw field. Other system/default and all library-scoped configuration comes from the appropriate domain export; the runtime-fallback snapshot is not a second complete settings export.
 - Global application-only values -> `SystemSettings` / `PatronEmbedAllowedOrigin`.
+  Imported embed origins are preflighted from the raw authority before SQL. Ordinary HTTPS origins permit one optional trailing slash; HTTP is allowed only for localhost/loopback. Wildcards are HTTPS-only ASCII DNS suffixes containing at least one dot, with no path. Reject user info, malformed DNS or bracketed IPv6, empty/nondecimal ports, numeric ports outside 0–65535, query/fragment, and other paths. Preserve explicit port text, including `:443`; do not treat it as equal to an omitted port in the target CSP contract.
 - Polaris integration -> system-only `PolarisSettings`; drop legacy per-staff Polaris auth fields not used by the target. Recognize legacy requesting/pickup aliases only to retain exact migration transformation provenance; they never become target authority. Workstation/system-user source values must be positive Int32 or absent; invalid values block import rather than manufacture defaults.
-- Workflow scalar defaults/overrides -> `WorkflowSettings`; only meaningful current library overrides become nullable library values. Common-creator list -> `CommonCreatorSet`/terms; allowed patron-code list -> `PatronCodeEligibilitySet`/members. Blank library lists mean no set/inherit.
+- Workflow scalar defaults/overrides -> `WorkflowSettings`; only meaningful current library overrides become nullable library values. Common-creator list -> `CommonCreatorSet`/terms; allowed patron-code list -> `PatronCodeEligibilitySet`/members. The pinned legacy source's blank/empty library lists that mean inheritance normalize to no target set during migration. This source-import normalization is separate from the current target settings API, where omitted means no edit, library `null` means reset/inherit, and `[]` means a present empty replacement; system common-creator `null`/`[]` both clear, while patron-code system `null` is invalid and `[]` clears.
 - Patron UI/status/eBook/eAudiobook values -> `PatronSettings`, correcting current record-level fallback quirks to target field-level inheritance without discarding stored values. Blank fields on a partial library UI record become no override and may therefore change from a hard-coded fallback to the configured system value; enumerate those intentional corrections in the transform report.
-- Current SMTP/sender state -> target Postmark-oriented `EmailSettings` only where there is a semantic equivalent: migrate effective sender identity/configuration, but treat legacy SMTP host/port/username/password/TLS transport fields as an intentional drop. Never reinterpret an SMTP password as a Postmark server token. The new target system Postmark token is supplied separately through secure target-provisioning input during import.
+- Current SMTP/sender state -> target Postmark-oriented `EmailSettings` only where there is a semantic equivalent: migrate effective sender identity/configuration, but treat legacy SMTP host/port/username/password/TLS transport fields as an intentional drop. Never reinterpret an SMTP password as a Postmark server token. The new target system Postmark token is supplied separately through secure target-provisioning input during import. The report always records one bounded `email_provider_token` transformation with only organization `1` and a `postmarkTokenProvisioned` boolean, including when no SMTP row exists; the source-SMTP audit bit must agree when present. An `email_settings` report entry preserves the exact SMTP source ID and records `legacy_smtp_transport_intentionally_dropped` with the stable `target_email_sender_selected_by_external_configuration` boundary; this does not snapshot mutable `EmailSafety.DeliveryMode`. Reconcile and recovery check target token presence against this operator-owned bit without exposing plaintext, ciphertext, hashes, or per-secret fingerprints.
 - Current external-search slots -> stable system `ExternalSearchProvider` identities plus sparse library overrides.
-- Publication options -> `PublicationOptionSet`/options with whole-list replacement semantics and preserved normalized option IDs. Preserve inherited versus meaningful replacement; a blank library source value means inherit/reset.
-- Additional/custom patron fields -> relational `PatronCustomField`/option rows plus `MaterialFormatCustomFieldRule` rows; preserve stable option IDs/enabled/order and do not invent system defaults.
+- Publication options -> `PublicationOptionSet`/options with whole-list replacement semantics and preserved effective option identities. Explicit IDs are trimmed; missing IDs use the pinned label slug, including the source `İ` expansion. Zero or omitted order uses `(source array index + 1) * 10`, and effective rows are stably ordered by that value. An empty System list, or a list with more than three labels where over half are ASCII digits-only, resolves to the canonical seeded `already_published`, `coming_soon`, and `published_a_while_back` options. The numeric safety fallback applies to JSON arrays and newline lists. The same empty/numeric fallback for a library means inherit the current System set and creates no library set. A selected whitespace-only label/name/value alias is rejected before SQL; a truly empty alias is falsy and can fall through to the next alias. These migration source semantics do not change the current target API: `[]` is an intentional empty set, library `null` resets to inheritance, and system `null`/`[]` clears its target list.
+- Additional/custom patron fields -> relational `PatronCustomField`/option rows plus `MaterialFormatCustomFieldRule` rows. Derive current definition keys and option IDs using the pinned source normalizer, including legitimate label-derived IDs, omitted sort order `(source array index + 1) * 10`, explicit-null sort order `0`, and explicit integers. Refuse invalid or colliding normalized identities before SQL; do not drop definitions/options to make them fit. Independently derive exact definition/option/rule populations and all stored fields. Sparse null rule objects use their raw code/key's pinned defaults; raw format codes stay distinct (`0`/`Book` are not canonicalized to `book`), and rule-map keys remain raw and case-sensitive. Preserve historical request custom-field snapshots with their historical keys/labels/types/values, without applying current-definition normalization; semantic JSON equality does not impose byte-for-byte whitespace/property-order identity.
 - Branding, email templates, material formats/overrides, custom formats, and auto-claim rules remain specialized records. For format behavior, do not arbitrate raw `material_formats` versus `patronFormatRules` records independently: calculate each library/format's current effective runtime rule result using the pinned resolver precedence, then represent built-in title/author/identifier/publication behavior in typed `MaterialFormat`/`MaterialFormatOverride` columns and custom-field mode/label behavior in `MaterialFormatCustomFieldRule`.
 - `allowedStaffUsers` is intentionally not migrated.
 - Preserve library-owned configuration distinctly from inherited overrides so **Reset inherited overrides** cannot delete it after cutover.
@@ -226,6 +270,10 @@ The effective system/default and library override values for `OutstandingTimeout
 - Resolve every migrated request/rule to a target stable MaterialFormat ID.
 - Existing library format with the same code as a system format becomes the library override for that system format.
 - Library-only code remains a library custom MaterialFormat.
+- Distinct source format codes that normalize to the same target code for one owner are rejected before SQL mutation. A system and library row may share a target code only when the raw source codes are identical; aliases such as system `book` plus library `0` would collapse distinct legacy identities and are rejected. An exact same-code system/library pair remains a valid system format plus library override.
+- A library-only code that normalizes to one of the six reserved system seeds (`book`, `audiobook_cd`, `dvd`, `music_cd`, `ebook`, or `eaudiobook`) is rejected as `format_library_seed_unsupported` unless the source also contains an exact same-code system row. The current settings editor reserves these target codes for system formats; it cannot preserve library ownership through settings edits or reset. Resolve that source identity before export rather than treating the DACPAC seed as a source system row.
+- Keep all six DACPAC system-format IDs for stable references, but enable them only when the legacy system-format source has the corresponding normalized code and its `enabled` value is true. A seeded code absent from the source is disabled and recorded in the `system_material_format_availability` report transformation; reconciliation derives both that list and target availability again.
+- Normalize absent material-row fields using the pinned legacy defaults; a sparse library row resets omitted row values rather than inheriting customized system values. The source material row has no message column; message text comes from `patronFormatRules` when present. Treat that object as a whole-set runtime replacement: omitted built-ins use per-code defaults, and an unlisted custom format uses the exact `book` rule when present or the pinned book defaults otherwise. An explicit null format entry is equivalent to an empty rule object; a null `customFields` member means the format has no custom-field overrides and its fields use the hidden default. Rule code keys and member names are case-sensitive; unknown mode or message-behavior strings use the pinned per-code default. Rule defaults use exact raw format codes before target normalization, so code `0` or `Book` uses custom-format defaults unless the exact `book` fallback rule applies. Material row title mode is always imported as required after validating the source enum.
 - Any request/rule whose historical format cannot be resolved after known mappings is a migration blocker. Do not create a synthetic "legacy format" merely to allow import.
 - No request-level format-label snapshot is added.
 
@@ -262,7 +310,7 @@ The importer inserts `BibIdStaffVerified` explicitly. It classifies a BIB as aut
 
 Block source correction when a nonblank BIB has `pending` or `error_max_retries` identifier state, its request is `suggestion` or can be reopened from `closed` into `suggestion`, and no placed-history protection is imported. The identifier processor can replace or clear a `suggestion/pending` BIB; the staff retry action can queue an `error_max_retries` row, and reopening a closed retryable row can make it eligible too. The blocker is `bib_authority_ambiguous` and identifies the PocketBase request. Known placed-history protection makes these rows ineligible for that mutation path and remains intact through import. Purchase promotion does not consult this flag. Identifier edits clear old BIB authority before lookup, and a newly selected BIB is validated through the target staff path.
 
-The migration report format is version 5 and semantic reconciliation compares `BibIdStaffVerified` explicitly. The target fingerprint also covers the column, so the later `reconcile` command detects any authority value changed after import. Equivalent frozen packages and fresh targets must produce byte-identical reports. No live Polaris call is used to classify or repair historical BIB authority.
+The migration report format is version 6 and semantic reconciliation compares `BibIdStaffVerified` explicitly. The target fingerprint also covers the column, so the later `reconcile` command detects any authority value changed after import. Equivalent frozen packages and fresh targets produce reports that match apart from their target-specific fingerprint and server/database identity hashes. No live Polaris call is used to classify or repair historical BIB authority.
 
 ### 6.10 Title request patron snapshots
 

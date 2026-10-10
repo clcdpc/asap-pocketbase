@@ -79,8 +79,8 @@ public sealed class DeterministicPolarisProviderTests
     {
         var provider = new DeterministicTestingPatronProvider();
         var conversation = Guid.Parse("a96fdf25-0bdb-44db-98ef-6d5e832d3794");
-        var create = new HoldCreateCommand(7001, 9001, 102, 2, 99, 42);
-        var reply = new HoldReplyCommand(conversation, "group", "qualifier", 2);
+        var create = new HoldCreateCommand(7001, 9001, 102, 101, 99, 42);
+        var reply = new HoldReplyCommand(conversation, "group", "qualifier", 101);
         provider.ExpectCreate(create, new(HoldProviderOutcome.ReplyRequired, conversation, null, "group", "qualifier", 3, 5, "declared_reply"));
         provider.ExpectReply(reply, new(HoldProviderOutcome.FinalSuccess, conversation, 8123, "group", "qualifier", 2, 1, "declared_success"));
         foreach (var invalid in new[] { create with { RequestingOrganizationId = 3 }, create with { PatronId = 7002 },

@@ -114,7 +114,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     try {
       const result = await request('/api/asap/staff/organizations', { signal: load.signal });
       if (disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner)) return null;
-      const libraries = (result?.data ?? result).filter(item => Number(item.id) > 1 && item.isActive);
+      const libraries = (result?.data ?? result).filter(item => Number(item.id) > 1 && item.organizationCodeId === 2 && item.isActive);
       views.queue.setLibraries(libraries);
       return libraries.some(item => String(item.id) === context.scope) ? context.scope : 'all';
     } catch (error) {
@@ -235,7 +235,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     if (owner.role === 'super_admin' && (catalogStale || /^[1-9]\d{0,9}$/.test(route.scope) && Number(route.scope) > 1)) {
       try {
         const result = await request('/api/asap/staff/organizations', { signal });
-        organizations = (result?.data ?? result).filter(item => Number(item.id) > 1 && item.isActive);
+        organizations = (result?.data ?? result).filter(item => Number(item.id) > 1 && item.organizationCodeId === 2 && item.isActive);
         if (organizations.some(item => String(item.id) === route.scope)) scope = route.scope;
       } catch (error) {
         if (catalogStale || isAbortError(error) || error.status === 401) throw error;

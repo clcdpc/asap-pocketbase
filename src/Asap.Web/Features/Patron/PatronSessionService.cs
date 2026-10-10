@@ -9,6 +9,7 @@ namespace Asap.Web.Features.Patron;
 public sealed record PatronSessionContext(
     long Id,
     string Barcode,
+    int NativePatronId,
     int? HomeOrganizationId,
     int? ExperienceOrganizationId,
     int EffectiveOrganizationId,
@@ -22,11 +23,17 @@ public sealed class PatronSessionService(ExternalConfiguration configuration)
 
     public async Task<IssuedPatronSession?> IssueAsync(
         string barcode,
+        int nativePatronId,
         int? homeOrganizationId,
         int? experienceOrganizationId,
         int effectiveOrganizationId,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(barcode) || barcode.Length > 50 || nativePatronId <= 0)
+        {
+            throw new ArgumentException("A patron session requires a verified positive native patron ID and current barcode.");
+        }
+
         var tokenBytes = RandomNumberGenerator.GetBytes(32);
         var token = WebEncoders.Base64UrlEncode(tokenBytes);
         var tokenHash = SHA256.HashData(tokenBytes);
@@ -38,7 +45,7 @@ public sealed class PatronSessionService(ExternalConfiguration configuration)
             cancellationToken);
 
         await using (var organizationCommand = new SqlCommand(
-            "SELECT [IsActive] FROM [asap].[Organization] WITH (UPDLOCK, HOLDLOCK) WHERE [Id] = @organizationId;",
+            "SELECT CONVERT(bit, CASE WHEN [Id] > 1 AND [OrganizationCodeId] = 2 AND [IsActive] = 1 THEN 1 ELSE 0 END) FROM [asap].[Organization] WITH (UPDLOCK, HOLDLOCK) WHERE [Id] = @organizationId;",
             connection,
             transaction))
         {
@@ -56,11 +63,11 @@ public sealed class PatronSessionService(ExternalConfiguration configuration)
         await using (var insertCommand = new SqlCommand(
             """
             INSERT INTO [asap].[PatronSession]
-                ([TokenHash], [Barcode], [HomeOrganizationId], [ExperienceOrganizationId],
+                ([TokenHash], [Barcode], [NativePatronId], [HomeOrganizationId], [ExperienceOrganizationId],
                  [EffectiveOrganizationId], [CreatedUtc], [ExpiresUtc])
             OUTPUT inserted.[Id], inserted.[ExpiresUtc]
             VALUES
-                (@tokenHash, @barcode, @homeOrganizationId, @experienceOrganizationId,
+                (@tokenHash, @barcode, @nativePatronId, @homeOrganizationId, @experienceOrganizationId,
                  @effectiveOrganizationId, SYSUTCDATETIME(), DATEADD(hour, 1, SYSUTCDATETIME()));
             """,
             connection,
@@ -68,6 +75,7 @@ public sealed class PatronSessionService(ExternalConfiguration configuration)
         {
             insertCommand.Parameters.Add("@tokenHash", SqlDbType.Binary, 32).Value = tokenHash;
             insertCommand.Parameters.Add("@barcode", SqlDbType.NVarChar, 50).Value = barcode;
+            insertCommand.Parameters.Add("@nativePatronId", SqlDbType.Int).Value = nativePatronId;
             insertCommand.Parameters.Add("@homeOrganizationId", SqlDbType.Int).Value = DbValue(homeOrganizationId);
             insertCommand.Parameters.Add("@experienceOrganizationId", SqlDbType.Int).Value = DbValue(experienceOrganizationId);
             insertCommand.Parameters.Add("@effectiveOrganizationId", SqlDbType.Int).Value = effectiveOrganizationId;
@@ -83,6 +91,7 @@ public sealed class PatronSessionService(ExternalConfiguration configuration)
             new PatronSessionContext(
                 id,
                 barcode,
+                nativePatronId,
                 homeOrganizationId,
                 experienceOrganizationId,
                 effectiveOrganizationId,
@@ -102,13 +111,16 @@ public sealed class PatronSessionService(ExternalConfiguration configuration)
         await connection.OpenAsync(cancellationToken);
         await using var command = new SqlCommand(
             """
-            SELECT s.[Id], s.[Barcode], s.[HomeOrganizationId], s.[ExperienceOrganizationId],
+            SELECT s.[Id], s.[Barcode], s.[NativePatronId], s.[HomeOrganizationId], s.[ExperienceOrganizationId],
                    s.[EffectiveOrganizationId], s.[ExpiresUtc]
             FROM [asap].[PatronSession] AS s
             INNER JOIN [asap].[Organization] AS o ON o.[Id] = s.[EffectiveOrganizationId]
             WHERE s.[TokenHash] = @tokenHash
               AND s.[RevokedUtc] IS NULL
+              AND s.[NativePatronId] > 0
               AND s.[ExpiresUtc] > SYSUTCDATETIME()
+              AND o.[Id] > 1
+              AND o.[OrganizationCodeId] = 2
               AND o.[IsActive] = 1;
             """,
             connection);
@@ -122,10 +134,11 @@ public sealed class PatronSessionService(ExternalConfiguration configuration)
         return new PatronSessionContext(
             reader.GetInt64(0),
             reader.GetString(1),
-            reader.IsDBNull(2) ? null : reader.GetInt32(2),
+            reader.GetInt32(2),
             reader.IsDBNull(3) ? null : reader.GetInt32(3),
-            reader.GetInt32(4),
-            reader.GetDateTime(5));
+            reader.IsDBNull(4) ? null : reader.GetInt32(4),
+            reader.GetInt32(5),
+            reader.GetDateTime(6));
     }
 
     public async Task RevokeAsync(string token, CancellationToken cancellationToken)
@@ -172,7 +185,7 @@ public sealed class PatronSessionService(ExternalConfiguration configuration)
         }
 
         await using (var updateCommand = new SqlCommand(
-            "UPDATE [asap].[Organization] SET [IsActive] = @isActive WHERE [Id] = @organizationId;",
+            "IF @isActive = 1 AND NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = @organizationId AND [Id] > 1 AND [OrganizationCodeId] = 2) THROW 51000, 'Only Polaris library organizations can be activated.', 1; UPDATE [asap].[Organization] SET [IsActive] = @isActive WHERE [Id] = @organizationId;",
             connection,
             transaction))
         {

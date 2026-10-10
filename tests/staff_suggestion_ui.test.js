@@ -112,6 +112,7 @@ async function until(predicate, message) {
     let duplicateNextSuggestion = false;
     let partialDuplicateNextSuggestion = false;
     let expireNextSuggestion = false;
+    let malformedNextSuggestion = false;
     let currentPickupAtLookup = 101;
     let staleLookupResolve = null;
     global.fetch = async (url, options = {}) => {
@@ -193,6 +194,13 @@ async function until(predicate, message) {
         assert.equal(body.verifiedBibId, null);
         assert.equal(body.emailPatronConfirmation, false);
         if (!created) assert.equal(body.autohold, false);
+        if (malformedNextSuggestion) {
+          malformedNextSuggestion = false;
+          return {
+            ...response(201, null),
+            json: async () => { throw new SyntaxError('Malformed accepted response'); }
+          };
+        }
         if (duplicateNextSuggestion) {
           duplicateNextSuggestion = false;
           return response(409, {
@@ -224,7 +232,8 @@ async function until(predicate, message) {
     };
 
     const workflow = await import(pathToFileURL(path.join(temporary, 'staff/js/workflow.js')).href);
-    await workflow.createWorkflowApp().start();
+    let workflowApp = workflow.createWorkflowApp();
+    await workflowApp.start();
     document.getElementById('new-suggestion').click();
     await until(() => document.getElementById('staff-suggestion-dialog').open, 'new suggestion dialog must open');
     const scope = document.querySelector('#staff-suggestion-body select[aria-label="Servicing library"]');
@@ -369,6 +378,67 @@ async function until(predicate, message) {
     assert.equal(document.getElementById('signed-out').hidden, false);
     assert.equal(document.getElementById('signed-out-message').textContent,
       'Your staff session ended or no longer has access. Sign in again.');
+
+    workflowApp.dispose();
+    dom.window.close();
+    dom = new JSDOM(fs.readFileSync(path.join(temporary, 'staff/index.html'), 'utf8'), {
+      url: 'https://localhost/staff/',
+      pretendToBeVisual: true
+    });
+    global.window = dom.window;
+    global.document = dom.window.document;
+    global.FormData = dom.window.FormData;
+    global.URLSearchParams = dom.window.URLSearchParams;
+    global.Node = dom.window.Node;
+    global.HTMLElement = dom.window.HTMLElement;
+    global.DOMParser = dom.window.DOMParser;
+    dom.window.confirm = () => true;
+    dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
+    dom.window.gridjs = require(path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js'));
+    currentPickupAtLookup = 101;
+    malformedNextSuggestion = true;
+    const attemptsBeforeUnconfirmed = suggestionRequests;
+    workflowApp = workflow.createWorkflowApp();
+    await workflowApp.start();
+
+    document.getElementById('new-suggestion').click();
+    await until(() => document.getElementById('staff-suggestion-dialog').open, 'uncertain suggestion dialog must open in a fresh page context');
+    const uncertainScope = document.querySelector('#staff-suggestion-body select[aria-label="Servicing library"]');
+    uncertainScope.value = '2';
+    uncertainScope.dispatchEvent(new dom.window.Event('change'));
+    const uncertainQuery = document.querySelector('#staff-suggestion-body input[type="search"]');
+    uncertainQuery.value = '20000000000001';
+    document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await until(() => document.querySelectorAll('.staff-suggestion-candidate').length === 2,
+      'uncertain suggestion lookup must render current patron candidates');
+    document.querySelector('.staff-suggestion-candidate').click();
+    await until(() => document.querySelector('.staff-suggestion-fields'), 'uncertain suggestion form must render');
+    document.querySelector('.staff-suggestion-fields select[aria-label="Preferred pickup location"]').value = '101';
+    document.querySelector('.staff-suggestion-fields input[maxlength="500"]').value = 'Unconfirmed suggestion';
+    [...document.querySelectorAll('.staff-suggestion-fields select')]
+      .find(control => control.getAttribute('aria-label')?.startsWith('Who is it for?')).value = 'adult';
+    const detailReadsBeforeUnconfirmed = requests.filter(item =>
+      new URL(item.url, 'http://localhost').pathname.endsWith('/title-requests/9007199254740993')).length;
+    const uncertainForm = document.getElementById('staff-suggestion-form');
+    uncertainForm.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await until(() => suggestionRequests === attemptsBeforeUnconfirmed + 1,
+      'HTTP 201 malformed JSON must reach exactly one real suggestion POST');
+    await until(() => /unconfirmed/i.test(document.getElementById('staff-suggestion-status').textContent),
+      'malformed accepted response must be presented as an unconfirmed attempt');
+    const uncertainSubmit = document.querySelector('#staff-suggestion-actions button[type="submit"]');
+    assert.equal(uncertainForm.inert, true, 'the submitted form stays locked until the outcome is reviewed');
+    assert.equal(uncertainSubmit.disabled, true, 'the uncertain attempt cannot be submitted again immediately');
+    uncertainForm.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await settle();
+    assert.equal(suggestionRequests, attemptsBeforeUnconfirmed + 1,
+      'an uncertain 201 response cannot trigger a duplicate POST');
+    assert.equal(document.getElementById('staff-suggestion-dialog').open, true);
+    assert.equal(document.getElementById('signed-out').hidden, true);
+    assert.equal(requests.filter(item =>
+      new URL(item.url, 'http://localhost').pathname.endsWith('/title-requests/9007199254740993')).length,
+    detailReadsBeforeUnconfirmed, 'an unconfirmed attempt is not navigated as a created request');
+    workflowApp.dispose();
     console.log('Staff suggestion UI workflow, explicit scope, Polaris reuse, and double-submit checks passed');
   } finally {
     dom?.window.close();

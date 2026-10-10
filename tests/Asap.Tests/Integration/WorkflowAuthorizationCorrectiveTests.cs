@@ -115,7 +115,8 @@ public sealed partial class PatronJourneyTests
         {
             seed.Organizations.Add(new Organization
             {
-                Id = 91906, DisplayName = "Actor version destination", IsActive = true
+                Id = 91906, DisplayName = "Actor version destination",
+                OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
             });
         }
         seed.TitleRequests.Add(title);
@@ -181,7 +182,11 @@ public sealed partial class PatronJourneyTests
             {
                 if (!await context.Organizations.AnyAsync(item => item.Id == 91904))
                 {
-                    context.Organizations.Add(new Organization { Id = 91904, DisplayName = "Workflow race destination", IsActive = true });
+                    context.Organizations.Add(new Organization
+                    {
+                        Id = 91904, DisplayName = "Workflow race destination",
+                        OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
+                    });
                 }
                 if (additionalCopy)
                 {
@@ -307,7 +312,11 @@ public sealed partial class PatronJourneyTests
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var otherLibrary = 91910 + (deactivate ? 4 : 0) + (reassign ? 2 : 0) + (lifecycleFirst ? 1 : 0);
         await using var seed = await contextFactory.CreateDbContextAsync();
-        seed.Organizations.Add(new Organization { Id = otherLibrary, DisplayName = "Cross-library cleanup race", IsActive = true });
+        seed.Organizations.Add(new Organization
+        {
+            Id = otherLibrary, DisplayName = "Cross-library cleanup race",
+            OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
+        });
         await seed.SaveChangesAsync();
         var claimant = await CreateCorrectiveStaffAsync(lifecycleActor, "super_admin", 1);
         var admin = await CreateCorrectiveStaffAsync(lifecycleActor, "admin", otherLibrary);

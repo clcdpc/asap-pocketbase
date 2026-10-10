@@ -77,7 +77,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     assert.equal(cleanUnload.defaultPrevented, false);
     assert.ok(get('#workspace'));
   });
-  for (const review of ['unauthenticated', 'active', 'unavailable', 'malformed', 'replacement', 'access unavailable']) {
+  for (const review of ['unauthenticated', 'active', 'accepted_unknown', 'unavailable', 'malformed', 'replacement', 'access unavailable']) {
     await fixture(async ({ load, get }) => {
       const { createSessionIdentity } = await load('session-identity');
       const { createStaffShell } = await load('shell');
@@ -93,6 +93,11 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
         request: async (path, options) => {
           assert.equal(path, '/api/asap/staff/sign-out');
           assert.equal(options.signal, undefined, 'committing Sign Out is independent of read cancellation');
+          if (review === 'accepted_unknown') {
+            throw Object.assign(new Error('Accepted sign-out response could not be confirmed.'), {
+              status: 200, outcomeUnknown: true
+            });
+          }
           throw Object.assign(new Error('Sign Out response lost'), { status: review === 'active' ? 503 : review === 'unavailable' ? 408 : 0 });
         },
         sessionRequest: async options => {
@@ -110,9 +115,10 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
         if (review === 'unavailable') shell.recordReceipt('An operation still needs authoritative review.', identity.preferences(), {});
         await coordinator.signOut();
         assert.equal(sessionReads, 2, `${review}: response loss must trigger a fresh authoritative session read`);
-        assert.equal(get('#workspace').hidden, review !== 'active');
-        assert.equal(cleanups, review === 'active' ? 0 : 1);
-        if (review === 'active') {
+        const sessionStillActive = review === 'active' || review === 'accepted_unknown';
+        assert.equal(get('#workspace').hidden, !sessionStillActive);
+        assert.equal(cleanups, sessionStillActive ? 0 : 1);
+        if (sessionStillActive) {
           assert.equal(identity.preferences().version, 'a-v2');
           assert.match(get('#app-status').textContent, /not confirmed.*session is still active/i);
           await coordinator.signOut(); assert.equal(sessionReads, 3, 'same active session permits an explicit retry');

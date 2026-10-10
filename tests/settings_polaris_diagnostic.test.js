@@ -12,7 +12,8 @@ async function until(predicate) {
 async function diagnosticFixture(journey) {
   await fixture(async ui => {
     const { createSettingsController } = await ui.load('settings');
-    let diagnostic = async () => response(200, { data: { connected: true, organizationCount: 2 } });
+    let diagnostic = async () => response(200, { code: 'polaris_connected',
+      data: { connected: true, organizationCount: 2, errorCode: null } });
     let settingsReads = 0, diagnosticCalls = 0;
     const receipts = [], commits = [], notices = [], requests = [];
     global.fetch = async (path, init = {}) => {
@@ -22,10 +23,14 @@ async function diagnosticFixture(journey) {
       if (path.includes('/settings?')) {
         settingsReads++;
         return response(200, { orgId: 'system', version: 'settings-v1',
-          stored: { configuredSystem: { patron: { loginNote: 'Saved' } }, systemSettings: {}, polaris: {} },
+          stored: { configuredSystem: { patron: { loginNote: 'Saved' } },
+            systemSettings: { enabledLibraryOrgIds: [2], libraryOrgIds: [2] }, polaris: {} },
           effective: {}, ui_text: { loginNote: 'Saved' }, emails: {}, workflow: {} });
       }
-      if (path.endsWith('/organizations')) return response(200, { data: [{ id: 2, name: 'Library', isActive: true }] });
+      if (path.endsWith('/organizations')) return response(200, { code: 'ok', data: [
+        { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-1' },
+        { id: 2, name: 'Library', abbreviation: 'LIB', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-2' }
+      ] });
       if (path.includes('/patron-codes')) return response(200, { data: [] });
       throw new Error(`Unexpected diagnostic fixture path: ${path}`);
     };
@@ -46,7 +51,8 @@ async function diagnosticFixture(journey) {
         assert.equal(init.method, 'POST');
         if (outcome === 'transport') throw new TypeError('Network offline');
         return outcome === 'unavailable' ? response(502, { code: 'polaris_unavailable', data: { connected: false } })
-          : response(200, { data: { connected: true, organizationCount: 2 } });
+          : response(200, { code: 'polaris_connected',
+            data: { connected: true, organizationCount: 2, errorCode: null } });
       });
       get('#btn-test-polaris').click();
       await until(() => calls() === 1 && !get('#btn-test-polaris').disabled);
@@ -60,6 +66,34 @@ async function diagnosticFixture(journey) {
       const priorReads = requests.length;
       await controller.activate('polaris');
       assert.equal(requests.length, priorReads, 'diagnostic did not set awaitingReload');
+    });
+  }
+  const malformedAcknowledgements = [
+    ['missing discriminator', { data: { connected: true, organizationCount: 2, errorCode: null } }],
+    ['wrong discriminator', { code: 'saved', data: { connected: true, organizationCount: 2, errorCode: null } }],
+    ['wrong connected kind', { code: 'polaris_connected', data: { connected: 'true', organizationCount: 2, errorCode: null } }],
+    ['contradictory disconnected result', { code: 'polaris_connected', data: { connected: false, organizationCount: 2, errorCode: null } }],
+    ['invalid organization count', { code: 'polaris_connected', data: { connected: true, organizationCount: -1, errorCode: null } }]
+  ];
+  for (const [label, acknowledgement] of malformedAcknowledgements) {
+    await diagnosticFixture(async ({ get, controller, setDiagnostic, receipts, commits, calls, reads, notices }) => {
+      setDiagnostic(async init => {
+        assert.equal(init.method, 'POST');
+        return response(200, acknowledgement);
+      });
+      get('#btn-test-polaris').click();
+      await until(() => calls() === 1 && !get('#btn-test-polaris').disabled);
+      assert.doesNotMatch(get('#polaris-test-result').textContent, /^Connected;\s+\d+ organizations available\.$/,
+        `${label} cannot be reported as a confirmed connection`);
+      assert.equal(notices.some(message => /Polaris connection succeeded/i.test(message)), false,
+        `${label} cannot announce a confirmed connection`);
+      assert.equal(controller.hasPendingMutation(), false);
+      assert.equal(controller.hasUnconfirmedOutcome(), false);
+      assert.equal(controller.inspectDeparture().blocked, false);
+      assert.equal(commits.length, 0);
+      assert.equal(receipts.length, 0);
+      assert.equal(reads(), 1, `${label}: a read-only diagnostic does not require a mutation reload`);
+      assert.equal(controller.suspend(), true);
     });
   }
   await diagnosticFixture(async ({ get, dom, controller, setDiagnostic, calls, reads }) => {
@@ -79,7 +113,8 @@ async function diagnosticFixture(journey) {
     controller.suspend(); assert.equal(signal.aborted, true);
     await controller.activate('polaris');
     get('#polaris-test-result').textContent = 'Replacement presentation';
-    complete(response(200, { data: { connected: true, organizationCount: 99 } })); await flush(); await flush();
+    complete(response(200, { code: 'polaris_connected',
+      data: { connected: true, organizationCount: 99, errorCode: null } })); await flush(); await flush();
     assert.equal(get('#polaris-test-result').textContent, 'Replacement presentation', 'retired diagnostic cannot repaint after re-entry');
     assert.equal(controller.hasUnconfirmedOutcome(), false);
   });

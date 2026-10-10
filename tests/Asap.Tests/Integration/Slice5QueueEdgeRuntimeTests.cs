@@ -539,6 +539,8 @@ public sealed partial class PatronJourneyTests
                     Id = 102,
                     DisplayName = "Slice 5 Global Test Library",
                     Abbreviation = "S5G",
+                    OrganizationCodeId = 2,
+                    ParentOrganizationId = 1,
                     IsActive = true
                 });
                 await seed.SaveChangesAsync();

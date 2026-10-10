@@ -30,6 +30,7 @@ function renderField(def, required, labelOverride) {
     input = document.createElement('textarea');
   } else if (def.type === 'select') {
     input = document.createElement('select');
+    input.appendChild(new Option(required ? 'Select an option...' : 'No selection', ''));
     (def.options || []).filter(opt => opt.enabled !== false).forEach(opt => {
       input.appendChild(new Option(opt.label, opt.id));
     });

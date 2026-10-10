@@ -45,7 +45,8 @@ public sealed partial class PolarisPatronProvider
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    results.Add(await LoadPatronAsync(client, barcode, string.Empty, cancellationToken));
+                    results.Add(await LoadPatronAsync(client, barcode, string.Empty, expectedPatronId: null,
+                        requireBarcodeAlias: true, cancellationToken));
                 }
                 catch (PolarisOperationalException exception) when (
                     exception.Code == "polaris_patron_not_found")
@@ -64,14 +65,8 @@ public sealed partial class PolarisPatronProvider
         {
             throw;
         }
-        catch (PolarisOperationalException) when (cancellationToken.IsCancellationRequested)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            throw;
-        }
         catch (Exception exception) when (IsExpectedProviderFailure(exception))
         {
-            cancellationToken.ThrowIfCancellationRequested();
             throw Operational("polaris_patron_search_failed", exception);
         }
     }

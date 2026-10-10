@@ -7,9 +7,31 @@ public sealed class Organization
     public int Id { get; set; }
     public required string DisplayName { get; set; }
     public string? Abbreviation { get; set; }
+    public int? OrganizationCodeId { get; set; }
+    public int? ParentOrganizationId { get; set; }
     public bool IsActive { get; set; }
     public DateTime? LastSyncedUtc { get; set; }
     public byte[] RowVersion { get; set; } = [];
+}
+
+public static class OrganizationAuthority
+{
+    public const int SystemOrganizationId = 1;
+    public const int LibraryOrganizationCodeId = 2;
+
+    public static bool IsLibrary(int organizationId, int? organizationCodeId) =>
+        organizationId > SystemOrganizationId && organizationCodeId == LibraryOrganizationCodeId;
+
+    public static bool IsLibrary(Organization organization) =>
+        IsLibrary(organization.Id, organization.OrganizationCodeId);
+
+    public static bool IsActiveLibrary(Organization organization) =>
+        IsLibrary(organization) && organization.IsActive;
+
+    public static bool IsActiveScope(Organization organization) =>
+        organization.Id == SystemOrganizationId
+            ? organization.IsActive
+            : IsActiveLibrary(organization);
 }
 
 public sealed class StaffUser
@@ -307,6 +329,7 @@ public sealed class PatronSession
     public long Id { get; set; }
     public byte[] TokenHash { get; set; } = [];
     public required string Barcode { get; set; }
+    public int? NativePatronId { get; set; }
     public int? HomeOrganizationId { get; set; }
     public int? ExperienceOrganizationId { get; set; }
     public int EffectiveOrganizationId { get; set; }
@@ -337,6 +360,7 @@ public sealed class TitleRequest
     public int? PatronOrganizationId { get; set; }
     public int? StaffLibraryOrganizationIdCreatedBy { get; set; }
     public required string Barcode { get; set; }
+    public int? PatronIdSnapshot { get; set; }
     public string? Email { get; set; }
     public string? NameFirst { get; set; }
     public string? NameLast { get; set; }

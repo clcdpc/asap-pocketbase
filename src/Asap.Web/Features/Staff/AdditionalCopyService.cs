@@ -112,7 +112,8 @@ public sealed class AdditionalCopyService(
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var organizations = await context.Organizations.AsNoTracking()
-            .Where(item => item.Id != 1 && item.IsActive)
+            .Where(item => item.Id > LibraryScope.SystemOrganizationId &&
+                           item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive)
             .OrderBy(item => item.DisplayName)
             .ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
@@ -234,11 +235,16 @@ public sealed class AdditionalCopyService(
             readiness = input.EmailPurchaseReminder
                 ? await emailSender.CheckReadinessAsync(snapshot.LibraryOrganizationId, cancellationToken)
                 : EmailTransportReadiness.NotConfigured;
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             return new AdditionalCopyMutationResult("notification_dependency_unavailable");
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var locked = await LockRelationshipContextAsync(
@@ -353,7 +359,11 @@ public sealed class AdditionalCopyService(
             (input.EmailPurchaseReminder && outbox is null ? "recipient_missing" : null);
         try
         {
-            Dispatch(outbox);
+            Dispatch(outbox, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The committed outbox remains available to the delivery sweep.
         }
         // The accepted task and outbox are durable; return the dispatch outcome without misreporting a rollback.
         catch (Exception exception)
@@ -445,11 +455,16 @@ public sealed class AdditionalCopyService(
             readiness = assigneeId.HasValue
                 ? await emailSender.CheckReadinessAsync(snapshot.LibraryOrganizationId, cancellationToken)
                 : EmailTransportReadiness.NotConfigured;
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             return new AdditionalCopyMutationResult("notification_dependency_unavailable");
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var targetId = assigneeId ?? actor.Id;
@@ -536,7 +551,11 @@ public sealed class AdditionalCopyService(
             (assigneeId.HasValue && outbox is null ? "recipient_missing" : null);
         try
         {
-            Dispatch(outbox);
+            Dispatch(outbox, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The committed outbox remains available to the delivery sweep.
         }
         // The accepted task and outbox are durable; return the dispatch outcome without misreporting a rollback.
         catch (Exception exception)
@@ -707,7 +726,7 @@ public sealed class AdditionalCopyService(
             return new LockedRelationshipContext("organization_inactive");
         }
         var organization = context.Organizations.Local.Single(item => item.Id == organizationId);
-        if (!organization.IsActive)
+        if (!OrganizationAuthority.IsActiveLibrary(organization))
         {
             return new LockedRelationshipContext("organization_inactive");
         }
@@ -828,9 +847,9 @@ public sealed class AdditionalCopyService(
         return outbox;
     }
 
-    private void Dispatch(EmailOutbox? outbox)
+    private void Dispatch(EmailOutbox? outbox, CancellationToken cancellationToken)
     {
-        if (outbox?.Status == "pending")
+        if (outbox?.Status == "pending" && !cancellationToken.IsCancellationRequested)
         {
             outboxDispatcher.Enqueue(outbox.Id);
         }

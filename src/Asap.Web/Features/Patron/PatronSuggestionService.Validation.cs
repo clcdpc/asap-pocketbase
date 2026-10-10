@@ -16,6 +16,61 @@ namespace Asap.Web.Features.Patron;
 
 public sealed partial class PatronSuggestionService
 {
+    private static void ValidateCurrentPublicSubmission(
+        PatronSuggestionInput input,
+        ValidatedSuggestion captured,
+        EffectivePatronConfiguration currentConfiguration)
+    {
+        ValidatedSuggestion current;
+        try
+        {
+            current = Validate(input, currentConfiguration);
+        }
+        catch (PatronFlowException exception) when (exception.StatusCode == 400)
+        {
+            throw SubmissionConfigurationChanged(exception);
+        }
+        EnsureSameAcceptedSubmission(captured, current);
+    }
+
+    private static void EnsureSameAcceptedSubmission(ValidatedSuggestion captured, ValidatedSuggestion current)
+    {
+        if (current.Format.Id != captured.Format.Id || current.AutoHold != captured.AutoHold ||
+            current.Title != captured.Title || current.Author != captured.Author ||
+            current.Identifier != captured.Identifier || current.Publication != captured.Publication ||
+            current.ExactPublicationDate != captured.ExactPublicationDate ||
+            !SameAcceptedCustomFields(captured.CustomFieldsJson, current.CustomFieldsJson))
+        {
+            throw SubmissionConfigurationChanged();
+        }
+    }
+
+    private static bool SameAcceptedCustomFields(string? captured, string? current)
+    {
+        if (captured is null || current is null)
+        {
+            return captured is null && current is null;
+        }
+        using var capturedDocument = JsonDocument.Parse(captured);
+        using var currentDocument = JsonDocument.Parse(current);
+        var capturedFields = capturedDocument.RootElement.EnumerateObject().ToArray();
+        if (capturedFields.Length != currentDocument.RootElement.EnumerateObject().Count())
+        {
+            return false;
+        }
+        return capturedFields.All(field =>
+            currentDocument.RootElement.TryGetProperty(field.Name, out var value) &&
+            field.Value.GetProperty("type").GetString() == value.GetProperty("type").GetString() &&
+            field.Value.GetProperty("value").GetString() == value.GetProperty("value").GetString());
+    }
+
+    private static PatronFlowException SubmissionConfigurationChanged(Exception? innerException = null)
+    {
+        const string message = "The suggestion form changed while it was being submitted. Refresh the form and try again.";
+        return new PatronFlowException(409, message,
+            new { code = "submission_configuration_changed", message }, innerException);
+    }
+
     private static ValidatedSuggestion Validate(
         PatronSuggestionInput input,
         EffectivePatronConfiguration configuration,
@@ -133,8 +188,13 @@ public sealed partial class PatronSuggestionService
             if (definition.Type == "select")
             {
                 var option = definition.Options.SingleOrDefault(item =>
-                    string.Equals(item.Key, value, StringComparison.Ordinal) ||
-                    string.Equals(item.Label, value, StringComparison.Ordinal));
+                    string.Equals(item.Key, value, StringComparison.Ordinal));
+                if (option is null)
+                {
+                    var labels = definition.Options.Where(item =>
+                        string.Equals(item.Label, value, StringComparison.Ordinal)).Take(2).ToArray();
+                    option = labels.Length == 1 ? labels[0] : null;
+                }
                 if (option is null)
                 {
                     if (rule.Mode == "required")

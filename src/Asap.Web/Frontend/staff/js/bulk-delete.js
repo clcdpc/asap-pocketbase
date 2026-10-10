@@ -23,7 +23,7 @@ function failureOutcome(error) {
   if (error.status === 401 || error.status === 403 ||
       ['delete_forbidden', 'staff_scope_forbidden', 'staff_session_invalid'].includes(code)) return 'forbidden/out_of_scope';
   if (code === 'hold_history_retained') return 'blocked_hold_history';
-  if (isAbortError(error) || error.status === 408 || error.status >= 500 || !error.status) return 'outcome_unconfirmed';
+  if (error.outcomeUnknown === true || isAbortError(error) || error.status === 408 || error.status >= 500 || !error.status) return 'outcome_unconfirmed';
   return 'operational_failure';
 }
 

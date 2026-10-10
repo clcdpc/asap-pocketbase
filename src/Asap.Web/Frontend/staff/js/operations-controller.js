@@ -27,16 +27,18 @@ export function createOperationsController({ root, sessionIdentity, announce, on
 
   function setLibraries(organizations) {
       if (disposed) return;
-      libraries = organizations || [];
+      libraries = Array.isArray(organizations)
+        ? organizations.filter(item => Number(item?.id) > 1 && typeof item.name === 'string')
+        : [];
       const retained = state.operationMutation;
       if (retained?.scope !== 'all' && !libraries.some(item => String(item.id) === retained?.scope)) clearReview(retained);
       const operationScope = sessionIdentity.preferences()?.role === 'super_admin'
         ? state.operationsScope
         : String(sessionIdentity.preferences()?.organizationId);
-      const knownScopes = new Set(['all', ...(organizations || []).map(item => String(item.id))]);
+      const knownScopes = new Set(['all', ...libraries.map(item => String(item.id))]);
       const reconciledScope = knownScopes.has(String(operationScope)) ? String(operationScope) : 'all';
       dom.operationsScope.replaceChildren(element('option', { value: 'all', text: 'All libraries' }));
-      for (const organization of organizations || []) {
+      for (const organization of libraries) {
         dom.operationsScope.append(element('option', {
           value: organization.id,
           text: organization.name || organization.displayName || String(organization.id)
@@ -112,6 +114,66 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     return value.path.endsWith('/retry')
       ? typeof value.body?.version === 'string' && Boolean(value.body.version) && Object.keys(value.body).length === 1
       : value.body === undefined || value.body === null;
+  }
+
+  function hasNonemptyString(value) {
+    return typeof value === 'string' && value.trim().length > 0;
+  }
+
+  function isInt32(value) {
+    return Number.isInteger(value) && value >= -2147483648 && value <= 2147483647;
+  }
+
+  function isCanonicalPositiveInt64Id(value) {
+    return typeof value === 'string' && /^[1-9]\d*$/.test(value) &&
+      (value.length < 19 || value.length === 19 && value <= '9223372036854775807');
+  }
+
+  function hasConfirmedResult(result, operation) {
+    const path = operation.path;
+    if (path.startsWith('/api/asap/staff/workflow/')) {
+      const expectedOrganizationId = operation.scope === 'all' ? 1 : Number(operation.scope);
+      if (result?.code !== 'queued' || !hasNonemptyString(result.jobId) ||
+          !isInt32(result.organizationId) || result.organizationId !== expectedOrganizationId) return false;
+      if (path.endsWith('?force=true')) {
+        return typeof result.manualRunId === 'string' &&
+          /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(result.manualRunId) &&
+          result.manualRunId === operation.operationId;
+      }
+      return true;
+    }
+
+    const retry = path.match(/^\/api\/asap\/staff\/email-operations\/([1-9]\d*)\/retry$/);
+    const isRetry = Boolean(retry);
+    const isTest = path === '/api/asap/staff/email-operations/test';
+    const data = result?.data;
+    if (!data || typeof data !== 'object' || Array.isArray(data) ||
+        !['queued', ...(isTest ? ['suppressed'] : [])].includes(result?.code) ||
+        !isCanonicalPositiveInt64Id(data.id) ||
+        !hasNonemptyString(data.version)) return false;
+
+    if (isRetry) {
+      return result.code === 'queued' && data.id === retry[1] &&
+        typeof data.dispatchDelayed === 'boolean' &&
+        !Object.prototype.hasOwnProperty.call(data, 'replayed') &&
+        !Object.prototype.hasOwnProperty.call(data, 'status');
+    }
+
+    const hasReplayMarker = Object.prototype.hasOwnProperty.call(data, 'replayed');
+    const hasReplayStatus = Object.prototype.hasOwnProperty.call(data, 'status');
+    if (hasReplayMarker || hasReplayStatus) {
+      if (data.replayed !== true || !hasReplayStatus ||
+          !['pending', 'sending', 'sent', 'failed', 'suppressed'].includes(data.status) ||
+          (result.code === 'suppressed') !== (data.status === 'suppressed')) return false;
+      return data.status === 'suppressed'
+        ? hasNonemptyString(data.code)
+        : data.code === null;
+    }
+
+    if (typeof data.dispatchDelayed !== 'boolean') return false;
+    return result.code === 'suppressed'
+      ? hasNonemptyString(data.code)
+      : data.code === null;
   }
 
   function operationStorageKey(staff = sessionIdentity.preferences()) {
@@ -208,7 +270,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         { label: 'Type', key: 'deliveryClass' },
         { label: 'Error', render: row => element('span', { text: row.lastErrorCode || row.suppressionReason || 'None' }) },
         { label: 'Action', render: row => {
-          if (row.status !== 'failed') return element('span', { text: 'No action' });
+          if (row.status !== 'failed' || row.canRetry !== true) return element('span', { text: 'No action' });
           return commandButton('Retry', 'refresh', () => {
             if (active && projection === rendered && sessionIdentity.isCurrent(rendered.owner) && rendered.scope === state.operationsScope) void retryEmail(row);
           }, 'secondary-button');
@@ -240,7 +302,10 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== state.operationsScope) return false;
       const organizations = organizationResult?.data ?? organizationResult;
       if (sessionIdentity.preferences().role === 'super_admin' && Array.isArray(organizations)) {
-        setLibraries(organizations.filter(item => Number(item.id) > 1 && item.isActive));
+        const activeLibraries = organizations
+          .filter(item => Number(item.id) > 1 && item.organizationCodeId === 2 && item.isActive === true)
+          .map(item => ({ id: item.id, name: item.name || item.displayName || String(item.id) }));
+        setLibraries(activeLibraries);
         if (requestedScope !== state.operationsScope) return loadOperations(options);
       }
       renderOperations({ queue, email });
@@ -303,7 +368,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     let committedMessage = '';
     try {
       const result = await request(`${path}${query}${identityQuery}`, { method: 'POST', body: operation.body });
-      if (!['queued', 'suppressed'].includes(result?.code)) throw unconfirmedResponseError();
+      if (!hasConfirmedResult(result, operation)) throw unconfirmedResponseError();
       committedMessage = result.data?.replayed ? `${message} was already recorded as ${result.data.status}. Review email operation ${result.data.id}.`
         : result.code === 'suppressed' ? `${message} was suppressed; no email was sent.`
         : result.manualRunId && !path.endsWith('/retry') ? `${message} Run ${result.manualRunId} queued.` : `${message} queued.`;
@@ -324,7 +389,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         if (!disposed && active && sessionIdentity.isCurrent(owner)) announce(`${committedMessage} Operations could not be refreshed.`, 'warning');
         return;
       }
-      const uncertain = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
+      const uncertain = error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
       if (uncertain) {
         operation.uncertain = true;
         // The record saved before dispatch already requires review on restore.

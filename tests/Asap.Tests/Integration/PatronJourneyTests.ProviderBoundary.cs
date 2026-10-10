@@ -207,7 +207,9 @@ public sealed partial class PatronJourneyTests
                 ? """{"PAPIErrorCode":1,"OrganizationsGetRows":[{"OrganizationID":300,"OrganizationCodeID":2,"DisplayName":"Registered Branch"}]}"""
                 : "{\"PAPIErrorCode\":0,\"PatronBasicData\":{\"PatronID\":123,\"Barcode\":\"20000000000001\",\"PatronOrgID\":300," + field + "}}"))));
         var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(() => provider.RefreshAsync("20000000000001", 2, CancellationToken.None));
-        Assert.IsTrue(failure.Code is "polaris_pickup_preference_invalid" or "polaris_patron_protocol_failed", failure.Code);
+        Assert.IsTrue(
+            failure.Code is "polaris_pickup_preference_invalid" or "polaris_patron_protocol_failed",
+            $"{failure.Code}; original provider exception type: {failure.InnerException?.GetType().FullName ?? "<none>"}.");
     }
 
     [TestMethod]

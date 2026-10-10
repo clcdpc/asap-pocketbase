@@ -195,7 +195,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       if (refreshed === false && sessionIdentity.isCurrent(attempt.owner) && isNavigationCurrent(attempt.generation)) announce(`${message} The Closed view could not refresh.`, 'warning');
     } catch (error) {
       if (attempt.outcome === 'committed') return;
-      const uncertain = !error.status || isAbortError(error) || error.status === 408 || error.status >= 500;
+      const uncertain = error.outcomeUnknown === true || !error.status || isAbortError(error) || error.status === 408 || error.status >= 500;
       attempt.outcome = uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
       if (uncertain) recordReceipt(attempt, 'Title-request deletion could not be confirmed. Sign in again and refresh Closed work before retrying.');
       if (!attempt.isCurrent() || error.status === 401) return;
@@ -253,7 +253,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       }
       const recordedProviderOutcome = error.response?.providerOutcomeRecorded === true;
       const definiteNoCommit = ['bib_validation_unavailable', 'notification_dependency_unavailable'].includes(error.response?.code);
-      const uncertain = !definiteNoCommit && (!error.status || isAbortError(error) || error.status === 408 || error.status >= 500 ||
+      const uncertain = !definiteNoCommit && (error.outcomeUnknown === true || !error.status || isAbortError(error) || error.status === 408 || error.status >= 500 ||
         ['request_outcome_unconfirmed', 'hold_outcome_unconfirmed', 'hold_provider_error'].includes(error.response?.code));
       attempt.outcome = recordedProviderOutcome ? 'provider_recorded' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
       if ((path.endsWith('/action') || path.endsWith('/place-hold')) && error.status === 409 && error.response?.code === 'duplicate_open_request') {
@@ -301,7 +301,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     } catch (error) {
       if (attempt.outcome === 'committed') { if (attempt.isCurrent()) announce('Hold recovery committed. Current details could not refresh.', 'warning'); return; }
       const provider = error.response?.providerOutcomeRecorded === true;
-      const uncertain = error.response?.code !== 'hold_resolution_dependency_unavailable' && (!error.status || isAbortError(error) || error.status === 408 || error.status >= 500 ||
+      const uncertain = error.response?.code !== 'hold_resolution_dependency_unavailable' && (error.outcomeUnknown === true || !error.status || isAbortError(error) || error.status === 408 || error.status >= 500 ||
         ['hold_outcome_unconfirmed', 'hold_provider_error'].includes(error.response?.code));
       attempt.outcome = provider ? 'provider_recorded' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
       const message = provider ? 'Polaris returned a hold result, but request finalization was deferred after staff access changed. Review the hold operation with an authorized account.'

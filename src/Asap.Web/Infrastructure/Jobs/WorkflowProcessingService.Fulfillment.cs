@@ -38,6 +38,43 @@ public sealed partial class WorkflowProcessingService
         }
 
         var operation = await LatestTrackedOperationAsync(candidate.Id, cancellationToken);
+        if (!NativePatronSnapshotsAgree(candidate.PatronIdSnapshot, operation?.PatronIdSnapshot))
+        {
+            return NativePatronIdentityMismatch();
+        }
+
+        PatronSnapshot patron;
+        try
+        {
+            patron = await ReadFulfillmentPatronAsync(candidate, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException exception)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            logger.LogWarning(exception, "Patron identity unavailable for fulfillment request {RequestId}.", candidate.Id);
+            return await RecordFulfillmentDiagnosticAsync(
+                candidate,
+                scanScope,
+                expectedProgressVersion,
+                operation,
+                "hold_tracking_provider_error",
+                stop: true,
+                cancellationToken,
+                manualActorEvidence);
+        }
+        if (!MatchesKnownNativePatron(candidate, operation, patron.PatronId))
+        {
+            return NativePatronIdentityMismatch();
+        }
+
         IReadOnlyList<PolarisCheckoutSnapshot> checkouts;
         try
         {
@@ -49,6 +86,11 @@ public sealed partial class WorkflowProcessingService
         }
         catch (PolarisOperationalException exception)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
             logger.LogWarning(exception, "Patron checkout evidence unavailable for request {RequestId}.", candidate.Id);
             return await RecordFulfillmentDiagnosticAsync(
                 candidate,
@@ -76,10 +118,43 @@ public sealed partial class WorkflowProcessingService
         }
         if (checkouts.Any(item => item.BibId == candidate.BibId))
         {
+            PatronSnapshot checkoutOwner;
+            try
+            {
+                checkoutOwner = await ReadFulfillmentPatronAsync(candidate, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (PolarisOperationalException exception)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+
+                logger.LogWarning(exception, "Patron identity unavailable after checkout evidence for request {RequestId}.", candidate.Id);
+                return await RecordFulfillmentDiagnosticAsync(
+                    candidate,
+                    scanScope,
+                    expectedProgressVersion,
+                    operation,
+                    "hold_tracking_provider_error",
+                    stop: true,
+                    cancellationToken,
+                    manualActorEvidence);
+            }
+            if (checkoutOwner.PatronId != patron.PatronId ||
+                !MatchesKnownNativePatron(candidate, operation, checkoutOwner.PatronId))
+            {
+                return NativePatronIdentityMismatch();
+            }
+
             return await CloseFulfilledAsync(
                 candidate,
                 scanScope,
-                new FulfillmentEvidence(null, operation),
+                new FulfillmentEvidence(null, operation, checkoutOwner.PatronId),
                 expectedProgressVersion,
                 cancellationToken,
                 manualActorEvidence);
@@ -96,6 +171,11 @@ public sealed partial class WorkflowProcessingService
         }
         catch (PolarisOperationalException exception)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
             logger.LogWarning(exception, "Patron hold evidence unavailable for request {RequestId}.", candidate.Id);
             return await RecordFulfillmentDiagnosticAsync(
                 candidate,
@@ -182,10 +262,43 @@ public sealed partial class WorkflowProcessingService
             return new WorkflowItemResult("not_terminal");
         }
 
+        PatronSnapshot holdOwner;
+        try
+        {
+            holdOwner = await ReadFulfillmentPatronAsync(candidate, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException exception)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            logger.LogWarning(exception, "Patron identity unavailable after hold evidence for request {RequestId}.", candidate.Id);
+            return await RecordFulfillmentDiagnosticAsync(
+                candidate,
+                scanScope,
+                expectedProgressVersion,
+                operation,
+                "hold_tracking_provider_error",
+                stop: true,
+                cancellationToken,
+                manualActorEvidence);
+        }
+        if (holdOwner.PatronId != patron.PatronId ||
+            !MatchesKnownNativePatron(candidate, operation, holdOwner.PatronId))
+        {
+            return NativePatronIdentityMismatch();
+        }
+
         return await CloseFulfilledAsync(
             candidate,
             scanScope,
-            new FulfillmentEvidence(terminalReason, operation),
+            new FulfillmentEvidence(terminalReason, operation, holdOwner.PatronId),
             expectedProgressVersion,
             cancellationToken,
             manualActorEvidence);
@@ -223,12 +336,14 @@ public sealed partial class WorkflowProcessingService
                 .SingleOrDefaultAsync(cancellationToken);
         var code = "skipped";
         var changed = false;
-        if (organization?.IsActive == true && request is not null &&
+        if (organization is not null && OrganizationAuthority.IsActiveLibrary(organization) && request is not null &&
             request.LibraryOrganizationId == candidate.LibraryOrganizationId &&
             request.RowVersion.SequenceEqual(candidate.RowVersion) &&
             request.Status == RequestStatus.HoldPlaced &&
             request.BibId == candidate.BibId &&
-            string.Equals(request.Barcode, candidate.Barcode, StringComparison.Ordinal))
+            string.Equals(request.Barcode, candidate.Barcode, StringComparison.Ordinal) &&
+            evidence.PatronId > 0 &&
+            MatchesKnownNativePatron(request.PatronIdSnapshot, evidence.PatronId))
         {
             var settings = await EffectiveWorkflowAsync(context, request.LibraryOrganizationId, cancellationToken);
             var (timeoutEnabled, timeoutDays) = TimeoutSetting(settings, TimeoutFamily.HoldPickupTimeout);
@@ -251,6 +366,7 @@ public sealed partial class WorkflowProcessingService
                 var latest = await LoadLatestSucceededOperationAsync(context, request.Id, cancellationToken);
                 if (operation is null || latest is null || !SameOperationIdentity(latest, evidence.Operation) ||
                     !SameOperationIdentity(operation, evidence.Operation) ||
+                    !MatchesKnownNativePatron(operation.PatronIdSnapshot, evidence.PatronId) ||
                     operation.BibIdSnapshot != request.BibId ||
                     !string.Equals(operation.PatronBarcodeSnapshot, request.Barcode, StringComparison.Ordinal))
                 {
@@ -417,12 +533,45 @@ public sealed partial class WorkflowProcessingService
         current.Id == expected.Id && current.AttemptNumber == expected.AttemptNumber &&
         current.State == HoldOperationState.Succeeded && current.CompletedUtc.HasValue &&
         current.RowVersion.SequenceEqual(expected.RowVersion) &&
+        current.PatronIdSnapshot == expected.PatronIdSnapshot &&
         string.Equals(current.PatronBarcodeSnapshot, expected.PatronBarcodeSnapshot, StringComparison.Ordinal) &&
         current.BibIdSnapshot == expected.BibIdSnapshot &&
         current.PolarisHoldId == expected.PolarisHoldId;
 
+    private async Task<PatronSnapshot> ReadFulfillmentPatronAsync(
+        TitleRequest candidate,
+        CancellationToken cancellationToken)
+    {
+        var patron = await patronProvider.RefreshAsync(
+            candidate.Barcode,
+            candidate.LibraryOrganizationId,
+            cancellationToken);
+        if (patron.PatronId <= 0 || !patron.KnownBarcodeAliases.Contains(candidate.Barcode, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new PolarisOperationalException(
+                "polaris_patron_protocol_failed",
+                "Polaris returned an incomplete or mismatched patron identity.");
+        }
+
+        return patron;
+    }
+
+    private static bool NativePatronSnapshotsAgree(int? requestPatronId, int? operationPatronId) =>
+        !requestPatronId.HasValue || !operationPatronId.HasValue || requestPatronId == operationPatronId;
+
+    private static bool MatchesKnownNativePatron(TitleRequest request, HoldPlacementOperation? operation, int patronId) =>
+        patronId > 0 && MatchesKnownNativePatron(request.PatronIdSnapshot, patronId) &&
+        (operation is null || MatchesKnownNativePatron(operation.PatronIdSnapshot, patronId));
+
+    private static bool MatchesKnownNativePatron(int? savedPatronId, int patronId) =>
+        patronId > 0 && (!savedPatronId.HasValue || savedPatronId.Value == patronId);
+
+    private static WorkflowItemResult NativePatronIdentityMismatch() =>
+        new("native_patron_identity_mismatch", Stop: true);
+
     private sealed record FulfillmentEvidence(
         string? TerminalReason,
-        HoldPlacementOperation? Operation);
+        HoldPlacementOperation? Operation,
+        int PatronId);
 
 }

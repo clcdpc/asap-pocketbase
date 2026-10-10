@@ -43,11 +43,11 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
     if (!departure) return;
     const attempt = { owner: identity.preferences(), departure, pending: true, outcome: 'pending' }; signOutAttempt = attempt;
     try {
-      await request('/api/asap/staff/sign-out', { method: 'POST' });
+      await request('/api/asap/staff/sign-out', { method: 'POST', allowNoContent: true });
       attempt.outcome = 'committed';
       if (!disposed && shell.isPresentationOwner(attempt.owner)) lose('You are signed out.');
     } catch (error) {
-      attempt.outcome = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error) ? 'uncertain' : 'rejected';
+      attempt.outcome = error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error) ? 'uncertain' : 'rejected';
       if (attempt.outcome === 'uncertain') await reviewSignOut(attempt);
       else if (!disposed && error.status !== 401) shell.signOutFailed(attempt.owner);
     } finally { attempt.pending = false; }
