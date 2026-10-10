@@ -232,6 +232,8 @@ async function runScopedConfigurationGuards(browser, baseOrigin, artifactRoot, a
     assert.equal(session.ui_text.pageTitle, scoped.pageTitle);
     assert.deepEqual(session.ui_text.availableFormats, [],
       'The real producer should return the Settings-owned empty format list.');
+    assert.deepEqual(session.ui_text.publicationOptions, [],
+      'The real producer should return the Settings-owned empty publication list.');
     serverIssuedTokenPresent = typeof session.token === 'string' && session.token.trim().length > 0;
     assert.equal(serverIssuedTokenPresent, true,
       'route.fetch reaches the real server, which may and does issue a token before the browser rejects this response.');
@@ -325,6 +327,8 @@ async function runScopedConfigurationGuards(browser, baseOrigin, artifactRoot, a
     assert.equal(fullSession.ui_text.pageTitle, scoped.pageTitle);
     assert.deepEqual(fullSession.ui_text.availableFormats, [],
       'The complete producer response should preserve the saved empty format list.');
+    assert.deepEqual(fullSession.ui_text.publicationOptions, [],
+      'The complete producer response should preserve the saved empty publication list.');
 
     const emptyFormatState = await page.evaluate(() => ({
       formVisible: !document.querySelector('#step-form').classList.contains('hidden'),
@@ -335,7 +339,8 @@ async function runScopedConfigurationGuards(browser, baseOrigin, artifactRoot, a
       storedLibraryId: localStorage.getItem('asap_patron_library_org_id'),
       pickupBranch: document.querySelector('#preferred-pickup-branch').value,
       optionCount: document.querySelector('#format').options.length,
-      formatValid: document.querySelector('#format').checkValidity()
+      formatValid: document.querySelector('#format').checkValidity(),
+      publicationOptionCount: document.querySelector('#publication').options.length
     }));
     assert.equal(emptyFormatState.formVisible, true);
     assert.equal(emptyFormatState.displayBarcode, scoped.barcode);
@@ -349,6 +354,7 @@ async function runScopedConfigurationGuards(browser, baseOrigin, artifactRoot, a
     assert.equal(emptyFormatState.formatValid, false,
       'The required format select must be invalid when the complete B configuration has no formats.');
     assert.equal(emptyFormatState.pickupBranch, '101', 'The empty-format submit control needs a valid pickup branch.');
+    assert.equal(emptyFormatState.publicationOptionCount, 0, 'The complete B snapshot must render no publication choices.');
 
     await page.locator('#suggestion-form').evaluate(form =>
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
@@ -361,6 +367,8 @@ async function runScopedConfigurationGuards(browser, baseOrigin, artifactRoot, a
       scenario: 'settings-empty-formats',
       effectiveLibraryOrgId: fullSession.effectiveLibraryOrgId,
       availableFormats: fullSession.ui_text.availableFormats,
+      publicationOptions: fullSession.ui_text.publicationOptions,
+      publicationOptionCount: emptyFormatState.publicationOptionCount,
       optionCount: emptyFormatState.optionCount,
       suggestionPostCount
     });

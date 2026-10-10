@@ -66,6 +66,7 @@ function uiText(prefix, overrides = {}) {
     const bootstrap = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'bootstrap.js')).href);
     const auth = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'auth.js')).href);
     const submit = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'submit.js')).href);
+    const configuration = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'config.js')).href);
 
     // Exercise a new page before bootstrap has loaded any server configuration.
     loginResponseOverride = patronSession('F20000000000901', 'fresh-empty-format-token', {
@@ -136,6 +137,61 @@ function uiText(prefix, overrides = {}) {
       'an empty enabled-format list cannot dispatch a suggestion through the direct submit handler');
     assert.match(document.getElementById('submit-error').textContent, /format.*available/i,
       'the patron sees why submission is unavailable when there are no enabled formats');
+
+    await auth.logout();
+    async function assertEmptyPublicationSnapshot(mode, suffix) {
+      const snapshot = uiText(`Empty Publication ${mode}`, {
+        availableFormats: ['book'],
+        publicationOptions: []
+      });
+      snapshot.formatRules.book.fields.publication.mode = mode;
+      loginResponseOverride = patronSession(`P2000000000090${suffix}`, `empty-publication-${mode}-token`, {
+        effectiveLibraryOrgId: 3,
+        ui_text: snapshot
+      });
+      document.getElementById('barcode').value = `P2000000000090${suffix}`;
+      document.getElementById('pin').value = '1234';
+      await auth.handleLoginSubmit({ preventDefault() {} });
+
+      const publication = document.getElementById('publication');
+      assert.deepStrictEqual(Array.from(publication.options), [],
+        `a complete ${mode} session snapshot must keep authoritative empty publication options empty`);
+      assert.strictEqual(publication.required, mode === 'required');
+      assert.strictEqual(publication.disabled, mode === 'hidden');
+      assert.strictEqual(publication.checkValidity(), mode !== 'required',
+        `an empty publication set must remain valid for a ${mode} publication field`);
+      assert.strictEqual(
+        document.getElementById('field-publication').classList.contains('hidden'),
+        mode === 'hidden');
+
+      if (mode !== 'required') {
+        document.getElementById('format').value = 'book';
+        document.getElementById('title').value = `Suggestion for ${mode}`;
+        document.getElementById('author').value = 'Test author';
+        const beforeSuggestion = suggestionRequests;
+        await submit.handleSuggestionSubmit({ preventDefault() {} });
+        assert.strictEqual(suggestionRequests, beforeSuggestion + 1,
+          `an empty publication set must not block a ${mode} suggestion`);
+        assert.ok(submittedPayload.publication === undefined || submittedPayload.publication === '',
+          `a ${mode} empty publication field must serialize no selected value`);
+      }
+
+      await auth.logout();
+    }
+
+    await assertEmptyPublicationSnapshot('required', '4');
+    await assertEmptyPublicationSnapshot('optional', '5');
+    await assertEmptyPublicationSnapshot('hidden', '6');
+    loginResponseOverride = null;
+    assert.deepStrictEqual(configuration.normalizePublicationOptions(undefined),
+      configuration.defaultUiText.publicationOptions,
+      'an absent legacy publication property retains the established defaults');
+    assert.deepStrictEqual(configuration.normalizePublicationOptions('Legacy A\r\nLegacy B'), ['Legacy A', 'Legacy B'],
+      'the supported legacy newline representation remains readable');
+    assert.deepStrictEqual(configuration.normalizePublicationOptions([
+      { label: 'Disabled legacy choice', enabled: false },
+      '   '
+    ]), [], 'a supplied array cleaned to no enabled nonblank choices remains authoritatively empty');
 
     console.log('Patron initial configuration race regression checks passed');
   } finally {

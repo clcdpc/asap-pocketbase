@@ -27,7 +27,7 @@ public sealed partial class PatronJourneyTests
             ?? throw new InvalidOperationException("The Kestrel test host did not expose a base address.");
         const int scopedLibraryId = 91406;
         const string scopedBarcode = "20000000091406";
-        const string scopedLibraryName = "Patron Browser Empty Format Library";
+        const string scopedLibraryName = "Patron Browser Empty Format and Publication Library";
         var scopedPageTitle = $"Scoped browser configuration {Guid.NewGuid():N}";
         var cleanupTemplateKeyA = $"patron_browser_a_{Guid.NewGuid():N}";
         var cleanupTemplateKeyB = $"patron_browser_b_{Guid.NewGuid():N}";
@@ -70,7 +70,8 @@ public sealed partial class PatronJourneyTests
                                ["patron"] = new
                                {
                                    pageTitle = scopedPageTitle,
-                                   availableFormats = Array.Empty<string>()
+                                   availableFormats = Array.Empty<string>(),
+                                   publicationOptions = Array.Empty<string>()
                                }
                            }))
                 {
@@ -85,6 +86,13 @@ public sealed partial class PatronJourneyTests
                     "An authoritative empty availableFormats Settings save must disable every effective format.");
                 Assert.AreEqual(scopedPageTitle,
                     reloadedSettings.RootElement.GetProperty("effective").GetProperty("pageTitle").GetString());
+                var publicationOverride = reloadedSettings.RootElement.GetProperty("stored")
+                    .GetProperty("libraryOverride").GetProperty("publicationOptions");
+                Assert.IsTrue(publicationOverride.GetProperty("exists").GetBoolean());
+                Assert.AreEqual(0, publicationOverride.GetProperty("values").GetArrayLength(),
+                    "The saved empty publication list must remain a present, owning library set.");
+                Assert.AreEqual(0, reloadedSettings.RootElement.GetProperty("effective")
+                    .GetProperty("publicationOptions").GetArrayLength());
 
                 using var publicConfiguration = await settingsClient.GetAsync(
                     $"/api/asap/config?libraryOrgId={scopedLibraryId}");
@@ -93,6 +101,8 @@ public sealed partial class PatronJourneyTests
                 using var publicConfigurationJson = JsonDocument.Parse(await publicConfiguration.Content.ReadAsStringAsync());
                 Assert.AreEqual(0, publicConfigurationJson.RootElement.GetProperty("availableFormats").GetArrayLength());
                 Assert.AreEqual(scopedPageTitle, publicConfigurationJson.RootElement.GetProperty("pageTitle").GetString());
+                Assert.AreEqual(0, publicConfigurationJson.RootElement.GetProperty("publicationOptions").GetArrayLength(),
+                    "The public configuration payload must preserve the owning empty publication set.");
             }
 
             await using (var connection = new SqlConnection(databaseConnectionString))
@@ -106,7 +116,9 @@ public sealed partial class PatronJourneyTests
                     "LEFT JOIN [asap].[MaterialFormatOverride] AS override " +
                     "ON override.[LibraryOrganizationId] = @organizationId AND override.[MaterialFormatId] = format.[Id] " +
                     "WHERE format.[OwnerOrganizationId] = 1 AND COALESCE(override.[IsEnabled], format.[IsEnabled]) = 1), " +
-                    "(SELECT [PageTitle] FROM [asap].[PatronSettings] WHERE [OrganizationId] = @organizationId);";
+                    "(SELECT [PageTitle] FROM [asap].[PatronSettings] WHERE [OrganizationId] = @organizationId), " +
+                    "(SELECT COUNT_BIG(*) FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = @organizationId), " +
+                    "(SELECT COUNT_BIG(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = @organizationId);";
                 verifySettings.Parameters.AddWithValue("@organizationId", scopedLibraryId);
                 await using var settingsReader = await verifySettings.ExecuteReaderAsync();
                 Assert.IsTrue(await settingsReader.ReadAsync());
@@ -117,6 +129,10 @@ public sealed partial class PatronJourneyTests
                 Assert.IsFalse(settingsReader.IsDBNull(2));
                 Assert.AreEqual(scopedPageTitle, settingsReader.GetString(2),
                     "The saved Settings marker must be present in the owning PatronSettings row.");
+                Assert.AreEqual(1L, settingsReader.GetInt64(3),
+                    "An explicit empty list must retain its owning PublicationOptionSet row.");
+                Assert.AreEqual(0L, settingsReader.GetInt64(4),
+                    "An explicit empty list must own no PublicationOption rows.");
             }
 
             await File.WriteAllTextAsync(
@@ -166,6 +182,8 @@ public sealed partial class PatronJourneyTests
                 .Single(item => item.GetProperty("scenario").GetString() == "settings-empty-formats");
             Assert.AreEqual(scopedLibraryId, emptyFormats.GetProperty("effectiveLibraryOrgId").GetInt32());
             Assert.AreEqual(0, emptyFormats.GetProperty("availableFormats").GetArrayLength());
+            Assert.AreEqual(0, emptyFormats.GetProperty("publicationOptions").GetArrayLength());
+            Assert.AreEqual(0, emptyFormats.GetProperty("publicationOptionCount").GetInt32());
             Assert.AreEqual(0, emptyFormats.GetProperty("optionCount").GetInt32());
             Assert.AreEqual(0, emptyFormats.GetProperty("suggestionPostCount").GetInt32());
         }
