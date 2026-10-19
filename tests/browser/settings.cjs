@@ -944,8 +944,8 @@ async function main() {
       await checkbox.setChecked(id === '2' || id === '3');
     }
     const participationPayload = await saveSettings();
-    assert.deepEqual(participationPayload.systemSettings.enabledLibraryOrgIds, [2, 3],
-      'The browser must submit exact numeric native library IDs for an intentional participation change.');
+    assert.deepEqual([...participationPayload.systemSettings.enabledLibraryOrgIds].sort((left, right) => left - right), [2, 3],
+      'The browser must submit the exact numeric native library identities, independently of visible-name order.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('system');
     for (const id of ['2', '3', '4']) {

@@ -110,8 +110,17 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     await page.keyboard.press('Escape');
     await page.locator('#library-scope').selectOption(library);
     await page.locator('#refresh-queue:not([disabled])').waitFor();
+    assert.equal(await page.locator('#library-scope').inputValue(), library);
+    assert.equal(await page.locator('#status-tabs [aria-selected="true"]').getAttribute('data-status'), 'suggestion');
+    const claims = page.locator('#claim-filter');
+    await claims.selectOption('all');
     const row = page.locator('#request-grid tr').filter({ has: page.getByRole('button', { name: `Open request ${created.id}`, exact: true }) });
     await row.waitFor(); assert.match(await row.textContent(), /Browser claimant/); assert.match(await row.textContent(), /Duplicate suggestion/i);
+    await claims.selectOption('mine_unclaimed');
+    await row.waitFor({ state: 'hidden' });
+    await page.getByRole('button', { name: `Open request ${sourceId}`, exact: true }).waitFor();
+    await claims.selectOption('all');
+    await row.waitFor();
     await scan('created-queue');
     assert.deepEqual(report.externalRequests, []); assert.deepEqual(report.errors, []);
     await fs.writeFile(path.join(artifacts, 'browser-results.json'), JSON.stringify(report, null, 2));

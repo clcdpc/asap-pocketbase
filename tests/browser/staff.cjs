@@ -2485,12 +2485,13 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     }
   });
   try {
-    await desktopPage.goto(`${args.baseOrigin}/staff/?scope=2`, { waitUntil: 'networkidle' });
+    await desktopPage.goto(`${args.baseOrigin}/staff/?scope=all`, { waitUntil: 'networkidle' });
     await desktopPage.locator('#workspace').waitFor({ state: 'visible' });
+    assert.equal(await desktopPage.locator('#library-scope').inputValue(), 'all');
     await desktopPage.getByRole('button', { name: 'New suggestion', exact: true }).click();
     await desktopPage.locator('#staff-suggestion-dialog[open]').waitFor();
     const scope = desktopPage.getByLabel('Servicing library', { exact: true });
-    assert.equal(await scope.inputValue(), '', 'Super-admin suggestion scope must start blank');
+    assert.equal(await scope.inputValue(), '', 'All-library suggestion scope requires an explicit servicing library');
     await desktopPage.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Servicing library');
     assert.equal(await desktopPage.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Servicing library');
     await scope.selectOption('2');
@@ -2585,12 +2586,13 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
   const mobileErrors = [];
   mobilePage.on('pageerror', error => mobileErrors.push(error.message));
   try {
-    await mobilePage.goto(`${args.baseOrigin}/staff/?scope=2`, { waitUntil: 'networkidle' });
+    await mobilePage.goto(`${args.baseOrigin}/staff/?scope=all`, { waitUntil: 'networkidle' });
     await mobilePage.locator('#workspace').waitFor({ state: 'visible' });
+    assert.equal(await mobilePage.locator('#library-scope').inputValue(), 'all');
     await mobilePage.getByRole('button', { name: 'New suggestion', exact: true }).click();
     await mobilePage.locator('#staff-suggestion-dialog[open]').waitFor();
     const mobileScope = mobilePage.getByLabel('Servicing library', { exact: true });
-    assert.equal(await mobileScope.inputValue(), '', 'Mobile super-admin suggestion scope must start blank');
+    assert.equal(await mobileScope.inputValue(), '', 'Mobile All-library suggestion scope requires an explicit servicing library');
     await mobileScope.selectOption('2');
     await mobilePage.getByLabel('Patron barcode or name', { exact: true }).fill('MULTIPLE');
     await mobilePage.getByRole('button', { name: 'Look up patron', exact: true }).click();
