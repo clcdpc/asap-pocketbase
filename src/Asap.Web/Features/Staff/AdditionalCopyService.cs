@@ -58,6 +58,7 @@ public sealed record AdditionalCopyDto(
     string? NotificationReason = null)
 {
     public AdditionalCopyTimeoutContext? TimeoutContext { get; init; }
+    public StaffResearchContext? Research { get; init; }
 }
 
 public sealed record AdditionalCopyScopeResult(
@@ -1008,6 +1009,10 @@ public sealed class AdditionalCopyService(
             .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || organizationIds.Contains(item.OrganizationId))
             .ToDictionaryAsync(item => item.OrganizationId, cancellationToken);
         workflowRows.TryGetValue(1, out var systemWorkflow);
+        var research = await context.SystemSettings.AsNoTracking()
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
+            .Select(item => new StaffResearchContext(item.LeapBibUrlPattern, null, null))
+            .SingleAsync(cancellationToken);
         return requests.Select(request =>
         {
             sources.TryGetValue(request.SourceTitleRequestId ?? 0, out var source);
@@ -1058,7 +1063,8 @@ public sealed class AdditionalCopyService(
             {
                 TimeoutContext = new AdditionalCopyTimeoutContext(
                     libraryWorkflow?.AdditionalCopyTimeoutEnabled ?? systemWorkflow?.AdditionalCopyTimeoutEnabled == true,
-                    libraryWorkflow?.AdditionalCopyTimeoutDays ?? systemWorkflow?.AdditionalCopyTimeoutDays)
+                    libraryWorkflow?.AdditionalCopyTimeoutDays ?? systemWorkflow?.AdditionalCopyTimeoutDays),
+                Research = research
             };
         }).ToList();
     }

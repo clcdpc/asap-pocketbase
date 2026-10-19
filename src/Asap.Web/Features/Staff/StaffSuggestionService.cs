@@ -386,10 +386,23 @@ public sealed class StaffSuggestionService(
         CancellationToken cancellationToken)
     {
         var branches = await GetPickupBranchesAsync(patron, scope.OrganizationId, cancellationToken);
+        await using var researchContext = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var metadata = await researchContext.SystemSettings.AsNoTracking()
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
+            .Select(item => new
+            {
+                item.LeapBibUrlPattern,
+                item.LeapPatronUrlPattern,
+                PatronOrganizationName = researchContext.Organizations.Where(organization => organization.Id == patron.PatronOrganizationId)
+                    .Select(organization => organization.DisplayName).FirstOrDefault()
+            })
+            .SingleAsync(cancellationToken);
         scope = await ResolveScopeAsync(actor, requestedOrganizationId, cancellationToken);
         await EnsurePatronScopeAsync(patron, scope.Configuration, cancellationToken);
-        var current = branches.SingleOrDefault(item => item.Id == patron.PreferredPickupBranchId);
-        var warning = current is null ? "Choose an eligible preferred pickup location." : null;
+        var current = patron.EffectivePickupPreferenceState == PatronPickupPreferenceState.Current
+            ? branches.SingleOrDefault(item => item.Id == patron.PreferredPickupBranchId) : null;
+        var warning = branches.Count == 0 ? "No eligible pickup locations are available; a suggestion cannot be created." :
+            current is null ? "The current Polaris preference is missing or ineligible. Choose an eligible preferred pickup location." : null;
         var context = new StaffPatronContext(
             ToMatch(patron),
             patron.Email,
@@ -401,7 +414,18 @@ public sealed class StaffSuggestionService(
             branches.Count == 0,
             scope.OrganizationId,
             scope.Configuration.OrganizationName,
-            !scope.Configuration.AllowAnyRegisteredCardLogin);
+            !scope.Configuration.AllowAnyRegisteredCardLogin)
+        {
+            Research = new StaffResearchContext(metadata.LeapBibUrlPattern, metadata.LeapPatronUrlPattern,
+                patron.PatronId is > 0 ? patron.PatronId : null),
+            PatronOrganizationName = metadata.PatronOrganizationName,
+            CurrentPreferredPickupState = patron.EffectivePickupPreferenceState switch
+            {
+                PatronPickupPreferenceState.Current => "current",
+                PatronPickupPreferenceState.ExplicitInvalid => "invalid",
+                _ => "absent"
+            }
+        };
         return new StaffPatronLookupResult(
             "verified",
             scope.OrganizationId,

@@ -114,6 +114,7 @@ public sealed record TitleRequestDto(
     public RelatedRequestSummary? RelatedRequests { get; init; }
     public RequestWorkflowContext? WorkflowContext { get; init; }
     public PickupOperationSummary? PickupOperation { get; init; }
+    public StaffResearchContext? Research { get; init; }
 }
 
 public sealed record TitleRequestScopeResult(
@@ -245,6 +246,10 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || visibleOrganizationIds.Contains(item.OrganizationId))
             .ToDictionaryAsync(item => item.OrganizationId, cancellationToken);
         workflowRows.TryGetValue(1, out var systemWorkflow);
+        var research = await context.SystemSettings.AsNoTracking()
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
+            .Select(item => new StaffResearchContext(item.LeapBibUrlPattern, item.LeapPatronUrlPattern, null))
+            .SingleAsync(cancellationToken);
         var relatedByKey = new Dictionary<string, List<TitleRequest>>(StringComparer.Ordinal);
         foreach (var candidate in relatedCandidates)
         {
@@ -409,6 +414,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                     AsUtc(item.CreatedUtc))).ToArray() : [])
             {
                 CustomFieldsValid = customFieldsValid,
+                Research = research with { PatronId = request.PatronIdSnapshot is > 0 ? request.PatronIdSnapshot : null },
                 PickupOperation = pendingPickup is null ? null : new PickupOperationSummary(pendingPickup.Id,
                     pendingPickup.State, pendingPickup.TargetBranchId, pendingPickup.TargetBranchName),
                 RelatedRequests = new RelatedRequestSummary(related.Count, relatedCounts),

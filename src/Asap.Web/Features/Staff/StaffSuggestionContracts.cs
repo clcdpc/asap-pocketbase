@@ -25,7 +25,12 @@ public sealed record StaffPatronContext(
     bool PickupOptionsUnavailable,
     int LibraryOrgId,
     string LibraryOrgName,
-    bool SearchLibraryLimited);
+    bool SearchLibraryLimited)
+{
+    public StaffResearchContext? Research { get; init; }
+    public string? PatronOrganizationName { get; init; }
+    public string CurrentPreferredPickupState { get; init; } = "absent";
+}
 
 public sealed record StaffPatronLookupResult(
     string Status,

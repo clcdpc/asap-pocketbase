@@ -19,6 +19,8 @@ public sealed partial class AdministrationService
         AdministrationSettingsCommand command,
         CancellationToken cancellationToken)
     {
+        ValidateLeapUrlPattern(command.System.LeapBibUrlPattern, patron: false);
+        ValidateLeapUrlPattern(command.System.LeapPatronUrlPattern, patron: true);
         var system = await context.SystemSettings.SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
         var polaris = await context.PolarisSettings.SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
         var email = await context.EmailSettings.SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
@@ -61,6 +63,33 @@ public sealed partial class AdministrationService
         if (command.Email.ClearServerToken.Value == true)
         {
             email.ProtectedServerToken = null;
+        }
+    }
+
+    private static void ValidateLeapUrlPattern(SuppliedValue<string?> patch, bool patron)
+    {
+        if (!patch.IsSupplied || string.IsNullOrWhiteSpace(patch.Value))
+        {
+            return;
+        }
+        var pattern = patch.Value.Trim();
+        var required = patron ? "{{patron-id}} (or {{patronId}})" : "{{bibid}}";
+        var hasToken = patron
+            ? pattern.Contains("{{patron-id}}", StringComparison.Ordinal) || pattern.Contains("{{patronId}}", StringComparison.Ordinal)
+            : pattern.Contains("{{bibid}}", StringComparison.Ordinal);
+        var expanded = pattern;
+        foreach (var token in new[] { "title", "identifier", "bibid", "patron-id", "patronId" })
+        {
+            expanded = expanded.Replace("{{" + token + "}}", "123", StringComparison.Ordinal);
+        }
+        if (!hasToken ||
+            !(pattern.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || pattern.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) ||
+            pattern.Any(char.IsControl) || pattern.Contains('\\') ||
+            expanded.Contains("{{", StringComparison.Ordinal) || expanded.Contains("}}", StringComparison.Ordinal) ||
+            !Uri.TryCreate(expanded, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host) ||
+            !string.IsNullOrEmpty(uri.UserInfo))
+        {
+            throw new AdministrationInputException($"The LEAP {(patron ? "patron" : "BIB")} URL pattern must be an HTTP(S) URL containing {required}, without credentials or unsupported placeholders.");
         }
     }
 
