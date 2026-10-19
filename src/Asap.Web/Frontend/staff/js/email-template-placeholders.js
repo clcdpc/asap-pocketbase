@@ -12,9 +12,9 @@ export const PLACEHOLDERS = [
 ];
 const PATRON_CONTEXTS = new Set(['suggestion_submitted', 'purchase_approved', 'already_owned', 'rejected']);
 
-export function supportedPlaceholderKeys(templateKey) {
-  if (PATRON_CONTEXTS.has(templateKey)) return PLACEHOLDERS.map(item => item.key);
-  if (templateKey?.startsWith('rejection:')) return ['title'];
+export function supportedPlaceholderKeys(templateKey, usage) {
+  if (usage === 'builtin' && PATRON_CONTEXTS.has(templateKey)) return PLACEHOLDERS.map(item => item.key);
+  if (usage === 'additional' && /^rejection:/i.test(templateKey || '')) return ['title'];
   return [];
 }
 
@@ -36,7 +36,10 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
     const key = row?.querySelector('.template-key')?.value.trim() || fieldset?.dataset.templateKey || '';
     const name = row?.querySelector('.template-display-name')?.value.trim() ||
       fieldset?.querySelector('legend')?.firstChild?.textContent.trim() || key;
-    return { key, name, role: control.dataset.templateField };
+    // An additional/custom row may use a built-in-looking key without being
+    // consumed by that built-in sender. Usage comes from the owning editor.
+    const usage = row ? 'additional' : fieldset?.matches('fieldset.settings-template') ? 'builtin' : '';
+    return { key, name, usage, kind: row?.dataset.templateKind || '', role: control.dataset.templateField };
   }
 
   function marked(control) {
@@ -56,8 +59,9 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
   }
 
   function validTarget() {
-    return selection && isContextCurrent(selection.context) && editable(selection.control) &&
-      identity(selection.control).key === selection.key;
+    if (!selection || !isContextCurrent(selection.context) || !editable(selection.control)) return false;
+    const target = identity(selection.control);
+    return target.key === selection.key && target.usage === selection.usage && target.kind === selection.kind;
   }
 
   function current() {
@@ -67,13 +71,13 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
   function render() {
     const usable = current();
     const target = usable ? identity(selection.control) : null;
-    const supported = target ? supportedPlaceholderKeys(target.key) : [];
+    const supported = target ? supportedPlaceholderKeys(target.key, target.usage) : [];
     targetLabel.textContent = target
       ? `Inserting into: ${target.name || target.key} · ${target.role === 'body' ? 'Body' : 'Subject'}`
       : 'No editable Subject or Body selected.';
     guidance.textContent = target
       ? supported.length
-        ? target.key.startsWith('rejection:')
+        ? target.usage === 'additional'
           ? 'Only {{title}} is supported by every sending path for named rejection templates, including timeouts.'
           : 'Choose a placeholder to insert it at the remembered cursor or selection.'
         : 'Placeholder support is not verified for this template. You can still edit its text manually.'
@@ -109,10 +113,11 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
     // Focus or a fresh user editing gesture owns the target. Late selection
     // events may update neither a different target nor a cleared population.
     if (document.activeElement !== control || !editable(control)) return;
-    const key = identity(control).key;
-    const changedTarget = selection?.control !== control || selection.key !== key || !isContextCurrent(selection.context);
+    const { key, usage, kind } = identity(control);
+    const changedTarget = selection?.control !== control || selection.key !== key || selection.usage !== usage ||
+      selection.kind !== kind || !isContextCurrent(selection.context);
     selection = {
-      control, key, context: captureContext(),
+      control, key, usage, kind, context: captureContext(),
       start: control.selectionStart ?? control.value.length,
       end: control.selectionEnd ?? control.value.length
     };
@@ -154,7 +159,7 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
     const button = event.target.closest('[data-placeholder-key]');
     if (!button || !list.contains(button)) return;
     const key = button.dataset.placeholderKey;
-    if (!current() || !advertised.has(key) || !supportedPlaceholderKeys(selection.key).includes(key)) {
+    if (!current() || !advertised.has(key) || !supportedPlaceholderKeys(selection.key, selection.usage).includes(key)) {
       clear();
       status.textContent = 'Select an editable Subject or Body field first.';
       return;

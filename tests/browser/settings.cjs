@@ -662,6 +662,82 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     report.campaign2SystemAndInheritance = true;
   }
   await page.locator('#settings-nav-templates').click();
+  const beforeCustomSave = await read(library);
+  const builtinBeforeCustomSave = await page.locator('#settings-template-editor').evaluate(container =>
+    [...container.querySelectorAll('[data-template-field]')].map(input => ({ id: input.id, value: input.value, disabled: input.disabled })));
+  const customBodies = new Map();
+  for (const key of ['purchase_approved', 'suggestion_submitted', 'rejected']) {
+    await page.locator('#add-email-template').click();
+    const custom = page.locator('#email-templates-editor [data-template-id=""]').last();
+    await custom.locator('.template-key').fill(key);
+    await custom.locator('.template-display-name').fill(`Custom ${key}`);
+    await custom.locator('.template-subject').fill(`Manual ${key}`);
+    const body = `Unchanged manual {{name}} content for ${key} & é`;
+    customBodies.set(key, body);
+    await custom.locator('.template-body').fill(body);
+    await custom.locator('.template-body').focus();
+    assert.equal(await custom.getAttribute('data-template-kind'), 'custom');
+    assert.equal(await page.locator('#template-placeholder-list button').count(), 0,
+      `A library-custom ${key} key cannot claim its built-in sending capabilities.`);
+    assert.match(await page.locator('#template-placeholder-guidance').textContent(), /not verified/);
+    assert.equal(await custom.locator('.template-body').inputValue(), body);
+  }
+  const rejectionKey = 'REJECTION:campaign2_custom';
+  await page.locator('#add-email-template').click();
+  const upper = page.locator('#email-templates-editor [data-template-id=""]').last();
+  await upper.locator('.template-key').fill(rejectionKey);
+  await upper.locator('.template-display-name').fill('Case-insensitive named rejection');
+  await upper.locator('.template-subject').fill('Uppercase rejection {{title}}');
+  await upper.locator('.template-body').fill('Upper & ');
+  await selectRange(upper.locator('.template-body'), 8);
+  assert.deepEqual(await page.locator('#template-placeholder-list button').allTextContents(), ['{{title}}']);
+  assert.match(await page.locator('#template-placeholder-guidance').textContent(), /including timeouts/);
+  await titleButton().focus();
+  await page.keyboard.press('Enter');
+  customBodies.set(rejectionKey, 'Upper & {{title}}');
+  assert.equal(await upper.locator('.template-body').inputValue(), customBodies.get(rejectionKey));
+  const customPayload = await saveSettings();
+  for (const [key, body] of customBodies) {
+    const submitted = customPayload.templates.find(item => item.templateKey === key && item.isCustom);
+    assert.ok(submitted, `The custom ${key} row is submitted independently of built-in lineage.`);
+    assert.equal(submitted.sourceTemplateId ?? null, null);
+    assert.equal(submitted.body, body);
+  }
+  for (const patch of customPayload.templates.filter(item => !item.isCustom && item.sourceTemplateId)) {
+    const original = beforeCustomSave.stored.templates.find(item => item.organizationId === library &&
+      item.sourceTemplateId === patch.sourceTemplateId && !item.isCustom);
+    assert.ok(original, 'Adding custom rows cannot create an unrelated lineage override.');
+    assert.notEqual(patch.reset, true);
+    for (const field of ['subject', 'body', 'displayName', 'enabled']) {
+      if (!Object.hasOwn(patch, field)) continue;
+      assert.notEqual(original[field], null, `An inherited ${field} must not be materialized by adding another row.`);
+      assert.equal(patch[field], original[field], `Only the unchanged explicit ${field} may be reasserted.`);
+    }
+  }
+  await reload(library);
+  await page.locator('#settings-nav-templates').click();
+  const customSaved = await read(library);
+  for (const original of beforeCustomSave.stored.templates) {
+    assert.deepEqual(customSaved.stored.templates.find(item => item.id === original.id), original,
+      'Custom template saves preserve every preexisting raw row, sparse field and rowversion.');
+  }
+  assert.deepEqual(await page.locator('#settings-template-editor').evaluate(container =>
+    [...container.querySelectorAll('[data-template-field]')].map(input => ({ id: input.id, value: input.value, disabled: input.disabled }))),
+    builtinBeforeCustomSave, 'Custom built-in-looking keys stay independent of the actual built-in editors.');
+  for (const [key, body] of customBodies) {
+    const stored = customSaved.stored.templates.find(item => item.templateKey === key && item.organizationId === library && item.isCustom);
+    assert.ok(stored, `The real saved custom ${key} row survives reload.`);
+    assert.equal(stored.sourceTemplateId ?? null, null);
+    assert.equal(stored.body, body);
+    const custom = await row(key);
+    assert.equal(await custom.getAttribute('data-template-kind'), 'custom');
+    assert.equal(await custom.locator('.template-key').evaluate(input => input.readOnly), true);
+    await custom.locator('.template-body').focus();
+    assert.deepEqual(await page.locator('#template-placeholder-list button').allTextContents(),
+      key === rejectionKey ? ['{{title}}'] : [], 'Saved custom identity cannot borrow built-in capabilities.');
+    assert.equal(await custom.locator('.template-body').inputValue(), body);
+  }
+  report.campaign2CustomUsageCapabilities = true;
   await scan(page, axeSource, args.artifactRoot, report, 'campaign2-desktop');
   await page.setViewportSize({ width: 390, height: 844 });
   await scan(page, axeSource, args.artifactRoot, report, 'campaign2-mobile');

@@ -99,11 +99,24 @@ const { JSDOM } = require('jsdom');
 
     const rows = [...document.querySelectorAll('#email-templates-editor [data-domain-row]')];
     assert.strictEqual(rows.length, 2);
-    const lineage = rows.find(row => row.dataset.templateKind === 'lineage');
+    let lineage = rows.find(row => row.dataset.templateKind === 'lineage');
     assert.strictEqual(lineage.dataset.templateSourceId, systemTemplate.id);
     assert.strictEqual(lineage.querySelector('.template-subject').value, 'System subject');
     assert.strictEqual(lineage.querySelector('.template-body').value, 'Library body');
     assert.strictEqual(lineage.querySelector('.template-subject').disabled, false);
+
+    const priorLineage = editors.collect().values.templates.find(item => item.sourceTemplateId === systemTemplate.id);
+    document.getElementById('add-email-template').click();
+    assert.deepStrictEqual(editors.collect().values.templates.find(item => item.sourceTemplateId === systemTemplate.id), priorLineage,
+      'Adding a custom row must not turn untouched inherited fields into explicit library edits.');
+    lineage = document.querySelector('#email-templates-editor [data-template-kind="lineage"]');
+    lineage.querySelector('[aria-label="Move down"]').click();
+    assert.deepStrictEqual(editors.collect().values.templates.find(item => item.sourceTemplateId === systemTemplate.id), priorLineage,
+      'Reordering rows must preserve sparse field baselines too.');
+    document.querySelector('#email-templates-editor [data-template-id=""] [aria-label="Delete"]').click();
+    assert.deepStrictEqual(editors.collect().values.templates.find(item => item.sourceTemplateId === systemTemplate.id), priorLineage,
+      'Removing a different row must preserve existing override identity and field intent.');
+    lineage = document.querySelector('#email-templates-editor [data-template-kind="lineage"]');
 
     lineage.querySelector('.settings-template-override').checked = false;
     lineage.querySelector('.settings-template-override').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
