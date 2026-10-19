@@ -112,6 +112,7 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(reset.templates.find(item => item.reset).sourceTemplateId, systemTemplate.id);
 
     const systemRoot = document.getElementById('settings-view');
+    editors.dispose();
     const systemEditors = module.createSettingsDomainEditors({ root: systemRoot });
     systemEditors.populate({
       orgId: 'system',
@@ -134,6 +135,48 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(document.getElementById('add-email-template').hidden, false);
     document.getElementById('add-email-template').click();
     assert.ok(systemEditors.collect().templates.some(item => item.templateKey.startsWith('rejection:')));
+
+    const collisionRows = ['rejection:template_1', 'rejection:template_3'].map((templateKey, index) => ({
+      ...systemTemplate, id: String(100 + index), templateKey
+    }));
+    systemEditors.populate({ ...data, orgId: 'system', stored: { ...data.stored,
+      configuredSystem: { ...completeSystem, templates: collisionRows }, templates: collisionRows } }, true);
+    document.getElementById('add-email-template').click();
+    const newRow = document.querySelector('#email-templates-editor [data-template-id=""]');
+    const newKey = newRow.querySelector('.template-key');
+    assert.strictEqual(newKey.value, 'rejection:template_2', 'Add must choose an unused key from nonsequential saved identities.');
+    assert.strictEqual(newKey.readOnly, false);
+    assert.strictEqual(newKey.hasAttribute('readonly'), false, 'Boolean false must not create a readonly attribute.');
+    newKey.value = 'rejection:editable_new_key';
+    assert.ok(systemEditors.collect().templates.some(item => item.templateKey === newKey.value));
+    for (const row of document.querySelectorAll('#email-templates-editor [data-template-id]:not([data-template-id=""])')) {
+      assert.strictEqual(row.querySelector('.template-key').readOnly, true);
+    }
+    const casedKeys = collisionRows.map((item, index) => ({ ...item,
+      templateKey: index === 0 ? 'REJECTION:TEMPLATE_1' : 'rejection:template_3' }));
+    systemEditors.populate({ ...data, orgId: 'system', stored: { ...data.stored,
+      configuredSystem: { ...completeSystem, templates: casedKeys }, templates: casedKeys } }, true);
+    document.getElementById('add-email-template').click();
+    assert.strictEqual(document.querySelector('#email-templates-editor [data-template-id=""] .template-key').value, 'rejection:template_2');
+    systemEditors.dispose();
+
+    const provider = { id: '31', key: 'persisted_provider', label: 'Provider', urlTemplate: 'https://example.org/?q={query}',
+      isEnabled: true, sortOrder: 10, overridden: false };
+    const format = { id: '32', code: 'owned_format', ownerOrganizationId: 2, version: 'format-version', label: 'Owned format',
+      isEnabled: true, sortOrder: 10, overridden: true };
+    const identityEditors = module.createSettingsDomainEditors({ root: systemRoot });
+    identityEditors.populate({ ...data, effective: { ...data.effective, formats: [format] },
+      stored: { ...data.stored, formats: [format], configuredSystem: { ...completeSystem, providers: [provider] } } }, false);
+    assert.strictEqual(document.querySelector('#material-formats-editor input').readOnly, true,
+      'Persisted library-owned material-format codes are immutable too.');
+    identityEditors.populate({ ...data, orgId: 'system', stored: { ...data.stored,
+      configuredSystem: { ...completeSystem, providers: [provider] } },
+      effective: { ...data.effective, externalSearchProviders: [provider] } }, true);
+    assert.strictEqual(document.querySelector('#external-search-provider-editor input').readOnly, true,
+      'Persisted System provider keys must remain immutable after Boolean construction is fixed.');
+    document.getElementById('add-provider').click();
+    assert.strictEqual([...document.querySelectorAll('#external-search-provider-editor [data-domain-row]')].at(-1).querySelector('input').readOnly, false);
+    identityEditors.dispose();
 
     dom.window.close();
     console.log('Settings template lineage, hiding/reset, system rejection, and bigint identity controls passed');

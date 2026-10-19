@@ -14,6 +14,12 @@ const browserTests = [
   'FullyQualifiedName~LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata',
   'FullyQualifiedName~ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery',
   'FullyQualifiedName~OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes',
+  'FullyQualifiedName~EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance',
+  'FullyQualifiedName~Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload',
+  'FullyQualifiedName~StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry',
+  'FullyQualifiedName~LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces',
+  'FullyQualifiedName~SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference',
+  'FullyQualifiedName~StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope',
 ].join('|');
 
 const child = spawn(
@@ -27,7 +33,7 @@ const child = spawn(
     '--no-build',
     '--no-restore',
     '--minimum-expected-tests',
-    '9',
+    '16',
     '--filter',
     browserTests,
   ],

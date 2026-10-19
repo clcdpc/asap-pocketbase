@@ -19,6 +19,10 @@
     </a>
     <div id="session-actions" class="session-actions" hidden>
       <span id="staff-identity"></span>
+      <button id="profile-button" class="icon-button header-profile" type="button" data-view="profile"
+              aria-controls="profile-view" aria-label="Profile" title="Profile">
+        <i class="fa fa-user" aria-hidden="true"></i>
+      </button>
       <details id="recent-work" class="recent-work">
         <summary>Recent requests</summary>
         <div id="recent-request-list" class="recent-request-list" aria-label="Recently opened title requests"></div>
@@ -53,9 +57,6 @@
         </button>
         <button class="view-tab" type="button" data-view="analytics">
           <i class="fa fa-bar-chart" aria-hidden="true"></i> Analytics
-        </button>
-        <button class="view-tab" type="button" data-view="profile">
-          <i class="fa fa-user" aria-hidden="true"></i> Profile
         </button>
         <button id="operations-view-tab" class="view-tab" type="button" data-view="operations" hidden>
           <i class="fa fa-cogs" aria-hidden="true"></i> Operations
@@ -126,7 +127,7 @@
         <p id="queue-automation" class="queue-automation"></p>
 
         <div id="request-grid" class="request-grid"></div>
-        <p id="queue-empty" class="empty-state" hidden>No requests match these filters.</p>
+        <p id="queue-empty" class="empty-state" role="status" aria-live="polite" hidden>No requests match these filters.</p>
       </section>
 
       <section id="additional-copy-view" aria-labelledby="additional-copy-title" hidden>
@@ -168,7 +169,7 @@
         </div>
 
         <div id="additional-copy-grid" class="request-grid"></div>
-        <p id="additional-copy-empty" class="empty-state" hidden>No additional-copy tasks match these filters.</p>
+        <p id="additional-copy-empty" class="empty-state" role="status" aria-live="polite" hidden>No additional-copy tasks match these filters.</p>
         <div id="additional-copy-create-review" role="group" aria-label="Review unconfirmed additional-copy creation" hidden>
           <p id="additional-copy-create-review-summary"></p>
           <button id="additional-copy-create-review-done" class="secondary-button" type="button">I reviewed these tasks</button>
@@ -228,10 +229,19 @@
           <button id="run-workflow-now" class="primary-button" type="button"><i class="fa fa-play" aria-hidden="true"></i> Run workflow now</button>
           <button id="run-weekly-now" class="secondary-button" type="button"><i class="fa fa-envelope" aria-hidden="true"></i> Run weekly summary</button>
           <button id="force-weekly-now" class="secondary-button" type="button"><i class="fa fa-repeat" aria-hidden="true"></i> Force weekly summary</button>
-          <button id="send-test-email" class="secondary-button" type="button"><i class="fa fa-paper-plane" aria-hidden="true"></i> Send test email</button>
           <button id="refresh-operations" class="icon-button" type="button" title="Refresh operations" aria-label="Refresh operations"><i class="fa fa-refresh" aria-hidden="true"></i></button>
         </div>
         <div id="operations-outcome" class="status-message warning" role="status" hidden></div>
+        <fieldset id="operations-email-test" class="settings-fieldset" data-settings-ignore="true">
+          <legend>Test email</legend>
+          <div data-email-test="context"></div>
+          <div class="form-actions">
+            <button id="send-test-email" data-email-test="send" class="secondary-button" type="button">Send test email</button>
+            <button data-email-test="refresh" class="secondary-button" type="button">Refresh test status</button>
+            <button data-email-test="operations" class="secondary-button" type="button">View email operations</button>
+          </div>
+          <p data-email-test="result" class="settings-result" role="status" aria-live="polite"></p>
+        </fieldset>
         <div class="operations-columns">
           <section class="operations-panel" aria-labelledby="queue-progress-title">
             <h2 id="queue-progress-title">Queue progress</h2>
@@ -277,14 +287,15 @@
         </div>
 
         <div id="settings-system-context" class="settings-callout" hidden>
-          System-only controls are available at System level. Library settings can override only the fields enabled below.
+          <strong id="settings-library-context-title"></strong>
+          <p id="settings-library-context-guidance"></p>
           <button id="settings-switch-system" class="secondary-button" type="button" hidden>Switch to System level</button>
         </div>
         <div class="settings-layout">
           <aside class="settings-sidebar" aria-label="Settings sections">
             <nav id="settings-nav" class="settings-nav" role="tablist" aria-label="Settings categories">
-              <button id="settings-nav-start" type="button" role="tab" aria-selected="true" aria-controls="settings-start" data-settings-panel="start">Getting started</button>
-              <button id="settings-nav-polaris" type="button" role="tab" aria-selected="false" aria-controls="settings-polaris" data-settings-panel="polaris">Polaris</button>
+              <button id="settings-nav-start" type="button" role="tab" aria-selected="true" aria-controls="settings-start" data-settings-panel="start" data-settings-system-only="true">Getting started</button>
+              <button id="settings-nav-polaris" type="button" role="tab" aria-selected="false" aria-controls="settings-polaris" data-settings-panel="polaris" data-settings-system-only="true">Polaris</button>
               <button id="settings-nav-smtp" type="button" role="tab" aria-selected="false" aria-controls="settings-smtp" data-settings-panel="smtp">Email / Postmark</button>
               <button id="settings-nav-staff" type="button" role="tab" aria-selected="false" aria-controls="settings-staff" data-settings-panel="staff">Staff access</button>
               <button id="settings-nav-workflow" type="button" role="tab" aria-selected="false" aria-controls="settings-workflow" data-settings-panel="workflow">Workflow</button>
@@ -308,10 +319,12 @@
                     <span>Staff URL</span><input id="system-staff-url" type="url" autocomplete="url">
                   </label>
                   <label class="settings-field" data-setting-section="systemSettings" data-setting-key="leapBibUrlPattern" data-system-only="true">
-                    <span>Leap bib record URL pattern</span><input id="leap-bib-url-pattern" type="url">
+                    <span>LEAP BIB record URL pattern</span><input id="leap-bib-url-pattern" type="url" aria-describedby="leap-bib-help">
+                    <small id="leap-bib-help" class="field-help">Optional HTTP(S) URL. Use {{bibid}} for the Polaris BIB ID. Example: https://leap.example.org/LeapWebApp/staff/default#bibrecords/{{bibid}}</small>
                   </label>
                   <label class="settings-field" data-setting-section="systemSettings" data-setting-key="leapPatronUrlPattern" data-system-only="true">
-                    <span>Leap patron record URL pattern</span><input id="leap-patron-url-pattern" type="url">
+                    <span>LEAP patron record URL pattern</span><input id="leap-patron-url-pattern" type="url" aria-describedby="leap-patron-help">
+                    <small id="leap-patron-help" class="field-help">Optional HTTP(S) URL. Use {{patron-id}} for the native Polaris patron ID; {{patronId}} is also supported. Example: https://leap.example.org/LeapWebApp/staff/default#patrons/{{patron-id}}/checkout</small>
                   </label>
                   <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="formatIconUrlPattern" data-system-only="true">
                     <span>Format icon URL pattern</span><input id="format-icon-url-pattern" type="text">
@@ -394,6 +407,17 @@
                   <label class="settings-field wide check-field" data-system-only="true"><input id="email-clear-postmark-token" type="checkbox"><span>Clear stored Postmark token</span></label>
                 </div>
                 <p id="email-token-status" class="settings-result"></p>
+              </fieldset>
+              <fieldset id="settings-email-test" class="settings-fieldset" data-settings-ignore="true">
+                <legend>Test email</legend>
+                <p>Send a test message using the saved settings for this scope.</p>
+                <div data-email-test="context"></div>
+                <div class="form-actions">
+                  <button data-email-test="send" class="secondary-button" type="button">Send test email</button>
+                  <button data-email-test="refresh" class="secondary-button" type="button">Refresh test status</button>
+                  <button data-email-test="operations" class="secondary-button" type="button">View email operations</button>
+                </div>
+                <p data-email-test="result" class="settings-result" role="status" aria-live="polite"></p>
               </fieldset>
             </section>
 
@@ -588,14 +612,21 @@
             <section id="settings-templates" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="templates" aria-labelledby="settings-nav-templates" hidden>
               <div class="settings-panel-heading">
                 <h2>Email templates</h2>
-                <p>Subject and body content preserve system identity and library lineage.</p>
+                <p>Customize the email messages your library sends to patrons.</p>
               </div>
-              <details id="template-placeholder-help" class="settings-fieldset" data-settings-ignore="true">
-                <summary>Template placeholders</summary>
-                <p>Place the cursor in a template Subject or Body, then choose a placeholder to insert it.</p>
-                <div id="template-placeholder-list" class="settings-inline-actions"></div>
+              <div id="template-placeholder-help" class="template-placeholder-help" data-settings-ignore="true" role="group" aria-labelledby="template-placeholder-title">
+                <h3 id="template-placeholder-title">Available placeholders</h3>
+                <p>Select a Subject or Body field, then choose a placeholder to insert it at the cursor. Availability depends on the selected template.</p>
+                <p id="template-placeholder-target"></p>
+                <p id="template-placeholder-guidance"></p>
+                <div id="template-placeholder-list" class="template-placeholder-list" role="group" aria-label="Insert a supported placeholder"></div>
+                <details>
+                  <summary>What each placeholder means</summary>
+                  <p>This reference uses synthetic examples. A supported placeholder may have no value; it does not automatically remove surrounding labels or sentences.</p>
+                  <dl id="template-placeholder-reference"></dl>
+                </details>
                 <p id="template-placeholder-status" role="status" aria-live="polite"></p>
-              </details>
+              </div>
               <fieldset class="settings-fieldset">
                 <legend>Sender details</legend>
                 <div class="settings-grid">
@@ -606,28 +637,28 @@
               <div id="settings-template-editor" class="settings-template-list">
                 <fieldset class="settings-fieldset settings-template" data-template-key="suggestion_submitted" data-template-prefix="submit">
                   <legend>Submission confirmation</legend>
-                  <label class="settings-field"><span>Subject</span><input id="email-submit-subject" type="text"></label>
-                  <label class="settings-field wide"><span>Body</span><textarea id="email-submit-body" rows="7"></textarea></label>
+                  <label class="settings-field"><span>Subject</span><input id="email-submit-subject" type="text" data-template-field="subject"></label>
+                  <label class="settings-field wide"><span>Body</span><textarea id="email-submit-body" rows="7" data-template-field="body"></textarea></label>
                 </fieldset>
                 <fieldset class="settings-fieldset settings-template" data-template-key="purchase_approved" data-template-prefix="purchase-approved">
                   <legend>Purchase approved</legend>
-                  <label class="settings-field"><span>Subject</span><input id="email-purchase-approved-subject" type="text"></label>
-                  <label class="settings-field wide"><span>Body</span><textarea id="email-purchase-approved-body" rows="7"></textarea></label>
+                  <label class="settings-field"><span>Subject</span><input id="email-purchase-approved-subject" type="text" data-template-field="subject"></label>
+                  <label class="settings-field wide"><span>Body</span><textarea id="email-purchase-approved-body" rows="7" data-template-field="body"></textarea></label>
                 </fieldset>
                 <fieldset class="settings-fieldset settings-template" data-template-key="already_owned" data-template-prefix="owned">
                   <legend>Already owned</legend>
-                  <label class="settings-field"><span>Subject</span><input id="email-owned-subject" type="text"></label>
-                  <label class="settings-field wide"><span>Body</span><textarea id="email-owned-body" rows="7"></textarea></label>
+                  <label class="settings-field"><span>Subject</span><input id="email-owned-subject" type="text" data-template-field="subject"></label>
+                  <label class="settings-field wide"><span>Body</span><textarea id="email-owned-body" rows="7" data-template-field="body"></textarea></label>
                 </fieldset>
                 <fieldset class="settings-fieldset settings-template" data-template-key="hold_placed" data-template-prefix="hold">
                   <legend>Hold placed</legend>
-                  <label class="settings-field"><span>Subject</span><input id="email-hold-subject" type="text"></label>
-                  <label class="settings-field wide"><span>Body</span><textarea id="email-hold-body" rows="7"></textarea></label>
+                  <label class="settings-field"><span>Subject</span><input id="email-hold-subject" type="text" data-template-field="subject"></label>
+                  <label class="settings-field wide"><span>Body</span><textarea id="email-hold-body" rows="7" data-template-field="body"></textarea></label>
                 </fieldset>
                 <fieldset class="settings-fieldset settings-template" data-template-key="rejected" data-template-prefix="rejected">
                   <legend>Rejected</legend>
-                  <label class="settings-field"><span>Subject</span><input id="email-rejected-subject" type="text"></label>
-                  <label class="settings-field wide"><span>Body</span><textarea id="email-rejected-body" rows="7"></textarea></label>
+                  <label class="settings-field"><span>Subject</span><input id="email-rejected-subject" type="text" data-template-field="subject"></label>
+                  <label class="settings-field wide"><span>Body</span><textarea id="email-rejected-body" rows="7" data-template-field="body"></textarea></label>
                 </fieldset>
               </div>
               <div class="settings-domain-block">

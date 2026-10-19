@@ -126,6 +126,16 @@ function operationResult(url) {
     global.fetch = async (url, options = {}) => {
       requests.push({ url, options });
       if (url.endsWith('/session')) return response(200, session);
+      if (url.includes('/email-operations/test-context')) {
+        const organizationId = Number(new URL(url, 'https://localhost').searchParams.get('organizationId'));
+        return response(200, { code: 'ok', data: { organizationId, scopeName: 'Saved Operations scope',
+          fromAddress: 'saved@example.org', fromName: 'Saved sender', recipient: 'admin@example.org',
+          deliveryMode: 'postmark', state: 'ready', configurationVersion: 'A'.repeat(64) } });
+      }
+      if (/\/email-operations\/9007199254740995\?/.test(url) && options.method !== 'POST') {
+        return response(200, { code: 'ok', data: { id: '9007199254740995', organizationId: 2,
+          status: 'sent', deliveryMode: 'postmark' } });
+      }
       if (url.endsWith('/api/asap/staff/organizations')) return response(200, { code: 'ok', data: organizations });
       if (url.includes('/workflow/queues')) {
         const scope = new URL(`https://localhost${url}`).searchParams.get('organizationId') || 'all';
@@ -144,7 +154,7 @@ function operationResult(url) {
         return response(200, emailPayload);
       }
       if (url.includes('/api/asap/staff/email-readiness')) {
-        return response(200, { state: 'non_delivery' });
+        return response(200, { state: 'ready' });
       }
       if (url.includes('/api/asap/staff/additional-copies?')) {
         return response(200, { scope: 'all', status: 'open', items: [], availableLibraries: activeLibraries });
@@ -191,7 +201,9 @@ function operationResult(url) {
     assertRequest(requests.find(item => item.url.includes('force=true')), '/api/asap/staff/workflow/weekly-summary/run-now', '2', null);
     document.getElementById('send-test-email').click();
     await settle();
-    assertRequest(requests.find(item => item.url.includes('/email-operations/test')), '/api/asap/staff/email-operations/test', '2', null);
+    assertRequest(requests.find(item => item.url.includes('/email-operations/test?') && item.options.method === 'POST'),
+      '/api/asap/staff/email-operations/test', '2', { configurationVersion: 'A'.repeat(64), intendedDeliveryMode: 'postmark' });
+    assert.match(document.querySelector('#operations-email-test').textContent, /email service accepted/);
 
     const emailRows = [...document.querySelectorAll('#email-operations-table tbody tr')];
     const rowForId = id => emailRows.find(row => row.textContent.includes(id));

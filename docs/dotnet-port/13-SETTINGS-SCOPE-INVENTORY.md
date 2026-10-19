@@ -23,7 +23,7 @@ The target does **not** use one generic or catch-all `Settings` table. Configura
 
 `OrganizationId = 1` is the real Polaris system organization and is the target system/default scope. Do not introduce `NULL`, `-1`, or another synthetic scope sentinel for configuration ownership.
 
-For inheritable scalar fields, a library override must remain distinguishable from an inherited value. Resetting an individual override means setting/removing the library value so the current system value becomes effective; never copy the current system value into the library record merely to simulate inheritance. For ordinary overrideable text fields, trim input and normalize a blank library value to `NULL`/no override when current behavior treats blank as fallback. Secret-edit forms are different: a blank submitted secret means preserve the existing secret; removing a library secret override requires an explicit **Use system default/Clear override** action.
+For inheritable scalar fields, a library override must remain distinguishable from an inherited value. Resetting an individual override means setting/removing the library value so the current system value becomes effective; never copy the current system value into the library record merely to simulate inheritance. For ordinary overrideable text fields, trim input and normalize a blank library value to `NULL`/no override when current behavior treats blank as fallback. Reusable Polaris and Postmark secrets are system-only: blank preserves the stored secret and an explicit authorized System-level Clear removes it. Libraries cannot override, replace, or clear these credentials.
 
 ## 3. Target configuration tables
 
@@ -48,7 +48,7 @@ The tables are:
 
 - `[asap].[WorkflowSettings]` — limits, eligibility, automation, timeout behavior, and common-creator presentation/behavior that belongs to those workflows;
 - `[asap].[PatronSettings]` — patron-facing text/messages and duplicate-request status labels;
-- `[asap].[EmailSettings]` — Postmark transport/sender configuration with system + library inheritance; reusable secret values are Data Protection ciphertext.
+- `[asap].[EmailSettings]` — From address/name inherit independently from the System default. `ProtectedServerToken` belongs only to organization 1 and contains Data Protection ciphertext; it never inherits from a library row. Library saves and resets cannot change the System credential. DACPAC post-deployment clears obsolete non-System token ciphertext idempotently, preserving sender values and rows without decrypting, logging, or promoting tokens.
 
 ### 3.3 Whole-set replacement tables
 
@@ -87,7 +87,7 @@ Do not add an EAV `SettingKey/Value` table or a whole-configuration JSON documen
 | **Nonparticipating-library message** | `systemNotEnabledMessage` | **System-only** | `SystemSettings.SystemNotEnabledMessage`. |
 | **Misconfiguration message** | `misconfiguredMessage` | **System-only** | `SystemSettings.MisconfiguredMessage`. Treat the current save-path gap as a defect, not intended behavior. |
 | **Polaris integration** | `host`, `accessId`, `apiKey`, `staffDomain`, `adminUser`, `adminPassword`, `overridePassword`, `workstationId`, `systemPolarisUserId` | **System-only** | `PolarisSettings`. Keep only fields required by `Clc.Polaris.Api` and the target system/application credential model. Remove legacy per-staff authentication fields. Reusable secrets are protected ciphertext. Configured integration IDs are positive Int32; NULL is unconfigured. Requesting/servicing library and pickup branch belong to each operation and are not persisted as global defaults. |
-| **Email transport** | current `smtp_settings` | **System default + library override in target** | `EmailSettings`; replace SMTP with approved Postmark configuration. SMTP host/port/user/password/TLS do not map to Postmark credentials and are intentionally dropped. The target Postmark token is separately provisioned as a new secret. Missing effective sender/transport configuration is a notification-state concern, not a business-transaction veto: notification intent is terminally suppressed when required configuration is absent at creation, or a previously valid queued row becomes retryable `failed/mail_not_configured` if transport configuration disappears before delivery. |
+| **Email transport** | current `smtp_settings` | **System-only** | `EmailSettings.ProtectedServerToken` on organization 1; every library uses this one protected Postmark credential with its independently resolved sender identity. Library token writes, including legacy aliases and explicit clear requests, are rejected. SMTP host/port/user/password/TLS do not map to Postmark credentials and are intentionally dropped. The target Postmark token is separately provisioned as a new secret. Missing effective sender/transport configuration is a notification-state concern, not a business-transaction veto: notification intent is terminally suppressed when required configuration is absent at creation, or a previously valid queued row becomes retryable `failed/mail_not_configured` if transport configuration disappears before delivery. |
 | **Email sender identity** | `fromAddress`, `fromName` | **System default + library override** | `EmailSettings.FromAddress` / `FromName`; do not duplicate sender configuration on every template. |
 | **Weekly suggestion limit** | `suggestionLimit`, `suggestionLimitMessage` | **System default + library override** | `WorkflowSettings`. |
 | **Unreviewed-suggestion timeout / auto-reject (`OutstandingTimeout`)** | `outstandingTimeoutEnabled`, `outstandingTimeoutDays`, `outstandingTimeoutSendEmail`, `outstandingTimeoutRejectionTemplate` | **System default + library override** | `WorkflowSettings`: eligible status `suggestion`, age from `CreatedUtc`, strict threshold, result `closed/rejected`; effective send-email switch/template govern the auto-rejection notification. No `outstanding_purchase` expiry. Template selection references target `EmailTemplate` identity with scope validation; full predicate in porting-spec section 23.2. |
@@ -157,6 +157,8 @@ System formats are durable identities. `MaterialFormatOverride` contains nullabl
 
 Built-in/system templates remain system identities. Library rows may override/hide a system template through lineage/source identity. Library-created rejection templates are library-owned records and are not inherited overrides.
 
+The Available placeholders reference describes verified consumers without changing delivery behavior: `suggestion_submitted`, `purchase_approved`, `already_owned`, and built-in `rejected` support the seven patron-renderer tokens. Named `rejection:*` templates offer only `{{title}}`, the intersection with timeout rendering. `hold_placed` has no verified configured-template consumer and unknown keys imply no insertion capabilities; both remain manually editable. Insertion edits the current draft only and must retain current identity, scope, focus, DOM, visibility, editability, and override ownership. Native `setRangeText` is used; its Chromium undo/redo history behavior is not a verified editing-history guarantee. Real screen-reader and browser-zoom acceptance remain separate from automated focus, reflow, forced-colors, and axe checks.
+
 ### 5.5 Branding
 
 Logo image and logo alt text inherit independently. Clearing only the image override does not implicitly clear alt text, and vice versa.
@@ -204,7 +206,7 @@ After an inherited-override reset, effective configuration immediately resolves 
 
 **`allowedStaffUsers`:** legacy configuration is superseded by Entra authentication plus local `StaffUser` authorization and is not migrated.
 
-**Transport versus sender configuration:** current SMTP transport is global while sender values can effectively be scoped through template rows. Target Postmark transport/sender settings use `EmailSettings`; templates contain content, not redundant transport/sender configuration.
+**Transport versus sender configuration:** current SMTP transport is global while sender values can effectively be scoped through template rows. Target `EmailSettings` keeps the Postmark transport credential System-only and From address/name independently inheritable. Templates contain content, not redundant transport/sender configuration. Settings library context names the selected library; System-only navigation and fieldsets explain their all-library effect. The normal dirty-safe scope switch is the only shortcut to System editing.
 
 ## 8. Migration requirements
 

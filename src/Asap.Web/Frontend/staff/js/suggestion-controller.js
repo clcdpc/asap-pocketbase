@@ -1,20 +1,23 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
+import { byDisplayLabel } from './display-order.js';
 import { createDraftScope } from './draft-scope.js';
 import { validRequestId } from './recent-requests.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
-import { applyPolarisResultToControls } from './research.js';
+import { applyPolarisResultToControls, researchRecordValue } from './research.js';
 import { renderCustomFieldEditor } from './custom-fields.js';
 import { sanitizedHtmlFragment } from '../../shared/html.js';
-import { element, icon, labeledInput, selectWithHistorical } from './ui.js';
+import { element, icon, labeledInput, selectWithHistorical, dateTime } from './ui.js';
 
 export function createSuggestionController({ root, trigger, sessionIdentity, polarisLookup, announce, getLibraries,
-  beforeOpen, beforeClose, openCreatedTitle, openExistingTitle, onReceipt, clearReceipt, request: send = authorizedJson }) {
+  beforeOpen, beforeClose, openCreatedTitle, openExistingTitle, onReceipt, clearReceipt,
+  getScope = () => null, request: send = authorizedJson }) {
   const dom = { staffSuggestionDialog: root, staffSuggestionForm: root.querySelector('#staff-suggestion-form'),
     staffSuggestionStatus: root.querySelector('#staff-suggestion-status'), staffSuggestionBody: root.querySelector('#staff-suggestion-body'),
     staffSuggestionActions: root.querySelector('#staff-suggestion-actions') };
   const reads = createLatestLoad(), events = new window.AbortController();
   let suggestion = null, actor = null, returnFocus = null, activeAttempt = null, disposed = false, stageToken = 0;
+  let clearOpeningAnnouncement = null;
   let drafts = createDraftScope(), draft = null, baseline = null, stageEvents = new window.AbortController(), lookupContext = null;
   function isCurrent(owner = suggestion) { return !disposed && root.open && owner !== null && suggestion === owner && sessionIdentity.isCurrent(actor); }
   function isCurrentGeneration(token) { return token === stageToken && isCurrent(); }
@@ -49,25 +52,37 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     }
     if (!options.force && !options.guarded && !beforeClose()) return false;
     const owner = actor, target = returnFocus;
+    if (typeof clearOpeningAnnouncement === 'function') clearOpeningAnnouncement();
+    clearOpeningAnnouncement = null;
     invalidate(); beginStage(); suggestion = null; actor = null; returnFocus = null;
     if (root.open) root.close(); dom.staffSuggestionForm.inert = false;
     if (!options.navigation && options.focusButton !== false && sessionIdentity.isCurrent(owner)) {
-      if (target?.isConnected) target.focus(); else if (trigger?.isConnected) trigger.focus();
+      const port = typeof target?.target === 'function' && target.isCurrent?.() ? target : null;
+      const focus = port ? port.target() || port.fallback : target;
+      if (focus?.isConnected) focus.focus(); else if (trigger?.isConnected) trigger.focus();
     }
     return true;
   }
-  function open(opener = null) {
+  function open(opener = null, { barcode = null, focusReturn = null } = {}) {
     if (disposed || !sessionIdentity.actor() || !beforeOpen() || !closeStaffSuggestion({ focusButton: false })) return false;
-    actor = sessionIdentity.preferences(); returnFocus = opener || document.activeElement;
-    suggestion = { scopeId: actor.role === 'super_admin' ? null : String(actor.organizationId), stage: 'lookup' };
-    renderStaffSuggestionSearch(); root.showModal();
+    actor = sessionIdentity.preferences(); returnFocus = focusReturn || opener || document.activeElement;
+    const queueScope = String(getScope() ?? '');
+    const specificScope = Number(queueScope) > 1 && getLibraries().some(library => String(library.id) === queueScope)
+      ? queueScope : null;
+    const seed = typeof barcode === 'string' ? barcode.trim() : '';
+    suggestion = { scopeId: actor.role === 'super_admin' ? specificScope : String(actor.organizationId),
+      barcodeSeed: seed || null, stage: 'lookup' };
+    renderStaffSuggestionSearch({ query: seed }); root.showModal();
     const token = stageToken;
     window.requestAnimationFrame(() => {
       if (!isCurrentGeneration(token)) return;
       const controls = suggestion.controls;
       (actor.role === 'super_admin' && !controls.scope?.value ? controls.scope : controls.queryInput)?.focus();
     });
-    announce('Look up a patron to start a new suggestion.'); return true;
+    clearOpeningAnnouncement = announce(seed ? suggestion.scopeId ? 'Refreshing current Polaris details for this patron.'
+      : 'Choose a servicing library to refresh this patron.' : 'Look up a patron to start a new suggestion.');
+    if (seed && suggestion.scopeId) void lookupStaffPatron(null, seed);
+    return true;
   }
   function staffSuggestionScopeOptions() {
     if (actor?.role !== 'super_admin') {
@@ -76,7 +91,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
         text: actor?.organizationName || 'My library'
       }];
     }
-    return getLibraries().map(library => ({ value: library.id, text: library.name }));
+    return byDisplayLabel(getLibraries()).map(library => ({ value: library.id, text: library.name }));
   }
 
   function setStaffSuggestionStatus(message, kind = '') {
@@ -115,7 +130,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     });
     const help = element('small', {
       text: actor?.role === 'super_admin'
-        ? 'Select the library that will own this request. Queue scope is not used as a default.'
+        ? 'This library will own the request. A specific queue library is preselected; All libraries requires an explicit choice.'
         : 'Search by barcode or name. Name matches are refreshed against current Polaris data before selection.'
     });
     const fields = element('div', { className: 'staff-suggestion-search-fields' }, [
@@ -148,10 +163,12 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
         verifiedBibId: null
       };
       setStaffSuggestionStatus(scope.value ? 'Library selected. Look up the patron to continue.' : 'Choose a servicing library.', '');
+      if (scope.value && suggestion.barcodeSeed) void lookupStaffPatron(null, suggestion.barcodeSeed);
     });
     listen(queryInput, 'input', () => {
       cancelStaffSuggestionLookup();
       cancelStaffSuggestionConfiguration();
+      suggestion.barcodeSeed = null;
       dom.staffSuggestionBody.querySelector('.staff-suggestion-matches')?.remove();
     });
     bindDraft();
@@ -170,7 +187,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     const list = element('div', { className: 'staff-suggestion-matches' });
     list.append(element('h3', { text: 'Choose a patron' }));
     const candidates = element('div', { className: 'staff-suggestion-candidate-list' });
-    for (const match of result.matches || []) {
+    for (const match of byDisplayLabel(result.matches, item => item.name || 'Patron', item => item.barcode)) {
       const button = element('button', {
         type: 'button',
         className: 'staff-suggestion-candidate',
@@ -190,6 +207,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
   async function lookupStaffPatron(queryOverride = null, barcodeOverride = null) {
     if (!actor || !suggestion) return;
     const current = suggestion;
+    const clearOpening = clearOpeningAnnouncement;
     const controls = current.controls;
     const scopeValue = controls?.scope?.value || current.scopeId;
     const scopeId = Number(scopeValue);
@@ -258,6 +276,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       const message = error.response?.message || error.message || 'Patron lookup could not be completed.';
       renderStaffSuggestionSearch({ query, scopeId: String(scopeId), message, kind: 'error' });
     } finally {
+      if (typeof clearOpening === 'function') clearOpening();
       if (configurationLoad) {
         reads.finish('staff-suggestion-configuration', configurationLoad.token);
       }
@@ -295,10 +314,11 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     const notes = element('textarea', { maxlength: '10000' });
     const autohold = element('input', { type: 'checkbox', checked: true });
     const emailConfirmation = element('input', { type: 'checkbox' });
-    const pickup = element('select', { required: 'required', 'aria-label': 'Preferred pickup location' });
+    const pickup = element('select', { required: 'required', 'aria-required': 'true', 'aria-label': 'Preferred pickup location',
+      'aria-describedby': 'staff-suggestion-pickup-help staff-suggestion-pickup-warning staff-suggestion-pickup-refreshed' });
     const branches = Array.isArray(context.pickupBranches) ? context.pickupBranches : [];
     for (const branch of branches) pickup.append(element('option', { value: branch.id, text: branch.label }));
-    if (context.currentPreferredPickupBranchId &&
+    if (context.currentPreferredPickupState !== 'invalid' && context.currentPreferredPickupBranchId &&
         branches.some(branch => branch.id === context.currentPreferredPickupBranchId)) {
       pickup.value = String(context.currentPreferredPickupBranchId);
     } else {
@@ -314,10 +334,18 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     const exactDateField = labeledInput('Exact publication date', exactDate);
     const pickupField = labeledInput('Preferred pickup location', pickup);
     const pickupHelp = element('small', {
+      id: 'staff-suggestion-pickup-help',
       className: 'field-help',
-      text: "Changing this updates the patron's preferred pickup location in Polaris."
+      text: "Changing this updates the patron's preferred pickup location in Polaris. Unfilled requests use the live preference when each hold is placed."
     });
-    pickupField.append(pickupHelp);
+    const pickupWarning = element('small', { id: 'staff-suggestion-pickup-warning', className: 'field-help',
+      role: 'status', 'aria-live': 'polite', text: context.pickupWarning || '' });
+    pickupWarning.hidden = !context.pickupWarning;
+    const refreshed = element('small', { id: 'staff-suggestion-pickup-refreshed', className: 'field-help' }, [
+      'Pickup choices refreshed: ', element('time', { datetime: context.pickupBranchesRefreshedAt,
+        text: dateTime(context.pickupBranchesRefreshedAt) })
+    ]);
+    pickupField.append(pickupHelp, pickupWarning, refreshed);
 
     const bib = element('input', { type: 'hidden' });
     const catalogStatus = element('p', { className: 'field-help', role: 'status', 'aria-live': 'polite' });
@@ -395,16 +423,21 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     listen(format, 'change', updateFormat);
 
     const patronCard = element('section', { className: 'staff-patron-card', 'aria-labelledby': 'staff-patron-card-title' }, [
-      element('h3', { id: 'staff-patron-card-title', text: patron.name || 'Verified patron' }),
-      element('p', { text: `${patron.barcode} · Home library: ${patron.homeLibraryOrganizationName}` }),
+      element('h3', { id: 'staff-patron-card-title' }, [researchRecordValue(patron.name || 'Verified patron', context.research, 'patron')]),
+      element('p', { text: `Barcode: ${patron.barcode}` }),
+      element('p', { text: `Registered organization: ${context.patronOrganizationName || 'Polaris organization'} (${patron.patronOrganizationId ?? 'Not recorded'})` }),
+      element('p', { text: `Home library: ${patron.homeLibraryOrganizationName || 'Not recorded'} (${patron.homeLibraryOrganizationId ?? 'Not recorded'})` }),
+      element('p', { text: `Servicing library: ${context.libraryOrgName || result.libraryOrgName || 'Selected library'} (${result.libraryOrgId})` }),
+      element('p', { text: context.searchLibraryLimited
+        ? 'Patron search is limited to this servicing library.'
+        : 'Patrons from other participating home libraries may be serviced here.' }),
+      element('p', { text: `Current Polaris pickup preference: ${context.currentPreferredPickupBranchName ||
+        (context.currentPreferredPickupState === 'invalid' ? 'Invalid preference; choose an eligible location' :
+          context.currentPreferredPickupBranchId ? `Branch ${context.currentPreferredPickupBranchId} (not currently eligible)` : 'Not recorded')}` }),
       element('p', { text: context.email || 'No patron email is recorded.' })
     ]);
-    const scopeNote = result.searchLibraryLimited
-      ? element('p', { className: 'field-help wide', text: `Patron is being serviced by ${result.libraryOrgName}.` })
-      : null;
     const fields = element('div', { className: 'edit-form staff-suggestion-fields' }, [
       patronCard,
-      scopeNote,
       labeledInput('Material format', format),
       formatNotice,
       catalogPanel,

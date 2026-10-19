@@ -14,13 +14,18 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
   const views = { queue: ['#queue-view', '#queue-title'], 'additional-copies': ['#additional-copy-view', '#additional-copy-title'],
     settings: ['#settings-view', '#settings-title'], analytics: ['#analytics-view', '#analytics-title'],
     profile: ['#profile-view', '#profile-title'], operations: ['#operations-view', '#operations-title'] };
-  const tabs = [...root.querySelectorAll('.view-tab')];
+  const tabs = [...root.querySelectorAll('.view-tab, #profile-button')];
+  const profileEntry = tabs.find(tab => tab.dataset.view === 'profile');
   const reads = createLatestLoad(), events = new window.AbortController(), receipts = new Map();
-  let lastOwner = null, recentKey = null, receiptSequence = 0, disposed = false;
+  let lastOwner = null, recentKey = null, receiptSequence = 0, disposed = false, announcementSequence = 0;
 
   function announce(message, kind = '') {
     if (disposed) return;
+    const sequence = ++announcementSequence;
     dom.status.textContent = message || ''; dom.status.className = `status-message${kind ? ` ${kind}` : ''}`;
+    // A successful load clears only its own transient message. A newer save,
+    // error or another feature's announcement retains presentation ownership.
+    return () => { if (!disposed && sequence === announcementSequence) announce(''); };
   }
 
   function storage() { try { return window.sessionStorage; } catch { return null; } }
@@ -130,6 +135,7 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
     if (!sessionIdentity.sameSession(lastOwner, staff)) receipts.clear();
     lastOwner = staff; recentKey = recentStorageKey(staff); renderRecent();
     dom.signedOut.hidden = true; dom.workspace.hidden = false; dom.actions.hidden = false;
+    if (profileEntry) profileEntry.hidden = false;
     preferencesChanged(staff);
     get('#operations-view-tab').hidden = !['admin', 'super_admin'].includes(staff.role);
     void refreshReadiness();
@@ -141,6 +147,7 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
     recentKey = null; dom.recent.open = false; dom.recentList.replaceChildren();
     dom.message.textContent = latestReceipt()?.message || featureMessage || message || 'Sign in with your authorized library account.';
     dom.signedOut.hidden = false; dom.workspace.hidden = true; dom.actions.hidden = !accessUnavailable;
+    if (profileEntry) profileEntry.hidden = true;
     if (accessUnavailable) { dom.identity.textContent = 'Access unavailable'; dom.identity.title = ''; }
     announce('');
   }

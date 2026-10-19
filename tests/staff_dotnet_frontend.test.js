@@ -117,6 +117,8 @@ const owners = new Set(['analytics', 'bulk-delete', 'copy-creation', 'copy-detai
   'navigation', 'operations-controller', 'profile-controller', 'session', 'settings', 'shell',
   'suggestion-controller', 'title-detail', 'queues', 'research'].map(name => `${name}.js`));
 const visited = new Set(), visiting = new Set();
+const statelessResearchHelpers = new Set(['positivePolarisId', 'applyPolarisResultToControls',
+  'researchRecordUrl', 'researchRecordValue']);
 function inspectImports(file) {
   assert.ok(!visiting.has(file), `ES module import cycle at ${file}`);
   if (visited.has(file)) return;
@@ -127,8 +129,9 @@ function inspectImports(file) {
     const dependency = path.resolve(path.dirname(file), match[1]);
     // Research exports stateless formatting/verification helpers alongside the
     // injected dialog service. Importing those helpers grants no peer lifetime.
-    const sharedResearchHelpers = path.basename(dependency) === 'research.js' &&
-      /^import\s*\{\s*(?:positivePolarisId|applyPolarisResultToControls)\s*\}\s*from/.test(match[0]);
+    const importedNames = match[0].match(/^import\s*\{([^}]+)\}\s*from/)?.[1].split(',').map(name => name.trim());
+    const sharedResearchHelpers = path.basename(dependency) === 'research.js' && importedNames?.length > 0 &&
+      importedNames.every(name => statelessResearchHelpers.has(name));
     if (owners.has(path.basename(file)) && !sharedResearchHelpers) {
       assert.ok(!owners.has(path.basename(dependency)), `${file} must use injected ports instead of importing a peer owner`);
     }

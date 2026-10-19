@@ -69,8 +69,10 @@ export function closeReasonLabel(value) {
 
 export function addDetail(list, label, value) {
   const wrapper = element('div');
-  wrapper.append(element('dt', { text: label }), element('dd', { text: text(value) }));
+  const detail = element('dd', { text: text(value) });
+  wrapper.append(element('dt', { text: label }), detail);
   list.append(wrapper);
+  return detail;
 }
 
 export function labeledInput(label, input, className = '') {

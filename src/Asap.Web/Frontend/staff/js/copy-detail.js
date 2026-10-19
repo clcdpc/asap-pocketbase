@@ -1,5 +1,7 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
+import { byDisplayLabel } from './display-order.js';
+import { researchRecordValue } from './research.js';
 import { createDraftScope } from './draft-scope.js';
 import { unconfirmedResponseError, notificationOutcome, isCommittedRequestResponse } from './mutation-outcome.js';
 import { element, icon, commandButton, statusLabel, dateTime, timeoutLabel, addDetail, labeledInput } from './ui.js';
@@ -206,7 +208,7 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
       buildAdditionalCopyActionBar(request)
     );
     const details = element('dl', { className: 'detail-grid' });
-    addDetail(details, 'BIB ID', request.bibid);
+    addDetail(details, 'BIB ID', request.bibid).replaceChildren(researchRecordValue(request.bibid, request.research, 'bib', request.bibid));
     addDetail(details, 'Format', request.formatLabel || request.format);
     addDetail(details, 'Author', request.author);
     addDetail(details, 'Identifier', request.identifier);
@@ -292,11 +294,11 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
       });
       if (!load.isCurrent() || !isCurrentDialogRequest(request, 'additional_copy') || activeAttempt) return;
       const select = element('select', { 'aria-label': 'Assign additional-copy task' });
-      const candidates = result.candidates || [];
+      const candidates = byDisplayLabel(result.candidates, item => item.displayName || item.userPrincipalName || `Staff ${item.id}`);
       for (const candidate of candidates) {
         select.append(element('option', {
           value: candidate.id,
-          text: candidate.displayName
+          text: candidate.displayName || candidate.userPrincipalName || `Staff ${candidate.id}`
         }));
       }
       const form = element('form', { className: 'inline-form' }, [

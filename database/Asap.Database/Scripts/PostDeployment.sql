@@ -3,13 +3,13 @@ ALTER DATABASE CURRENT SET COMPATIBILITY_LEVEL = 160;
 IF NOT EXISTS (SELECT 1 FROM [asap].[SchemaVersion] WHERE [Id] = 1)
 BEGIN
     INSERT INTO [asap].[SchemaVersion] ([Id], [Version], [UpdatedUtc])
-    VALUES (1, 12, SYSUTCDATETIME());
+    VALUES (1, 13, SYSUTCDATETIME());
 END;
 ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) < 7
 BEGIN
     THROW 51000, 'Schema 7 is a pre-release reset boundary. Recreate the application database from this DACPAC.', 1;
 END;
-ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) > 12
+ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) > 13
 BEGIN
     THROW 51000, 'The database schema is newer than this DACPAC.', 1;
 END;
@@ -34,10 +34,10 @@ BEGIN
     );
 END;
 
--- Native schemas 7/8/9/10/11 upgrade in place.
+-- Native schemas 7/8/9/10/11/12 upgrade in place.
 UPDATE [asap].[SchemaVersion]
-SET [Version] = 12, [UpdatedUtc] = SYSUTCDATETIME()
-WHERE [Id] = 1 AND [Version] IN (7, 8, 9, 10, 11);
+SET [Version] = 13, [UpdatedUtc] = SYSUTCDATETIME()
+WHERE [Id] = 1 AND [Version] IN (7, 8, 9, 10, 11, 12);
 
 IF NOT EXISTS (SELECT 1 FROM [asap].[DeploymentState] WHERE [Id] = 1)
 BEGIN

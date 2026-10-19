@@ -45,7 +45,7 @@ public sealed partial class MigrationCliTests
         Assert.AreEqual(
             "structured-policy-v4",
             contract.RootElement.GetProperty("contractVersion").GetString());
-        Assert.AreEqual(12, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
+        Assert.AreEqual(13, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
         Assert.AreEqual(
             "CLC.ASAP",
             contract.RootElement.GetProperty("dataProtectionApplicationName").GetString());

@@ -346,7 +346,7 @@ Use these primary configuration domains:
 - `[asap].[PolarisSettings]` — system-only Polaris integration configuration/credentials; constrained to Organization `1`.
 - `[asap].[WorkflowSettings]` — limits, eligibility, automation, timeout behavior, and related common-creator behavior/text; Organization `1` is the complete system default and library rows contain only nullable field overrides.
 - `[asap].[PatronSettings]` — patron-facing page/messages and fixed duplicate-status labels with the same field-level inheritance model.
-- `[asap].[EmailSettings]` — Postmark transport/sender configuration with system default + nullable library overrides; reusable secret values are protected ciphertext.
+- `[asap].[EmailSettings]` — System-only protected Postmark credential, with independently inheritable From address/name defaults and nullable library sender overrides.
 
 Use relational tables rather than JSON when the configuration has meaningful identity, ordering, children, or whole-set override semantics: `PatronEmbedAllowedOrigin`, `ExternalSearchProvider`/`ExternalSearchProviderOverride`, `PublicationOptionSet`/`PublicationOption`, `CommonCreatorSet`/`CommonCreatorTerm`, `PatronCodeEligibilitySet`/`PatronCodeEligibilityMember`, and `PatronCustomField`/`PatronCustomFieldOption`/`MaterialFormatCustomFieldRule`. Keep `MaterialFormat`/`MaterialFormatOverride`, `FormatAutoClaimRule`, `EmailTemplate`, and `Branding` as specialized domain models. Built-in material-format field behavior is strongly typed; custom-field per-format mode/label behavior uses `MaterialFormatCustomFieldRule`. No competing JSON rule blob remains.
 
@@ -408,7 +408,7 @@ Because SQL secrets now depend on the Data Protection key ring, disaster recover
 
 Use the latest `Clc.Postmark.Api`. Postmark is the transport; templates remain application-owned.
 
-Email configuration uses system defaults plus library overrides in `[asap].[EmailSettings]`, including credential inheritance semantics. Do not collapse Postmark configuration into a system-only model merely because Polaris is system-only.
+The Postmark credential in `[asap].[EmailSettings]` is System-only (organization 1), as decided in #318. From address/name independently resolve library override -> System default. Library saves cannot set, replace, or clear the credential; runtime delivery never falls back to obsolete library ciphertext. DACPAC post-deployment clears that obsolete ciphertext without changing sender identities. This supersedes the earlier per-library transport credential design.
 
 All business email is durable, but notification availability never rolls back an otherwise valid ordinary business mutation:
 

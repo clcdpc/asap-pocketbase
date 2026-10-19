@@ -8,6 +8,17 @@ Release build, full .NET/real-SQL and frontend suites, publish/exclusion checks,
 exact test-IIS artifact/manifest validation and workflow isolation checks. It
 does not require a Windows runner or live provider/host evidence.
 
+Campaign 2 discovery on October 19, 2026 contains 1,407 .NET cases: 1,391 in
+the main/real-SQL partition and 16 designated browser cases from 15 methods
+(the Settings role test has two DataRows). All 1,365 baseline case identities
+remain present. The CI exclusions and `tests/browser/run.cjs` select disjoint,
+complete partitions and guard these current minimums. `npm test` discovers all
+57 retained frontend test files; browser states and assertions are not extra
+test cases. Record execution results against the tested commit separately.
+Controlled provider results, automated reflow/forced-colors scans and agent
+screenshot inspection do not establish live-provider or human accessibility
+acceptance.
+
 ## 1. Testing philosophy
 
 The port must replace PocketBase without building a temporary dual-implementation parity harness. Use the old application as a behavior reference, then encode durable behavior in .NET integration tests, real-SQL tests, frontend unit tests, and targeted browser journeys.
@@ -392,7 +403,7 @@ Version tags produce:
 
 Release/deployment tests must cover changed DACPAC with unchanged SchemaVersion, unchanged DACPAC with no dependency DDL (true file-only), unchanged DACPAC with required Hangfire DDL (database-changing), and inconsistent changed SchemaVersion with unchanged DACPAC (blocked). Section 10.1 R7 and `05-DEPLOYMENT-OPERATIONS.md` sections 9-10 govern backup/quiescence, compatibility, and failure ordering; application SchemaVersion alone cannot authorize restart/rollback.
 
-The schema-10 pickup journal revision remains a historical behavior pin: its original coverage tested fresh DACPAC creation and native schema-7/8/9 upgrades with credentials, identity, business rows and hold evidence preserved. Current deployment/package tests require exact application schema version 12, verify native schema-7/8/9/10/11 upgrades, retain `BlockOnPossibleDataLoss=True` and `DropObjectsNotInSource=False`, and reject manifests carrying any other application schema version. The pre-release hard boundary remains separate: a target reporting an application schema below 7 is rejected and must be recreated. Pickup durability tests cover effects followed by local conflicts, uncertain/cancelled dispatches, explicit nullable observations, no repeat writes, active invocation fencing, operator read-based recovery and frozen snapshots in two member libraries; schema-11 organization authority tests verify that nullable old classifications fail closed without losing historical references. Schema 12 records positively verified native patron identities in current sessions and new requests while leaving unknown legacy snapshots NULL rather than inferring identity from barcodes.
+The schema-10 pickup journal revision remains a historical behavior pin: its original coverage tested fresh DACPAC creation and native schema-7/8/9 upgrades with credentials, identity, business rows and hold evidence preserved. Current deployment/package tests require exact application schema version 13, verify native schema-7/8/9/10/11/12 upgrades, retain `BlockOnPossibleDataLoss=True` and `DropObjectsNotInSource=False`, and reject manifests carrying any other application schema version. The pre-release hard boundary remains separate: a target reporting an application schema below 7 is rejected and must be recreated. Pickup durability tests cover effects followed by local conflicts, uncertain/cancelled dispatches, explicit nullable observations, no repeat writes, active invocation fencing, operator read-based recovery and frozen snapshots in two member libraries; schema-11 organization authority tests verify that nullable old classifications fail closed without losing historical references. Schema 12 records positively verified native patron identities in current sessions and new requests while leaving unknown legacy snapshots NULL rather than inferring identity from barcodes.
 
 Do not rebuild production from an untagged branch state after a rehearsal. If a fix changes code, create a new tag/artifact and rehearse that exact replacement.
 

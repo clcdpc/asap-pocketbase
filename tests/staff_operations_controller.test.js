@@ -25,10 +25,26 @@ function committedOperationResult(path) {
   if (url.searchParams.get('force') === 'true') data.manualRunId = url.searchParams.get('operationId');
   return { code: 'queued', ...data };
 }
+// These fixtures exercise the generic operation journal. Saved email readiness
+// is an independent read, covered with blocked/dirty/mode races in staff_email_test.
+async function loadOperationsController(load) {
+  const actual = await load('operations-controller');
+  return { createOperationsController(options) {
+    return actual.createOperationsController({ ...options, request: (path, init) => {
+      if (path.includes('/email-operations/test-context')) {
+        const organizationId = Number(new URL(path, 'https://localhost').searchParams.get('organizationId'));
+        return Promise.resolve({ code: 'ok', data: { organizationId, scopeName: 'Saved fixture',
+          fromAddress: 'saved@example.org', recipient: 'primary@example.org', deliveryMode: 'postmark',
+          state: 'ready', configurationVersion: 'A'.repeat(64) } });
+      }
+      return options.request(path, init);
+    } });
+  } };
+}
 (async () => {
   await fixture(async ({ load, get, dom }) => {
     const { createSessionIdentity } = await load('session-identity');
-    const { createOperationsController } = await load('operations-controller');
+    const { createOperationsController } = await loadOperationsController(load);
     const session = createSessionIdentity();
     const owner = session.accept(actor('read-dto'));
     const timestamp = '2026-03-08T07:01:00.1234567Z';
@@ -100,7 +116,7 @@ function committedOperationResult(path) {
 
   await fixture(async ({ load, get }) => {
     const { createSessionIdentity } = await load('session-identity');
-    const { createOperationsController } = await load('operations-controller');
+    const { createOperationsController } = await loadOperationsController(load);
     const session = createSessionIdentity(); session.accept(actor('a'));
     const pending = [], receipts = [];
     const options = { root: get('#operations-view'), sessionIdentity: session, announce() {},
@@ -117,27 +133,27 @@ function committedOperationResult(path) {
     first.deactivate(); first.dispose();
     session.clear(); session.accept(actor('b'));
     const second = createOperationsController(options); second.setStaff(session.preferences()); second.activate();
-    assert.equal(get('#send-test-email').disabled, false, 'B cannot be blocked by A recovery');
+    assert.equal(get('#run-workflow-now').disabled, false, 'B cannot be blocked by A recovery');
     const savingB = second.run('/api/asap/staff/email-operations/test', 'B email');
     const bKey = `asap.staff.operation.tenant-b.b.${encodeURIComponent(session.actor().key)}`;
     const bRecord = window.sessionStorage.getItem(bKey);
     pending[0].resolve(committedOperationResult(pending[0].path)); await savingA;
     assert.equal(window.sessionStorage.getItem(bKey), bRecord, 'A cannot clear B captured recovery');
-    assert.equal(get('#send-test-email').disabled, true, 'old actor cannot release new actor controls');
+    assert.equal(get('#run-workflow-now').disabled, true, 'old actor cannot release new actor controls');
     assert.equal(receipts[0][2].outcome, 'committed');
     assert.equal(session.isCurrent(receipts[0][1]), false);
     pending[1].resolve(committedOperationResult(pending[1].path)); await savingB;
     assert.equal(window.sessionStorage.getItem(bKey), null);
-    assert.equal(get('#send-test-email').disabled, false);
+    assert.equal(get('#run-workflow-now').disabled, false);
     second.dispose();
     window.sessionStorage.setItem(bKey, JSON.stringify({ operationId: 'forged', path: '/api/asap/staff/email-operations/test', scope: 'all', message: 'Invalid' }));
     const third = createOperationsController(options); third.setStaff(session.preferences());
-    assert.equal(get('#send-test-email').disabled, false, 'malformed records cannot acquire a command guard');
+    assert.equal(get('#run-workflow-now').disabled, false, 'malformed records cannot acquire a command guard');
     third.dispose();
   });
   await fixture(async ({ load, get }) => {
     const { createSessionIdentity } = await load('session-identity');
-    const { createOperationsController } = await load('operations-controller');
+    const { createOperationsController } = await loadOperationsController(load);
     const session = createSessionIdentity(); session.accept(actor('a'));
     const reads = [], notices = [], receipts = [];
     const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: session,
@@ -158,7 +174,7 @@ function committedOperationResult(path) {
   for (const scenario of ['inactive', 'active', 'exact review unavailable', 'preferences', 'replacement', 'email body']) {
     await fixture(async ({ load, get, dom }) => {
       const { createSessionIdentity } = await load('session-identity');
-      const { createOperationsController } = await load('operations-controller');
+      const { createOperationsController } = await loadOperationsController(load);
       const identity = createSessionIdentity(); identity.accept(actor('a'));
       const paths = [], posts = [], notices = [];
       let uncertain = true, retired = false;
@@ -221,7 +237,7 @@ function committedOperationResult(path) {
     for (const kind of ['legacy', 'modern foreign', 'missing evidence at modern key', 'foreign evidence at modern key']) {
       await fixture(async ({ load, get, dom }) => {
         const { createSessionIdentity, actorKey } = await load('session-identity');
-        const { createOperationsController } = await load('operations-controller');
+        const { createOperationsController } = await loadOperationsController(load);
         const session = createSessionIdentity(); session.accept(sameIdActor);
         const posts = [];
         const options = { root: get('#operations-view'), sessionIdentity: session, announce() {},
@@ -245,6 +261,7 @@ function committedOperationResult(path) {
           testedRaw = JSON.stringify(legacy); dom.window.sessionStorage.setItem(testedKey, testedRaw);
         }
         const second = createOperationsController(options); second.setStaff(session.preferences()); second.activate();
+        assert.equal(await second.refresh(), true);
         const controls = ['#run-workflow-now', '#run-weekly-now', '#force-weekly-now', '#send-test-email', '#operations-scope'];
         for (const selector of controls) assert.equal(get(selector).disabled, false, `${kind} cannot block ${selector}`);
         assert.equal(await second.refresh(), true);
@@ -260,7 +277,7 @@ function committedOperationResult(path) {
   for (const path of ['/api/asap/staff/workflow/weekly-summary/run-now?force=true', '/api/asap/staff/email-operations/71/retry']) {
     await fixture(async ({ load, get, dom }) => {
       const { createSessionIdentity, actorKey } = await load('session-identity');
-      const { createOperationsController } = await load('operations-controller');
+      const { createOperationsController } = await loadOperationsController(load);
       const session = createSessionIdentity(); const owner = session.accept(sameIdActor);
       const posts = [], reads = [];
       const options = { root: get('#operations-view'), sessionIdentity: session, announce() {},
@@ -284,7 +301,7 @@ function committedOperationResult(path) {
       const revised = session.updatePreferences({ ...sameIdActor, version: 'v2', displayName: 'Revised',
         weeklyActionSummaryEnabled: true, purchaseReminderDefault: true }, owner);
       const second = createOperationsController(options); second.setStaff(revised); second.activate();
-      assert.equal(get('#send-test-email').disabled, true, 'exact actor revision restores command guard');
+      assert.equal(get('#run-workflow-now').disabled, true, 'exact actor revision restores command guard');
       assert.equal(get('#operations-outcome button'), null, 'restoration does not restore review authority');
       reads.length = 0; await second.refresh();
       assert.equal(reads.filter(value => value.endsWith('organizationId=3')).length, 2, 'captured scope reviewed independently of all projection');
@@ -297,7 +314,7 @@ function committedOperationResult(path) {
       session.accept({ ...revised, authenticationEmail: 'replacement@example.org' }); second.setStaff(session.preferences());
       oldRetry.click(); await new Promise(resolve => setImmediate(resolve));
       assert.equal(posts.length, 2, 'actor replacement cannot reuse exact captured review');
-      assert.equal(get('#send-test-email').disabled, false);
+      assert.equal(get('#run-workflow-now').disabled, false);
       second.dispose();
     });
   }
@@ -305,7 +322,7 @@ function committedOperationResult(path) {
     for (const replacement of ['newer', 'foreign']) {
       await fixture(async ({ load, get, dom }) => {
         const { createSessionIdentity } = await load('session-identity');
-        const { createOperationsController } = await load('operations-controller');
+        const { createOperationsController } = await loadOperationsController(load);
         const session = createSessionIdentity(); session.accept(sameIdActor);
         let complete, reject;
         const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: session,
@@ -330,7 +347,7 @@ function committedOperationResult(path) {
   }
   await fixture(async ({ load, get, dom }) => {
     const { createSessionIdentity } = await load('session-identity');
-    const { createOperationsController } = await load('operations-controller');
+    const { createOperationsController } = await loadOperationsController(load);
     const session = createSessionIdentity(); session.accept(sameIdActor);
     const pending = [];
     const options = { root: get('#operations-view'), sessionIdentity: session, announce() {},
@@ -339,7 +356,7 @@ function committedOperationResult(path) {
         return path.endsWith('/organizations') ? { data: organizationCatalog } : { items: [] };
       } };
     const first = createOperationsController(options); first.setStaff(session.preferences()); first.activate();
-    const saving = first.run('/api/asap/staff/email-operations/test', 'Reloaded operation'); first.dispose();
+    const saving = first.run('/api/asap/staff/workflow/weekly-summary/run-now?force=true', 'Reloaded operation'); first.dispose();
     const key = `asap.staff.operation.${sameIdActor.tenantId}.${sameIdActor.id}.${encodeURIComponent(session.actor().key)}`;
     const original = JSON.parse(dom.window.sessionStorage.getItem(key));
     const second = createOperationsController(options); second.setStaff(session.preferences()); second.activate(); await second.refresh();
@@ -355,7 +372,7 @@ function committedOperationResult(path) {
   });
   await fixture(async ({ load, get, dom }) => {
     const { createSessionIdentity } = await load('session-identity');
-    const { createOperationsController } = await load('operations-controller');
+    const { createOperationsController } = await loadOperationsController(load);
     const identity = createSessionIdentity(); identity.accept(actor('catalog-scope'));
     const paths = [];
     const key = `asap.staff.operation.${identity.actor().tenantId}.${identity.actor().id}.${encodeURIComponent(identity.actor().key)}`;
@@ -386,16 +403,48 @@ function committedOperationResult(path) {
       'filtered presentation preserves the captured command without authorizing it');
     controller.dispose();
   });
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createOperationsController } = await loadOperationsController(load);
+    const identity = createSessionIdentity(), owner = identity.accept(actor('legacy-test'));
+    const operationId = 'db540bca-9621-42b7-a8f1-4b58bf7f99a9';
+    const key = `asap.staff.operation.${owner.tenantId}.${owner.id}.${encodeURIComponent(identity.actor().key)}`;
+    dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, actorKey: identity.actor().key,
+      path: '/api/asap/staff/email-operations/test', scope: '3', message: 'Original test email' }));
+    let posts = 0, observed = 0;
+    const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+      announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
+        if (init.method === 'POST') { posts += 1; throw new Error('Legacy recovery must never POST.'); }
+        if (path.endsWith('/organizations')) return { data: organizationCatalog };
+        if (path.includes('/email-operations/test?')) {
+          observed += 1;
+          assert.equal(new URL(path, 'https://localhost').searchParams.get('operationId'), operationId);
+          return { code: 'ok', data: { id: '9223372036854775807', organizationId: 3, status: 'sent', deliveryMode: 'postmark' } };
+        }
+        return { items: [] };
+      } });
+    controller.setStaff(owner); controller.activate(); await controller.refresh();
+    assert.equal(posts, 0);
+    assert.equal(observed, 1, 'legacy recovery resolves its original click beyond the list projection');
+    assert.equal(dom.window.sessionStorage.getItem(key), null);
+    const recovered = JSON.parse(dom.window.sessionStorage.getItem(`asap.staff.email-test.${encodeURIComponent(identity.actor().key)}.3`));
+    assert.equal(recovered.operationId, operationId);
+    assert.equal(recovered.id, '9223372036854775807');
+    assert.equal(recovered.pending, false);
+    controller.dispose();
+  });
   const status200Commands = [
     { selector: '#run-workflow-now', path: '/api/asap/staff/workflow/run-now', message: 'Workflow run' },
     { selector: '#run-weekly-now', path: '/api/asap/staff/workflow/weekly-summary/run-now?force=false', message: 'Weekly summary' },
-    { selector: '#send-test-email', path: '/api/asap/staff/email-operations/test', message: 'Test email' },
+    // The shared email-test controller owns the new visible action; this entry
+    // retains the generic legacy acknowledgement/recovery contract.
+    { legacyTest: true, path: '/api/asap/staff/email-operations/test', message: 'Test email' },
     { retry: true, path: '/api/asap/staff/email-operations/71/retry', message: 'Email retry 71', body: { version: 'email-v1' } }
   ];
   for (const command of status200Commands) {
     await fixture(async ({ load, get, dom }) => {
       const { createSessionIdentity } = await load('session-identity');
-      const { createOperationsController } = await load('operations-controller');
+      const { createOperationsController } = await loadOperationsController(load);
       const identity = createSessionIdentity();
       const ownerA = identity.accept(actor('a'));
       const posts = [], receipts = [];
@@ -427,6 +476,8 @@ function committedOperationResult(path) {
           .find(item => item.textContent.includes('71'));
         assert.ok(row, 'retry-email witness loads the captured failed row');
         row.querySelector('button').click();
+      } else if (command.legacyTest) {
+        void controller.run(command.path, command.message);
       } else {
         get(command.selector).click();
       }
@@ -494,7 +545,7 @@ function committedOperationResult(path) {
   for (const invalid of invalidAcknowledgements) {
     await fixture(async ({ load, get, dom }) => {
       const { createSessionIdentity } = await load('session-identity');
-      const { createOperationsController } = await load('operations-controller');
+      const { createOperationsController } = await loadOperationsController(load);
       const identity = createSessionIdentity();
       const owner = identity.accept(actor('shape'));
       const posts = [], receipts = [];
@@ -551,7 +602,7 @@ function committedOperationResult(path) {
   ]) {
     await fixture(async ({ load, get }) => {
       const { createSessionIdentity } = await load('session-identity');
-      const { createOperationsController } = await load('operations-controller');
+      const { createOperationsController } = await loadOperationsController(load);
       const identity = createSessionIdentity(); const owner = identity.accept(actor('shape-positive'));
       const receipts = [];
       const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,

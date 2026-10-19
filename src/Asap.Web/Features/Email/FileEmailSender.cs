@@ -30,6 +30,10 @@ public sealed class FileEmailSender : IEmailSender
     {
         ArgumentNullException.ThrowIfNull(envelope);
         cancellationToken.ThrowIfCancellationRequested();
+        if (envelope.IntendedDeliveryMode is not null && envelope.IntendedDeliveryMode != "file")
+        {
+            return EmailSendResult.ConfigurationChanged;
+        }
 
         Directory.CreateDirectory(outputDirectory);
 
@@ -43,7 +47,7 @@ public sealed class FileEmailSender : IEmailSender
             await File.WriteAllTextAsync(temporaryPath, document, Utf8WithoutBom, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporaryPath, finalPath);
-            return new EmailSendResult($"file:{fileId}");
+            return new EmailSendResult($"file:{fileId}") { DeliveryMode = "file" };
         }
         catch
         {

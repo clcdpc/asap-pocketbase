@@ -8,6 +8,7 @@ using Hangfire;
 namespace Asap.Web.Features.Administration;
 
 public sealed record AdministrationVersionInput(string? Version);
+public sealed record EmailTestIntentInput(string? ConfigurationVersion, string? IntendedDeliveryMode);
 
 public static class AdministrationEndpoints
 {
@@ -63,6 +64,12 @@ public static class AdministrationEndpoints
         endpoints.MapPost("/api/asap/staff/email-operations/test", QueueTestEmailAsync)
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapGet("/api/asap/staff/email-operations/test-context", GetEmailTestContextAsync)
+            .RequireAuthorization();
+        endpoints.MapGet("/api/asap/staff/email-operations/test", GetEmailTestByOperationAsync)
+            .RequireAuthorization();
+        endpoints.MapGet("/api/asap/staff/email-operations/{id:long}", GetEmailTestAsync)
+            .RequireAuthorization();
         endpoints.MapGet("/api/asap/staff/workflow/queues", ListQueueProgressAsync)
             .RequireAuthorization();
         endpoints.MapGet("/api/asap/staff/email-operations", ListEmailOperationsAsync)
@@ -464,14 +471,21 @@ public static class AdministrationEndpoints
         int? organizationId,
         EmailOperationsService service,
         CancellationToken cancellationToken,
-        Guid? operationId = null)
+        Guid? operationId = null,
+        EmailTestIntentInput? input = null)
     {
         if (operationId == Guid.Empty)
         {
             return Results.BadRequest(new { code = "operation_id_invalid" });
         }
+        if (!operationId.HasValue || !organizationId.HasValue || input?.IntendedDeliveryMode != "postmark" ||
+            input.ConfigurationVersion is not { Length: 64 } || !input.ConfigurationVersion.All(Uri.IsHexDigit))
+        {
+            return Results.BadRequest(new { code = "email_test_context_required" });
+        }
         var result = await service.QueueTestAsync(
-            StaffAuthenticationEndpoints.RequireCurrentStaff(context), organizationId, cancellationToken, operationId);
+            StaffAuthenticationEndpoints.RequireCurrentStaff(context), organizationId, cancellationToken, operationId,
+            input.ConfigurationVersion, input.IntendedDeliveryMode);
         var status = result.Code switch
         {
             "queued" => StatusCodes.Status202Accepted,
@@ -479,10 +493,45 @@ public static class AdministrationEndpoints
             "staff_scope_forbidden" => StatusCodes.Status403Forbidden,
             "organization_inactive" => StatusCodes.Status409Conflict,
             "email_transport_unavailable" => StatusCodes.Status503ServiceUnavailable,
+            "email_test_configuration_changed" or "live_delivery_disabled" => StatusCodes.Status409Conflict,
+            "email_test_cooldown" => StatusCodes.Status429TooManyRequests,
             _ => StatusCodes.Status400BadRequest
         };
         return Results.Json(new { code = result.Code, data = result.Data }, statusCode: status);
     }
+
+    private static async Task<IResult> GetEmailTestContextAsync(
+        HttpContext context, int organizationId, EmailOperationsService service, CancellationToken cancellationToken)
+    {
+        var result = await service.GetTestContextAsync(StaffAuthenticationEndpoints.RequireCurrentStaff(context), organizationId, cancellationToken);
+        return EmailTestReadResult(result);
+    }
+
+    private static async Task<IResult> GetEmailTestByOperationAsync(
+        HttpContext context, int organizationId, Guid operationId, EmailOperationsService service, CancellationToken cancellationToken)
+    {
+        if (operationId == Guid.Empty)
+        {
+            return Results.BadRequest(new { code = "operation_id_invalid" });
+        }
+        return EmailTestReadResult(await service.GetTestAsync(StaffAuthenticationEndpoints.RequireCurrentStaff(context),
+            organizationId, null, operationId, cancellationToken));
+    }
+
+    private static async Task<IResult> GetEmailTestAsync(
+        HttpContext context, long id, int organizationId, EmailOperationsService service, CancellationToken cancellationToken) =>
+        EmailTestReadResult(await service.GetTestAsync(StaffAuthenticationEndpoints.RequireCurrentStaff(context),
+            organizationId, id, null, cancellationToken));
+
+    private static IResult EmailTestReadResult(EmailOperationResult result) => Results.Json(
+        new { code = result.Code, data = result.Data }, statusCode: result.Code switch
+        {
+            "ok" => StatusCodes.Status200OK,
+            "staff_scope_forbidden" => StatusCodes.Status403Forbidden,
+            "not_found" => StatusCodes.Status404NotFound,
+            "email_transport_unavailable" => StatusCodes.Status503ServiceUnavailable,
+            _ => StatusCodes.Status409Conflict
+        });
 
     private static async Task<IResult> RetryEmailAsync(
         HttpContext context,

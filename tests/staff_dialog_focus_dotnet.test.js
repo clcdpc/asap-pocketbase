@@ -173,7 +173,9 @@ async function runJourney(scenario) {
       const scope = document.getElementById('additional-copy-library-scope');
       scope.value = '3';
       scope.dispatchEvent(new dom.window.Event('change'));
-      await until(() => document.getElementById('app-status').textContent === '0 authorized additional-copy tasks loaded.', 'The newer library scope must load');
+      await until(() => !document.getElementById('refresh-additional-copies').disabled &&
+        document.getElementById('additional-copy-library-scope').value === '3' &&
+        !document.getElementById('additional-copy-empty').hidden, 'The newer library scope must load');
       newerFocus = document.activeElement;
     }
     renderReleased.resolve();

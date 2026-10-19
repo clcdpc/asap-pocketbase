@@ -29,6 +29,8 @@ async function flush() {
     global.document = dom.window.document;
     global.FormData = dom.window.FormData;
     global.Node = dom.window.Node;
+    document.getElementById('settings-view').hidden = false;
+    document.getElementById('workspace').hidden = false;
     window.confirm = () => true;
 
     let version = 1;
@@ -96,11 +98,15 @@ async function flush() {
     controller.bind();
     controller.setStaff({ id: '1', tenantId: 'tenant', role: 'super_admin', organizationId: 1 });
     await controller.activate('templates');
+    document.getElementById('email-submit-subject').disabled = true;
+    assert.strictEqual(await controller.load({ silent: true }), true);
+    assert.strictEqual(document.getElementById('email-submit-subject').disabled, false,
+      'Repopulating System templates restores controls previously disabled by library inheritance.');
     assert.strictEqual(document.getElementById('email-postmark-token').value, '');
     assert.strictEqual(document.getElementById('email-token-status').textContent.includes('stored'), true);
     assert.deepStrictEqual([...document.querySelectorAll('#template-placeholder-list button')]
       .map(button => button.textContent), ['{{name}}', '{{title}}']);
-    document.getElementById('template-placeholder-help').open = true;
+    document.querySelector('#template-placeholder-help details').open = true;
     assert.strictEqual(controller.isDirty(), false);
     const subject = document.getElementById('email-submit-subject');
     subject.focus();
@@ -113,6 +119,22 @@ async function flush() {
     document.getElementById('settings-discard').click();
     for (let i = 0; i < 10 && controller.isDirty(); i++) await flush();
     assert.strictEqual(subject.value, template.subject);
+    document.querySelector('#template-placeholder-list button').click();
+    assert.strictEqual(subject.value, template.subject, 'Discard must clear the old insertion target.');
+    subject.focus();
+    subject.setSelectionRange(0, 0);
+    subject.dispatchEvent(new dom.window.Event('select', { bubbles: true }));
+    controller.activatePanel('workflow');
+    controller.activatePanel('templates');
+    document.querySelector('#template-placeholder-list button').click();
+    assert.strictEqual(subject.value, template.subject, 'Panel departure invalidates the previous target.');
+    subject.focus();
+    subject.dispatchEvent(new dom.window.Event('select', { bubbles: true }));
+    controller.suspend();
+    await controller.activate('templates');
+    document.querySelector('#template-placeholder-list button').click();
+    assert.strictEqual(subject.value, template.subject, 'Suspending Settings invalidates the previous target.');
+    assert.strictEqual(controller.isDirty(), false, 'Browsing guidance never creates a settings draft.');
 
     const name = document.getElementById('email-from-name');
     name.value = 'Changed sender';

@@ -92,6 +92,7 @@ export function createWorkflowApp() {
 
   const titleQueue = createTitleQueue({ root: get('#queue-view'), sessionIdentity, announce,
     getContext: navigation.context, onOpen: (id, opener) => titleDetail.open(id, opener, { history: 'push' }),
+    onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) }),
     onScopeIntent: scope => navigation.changeQueueContext('queue', { scope }),
     onStatusIntent: status => navigation.changeQueueContext('queue', { status }),
     onScopeAccepted: navigation.queueScopeAccepted, onLibraries: populateScopes,
@@ -134,9 +135,11 @@ export function createWorkflowApp() {
     beforeClose: () => navigation.allow({ settings: false, suggestion: false }), onClosed: options => navigation.detailClosed(false, options),
     getFocusReturn: (id, opener) => titleQueue.focusReturn(id, opener), refreshQueue: options => titleQueue.refresh(options), queueSequence: titleQueue.sequence,
     rememberOpened: shell.rememberOpened, forgetUnavailable: shell.forgetUnavailable,
-    refreshCurrentStaff: owner => session.refreshCurrentStaff(owner)
+    refreshCurrentStaff: owner => session.refreshCurrentStaff(owner),
+    onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) })
   });
   const suggestion = createSuggestionController({ root: get('#staff-suggestion-dialog'), trigger: get('#new-suggestion'), sessionIdentity, polarisLookup, announce,
+    getScope: () => navigation.context().scope,
     getLibraries: titleQueue.libraries, beforeOpen: navigation.prepareSuggestion, beforeClose: () => navigation.allow({ settings: false, request: false }),
     openCreatedTitle: navigation.openCreatedTitle, openExistingTitle: navigation.openExistingTitle, onReceipt, clearReceipt
   });
@@ -156,6 +159,9 @@ export function createWorkflowApp() {
     prepareDeparture: navigation.prepareDeparture,
     onPanelChange: navigation.settingsPanelChanged,
     onScopeChange: scope => { navigation.settingsScopeChanged(scope); void shell.refreshReadiness(); },
+    onEmailTestOperations: async organizationId => {
+      if (navigation.switchView('operations')) await operations.openEmailScope(organizationId);
+    },
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner),
     onConfigurationCommitted: (owner, scope) => {
       if (!sessionIdentity.isCurrent(owner)) return;

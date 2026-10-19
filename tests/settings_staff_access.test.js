@@ -130,8 +130,9 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
   try {
     const settingsModule = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings.js')).href);
     let users = [
-      staffUser(20, { displayName: 'Ada Admin', role: 'admin', version: 'user-version-20' }),
-      staffUser(21, { displayName: 'Inactive Selector', active: false, version: 'user-version-21' })
+      staffUser(21, { displayName: 'Inactive Selector', active: false, version: 'user-version-21' }),
+      { ...staffUser(22), displayName: '', userPrincipalName: 'aaron@example.org' },
+      staffUser(20, { displayName: 'Ada Admin', role: 'admin', version: 'user-version-20' })
     ];
     const requests = [];
     const postBodies = [];
@@ -239,11 +240,21 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     );
 
     assert.ok(!requests.some(url => url.includes('/api/asap/staff/users')));
+    assert.deepStrictEqual([...document.querySelectorAll('#settings-scope option')].map(option => option.textContent),
+      ['System level', 'Library Three', 'Library Two']);
+    assert.deepStrictEqual([...document.querySelectorAll('#enabled-libraries-checkbox-container label span')].map(span => span.textContent),
+      ['Library Three', 'Library Two']);
+    assert.equal(document.getElementById('settings-message').textContent, '', 'A successful routine load clears its own loading status.');
     document.getElementById('settings-nav-staff').click();
     await waitFor(() => document.getElementById('settings-staff-users-list').textContent.includes('Ada Admin'));
     assert.ok(requests.includes('/api/asap/staff/users'));
     assert.ok(requests.includes('/api/asap/staff/audit?limit=50'));
     assert.ok(document.getElementById('settings-staff-audit-list').textContent.includes('staff_created'));
+    assert.deepStrictEqual([...document.querySelectorAll('.settings-staff-heading strong')].map(item => item.textContent),
+      ['aaron@example.org', 'Ada Admin', 'Inactive Selector'], 'Sort the actual visible fallback name, not empty displayName.');
+    assert.deepStrictEqual([...document.querySelectorAll('#staff-add-organization option')].map(option => option.textContent),
+      ['Library Three', 'Library Two']);
+    assert.equal(document.getElementById('staff-access-status').textContent, '', 'Roster loading completion is quiet.');
     assert.strictEqual(document.querySelectorAll('#settings-staff .settings-override-control').length, 0);
 
     assert.strictEqual(document.getElementById('staff-add-tenant-id'), null);
@@ -366,7 +377,8 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.equal(controller.inspectDeparture().blocked, false, 'a confirmed commit permits navigation');
     revokeStaffRefresh = false;
     document.getElementById('staff-refresh').click();
-    await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff access loaded'));
+    await waitFor(() => !document.getElementById('staff-refresh').disabled &&
+      document.getElementById('staff-access-status').textContent === '');
     loseProfileResponse = true; failRoster = true;
     controller.discardDraft();
     const uncertainRow = [...document.querySelectorAll('.settings-staff-row')].find(row => row.textContent.includes('Ada Admin'));
@@ -427,7 +439,8 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         { onCommitted: message => lifecycleCommits.push(message) }
       );
       document.getElementById('settings-nav-staff').click();
-      await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff access loaded'));
+      await waitFor(() => !document.getElementById('staff-refresh').disabled &&
+        document.getElementById('staff-access-status').textContent === '');
       const email = `uncertain-${missingEvidence}@example.org`;
       document.getElementById('staff-add-email').value = email;
       const createRole = document.getElementById('staff-add-role');
@@ -534,7 +547,8 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         }, { onCommitted: (...args) => commits.push(args) });
 
       document.getElementById('settings-nav-staff').click();
-      await waitFor(() => document.getElementById('staff-access-status').textContent.includes('Staff access loaded'));
+      await waitFor(() => !document.getElementById('staff-refresh').disabled &&
+        document.getElementById('staff-access-status').textContent === '');
       const targetId = action === 'reactivate' ? inactiveTargetId : activeTargetId;
       const targetRow = [...document.querySelectorAll('.settings-staff-row')]
         .find(row => row.textContent.includes(`ID ${targetId}`));

@@ -15,7 +15,7 @@ const { JSDOM } = require('jsdom');
     global.document = dom.window.document;
     global.window = dom.window;
     const { applyPolarisResultToControls, createPolarisLookup, mergeCatalogValue, selectedStaffBibId, positivePolarisId,
-      researchUrl, renderResearchLinks } = await import(pathToFileURL(path.join(temporary, 'research.js')).href);
+      researchUrl, renderResearchLinks, researchRecordUrl, researchRecordValue } = await import(pathToFileURL(path.join(temporary, 'research.js')).href);
     assert.equal(positivePolarisId('09001'), 9001);
     assert.equal(positivePolarisId(2147483647), 2147483647);
     for (const value of [null, undefined, '', 'bad', '0', '-1', '2147483648', 0, -1, 1.5, 2147483648]) {
@@ -36,8 +36,28 @@ const { JSDOM } = require('jsdom');
     assert.equal(researchUrl('javascript:alert(1)', { bibid: '9001' }), '');
     assert.equal(researchUrl('https://search.example.test/?q={{author}}', { author: 'Someone' }), '');
     assert.equal(researchUrl('https://leap.example.test/bib/', { bibid: '9001' }, 'bibid'), '');
+    assert.equal(researchUrl('https:leap.example.test/bib/{{bibid}}', { bibid: 9001 }, 'bibid'), '');
+    assert.equal(researchUrl('https:///leap.example.test/bib/{{bibid}}', { bibid: 9001 }, 'bibid'), '');
+    assert.equal(researchUrl('https://leap.example.test/\\other/{{bibid}}', { bibid: 9001 }, 'bibid'), '');
+    assert.equal(researchUrl('https://leap.example.test/bib/{{bibid}}', { bibid: '   ' }, 'bibid'), '');
+    assert.equal(researchUrl(' https://leap.example.test/{{patron-id}}/{{patronId}} ',
+      { 'patron-id': ' 70/01 ', patronId: ' 70/01 ' }), 'https://leap.example.test/70%2F01/70%2F01');
+    assert.equal(researchUrl('https://leap.example.test/{{bibid}}/{{bibid}}',
+      { bibid: '9001' }, 'bibid'), 'https://leap.example.test/9001/9001');
 
     const links = document.querySelector('#links');
+    const recordResearch = { leapBibUrlPattern: 'https://leap.example.test/{{bibid}}',
+      leapPatronUrlPattern: 'https://leap.example.test/{{patronId}}', patronId: 7001 };
+    assert.equal(researchRecordUrl(recordResearch, 'bib', '9001'), 'https://leap.example.test/9001');
+    assert.equal(researchRecordUrl(recordResearch, 'patron'), 'https://leap.example.test/7001');
+    assert.equal(researchRecordUrl({ ...recordResearch, patronId: null }, 'patron'), '');
+    assert.equal(researchRecordUrl({ ...recordResearch, patronId: 'bad' }, 'patron'), '');
+    assert.equal(researchRecordUrl(recordResearch, 'bib', 0), '');
+    const recordLink = researchRecordValue('<unsafe patron label>', recordResearch, 'patron');
+    assert.equal(recordLink.tagName, 'A'); assert.equal(recordLink.textContent, '<unsafe patron label>');
+    assert.equal(recordLink.querySelector('unsafe'), null); assert.equal(recordLink.target, '_blank');
+    assert.equal(recordLink.rel, 'noopener noreferrer');
+    assert.equal(researchRecordValue('Patron', { ...recordResearch, leapPatronUrlPattern: 'javascript:{{patronId}}' }, 'patron').tagName, 'SPAN');
     const request = { title: 'A & B / C', identifier: '978 1', bibid: 9001 };
     renderResearchLinks(links, request, {
       leapBibUrlPattern: 'https://leap.example.test/bib/{{bibid}}',

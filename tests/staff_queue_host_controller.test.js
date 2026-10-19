@@ -31,16 +31,23 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await fixture(async ({ load, get, dom }) => {
       const { createSessionIdentity } = await load('session-identity');
       const { createTitleQueue, createCopyQueue } = await load('queues');
+      const { createStaffShell } = await load('shell');
       const session = createSessionIdentity(); session.accept(staff);
       let context = Object.freeze({ scope: '2', status: 'suggestion', additionalCopyStatus: 'open', activeView: copy ? 'additional-copies' : 'queue' });
       const calls = [], notices = [], grids = [], opened = [];
+      const shell = createStaffShell({ root: document, sessionIdentity: session, getContext: () => context,
+        settingsScope: () => 'system', operationsScope: () => '2', findTitle() {}, openRecentTitle() {},
+        onViewIntent() {}, onSignOutIntent() {} });
       dom.window.gridjs = { h: () => null, Grid: class {
         constructor(config) { this.config = config; grids.push(this); }
         render() {} updateConfig(config) { Object.assign(this.config, config); return this; }
         forceRender() { return this; } destroy() { this.destroyed = true; }
       } };
       const owner = (copy ? createCopyQueue : createTitleQueue)({ root: get(copy ? '#additional-copy-view' : '#queue-view'),
-        sessionIdentity: session, getContext: () => context, announce: message => notices.push(message),
+        sessionIdentity: session, getContext: () => context, announce: message => {
+          notices.push(message);
+          return shell.announce(message);
+        },
         onScopeAccepted() {}, onLibraries() {}, onRefreshed() {}, onRendered() {},
         onOpen: (...args) => opened.push(args), onScopeIntent() {}, onStatusIntent() {},
         recovery: { current: () => null, begin() {}, loaded() {}, acknowledge() {} },
@@ -53,7 +60,10 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       const id = '9223372036854775807';
       calls[1].pending.resolve({ items: [{ id, title: 'Current', status: copy ? 'open' : 'suggestion' }], scope: '3', status: 'open' });
       assert.equal(await current, true);
+      assert.equal(get('#app-status').textContent, '', 'successful owning load clears its transient feedback');
+      shell.announce('A newer save succeeded.', 'success');
       calls[0].pending.resolve({ items: [{ id: '91', title: 'Old', status: 'suggestion' }], scope: '2' }); await old;
+      assert.equal(get('#app-status').textContent, 'A newer save succeeded.', 'stale completion cannot clear current feedback');
       assert.equal(owner.find(id).title, 'Current'); assert.equal(owner.find('91'), undefined);
       assert.ok(calls[0].init.signal.aborted);
       owner.markStale('2');
@@ -73,6 +83,15 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       calls[4].pending.resolve({ items: [{ id, title: 'Reviewed', status: copy ? 'open' : 'suggestion' }], scope: '3', status: 'open' });
       assert.equal(await retryEntry, true);
       assert.equal(owner.find(id).title, 'Reviewed');
+      const canceledLoading = owner.refresh();
+      assert.match(get('#app-status').textContent, /Loading authorized/);
+      owner.invalidate();
+      const silentRefresh = owner.refresh({ silent: true });
+      calls.at(-1).pending.resolve({ items: [], scope: '3', status: 'open' });
+      assert.equal(await silentRefresh, true);
+      calls.at(-2).pending.resolve({ items: [], scope: '3', status: 'open' });
+      assert.equal(await canceledLoading, false);
+      assert.equal(get('#app-status').textContent, '', 'canceled non-silent load cannot leave a loading message after a silent success');
       const stale = owner.refresh(); owner.dispose();
       calls.at(-1).pending.resolve({ items: [], scope: '3' }); await stale;
       assert.ok(grids.every(grid => grid.destroyed));
@@ -86,6 +105,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       owner.dispose(); owner.signedOut(); owner.contextChanged({ ...context, scope: '2' }, context);
       assert.equal(get(copy ? '#additional-copy-grid' : '#request-grid'), liveGrid, 'retired lifecycle cannot detach the replacement grid');
       replacement.dispose();
+      shell.dispose();
     });
   }
   console.log('Exclusive detail lease and locally owned queue read/disposal/recreation contracts passed');

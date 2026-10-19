@@ -2,6 +2,7 @@ import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { createDraftScope } from './draft-scope.js';
 import { createRequestEditor } from './request-editor.js';
+import { researchRecordValue } from './research.js';
 import { createRequestWorkflows } from './request-workflows.js';
 import { unconfirmedResponseError, notificationOutcome, isCommittedRequestResponse } from './mutation-outcome.js';
 import { element, icon, statusLabel, dateTime, text, closeReasonLabel, timeoutLabel, addDetail } from './ui.js';
@@ -10,6 +11,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   beforeOpen, isNavigationCurrent, getNavigationGeneration, getScope, onAlign, onOpened, onUpdated = () => {}, beforeClose, onClosed,
   getFocusReturn, refreshQueue, queueSequence, rememberOpened, forgetUnavailable, onReceipt, clearReceipt,
   refreshCurrentStaff = async () => null,
+  onNewSuggestion = null,
   request: send = authorizedJson }) {
   const reads = createLatestLoad(), configurations = new Map();
   let lease = null, actor = null, current = null, returnFocus = null, activeAttempt = null;
@@ -369,6 +371,14 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       element('span', { text: request.claimedByDisplayName ? `Claimed by ${request.claimedByDisplayName}` : 'Unclaimed' })
     ]);
     body.append(meta, workflows.buildActions());
+    if (typeof request.barcode === 'string' && request.barcode.trim() && onNewSuggestion) {
+      body.append(element('button', { type: 'button', className: 'secondary-button',
+        'aria-label': `New suggestion for patron ${request.barcode} from request ${request.id}`,
+        onclick: event => {
+          if (live() && !hasPendingMutation()) onNewSuggestion(request.barcode, event.currentTarget, request.id);
+        }
+      }, [icon('plus'), 'New suggestion for this patron']));
+    }
 
     if (request.capabilities && request.capabilities.blockingReason) {
       body.append(element('p', {
@@ -384,17 +394,20 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     }
 
     const details = element('dl', { className: 'detail-grid' });
-    addDetail(details, 'Patron', [request.nameFirst, request.nameLast].filter(Boolean).join(' '));
-    addDetail(details, 'Barcode', request.barcode);
+    const patronName = [request.nameFirst, request.nameLast].filter(Boolean).join(' ');
+    addDetail(details, 'Patron', patronName).replaceChildren(researchRecordValue(patronName, request.research, 'patron'));
+    addDetail(details, 'Barcode', request.barcode).replaceChildren(researchRecordValue(request.barcode, request.research, 'patron'));
     addDetail(details, 'Email', request.email);
     addDetail(details, 'Format', request.formatLabel || request.format);
     addDetail(details, 'Identifier', request.identifier);
-    addDetail(details, 'BIB ID', request.bibid);
+    addDetail(details, 'BIB ID', request.bibid).replaceChildren(researchRecordValue(request.bibid, request.research, 'bib', request.bibid));
     addDetail(details, 'Publication', request.publication);
-    addDetail(details, 'Pickup', request.preferredPickupBranchName || request.preferredPickupBranchId);
+    addDetail(details, 'Recorded ASAP pickup', request.preferredPickupBranchName || request.preferredPickupBranchId);
     addDetail(details, 'Identifier check', request.isbnCheckStatus);
     if (request.status === 'closed') addDetail(details, 'Close reason', closeReasonLabel(request.closeReason));
     body.append(details);
+    body.append(element('p', { className: 'field-help',
+      text: "Recorded ASAP pickup is a historical snapshot. Each unfilled request uses the patron's live Polaris pickup preference when its hold is placed. Updating pickup changes the patron's account default; existing holds keep their recorded destination." }));
 
     if (request.workflowTags && request.workflowTags.length) {
       const tags = element('div', { className: 'tags', 'aria-label': 'Workflow tags' });

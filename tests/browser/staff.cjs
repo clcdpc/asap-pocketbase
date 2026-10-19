@@ -2764,7 +2764,7 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     assert.equal(await page.locator('#send-test-email').isDisabled(), true);
     await page.getByRole('button', { name: 'Profile', exact: true }).click();
     release.resolve();
-    await page.waitForFunction(() => !document.getElementById('send-test-email').disabled);
+    await page.waitForFunction(() => !document.getElementById('force-weekly-now').disabled);
     assert.equal(await page.locator('#profile-view').isVisible(), true);
     await page.unroute('**/api/asap/staff/workflow/weekly-summary/run-now?*', operationRoute);
     assert.deepEqual(errors, []);
@@ -3534,7 +3534,8 @@ async function runSettingsLayout(browser, args, axeSource, report) {
           const reload = page.waitForResponse(response => response.url().endsWith('/api/asap/staff/settings?orgId=system'));
           await page.locator('#settings-refresh').click();
           assert.equal((await reload).status(), 200);
-          await page.locator('#settings-message').filter({ hasText: 'Settings loaded.' }).waitFor();
+          await page.locator('#settings-refresh:not([disabled])').waitFor();
+          assert.equal(await page.locator('#settings-message').textContent(), '', 'Routine Settings load completes quietly');
 
           const failurePath = '**/api/asap/staff/settings?orgId=system';
           const failureMessage = 'Settings could not be loaded. Check your connection, then reload current values before editing or saving this settings context.';
@@ -3553,7 +3554,8 @@ async function runSettingsLayout(browser, args, axeSource, report) {
             await page.setViewportSize(viewport);
           }
           await page.locator('#settings-refresh').click();
-          await page.locator('#settings-message').filter({ hasText: 'Settings loaded.' }).waitFor();
+          await page.locator('#settings-refresh:not([disabled])').waitFor();
+          assert.equal(await page.locator('#settings-message').textContent(), '', 'Recovery clears its own transient loading state');
 
           const draft = page.locator('#ui-misconfigured-msg');
           const original = await draft.inputValue();

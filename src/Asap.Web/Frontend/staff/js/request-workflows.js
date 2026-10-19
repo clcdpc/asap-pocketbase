@@ -1,5 +1,6 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
+import { byDisplayLabel } from './display-order.js';
 import { positivePolarisId } from './research.js';
 import { element, icon, commandButton, statusLabel, labeledInput } from './ui.js';
 
@@ -250,11 +251,11 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       });
       if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request') || isPending()) return;
       const select = element('select', { 'aria-label': 'Assign to staff member' });
-      const candidates = result.candidates || [];
+      const candidates = byDisplayLabel(result.candidates, item => item.displayName || item.userPrincipalName || `Staff ${item.id}`);
       for (const candidate of candidates) {
         select.append(element('option', {
           value: candidate.id,
-          text: candidate.displayName
+          text: candidate.displayName || candidate.userPrincipalName || `Staff ${candidate.id}`
         }));
       }
       const form = element('form', { className: 'inline-form' }, [
@@ -287,7 +288,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
   async function showPickup(request, returnFocus) {
     if (!isCurrentDialogRequest(request, 'title_request') || isPending()) return;
     const load = reads.begin('pickup-options');
-    announce('Loading current pickup preference...');
+    const clearLoading = announce('Loading current pickup preference...');
     try {
       const options = await send(`/api/asap/staff/title-requests/${request.id}/pickup-options`, {
         method: 'POST',
@@ -295,16 +296,26 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         signal: load.signal
       });
       if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request') || isPending()) return;
-      const select = element('select', { 'aria-label': 'Preferred pickup branch' });
+      const select = element('select', { 'aria-label': 'Preferred pickup branch', required: 'required',
+        'aria-required': 'true', 'aria-describedby': 'request-pickup-help request-pickup-warning' });
       for (const branch of options.pickupBranches || []) {
         select.append(element('option', { value: branch.id, text: branch.label }));
       }
       if (options.selectedPickupBranchId) select.value = String(options.selectedPickupBranchId);
+      else {
+        select.prepend(element('option', { value: '', text: 'Choose an eligible pickup branch' }));
+        select.value = '';
+      }
       const form = element('form', { className: 'inline-form' }, [
         labeledInput('Preferred pickup branch', select),
+        element('p', { id: 'request-pickup-help', className: 'field-help wide',
+          text: "This changes the patron's preferred pickup location in Polaris. Every unfilled request uses the live default when its hold is placed; existing holds are not moved." }),
         element('button', { type: 'submit', className: 'primary-button', disabled: options.readOnly }, [icon('map-marker'), 'Update pickup'])
       ]);
-      if (options.pickupBranchWarning) form.append(element('p', { className: 'wide', text: options.pickupBranchWarning }));
+      const warning = element('p', { id: 'request-pickup-warning', className: 'wide', role: 'status', 'aria-live': 'polite',
+        text: options.pickupBranchWarning || '' });
+      warning.hidden = !options.pickupBranchWarning;
+      form.append(warning);
       form.addEventListener('submit', async event => {
         event.preventDefault();
         if (!form.isConnected || !isCurrentDialogRequest(request, 'title_request')) return;
@@ -335,13 +346,13 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       const draft = trackDialogFormDraft(form);
       root.prepend(form);
       select.focus();
-      announce('Current pickup preference loaded.');
     } catch (error) {
       if (load.isCurrent() && isCurrentDialogRequest(request, 'title_request') &&
           error.status !== 401 && !(isAbortError(error) && load.signal.aborted)) {
         announce(error.message || 'Pickup choices could not be loaded.', 'error');
       }
     } finally {
+      if (typeof clearLoading === 'function') clearLoading();
       reads.finish('pickup-options', load.token);
     }
   }

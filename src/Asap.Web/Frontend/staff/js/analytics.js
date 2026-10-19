@@ -1,5 +1,6 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
+import { byDisplayLabel } from './display-order.js';
 
 const dateRangeLabels = {
   last30: 'Last 30 days',
@@ -97,7 +98,7 @@ function renderScopeControl(data) {
   allOption.textContent = 'All libraries';
   select.append(allOption);
 
-  const libraries = (data.availableLibraries || []).slice();
+  const libraries = byDisplayLabel(data.availableLibraries, item => `${item.name} (ID ${item.orgId})`, item => item.orgId);
   if (data.scope.mode === 'library' && data.scope.libraryOrgId &&
       !libraries.some(item => item.orgId === data.scope.libraryOrgId)) {
     libraries.push({ orgId: data.scope.libraryOrgId, name: data.scope.label || 'Current library' });

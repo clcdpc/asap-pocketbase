@@ -30,7 +30,7 @@ UpdatedUtc datetime2 NOT NULL
 
 The integer changes only for contract-affecting schema changes. Application startup compares the expected build value with SQL. Mismatch keeps liveness healthy but readiness unhealthy and blocks normal application functions. It is not used to decide whether a DACPAC needs deployment.
 
-Schema 7 is the pre-release reset boundary for native Polaris identities; current schema 12 upgrades native schema-7/8/9/10/11 targets in place and adds nullable native organization type, parent and patron identity snapshots. Recreate pre-7 databases from the current DACPAC; no string-to-number upgrade or compatibility columns are retained. Run the DACPAC's embedded pre-deployment script before plan generation: it rejects unidentified/pre-7/newer targets, retires only the two obsolete global requesting/pickup columns, clears nonpositive integration IDs and the former system pickup reference to NULL, and preserves valid credentials, identity and native business data. Newly added organization type/parent values remain unclassified on old rows until trusted synchronization supplies them, so unknown rows do not gain library authority from their existing active flag. Nullable patron ID snapshots remain unknown on preexisting rows; no barcode-based identity backfill occurs. Publish retains normal data-loss protection and preserves unowned objects; the post-deployment script advances compatible schema 7/8/9/10/11 to 12. Fresh import parses numeric source identities, and repeat deployment preserves existing native data.
+Schema 7 is the pre-release reset boundary for native Polaris identities; current schema 13 upgrades native schema-7/8/9/10/11/12 targets in place. Earlier revisions added nullable native organization type, parent and patron identity snapshots; schema 13 appends nullable test-email actor, configuration and delivery-mode evidence without rewriting historical outbox payloads, timestamps or rowversions. Recreate pre-7 databases from the current DACPAC; no string-to-number upgrade or compatibility columns are retained. Run the DACPAC's embedded pre-deployment script before plan generation: it rejects unidentified/pre-7/newer targets, retires only the two obsolete global requesting/pickup columns, clears nonpositive integration IDs and the former system pickup reference to NULL, and preserves valid credentials, identity and native business data. Newly added organization type/parent values remain unclassified on old rows until trusted synchronization supplies them, so unknown rows do not gain library authority from their existing active flag. Nullable patron ID snapshots remain unknown on preexisting rows; no barcode-based identity backfill occurs. Publish retains normal data-loss protection and preserves unowned objects; the post-deployment script advances compatible schema 7/8/9/10/11/12 to 13. Fresh import parses numeric source identities, and repeat deployment preserves existing native data.
 
 ### `[asap].[DeploymentState]`
 
@@ -269,7 +269,7 @@ Use explicit columns for the fixed status-label taxonomy; do not reintroduce a g
 
 ### `[asap].[EmailSettings]`
 
-Postmark transport/sender configuration with system + library field-level inheritance.
+System-only Postmark credential plus System defaults and library field-level overrides for From address/name.
 
 ```text
 OrganizationId int PK/FK Organization
@@ -281,7 +281,7 @@ UpdatedUtc datetime2 NOT NULL
 RowVersion rowversion
 ```
 
-A null library field inherits from Organization `1`. Protected token/secret values are opaque Data Protection ciphertext in SQL. Secret API semantics remain blank=preserve, explicit Clear=remove override/system value according to authorization/confirmation rules.
+A null library sender field inherits from Organization `1`. Only organization `1` owns `ProtectedServerToken`; delivery ignores obsolete non-System ciphertext and DACPAC post-deployment clears it without decrypting or altering sender fields. Protected token values are opaque Data Protection ciphertext in SQL. Secret API semantics are blank=preserve and explicit authorized System Clear=remove; library credential writes and clears are rejected.
 
 ### `[asap].[ExternalSearchProvider]`
 
@@ -695,6 +695,10 @@ RecipientStaffUserId bigint NULL FK StaffUser
 RecipientAuthenticationEmail nvarchar(320) NULL -- normalized identity snapshot for sensitive mail
 AuthorizationOrganizationId int NULL FK Organization
 RecipientAddressKind nvarchar(32) NULL CHECK (notification_email/weekly_summary)
+TestRequestedByStaffUserId bigint NULL      -- operational-test actor snapshot; retained after staff retirement
+TestConfigurationVersion varchar(64) NULL   -- saved sender/System credential rowversion fingerprint, no secret
+IntendedDeliveryMode nvarchar(32) NULL      -- live UI test intent is postmark
+AttemptDeliveryMode nvarchar(32) NULL       -- actual attempt/transport evidence; old results remain unknown
 ToAddress nvarchar(...) NULL                -- nullable only for terminal suppressed intent
 FromAddress nvarchar(...) NULL              -- nullable only for terminal suppressed intent
 FromName nvarchar(...) NULL
@@ -726,7 +730,15 @@ CREATE UNIQUE INDEX UX_EmailOutbox_BusinessKey
     WHERE BusinessKey IS NOT NULL;
 ```
 
-Deterministic business keys are globally namespaced by notification semantics; test/ad-hoc repeatable messages may leave the key null. When two writers race on the same key, SQL uniqueness is authoritative and the loser resolves the existing row as an idempotent success rather than reporting a failed enqueue. Ordinary weekly summaries use one key per recipient/reporting period. Forced weekly summaries use one generated `ManualRunId` per accepted forced invocation and keys such as `weekly-summary-force:{ManualRunId}:{StaffUserId}`; retries of that same forced Hangfire job reuse the ID.
+Deterministic business keys are globally namespaced by notification semantics. Public operational-test requests require an actor/scope/click key; internal ad-hoc messages may leave it null. When two writers race on the same key, SQL uniqueness is authoritative and the loser resolves the existing row as an idempotent success rather than reporting a failed enqueue. Ordinary weekly summaries use one key per recipient/reporting period. Forced weekly summaries use one generated `ManualRunId` per accepted forced invocation and keys such as `weekly-summary-force:{ManualRunId}:{StaffUserId}`; retries of that same forced Hangfire job reuse the ID.
+
+Schema 13 adds nullable operational-test metadata without inventing historical
+live-send evidence or changing the immutable `operational_test` delivery class.
+New live tests bind their saved configuration and intended mode before enqueue;
+the worker and final Postmark adapter reject changed configuration/mode before
+the provider POST. A successful result records actual transport evidence, rather
+than reading current configuration when status is requested. The actor snapshot
+is audit metadata and does not create another staff authorization tuple.
 
 For `staff_authorization_sensitive`, `RecipientStaffUserId`, `RecipientAuthenticationEmail`, `AuthorizationOrganizationId`, and `RecipientAddressKind` are required. Snapshot the normalized authentication email at intent creation. Every send/retry requires that snapshot to equal the current StaffUser authentication email, plus current active/role/scope/participation and exact destination ownership checks. Stored Entra metadata is irrelevant. An authentication-email change suppresses the stale row; an OID change does not.
 

@@ -108,6 +108,30 @@ const axe = require('axe-core');
     });
     editors.populate(data, false);
 
+    const rule = document.querySelector('#format-rules-editor [data-rule-code="book"]');
+    const behavior = rule.querySelector('[data-rule-property="messageBehavior"]');
+    const message = rule.querySelector('[data-rule-property="message"]');
+    assert.strictEqual(message.closest('label').hidden, true);
+    assert.strictEqual(message.disabled, true);
+    assert.strictEqual(message.required, false);
+    behavior.value = 'message';
+    behavior.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.strictEqual(message.closest('label').hidden, false);
+    assert.strictEqual(message.disabled, false);
+    message.value = 'Draft & é retained';
+    behavior.value = 'none';
+    behavior.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.strictEqual(message.closest('label').hidden, true);
+    assert.strictEqual(editors.collect().values.rules.find(item => item.code === 'book').message, 'Draft & é retained');
+    behavior.value = 'ebookMessage';
+    behavior.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.strictEqual(message.value, 'Draft & é retained');
+    assert.strictEqual(message.closest('label').hidden, false);
+    // Restore the fixture draft before the existing persistence assertions.
+    behavior.value = 'none';
+    behavior.dispatchEvent(new window.Event('change', { bubbles: true }));
+    message.value = '';
+
     assert.strictEqual(root.querySelectorAll('textarea[data-settings-json]').length, 0);
     assert.strictEqual(root.querySelector('[data-setting-key="postmarkToken"]').dataset.systemOnly, 'true');
     assert.strictEqual(document.getElementById('publication-options-use-system').checked, false);
@@ -211,6 +235,11 @@ const axe = require('axe-core');
     });
 
     editors.populate({ ...data, autoClaimStaff: [] }, false);
+    document.getElementById('add-format-rule').click();
+    const newRuleMessage = [...document.querySelectorAll('#format-rules-editor [data-rule-property="message"]')].at(-1);
+    assert.strictEqual(newRuleMessage.closest('label').hidden, true, 'New no-message rules use the same conditional visibility.');
+    assert.strictEqual(newRuleMessage.disabled, true);
+    editors.populate({ ...data, autoClaimStaff: [] }, false);
     document.getElementById('add-auto-claim-rule').click();
     const incompleteClaimRow = document.querySelector('#format-claim-rules-editor [data-domain-row]');
     assert.ok(incompleteClaimRow, 'An incomplete auto-claim draft must remain visible for correction or deletion.');
@@ -235,6 +264,27 @@ const axe = require('axe-core');
       ]);
       bigintStaffEditors.dispose();
     }
+
+    const sortedStaffData = JSON.parse(JSON.stringify(data));
+    const configuredFormats = [...systemFormats, { ...systemFormats[0], id: '8', code: 'audio', label: 'Audio' }];
+    sortedStaffData.stored.configuredSystem.formats = configuredFormats;
+    sortedStaffData.stored.formats = configuredFormats;
+    sortedStaffData.effective.formats = configuredFormats;
+    sortedStaffData.autoClaimStaff = [
+      { id: '9223372036854775807', label: 'Zebra staff', displayName: 'A misleading unused name' },
+      { id: '9007199254740993', label: 'Alpha staff', displayName: 'Z misleading unused name' }
+    ];
+    sortedStaffData.stored.autoClaimRules = [{ materialFormatId: '7', staffUserId: '9223372036854775807', active: true }];
+    const sortedRoot = root.cloneNode(true);
+    const sortedEditors = module.createSettingsDomainEditors({ root: sortedRoot });
+    sortedEditors.populate(sortedStaffData, false);
+    const sortedSelect = sortedRoot.querySelectorAll('#format-claim-rules-editor [data-domain-row] select')[1];
+    assert.deepStrictEqual([...sortedRoot.querySelector('#format-claim-rules-editor select').options].map(option => option.textContent),
+      ['Book (book)', 'Audio (audio)'], 'Material format options retain their configured order.');
+    assert.deepStrictEqual([...sortedSelect.options].map(option => option.textContent), ['Alpha staff', 'Zebra staff']);
+    assert.strictEqual(sortedSelect.value, '9223372036854775807', 'Sorting choices preserves the exact selected bigint.');
+    assert.deepStrictEqual(sortedStaffData.autoClaimStaff.map(item => item.label), ['Zebra staff', 'Alpha staff'], 'Sorting must not mutate source data.');
+    sortedEditors.dispose();
 
     for (const invalidStaff of [
       { name: 'zero auto-claim staff ID', id: '0' },

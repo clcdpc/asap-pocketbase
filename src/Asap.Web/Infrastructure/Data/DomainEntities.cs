@@ -484,6 +484,10 @@ public sealed class EmailOutbox
     public string? RecipientAuthenticationEmail { get; set; }
     public int? AuthorizationOrganizationId { get; set; }
     public string? RecipientAddressKind { get; set; }
+    public long? TestRequestedByStaffUserId { get; set; }
+    public string? TestConfigurationVersion { get; set; }
+    public string? IntendedDeliveryMode { get; set; }
+    public string? AttemptDeliveryMode { get; set; }
     public string? ToAddress { get; set; }
     public string? FromAddress { get; set; }
     public string? FromName { get; set; }

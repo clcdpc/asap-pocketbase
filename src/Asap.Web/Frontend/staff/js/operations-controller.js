@@ -4,6 +4,7 @@ import { element, commandButton, text, dateTime } from './ui.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
 import { actorKey } from './session-identity.js';
 import { byDisplayLabel } from './display-order.js';
+import { createEmailTestController, emailTestStatusMessage } from './email-test.js';
 
 export function createOperationsController({ root, sessionIdentity, announce, onScopeChange,
   onReceipt, clearReceipt, request = authorizedJson }) {
@@ -25,6 +26,12 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     emailOperationsTable: root.querySelector('#email-operations-table'),
     outcome: root.querySelector('#operations-outcome'),
   };
+  const emailTest = createEmailTestController({ root: root.querySelector('#operations-email-test'), request,
+    context: () => ({ ownerKey: sessionIdentity.actor()?.key, version: sessionIdentity.preferences()?.version,
+      organizationId: state.operationsScope === 'all' ? 1 : Number(state.operationsScope),
+      active: active && !disposed, ready: Boolean(sessionIdentity.actor()), dirty: false,
+      blocked: Boolean(state.operationMutation) }),
+    onOperations: () => { dom.emailOperationsTable.focus(); dom.emailOperationsTable.scrollIntoView?.({ block: 'nearest' }); } });
 
   function setLibraries(organizations) {
       if (disposed) return;
@@ -204,16 +211,38 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     if (disposed) return;
     const operation = state.operationMutation;
     const locked = Boolean(operation);
-    for (const control of [dom.runWorkflowNow, dom.runWeeklyNow, dom.forceWeeklyNow, dom.sendTestEmail,
+    for (const control of [dom.runWorkflowNow, dom.runWeeklyNow, dom.forceWeeklyNow,
       dom.operationsScope, ...dom.emailOperationsTable.querySelectorAll('button')]) control.disabled = locked;
+    emailTest.sync();
     const notice = dom.outcome;
     notice.hidden = !operation?.uncertain;
     notice.replaceChildren();
     if (!operation?.uncertain) return;
     notice.append(element('p', { text: `${operation.message} outcome is unconfirmed. Refresh Operations to review current work before retrying this same operation. A new operation remains blocked.` }));
     if (canRetry(operation)) {
-      notice.append(commandButton('Retry same operation', 'refresh', () =>
-        runOperation(operation.path, operation.message, operation)));
+      notice.append(operation.path === '/api/asap/staff/email-operations/test'
+        ? commandButton('Review test email status', 'refresh', () => void reviewLegacyEmailTest(operation))
+        : commandButton('Retry same operation', 'refresh', () => runOperation(operation.path, operation.message, operation)));
+    }
+  }
+
+  async function reviewLegacyEmailTest(operation) {
+    if (!active || !canRetry(operation) || state.operationMutation !== operation) return false;
+    const scope = operation.scope === 'all' ? 1 : Number(operation.scope);
+    try {
+      const result = await request(`/api/asap/staff/email-operations/test?organizationId=${scope}&operationId=${encodeURIComponent(operation.operationId)}`);
+      if (!active || state.operationMutation !== operation || !sessionIdentity.isCurrent(operation.owner) ||
+          result?.code !== 'ok' || !isCanonicalPositiveInt64Id(result.data?.id) || result.data.organizationId !== scope ||
+          !['pending', 'sending', 'sent', 'suppressed', 'failed'].includes(result.data.status)) return false;
+      if (!emailTest.adopt(scope, operation.operationId, result.data)) return false;
+      clearOperation(operation); state.operationMutation = null; clearReceipt(operation);
+      updateOperationControls(); announce(emailTestStatusMessage(result.data));
+      return true;
+    } catch (error) {
+      if (active && sessionIdentity.isCurrent(operation.owner) && state.operationMutation === operation && !isAbortError(error)) {
+        announce('The original test outcome is still unconfirmed. Refresh its status before requesting another test.', 'warning');
+      }
+      return false;
     }
   }
 
@@ -290,7 +319,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     const retained = state.operationMutation;
     if (retained?.uncertain) { clearReview(retained); updateOperationControls(); }
     dom.refreshOperations.disabled = true;
-    if (!options.silent) announce('Loading workflow operations...');
+    const clearLoading = !options.silent ? announce('Loading workflow operations...') : null;
     try {
       const query = operationsQuery(requestedScope);
       const [queue, email, organizationResult] = await Promise.all([
@@ -326,9 +355,9 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || state.operationMutation !== retained) return false;
         retained.reviewEvidence = Object.freeze({ operation: retained, owner, scope: retained.scope, actorKey: retained.actorKey });
         retained.reviewed = true;
+        if (retained.path === '/api/asap/staff/email-operations/test') await reviewLegacyEmailTest(retained);
       }
       updateOperationControls();
-      if (!options.silent) announce('Workflow operations loaded.');
       return true;
     } catch (error) {
       if (load.isCurrent() && sessionIdentity.isCurrent(owner) && requestedScope === state.operationsScope &&
@@ -337,6 +366,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       }
       return false;
     } finally {
+      if (typeof clearLoading === 'function') clearLoading();
       if (load.isCurrent()) dom.refreshOperations.disabled = false;
       reads.finish('operations', load.token);
     }
@@ -345,6 +375,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   async function runOperation(path, message, retry = null, body = undefined) {
     if (disposed || !active || !['admin', 'super_admin'].includes(sessionIdentity.preferences()?.role)) return;
     if (retry ? retry !== state.operationMutation || !canRetry(retry) : state.operationMutation) return;
+    if (retry && path === '/api/asap/staff/email-operations/test') return reviewLegacyEmailTest(retry);
     const owner = sessionIdentity.preferences();
     const operation = retry || captureOperation({ path, message, scope: state.operationsScope,
       operationId: window.crypto.randomUUID(), storageKey: operationStorageKey(), actorKey: sessionIdentity.actor().key,
@@ -417,16 +448,28 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   listen(dom.operationsScope, 'change', () => {
     if (state.operationMutation) { dom.operationsScope.value = state.operationsScope; return; }
     state.operationsScope = dom.operationsScope.value;
+    emailTest.sync();
     onScopeChange();
     void loadOperations();
   });
   listen(dom.runWorkflowNow, 'click', () => runOperation('/api/asap/staff/workflow/run-now', 'Workflow run'));
   listen(dom.runWeeklyNow, 'click', () => runOperation('/api/asap/staff/workflow/weekly-summary/run-now?force=false', 'Weekly summary'));
   listen(dom.forceWeeklyNow, 'click', () => runOperation('/api/asap/staff/workflow/weekly-summary/run-now?force=true', 'Forced weekly summary'));
-  listen(dom.sendTestEmail, 'click', () => runOperation('/api/asap/staff/email-operations/test', 'Test email'));
   listen(dom.refreshOperations, 'click', () => loadOperations());
   return {
     setStaff, setLibraries, currentScope: () => state.operationsScope,
+    async openEmailScope(organizationId) {
+      const owner = sessionIdentity.preferences();
+      if (!active || !owner) return false;
+      if (!await loadOperations({ silent: true }) || !sessionIdentity.isCurrent(owner)) return false;
+      const scope = organizationId === 1 ? 'all' : String(organizationId);
+      if (owner.role === 'super_admin' ? scope !== 'all' && !libraries.some(item => String(item.id) === scope)
+        : organizationId !== owner.organizationId) return false;
+      state.operationsScope = scope; dom.operationsScope.value = scope; emailTest.sync(); onScopeChange();
+      if (!await loadOperations({ silent: true })) return false;
+      dom.emailOperationsTable.focus();
+      return true;
+    },
     retireCatalog() {
       if (disposed) return;
       reads.begin('operations').abort(); projection = null;
@@ -437,12 +480,12 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       dom.emailOperationsTable.replaceChildren(element('p', { text: 'Email operations unavailable. Refresh Operations to review current work.' }));
       updateOperationControls();
     },
-    activate() { active = true; },
-    deactivate() { active = false; projection = null; reads.begin('operations').abort(); },
-    invalidate() { projection = null; reads.begin('operations').abort(); },
+    activate() { active = true; emailTest.sync(); },
+    deactivate() { active = false; emailTest.invalidate(); projection = null; reads.begin('operations').abort(); },
+    invalidate() { emailTest.invalidate(); projection = null; reads.begin('operations').abort(); },
     refresh: loadOperations, run: runOperation,
     inspectDeparture: () => ({ owner: active ? state.operationsScope : null, blocked: disposed, dirty: false }),
     signedOut() { active = false; setStaff(null); },
-    dispose() { disposed = true; active = false; events.abort(); reads.begin('operations').abort(); }
+    dispose() { disposed = true; active = false; emailTest.dispose(); events.abort(); reads.begin('operations').abort(); }
   };
 }

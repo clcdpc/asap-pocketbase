@@ -158,6 +158,12 @@ async function flush() {
     assert.deepStrictEqual(settingsRequests, ['/api/asap/staff/settings?orgId=2']);
     assert.strictEqual(document.getElementById('settings-scope').value, '2');
     assert.strictEqual(document.getElementById('settings-scope-field').hidden, true);
+    assert.match(document.getElementById('settings-library-context-title').textContent, /Editing Library Two settings/);
+    assert.match(document.getElementById('settings-library-context-guidance').textContent, /apply to every library/);
+    assert.strictEqual(document.getElementById('settings-switch-system').hidden, true);
+    assert.strictEqual(document.querySelector('#settings-nav-polaris .settings-scope-badge').hidden, false);
+    assert.strictEqual(document.querySelector('#settings-nav-smtp .settings-scope-badge'), null);
+    assert.match(document.querySelector('#settings-smtp .settings-scope-explanation').textContent, /Library Two.*managed centrally/);
     assert.strictEqual(document.getElementById('email-postmark-token').disabled, true);
     assert.strictEqual(document.getElementById('email-clear-postmark-token').disabled, true);
     assert.strictEqual(document.querySelector('[data-setting-key="postmarkToken"] .settings-override-toggle'), null);

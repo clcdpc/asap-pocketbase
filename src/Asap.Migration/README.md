@@ -6,7 +6,7 @@ and its file storage directly; it does not start PocketBase or call the web
 application.
 
 The executable is pinned to PocketBase source
-`150b30b776565194260cc327eeeffdfb46475e81`, DACPAC schema `12`, migration
+`150b30b776565194260cc327eeeffdfb46475e81`, DACPAC schema `13`, migration
 contract `structured-policy-v4`, and export format `1`. Use `describe-contract` for the
 machine-readable contract. The exporter accepts any syntactically valid 40-character
 Git SHA so a compatible source revision can be represented; operators verify the
@@ -18,10 +18,10 @@ system integration settings. Legacy requesting/pickup aliases are recognized
 only for exact migration provenance; operations select their library/branch.
 Invalid supplied integration IDs fail import. The DACPAC seeds these IDs as
 unconfigured NULL; readiness requires valid local configuration, without a live
-Polaris call. Native schema-7/8/9/10/11 targets upgrade in place to 12 using the
+Polaris call. Native schema-7/8/9/10/11/12 targets upgrade in place to 13 using the
 DACPAC's embedded pre-deployment script before publishing the guarded plan;
 pre-7 targets must be recreated and the stopped source re-exported with this
-contract. Targets newer than schema 12 are rejected.
+contract. Targets newer than schema 13 are rejected.
 
 ## Commands
 

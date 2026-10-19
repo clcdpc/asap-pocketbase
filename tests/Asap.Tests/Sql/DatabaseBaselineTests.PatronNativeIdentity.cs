@@ -97,7 +97,7 @@ public sealed partial class DatabaseBaselineTests
                 "UPDATE [asap].[SchemaVersion] SET [Version] = 11 WHERE [Id] = 1;");
             new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
 
-            Assert.AreEqual(12, Convert.ToInt32(await Scalar(connection,
+            Assert.AreEqual(13, Convert.ToInt32(await Scalar(connection,
                 "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
             Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, $"""
                 SELECT COUNT(*) FROM [asap].[PatronSession]
@@ -140,11 +140,11 @@ public sealed partial class DatabaseBaselineTests
             }
             await NonQuery(connection, $"DELETE FROM [asap].[Organization] WHERE [Id] = {libraryId};");
 
-            // Restore schema 12 even when a regression assertion fails after the
+            // Restore schema 13 even when a regression assertion fails after the
             // old shape has been published, then restore this isolated fixture's pin.
             await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 11 WHERE [Id] = 1;");
             new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 12 WHERE [Id] = 1;");
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 13 WHERE [Id] = 1;");
         }
     }
 }

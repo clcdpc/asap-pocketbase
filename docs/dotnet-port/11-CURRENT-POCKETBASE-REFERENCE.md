@@ -270,7 +270,7 @@ Important effective-value behavior:
 - library settings UI should expose inherited vs overridden state;
 - reset removes the override and re-exposes system value;
 - true system-only application configuration lives in `SystemSettings`; Polaris configuration is isolated in system-only `PolarisSettings`;
-- email/Postmark configuration supports system defaults plus library overrides; only sender/configuration semantics migrate from the SMTP-era source, while the new Postmark token is target-only cutover configuration.
+- target email sender identity supports system defaults plus library overrides; only sender/configuration semantics migrate from the SMTP-era source. The target-only Postmark token belongs solely to System organization 1 under #318; earlier per-library credential assumptions are superseded.
 - built-in material-format field behavior becomes typed relational columns and custom-field/format behavior becomes `MaterialFormatCustomFieldRule`, eliminating the competing legacy JSON rule representation.
 
 ### Email templates

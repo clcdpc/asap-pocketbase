@@ -1,5 +1,7 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
+import { byDisplayLabel } from './display-order.js';
+import { researchRecordUrl } from './research.js';
 import { element, dateTime, statusLabel, closeReasonLabel, timeoutLabel } from './ui.js';
 
 function detachGridContainer(container) {
@@ -25,7 +27,7 @@ function bindStatusTabs(tabs, key, intent, signal) {
 
 function populateLibraries(select, organizations, scope) {
   select.replaceChildren(element('option', { value: 'all', text: 'All libraries' }));
-  for (const organization of organizations || []) {
+  for (const organization of byDisplayLabel(organizations)) {
     select.append(element('option', { value: organization.id, text: organization.name }));
   }
   select.value = scope;
@@ -35,11 +37,11 @@ function affectsProjection(scope, loadedScope) {
   return scope === 'system' || String(scope) === '1' || loadedScope === 'all' || String(scope) === loadedScope;
 }
 
-function focusPort({ grid, label, fallback, sessionIdentity, getContext, copy }) {
+function focusPort({ grid, label, fallback, sessionIdentity, getContext, copy, selector = '.grid-open' }) {
   const owner = sessionIdentity.preferences();
   const context = getContext();
   return { root: grid, fallback,
-    target: () => [...grid().querySelectorAll('.grid-open')].find(button => button.getAttribute('aria-label') === label),
+    target: () => [...grid().querySelectorAll(selector)].find(button => button.getAttribute('aria-label') === label),
     isCurrent: () => sessionIdentity.isCurrent(owner) && getContext().activeView === context.activeView &&
       getContext().scope === context.scope && (copy ? getContext().additionalCopyStatus === context.additionalCopyStatus : getContext().status === context.status)
   };
@@ -47,6 +49,7 @@ function focusPort({ grid, label, fallback, sessionIdentity, getContext, copy })
 
 export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   onOpen, onScopeIntent, onStatusIntent, onScopeAccepted, onLibraries, onRefreshed, onRendered,
+  onNewSuggestion = null,
   resolveScope = () => getContext().scope,
   request = authorizedJson }) {
   const dom = {
@@ -98,7 +101,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     const load = reads.begin('queue');
     const sequence = ++state.sequence;
     dom.refresh.disabled = true;
-    if (!options.silent) announce('Loading authorized requests...');
+    const clearLoading = !options.silent ? announce('Loading authorized requests...') : null;
     try {
       const resolution = resolveScope(owner);
       const acceptedScope = typeof resolution === 'string' ? resolution : await resolution;
@@ -112,13 +115,13 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       acceptingScope = true;
       try { onScopeAccepted(result.scope); } finally { acceptingScope = false; }
       acceptResult(result, sequence);
-      if (!options.silent) announce(`${state.requests.length} authorized requests loaded.`);
       return true;
     } catch (error) {
       if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) &&
           !options.silent && !isAbortError(error) && error.status !== 401) announce(error.message || 'Requests could not be loaded.', 'error');
       return false;
     } finally {
+      if (typeof clearLoading === 'function') clearLoading();
       if (!disposed && load.isCurrent()) dom.refresh.disabled = false;
       reads.finish('queue', load.token);
     }
@@ -220,14 +223,16 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     const field = (label, value, width = '130px') => ({ label, value, width });
     const title = field('Title', request => request.title, '220px');
     const bib = field('BIB ID', request => request.bibid || '—');
+    bib.kind = 'bib';
     const format = field('Format', request => request.formatLabel || request.format || '—');
     const library = field('Library', request => request.libraryOrgName, '150px');
     const patron = field('Patron', request => [request.nameLast, request.nameFirst].filter(Boolean).join(', ') || request.barcode, '150px');
+    patron.kind = 'patron';
     const claim = field('Claim', request => request.claimedByDisplayName || 'Unclaimed', '145px');
     claim.kind = 'claim';
     const notes = field('Notes', request => request.notes?.trim() ? 'Present' : '—', '85px');
     const tags = field('Tags', request => request.workflowTags?.join(', ') || 'None', '145px');
-    const open = field('Open', request => request.id, '85px');
+    const open = field('Open', request => request.id, '160px');
     open.kind = 'open';
     const automation = label => field(label, workflowLabel, '145px');
     switch (getContext().status) {
@@ -281,6 +286,14 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       state.gridStatus = getContext().status;
       state.grid = new window.gridjs.Grid({
         columns: definitions.map((column, index) => {
+          if (column.kind === 'bib' || column.kind === 'patron') return {
+            name: column.label, width: column.width,
+            formatter: (cell, row) => {
+              const request = state.requests.find(item => item.id === row.cells.at(-1).data);
+              const url = researchRecordUrl(request?.research, column.kind, request?.bibid);
+              return url ? window.gridjs.h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, String(cell)) : cell;
+            }
+          };
           if (column.kind === 'claim') return {
             name: column.label, width: column.width,
             formatter: (cell, row) => {
@@ -291,14 +304,28 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
           };
           if (column.kind === 'open') return {
             name: column.label, width: column.width, sort: false,
-            formatter: id => window.gridjs.h('button', {
+            formatter: id => {
+              const request = state.requests.find(item => item.id === id);
+              const live = event => sessionIdentity.isCurrent(owner) && !disposed && !state.stale &&
+                getContext().activeView === 'queue' && event.currentTarget.isConnected && dom.grid.contains(event.currentTarget);
+              const open = window.gridjs.h('button', {
               type: 'button', className: 'grid-open', 'aria-label': `Open request ${id}`,
               onClick: event => {
-                if (sessionIdentity.isCurrent(owner) && !disposed && getContext().activeView === 'queue' && event.currentTarget.isConnected && dom.grid.contains(event.currentTarget)) {
+                if (live(event)) {
                   onOpen(String(id), event.currentTarget);
                 }
               }
-            }, [window.gridjs.h('i', { className: 'fa fa-chevron-right', 'aria-hidden': 'true' }), 'Open'])
+              }, [window.gridjs.h('i', { className: 'fa fa-chevron-right', 'aria-hidden': 'true' }), 'Open']);
+              const barcode = typeof request?.barcode === 'string' ? request.barcode.trim() : '';
+              if (!barcode || !onNewSuggestion) return open;
+              return window.gridjs.h('div', {}, [open, window.gridjs.h('button', {
+                type: 'button', className: 'grid-new-suggestion', 'aria-label': `New suggestion for patron ${barcode} from request ${id}`,
+                title: 'New suggestion for this patron',
+                onClick: event => {
+                  if (live(event)) onNewSuggestion(barcode, event.currentTarget, String(id));
+                }
+              }, [window.gridjs.h('i', { className: 'fa fa-plus', 'aria-hidden': 'true' }), 'New suggestion'])]);
+            }
           };
           return { name: column.label, width: column.width };
         }),
@@ -325,6 +352,12 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     isReady: context => !state.stale && state.loadedContext?.scope === context.scope && state.loadedContext?.status === context.status,
     find: id => state.requests.find(item => item.id === id), sequence: () => state.sequence,
     libraryScope: scopeForLibraryOrAll,
+    quickCreateFocusReturn: id => {
+      const request = state.requests.find(item => item.id === id);
+      return focusPort({ grid: () => dom.grid,
+        label: `New suggestion for patron ${request?.barcode?.trim() || ''} from request ${id}`,
+        selector: '.grid-new-suggestion', fallback: dom.refresh, sessionIdentity, getContext, copy: false });
+    },
     libraries: () => [...dom.scope.options].filter(option => option.value !== 'all')
       .map(option => Object.freeze({ id: option.value, name: option.textContent })),
     focusReturn: (id, fallback) => focusPort({ grid: () => dom.grid, label: `Open request ${id}`, fallback, sessionIdentity, getContext }),
@@ -403,7 +436,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
     const evidence = recovery.begin();
     dom.additionalCopyRefresh.disabled = true;
     if (wasReviewReady) renderAdditionalCopyGrid();
-    if (!options.silent) announce('Loading authorized additional-copy tasks...');
+    const clearLoading = !options.silent ? announce('Loading authorized additional-copy tasks...') : null;
     try {
       const resolution = resolveScope(owner);
       const acceptedScope = typeof resolution === 'string' ? resolution : await resolution;
@@ -417,14 +450,14 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
       acceptingScope = true;
       try { onScopeAccepted(result.scope); } finally { acceptingScope = false; }
       const reviewReady = acceptResult(result, evidence);
-      if (!options.silent) announce(reviewReady ? 'Open additional-copy tasks loaded. Review the matching tasks and acknowledge the review before trying again.'
-        : `${state.additionalCopies.length} authorized additional-copy tasks loaded.`);
+      if (!options.silent && reviewReady) announce('Open additional-copy tasks loaded. Review the matching tasks and acknowledge the review before trying again.');
       return true;
     } catch (error) {
       if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) &&
           !options.silent && !isAbortError(error) && error.status !== 401) announce(error.message || 'Additional-copy tasks could not be loaded.', 'error');
       return false;
     } finally {
+      if (typeof clearLoading === 'function') clearLoading();
       if (!disposed && load.isCurrent()) dom.additionalCopyRefresh.disabled = false;
       reads.finish('queue', load.token);
     }
@@ -530,7 +563,11 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
         columns: [
           { name: 'Title', width: '220px' },
           { name: 'Author', width: '155px' },
-          { name: 'BIB ID', width: '140px' },
+          { name: 'BIB ID', width: '140px', formatter: (cell, row) => {
+            const request = state.additionalCopies.find(item => item.id === row.cells[10].data);
+            const url = researchRecordUrl(request?.research, 'bib', request?.bibid);
+            return url ? window.gridjs.h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, String(cell)) : cell;
+          } },
           { name: 'Library', width: '145px' },
           { name: 'Format', width: '125px' },
           { name: 'Created by', width: '145px' },

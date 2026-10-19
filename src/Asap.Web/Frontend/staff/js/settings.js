@@ -4,6 +4,9 @@ import { createDraftScope } from './draft-scope.js';
 import { createSettingsDomainEditors } from './settings-domains.js';
 import { actorKey } from './session-identity.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
+import { createEmailTemplatePlaceholders } from './email-template-placeholders.js';
+import { createEmailTestController } from './email-test.js';
+import { byDisplayLabel } from './display-order.js';
 
 const WORKFLOW_FIELDS = [
   ['suggestionLimit', 'suggestion-limit', 'number'],
@@ -259,7 +262,8 @@ export function createSettingsController({
   onOrganizationCatalogCommitted = () => {},
   refreshCurrentStaff = async () => true,
   onRefreshed = () => {},
-  onUnconfirmed = () => {}
+  onUnconfirmed = () => {},
+  onEmailTestOperations = () => {}
 }) {
   const dom = {
     contextSummary: root.querySelector('#settings-context-summary'),
@@ -329,19 +333,25 @@ export function createSettingsController({
     baselineTemplates: new Map(),
     baselineOverrides: new Map(),
     pendingDeletedFormats: [],
-    templateSelection: null,
     savedRejectionTemplateId: '',
     awaitingReload: false,
     awaitingReloadMutation: null,
     outcomeUncertain: false,
     unconfirmedMutation: null,
     saving: false,
+    loading: false,
     pendingMutation: null,
     visible: false,
     bound: false
   };
   const reads = createLatestLoad(), events = new window.AbortController();
   let disposed = false, contextGeneration = 0, drafts = createDraftScope(), scopePreparation = null;
+  const emailTest = createEmailTestController({ root: root.querySelector('#settings-email-test'),
+    context: () => ({ ownerKey: actorKey(state.staff), version: state.data?.version,
+      organizationId: organizationId(), active: state.visible && state.activePanel === 'smtp' && !disposed,
+      ready: Boolean(state.data && String(state.data.orgId) === String(state.scope) && !state.awaitingReload && !state.loading),
+      dirty: isDirty(), blocked: Boolean(state.pendingMutation || state.saving || state.outcomeUncertain || state.awaitingReload) }),
+    onOperations: onEmailTestOperations });
   let settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
   let staffCreateDraft = null;
   let polarisTest = null;
@@ -352,6 +362,7 @@ export function createSettingsController({
   let logoDraftUrl = null;
   let logoPreviewGeneration = 0;
   let copyGeneration = 0;
+  let notificationGeneration = 0, staffStatusGeneration = 0;
 
   function releaseLogoDraft() {
     if (logoDraftUrl) URL.revokeObjectURL(logoDraftUrl);
@@ -455,49 +466,12 @@ export function createSettingsController({
     }
   });
 
-  function isTemplateTextEditor(control) {
-    return Boolean(control?.matches) && !control.disabled &&
-      (control.matches('#settings-template-editor input[type="text"], #settings-template-editor textarea') ||
-       control.matches('#email-templates-editor .template-subject, #email-templates-editor .template-body'));
-  }
-
-  function rememberTemplateSelection(control) {
-    if (!isTemplateTextEditor(control)) return;
-    state.templateSelection = {
-      control,
-      start: control.selectionStart ?? control.value.length,
-      end: control.selectionEnd ?? control.value.length
-    };
-  }
-
-  function insertPlaceholder(key) {
-    const selection = state.templateSelection;
-    const status = document.getElementById('template-placeholder-status');
-    if (!selection?.control?.isConnected || !isTemplateTextEditor(selection.control)) {
-      status.textContent = 'Select a template Subject or Body field first.';
-      return;
-    }
-    const token = `{{${key}}}`;
-    selection.control.setRangeText(token, selection.start, selection.end, 'end');
-    selection.control.dispatchEvent(new window.Event('input', { bubbles: true }));
-    selection.control.focus();
-    rememberTemplateSelection(selection.control);
-    updateDirtyState();
-    status.textContent = `${token} inserted.`;
-  }
-
-  function renderPlaceholderHelp(data) {
-    const list = document.getElementById('template-placeholder-list');
-    list.replaceChildren();
-    for (const key of Array.isArray(data.templatePlaceholders) ? data.templatePlaceholders : []) {
-      if (typeof key !== 'string' || !/^\w+$/.test(key)) continue;
-      const button = node('button', { type: 'button', className: 'secondary-button', text: `{{${key}}}` });
-      listen(button, 'click', () => insertPlaceholder(key));
-      list.append(button);
-    }
-    state.templateSelection = null;
-    document.getElementById('template-placeholder-status').textContent = '';
-  }
+  const placeholders = createEmailTemplatePlaceholders({
+    root, panel: root.querySelector('#settings-templates'), listen,
+    captureContext: captureSettingsContext, isContextCurrent: isSettingsContextCurrent,
+    isActive: () => state.visible && state.activePanel === 'templates' && !state.pendingMutation &&
+      !state.awaitingReload && !state.outcomeUncertain
+  });
 
   function isSystem() {
     return state.scope === 'system';
@@ -581,6 +555,9 @@ export function createSettingsController({
   }
 
   function cancelSettingsOperations() {
+    emailTest.invalidate();
+    state.loading = false;
+    placeholders.clear();
     scopePreparation = null;
     cancelPolarisTest();
     dom.syncOrganizations.disabled = false;
@@ -698,7 +675,7 @@ export function createSettingsController({
     const organizations = staffScope
       ? state.organizations.filter(item => isLibraryOrganization(item) && String(item.id) === String(staffScope))
       : state.organizations.filter(isLibraryOrganization);
-    return organizations.map(item => ({
+    return byDisplayLabel(organizations, item => item.name || `Library ${item.id}`).map(item => ({
       value: String(item.id),
       label: item.name || `Library ${item.id}`
     }));
@@ -739,14 +716,29 @@ export function createSettingsController({
 
   function setStaffStatus(message, kind = '') {
     if (!dom.staffStatus) return;
+    const generation = ++staffStatusGeneration;
     dom.staffStatus.textContent = message || '';
     dom.staffStatus.className = `settings-result${kind ? ` ${kind}` : ''}`;
+    return () => {
+      if (staffStatusGeneration === generation) {
+        dom.staffStatus.textContent = '';
+        dom.staffStatus.className = 'settings-result';
+      }
+    };
   }
 
   function notify(message, kind = '') {
+    const generation = ++notificationGeneration;
     dom.message.textContent = message || '';
     dom.message.className = `settings-message${kind ? ` ${kind}` : ''}`;
-    announce(message || '', kind);
+    const clearAnnouncement = announce(message || '', kind);
+    return () => {
+      if (notificationGeneration === generation) {
+        dom.message.textContent = '';
+        dom.message.className = 'settings-message';
+      }
+      if (typeof clearAnnouncement === 'function') clearAnnouncement();
+    };
   }
 
   function hasSettingsDraft() {
@@ -800,6 +792,7 @@ export function createSettingsController({
       : 'Everything in this settings context is saved.';
     dom.reset.hidden = isSystem();
     dom.reset.disabled = state.awaitingReload || Boolean(state.pendingMutation);
+    emailTest.sync();
   }
 
   function draftChanged() { drafts.touch(); updateDirtyState(); }
@@ -879,6 +872,26 @@ export function createSettingsController({
     }
     for (const fieldset of root.querySelectorAll('fieldset[data-system-only="true"]')) {
       fieldset.disabled = !system;
+      const legend = fieldset.querySelector('legend');
+      if (legend && !legend.querySelector('.settings-scope-badge')) {
+        legend.append(node('span', { className: 'settings-scope-badge', text: 'System only' }));
+      }
+      let explanation = fieldset.previousElementSibling;
+      if (!explanation?.classList.contains('settings-scope-explanation')) {
+        explanation = node('p', { className: 'settings-callout settings-scope-explanation' });
+        fieldset.before(explanation);
+      }
+      explanation.hidden = system;
+      explanation.textContent = `System-level setting: ${legend?.firstChild?.textContent.trim() || 'These settings'} applies to all libraries and cannot be changed for ${state.data?.organization?.name || 'this library'}. ` +
+        (state.staff?.role === 'super_admin' ? 'Use Switch to System level above to edit it.' : 'These settings are managed centrally.');
+    }
+    for (const button of dom.nav.filter(button => button.dataset.settingsSystemOnly === 'true')) {
+      let badge = button.querySelector('.settings-scope-badge');
+      if (!badge) {
+        badge = node('span', { className: 'settings-scope-badge', text: 'System only' });
+        button.append(badge);
+      }
+      badge.hidden = system;
     }
   }
 
@@ -935,6 +948,8 @@ export function createSettingsController({
       });
       const fieldset = root.querySelector(`[data-template-key="${key}"]`);
       fieldset.querySelector('.settings-template-override-control')?.remove();
+      document.getElementById(subjectId).disabled = false;
+      document.getElementById(bodyId).disabled = false;
       if (!isSystem()) {
         const systemRow = findTemplate(systemRows, key);
         const libraryRow = libraryRows.find(row =>
@@ -1013,7 +1028,7 @@ export function createSettingsController({
 
   function populateParticipation() {
     dom.enabledLibraries.replaceChildren();
-    const libraries = state.organizations.filter(isLibraryOrganization);
+    const libraries = byDisplayLabel(state.organizations.filter(isLibraryOrganization));
     if (libraries.length === 0) {
       dom.enabledLibraries.append(node('p', { className: 'settings-empty', text: 'No synced library organizations.' }));
       return;
@@ -1038,7 +1053,7 @@ export function createSettingsController({
       dom.organizations.append(node('li', { className: 'settings-empty', text: 'No organizations are available.' }));
       return;
     }
-    for (const organization of state.organizations) {
+    for (const organization of byDisplayLabel(state.organizations, item => `${item.name}${item.abbreviation ? ` (${item.abbreviation})` : ''}`)) {
       const isLibrary = isLibraryOrganization(organization);
       const active = isLibrary && Boolean(organization.isActive);
       const item = node('li', { className: 'settings-list-row' }, [
@@ -1105,7 +1120,7 @@ export function createSettingsController({
       return;
     }
 
-    for (const user of state.staffUsers) {
+    for (const user of byDisplayLabel(state.staffUsers, staffUserDisplay)) {
       const id = stringValue(property(user, 'id'));
       const version = stringValue(property(user, 'version'));
       const active = property(user, 'active') !== false;
@@ -1279,7 +1294,7 @@ export function createSettingsController({
     renderPublicLinks(data);
     writeControl(document.getElementById('branding-alt'), property(effective, 'logoAltText'));
     setTemplates(data);
-    renderPlaceholderHelp(data);
+    placeholders.populate(data.templatePlaceholders);
     setRejectionTemplateOptions(data, workflow);
 
     state.baselineOverrides.clear();
@@ -1288,6 +1303,10 @@ export function createSettingsController({
     }
     configureScopedFields();
     dom.systemContext.hidden = isSystem();
+    root.querySelector('#settings-library-context-title').textContent = `Editing ${data.organization?.name || 'this library'} settings`;
+    root.querySelector('#settings-library-context-guidance').textContent =
+      'Library-specific settings can be changed here. Settings marked System only apply to every library and can only be changed at System level.' +
+      (state.staff?.role === 'super_admin' ? '' : ' System-only settings are managed centrally.');
     dom.switchSystem.hidden = state.staff?.role !== 'super_admin';
     dom.clearLogo.textContent = isSystem() ? 'Clear system image' : 'Clear image (use inherited image)';
     renderBrandingPreview();
@@ -1309,13 +1328,16 @@ export function createSettingsController({
     if (disposed || !state.staff || state.staff.role === 'staff') return;
     if (state.pendingMutation && state.pendingMutation !== options.owner) return false;
     const context = captureSettingsContext();
+    state.loading = true;
+    emailTest.invalidate();
+    placeholders.clear();
     const snapshot = snapshotDrafts();
     const loadState = reads.begin('administration-settings');
     state.organizationsReady = false;
     state.baselineParticipationIds = null;
     updateDirtyState();
     dom.refresh.disabled = true;
-    if (!options.silent) notify('Loading settings...');
+    const clearLoading = !options.silent ? notify('Loading settings...') : null;
     try {
       const [settingsResponse, organizationsResponse, patronCodesResponse] = await Promise.all([
         authorizedJson(`/api/asap/staff/settings?orgId=${currentScopeForRequest()}`, { signal: loadState.signal }),
@@ -1364,7 +1386,6 @@ export function createSettingsController({
           return false;
         }
       } else if (state.activePanel === 'staff') void loadStaffAccess({ silent: true });
-      if (!options.silent && loadState.isCurrent() && isSettingsContextCurrent(context)) notify('Settings loaded.');
       return true;
     } catch (error) {
       if (loadState.isCurrent() && isSettingsContextCurrent(context) && state.visible && !isAbortError(error) && error.status !== 401) {
@@ -1374,7 +1395,10 @@ export function createSettingsController({
       }
       return false;
     } finally {
-      if (loadState.isCurrent() && isSettingsContextCurrent(context)) dom.refresh.disabled = false;
+      clearLoading?.();
+      if (loadState.isCurrent() && isSettingsContextCurrent(context)) {
+        state.loading = false; dom.refresh.disabled = false; emailTest.sync();
+      }
       reads.finish('administration-settings', loadState.token);
     }
   }
@@ -1397,7 +1421,7 @@ export function createSettingsController({
     if (hasStaffDraft() && !options.discard) return false;
     const snapshot = snapshotDrafts();
     const loadState = beginSettingsOperation('administration-staff-access');
-    if (!options.silent) setStaffStatus(`Loading staff access for ${scopedStaffLabel()}...`);
+    const clearLoading = !options.silent ? setStaffStatus(`Loading staff access for ${scopedStaffLabel()}...`) : null;
     if (dom.staffRefresh) dom.staffRefresh.disabled = true;
     if (dom.staffAuditRefresh) dom.staffAuditRefresh.disabled = true;
     try {
@@ -1432,7 +1456,6 @@ export function createSettingsController({
       updateDirtyState();
       onRefreshed(loadState.context.owner, { kind: 'staff', scope: loadState.context.scope,
         changed: review?.slot === 'administration-staff-mutation' });
-      if (!options.silent) setStaffStatus(`Staff access loaded for ${scopedStaffLabel()}.`, 'success');
       return true;
     } catch (error) {
       if (isSettingsOperationCurrent(loadState) && !isAbortError(error) && error.status !== 401) {
@@ -1440,6 +1463,7 @@ export function createSettingsController({
       }
       return false;
     } finally {
+      clearLoading?.();
       if (isSettingsOperationCurrent(loadState)) {
         if (dom.staffRefresh) dom.staffRefresh.disabled = false;
         if (dom.staffAuditRefresh) dom.staffAuditRefresh.disabled = false;
@@ -2128,6 +2152,7 @@ export function createSettingsController({
   function activatePanel(name, updateUrl = false) {
     if (disposed || !dom.nav.some(button => button.dataset.settingsPanel === name) ||
         !state.staff || state.staff.role === 'staff') return false;
+    if (name !== state.activePanel) placeholders.clear();
     state.activePanel = name;
     for (const button of dom.nav) {
       const active = button.dataset.settingsPanel === name;
@@ -2139,6 +2164,7 @@ export function createSettingsController({
     const panel = dom.panels.find(item => item.dataset.settingsPanelContent === name);
     panel?.focus({ preventScroll: true });
     if (name === 'staff') void loadStaffAccess();
+    emailTest.sync();
     if (updateUrl) onPanelChange?.(name);
     return true;
   }
@@ -2156,7 +2182,7 @@ export function createSettingsController({
         text: staffLibrary?.name || `Library ${staffScope}`
       }));
     } else {
-      for (const organization of state.organizations.filter(isLibraryOrganization)) {
+      for (const organization of byDisplayLabel(state.organizations.filter(isLibraryOrganization))) {
         dom.scope.append(node('option', { value: String(organization.id), text: organization.name }));
       }
     }
@@ -2184,6 +2210,7 @@ export function createSettingsController({
       dom.staffRole.value = 'staff'; dom.staffOrganization.value = '';
     }
     state.staff = staff;
+    emailTest.sync();
     tab.hidden = !staff || staff.role === 'staff';
     if (!replaced) return;
     if (staff?.role === 'super_admin') {
@@ -2232,10 +2259,6 @@ export function createSettingsController({
     listen(dom.form, 'submit', saveSettings);
     listen(dom.form, 'input', draftChanged);
     listen(dom.form, 'change', draftChanged);
-    const templatesPanel = document.getElementById('settings-templates');
-    for (const eventName of ['focusin', 'select', 'keyup', 'mouseup']) {
-      listen(templatesPanel, eventName, event => rememberTemplateSelection(event.target));
-    }
     listen(dom.scope, 'change', changeScope);
     listen(dom.switchSystem, 'click', async () => {
       if (state.staff?.role !== 'super_admin') return;
@@ -2352,6 +2375,8 @@ export function createSettingsController({
     if (disposed) return false;
     if (state.pendingMutation || state.outcomeUncertain) return false;
     state.visible = false;
+    emailTest.invalidate();
+    placeholders.clear();
     cancelPolarisTest();
     releaseLogoDraft();
     dom.logo.value = '';
@@ -2372,7 +2397,7 @@ export function createSettingsController({
   }
 
   return {
-    dispose() { if (disposed) return; cancelSettingsOperations(); releaseLogoDraft(); disposed = true; events.abort(); drafts.dispose(); domainEditors.dispose(); },
+    dispose() { if (disposed) return; cancelSettingsOperations(); emailTest.dispose(); releaseLogoDraft(); disposed = true; events.abort(); drafts.dispose(); domainEditors.dispose(); },
     bind,
     setStaff,
     signedOut,

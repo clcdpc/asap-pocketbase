@@ -42,14 +42,16 @@ export function selectedStaffBibId(selection, requestId, bibId) {
 
 export function researchUrl(template, values, requiredToken = '') {
   const pattern = String(template || '').trim();
-  if (!pattern || (requiredToken && !pattern.includes(`{{${requiredToken}}}`))) return '';
+  if (!/^https?:\/\/[^/\\\s?#]/i.test(pattern) || pattern.includes('\\') || /[\u0000-\u001f\u007f-\u009f]/.test(pattern) ||
+      (requiredToken && !pattern.includes(`{{${requiredToken}}}`))) return '';
   let invalid = false;
   const result = pattern.replace(/\{\{([^{}]+)\}\}/g, (_, token) => {
-    if (!supportedTokens.has(token) || !values[token]) {
+    const value = String(values[token] ?? '').trim();
+    if (!supportedTokens.has(token) || !value) {
       invalid = true;
       return '';
     }
-    return encodeURIComponent(String(values[token]).trim());
+    return encodeURIComponent(value);
   });
   if (invalid || /\{\{|\}\}/.test(result)) return '';
   try {
@@ -70,6 +72,23 @@ function node(tag, attributes = {}, children = []) {
   }
   for (const child of children) result.append(child);
   return result;
+}
+
+export function researchRecordUrl(research, kind, bibId = null) {
+  if (kind === 'bib') {
+    const id = positivePolarisId(bibId);
+    return id ? researchUrl(research?.leapBibUrlPattern, { bibid: id }, 'bibid') : '';
+  }
+  const id = positivePolarisId(research?.patronId), pattern = research?.leapPatronUrlPattern;
+  if (!id || !(pattern?.includes('{{patron-id}}') || pattern?.includes('{{patronId}}'))) return '';
+  return researchUrl(pattern, { 'patron-id': id, patronId: id });
+}
+
+export function researchRecordValue(value, research, kind, bibId = null) {
+  const label = String(value ?? '').trim() || 'Not recorded';
+  const url = researchRecordUrl(research, kind, bibId);
+  return url ? node('a', { href: url, target: '_blank', rel: 'noopener noreferrer', text: label })
+    : node('span', { text: label });
 }
 
 export function renderResearchLinks(container, request, research, draft = {}) {

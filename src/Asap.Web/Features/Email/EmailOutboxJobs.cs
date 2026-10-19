@@ -37,7 +37,10 @@ internal sealed record ClaimedEmail(
     int AttemptCount,
     DateTime DeadlineStartedUtc,
     Guid LeaseId,
-    byte[] RowVersion);
+    byte[] RowVersion,
+    string? TestConfigurationVersion,
+    string? IntendedDeliveryMode,
+    string? AttemptDeliveryMode);
 
 public sealed class EmailOutboxJobs(
     ExternalConfiguration configuration,
@@ -102,6 +105,13 @@ public sealed class EmailOutboxJobs(
             await FailNotConfiguredAsync(claim);
             return;
         }
+        if (claim.IntendedDeliveryMode is not null &&
+            (!readiness.IsLiveDelivery || readiness.DeliveryMode != claim.IntendedDeliveryMode))
+        {
+            await SuppressAsync(claim, "test_delivery_mode_changed", cancellationToken);
+            return;
+        }
+        claim = claim with { AttemptDeliveryMode = readiness.DeliveryMode };
 
         if (timeProvider.GetUtcNow().UtcDateTime - claim.DeadlineStartedUtc > runtimeOptions.ProviderStartDeadline)
         {
@@ -135,7 +145,11 @@ public sealed class EmailOutboxJobs(
                     claim.FromName,
                     claim.Subject,
                     claim.BodyText,
-                    claim.BodyHtml),
+                    claim.BodyHtml)
+                {
+                    TestConfigurationVersion = claim.TestConfigurationVersion,
+                    IntendedDeliveryMode = claim.IntendedDeliveryMode
+                },
                 timeout.Token);
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
@@ -166,12 +180,19 @@ public sealed class EmailOutboxJobs(
             await FailNotConfiguredAsync(claim);
             return;
         }
+        if (result.Outcome == EmailSendOutcome.ConfigurationChanged)
+        {
+            await SuppressAsync(claim, "test_configuration_changed", CancellationToken.None);
+            return;
+        }
         if (string.IsNullOrWhiteSpace(result.ProviderMessageId))
         {
             throw new InvalidOperationException("A successful email transport result requires a provider message ID.");
         }
 
-        await CompleteAsync(claim, result.ProviderMessageId);
+        var actualMode = result.DeliveryMode ??
+            (result.ProviderMessageId.StartsWith("file:", StringComparison.Ordinal) ? "file" : claim.AttemptDeliveryMode);
+        await CompleteAsync(claim with { AttemptDeliveryMode = actualMode }, result.ProviderMessageId);
     }
 
     [AutomaticRetry(Attempts = 0)]
@@ -285,7 +306,8 @@ public sealed class EmailOutboxJobs(
                 inserted.[ToAddress], inserted.[FromAddress], inserted.[FromName],
                 inserted.[Subject], inserted.[BodyText], inserted.[BodyHtml],
                 inserted.[AttemptCount], inserted.[LeaseId],
-                inserted.[RowVersion]
+                inserted.[RowVersion], inserted.[TestConfigurationVersion],
+                inserted.[IntendedDeliveryMode], inserted.[AttemptDeliveryMode]
             WHERE [Id] = @id
               AND [Status] = N'pending'
               AND ([NextAttemptUtc] IS NULL OR [NextAttemptUtc] <= @now);
@@ -319,7 +341,7 @@ public sealed class EmailOutboxJobs(
                     reader.GetInt32(14),
                     now,
                     reader.GetGuid(15),
-                    (byte[])reader[16]);
+                    (byte[])reader[16], NullableString(reader, 17), NullableString(reader, 18), NullableString(reader, 19));
             }
         }
 
@@ -412,6 +434,7 @@ public sealed class EmailOutboxJobs(
             UPDATE [asap].[EmailOutbox]
             SET [Status] = N'sent',
                 [ProviderMessageId] = @detail,
+                [AttemptDeliveryMode] = @attemptMode,
                 [SentUtc] = @now,
                 [NextAttemptUtc] = NULL,
                 [SendingStartedUtc] = NULL,
@@ -575,6 +598,17 @@ public sealed class EmailOutboxJobs(
             IsolationLevel.ReadCommitted,
             cancellationToken);
 
+        if (claim.TestConfigurationVersion is not null)
+        {
+            var current = await EmailTestConfiguration.ReadLockedAsync(connection, transaction, claim.OrganizationId, cancellationToken);
+            if (!string.Equals(current.Version, claim.TestConfigurationVersion, StringComparison.Ordinal))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                await SuppressAsync(claim, "test_configuration_changed", cancellationToken);
+                return null;
+            }
+        }
+
         if (claim.DeliveryClass == "staff_authorization_sensitive" &&
             !await IsCurrentSensitiveRecipientAuthorizedAtIntentAsync(connection, transaction, claim, cancellationToken))
         {
@@ -597,7 +631,8 @@ public sealed class EmailOutboxJobs(
             """
             UPDATE [asap].[EmailOutbox]
             SET [LastErrorCode] = NULL,
-                [LastErrorDetail] = NULL
+                [LastErrorDetail] = NULL,
+                [AttemptDeliveryMode] = @attemptMode
             OUTPUT inserted.[RowVersion]
             WHERE [Id] = @id AND [Status] = N'sending'
               AND [LeaseId] = @leaseId AND [RowVersion] = @rowVersion
@@ -776,6 +811,7 @@ public sealed class EmailOutboxJobs(
         command.Parameters.Add("@id", SqlDbType.BigInt).Value = claim.Id;
         command.Parameters.Add("@leaseId", SqlDbType.UniqueIdentifier).Value = claim.LeaseId;
         command.Parameters.Add("@rowVersion", SqlDbType.Timestamp, 8).Value = claim.RowVersion;
+        command.Parameters.Add("@attemptMode", SqlDbType.NVarChar, 32).Value = (object?)claim.AttemptDeliveryMode ?? DBNull.Value;
     }
 
     private static string? NullableString(SqlDataReader reader, int ordinal) =>

@@ -74,6 +74,11 @@ CREATE TABLE [asap].[EmailOutbox]
     [SentUtc] datetime2(7) NULL,
     [SuppressedUtc] datetime2(7) NULL,
     [RowVersion] rowversion NOT NULL,
+    -- Append nullable test metadata so upgrades preserve existing rowversions.
+    [TestRequestedByStaffUserId] bigint NULL,
+    [TestConfigurationVersion] varchar(64) NULL,
+    [IntendedDeliveryMode] nvarchar(32) NULL,
+    [AttemptDeliveryMode] nvarchar(32) NULL,
     CONSTRAINT [FK_EmailOutbox_Organization] FOREIGN KEY ([OrganizationId]) REFERENCES [asap].[Organization]([Id]),
     CONSTRAINT [FK_EmailOutbox_RecipientStaffUser] FOREIGN KEY ([RecipientStaffUserId]) REFERENCES [asap].[StaffUser]([Id]),
     CONSTRAINT [FK_EmailOutbox_AuthorizationOrganization] FOREIGN KEY ([AuthorizationOrganizationId]) REFERENCES [asap].[Organization]([Id]),
@@ -136,6 +141,11 @@ GO
 
 CREATE INDEX [IX_EmailOutbox_RecipientAuthorization]
     ON [asap].[EmailOutbox]([RecipientStaffUserId], [AuthorizationOrganizationId], [Status]);
+GO
+
+CREATE INDEX [IX_EmailOutbox_TestActorTime]
+    ON [asap].[EmailOutbox]([TestRequestedByStaffUserId], [CreatedUtc])
+    INCLUDE ([OrganizationId]) WHERE [TestRequestedByStaffUserId] IS NOT NULL;
 GO
 
 CREATE TABLE [asap].[EmailDeliveryEvent]

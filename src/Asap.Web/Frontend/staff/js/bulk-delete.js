@@ -1,5 +1,6 @@
 import { authorizedJson, isAbortError, loadStaffSession } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
+import { byDisplayLabel } from './display-order.js';
 import { createDraftScope } from './draft-scope.js';
 import { element, closeReasonLabel } from './ui.js';
 import { actorKey } from './session-identity.js';
@@ -77,7 +78,7 @@ export function createBulkDeleteController({ root, titleTrigger, copyTrigger, se
     if (owner.role === 'super_admin') {
       dom.scope.append(element('option', { value: '', text: 'Choose a library scope' }),
         element('option', { value: 'all', text: 'All libraries' }));
-      for (const library of getLibraries()) dom.scope.append(element('option', { value: library.id, text: library.name }));
+      for (const library of byDisplayLabel(getLibraries())) dom.scope.append(element('option', { value: library.id, text: library.name }));
     } else dom.scope.append(element('option', { value: String(owner.organizationId), text: owner.organizationName || 'My library' }));
     dom.scope.value = owner.role === 'super_admin' ? '' : String(owner.organizationId);
     resetPreview(); root.showModal();

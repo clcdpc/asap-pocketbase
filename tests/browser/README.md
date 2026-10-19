@@ -1,7 +1,7 @@
 # Browser acceptance suite
 
 `npm run test:browser` is the full browser-suite entry point. It selects the
-eight real-SQL integration cases and runs them through the same
+sixteen real-SQL integration cases and runs them through the same
 Testing Kestrel fixtures used by the .NET test suite:
 
 - `patron.cjs`: 10 desktop/mobile patron states and 3 authentication/session
@@ -21,7 +21,9 @@ Testing Kestrel fixtures used by the .NET test suite:
   effective configuration, staff authority, protected holds, additional-copy
   links and new submission/automatic claiming through HTTP and SQL.
 - `settings.cjs`: real Settings
-  GET/editor POST/reload, ownership, override metadata and lossless identity.
+  GET/editor POST/reload, ownership, override metadata and lossless identity;
+  the Campaign 2 super-admin/library-admin cases cover editable new keys,
+  collisions, placeholder focus ownership, conditional fields and scope guards.
 - `functional-acceptance.cjs`: real Settings editor to patron form to SQL,
   required/hidden/optional fields, stale Settings writes, validation failures,
   one pickup write, committed response loss, patron switching, a current
@@ -29,8 +31,24 @@ Testing Kestrel fixtures used by the .NET test suite:
   recovery and captured outbox delivery. Responses are forwarded from the
   actual server before being delayed or lost; pre-dispatch failure aborts
   the request. No fabricated JSON replaces an endpoint in this runner.
+- `operations-dto-boundary.cjs`: SQL UTC timestamps, local-time/DST rendering,
+  exact queue bigint strings and zero/null cycle states across scopes.
+- `email-defaults.cjs`: all five built-in seeds, saved text and sparse inheritance.
+- `staff-presentation.cjs`: header Profile routing and focus, lookup order,
+  quiet completed loads, heading gaps and desktop/mobile tab geometry with
+  overlay and persistent scrollbars. CSS zoom is automated reflow evidence;
+  it does not establish human browser-zoom acceptance.
+- `leap-consumers.cjs`: native-ID links in queues, details and verified patron
+  context, safe plain-text fallbacks and a separate malformed-response probe.
+- `saved-email-test.cjs`: saved sender/recipient/mode context, draft guards,
+  one click through the normal automatic worker and recording Postmark adapter,
+  durable status/reference reload and scoped Operations handoff. No live mail.
+- `staff-workflow-completion.cjs`: queue/detail quick-create, barcode-only
+  authoritative verification, explicit All scope, live pickup context and real
+  HTTP/SQL creation with deterministic provider boundaries.
 
-The eight selected cases are named explicitly in `run.cjs`; several own more
+The fifteen selected methods are named explicitly in `run.cjs`; the two Settings
+role DataRows make sixteen discovered cases. Several methods own more
 than one Node runner. Other .NET cases also contain embedded browser checks.
 Counts refer to discovered .NET cases, not scanned states or assertions.
 

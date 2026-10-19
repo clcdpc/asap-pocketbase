@@ -428,9 +428,252 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   report.libraryOverrideMetadataRoundTrip = true;
 }
 
+async function runCampaign2Editor(page, axeSource, args, report, saveSettings, ready) {
+  const library = args.scopeId;
+  const read = scope => page.evaluate(async scope => {
+    const response = await fetch(`/api/asap/staff/settings?orgId=${encodeURIComponent(scope)}`);
+    if (!response.ok) throw new Error(`Settings GET ${response.status}`);
+    return response.json();
+  }, scope);
+  const reload = async scope => {
+    const discardDraft = dialog => dialog.accept();
+    page.on('dialog', discardDraft);
+    try { await page.reload({ waitUntil: 'networkidle' }); }
+    finally { page.off('dialog', discardDraft); }
+    await ready(scope);
+  };
+  const switchScope = async scope => {
+    await page.locator('#settings-scope').selectOption(scope);
+    await page.waitForFunction(scope => document.getElementById('settings-scope').value === scope &&
+      document.getElementById('settings-version').value && !document.getElementById('settings-form').inert, scope);
+    await page.waitForLoadState('networkidle');
+    await ready(scope);
+  };
+  // Value is a DOM property, so persisted and newly edited keys are found by
+  // their actual current values rather than an original value attribute.
+  const rowIndex = key => page.locator('#email-templates-editor [data-domain-row]').evaluateAll((rows, key) =>
+    rows.findIndex(row => row.querySelector('.template-key').value === key), key);
+  const row = async key => page.locator('#email-templates-editor [data-domain-row]').nth(await rowIndex(key));
+  const titleButton = () => page.locator('[data-placeholder-key="title"]');
+  const selectRange = async (control, start, end = start) => {
+    await control.focus();
+    await control.evaluate((element, range) => {
+      element.setSelectionRange(range.start, range.end);
+      element.dispatchEvent(new Event('select', { bubbles: true }));
+    }, { start, end });
+  };
+  const assertLibraryContext = async () => {
+    assert.match(await page.locator('#settings-system-context').textContent(), /Campaign 2 library/);
+    assert.match(await page.locator('#settings-system-context').textContent(), /apply to every library/);
+    assert.equal(await page.locator('#settings-nav-polaris .settings-scope-badge').isVisible(), true);
+    await page.locator('#settings-nav-polaris').click();
+    assert.match(await page.locator('#settings-polaris .settings-scope-explanation').first().textContent(), /Campaign 2 library/);
+    assert.equal(await page.locator('#polaris-host').isDisabled(), true);
+    await page.locator('#settings-nav-smtp').click();
+    assert.equal(await page.locator('#email-postmark-token').isDisabled(), true);
+    assert.equal(await page.locator('#email-clear-postmark-token').isDisabled(), true);
+    assert.equal(await page.locator('[data-setting-key="postmarkToken"] .settings-override-toggle').count(), 0);
+    assert.equal(await page.locator('#settings-nav-smtp .settings-scope-badge').count(), 0);
+  };
+
+  if (args.mode === 'campaign2-library-admin') {
+    await assertLibraryContext();
+    assert.equal(await page.locator('#settings-switch-system').isVisible(), false);
+    assert.equal(await page.locator('#settings-scope-field').isVisible(), false);
+    await page.locator('#settings-nav-templates').click();
+    const inherited = await row('rejection:template_1');
+    assert.equal(await inherited.locator('.template-subject').isDisabled(), true);
+    await inherited.locator('.settings-template-override').check();
+    await inherited.locator('.template-body').fill('Library admin {{title}}');
+    const payload = await saveSettings();
+    assert.equal(Object.hasOwn(payload.email, 'postmarkToken'), false);
+    assert.equal(Object.hasOwn(payload.email, 'clearPostmarkToken'), false);
+    await reload(library);
+    await page.locator('#settings-nav-templates').click();
+    assert.equal(await (await row('rejection:template_1')).locator('.template-body').inputValue(), 'Library admin {{title}}');
+    report.campaign2LibraryAdmin = true;
+  } else {
+    await page.locator('#settings-nav-templates').click();
+    const initial = await read('system');
+    const patronKeys = ['name', 'title', 'author', 'format', 'barcode', 'firstName', 'lastName'];
+    assert.deepEqual([...initial.templatePlaceholders].sort(), [...patronKeys].sort(),
+      'The UI catalog must remain aligned with the actual patron renderer capability contract.');
+    await page.locator('#email-submit-subject').focus();
+    assert.deepEqual(await page.locator('#template-placeholder-list button').allTextContents(), patronKeys.map(key => `{{${key}}}`));
+    for (const key of ['rejection:template_1', 'rejection:template_3']) {
+      assert.equal(await (await row(key)).locator('.template-key').evaluate(input => input.readOnly), true);
+    }
+    await page.locator('#add-email-template').click();
+    let added = page.locator('#email-templates-editor [data-template-id=""]');
+    assert.equal(await added.locator('.template-key').inputValue(), 'rejection:template_2');
+    assert.equal(await added.locator('.template-key').isEditable(), true);
+    await added.locator('.template-key').fill('rejection:template_2');
+    await added.locator('.template-display-name').fill('Campaign 2 added template');
+    await added.locator('.template-subject').fill('É & title: ');
+    await added.locator('.template-body').fill('First\nselected & last');
+    await selectRange(added.locator('.template-body'), 6, 14);
+    assert.deepEqual(await page.locator('#template-placeholder-list button').allTextContents(), ['{{title}}']);
+    await titleButton().focus();
+    report.campaign2InsertionFocus = await page.evaluate(() => ({
+      target: document.getElementById('template-placeholder-target').textContent,
+      status: document.getElementById('template-placeholder-status').textContent,
+      active: document.activeElement?.className,
+      allowed: document.querySelector('[data-placeholder-key="title"]')?.getAttribute('aria-disabled')
+    }));
+    await page.keyboard.press('Enter');
+    assert.equal(await added.locator('.template-body').inputValue(), 'First\n{{title}} & last',
+      JSON.stringify(report.campaign2InsertionFocus));
+    assert.equal(await added.locator('.template-body').evaluate(element => document.activeElement === element), true);
+    assert.equal(await added.locator('.template-body').evaluate(element => element.selectionStart), 15);
+    const createdPayload = await saveSettings();
+    assert.equal(createdPayload.templates.find(item => item.templateKey === 'rejection:template_2').body, 'First\n{{title}} & last');
+    await reload('system');
+    await page.locator('#settings-nav-templates').click();
+    added = await row('rejection:template_2');
+    assert.equal(await added.locator('.template-key').evaluate(input => input.readOnly), true);
+    assert.equal(await added.locator('.template-subject').inputValue(), 'É & title: ');
+    const saved = await read('system');
+    const created = saved.stored.templates.find(item => item.templateKey === 'rejection:template_2' && item.organizationId === '1');
+    assert.equal(typeof created.id, 'string');
+    assert.equal(created.body, 'First\n{{title}} & last');
+    for (const original of initial.stored.templates) {
+      assert.deepEqual(saved.stored.templates.find(item => item.id === original.id), original,
+        'Creating an additional template must preserve every existing raw row/version.');
+    }
+
+    // The actual duplicate POST is rejected atomically, including a sibling
+    // sender draft, and authoritative SQL-backed snapshots remain exact.
+    const beforeRejected = await read('system');
+    await page.locator('#add-email-template').click();
+    const invalid = page.locator('#email-templates-editor [data-template-id=""]');
+    await invalid.locator('.template-key').fill('rejection:template_1');
+    await invalid.locator('.template-subject').fill('Duplicate');
+    await invalid.locator('.template-body').fill('Duplicate body');
+    await page.locator('#email-template-from-name').fill('Must roll back');
+    const rejectedResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === '/api/asap/staff/settings');
+    await page.locator('#settings-save').click();
+    assert.equal((await rejectedResponse).status(), 400);
+    await page.locator('#settings-message.error').waitFor();
+    assert.deepEqual(await read('system'), beforeRejected);
+    await reload('system');
+    await page.locator('#settings-nav-templates').click();
+
+    const submission = page.locator('#email-submit-subject');
+    const purchase = page.locator('#email-purchase-approved-body');
+    const submissionBefore = await submission.inputValue();
+    const purchaseBefore = await purchase.inputValue();
+    await selectRange(submission, 0);
+    await selectRange(purchase, 0);
+    await submission.dispatchEvent('select');
+    await submission.dispatchEvent('keyup');
+    await titleButton().focus();
+    await page.keyboard.press('Space');
+    assert.equal(await submission.inputValue(), submissionBefore, 'Late events cannot reclaim the prior editor.');
+    assert.equal(await purchase.inputValue(), `{{title}}${purchaseBefore}`);
+    await page.locator('#email-template-from-name').focus();
+    await titleButton().focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await purchase.inputValue(), `{{title}}${purchaseBefore}`, 'An unrelated field clears insertion ownership.');
+    await page.locator('#email-hold-subject').focus();
+    assert.equal(await page.locator('#template-placeholder-list button').count(), 0);
+    assert.match(await page.locator('#template-placeholder-guidance').textContent(), /not verified/);
+    await purchase.fill(Array.from({ length: 50 }, (_, index) => `Line ${index} & é`).join('\n'));
+    await selectRange(purchase, 0);
+    await purchase.evaluate(element => { element.scrollTop = 80; });
+    await titleButton().focus();
+    const scrollBefore = await purchase.evaluate(element => ({ page: scrollY, field: element.scrollTop }));
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await purchase.evaluate(element => ({ page: scrollY, field: element.scrollTop })), scrollBefore,
+      'Insertion restores focus without scrolling the page or multiline editor.');
+    await reload('system');
+
+    await page.locator('#settings-nav-patron').click();
+    const rule = page.locator('#format-rules-editor [data-rule-code="book"]');
+    const message = rule.locator('[data-rule-property="message"]');
+    const behavior = rule.locator('[data-rule-property="messageBehavior"]');
+    await behavior.selectOption('none');
+    assert.equal(await message.count(), 1, 'The complete snapshot retains the hidden textarea.');
+    assert.equal(await message.isVisible(), false);
+    assert.equal(await message.isDisabled(), true);
+    await behavior.selectOption('message');
+    await message.fill('Draft conditional text & é');
+    await behavior.selectOption('none');
+    assert.equal(await message.isVisible(), false);
+    await behavior.selectOption('ebookMessage');
+    assert.equal(await message.inputValue(), 'Draft conditional text & é');
+    await behavior.selectOption('none');
+    const rulePayload = await saveSettings();
+    assert.equal(rulePayload.formatRules.find(item => item.code === 'book').message, 'Draft conditional text & é');
+    await reload('system');
+    await page.locator('#settings-nav-patron').click();
+    assert.equal(await message.isVisible(), false);
+    assert.equal(await message.inputValue(), 'Draft conditional text & é');
+    await behavior.selectOption('message');
+    assert.equal(await message.isVisible(), true);
+    await reload('system');
+
+    await switchScope(library);
+    await assertLibraryContext();
+    await page.locator('#settings-nav-templates').click();
+    const inherited = await row('rejection:template_2');
+    assert.equal(await inherited.locator('.template-subject').isDisabled(), true);
+    await inherited.locator('.settings-template-override').check();
+    await inherited.locator('.template-body').fill('Library body: ');
+    await selectRange(inherited.locator('.template-body'), 14);
+    await titleButton().click();
+    const overridePayload = await saveSettings();
+    const submitted = overridePayload.templates.find(item => item.sourceTemplateId === created.id);
+    assert.equal(Object.hasOwn(submitted, 'subject'), false, 'An unchanged inherited subject must be omitted from the sparse override.');
+    assert.equal(submitted.body, 'Library body: {{title}}');
+    const beforeSystemEdit = await read(library);
+    const sparse = beforeSystemEdit.stored.templates.find(item => item.organizationId === library && item.sourceTemplateId === created.id);
+    assert.equal(sparse.subject, null);
+    assert.equal(sparse.body, 'Library body: {{title}}');
+
+    // The shortcut shares normal draft consent; cancellation leaves scope and
+    // draft untouched, acceptance switches and discards only after consent.
+    await inherited.locator('.template-subject').fill('Unsaved library draft');
+    page.once('dialog', dialog => dialog.dismiss());
+    await page.locator('#settings-switch-system').click();
+    assert.equal(await page.locator('#settings-scope').inputValue(), library);
+    assert.equal(await inherited.locator('.template-subject').inputValue(), 'Unsaved library draft');
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('#settings-switch-system').click();
+    await page.waitForFunction(() => document.getElementById('settings-scope').value === 'system' &&
+      !document.getElementById('settings-form').inert);
+    await page.waitForLoadState('networkidle');
+    await ready('system');
+    await page.locator('#settings-nav-templates').click();
+    assert.equal(await page.locator('#email-submit-subject').isEditable(), true,
+      'Returning from library inheritance must restore System built-in template editability.');
+    await (await row('rejection:template_2')).locator('.template-subject').fill('Updated System subject {{title}}');
+    await saveSettings();
+    const afterSystemEdit = await read(library);
+    assert.deepEqual(afterSystemEdit.stored.templates.find(item => item.id === sparse.id), sparse,
+      'System edits must preserve the exact sparse library row/version.');
+    await switchScope(library);
+    await page.locator('#settings-nav-templates').click();
+    assert.equal(await (await row('rejection:template_2')).locator('.template-subject').inputValue(), 'Updated System subject {{title}}');
+    assert.equal(await (await row('rejection:template_2')).locator('.template-body').inputValue(), 'Library body: {{title}}');
+    const badgeCounts = await page.locator('.settings-scope-badge').count();
+    await switchScope('system'); await switchScope(library);
+    assert.equal(await page.locator('.settings-scope-badge').count(), badgeCounts, 'Repeated scope changes must not duplicate indicators.');
+    report.campaign2SystemAndInheritance = true;
+  }
+  await page.locator('#settings-nav-templates').click();
+  await scan(page, axeSource, args.artifactRoot, report, 'campaign2-desktop');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await scan(page, axeSource, args.artifactRoot, report, 'campaign2-mobile');
+  await page.setViewportSize({ width: 640, height: 450 });
+  await scan(page, axeSource, args.artifactRoot, report, 'campaign2-640-reflow');
+  await page.emulateMedia({ forcedColors: 'active' });
+  await scan(page, axeSource, args.artifactRoot, report, 'campaign2-forced-colors');
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
-  if (!['full', 'system-format-rule', 'library-rule-partial-snapshot', 'library-rule-missing-row', 'library-metadata'].includes(args.mode)) {
+  if (!['full', 'system-format-rule', 'library-rule-partial-snapshot', 'library-rule-missing-row', 'library-metadata', 'campaign2', 'campaign2-library-admin'].includes(args.mode)) {
     throw new Error(`Unsupported settings browser mode: ${args.mode}`);
   }
   if (args.mode.startsWith('library-rule-') && (!args.formatCode || args.scopeId === 'system')) {
@@ -564,9 +807,16 @@ async function main() {
         'The settings editor became ready for the wrong scope.');
     };
 
-    const initialScope = args.mode.startsWith('library-') ? args.scopeId : 'system';
+    const initialScope = args.mode.startsWith('library-') || args.mode === 'campaign2-library-admin' ? args.scopeId : 'system';
     await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=${encodeURIComponent(initialScope)}#settings-start`, { waitUntil: 'networkidle' });
     await waitForSettingsReady(initialScope);
+    if (args.mode.startsWith('campaign2')) {
+      await runCampaign2Editor(page, axeSource, args, report, saveSettings, waitForSettingsReady);
+      assert.deepEqual(pageErrors, [], 'The Campaign 2 Settings journey raised browser errors.');
+      assert.equal(traffic.externalRequests, 0);
+      await page.close(); await context.close();
+      return;
+    }
     if (args.mode === 'library-metadata') {
       await runLibraryOverrideMetadataEditor(page, args, report, saveSettings, waitForSettingsReady);
       await scan(page, axeSource, args.artifactRoot, report, 'desktop');

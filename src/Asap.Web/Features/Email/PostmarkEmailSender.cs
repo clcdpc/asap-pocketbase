@@ -41,6 +41,12 @@ public sealed class PostmarkEmailSender(
             return EmailTransportReadiness.NotConfigured;
         }
 
+        return await CheckProviderReadinessAsync(token, cancellationToken);
+    }
+
+    private async Task<EmailTransportReadiness> CheckProviderReadinessAsync(string token, CancellationToken cancellationToken)
+    {
+
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(8));
         using var request = new HttpRequestMessage(HttpMethod.Get, ServerUri);
@@ -81,7 +87,36 @@ public sealed class PostmarkEmailSender(
     public async Task<EmailSendResult> SendAsync(EmailEnvelope envelope, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(envelope);
-        var token = await ReadSystemTokenAsync(cancellationToken);
+        string? token;
+        if (envelope.TestConfigurationVersion is not null)
+        {
+            // Read the versions and the protected token together. The final mode
+            // check and POST use this same token, even if settings change later.
+            await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+            var saved = await EmailTestConfiguration.ReadAsync(context, envelope.OrganizationId, cancellationToken);
+            if (!string.Equals(saved.Version, envelope.TestConfigurationVersion, StringComparison.Ordinal))
+            {
+                return EmailSendResult.ConfigurationChanged;
+            }
+            token = UnprotectToken(saved.ProtectedSystemToken);
+            if (token is not null)
+            {
+                var mode = await CheckProviderReadinessAsync(token, cancellationToken);
+                if (envelope.IntendedDeliveryMode != "postmark" || !mode.IsConfigured || !mode.IsLiveDelivery)
+                {
+                    return EmailSendResult.ConfigurationChanged;
+                }
+                var current = await EmailTestConfiguration.ReadAsync(context, envelope.OrganizationId, cancellationToken);
+                if (!string.Equals(current.Version, envelope.TestConfigurationVersion, StringComparison.Ordinal))
+                {
+                    return EmailSendResult.ConfigurationChanged;
+                }
+            }
+        }
+        else
+        {
+            token = await ReadSystemTokenAsync(cancellationToken);
+        }
         if (token is null)
         {
             return EmailSendResult.NotConfigured;
@@ -128,7 +163,10 @@ public sealed class PostmarkEmailSender(
                     throw new InvalidOperationException("Postmark did not confirm email acceptance.");
                 }
 
-                return new EmailSendResult(messageId.GetString()!);
+                return new EmailSendResult(messageId.GetString()!)
+                {
+                    DeliveryMode = envelope.TestConfigurationVersion is null ? null : "postmark"
+                };
             }
             finally
             {
@@ -197,6 +235,11 @@ public sealed class PostmarkEmailSender(
             .Where(item => item.OrganizationId == 1)
             .Select(item => item.ProtectedServerToken)
             .SingleOrDefaultAsync(cancellationToken);
+        return UnprotectToken(protectedToken);
+    }
+
+    private string? UnprotectToken(string? protectedToken)
+    {
         if (string.IsNullOrWhiteSpace(protectedToken))
         {
             return null;

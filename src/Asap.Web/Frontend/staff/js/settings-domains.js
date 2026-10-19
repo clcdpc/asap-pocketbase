@@ -1,3 +1,5 @@
+import { byDisplayLabel } from './display-order.js';
+
 function element(tag, attributes = {}, children = []) {
   const value = document.createElement(tag);
   for (const [name, attribute] of Object.entries(attributes)) {
@@ -6,6 +8,7 @@ function element(tag, attributes = {}, children = []) {
     else if (name === 'text') value.textContent = attribute;
     else if (name === 'checked') value.checked = Boolean(attribute);
     else if (name === 'disabled') value.disabled = Boolean(attribute);
+    else if (name === 'readOnly') value.readOnly = Boolean(attribute);
     else if (name === 'value') value.value = attribute;
     else value.setAttribute(name, String(attribute));
   }
@@ -743,10 +746,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
       return;
     }
     const allChoices = type === 'code'
-      ? array(property(state.data, 'patronCodeChoices')).map((choice) => ({
+      ? byDisplayLabel(array(property(state.data, 'patronCodeChoices')).map((choice) => ({
         value: stringId(property(choice, 'id')),
         label: `${clean(property(choice, 'description')) || 'Patron code'} (${stringId(property(choice, 'id')) || '?'})`
-      })).filter(choice => choice.value)
+      })).filter(choice => choice.value), choice => choice.label, choice => choice.value)
       : [];
     const choices = allChoices.filter(choice => !dom.codeSearch.value.trim() ||
       `${choice.label} ${choice.value}`.toLocaleLowerCase().includes(dom.codeSearch.value.trim().toLocaleLowerCase()));
@@ -826,7 +829,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     if (values.length === 0) dom.providers.append(element('p', { className: 'settings-empty', text: 'No providers configured.' }));
     for (const [index, value] of values.entries()) {
       const id = stringId(value.id);
-      const key = element('input', { type: 'text', value: value.key || '', readOnly: !state.system && Boolean(id), 'data-domain-editable': 'true' });
+      const key = element('input', { type: 'text', value: value.key || '', readOnly: Boolean(id), 'data-domain-editable': 'true' });
       const enabled = element('input', { type: 'checkbox', checked: value.isEnabled, 'data-domain-editable': 'true' });
       const override = checkbox('Override', state.system || value.overridden, 'settings-inline-check settings-domain-override');
       override.input.className = 'settings-domain-override-toggle';
@@ -899,7 +902,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     if (values.length === 0) dom.formats.append(element('p', { className: 'settings-empty', text: 'No material formats configured.' }));
     for (const [index, value] of values.entries()) {
       const custom = value.ownerOrganizationId === currentOrganizationId() && !state.system;
-      const code = element('input', { type: 'text', value: value.code, readOnly: Boolean(value.id) && !custom, 'data-domain-editable': 'true' });
+      const code = element('input', { type: 'text', value: value.code, readOnly: Boolean(value.id), 'data-domain-editable': 'true' });
       const enabled = element('input', { type: 'checkbox', checked: value.isEnabled, 'data-domain-editable': 'true' });
       const override = checkbox('Override', state.system || value.overridden, 'settings-inline-check settings-domain-override');
       override.input.className = 'settings-domain-override-toggle';
@@ -1109,6 +1112,15 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
           })
         ])
       ]);
+      const behavior = row.querySelector('[data-rule-property="messageBehavior"]');
+      const updateMessage = () => {
+        const control = row.querySelector('[data-rule-property="message"]');
+        const usesMessage = behavior.value !== 'none';
+        control.closest('label').hidden = !usesMessage;
+        control.disabled = !usesMessage;
+      };
+      updateMessage();
+      listen(behavior, 'change', updateMessage);
       dom.rules.append(row);
     }
   }
@@ -1142,7 +1154,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     for (const [index, value] of values.entries()) {
       const formatId = stringId(property(value, 'materialFormatId') ?? property(value, 'formatId'));
       const staffId = stringId(property(value, 'staffUserId') ?? property(value, 'staffId'));
-      const staffOptions = staff.map(item => ({ value: stringId(property(item, 'id')), label: property(item, 'label') || property(item, 'displayName') || `Staff ${property(item, 'id')}` })).filter(item => item.value);
+      const staffOptions = byDisplayLabel(staff.map(item => ({ value: stringId(property(item, 'id')), label: property(item, 'label') || property(item, 'displayName') || `Staff ${property(item, 'id')}` })).filter(item => item.value), item => item.label, item => item.value);
       if (staffId && !staffOptions.some(item => item.value === staffId)) staffOptions.unshift({ value: staffId, label: `Staff ${staffId}` });
       const row = element('div', { className: 'settings-editor-row', 'data-domain-row': 'true' }, [
         field('Format', select(formatOptions, formatId, { 'data-domain-editable': 'true' })),
@@ -1249,12 +1261,14 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         field('Subject', element('input', {
           type: 'text',
           className: 'template-subject',
+          'data-template-field': 'subject',
           value: value.subject || '',
           'data-domain-editable': 'true'
         })),
         field('Body', element('textarea', {
           rows: '5',
           className: 'template-body',
+          'data-template-field': 'body',
           'data-domain-editable': 'true'
         }, [value.body || ''])),
         element('label', { className: 'settings-domain-check' }, [element('input', {
@@ -1509,11 +1523,18 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     return normalizeRule({ code: format?.code || '' }, format || {});
   });
   bindAdd('claims', values => ({ materialFormatId: readFormats()[0]?.id || '', staffUserId: '' }));
+  function unusedTemplateKey(values) {
+    // The DACPAC uses a case-insensitive collation for unique template keys.
+    const keys = new Set(values.map(value => String(value.templateKey || '').toLowerCase()));
+    const prefix = state.system ? 'rejection:template_' : 'rejection:custom_template_';
+    let index = 1;
+    while (keys.has(`${prefix}${index}`)) index += 1;
+    return `${prefix}${index}`;
+  }
+
   bindAdd('templates', values => ({
     id: null,
-    templateKey: state.system
-      ? `rejection:template_${values.length + 1}`
-      : `rejection:custom_template_${values.length + 1}`,
+    templateKey: unusedTemplateKey(values),
     displayName: 'New rejection template',
     subject: '',
     body: '',

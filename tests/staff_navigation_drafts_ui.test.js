@@ -132,6 +132,12 @@ async function fixture(route, journey, options = {}) {
       }
       if (pathname.endsWith('/session')) return response(200, { authenticated: true, accessAllowed: true, staff, antiforgeryToken: 'token' });
       if (pathname.endsWith('/email-readiness')) return response(200, {});
+      if (pathname.endsWith('/email-operations/test-context')) {
+        const organizationId = Number(parsed.searchParams.get('organizationId'));
+        return response(200, { code: 'ok', data: { organizationId, scopeName: `Saved scope ${organizationId}`,
+          fromAddress: 'saved@example.org', recipient: 'primary@example.org', deliveryMode: 'postmark',
+          state: 'ready', configurationVersion: 'A'.repeat(64) } });
+      }
       if (pathname.endsWith('/organizations')) return response(200, { code: 'ok', data: organizations });
       if (pathname.endsWith('/settings') && init.method !== 'POST') {
         const requestedScope = parsed.searchParams.get('orgId');
@@ -1813,7 +1819,8 @@ test('staff roster review preserves the cached Title configuration', () =>
     ui.get('#close-request').click(); await settle();
     ui.get('[data-view="settings"]').click(); await settle();
     ui.get('[data-settings-panel="staff"]').click();
-    await until(() => rosterReads === 1 && /Staff access loaded/.test(ui.get('#staff-access-status').textContent), 'authoritative roster reviewed');
+    await until(() => rosterReads === 1 && !ui.get('#staff-refresh').disabled &&
+      !ui.get('#settings-form').inert, 'authoritative roster reviewed');
     ui.get('[data-view="queue"]').click(); await settle();
     await ui.open();
     assert.equal(configurationReads, 1, 'staff access review does not invalidate public form configuration');
@@ -2240,7 +2247,8 @@ for (const copy of [false, true]) {
             /deactivated|profile saved|uncertain/.test(ui.get('#staff-access-status').textContent + ui.get('#settings-message').textContent), 'Staff Access committed and review settled');
           if (change === 'unconfirmed cleanup review') {
             ui.get('#staff-refresh').click();
-            await until(() => /Staff access loaded/.test(ui.get('#staff-access-status').textContent) && !ui.get('#settings-form').inert, 'uncertain mutation authoritatively reviewed');
+            await until(() => !ui.get('#staff-refresh').disabled && !ui.get('#settings-form').inert &&
+              !ui.get('#settings-form').hasAttribute('aria-busy'), 'uncertain mutation authoritatively reviewed');
           }
         }
         ui.get(`[data-view="${view}"]`).click();

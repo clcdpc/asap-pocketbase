@@ -246,13 +246,14 @@ public sealed partial class PatronJourneyTests
             }));
         using var client = await CreateAuthenticatedStaffClientAsync(emailFactory, actor);
         var storage = emailFactory.Services.GetRequiredService<JobStorage>();
+        var savedEmailContext = await ReadSavedEmailContextAsync(client, 2);
         long? outboxId = null;
 
         try
         {
-            using var first = await client.PostAsync(
+            using var first = await client.PostAsJsonAsync(
                 $"/api/asap/staff/email-operations/test?organizationId=2&operationId={operationId:D}",
-                content: null);
+                SavedEmailInput(savedEmailContext));
             Assert.AreEqual(HttpStatusCode.Accepted, first.StatusCode, await first.Content.ReadAsStringAsync());
             using var firstBody = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
             Assert.AreEqual("queued", firstBody.RootElement.GetProperty("code").GetString());
@@ -263,9 +264,9 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(long.TryParse(returnedId.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out var parsedId));
             outboxId = parsedId;
 
-            using var replay = await client.PostAsync(
+            using var replay = await client.PostAsJsonAsync(
                 $"/api/asap/staff/email-operations/test?organizationId=2&operationId={operationId:D}",
-                content: null);
+                SavedEmailInput(savedEmailContext));
             Assert.AreEqual(HttpStatusCode.Accepted, replay.StatusCode, await replay.Content.ReadAsStringAsync());
             using var replayBody = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
             Assert.AreEqual("queued", replayBody.RootElement.GetProperty("code").GetString());
@@ -337,21 +338,22 @@ public sealed partial class PatronJourneyTests
     {
         var actor = await ReadConfiguredSuperAdminAsync();
         using var client = await CreateAuthenticatedStaffClientAsync(factory!, actor);
+        var savedEmailContext = await ReadSavedEmailContextAsync(client, 2);
         var rejectedOutboxCount = await ReadEmailOutboxCountAsync(
             factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>());
 
-        using (var forbidden = await client.PostAsync(
-                   "/api/asap/staff/email-operations/test?organizationId=0",
-                   content: null))
+        using (var forbidden = await client.PostAsJsonAsync(
+                   $"/api/asap/staff/email-operations/test?organizationId=0&operationId={Guid.NewGuid():D}",
+                   SavedEmailInput(savedEmailContext)))
         {
             Assert.AreEqual(HttpStatusCode.Forbidden, forbidden.StatusCode, await forbidden.Content.ReadAsStringAsync());
             using var body = JsonDocument.Parse(await forbidden.Content.ReadAsStringAsync());
             Assert.AreEqual("staff_scope_forbidden", body.RootElement.GetProperty("code").GetString());
         }
 
-        using (var emptyGuid = await client.PostAsync(
+        using (var emptyGuid = await client.PostAsJsonAsync(
                    $"/api/asap/staff/email-operations/test?organizationId=2&operationId={Guid.Empty:D}",
-                   content: null))
+                   SavedEmailInput(savedEmailContext)))
         {
             Assert.AreEqual(HttpStatusCode.BadRequest, emptyGuid.StatusCode, await emptyGuid.Content.ReadAsStringAsync());
             using var body = JsonDocument.Parse(await emptyGuid.Content.ReadAsStringAsync());
@@ -369,9 +371,9 @@ public sealed partial class PatronJourneyTests
         }
         try
         {
-            using var inactive = await client.PostAsync(
-                "/api/asap/staff/email-operations/test?organizationId=2",
-                content: null);
+            using var inactive = await client.PostAsJsonAsync(
+                $"/api/asap/staff/email-operations/test?organizationId=2&operationId={Guid.NewGuid():D}",
+                SavedEmailInput(savedEmailContext));
             Assert.AreEqual(HttpStatusCode.Conflict, inactive.StatusCode, await inactive.Content.ReadAsStringAsync());
             using var body = JsonDocument.Parse(await inactive.Content.ReadAsStringAsync());
             Assert.AreEqual("organization_inactive", body.RootElement.GetProperty("code").GetString());
@@ -398,22 +400,17 @@ public sealed partial class PatronJourneyTests
             using var suppressedClient = await CreateAuthenticatedStaffClientAsync(suppressedFactory, actor);
             try
             {
-                using var suppressed = await suppressedClient.PostAsync(
+                var blockedContext = await ReadSavedEmailContextAsync(suppressedClient, 2);
+                using var suppressed = await suppressedClient.PostAsJsonAsync(
                     $"/api/asap/staff/email-operations/test?organizationId=2&operationId={suppressedOperationId:D}",
-                    content: null);
-                Assert.AreEqual(HttpStatusCode.OK, suppressed.StatusCode, await suppressed.Content.ReadAsStringAsync());
+                    SavedEmailInput(blockedContext));
+                Assert.AreEqual(HttpStatusCode.Conflict, suppressed.StatusCode, await suppressed.Content.ReadAsStringAsync());
                 using var body = JsonDocument.Parse(await suppressed.Content.ReadAsStringAsync());
-                Assert.AreEqual("suppressed", body.RootElement.GetProperty("code").GetString());
-                var data = body.RootElement.GetProperty("data");
-                Assert.AreEqual(JsonValueKind.String, data.GetProperty("id").ValueKind);
-                Assert.AreEqual("mail_not_configured", data.GetProperty("code").GetString());
+                Assert.AreEqual("live_delivery_disabled", body.RootElement.GetProperty("code").GetString());
 
                 await using var context = await contextFactory.CreateDbContextAsync();
-                var row = await context.EmailOutbox.AsNoTracking().SingleAsync(item => item.BusinessKey == suppressedBusinessKey);
-                Assert.AreEqual(2, row.OrganizationId);
-                Assert.AreEqual("suppressed", row.Status);
-                Assert.AreEqual("mail_not_configured", row.SuppressionReason);
-                Assert.AreEqual(row.Id.ToString(CultureInfo.InvariantCulture), data.GetProperty("id").GetString());
+                Assert.IsFalse(await context.EmailOutbox.AnyAsync(item => item.BusinessKey == suppressedBusinessKey),
+                    "An explicitly live test cannot silently become a non-delivery or unavailable transport intent.");
             }
             finally
             {
@@ -435,9 +432,9 @@ public sealed partial class PatronJourneyTests
                          })))
         {
             using var unavailableClient = await CreateAuthenticatedStaffClientAsync(unavailableFactory, actor);
-            using var unavailable = await unavailableClient.PostAsync(
+            using var unavailable = await unavailableClient.PostAsJsonAsync(
                 $"/api/asap/staff/email-operations/test?organizationId=2&operationId={Guid.NewGuid():D}",
-                content: null);
+                SavedEmailInput(savedEmailContext));
             Assert.AreEqual(HttpStatusCode.ServiceUnavailable, unavailable.StatusCode,
                 await unavailable.Content.ReadAsStringAsync());
             using var body = JsonDocument.Parse(await unavailable.Content.ReadAsStringAsync());
