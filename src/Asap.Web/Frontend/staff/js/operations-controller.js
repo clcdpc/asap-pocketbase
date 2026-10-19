@@ -3,6 +3,7 @@ import { createLatestLoad } from '../../shared/latest-load.js';
 import { element, commandButton, text, dateTime } from './ui.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
 import { actorKey } from './session-identity.js';
+import { byDisplayLabel } from './display-order.js';
 
 export function createOperationsController({ root, sessionIdentity, announce, onScopeChange,
   onReceipt, clearReceipt, request = authorizedJson }) {
@@ -28,7 +29,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   function setLibraries(organizations) {
       if (disposed) return;
       libraries = Array.isArray(organizations)
-        ? organizations.filter(item => Number(item?.id) > 1 && typeof item.name === 'string')
+        ? byDisplayLabel(organizations.filter(item => Number(item?.id) > 1 && typeof item.name === 'string'))
         : [];
       const retained = state.operationMutation;
       if (retained?.scope !== 'all' && !libraries.some(item => String(item.id) === retained?.scope)) clearReview(retained);
@@ -248,7 +249,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         { label: 'Queue', key: 'queueName' },
         { label: 'Cycle watermark', render: row => element('span', { text: row.cycleMaxId === null ? 'None' : String(row.cycleMaxId) }) },
         { label: 'State', render: row => element('span', {
-          text: row.cycleMaxId === 0 ? 'Empty' : row.cycleMaxId === null
+          text: row.cycleMaxId === '0' ? 'Empty' : row.cycleMaxId === null
             ? row.lastOutcomeCode === 'cycle_complete' ? 'Completed' : 'Idle'
             : 'Active'
         }) },

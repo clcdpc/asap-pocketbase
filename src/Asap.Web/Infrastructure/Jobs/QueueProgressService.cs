@@ -1,3 +1,4 @@
+using System.Globalization;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -25,9 +26,9 @@ public sealed record QueueProgressSnapshot(
     string QueueName,
     int ScopeOrganizationId,
     DateTime? LastCreatedUtc,
-    long? LastItemId,
-    long? CycleMaxId,
-    long? LastOutcomeItemId,
+    string? LastItemId,
+    string? CycleMaxId,
+    string? LastOutcomeItemId,
     string? LastOutcomeCode,
     DateTime? LastOutcomeUtc,
     DateTime UpdatedUtc,
@@ -95,15 +96,20 @@ public sealed class QueueProgressService(IDbContextFactory<AsapDbContext> contex
             : new QueueProgressSnapshot(
                 progress.QueueName,
                 progress.ScopeOrganizationId,
-                progress.LastCreatedUtc,
-                progress.LastItemId,
-                progress.CycleMaxId,
-                progress.LastOutcomeItemId,
+                AsUtc(progress.LastCreatedUtc),
+                progress.LastItemId?.ToString(CultureInfo.InvariantCulture),
+                progress.CycleMaxId?.ToString(CultureInfo.InvariantCulture),
+                progress.LastOutcomeItemId?.ToString(CultureInfo.InvariantCulture),
                 progress.LastOutcomeCode,
-                progress.LastOutcomeUtc,
-                progress.UpdatedUtc,
+                AsUtc(progress.LastOutcomeUtc),
+                AsUtc(progress.UpdatedUtc),
                 Convert.ToBase64String(progress.RowVersion));
     }
+
+    // SQL datetime2 stores UTC clock values without retaining DateTime.Kind.
+    private static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
+
+    private static DateTime? AsUtc(DateTime? value) => value.HasValue ? AsUtc(value.Value) : null;
 
     public static int NormalizeScope(int? scopeOrganizationId) => scopeOrganizationId ?? LibraryScope.SystemOrganizationId;
 }

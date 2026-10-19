@@ -26,6 +26,78 @@ function committedOperationResult(path) {
   return { code: 'queued', ...data };
 }
 (async () => {
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createOperationsController } = await load('operations-controller');
+    const session = createSessionIdentity();
+    const owner = session.accept(actor('read-dto'));
+    const timestamp = '2026-03-08T07:01:00.1234567Z';
+    const invalid = '<img src=x onerror="throw Error(1)">';
+    // Parse the actual wire shape before rendering so opaque SQL identities never
+    // pass through JavaScript numeric literals or Number conversion.
+    const queues = JSON.parse(`{"items":[
+      {"queueName":"Active","cycleMaxId":"9007199254740995","lastItemId":"9007199254740993","lastOutcomeItemId":"9223372036854775807","lastCreatedUtc":"${timestamp}","updatedUtc":"${timestamp}"},
+      {"queueName":"Empty","cycleMaxId":"0","lastItemId":"0","lastCreatedUtc":"${timestamp}","updatedUtc":null},
+      {"queueName":"Idle","cycleMaxId":null,"lastItemId":null,"lastCreatedUtc":null,"updatedUtc":null},
+      {"queueName":"Completed","cycleMaxId":null,"lastItemId":null,"lastCreatedUtc":null,"lastOutcomeCode":"cycle_complete","updatedUtc":null},
+      {"queueName":"Maximum","cycleMaxId":"9223372036854775807","lastItemId":"9223372036854775807","lastCreatedUtc":"${timestamp}","updatedUtc":"${timestamp}"}
+    ]}`);
+    queues.items.push({ queueName: 'Invalid', cycleMaxId: null, lastCreatedUtc: invalid,
+      lastItemId: '9007199254740993', updatedUtc: invalid });
+    const requests = [];
+    const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: session,
+      announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {},
+      request: async path => {
+        requests.push(path);
+        if (path.endsWith('/organizations')) return { data: organizationCatalog };
+        if (path.includes('/workflow/queues')) return queues;
+        return { items: [
+          { id: '1', createdUtc: timestamp, status: 'sent' },
+          { id: '2', createdUtc: null, status: 'pending' },
+          { id: '3', createdUtc: invalid, status: 'failed' }
+        ] };
+      } });
+    controller.setStaff(owner); controller.activate();
+    const assertProjection = () => {
+      const rows = [...get('#queue-progress-table').querySelectorAll('tbody tr')];
+      const cells = name => [...rows.find(row => row.cells[0].textContent === name).cells].map(cell => cell.textContent);
+      assert.equal(cells('Active')[1], '9007199254740995');
+      assert.equal(cells('Active')[2], 'Active');
+      assert.equal(cells('Active')[3], `${new Date(timestamp).toLocaleString()} / 9007199254740993`);
+      assert.equal(cells('Maximum')[1], '9223372036854775807');
+      assert.equal(cells('Maximum')[3], `${new Date(timestamp).toLocaleString()} / 9223372036854775807`);
+      assert.equal(cells('Empty')[1], '0');
+      assert.equal(cells('Empty')[2], 'Empty', 'canonical string zero retains the empty-cycle sentinel');
+      assert.equal(cells('Empty')[3], `${new Date(timestamp).toLocaleString()} / 0`);
+      assert.equal(cells('Idle')[1], 'None');
+      assert.equal(cells('Idle')[2], 'Idle');
+      assert.equal(cells('Idle')[3], 'None');
+      assert.equal(cells('Completed')[2], 'Completed');
+      const times = [...get('#email-operations-table').querySelectorAll('time')];
+      assert.equal(times[0].textContent, new Date(timestamp).toLocaleString());
+      assert.equal(times[0].getAttribute('datetime'), timestamp);
+      assert.equal(times[1].textContent, 'Not recorded');
+      assert.equal(times[1].hasAttribute('datetime'), false);
+      assert.equal(times[2].textContent, invalid);
+      assert.equal(times[2].children.length, 0);
+      assert.equal(cells('Invalid')[3], `${invalid} / 9007199254740993`);
+      const updated = rows[0].querySelector('time');
+      assert.equal(updated.textContent, new Date(timestamp).toLocaleString());
+      assert.equal(updated.getAttribute('datetime'), timestamp);
+      assert.equal(get('#queue-progress-table').querySelector('img'), null);
+      assert.equal(get('#email-operations-table').querySelector('img'), null);
+      assert.doesNotMatch(get('#operations-view').textContent, /Invalid Date/);
+    };
+    assert.equal(await controller.refresh(), true);
+    assertProjection();
+    get('#operations-scope').value = '2';
+    get('#operations-scope').dispatchEvent(new dom.window.Event('change'));
+    assert.equal(await controller.refresh({ silent: true }), true);
+    assert.ok(requests.some(path => path.includes('/workflow/queues?organizationId=2')));
+    assertProjection();
+    controller.dispose();
+  });
+
   await fixture(async ({ load, get }) => {
     const { createSessionIdentity } = await load('session-identity');
     const { createOperationsController } = await load('operations-controller');
@@ -304,7 +376,7 @@ function committedOperationResult(path) {
       } });
     controller.setStaff(identity.preferences()); controller.activate();
     assert.equal(await controller.refresh(), true);
-    assert.deepEqual([...get('#operations-scope').options].map(option => option.value), ['all', '2', '3', '4'],
+    assert.deepEqual([...get('#operations-scope').options].map(option => option.value), ['all', '4', '3', '2'],
       'active code-2 libraries remain selectable while system, branch, inactive and unclassified rows stay excluded');
     assert.equal(get('#operations-outcome button'), null,
       'a retained command scoped to an active branch is not reviewable as a library operation');

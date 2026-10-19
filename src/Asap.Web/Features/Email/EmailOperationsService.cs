@@ -260,7 +260,9 @@ public sealed class EmailOperationsService(
             item.Id.ToString(CultureInfo.InvariantCulture), item.OrganizationId, item.Status,
             item.BusinessKey, item.DeliveryClass,
             item.RecipientAddressKind, item.AttemptCount, item.LastErrorCode, item.SuppressionReason,
-            item.CreatedUtc, item.SentUtc, StaffVersion.Encode(item.RowVersion),
+            DateTime.SpecifyKind(item.CreatedUtc, DateTimeKind.Utc),
+            item.SentUtc.HasValue ? DateTime.SpecifyKind(item.SentUtc.Value, DateTimeKind.Utc) : null,
+            StaffVersion.Encode(item.RowVersion),
             IsCertifiedForRetry(item.Status, item.LastErrorCode, item.ProviderMessageId, item.SendingStartedUtc,
                 item.LeaseId, item.LeaseExpiresUtc, item.NextAttemptUtc)))
             .ToArray();

@@ -108,8 +108,8 @@ function operationResult(url) {
       organizations: activeLibraries,
       items: [{
         queueName: 'IdentifierProcessing', scopeOrganizationId: scope === 'all' ? 1 : Number(scope),
-        cycleMaxId: 12, lastCreatedUtc: '2026-09-14T12:00:00Z', lastItemId: 11,
-        lastOutcomeItemId: 11, lastOutcomeCode: 'processed', lastOutcomeUtc: '2026-09-14T12:01:00Z',
+        cycleMaxId: '12', lastCreatedUtc: '2026-09-14T12:00:00Z', lastItemId: '11',
+        lastOutcomeItemId: '11', lastOutcomeCode: 'processed', lastOutcomeUtc: '2026-09-14T12:01:00Z',
         updatedUtc: '2026-09-14T12:01:00Z', version: 'queue-version'
       }]
     });

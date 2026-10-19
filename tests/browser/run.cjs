@@ -13,6 +13,7 @@ const browserTests = [
   'FullyQualifiedName~SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp',
   'FullyQualifiedName~LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata',
   'FullyQualifiedName~ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery',
+  'FullyQualifiedName~OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes',
 ].join('|');
 
 const child = spawn(
@@ -26,7 +27,7 @@ const child = spawn(
     '--no-build',
     '--no-restore',
     '--minimum-expected-tests',
-    '8',
+    '9',
     '--filter',
     browserTests,
   ],
