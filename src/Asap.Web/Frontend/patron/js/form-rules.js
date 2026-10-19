@@ -34,7 +34,8 @@ export function normalizeFormatRule(formatKey, rawRule, defaultRule, bookDefault
     Object.keys(incomingRule.customFields).forEach(key => {
       const incomingCustom = incomingRule.customFields[key] || {};
       normalized.customFields[key] = {
-        mode: normalizeMode(incomingCustom.mode, 'hidden')
+        mode: normalizeMode(incomingCustom.mode, 'hidden'),
+        label: String(incomingCustom.label || '').trim()
       };
     });
   }

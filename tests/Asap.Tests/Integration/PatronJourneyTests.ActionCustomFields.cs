@@ -21,7 +21,8 @@ public sealed partial class PatronJourneyTests
             .Select(item => item.Id).SingleAsync();
         seed.Organizations.Add(new Organization
         {
-            Id = libraryId, DisplayName = "Action field library", Abbreviation = "AFL", IsActive = true
+            Id = libraryId, DisplayName = "Action field library", Abbreviation = "AFL",
+            OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
         });
         var note = new PatronCustomField
         {

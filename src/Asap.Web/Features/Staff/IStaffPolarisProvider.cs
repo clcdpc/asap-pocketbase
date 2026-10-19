@@ -67,7 +67,7 @@ public sealed record PolarisHoldSnapshot(
     int BibId,
     int StatusId,
     string? StatusDescription,
-    int PickupBranchId,
+    int? PickupBranchId,
     string? PatronBarcode = null);
 
 public sealed record PolarisCheckoutSnapshot(

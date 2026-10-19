@@ -103,6 +103,11 @@ public sealed partial class WorkflowProcessingService
                     return new WorkflowRunResult("stale_progress_fence", visited, changed, visited - changed);
                 }
 
+                if (outcome.Stop && cancellationToken.IsCancellationRequested)
+                {
+                    return new WorkflowRunResult(outcome.Code, visited, changed, visited - changed);
+                }
+
                 try
                 {
                     expectedVersion = await ApplyOutcomeAsync(
@@ -200,6 +205,11 @@ public sealed partial class WorkflowProcessingService
                 if (outcome.FenceLost)
                 {
                     return new WorkflowRunResult("stale_progress_fence", visited, changed, visited - changed);
+                }
+
+                if (outcome.Stop && cancellationToken.IsCancellationRequested)
+                {
+                    return new WorkflowRunResult(outcome.Code, visited, changed, visited - changed);
                 }
 
                 try
@@ -582,7 +592,10 @@ public sealed partial class WorkflowProcessingService
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         return await context.Organizations.AsNoTracking().AnyAsync(
-            item => item.Id == scope && item.IsActive,
+            item => item.Id == scope && item.IsActive &&
+                    (item.Id == LibraryScope.SystemOrganizationId ||
+                     item.Id > LibraryScope.SystemOrganizationId &&
+                     item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId),
             cancellationToken);
     }
 

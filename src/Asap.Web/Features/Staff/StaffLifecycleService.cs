@@ -1,5 +1,6 @@
 using System.Data;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -13,10 +14,10 @@ public sealed record StaffCreateInput(
     int? OrganizationId);
 
 public sealed record StaffMetadataInput(
-    string? Version,
-    string? Email,
-    string? DisplayName,
-    string? NotificationEmail);
+    [property: JsonRequired] string? Version,
+    [property: JsonRequired] string? Email,
+    [property: JsonRequired] string? DisplayName,
+    [property: JsonRequired] string? NotificationEmail);
 
 public sealed record StaffRoleInput(string? Version, string? Role, int? OrganizationId);
 public sealed record StaffDeactivateInput(string? Version);
@@ -51,7 +52,13 @@ public sealed class StaffLifecycleService(
             query = query.Where(item => item.OrganizationId == organizationId.Value);
         }
 
-        return await query
+        return await (from staff in query
+                      join organization in context.Organizations.AsNoTracking()
+                          on staff.OrganizationId equals organization.Id
+                      where (staff.Role == StaffRole.SuperAdmin && organization.Id == LibraryScope.SystemOrganizationId) ||
+                            (staff.Role != StaffRole.SuperAdmin && organization.Id > LibraryScope.SystemOrganizationId &&
+                             organization.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId)
+                      select staff)
             .OrderBy(item => item.DisplayName)
             .ThenBy(item => item.UserPrincipalName)
             .ThenBy(item => item.Id)
@@ -64,7 +71,8 @@ public sealed class StaffLifecycleService(
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var libraryIsActive = await context.Organizations.AsNoTracking().AnyAsync(
-            item => item.Id == libraryOrganizationId && item.Id > LibraryScope.SystemOrganizationId && item.IsActive,
+            item => item.Id == libraryOrganizationId && item.Id > LibraryScope.SystemOrganizationId &&
+                    item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive,
             cancellationToken);
         if (!libraryIsActive)
         {
@@ -74,7 +82,11 @@ public sealed class StaffLifecycleService(
         var rows = await (from staff in context.StaffUsers.AsNoTracking()
                           join owner in context.Organizations.AsNoTracking()
                               on staff.OrganizationId equals owner.Id
-                          where owner.IsActive && staff.IsActive &&
+                          where staff.IsActive &&
+                              ((owner.Id == LibraryScope.SystemOrganizationId && staff.Role == StaffRole.SuperAdmin && owner.IsActive) ||
+                               (owner.Id > LibraryScope.SystemOrganizationId &&
+                                owner.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId &&
+                                owner.IsActive && staff.Role != StaffRole.SuperAdmin)) &&
                               (staff.OrganizationId == libraryOrganizationId ||
                                staff.OrganizationId == LibraryScope.SystemOrganizationId)
                           select staff)
@@ -146,16 +158,21 @@ public sealed class StaffLifecycleService(
             locked[id] = row;
         }
         var lockedActor = locked[actor.Id];
+        if (role != StaffRole.SuperAdmin && !OrganizationAuthority.IsLibrary(organizations[organizationId]))
+        {
+            return new StaffLifecycleResult("organization_not_library");
+        }
         if (!CanManage(
                 actor,
                 lockedActor,
                 organizations.GetValueOrDefault(lockedActor?.OrganizationId ?? 0),
                 organizationId,
-                role))
+                role,
+                organizations.GetValueOrDefault(organizationId)))
         {
             return new StaffLifecycleResult("staff_scope_forbidden");
         }
-        if (role != StaffRole.SuperAdmin && !organizations[organizationId].IsActive)
+        if (role != StaffRole.SuperAdmin && !OrganizationAuthority.IsActiveLibrary(organizations[organizationId]))
         {
             return new StaffLifecycleResult("organization_inactive");
         }
@@ -173,7 +190,8 @@ public sealed class StaffLifecycleService(
                     lockedActor,
                     organizations.GetValueOrDefault(lockedActor?.OrganizationId ?? 0),
                     existing.OrganizationId,
-                    existing.Role))
+                    existing.Role,
+                    organizations.GetValueOrDefault(existing.OrganizationId)))
             {
                 return new StaffLifecycleResult("staff_scope_forbidden");
             }
@@ -271,7 +289,8 @@ public sealed class StaffLifecycleService(
                 lockedActor,
                 organizations.GetValueOrDefault(lockedActor.OrganizationId),
                 target.OrganizationId,
-                target.Role))
+                target.Role,
+                organizations.GetValueOrDefault(target.OrganizationId)))
         {
             return new StaffLifecycleResult("staff_scope_forbidden");
         }
@@ -398,13 +417,19 @@ public sealed class StaffLifecycleService(
         }
         var lockedActor = locked[actor.Id];
         var target = locked[targetId];
+        if (role != StaffRole.SuperAdmin && !OrganizationAuthority.IsLibrary(organizations[organizationId]))
+        {
+            return new StaffLifecycleResult("organization_not_library");
+        }
         if (!CanManage(
                 actor,
                 lockedActor,
                 organizations.GetValueOrDefault(lockedActor.OrganizationId),
                 target.OrganizationId,
-                target.Role) ||
-            !CanManage(actor, lockedActor, organizations.GetValueOrDefault(lockedActor.OrganizationId), organizationId, role))
+                target.Role,
+                organizations.GetValueOrDefault(target.OrganizationId)) ||
+            !CanManage(actor, lockedActor, organizations.GetValueOrDefault(lockedActor.OrganizationId), organizationId, role,
+                organizations.GetValueOrDefault(organizationId)))
         {
             return new StaffLifecycleResult("staff_scope_forbidden");
         }
@@ -414,7 +439,7 @@ public sealed class StaffLifecycleService(
         }
 
         var newActive = requestedActive ?? target.IsActive;
-        if (newActive && role != StaffRole.SuperAdmin && !organizations[organizationId].IsActive)
+        if (newActive && role != StaffRole.SuperAdmin && !OrganizationAuthority.IsActiveLibrary(organizations[organizationId]))
         {
             return new StaffLifecycleResult("organization_inactive");
         }
@@ -534,9 +559,17 @@ public sealed class StaffLifecycleService(
         StaffUser? lockedActor,
         Organization? lockedActorOrganization,
         int targetOrganizationId,
-        string targetRole) =>
-        lockedActor is not null && lockedActorOrganization is { IsActive: true } &&
+        string targetRole,
+        Organization? targetOrganization) =>
+        lockedActor is not null && lockedActorOrganization is not null &&
+        lockedActor.Role == ticketActor.Role && lockedActor.OrganizationId == ticketActor.OrganizationId &&
+        OrganizationAuthority.IsActiveScope(lockedActorOrganization) &&
+        (lockedActor.Role == StaffRole.SuperAdmin
+            ? lockedActorOrganization.Id == LibraryScope.SystemOrganizationId
+            : OrganizationAuthority.IsActiveLibrary(lockedActorOrganization)) &&
         lockedActorOrganization.Id == lockedActor.OrganizationId &&
+        (lockedActor.Role == StaffRole.SuperAdmin || targetOrganizationId == LibraryScope.SystemOrganizationId ||
+         targetOrganization is not null && OrganizationAuthority.IsLibrary(targetOrganization)) &&
         staffEligibility.IsCurrentAndEligible(ticketActor, lockedActor, targetOrganizationId, StaffRoleRequirement.Admin) &&
         (lockedActor.Role == StaffRole.SuperAdmin || targetRole != StaffRole.SuperAdmin);
 

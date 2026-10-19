@@ -73,6 +73,7 @@ public sealed partial class PatronSuggestionService
         try
         {
             result = await patronProvider.LookupIdentifierAsync(identifier, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -81,6 +82,10 @@ public sealed partial class PatronSuggestionService
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
+            if (exception is PolarisOperationalException && cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             logger.LogWarning(
                 exception,
                 "Immediate identifier lookup failed for title request {TitleRequestId}.",
@@ -88,6 +93,10 @@ public sealed partial class PatronSuggestionService
             result = new IdentifierLookupResult(
                 IdentifierLookupOutcome.OperationalFailure,
                 ErrorCode: "polaris_identifier_lookup_failed");
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
 
         if (result.Outcome == IdentifierLookupOutcome.OperationalFailure)
@@ -105,7 +114,9 @@ public sealed partial class PatronSuggestionService
             cancellationToken);
         await using (var organization = new SqlCommand(
             """
-            SELECT [IsActive]
+            SELECT CONVERT(bit, CASE
+                WHEN [Id] > 1 AND [OrganizationCodeId] = 2 AND [IsActive] = 1 THEN 1
+                ELSE 0 END)
             FROM [asap].[Organization] WITH (UPDLOCK, HOLDLOCK)
             WHERE [Id] = @organizationId;
             """,

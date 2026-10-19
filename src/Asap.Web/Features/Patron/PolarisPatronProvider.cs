@@ -5,6 +5,7 @@ using Clc.Polaris.Api.Configuration;
 using Clc.Polaris.Api.Models;
 using Clc.Rest;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Asap.Web.Features.Staff;
@@ -15,7 +16,8 @@ public sealed partial class PolarisPatronProvider(
     IDbContextFactory<AsapDbContext> contextFactory,
     IntegrationCredentialProtector credentialProtector,
     IHttpClientFactory httpClientFactory,
-    TimeProvider timeProvider) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
+    TimeProvider timeProvider,
+    ILogger<PolarisPatronProvider> logger) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
 {
     private static readonly HashSet<int> DocumentedCreateNoEffectStatuses =
         [6, -4002, -4004, -4006, -4007, -4020, -4021, -4022];
@@ -46,12 +48,11 @@ public sealed partial class PolarisPatronProvider(
             var (client, _) = await CreateClientAsync(PolarisConfigurationValidation.SystemOrganizationId, cancellationToken);
             var rows = await LoadOrganizationsAsync(client, cancellationToken);
             return rows
-                .Where(row => row.OrganizationID > 0)
                 .Select(row => new PolarisOrganizationSnapshot(
-                    row.OrganizationID,
-                    Clean(row.DisplayName) ?? Clean(row.Name) ?? Clean(row.Abbreviation) ?? row.OrganizationID.ToString(),
+                    row.Id,
+                    Clean(row.DisplayName) ?? Clean(row.Name) ?? Clean(row.Abbreviation) ?? row.Id.ToString(),
                     Clean(row.Abbreviation),
-                    row.OrganizationCodeID,
+                    row.OrganizationCodeId,
                     row.ParentOrganizationID))
                 .ToArray();
         }
@@ -77,8 +78,8 @@ public sealed partial class PolarisPatronProvider(
             var (client, _) = await CreateClientAsync(PolarisConfigurationValidation.SystemOrganizationId, cancellationToken);
             var response = await client.CallAsync(() => client.PatronCodesGetAsync(null, cancellationToken), cancellationToken);
             var result = response.Data;
-            if (response.Response?.IsSuccessStatusCode != true ||
-                result is null || result.PAPIErrorCode < 0)
+            if (response.Response?.IsSuccessStatusCode != true || result is null ||
+                !TryValidatePatronCodesResponse(response.Response.Content, result))
             {
                 throw new PolarisOperationalException(
                     "polaris_patron_codes_failed",
@@ -86,9 +87,6 @@ public sealed partial class PolarisPatronProvider(
             }
 
             return result.PatronCodesRows
-                .Where(row => row.PatronCodeID > 0)
-                .GroupBy(row => row.PatronCodeID)
-                .Select(group => group.First())
                 .OrderBy(row => row.Description, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(row => row.PatronCodeID)
                 .Select(row => new PolarisPatronCodeSnapshot(
@@ -139,12 +137,31 @@ public sealed partial class PolarisPatronProvider(
                     "Polaris returned an invalid authentication response.");
             }
 
+            var hasPatronId = HasTopLevelProperty(response.Response.Content, "PatronID");
+            var authenticatedPatronId = 0;
+            if (hasPatronId)
+            {
+                if (!TryReadPositiveTopLevelInt32(response.Response.Content, "PatronID", out authenticatedPatronId) ||
+                    authentication.PatronID != authenticatedPatronId)
+                {
+                    throw new PolarisOperationalException(
+                        "polaris_authentication_protocol_failed",
+                        "Polaris returned an invalid authentication response.");
+                }
+            }
+            else if (authentication.PatronID != 0)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_authentication_protocol_failed",
+                    "Polaris returned an invalid authentication response.");
+            }
+
             if (papiErrorCode != 0)
             {
                 throw new PatronAuthenticationException("Incorrect Login - Please try again");
             }
 
-            if (authentication.PatronID <= 0 ||
+            if (!hasPatronId || authenticatedPatronId <= 0 ||
                 string.IsNullOrWhiteSpace(authentication.AccessToken) ||
                 string.IsNullOrWhiteSpace(authentication.AccessSecret))
             {
@@ -153,7 +170,8 @@ public sealed partial class PolarisPatronProvider(
                     "Polaris returned an incomplete authentication response.");
             }
 
-            return await LoadPatronAsync(client, barcode, pin, cancellationToken);
+            return await LoadPatronAsync(client, barcode, pin, authenticatedPatronId,
+                requireBarcodeAlias: false, cancellationToken);
         }
         catch (PatronAuthenticationException)
         {
@@ -178,7 +196,8 @@ public sealed partial class PolarisPatronProvider(
         var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
         try
         {
-            return await LoadPatronAsync(client, barcode, string.Empty, cancellationToken);
+            return await LoadPatronAsync(client, barcode, string.Empty, expectedPatronId: null,
+                requireBarcodeAlias: true, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -223,6 +242,8 @@ public sealed partial class PolarisPatronProvider(
             using var document = JsonDocument.Parse(rawContent);
             var root = document.RootElement;
             if (!TryGetUniqueProperty(root, "PatronBasicData", out var rawPatron) ||
+                rawPatron.ValueKind != JsonValueKind.Object ||
+                HasDuplicateProperties(root) || HasDuplicateProperties(rawPatron) ||
                 !TryGetUniqueProperty(rawPatron, "PatronID", out var rawPatronId) ||
                 !TryReadPositiveInt32(rawPatronId, out var patronId) ||
                 result.PatronBasicData is null || result.PatronBasicData.PatronID != patronId)
@@ -230,6 +251,55 @@ public sealed partial class PolarisPatronProvider(
                 throw new PolarisOperationalException(
                     "polaris_patron_id_protocol_failed",
                     "Polaris returned an incomplete patron identity.");
+            }
+
+            var requestedBarcode = barcode.Trim();
+            var hasCurrentBarcode = rawPatron.EnumerateObject().Any(property =>
+                string.Equals(property.Name, "Barcode", StringComparison.OrdinalIgnoreCase));
+            var hasFormerBarcode = rawPatron.EnumerateObject().Any(property =>
+                string.Equals(property.Name, "FormerID", StringComparison.OrdinalIgnoreCase));
+            string? currentBarcode = null;
+            string? formerBarcode = null;
+            if (hasCurrentBarcode)
+            {
+                if (!TryGetUniqueProperty(rawPatron, "Barcode", out var rawBarcode) ||
+                    rawBarcode.ValueKind != JsonValueKind.String ||
+                    Clean(rawBarcode.GetString()) is not { Length: > 0 and <= 50 } parsedBarcode ||
+                    !string.Equals(parsedBarcode, Clean(result.PatronBasicData.Barcode), StringComparison.Ordinal))
+                {
+                    throw new PolarisOperationalException(
+                        "polaris_patron_id_protocol_failed",
+                        "Polaris returned an invalid patron barcode alias.");
+                }
+                currentBarcode = parsedBarcode;
+            }
+            if (hasFormerBarcode)
+            {
+                if (!TryGetUniqueProperty(rawPatron, "FormerID", out var rawFormerBarcode) ||
+                    rawFormerBarcode.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                {
+                    throw new PolarisOperationalException(
+                        "polaris_patron_id_protocol_failed",
+                        "Polaris returned an invalid former patron barcode alias.");
+                }
+                formerBarcode = rawFormerBarcode.ValueKind == JsonValueKind.String
+                    ? Clean(rawFormerBarcode.GetString())
+                    : null;
+                if (formerBarcode is { Length: > 50 } ||
+                    !string.Equals(formerBarcode, Clean(result.PatronBasicData.FormerID), StringComparison.Ordinal))
+                {
+                    throw new PolarisOperationalException(
+                        "polaris_patron_id_protocol_failed",
+                        "Polaris returned an invalid former patron barcode alias.");
+                }
+            }
+            if ((currentBarcode is not null || formerBarcode is not null) &&
+                !string.Equals(requestedBarcode, currentBarcode, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(requestedBarcode, formerBarcode, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_id_protocol_failed",
+                    "Polaris returned a different patron for the requested barcode.");
             }
 
             return patronId;
@@ -276,7 +346,7 @@ public sealed partial class PolarisPatronProvider(
             }
 
             var organizations = (await LoadOrganizationsAsync(client, cancellationToken))
-                .ToDictionary(row => row.OrganizationID);
+                .ToDictionary(row => row.Id);
             return branchIds.Select(id =>
                 {
                     organizations.TryGetValue(id, out var organization);
@@ -341,6 +411,13 @@ public sealed partial class PolarisPatronProvider(
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (Exception exception) when (client?.MutationDispatched == true &&
+                                          exception is JsonException or Newtonsoft.Json.JsonException)
+        {
+            // A malformed response after the PUT may follow a successful write. Keep
+            // the operation in the durable ambiguous-outcome path.
+            throw Operational("polaris_pickup_update_protocol_failed", exception);
         }
         catch (Exception exception) when (client?.MutationDispatched != true)
         {
@@ -531,9 +608,15 @@ public sealed partial class PolarisPatronProvider(
         {
             throw;
         }
-        catch (Exception exception) when (IsExpectedProviderFailure(exception))
+        catch (Exception exception) when (
+            exception is Newtonsoft.Json.JsonException or System.Text.Json.JsonException)
         {
-            throw Operational("polaris_bib_validation_failed", exception);
+            throw Operational("polaris_bib_validation_protocol_failed", exception);
+        }
+        catch (Exception exception) when (
+            exception is HttpRequestException or TimeoutException or OperationCanceledException)
+        {
+            throw Operational("polaris_bib_validation_transport_failed", exception);
         }
     }
 
@@ -569,7 +652,9 @@ public sealed partial class PolarisPatronProvider(
                     item.BibID,
                     item.StatusID,
                     Clean(item.StatusDescription),
-                    item.PickupBranchID,
+                    item.PickupBranchID > PolarisConfigurationValidation.SystemOrganizationId
+                        ? item.PickupBranchID
+                        : null,
                     barcode))
                 .ToList();
         }
@@ -636,6 +721,38 @@ public sealed partial class PolarisPatronProvider(
             {
                 return false;
             }
+
+            var hasPickupBranchId = false;
+            var pickupBranchIdElement = default(JsonElement);
+            foreach (var property in row.EnumerateObject())
+            {
+                if (!string.Equals(property.Name, "PickupBranchID", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (hasPickupBranchId)
+                {
+                    return false;
+                }
+
+                hasPickupBranchId = true;
+                pickupBranchIdElement = property.Value;
+            }
+
+            if (!hasPickupBranchId)
+            {
+                if (model.PickupBranchID != 0)
+                {
+                    return false;
+                }
+            }
+            else if (pickupBranchIdElement.ValueKind != JsonValueKind.Number ||
+                     !pickupBranchIdElement.TryGetInt32(out var pickupBranchId) ||
+                     pickupBranchId < 0 || pickupBranchId != model.PickupBranchID)
+            {
+                return false;
+            }
         }
 
         return true;
@@ -658,15 +775,10 @@ public sealed partial class PolarisPatronProvider(
                 password: string.Empty,
                 cancellationToken), cancellationToken);
             var data = response.Data;
-            if (response.Response?.IsSuccessStatusCode != true || data is null || data.PAPIErrorCode != 0)
+            if (response.Response?.IsSuccessStatusCode != true || data is null ||
+                !TryValidateCheckoutResponse(response.Response.Content, data))
             {
                 throw new PolarisOperationalException("polaris_checkout_read_failed", "Polaris checkout data was unavailable.");
-            }
-            if (data.PatronItemsOutGetRows.Any(item => item.BibID <= 0))
-            {
-                throw new PolarisOperationalException(
-                    "polaris_checkout_read_failed",
-                    "Polaris returned an incomplete checkout row.");
             }
 
             return data.PatronItemsOutGetRows
@@ -803,24 +915,27 @@ public sealed partial class PolarisPatronProvider(
             {
                 return Ambiguous(isReply, "provider_protocol_error");
             }
-            var requestGuid = data.RequestGuid ?? replyContext?.RequestGuid;
-            var group = Clean(data.TxnGroupQualifer) ?? replyContext?.TxnGroupQualifier;
-            var qualifier = Clean(data.TxnQualifier) ?? replyContext?.TxnQualifier;
-            // Create/reply return a conversation GUID, not a SysHoldRequestID. Final hold
-            // identity is established independently from the patron's typed hold listing.
             if (papiErrorCode != 0)
             {
                 return new HoldProviderResult(
                     HoldProviderOutcome.Ambiguous,
-                    requestGuid,
                     null,
-                    group,
-                    qualifier,
+                    null,
+                    null,
+                    null,
                     statusType,
                     statusValue,
                     isReply ? "reply_papi_error" : "create_papi_error",
                     "provider_papi_error");
             }
+
+            if (!TryReadHoldConversationIdentity(root, data, statusType, statusValue, isReply, replyContext,
+                    out var requestGuid, out var group, out var qualifier))
+            {
+                return Ambiguous(isReply, "provider_protocol_error");
+            }
+            // Create/reply return a conversation GUID, not a SysHoldRequestID. Final hold
+            // identity is established independently from the patron's typed hold listing.
             if (!isReply && statusType == 3 && statusValue == 5 &&
                 requestGuid is { } guid && guid != Guid.Empty &&
                 !string.IsNullOrWhiteSpace(group) && !string.IsNullOrWhiteSpace(qualifier))
@@ -893,12 +1008,26 @@ public sealed partial class PolarisPatronProvider(
         DispatchAwarePapiClient client,
         string barcode,
         string pin,
+        int? expectedPatronId,
+        bool requireBarcodeAlias,
         CancellationToken cancellationToken)
     {
-        var response = await client.CallAsync(() => client.PatronBasicDataGetAsync(
-            barcode,
-            pin,
-            cancellationToken: cancellationToken), cancellationToken);
+        IRestResponse<PatronBasicDataGetResult> response;
+        try
+        {
+            response = await client.CallAsync(() => client.PatronBasicDataGetAsync(
+                barcode,
+                pin,
+                cancellationToken: cancellationToken), cancellationToken);
+        }
+        catch (Newtonsoft.Json.JsonException exception)
+        {
+            throw Operational("polaris_patron_protocol_failed", exception);
+        }
+        catch (System.Text.Json.JsonException exception)
+        {
+            throw Operational("polaris_patron_protocol_failed", exception);
+        }
         var rawContent = response.Response?.Content ?? string.Empty;
         var result = response.Data;
         var patron = result?.PatronBasicData;
@@ -935,33 +1064,45 @@ public sealed partial class PolarisPatronProvider(
                 : new PatronAuthenticationException("Incorrect Login - Please try again");
         }
 
-        if (patron is null || patron.PatronID <= 0)
+        if (patron is null || !TryReadPatronIdentity(rawContent, patron, out var patronId,
+                out var patronOrganizationId, out var patronCodeId, out var currentBarcode, out var formerBarcode) ||
+            expectedPatronId.HasValue && patronId != expectedPatronId.Value ||
+            requireBarcodeAlias && !string.Equals(barcode.Trim(), currentBarcode, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(barcode.Trim(), formerBarcode, StringComparison.OrdinalIgnoreCase))
         {
             throw new PolarisOperationalException(
                 "polaris_patron_protocol_failed",
-                "Polaris returned an incomplete patron response.");
+                "Polaris returned an incomplete or mismatched patron identity.");
         }
 
         var organizations = await LoadOrganizationsAsync(client, cancellationToken);
-        var home = ResolveHomeLibrary(organizations, patron.PatronOrgID)
+        var home = ResolveHomeLibrary(organizations, patronOrganizationId)
             ?? throw new PolarisOperationalException(
                 "polaris_home_library_missing",
                 "The patron home library could not be resolved from Polaris.");
+        var preferredPickupBranchId = ResolvePreferredPickupId(
+            patron.RequestPickupBranchID,
+            patronOrganizationId,
+            rawContent,
+            out var pickupPreferenceState);
         return new PatronSnapshot(
-            patron.PatronID,
-            (patron.Barcode ?? barcode).Trim(),
+            patronId,
+            currentBarcode,
             Clean(patron.EmailAddress),
             Clean(patron.NameFirst),
             Clean(patron.NameLast),
-            patron.PatronCodeID <= 0 ? null : patron.PatronCodeID,
+            patronCodeId,
             null,
-            patron.PatronOrgID,
-            home.OrganizationID,
-            home.DisplayName ?? home.Name ?? home.Abbreviation ?? home.OrganizationID.ToString(),
-            ResolvePreferredPickupId(patron.RequestPickupBranchID, patron.PatronOrgID, rawContent));
+            patronOrganizationId,
+            home.Id,
+            home.DisplayName ?? home.Name ?? home.Abbreviation ?? home.Id.ToString(),
+            preferredPickupBranchId,
+            formerBarcode,
+            requireBarcodeAlias ? Clean(barcode) : null,
+            pickupPreferenceState);
     }
 
-    private static async Task<IReadOnlyList<OrganizationsGetRow>> LoadOrganizationsAsync(
+    private static async Task<IReadOnlyList<NativeOrganization>> LoadOrganizationsAsync(
         DispatchAwarePapiClient client,
         CancellationToken cancellationToken)
     {
@@ -970,14 +1111,14 @@ public sealed partial class PolarisPatronProvider(
             cancellationToken), cancellationToken);
         var result = response.Data;
         if (response.Response?.IsSuccessStatusCode != true ||
-            result is null || result.PAPIErrorCode < 0 || result.OrganizationsGetRows.Count == 0)
+            result is null || !TryReadOrganizationsResponse(response.Response.Content, result, out var organizations))
         {
             throw new PolarisOperationalException(
                 "polaris_organizations_failed",
                 "Polaris did not return its organization hierarchy.");
         }
 
-        return result.OrganizationsGetRows;
+        return organizations;
     }
 
     private Task<(DispatchAwarePapiClient Client, PolarisSettings Settings)> CreateMemberClientAsync(
@@ -1024,24 +1165,25 @@ public sealed partial class PolarisPatronProvider(
                     settings.StaffDomain!,
                     settings.AdminUser!,
                     password)
-            });
+            },
+            logger);
         return (client, settings);
     }
 
-    private static OrganizationsGetRow? ResolveHomeLibrary(
-        IReadOnlyList<OrganizationsGetRow> organizations,
+    private static NativeOrganization? ResolveHomeLibrary(
+        IReadOnlyList<NativeOrganization> organizations,
         int patronOrganizationId)
     {
-        var byId = organizations.ToDictionary(item => item.OrganizationID);
+        var byId = organizations.ToDictionary(item => item.Id);
         if (!byId.TryGetValue(patronOrganizationId, out var current))
         {
             return null;
         }
 
         var visited = new HashSet<int>();
-        while (visited.Add(current.OrganizationID))
+        while (visited.Add(current.Id))
         {
-            if (current.OrganizationCodeID == 2)
+            if (current.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId)
             {
                 return current;
             }
@@ -1054,6 +1196,151 @@ public sealed partial class PolarisPatronProvider(
         }
 
         return null;
+    }
+
+    private static bool TryReadOrganizationsResponse(
+        string? content,
+        OrganizationsGetResult data,
+        out IReadOnlyList<NativeOrganization> organizations)
+    {
+        organizations = [];
+        try
+        {
+            using var document = JsonDocument.Parse(content ?? string.Empty);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || HasDuplicateProperties(root) ||
+                !TryGetUniqueProperty(root, "PAPIErrorCode", out var rawCode) ||
+                rawCode.ValueKind != JsonValueKind.Number || !rawCode.TryGetInt32(out var papiCode) ||
+                papiCode < 0 || data.PAPIErrorCode != papiCode ||
+                !TryGetUniqueProperty(root, "OrganizationsGetRows", out var rawRows) ||
+                rawRows.ValueKind != JsonValueKind.Array || data.OrganizationsGetRows is null ||
+                data.OrganizationsGetRows.Count == 0 ||
+                data.OrganizationsGetRows.Count != rawRows.GetArrayLength())
+            {
+                return false;
+            }
+
+            var parsed = new List<NativeOrganization>(data.OrganizationsGetRows.Count);
+            var identities = new HashSet<int>();
+            var index = 0;
+            foreach (var rawRow in rawRows.EnumerateArray())
+            {
+                var model = data.OrganizationsGetRows[index++];
+                if (rawRow.ValueKind != JsonValueKind.Object || model is null || HasDuplicateProperties(rawRow) ||
+                    !TryGetUniqueProperty(rawRow, "OrganizationID", out var rawId) ||
+                    rawId.ValueKind != JsonValueKind.Number || !rawId.TryGetInt32(out var id) || id <= 0 ||
+                    id != model.OrganizationID || !identities.Add(id))
+                {
+                    return false;
+                }
+
+                int? codeId = null;
+                if (TryGetUniqueProperty(rawRow, "OrganizationCodeID", out var rawOrganizationCode))
+                {
+                    if (rawOrganizationCode.ValueKind == JsonValueKind.Null)
+                    {
+                        if (model.OrganizationCodeID != 0)
+                        {
+                            return false;
+                        }
+                    }
+                    else if (rawOrganizationCode.ValueKind != JsonValueKind.Number ||
+                             !rawOrganizationCode.TryGetInt32(out var parsedCodeId) ||
+                             model.OrganizationCodeID != parsedCodeId)
+                    {
+                        return false;
+                    }
+                    else
+                    {
+                        codeId = parsedCodeId;
+                    }
+                }
+                else if (model.OrganizationCodeID != 0)
+                {
+                    return false;
+                }
+
+                int? parentId = null;
+                if (TryGetUniqueProperty(rawRow, "ParentOrganizationID", out var rawParentId))
+                {
+                    if (rawParentId.ValueKind == JsonValueKind.Null)
+                    {
+                        if (model.ParentOrganizationID is not null)
+                        {
+                            return false;
+                        }
+                    }
+                    else if (rawParentId.ValueKind != JsonValueKind.Number ||
+                             !rawParentId.TryGetInt32(out var parsedParentId) ||
+                             model.ParentOrganizationID != parsedParentId)
+                    {
+                        return false;
+                    }
+                    else
+                    {
+                        parentId = parsedParentId;
+                    }
+                }
+                else if (model.ParentOrganizationID is not null)
+                {
+                    return false;
+                }
+
+                parsed.Add(new NativeOrganization(
+                    id,
+                    codeId,
+                    parentId,
+                    model.DisplayName,
+                    model.Name,
+                    model.Abbreviation));
+            }
+
+            organizations = parsed;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryValidatePatronCodesResponse(string? content, PatronCodesGetResult data)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content ?? string.Empty);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || HasDuplicateProperties(root) ||
+                !TryGetUniqueProperty(root, "PAPIErrorCode", out var rawCode) ||
+                rawCode.ValueKind != JsonValueKind.Number || !rawCode.TryGetInt32(out var papiCode) ||
+                papiCode < 0 || data.PAPIErrorCode != papiCode ||
+                !TryGetUniqueProperty(root, "PatronCodesRows", out var rawRows) ||
+                rawRows.ValueKind != JsonValueKind.Array || data.PatronCodesRows is null ||
+                data.PatronCodesRows.Count != rawRows.GetArrayLength())
+            {
+                return false;
+            }
+
+            var identities = new HashSet<int>();
+            var index = 0;
+            foreach (var rawRow in rawRows.EnumerateArray())
+            {
+                var model = data.PatronCodesRows[index++];
+                if (rawRow.ValueKind != JsonValueKind.Object || model is null || HasDuplicateProperties(rawRow) ||
+                    !TryGetUniqueProperty(rawRow, "PatronCodeID", out var rawId) ||
+                    rawId.ValueKind != JsonValueKind.Number || !rawId.TryGetInt32(out var id) || id <= 0 ||
+                    id != model.PatronCodeID || !identities.Add(id))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static string? Clean(string? value) =>
@@ -1223,13 +1510,320 @@ public sealed partial class PolarisPatronProvider(
         try
         {
             using var document = JsonDocument.Parse(content ?? string.Empty);
-            return TryGetUniqueProperty(document.RootElement, "PAPIErrorCode", out var code) &&
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                   TryGetUniqueProperty(document.RootElement, "PAPIErrorCode", out var code) &&
+                   code.ValueKind == JsonValueKind.Number &&
                    code.TryGetInt32(out papiErrorCode);
         }
         catch (JsonException)
         {
             return false;
         }
+    }
+
+    private static bool TryReadPositiveTopLevelInt32(string? content, string name, out int value)
+    {
+        value = default;
+        try
+        {
+            using var document = JsonDocument.Parse(content ?? string.Empty);
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                   TryGetUniqueProperty(document.RootElement, name, out var element) &&
+                   element.ValueKind == JsonValueKind.Number &&
+                   element.TryGetInt32(out value) && value > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasTopLevelProperty(string? content, string name)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content ?? string.Empty);
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                   document.RootElement.EnumerateObject().Any(property =>
+                       string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadPatronIdentity(
+        string content,
+        PatronData patron,
+        out int patronId,
+        out int patronOrganizationId,
+        out int? patronCodeId,
+        out string barcode,
+        out string? formerBarcode)
+    {
+        patronId = default;
+        patronOrganizationId = default;
+        patronCodeId = null;
+        barcode = string.Empty;
+        formerBarcode = null;
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || HasDuplicateProperties(root) ||
+                !TryGetUniqueProperty(root, "PatronBasicData", out var rawPatron) ||
+                rawPatron.ValueKind != JsonValueKind.Object || HasDuplicateProperties(rawPatron) ||
+                !TryGetUniqueProperty(rawPatron, "PatronID", out var rawId) ||
+                rawId.ValueKind != JsonValueKind.Number || !rawId.TryGetInt32(out patronId) ||
+                patronId <= 0 || patron.PatronID != patronId ||
+                !TryGetUniqueProperty(rawPatron, "PatronOrgID", out var rawOrganizationId) ||
+                rawOrganizationId.ValueKind != JsonValueKind.Number ||
+                !rawOrganizationId.TryGetInt32(out patronOrganizationId) ||
+                patronOrganizationId <= 0 || patron.PatronOrgID != patronOrganizationId ||
+                !TryGetUniqueProperty(rawPatron, "Barcode", out var rawBarcode) ||
+                rawBarcode.ValueKind != JsonValueKind.String ||
+                Clean(rawBarcode.GetString()) is not { } currentBarcode ||
+                currentBarcode.Length > 50 ||
+                !string.Equals(currentBarcode, Clean(patron.Barcode), StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (TryGetUniqueProperty(rawPatron, "PatronCodeID", out var rawPatronCodeId))
+            {
+                if (rawPatronCodeId.ValueKind != JsonValueKind.Number ||
+                    !rawPatronCodeId.TryGetInt32(out var parsedPatronCodeId) ||
+                    patron.PatronCodeID != parsedPatronCodeId)
+                {
+                    return false;
+                }
+
+                // Polaris responses historically omit unknown or unclassified patron
+                // codes. Preserve that policy for every nonpositive native integer.
+                patronCodeId = parsedPatronCodeId > 0 ? parsedPatronCodeId : null;
+            }
+            else if (rawPatron.EnumerateObject().Any(property =>
+                         string.Equals(property.Name, "PatronCodeID", StringComparison.OrdinalIgnoreCase)) ||
+                     patron.PatronCodeID != 0)
+            {
+                // A missing source value is valid only when the pinned DTO kept its
+                // default value; a coerced or pre-populated model must not supply it.
+                return false;
+            }
+
+            if (TryGetUniqueProperty(rawPatron, "FormerID", out var rawFormerId))
+            {
+                if (rawFormerId.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                {
+                    return false;
+                }
+                formerBarcode = rawFormerId.ValueKind == JsonValueKind.String
+                    ? Clean(rawFormerId.GetString())
+                    : null;
+            }
+            else if (rawPatron.EnumerateObject().Any(property =>
+                         string.Equals(property.Name, "FormerID", StringComparison.OrdinalIgnoreCase)))
+            {
+                return false;
+            }
+
+            if (!string.Equals(formerBarcode, Clean(patron.FormerID), StringComparison.Ordinal))
+            {
+                return false;
+            }
+            if (formerBarcode is { Length: > 50 })
+            {
+                return false;
+            }
+
+            barcode = currentBarcode;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryValidateCheckoutResponse(string? content, PatronItemsOutGetResult data)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content ?? string.Empty);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || HasDuplicateProperties(root) ||
+                !TryGetUniqueProperty(root, "PAPIErrorCode", out var errorCode) ||
+                errorCode.ValueKind != JsonValueKind.Number || !errorCode.TryGetInt32(out var code) ||
+                code != 0 || data.PAPIErrorCode != code ||
+                !TryGetUniqueProperty(root, "PatronItemsOutGetRows", out var rawRows) ||
+                rawRows.ValueKind != JsonValueKind.Array || data.PatronItemsOutGetRows is null ||
+                data.PatronItemsOutGetRows.Count != rawRows.GetArrayLength())
+            {
+                return false;
+            }
+
+            var index = 0;
+            foreach (var rawRow in rawRows.EnumerateArray())
+            {
+                var model = data.PatronItemsOutGetRows[index++];
+                if (rawRow.ValueKind != JsonValueKind.Object || HasDuplicateProperties(rawRow) || model is null ||
+                    !TryGetUniqueProperty(rawRow, "BibID", out var bibIdElement) ||
+                    bibIdElement.ValueKind != JsonValueKind.Number ||
+                    !bibIdElement.TryGetInt32(out var bibId) || bibId <= 0 || model.BibID != bibId)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadHoldConversationIdentity(
+        JsonElement root,
+        HoldRequestCreateResult data,
+        int statusType,
+        int statusValue,
+        bool isReply,
+        HoldReplyCommand? replyContext,
+        out Guid? requestGuid,
+        out string? groupQualifier,
+        out string? qualifier)
+    {
+        requestGuid = null;
+        groupQualifier = null;
+        qualifier = null;
+        var hasRawGuid = TryGetUniqueProperty(root, "RequestGUID", out var rawGuid);
+        var hasGuidProperty = root.EnumerateObject().Any(property =>
+            string.Equals(property.Name, "RequestGUID", StringComparison.OrdinalIgnoreCase));
+        if (hasGuidProperty)
+        {
+            if (!hasRawGuid || rawGuid.ValueKind != JsonValueKind.String ||
+                !Guid.TryParse(rawGuid.GetString(), out var parsedGuid) || parsedGuid == Guid.Empty ||
+                data.RequestGuid != parsedGuid ||
+                isReply && replyContext is not null && parsedGuid != replyContext.RequestGuid)
+            {
+                return false;
+            }
+            requestGuid = parsedGuid;
+        }
+        else if (data.RequestGuid is not null)
+        {
+            return false;
+        }
+        else if (isReply && replyContext is not null)
+        {
+            requestGuid = replyContext.RequestGuid;
+        }
+
+        var rawCanonicalGroup = TryGetUniqueProperty(root, "TxnGroupQualifier", out var canonicalGroupElement);
+        var rawPackageGroup = TryGetUniqueProperty(root, "TxnGroupQualifer", out var packageGroupElement);
+        var hasGroupProperty = root.EnumerateObject().Any(property =>
+            string.Equals(property.Name, "TxnGroupQualifer", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(property.Name, "TxnGroupQualifier", StringComparison.OrdinalIgnoreCase));
+        if (hasGroupProperty)
+        {
+            if (root.EnumerateObject().Count(property =>
+                    string.Equals(property.Name, "TxnGroupQualifier", StringComparison.OrdinalIgnoreCase)) > 1 ||
+                root.EnumerateObject().Count(property =>
+                    string.Equals(property.Name, "TxnGroupQualifer", StringComparison.OrdinalIgnoreCase)) > 1)
+            {
+                return false;
+            }
+            var canonicalGroup = rawCanonicalGroup && canonicalGroupElement.ValueKind == JsonValueKind.String
+                ? Clean(canonicalGroupElement.GetString())
+                : null;
+            var packageGroup = rawPackageGroup && packageGroupElement.ValueKind == JsonValueKind.String
+                ? Clean(packageGroupElement.GetString())
+                : null;
+            if (rawCanonicalGroup && canonicalGroup is null || rawPackageGroup && packageGroup is null)
+            {
+                return false;
+            }
+            if (rawCanonicalGroup && rawPackageGroup &&
+                !string.Equals(canonicalGroup, packageGroup, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            // Beta.5's typed model owns the misspelled property. When it is present,
+            // the durable/reply value must come from that exact raw property. The
+            // correctly-spelled alias is accepted only when it is the sole raw field,
+            // because that alias is not represented by this pinned DTO.
+            var selectedGroup = rawPackageGroup ? packageGroupElement : rawCanonicalGroup ? canonicalGroupElement : default;
+            if (selectedGroup.ValueKind != JsonValueKind.String ||
+                Clean(selectedGroup.GetString()) is not { } rawGroup)
+            {
+                return false;
+            }
+            var modelGroup = Clean(data.TxnGroupQualifer);
+            if (rawPackageGroup && !string.Equals(modelGroup, rawGroup, StringComparison.Ordinal) ||
+                !rawPackageGroup && modelGroup is not null)
+            {
+                return false;
+            }
+            groupQualifier = rawGroup;
+        }
+        else if (data.TxnGroupQualifer is null && isReply && replyContext is not null)
+        {
+            groupQualifier = replyContext.TxnGroupQualifier;
+        }
+        else if (data.TxnGroupQualifer is null)
+        {
+            groupQualifier = null;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (TryGetUniqueProperty(root, "TxnQualifier", out var rawQualifier))
+        {
+            if (rawQualifier.ValueKind != JsonValueKind.String ||
+                Clean(rawQualifier.GetString()) is not { } rawValue ||
+                !string.Equals(rawValue, Clean(data.TxnQualifier), StringComparison.Ordinal))
+            {
+                return false;
+            }
+            qualifier = rawValue;
+        }
+        else if (!root.EnumerateObject().Any(property =>
+                     string.Equals(property.Name, "TxnQualifier", StringComparison.OrdinalIgnoreCase)) &&
+                 data.TxnQualifier is null && isReply && replyContext is not null)
+        {
+            qualifier = replyContext.TxnQualifier;
+        }
+        else if (!root.EnumerateObject().Any(property =>
+                     string.Equals(property.Name, "TxnQualifier", StringComparison.OrdinalIgnoreCase)) &&
+                 data.TxnQualifier is null)
+        {
+            qualifier = null;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (isReply && replyContext is not null &&
+            (requestGuid != replyContext.RequestGuid ||
+             groupQualifier is not null && !string.Equals(groupQualifier, replyContext.TxnGroupQualifier, StringComparison.Ordinal) ||
+             qualifier is not null && !string.Equals(qualifier, replyContext.TxnQualifier, StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        if (!isReply && statusType == 3 && statusValue == 5 &&
+            (requestGuid is null || groupQualifier is null || qualifier is null))
+        {
+            return false;
+        }
+
+        return !requestGuid.HasValue || requestGuid.Value != Guid.Empty;
     }
 
     private static bool IsDefinitiveInvalidBibResponse(string? content)
@@ -1336,8 +1930,10 @@ public sealed partial class PolarisPatronProvider(
     private static int? ResolvePreferredPickupId(
         int requestPickupBranchId,
         int patronOrganizationId,
-        string rawContent)
+        string rawContent,
+        out PatronPickupPreferenceState pickupPreferenceState)
     {
+        pickupPreferenceState = PatronPickupPreferenceState.Absent;
         using var document = JsonDocument.Parse(rawContent);
         if (!TryGetUniqueProperty(document.RootElement, "PatronBasicData", out var patron) ||
             patron.ValueKind != JsonValueKind.Object || HasDuplicateProperties(patron))
@@ -1346,9 +1942,19 @@ public sealed partial class PolarisPatronProvider(
         }
         if (!TryGetUniqueProperty(patron, "RequestPickupBranchID", out var value))
         {
-            // Preserve the established registered-branch fallback for responses
-            // that omit the field added in PAPI 6.7. It never falls back to system 1.
-            return patronOrganizationId > PolarisConfigurationValidation.SystemOrganizationId ? patronOrganizationId : null;
+            if (requestPickupBranchId != 0)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_pickup_preference_invalid",
+                    "Polaris returned an inconsistent pickup preference.");
+            }
+
+            // Keep the established basic-data projection: an omitted field uses
+            // the registered branch. The explicit state lets hold placement
+            // distinguish this fallback from a supplied preference.
+            return patronOrganizationId > PolarisConfigurationValidation.SystemOrganizationId
+                ? patronOrganizationId
+                : null;
         }
         if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var id) ||
             id < 0 || id != requestPickupBranchId)
@@ -1357,7 +1963,14 @@ public sealed partial class PolarisPatronProvider(
             // negative values instead of inventing provider semantics for them.
             throw new PolarisOperationalException("polaris_pickup_preference_invalid", "Polaris returned an invalid pickup preference.");
         }
-        // Zero is no usable preference; organization 1 is system scope, not a branch.
+
+        pickupPreferenceState = id > PolarisConfigurationValidation.SystemOrganizationId
+            ? PatronPickupPreferenceState.Current
+            : PatronPickupPreferenceState.ExplicitInvalid;
+        // Explicit zero and system scope are not absence. Preserve them as an
+        // unusable preference state so hold placement cannot silently reroute
+        // to the registered branch. Other patron flows retain their existing
+        // nullable preference projection.
         return id > PolarisConfigurationValidation.SystemOrganizationId ? id : null;
     }
 
@@ -1386,4 +1999,12 @@ public sealed partial class PolarisPatronProvider(
             IdentifierLookupOutcome.OperationalFailure,
             null);
     }
+
+    private sealed record NativeOrganization(
+        int Id,
+        int? OrganizationCodeId,
+        int? ParentOrganizationID,
+        string? DisplayName,
+        string? Name,
+        string? Abbreviation);
 }

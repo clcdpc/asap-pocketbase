@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 
 namespace Asap.Migration;
 
@@ -194,10 +195,17 @@ internal static class MigrationEffectiveConfiguration
         var baseUrl = EnvironmentValue("ASAP_BASE_URL");
         if (baseUrl is not null)
         {
-            return Resolved(
-                NormalizePersistedStaffUrl(StaffUrlFromEnvironment(baseUrl)),
-                "environment_fallback",
-                "ASAP_BASE_URL");
+            var initializedStaffUrl = NormalizePersistedStaffUrl(StaffUrlFromEnvironment(baseUrl));
+            if (initializedStaffUrl.Length > 0)
+            {
+                return Resolved(initializedStaffUrl, "environment_fallback", "ASAP_BASE_URL");
+            }
+
+            var publicUrl = EnvironmentValue("ASAP_PUBLIC_URL");
+            if (publicUrl is not null)
+            {
+                return Resolved(StaffUrlFromEnvironment(publicUrl), "environment_fallback", "ASAP_PUBLIC_URL");
+            }
         }
 
         return Resolved("http://localhost:8090/staff/", "code_default", "settings.staffUrl.localhost");
@@ -224,7 +232,7 @@ internal static class MigrationEffectiveConfiguration
         string field,
         string source) => new
         {
-            hasValue = Value(row, field) is not null,
+            hasValue = RawValue(row, field) is { Length: > 0 },
             provenance = row is null ? "absent_database_record" : "persisted_database",
             source
         };
@@ -234,7 +242,12 @@ internal static class MigrationEffectiveConfiguration
 
     private static object Schedule(string environmentName, string fallback, string targetScheduleKey)
     {
-        var configured = EnvironmentValue(environmentName);
+        var configured = Environment.GetEnvironmentVariable(environmentName);
+        if (string.IsNullOrEmpty(configured))
+        {
+            configured = null;
+        }
+
         return new
         {
             value = configured ?? fallback,
@@ -254,7 +267,7 @@ internal static class MigrationEffectiveConfiguration
         int maximum,
         string fallbackProvenance)
     {
-        var raw = EnvironmentValue(name);
+        var raw = NumericEnvironmentValue(name);
         if (raw is null)
         {
             return new(fallback, fallbackProvenance);
@@ -266,7 +279,7 @@ internal static class MigrationEffectiveConfiguration
 
     private static int? ResolveOptionalInteger(string name, int minimum, int maximum)
     {
-        var raw = EnvironmentValue(name);
+        var raw = NumericEnvironmentValue(name);
         if (raw is null)
         {
             return null;
@@ -278,19 +291,58 @@ internal static class MigrationEffectiveConfiguration
 
     private static int ParseLegacyInteger(string value, int fallback)
     {
-        var digits = new string(value
-            .SkipWhile(character => char.IsWhiteSpace(character))
-            .TakeWhile((character, index) =>
-                char.IsDigit(character) || index == 0 && character is '+' or '-')
-            .ToArray());
-        return int.TryParse(digits, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
-            ? parsed
-            : fallback;
+        var start = 0;
+        while (start < value.Length && IsEcmaScriptWhitespace(value[start]))
+        {
+            start++;
+        }
+
+        var end = start;
+        if (end < value.Length && value[end] is '+' or '-')
+        {
+            end++;
+        }
+        var digitStart = end;
+        while (end < value.Length && value[end] is >= '0' and <= '9')
+        {
+            end++;
+        }
+        if (end == digitStart)
+        {
+            return fallback;
+        }
+
+        var digits = value.AsSpan(start, end - start);
+        if (!BigInteger.TryParse(digits, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+        {
+            return fallback;
+        }
+        if (parsed < int.MinValue)
+        {
+            return int.MinValue;
+        }
+        if (parsed > int.MaxValue)
+        {
+            return int.MaxValue;
+        }
+        return (int)parsed;
     }
+
+    // Keep the ECMAScript parseInt TrimString set: FEFF counts as whitespace; NEL does not.
+    private static bool IsEcmaScriptWhitespace(char value) => value is
+        '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or
+        '\u1680' or '\u2000' or '\u2001' or '\u2002' or '\u2003' or '\u2004' or '\u2005' or
+        '\u2006' or '\u2007' or '\u2008' or '\u2009' or '\u200A' or '\u2028' or '\u2029' or
+        '\u202F' or '\u205F' or '\u3000' or '\uFEFF';
 
     private static string NormalizePersistedStaffUrl(string value)
     {
         value = StripHash(value);
+        if (value.Length == 0)
+        {
+            return string.Empty;
+        }
+
         if (!value.EndsWith('/'))
         {
             value += "/";
@@ -307,6 +359,11 @@ internal static class MigrationEffectiveConfiguration
     private static string StaffUrlFromEnvironment(string value)
     {
         value = StripHash(value);
+        if (value.Length == 0)
+        {
+            return string.Empty;
+        }
+
         if (!value.EndsWith('/'))
         {
             value += "/";
@@ -318,26 +375,63 @@ internal static class MigrationEffectiveConfiguration
     private static string StripHash(string value)
     {
         var index = value.IndexOf('#', StringComparison.Ordinal);
-        return (index >= 0 ? value[..index] : value).Trim();
+        return TrimEcmaScriptWhitespace(index >= 0 ? value[..index] : value);
     }
 
     private static string? EnvironmentValue(string name)
     {
         var value = Environment.GetEnvironmentVariable(name);
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        if (value is null)
+        {
+            return null;
+        }
+
+        var trimmed = TrimEcmaScriptWhitespace(value);
+        return trimmed.Length == 0 ? null : trimmed;
     }
 
+    private static string? NumericEnvironmentValue(string name)
+        => EnvironmentValue(name);
+
     private static string? Value(IReadOnlyDictionary<string, object?>? row, string name)
+    {
+        var value = RawValue(row, name);
+        if (value is null)
+        {
+            return null;
+        }
+
+        var trimmed = TrimEcmaScriptWhitespace(value);
+        return trimmed.Length == 0 ? null : trimmed;
+    }
+
+    private static string TrimEcmaScriptWhitespace(string value)
+    {
+        var start = 0;
+        while (start < value.Length && IsEcmaScriptWhitespace(value[start]))
+        {
+            start++;
+        }
+
+        var end = value.Length;
+        while (end > start && IsEcmaScriptWhitespace(value[end - 1]))
+        {
+            end--;
+        }
+
+        return value[start..end];
+    }
+
+    private static string? RawValue(IReadOnlyDictionary<string, object?>? row, string name)
     {
         if (row is null || !row.TryGetValue(name, out var raw) || raw is null)
         {
             return null;
         }
 
-        var value = raw is byte[] bytes
+        return raw is byte[] bytes
             ? System.Text.Encoding.UTF8.GetString(bytes)
             : Convert.ToString(raw, CultureInfo.InvariantCulture);
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     private sealed record ResolvedInteger(int Value, string Provenance);

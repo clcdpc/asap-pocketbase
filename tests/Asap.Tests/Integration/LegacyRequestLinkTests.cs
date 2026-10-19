@@ -187,6 +187,8 @@ public sealed partial class PatronJourneyTests
                 Id = outOfScopeOrganizationId,
                 DisplayName = "Out-of-scope legacy-link library",
                 Abbreviation = "OLL",
+                OrganizationCodeId = 2,
+                ParentOrganizationId = 1,
                 IsActive = true
             });
         }

@@ -69,6 +69,45 @@ const event = { preventDefault() {} };
   await fixture(async ({ load, get }) => {
     const { createSessionIdentity } = await load('session-identity');
     const { createProfileController } = await load('profile-controller');
+    const identity = createSessionIdentity();
+    const ownerA = identity.accept(staff);
+    let reject;
+    const receipts = [], notices = [], posted = [];
+    const options = { root: get('#profile-view'), sessionIdentity: identity,
+      announce: message => notices.push(message), onReceipt: (...args) => receipts.push(args), clearReceipt() {},
+      onPreferences: (value, owner) => identity.updatePreferences(value, owner),
+      onSessionLost() {}, onAccessUnavailable() {},
+      request: (path, init) => {
+        posted.push(init);
+        return new Promise((resolve, fail) => { reject = fail; });
+      } };
+    const first = createProfileController(options);
+    first.setStaff(ownerA);
+    get('#weekly-email').value = 'a-draft@example.org';
+    const saving = first.save(event);
+    assert.equal(posted.length, 1);
+    first.dispose();
+    identity.clear();
+    const actorB = { ...staff, id: '21', weeklyActionSummaryEmail: 'b@example.org' };
+    identity.accept(actorB);
+    const replacement = createProfileController(options);
+    replacement.setStaff(identity.preferences());
+    get('#weekly-email').value = 'b-draft@example.org';
+    reject(Object.assign(new Error('HTTP 200 response could not be confirmed.'), {
+      status: 200, outcomeUnknown: true
+    }));
+    await saving;
+    assert.equal(receipts.length, 1, 'the unconfirmed response remains attached to the submitted actor');
+    assert.equal(receipts[0][1].id, staff.id);
+    assert.equal(receipts[0][2].outcome, 'uncertain');
+    assert.equal(get('#weekly-email').value, 'b-draft@example.org', 'retired completion cannot repaint the replacement profile');
+    assert.equal(notices.some(message => /could not be confirmed/i.test(message)), false,
+      'retired completion cannot announce over the replacement actor');
+    replacement.dispose();
+  });
+  await fixture(async ({ load, get }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createProfileController } = await load('profile-controller');
     const session = createSessionIdentity(); const original = session.accept(staff);
     const controller = createProfileController({ root: get('#profile-view'), sessionIdentity: session,
       announce() {}, onReceipt() {}, clearReceipt() {}, onPreferences() {}, onSessionLost() {}, onAccessUnavailable() {} });

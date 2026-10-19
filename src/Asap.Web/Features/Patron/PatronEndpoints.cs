@@ -142,6 +142,7 @@ public static class PatronEndpoints
 
         var issued = await sessions.IssueAsync(
             patron.Barcode,
+            patron.PatronId,
             patron.HomeLibraryOrganizationId,
             input.LibraryOrgId,
             effective.OrganizationId,
@@ -189,6 +190,11 @@ public static class PatronEndpoints
         try
         {
             var patron = await patronProvider.RefreshAsync(session.Barcode, session.EffectiveOrganizationId, cancellationToken);
+            if (patron.PatronId != session.NativePatronId ||
+                !patron.KnownBarcodeAliases.Contains(session.Barcode, StringComparer.OrdinalIgnoreCase))
+            {
+                return Unauthorized();
+            }
             var branches = await patronProvider.GetPickupBranchesAsync(patron, session.EffectiveOrganizationId, cancellationToken);
             var selected = branches.Any(item => item.Id == patron.PreferredPickupBranchId)
                 ? patron.PreferredPickupBranchId
@@ -202,8 +208,7 @@ public static class PatronEndpoints
                 session.ExperienceOrganizationId,
                 experienceName: null,
                 configuration,
-                session.ExperienceOrganizationId.HasValue &&
-                session.ExperienceOrganizationId != session.HomeOrganizationId));
+                patron.HomeLibraryOrganizationId != session.EffectiveOrganizationId));
         }
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)

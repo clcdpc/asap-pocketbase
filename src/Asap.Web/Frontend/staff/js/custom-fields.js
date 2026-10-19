@@ -74,7 +74,7 @@ export function collectCustomFields(request, controls) {
     if (value.mode === 'hidden') continue;
     const normalized = value.input.value.trim();
     if (!normalized) {
-      delete result[key];
+      result[key] = null;
       continue;
     }
     result[key] = {

@@ -15,7 +15,13 @@ internal sealed class MigrationCredentialProtector
         _protector = protector;
     }
 
-    public static MigrationCredentialProtector? Load(string? externalConfigurationPath)
+    public static MigrationCredentialProtector? Load(string? externalConfigurationPath) =>
+        Load(externalConfigurationPath, createKeyDirectory: true);
+
+    public static MigrationCredentialProtector? LoadForVerification(string? externalConfigurationPath) =>
+        Load(externalConfigurationPath, createKeyDirectory: false);
+
+    private static MigrationCredentialProtector? Load(string? externalConfigurationPath, bool createKeyDirectory)
     {
         if (string.IsNullOrWhiteSpace(externalConfigurationPath))
         {
@@ -40,7 +46,16 @@ internal sealed class MigrationCredentialProtector
                     "credential_protection_configuration_invalid",
                     "Target Data Protection key path and certificate thumbprint are required for credential import.");
             }
-            Directory.CreateDirectory(keyPath);
+            if (createKeyDirectory)
+            {
+                Directory.CreateDirectory(keyPath);
+            }
+            else if (!Directory.Exists(keyPath))
+            {
+                throw new MigrationOperationException(
+                    "credential_protection_configuration_invalid",
+                    "The configured target Data Protection key directory is unavailable for credential verification.");
+            }
             var certificate = FindCertificate(thumbprint);
             if (certificate is null)
             {
@@ -50,9 +65,16 @@ internal sealed class MigrationCredentialProtector
             }
             var provider = DataProtectionProvider.Create(
                 new DirectoryInfo(keyPath),
-                builder => builder
-                    .SetApplicationName(SecurityContract.DataProtectionApplicationName)
-                    .ProtectKeysWithCertificate(certificate));
+                builder =>
+                {
+                    builder
+                        .SetApplicationName(SecurityContract.DataProtectionApplicationName)
+                        .ProtectKeysWithCertificate(certificate);
+                    if (!createKeyDirectory)
+                    {
+                        builder.DisableAutomaticKeyGeneration();
+                    }
+                });
             return new MigrationCredentialProtector(
                 provider.CreateProtector(SecurityContract.IntegrationCredentialPurpose));
         }
@@ -60,7 +82,9 @@ internal sealed class MigrationCredentialProtector
         {
             throw;
         }
-        catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException)
+        catch (Exception exception) when (
+            exception is JsonException or KeyNotFoundException or InvalidOperationException or
+                CryptographicException or IOException or UnauthorizedAccessException)
         {
             throw new MigrationOperationException(
                 "credential_protection_configuration_invalid",
@@ -69,6 +93,8 @@ internal sealed class MigrationCredentialProtector
     }
 
     public string Protect(string plaintext) => _protector.Protect(plaintext);
+
+    public string Unprotect(string protectedValue) => _protector.Unprotect(protectedValue);
 
     private static X509Certificate2? FindCertificate(string thumbprint)
     {

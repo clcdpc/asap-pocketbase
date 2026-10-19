@@ -35,10 +35,10 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(9001, (await provider.GetPatronCheckoutsAsync(barcode, organizationId,
             CancellationToken.None)).Single().BibId);
         var create = await provider.CreateHoldAsync(new HoldCreateCommand(
-            7001, 9001, handler.PickupBranchId, organizationId, 99, 42), CancellationToken.None);
+            7001, 9001, handler.PickupBranchId, handler.PickupBranchId, 99, 42), CancellationToken.None);
         Assert.AreEqual(HoldProviderOutcome.ReplyRequired, create.Outcome);
         var reply = await provider.ReplyToHoldAsync(new HoldReplyCommand(
-            create.RequestGuid!.Value, create.TxnGroupQualifier!, create.TxnQualifier!, organizationId),
+            create.RequestGuid!.Value, create.TxnGroupQualifier!, create.TxnQualifier!, handler.PickupBranchId),
             CancellationToken.None);
         Assert.AreEqual(HoldProviderOutcome.FinalSuccess, reply.Outcome);
         CollectionAssert.IsSubsetOf(new[] { "authenticate", "refresh", "pickup-read", "pickup-write",
@@ -112,7 +112,9 @@ public sealed partial class PatronJourneyTests
             }
             else
             {
-                Assert.AreEqual(organizationId, actualOrganizationId, path);
+                var holdMemberContext = path.EndsWith("/holdrequest", StringComparison.Ordinal) ||
+                    path.EndsWith("/holdrequest/" + Conversation, StringComparison.Ordinal);
+                Assert.AreEqual(holdMemberContext ? PickupBranchId : organizationId, actualOrganizationId, path);
                 if (request.Method == HttpMethod.Put && path.Contains("/patron/", StringComparison.Ordinal))
                 {
                     Operations.Add("pickup-write");
@@ -158,7 +160,7 @@ public sealed partial class PatronJourneyTests
                 {
                     Operations.Add("create");
                     using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
-                    Assert.AreEqual(organizationId, body.RootElement.GetProperty("RequestingOrgID").GetInt32());
+                    Assert.AreEqual(PickupBranchId, body.RootElement.GetProperty("RequestingOrgID").GetInt32());
                     Assert.AreEqual(PickupBranchId, body.RootElement.GetProperty("PickupOrgID").GetInt32());
                     Assert.AreEqual(7001, body.RootElement.GetProperty("PatronID").GetInt32());
                     Assert.AreEqual(9001, body.RootElement.GetProperty("BibID").GetInt32());
@@ -171,7 +173,7 @@ public sealed partial class PatronJourneyTests
                 {
                     Operations.Add("reply");
                     using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
-                    Assert.AreEqual(organizationId, body.RootElement.GetProperty("RequestingOrgID").GetInt32());
+                    Assert.AreEqual(PickupBranchId, body.RootElement.GetProperty("RequestingOrgID").GetInt32());
                     Assert.AreEqual("group", body.RootElement.GetProperty("TxnGroupQualifier").GetString());
                     json = JsonSerializer.Serialize(new { PAPIErrorCode = 0, StatusType = 2, StatusValue = 1, RequestGUID = Conversation });
                 }

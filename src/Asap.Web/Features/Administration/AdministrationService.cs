@@ -18,6 +18,8 @@ public sealed record OrganizationSummary(
     int Id,
     string Name,
     string? Abbreviation,
+    int? OrganizationCodeId,
+    int? ParentOrganizationId,
     bool IsActive,
     DateTime? LastSyncedUtc,
     string Version);
@@ -78,6 +80,10 @@ public sealed partial class AdministrationService(
         {
             return new AdministrationResult("organization_not_found");
         }
+        if (organizationId != LibraryScope.SystemOrganizationId && !OrganizationAuthority.IsLibrary(organization))
+        {
+            return new AdministrationResult("organization_not_found");
+        }
 
         var systemSettings = await context.SystemSettings.AsNoTracking()
             .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
@@ -112,11 +118,22 @@ public sealed partial class AdministrationService(
             .OrderBy(item => item.NormalizedOrigin)
             .Select(item => item.Origin)
             .ToListAsync(cancellationToken);
-        var providers = await LoadProvidersAsync(context, organizationId, cancellationToken);
-        var formats = await LoadFormatsAsync(context, organizationId, cancellationToken);
+        var libraryOrganizations = await context.Organizations.AsNoTracking()
+            .Where(item => item.Id > LibraryScope.SystemOrganizationId &&
+                           item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId)
+            .OrderBy(item => item.Id)
+            .Select(item => new { item.Id, item.IsActive })
+            .ToArrayAsync(cancellationToken);
+        var enabledLibraryOrgIds = libraryOrganizations.Where(item => item.IsActive).Select(item => item.Id).ToArray();
+        var libraryOrgIds = libraryOrganizations.Select(item => item.Id).ToArray();
+        var (providers, overriddenProviderIds) = await LoadProvidersAsync(context, organizationId, cancellationToken);
+        var (formats, formatMetadata) = await LoadFormatsAsync(context, organizationId, cancellationToken);
         var customFields = organizationId == LibraryScope.SystemOrganizationId
             ? []
             : await LoadCustomFieldsAsync(context, organizationId, cancellationToken);
+        var formatRules = organizationId == LibraryScope.SystemOrganizationId
+            ? Array.Empty<object>()
+            : await LoadRawCustomFieldRulesAsync(context, organizationId, cancellationToken);
         var templates = await LoadTemplatesAsync(context, organizationId, cancellationToken);
         var publicationOptions = await LoadPublicationOptionsAsync(context, organizationId, cancellationToken);
         var commonCreators = await LoadCommonCreatorsAsync(context, organizationId, cancellationToken);
@@ -180,7 +197,7 @@ public sealed partial class AdministrationService(
             };
         var stored = new
         {
-            systemSettings = ToSystemSettings(systemSettings, origins),
+            systemSettings = ToSystemSettings(systemSettings, origins, enabledLibraryOrgIds, libraryOrgIds),
             polaris = ToPolarisSettings(systemPolaris),
             configuredSystem,
             libraryOverride,
@@ -194,12 +211,14 @@ public sealed partial class AdministrationService(
             providers,
             formats,
             customFields,
+            formatRules,
             templates,
             autoClaimRules,
             branding = ToBranding(branding)
         };
 
-        var effectiveDto = ToEffectiveConfiguration(effective, systemWorkflow, libraryWorkflow);
+        var effectiveDto = ToEffectiveConfiguration(effective, systemWorkflow, libraryWorkflow,
+            overriddenProviderIds, formatMetadata);
         var result = new AdministrationResult(
             "ok",
             new
@@ -323,11 +342,19 @@ public sealed partial class AdministrationService(
         }
         else
         {
-            if (organizationId == LibraryScope.SystemOrganizationId)
+            try
             {
-                await ApplySystemSettingsAsync(context, command, cancellationToken);
+                if (organizationId == LibraryScope.SystemOrganizationId)
+                {
+                    await ApplySystemSettingsAsync(context, command, cancellationToken);
+                }
+                await ApplyScopedSettingsAsync(context, organizationId, command, cancellationToken);
             }
-            await ApplyScopedSettingsAsync(context, organizationId, command, cancellationToken);
+            catch (DbUpdateConcurrencyException)
+            {
+                return new AdministrationResult("stale_version",
+                    Message: "A submitted settings row changed. Reload before saving.");
+            }
         }
 
         if (!isReset)
@@ -349,6 +376,10 @@ public sealed partial class AdministrationService(
                 });
         }
         await context.SaveChangesAsync(cancellationToken);
+        if (isReset && organizationId != LibraryScope.SystemOrganizationId)
+        {
+            await ValidateEffectiveRequiredSelectRulesAsync(context, organizationId, cancellationToken);
+        }
         var savedVersion = await ComputeSettingsVersionAsync(context, organizationId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new AdministrationResult(
@@ -399,6 +430,7 @@ public sealed partial class AdministrationService(
         }
         await ResetLibrarySettingsInTransactionAsync(context, organizationId, actor, cancellationToken);
         await context.SaveChangesAsync(cancellationToken);
+        await ValidateEffectiveRequiredSelectRulesAsync(context, organizationId, cancellationToken);
         var resetVersion = await ComputeSettingsVersionAsync(context, organizationId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new AdministrationResult("reset", new { orgId = organizationId.ToString(), version = resetVersion });
@@ -426,6 +458,8 @@ public sealed partial class AdministrationService(
                 item.Id,
                 item.DisplayName,
                 item.Abbreviation,
+                item.OrganizationCodeId,
+                item.ParentOrganizationId,
                 item.IsActive,
                 item.LastSyncedUtc,
                 StaffVersion.Encode(item.RowVersion))).ToArray());
@@ -473,15 +507,20 @@ public sealed partial class AdministrationService(
         try
         {
             snapshots = await polarisProvider.GetOrganizationsAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (PolarisOperationalException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             return new AdministrationResult("polaris_unavailable", Message: "Polaris organizations could not be loaded.");
         }
         if (snapshots.Count == 0)
         {
             return new AdministrationResult("polaris_organizations_empty");
+        }
+        if (snapshots.Any(item => item.Id <= 0) || snapshots.Select(item => item.Id).Distinct().Count() != snapshots.Count)
+        {
+            return new AdministrationResult("polaris_organizations_invalid",
+                Message: "Polaris organizations contain an invalid or repeated organization ID.");
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -514,7 +553,7 @@ public sealed partial class AdministrationService(
         }
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var changed = 0;
-        foreach (var snapshot in snapshots.Where(item => item.Id > 0).GroupBy(item => item.Id).Select(item => item.First()))
+        foreach (var snapshot in snapshots)
         {
             var organization = await LockOrganizationAsync(context, snapshot.Id, cancellationToken);
             if (snapshot.Id == 1)
@@ -526,6 +565,8 @@ public sealed partial class AdministrationService(
                 }
                 organization.DisplayName = snapshot.DisplayName;
                 organization.Abbreviation = Clean(snapshot.Abbreviation);
+                organization.OrganizationCodeId = snapshot.OrganizationCodeId;
+                organization.ParentOrganizationId = snapshot.ParentOrganizationId;
                 organization.IsActive = true;
                 organization.LastSyncedUtc = now;
                 changed++;
@@ -539,6 +580,8 @@ public sealed partial class AdministrationService(
                     Id = snapshot.Id,
                     DisplayName = snapshot.DisplayName,
                     Abbreviation = Clean(snapshot.Abbreviation),
+                    OrganizationCodeId = snapshot.OrganizationCodeId,
+                    ParentOrganizationId = snapshot.ParentOrganizationId,
                     IsActive = false,
                     LastSyncedUtc = now
                 };
@@ -548,7 +591,20 @@ public sealed partial class AdministrationService(
             {
                 organization.DisplayName = snapshot.DisplayName;
                 organization.Abbreviation = Clean(snapshot.Abbreviation);
+                organization.OrganizationCodeId = snapshot.OrganizationCodeId;
+                organization.ParentOrganizationId = snapshot.ParentOrganizationId;
                 organization.LastSyncedUtc = now;
+            }
+            if (!OrganizationAuthority.IsLibrary(snapshot.Id, snapshot.OrganizationCodeId))
+            {
+                organization.IsActive = false;
+                var sessions = await context.PatronSessions
+                    .Where(item => item.EffectiveOrganizationId == snapshot.Id && item.RevokedUtc == null)
+                    .ToListAsync(cancellationToken);
+                foreach (var session in sessions)
+                {
+                    session.RevokedUtc = now;
+                }
             }
             changed++;
         }
@@ -589,7 +645,8 @@ public sealed partial class AdministrationService(
             organizationId,
             [],
             cancellationToken,
-            StaffRoleRequirement.SuperAdmin);
+            StaffRoleRequirement.SuperAdmin,
+            allowNonLibraryTarget: true);
         if (locked.Failure is not null)
         {
             return locked.Failure;
@@ -604,6 +661,11 @@ public sealed partial class AdministrationService(
             return new AdministrationResult(
                 "stale_version",
                 Message: "This library changed in another session. Reload before changing participation.");
+        }
+
+        if (active && !OrganizationAuthority.IsLibrary(organization))
+        {
+            return new AdministrationResult("organization_not_library");
         }
 
         var changed = organization.IsActive != active;
@@ -910,7 +972,9 @@ public sealed partial class AdministrationService(
             new { format.Code, format.Label });
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new AdministrationResult("format_deleted", new { formatId });
+        return new AdministrationResult(
+            "format_deleted",
+            new { formatId = formatId.ToString(System.Globalization.CultureInfo.InvariantCulture) });
     }
 
     private static bool TryResolveScope(
@@ -940,7 +1004,8 @@ public sealed partial class AdministrationService(
         CancellationToken cancellationToken,
         StaffRoleRequirement roleRequirement = StaffRoleRequirement.Admin,
         bool includeAllOrganizations = false,
-        IEnumerable<long>? additionalStaffIds = null)
+        IEnumerable<long>? additionalStaffIds = null,
+        bool allowNonLibraryTarget = false)
     {
         if (includeAllOrganizations)
         {
@@ -948,7 +1013,8 @@ public sealed partial class AdministrationService(
             // reference additions, so enumerate and lock that set before any Staff row.
             await LockOrganizationAsync(context, 1, cancellationToken);
             additionalOrganizationIds = additionalOrganizationIds.Concat(
-                await context.Organizations.AsNoTracking().Where(item => item.Id > 1)
+                await context.Organizations.AsNoTracking()
+                    .Where(item => item.Id > 1 && item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId)
                     .OrderBy(item => item.Id).Select(item => item.Id).ToListAsync(cancellationToken)).ToArray();
         }
         var organizationIds = new[] { 1, actor.OrganizationId, targetOrganizationId }
@@ -959,6 +1025,11 @@ public sealed partial class AdministrationService(
             .ToArray();
         var organizations = await LockOrganizationsAsync(context, organizationIds, cancellationToken);
         if (!organizations.ContainsKey(targetOrganizationId))
+        {
+            return (organizations, new AdministrationResult("organization_not_found"));
+        }
+        if (!allowNonLibraryTarget && targetOrganizationId != LibraryScope.SystemOrganizationId &&
+            !OrganizationAuthority.IsLibrary(organizations[targetOrganizationId]))
         {
             return (organizations, new AdministrationResult("organization_not_found"));
         }
@@ -977,10 +1048,14 @@ public sealed partial class AdministrationService(
             }
         }
 
+        int? eligibilityScope = allowNonLibraryTarget && targetOrganizationId != LibraryScope.SystemOrganizationId &&
+            !OrganizationAuthority.IsLibrary(organizations[targetOrganizationId])
+                ? null
+                : targetOrganizationId;
         var eligibility = await staffEligibility.RevalidateLockedAsync(
             context,
             actor,
-            targetOrganizationId,
+            eligibilityScope,
             roleRequirement,
             requireActorParticipation: true,
             organizations.Keys.ToHashSet(),
@@ -1028,11 +1103,7 @@ public sealed partial class AdministrationService(
         CancellationToken cancellationToken)
     {
         var workflow = GetObject(payload, "workflow");
-        if (workflow.ValueKind == JsonValueKind.Undefined)
-        {
-            workflow = payload;
-        }
-        if (!TryGetAny(workflow, out var value, "allowedPatronCodeIds", "patronCodeIds"))
+        if (!TryGetAtRootOrSection(payload, workflow, out var value, "allowedPatronCodeIds", "patronCodeIds"))
         {
             return (null, null);
         }
@@ -1064,6 +1135,7 @@ public sealed partial class AdministrationService(
         try
         {
             choices = await polarisProvider.GetPatronCodesAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1269,17 +1341,41 @@ public sealed partial class AdministrationService(
     {
         if (root.ValueKind == JsonValueKind.Object)
         {
+            JsonElement? selected = null;
             foreach (var name in names)
             {
                 if (root.TryGetProperty(name, out value))
                 {
-                    return true;
+                    if (selected.HasValue)
+                    {
+                        throw new AdministrationInputException("A settings field was supplied more than once.");
+                    }
+                    selected = value;
                 }
+            }
+            if (selected.HasValue)
+            {
+                value = selected.Value;
+                return true;
             }
         }
 
         value = default;
         return false;
+    }
+
+    private static bool TryGetAtRootOrSection(
+        JsonElement root,
+        JsonElement section,
+        out JsonElement value,
+        params string[] names)
+    {
+        if (TryGetAny(root, out value, names))
+        {
+            return true;
+        }
+
+        return TryGetAny(section, out value, names);
     }
 
     private static string? GetString(JsonElement root, string name)

@@ -19,8 +19,8 @@ public sealed record AssignTitleRequestInput(string? Version,
 
 public sealed record TitleRequestMutationResult(
     string Code,
-    long? RequestId = null,
-    IReadOnlyList<long>? DispatchOutboxIds = null,
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString)] long? RequestId = null,
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString)] IReadOnlyList<long>? DispatchOutboxIds = null,
     string? FinalStatus = null,
     string? NotificationStatus = null,
     string? NotificationReason = null,
@@ -28,7 +28,12 @@ public sealed record TitleRequestMutationResult(
     string? PatronNotificationReason = null,
     TitleRequestDuplicateConflict? Duplicate = null);
 
-public sealed record TitleRequestDuplicateConflict(long Id, string Title, string Status, int BibId, string MatchType);
+public sealed record TitleRequestDuplicateConflict(
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString)] long Id,
+    string Title,
+    string Status,
+    int BibId,
+    string MatchType);
 
 public sealed class TitleRequestMutationService(
     IDbContextFactory<AsapDbContext> contextFactory,
@@ -201,11 +206,16 @@ public sealed class TitleRequestMutationService(
         try
         {
             readiness = await emailSender.CheckReadinessAsync(notificationRequest.LibraryOrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             return new TitleRequestMutationResult("notification_dependency_unavailable");
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var staffIds = new[] { actor.Id, input.AssigneeId.Value }.Distinct().Order().ToArray();
@@ -247,7 +257,11 @@ public sealed class TitleRequestMutationService(
         var notificationReason = outbox?.SuppressionReason ?? (outbox is null ? "recipient_missing" : null);
         try
         {
-            Dispatch(outbox);
+            Dispatch(outbox, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The committed outbox remains available to the delivery sweep.
         }
         // The mutation and outbox are committed; preserve the accepted result and let the sweep recover delivery.
         catch (Exception exception)
@@ -279,6 +293,18 @@ public sealed class TitleRequestMutationService(
         if (input.ValidationError is { } validationError)
         {
             return new TitleRequestMutationResult(validationError);
+        }
+        if (input.Title is { } suppliedTitle)
+        {
+            var normalizedTitle = suppliedTitle.Trim();
+            if (normalizedTitle.Length == 0)
+            {
+                return new TitleRequestMutationResult("invalid_title");
+            }
+            if (normalizedTitle.Length > 500)
+            {
+                return new TitleRequestMutationResult("title_too_long");
+            }
         }
         var proposedExactDate = input.ExactPublicationDate.Value;
 
@@ -355,13 +381,8 @@ public sealed class TitleRequestMutationService(
         {
             try
             {
-                var refreshed = await patronProvider.RefreshAsync(notificationRequest.Barcode, notificationRequest.LibraryOrganizationId, cancellationToken);
+                currentPatron = await patronProvider.RefreshAsync(notificationRequest.Barcode, notificationRequest.LibraryOrganizationId, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-                if (refreshed is not null &&
-                    string.Equals(refreshed.Barcode, notificationRequest.Barcode, StringComparison.Ordinal))
-                {
-                    currentPatron = refreshed;
-                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -372,6 +393,10 @@ public sealed class TitleRequestMutationService(
                 logger.LogWarning(exception,
                     "Patron refresh failed before action email for request {RequestId}.", requestId);
             }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
         }
         var transportConfigured = false;
         if (notificationRequested)
@@ -380,11 +405,16 @@ public sealed class TitleRequestMutationService(
             {
                 transportConfigured = (await emailSender.CheckReadinessAsync(
                     notificationRequest.LibraryOrganizationId, cancellationToken)).IsConfigured;
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
                 return new TitleRequestMutationResult("notification_dependency_unavailable");
+            }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
         }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
@@ -487,7 +517,8 @@ public sealed class TitleRequestMutationService(
             // creation and automatic promotion take the same lock before writing requests.
             var otherOpenRequests = await context.TitleRequests.AsNoTracking().Where(item =>
                 item.LibraryOrganizationId == request.LibraryOrganizationId &&
-                item.Barcode == request.Barcode && item.BibId != null &&
+                ((request.PatronIdSnapshot.HasValue && item.PatronIdSnapshot == request.PatronIdSnapshot) ||
+                 item.PatronIdSnapshot == null && item.Barcode == request.Barcode) && item.BibId != null &&
                 item.Id != request.Id && item.Status != RequestStatus.Closed)
                 .OrderBy(item => item.Id)
                 .Select(item => new { item.Id, item.Title, item.Status, item.BibId })
@@ -803,9 +834,17 @@ public sealed class TitleRequestMutationService(
         await transaction.CommitAsync(cancellationToken);
         foreach (var outboxId in outboxIds)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
             try
             {
                 outboxDispatcher.Enqueue(outboxId);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
             }
             // Committed outbox rows remain recoverable even if the immediate dispatch path has a defect.
             catch (Exception exception)
@@ -890,7 +929,9 @@ public sealed class TitleRequestMutationService(
         }
 
         if (!await context.Organizations.AsNoTracking()
-                .AnyAsync(item => item.Id == request.LibraryOrganizationId && item.IsActive, cancellationToken))
+                .AnyAsync(item => item.Id == request.LibraryOrganizationId && item.Id > LibraryScope.SystemOrganizationId &&
+                                  item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive,
+                    cancellationToken))
         {
             return "organization_inactive";
         }
@@ -952,6 +993,7 @@ public sealed class TitleRequestMutationService(
         try
         {
             var result = await staffPolarisProvider.ValidateBibAsync(proposedBib.Value, request.LibraryOrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             return result.IsValid ? null : "bib_not_found";
         }
         catch (PolarisOperationalException)
@@ -961,6 +1003,10 @@ public sealed class TitleRequestMutationService(
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return "bib_validation_unavailable";
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
     }
 
@@ -1013,21 +1059,24 @@ public sealed class TitleRequestMutationService(
         var identifier = request.Identifier!;
         var organizationId = request.LibraryOrganizationId;
         await transaction.CommitAsync(cancellationToken);
-        try
+        if (!cancellationToken.IsCancellationRequested)
         {
-            identifierLookupDispatcher.Enqueue(request.Id, identifier, organizationId, processingVersion);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        // The retry state is already committed and the recurring processor is its recovery path.
-        catch (Exception exception)
-        {
-            logger.LogWarning(
-                exception,
-                "Identifier retry job enqueue failed for title request {TitleRequestId}; the recurring processor remains the recovery path.",
-                request.Id);
+            try
+            {
+                identifierLookupDispatcher.Enqueue(request.Id, identifier, organizationId, processingVersion);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The retry is committed and the recurring processor remains its recovery path.
+            }
+            // The retry state is already committed and the recurring processor is its recovery path.
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Identifier retry job enqueue failed for title request {TitleRequestId}; the recurring processor remains the recovery path.",
+                    request.Id);
+            }
         }
         return new TitleRequestMutationResult("updated", request.Id);
     }
@@ -1129,7 +1178,7 @@ public sealed class TitleRequestMutationService(
             return new LockedMutation("organization_inactive");
         }
         var organization = context.Organizations.Local.Single(item => item.Id == snapshot.LibraryOrganizationId);
-        if (organization?.IsActive != true)
+        if (!OrganizationAuthority.IsActiveLibrary(organization))
         {
             return new LockedMutation("organization_inactive");
         }
@@ -1355,7 +1404,9 @@ public sealed class TitleRequestMutationService(
             .Where(item => item.Id == request.MaterialFormatId)
             .Select(item => item.Label)
             .SingleAsync(cancellationToken);
-        var patron = currentPatron ?? new PatronSnapshot(0, request.Barcode, null,
+        var notificationOperation = await LatestSuccessfulHoldForNotificationAsync(context, request.Id, cancellationToken);
+        var identitySuppression = PatronNotificationIdentity.SuppressionReason(currentPatron, request, notificationOperation);
+        var patron = identitySuppression is null ? currentPatron! : new PatronSnapshot(0, request.Barcode, null,
             request.NameFirst, request.NameLast, request.PatronCodeId,
             request.PatronCodeDescription, request.PatronOrganizationId ?? 0,
             request.LibraryOrganizationId, request.LibraryNameSnapshot ?? string.Empty,
@@ -1368,10 +1419,10 @@ public sealed class TitleRequestMutationService(
             .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
         var fromAddress = Clean(libraryEmail?.FromAddress) ?? Clean(systemEmail?.FromAddress);
         var fromName = Clean(libraryEmail?.FromName) ?? Clean(systemEmail?.FromName);
-        var toAddress = Clean(currentPatron?.Email);
-        string? suppressionReason = currentPatron is null ? "patron_refresh_unavailable" :
+        var toAddress = identitySuppression is null ? Clean(currentPatron?.Email) : null;
+        string? suppressionReason = identitySuppression ?? (
             systemTemplate?.IsHidden == true || libraryTemplate?.IsHidden == true
-                ? "template_hidden" : null;
+                ? "template_hidden" : null);
         if (suppressionReason is null && (toAddress is null || !MailAddress.TryCreate(toAddress, out var parsed) ||
             parsed.Address != toAddress))
         {
@@ -1425,7 +1476,9 @@ public sealed class TitleRequestMutationService(
             .Where(item => item.Id == request.MaterialFormatId)
             .Select(item => item.Label)
             .SingleAsync(cancellationToken);
-        var patron = currentPatron ?? new PatronSnapshot(0, request.Barcode, null,
+        var notificationOperation = await LatestSuccessfulHoldForNotificationAsync(context, request.Id, cancellationToken);
+        var identitySuppression = PatronNotificationIdentity.SuppressionReason(currentPatron, request, notificationOperation);
+        var patron = identitySuppression is null ? currentPatron! : new PatronSnapshot(0, request.Barcode, null,
             request.NameFirst, request.NameLast, request.PatronCodeId,
             request.PatronCodeDescription, request.PatronOrganizationId ?? 0,
             request.LibraryOrganizationId, request.LibraryNameSnapshot ?? string.Empty,
@@ -1439,9 +1492,8 @@ public sealed class TitleRequestMutationService(
             .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
         var fromAddress = Clean(library?.FromAddress) ?? Clean(system?.FromAddress);
         var fromName = Clean(library?.FromName) ?? Clean(system?.FromName);
-        var toAddress = Clean(currentPatron?.Email);
-        string? suppressionReason = currentPatron is null ? "patron_refresh_unavailable" :
-            template.IsHidden ? "template_hidden" : null;
+        var toAddress = identitySuppression is null ? Clean(currentPatron?.Email) : null;
+        string? suppressionReason = identitySuppression ?? (template.IsHidden ? "template_hidden" : null);
         if (suppressionReason is null && (toAddress is null || !MailAddress.TryCreate(toAddress, out var parsed) ||
             parsed.Address != toAddress))
         {
@@ -1482,9 +1534,18 @@ public sealed class TitleRequestMutationService(
         return outbox;
     }
 
-    private void Dispatch(EmailOutbox? outbox)
+    private static Task<HoldPlacementOperation?> LatestSuccessfulHoldForNotificationAsync(
+        AsapDbContext context,
+        long requestId,
+        CancellationToken cancellationToken) =>
+        context.HoldPlacementOperations.AsNoTracking()
+            .Where(item => item.TitleRequestId == requestId && item.State == HoldOperationState.Succeeded)
+            .OrderByDescending(item => item.AttemptNumber)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    private void Dispatch(EmailOutbox? outbox, CancellationToken cancellationToken)
     {
-        if (outbox?.Status == "pending")
+        if (outbox?.Status == "pending" && !cancellationToken.IsCancellationRequested)
         {
             outboxDispatcher.Enqueue(outbox.Id);
         }
@@ -1544,6 +1605,16 @@ public sealed class TitleRequestMutationService(
         IReadOnlyDictionary<string, string?> submitted,
         CancellationToken cancellationToken)
     {
+        Dictionary<string, JsonElement> merged;
+        try
+        {
+            merged = TitleRequestCustomFieldsSnapshot.Parse(request.CustomFieldsJson);
+        }
+        catch (JsonException)
+        {
+            return ("invalid_custom_fields", null);
+        }
+
         var configuration = await patronConfigurations.GetAsync(
             context, request.LibraryOrganizationId, cancellationToken);
         var format = configuration?.Formats.FirstOrDefault(item => item.Id == request.MaterialFormatId);
@@ -1552,19 +1623,6 @@ public sealed class TitleRequestMutationService(
             return submitted.Count != 0
                 ? ("invalid_custom_fields", null)
                 : (null, request.CustomFieldsJson);
-        }
-
-        Dictionary<string, JsonElement> merged;
-        try
-        {
-            merged = string.IsNullOrWhiteSpace(request.CustomFieldsJson)
-                ? new(StringComparer.Ordinal)
-                : JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(request.CustomFieldsJson)
-                  ?? new(StringComparer.Ordinal);
-        }
-        catch (JsonException)
-        {
-            merged = new(StringComparer.Ordinal);
         }
 
         foreach (var field in format.CustomFields)
@@ -1593,6 +1651,14 @@ public sealed class TitleRequestMutationService(
                     return ("invalid_custom_fields", null);
                 }
                 merged.Remove(property.Key);
+                continue;
+            }
+            if (merged.TryGetValue(property.Key, out var existingSnapshot) &&
+                existingSnapshot.ValueKind == JsonValueKind.Object &&
+                existingSnapshot.TryGetProperty("value", out var existingValue) &&
+                existingValue.ValueKind == JsonValueKind.String &&
+                string.Equals(Clean(existingValue.GetString()), cleaned, StringComparison.Ordinal))
+            {
                 continue;
             }
             if (definition.Type == "select")

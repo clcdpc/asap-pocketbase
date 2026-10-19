@@ -33,7 +33,7 @@ function settingsData(organizationId, version, prefix) {
     version,
     organization: { id: organizationId, name: prefix + ' Library', abbreviation: prefix, active: true, version },
     stored: {
-      systemSettings: {},
+      systemSettings: { enabledLibraryOrgIds: [2, 3], libraryOrgIds: [2, 3] },
       polaris: {},
       configuredSystem: configured,
       libraryOverride: organizationId === 1 ? null : {
@@ -74,7 +74,9 @@ function settingsData(organizationId, version, prefix) {
     },
     workflow: {},
     ui_text: {},
-    emails: { fromAddress: 'system@example.org', fromName: 'System', templates: [] }
+    emails: { fromAddress: 'system@example.org', fromName: 'System', templates: [] },
+    patronCodeChoices: [],
+    autoClaimStaff: []
   };
 }
 
@@ -137,10 +139,11 @@ async function flush() {
           return response(200, settingsData(organizationId === 'system' ? 1 : Number(organizationId), `${organizationId}-version`, prefix));
         }
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
-          return response(200, [
-            { id: 2, name: 'Library Two', abbreviation: 'TWO', isActive: true, version: 'org-2' },
-            { id: 3, name: 'Library Three', abbreviation: 'THREE', isActive: true, version: 'org-3' }
-          ]);
+          return response(200, { code: 'ok', data: [
+            { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-1' },
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-3' }
+          ] });
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
         if (requestUrl.endsWith('/api/asap/staff/settings')) {
@@ -148,7 +151,7 @@ async function flush() {
           saveStarted?.();
           return new Promise(resolve => { releaseSave = () => resolve(
             outcome === 'success'
-              ? response(200, { code: 'saved', data: { version: 'library-2-saved' } })
+              ? response(200, { code: 'saved', data: { version: 'library-2-saved', orgId: '2' } })
               : response(409, { code: 'stale_version', message: 'The library settings are stale.' })
           ); });
         }
@@ -271,7 +274,11 @@ async function flush() {
             : response(200, data);
         }
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
-          return response(200, [{ id: 2, name: 'Library Two', isActive: true, version: 'org-2' }]);
+          return response(200, { code: 'ok', data: [
+            { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-1' },
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-3' }
+          ] });
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
           return response(200, { code: 'ok', data: [] });
@@ -412,10 +419,11 @@ async function flush() {
             `${organizationId}-version`, prefix));
         }
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
-          return response(200, [
-            { id: 2, name: 'Library Two', abbreviation: 'TWO', isActive: true, version: 'org-2' },
-            { id: 3, name: 'Library Three', abbreviation: 'THREE', isActive: true, version: 'org-3' }
-          ]);
+          return response(200, { code: 'ok', data: [
+            { id: 1, name: 'System', abbreviation: null, organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-1' },
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-3' }
+          ] });
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
         throw new Error('Unexpected request: ' + requestUrl);
@@ -470,7 +478,11 @@ async function flush() {
         if (requestUrl.endsWith('/settings') && options.method === 'POST') {
           posts.push(options); return new Promise((resolve, reject) => { complete = resolve; fail = reject; });
         }
-        if (requestUrl.includes('/settings?')) return response(200, settingsData(1, 'replacement-version', 'Replacement'));
+        if (requestUrl.includes('/settings?')) {
+          const data = settingsData(1, 'replacement-version', 'Replacement');
+          data.orgId = 'system';
+          return response(200, data);
+        }
         if (requestUrl.endsWith('/organizations')) return response(200, []);
         if (requestUrl.includes('/patron-codes?')) return response(200, { data: [] });
         throw new Error(`Unexpected request: ${requestUrl}`);
@@ -488,7 +500,7 @@ async function flush() {
       const replacement = settingsModule.createSettingsController(options); replacement.bind();
       replacement.setStaff({ id: '2', tenantId: 'tenant-b', authenticationEmail: 'b@example.org', role: 'super_admin', organizationId: 1 });
       await replacement.activate(); first.dispose();
-      if (outcome === 'committed') complete(response(200, { data: { version: 'old-commit-version' } }));
+      if (outcome === 'committed') complete(response(200, { code: 'saved', data: { version: 'old-commit-version', orgId: 'system' } }));
       else fail(new Error('Lost response'));
       await flush(); await flush();
       assert.equal(receipts.at(-1)[1].id, '1'); assert.equal(receipts.at(-1)[2].outcome, outcome, 'record old attempt truth before presentation checks');
@@ -507,7 +519,11 @@ async function flush() {
       global.fetch = async (url, options = {}) => {
         if (url.endsWith('/session')) return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
         if (url.endsWith('/settings') && options.method === 'POST') return new Promise((resolve, reject) => { complete = resolve; fail = reject; });
-        if (url.includes('/settings?')) return response(200, settingsData(1, 'current-version', 'Current'));
+        if (url.includes('/settings?')) {
+          const data = settingsData(1, 'current-version', 'Current');
+          data.orgId = 'system';
+          return response(200, data);
+        }
         if (url.endsWith('/organizations')) return response(200, []);
         if (url.includes('/patron-codes?')) return response(200, { data: [] });
         throw new Error(`Unexpected request: ${url}`);
@@ -525,7 +541,7 @@ async function flush() {
       controller.setStaff({ ...owner, authenticationEmail: undefined });
       assert.equal(controller.hasPendingMutation(), false, 'principal-name fallback cannot adopt a command from different authentication evidence');
       await controller.activate();
-      if (outcome === 'committed') complete(response(200, { data: { version: 'old-actor-version' } }));
+      if (outcome === 'committed') complete(response(200, { code: 'saved', data: { version: 'old-actor-version', orgId: 'system' } }));
       else fail(new Error('Old actor response lost'));
       await flush(); await flush();
       assert.equal(receipts.at(-1)[1], owner); assert.equal(receipts.at(-1)[2].outcome, outcome);

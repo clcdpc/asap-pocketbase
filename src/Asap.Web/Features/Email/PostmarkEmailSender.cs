@@ -5,13 +5,15 @@ using System.Text.Json;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Asap.Web.Features.Email;
 
 public sealed class PostmarkEmailSender(
     IDbContextFactory<AsapDbContext> contextFactory,
     IntegrationCredentialProtector credentialProtector,
-    IHttpClientFactory httpClientFactory) : IEmailSender
+    IHttpClientFactory httpClientFactory,
+    ILogger<PostmarkEmailSender> logger) : IEmailSender
 {
     private static readonly Uri SendUri = new("https://api.postmarkapp.com/email");
     private static readonly Uri ServerUri = new("https://api.postmarkapp.com/server");
@@ -57,7 +59,7 @@ public sealed class PostmarkEmailSender(
 
         await using var content = await response.Content.ReadAsStreamAsync(timeout.Token);
         using var result = await JsonDocument.ParseAsync(content, cancellationToken: timeout.Token);
-        if (result.RootElement.ValueKind != JsonValueKind.Object ||
+        if (!HasUniqueObjectProperties(result.RootElement) ||
             !result.RootElement.TryGetProperty("ID", out var id) ||
             id.ValueKind != JsonValueKind.Number || !id.TryGetInt64(out var serverId) || serverId <= 0)
         {
@@ -101,23 +103,91 @@ public sealed class PostmarkEmailSender(
             Content = new StringContent(body, Encoding.UTF8, "application/json")
         };
         request.Headers.TryAddWithoutValidation("X-Postmark-Server-Token", token);
-        using var response = await httpClientFactory.CreateClient("Postmark")
+        var response = await httpClientFactory.CreateClient("Postmark")
             .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        try
         {
-            throw new InvalidOperationException("Postmark rejected the email request.");
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException("Postmark rejected the email request.");
+            }
+
+            Stream? content = null;
+            try
+            {
+                content = await response.Content.ReadAsStreamAsync(cancellationToken);
+                using var result = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken);
+                var root = result.RootElement;
+                if (!HasUniqueObjectProperties(root) ||
+                    !root.TryGetProperty("ErrorCode", out var errorCode) ||
+                    errorCode.ValueKind != JsonValueKind.Number || !errorCode.TryGetInt32(out var code) || code != 0 ||
+                    !root.TryGetProperty("MessageID", out var messageId) ||
+                    messageId.ValueKind != JsonValueKind.String ||
+                    string.IsNullOrWhiteSpace(messageId.GetString()))
+                {
+                    throw new InvalidOperationException("Postmark did not confirm email acceptance.");
+                }
+
+                return new EmailSendResult(messageId.GetString()!);
+            }
+            finally
+            {
+                if (content is not null)
+                {
+                    try
+                    {
+                        await content.DisposeAsync();
+                    }
+                    catch (Exception cleanupFailure)
+                    {
+                        LogCleanupFailure(cleanupFailure);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            try
+            {
+                response.Dispose();
+            }
+            catch (Exception cleanupFailure)
+            {
+                LogCleanupFailure(cleanupFailure);
+            }
+        }
+    }
+
+    private static bool HasUniqueObjectProperties(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!names.Add(property.Name))
+            {
+                return false;
+            }
         }
 
-        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var result = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken);
-        var root = result.RootElement;
-        if (!root.TryGetProperty("ErrorCode", out var errorCode) || errorCode.GetInt32() != 0 ||
-            !root.TryGetProperty("MessageID", out var messageId) ||
-            string.IsNullOrWhiteSpace(messageId.GetString()))
+        return true;
+    }
+
+    private void LogCleanupFailure(Exception exception)
+    {
+        try
         {
-            throw new InvalidOperationException("Postmark did not confirm email acceptance.");
+            logger.LogWarning(
+                "Postmark response cleanup failed ({FailureType}).",
+                exception.GetType().Name);
         }
-        return new EmailSendResult(messageId.GetString()!);
+        catch
+        {
+            // Cleanup diagnostics must not replace the provider result or a primary response failure.
+        }
     }
 
     private async Task<string?> ReadSystemTokenAsync(CancellationToken cancellationToken)

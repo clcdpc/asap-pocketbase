@@ -93,7 +93,18 @@ internal static class DeterministicJourneyScenario
         return provider;
     }
 
-    private static PatronSnapshot Patron(string barcode, string firstName = "Test") =>
-        new(7001, barcode, $"{barcode}@example.org", firstName, firstName == "One" ? "Result" : "Example",
+    private static PatronSnapshot Patron(string barcode, string firstName = "Test", int? nativePatronId = null) =>
+        new(nativePatronId ?? FixtureNativePatronId(barcode), barcode, $"{barcode}@example.org", firstName,
+            firstName == "One" ? "Result" : "Example",
             1, "Adult", 101, 2, "Test Library", 101);
+
+    private static int FixtureNativePatronId(string barcode)
+    {
+        if (barcode.Length < 5 || !int.TryParse(barcode.AsSpan(barcode.Length - 5), out var barcodeSuffix))
+        {
+            throw new ArgumentException("A deterministic fixture barcode must end in five numeric digits.", nameof(barcode));
+        }
+
+        return checked(7000 + barcodeSuffix);
+    }
 }

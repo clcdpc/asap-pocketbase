@@ -1,10 +1,13 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Data;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace Asap.Web.Features.Staff;
 
@@ -218,6 +221,12 @@ public static class TitleRequestEndpoints
         await using var db = await contextFactory.CreateDbContextAsync(cancellationToken);
         var system = await db.SystemSettings.AsNoTracking()
             .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
+        var savedRequestIdentity = scope.Request is not null && requestId is { } scopedRequestId
+            ? await db.TitleRequests.AsNoTracking()
+                .Where(item => item.Id == scopedRequestId && item.LibraryOrganizationId == scope.OrganizationId)
+                .Select(item => new { item.PatronIdSnapshot })
+                .SingleOrDefaultAsync(cancellationToken)
+            : null;
         int? patronId = null;
         if (scope.Request is { Barcode.Length: > 0 } request &&
             HasUsablePatronResearchUrl(system.LeapPatronUrlPattern))
@@ -225,7 +234,9 @@ public static class TitleRequestEndpoints
             try
             {
                 var resolvedPatronId = await patrons.GetPatronIdAsync(request.Barcode, scope.OrganizationId, cancellationToken);
-                if (resolvedPatronId is > 0)
+                if (resolvedPatronId is > 0 && savedRequestIdentity is not null &&
+                    (!savedRequestIdentity.PatronIdSnapshot.HasValue ||
+                     savedRequestIdentity.PatronIdSnapshot.Value == resolvedPatronId.Value))
                 {
                     patronId = resolvedPatronId;
                 }
@@ -548,12 +559,45 @@ public static class TitleRequestEndpoints
     private static async Task<IResult> ActionAsync(
         HttpContext context,
         long id,
-        TitleRequestActionInput input,
         TitleRequestMutationService mutations,
         TitleRequestViewService views,
         ILoggerFactory loggerFactory,
+        IOptions<Microsoft.AspNetCore.Http.Json.JsonOptions> jsonOptions,
         CancellationToken cancellationToken)
     {
+        if (!context.Request.HasJsonContentType())
+        {
+            return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
+        }
+
+        TitleRequestActionInput input;
+        try
+        {
+            using var document = await JsonDocument.ParseAsync(
+                context.Request.Body,
+                cancellationToken: cancellationToken);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return InvalidActionPayload();
+            }
+
+            var propertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (!propertyNames.Add(property.Name))
+                {
+                    return InvalidActionPayload();
+                }
+            }
+
+            input = document.RootElement.Deserialize<TitleRequestActionInput>(jsonOptions.Value.SerializerOptions)
+                ?? throw new JsonException("The title-request action body must be an object.");
+        }
+        catch (JsonException)
+        {
+            return InvalidActionPayload();
+        }
+
         TitleRequestMutationResult result;
         try
         {
@@ -574,15 +618,19 @@ public static class TitleRequestEndpoints
         {
             row = await views.GetAsync(Current(context), id.ToString(CultureInfo.InvariantCulture), cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The action is committed; caller cancellation only prevents this optional detail read.
+        }
         // The mutation committed; a detail-refresh failure must still return the accepted outcome.
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception)
         {
             loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
                 .LogError(exception, "Request detail refresh failed after action {RequestId} committed", id);
         }
         if (row is not null)
         {
-            return Results.Json(row with
+        return Results.Json(row with
             {
                 Committed = true,
                 FinalStatus = result.FinalStatus,
@@ -604,6 +652,10 @@ public static class TitleRequestEndpoints
             refreshUnavailable = row is null
         });
     }
+
+    private static IResult InvalidActionPayload() =>
+        Results.Json(new { code = "invalid_action_payload", message = "The title-request action body is invalid." },
+            statusCode: StatusCodes.Status400BadRequest);
 
     private static Task<IResult> RetryIdentifierAsync(
         HttpContext context,
@@ -820,10 +872,13 @@ public static class TitleRequestEndpoints
         {
             return await views.GetAsync(Current(context), id.ToString(CultureInfo.InvariantCulture), cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
         // This read follows a committed mutation; log its failure and return explicit committed metadata.
         catch (Exception exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
                 .LogError(exception, "Request detail refresh failed after mutation {RequestId} committed", id);
             return null;

@@ -182,7 +182,8 @@ public sealed partial class PatronJourneyTests
             var patron = await provider.RefreshAsync(provider.Barcode, provider.OrganizationId, CancellationToken.None);
             var service = scoped.Services.GetRequiredService<PickupPreferenceMutationService>();
             Task<PickupMutationReceipt?> Change() => service.ChangeAsync(patron, provider.OrganizationId,
-                new PickupBranch(provider.SecondBranch, "Second"), null, "request", request.Id, null, CancellationToken.None);
+                new PickupBranch(provider.SecondBranch, "Second"), null, "request", request.Id, null,
+                static (_, _, _) => Task.CompletedTask, CancellationToken.None);
             if (failure == "programming")
             {
                 await Assert.ThrowsExactlyAsync<ArgumentException>(Change);

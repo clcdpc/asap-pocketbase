@@ -158,7 +158,7 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
         return;
       }
       const definiteNoCommit = error.status === 503 && error.response?.code === 'notification_dependency_unavailable';
-      const uncertain = !definiteNoCommit && (!error.status || error.status === 408 || error.status >= 500 || isAbortError(error));
+      const uncertain = !definiteNoCommit && (error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error));
       attempt.outcome = uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
       const message = uncertain ? 'The additional-copy action outcome could not be confirmed. Reload before trying again.'
         : error.message || 'The task changed. Review the refreshed version before trying again.';

@@ -295,6 +295,10 @@ The target deliberately changes reliability mechanics:
 - transient retry bounds + visible `failed` state/manual retry with payload retained while retryable; every expired sending lease is conservatively transport-ambiguous and fenced from stale-worker updates; authorization-sensitive staff rows persist the ordinary-versus-weekly recipient-address rule, revalidate current scope and that rule's effective address, and become terminal `suppressed` when stale; only terminal sent/suppressed payload is retention-purge eligible;
 - historical delivery/audit data migrated, but no historical email is placed into the new outbox for replay.
 
+### Later target-policy clarification - 2026-10-09
+
+The preceding target summary preserves the historical design wording. The operative current target rule is narrower: only `failed/mail_not_configured` rows with no provider message ID, send-start timestamp, lease, expiry, or scheduled retry are manually retryable. An expired possibly-dispatched `sending` row (after `TryBeginProviderSend` clears the durable `pre_send_check_pending` marker) is quarantined as `failed/ambiguous_expired_lease`, has no scheduled retry, and is not automatically or manually replayed. A row retaining that marker is certified not to have entered the provider call and may be safely released/requeued. This target refinement preserves the source reference and prior audit record; see `01-PORTING-SPEC.md` section 14 for the controlling contract. At-least-once attempt semantics do not promise provider acceptance or exactly-once delivery.
+
 When porting each workflow, include its email side effect in that vertical slice rather than postponing all email behavior to the end.
 
 ## 13. Analytics anchors

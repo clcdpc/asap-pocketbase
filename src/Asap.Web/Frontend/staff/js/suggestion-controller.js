@@ -497,7 +497,8 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     setStaffSuggestionStatus('Creating the suggestion...');
     try {
       const created = await send('/api/asap/staff/suggestions', { method: 'POST', body });
-      if (!validRequestId(created?.id)) throw unconfirmedResponseError();
+      if (!validRequestId(created?.id) || !Number.isSafeInteger(created?.libraryOrgId) ||
+          created.libraryOrgId !== body.libraryOrgId) throw unconfirmedResponseError();
       attempt.outcome = 'committed'; attempt.pending = false;
       const notification = created.notificationStatus === 'queued' ? 'Confirmation email queued.'
         : created.notificationStatus === 'suppressed' ? 'No confirmation email was sent because delivery is suppressed.'
@@ -507,14 +508,14 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       if (!isCurrent(current)) return;
       current.submitting = false; closeStaffSuggestion({ force: true, focusButton: false });
       announce(message, 'success');
-      const review = await openCreatedTitle(Object.freeze({ id: created.id, libraryOrgId: String(created.libraryOrgId || current.scopeId), owner, opener: trigger }));
+      const review = await openCreatedTitle(Object.freeze({ id: created.id, libraryOrgId: String(created.libraryOrgId), owner, opener: trigger }));
       if (review?.queueRefreshed && review.detailLoaded) clearReceipt(attempt);
       if (review?.isCurrent()) announce(`${message}${review.queueRefreshed && review.detailLoaded ? '' : ' Current details could not be refreshed.'}`,
         review.queueRefreshed && review.detailLoaded ? 'success' : 'warning');
     } catch (error) {
       if (attempt.outcome === 'committed') return;
       const pickupChanged = error.response?.code === 'request_not_created_pickup_changed' && error.response?.pickupPreferenceChanged === true;
-      const uncertain = !error.status || error.status === 408 || error.status >= 500 || isAbortError(error);
+      const uncertain = !pickupChanged && (error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error));
       attempt.outcome = pickupChanged ? 'pickup_changed' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
       if (pickupChanged) onReceipt(`${error.response?.message || error.message || "The suggestion was not created, but the patron's preferred pickup location was changed successfully."} Sign in again to restore staff access before continuing.`, owner, attempt);
       if (uncertain) onReceipt('Suggestion creation is unconfirmed. Sign in again and review the servicing library queue before another submission.', owner, attempt);

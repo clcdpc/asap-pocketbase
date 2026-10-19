@@ -93,6 +93,8 @@ public sealed partial class PatronJourneyTests
         var actor = await ReadCorrectiveStaffAsync(staff);
         var sender = new ScopedReadinessEmailSender(configured);
         var provider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
+        var roleOrdinal = role switch { "staff" => 1, "admin" => 2, _ => 3 };
+        provider.PatronId = 71050 + roleOrdinal * 10 + (configured ? 1 : 0);
         var localDispatcher = new RecordingOutboxDispatcher();
         await using var scoped = factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
         {
@@ -116,11 +118,11 @@ public sealed partial class PatronJourneyTests
         await context.SaveChangesAsync();
         var format = await context.MaterialFormats.SingleAsync(item => item.OwnerOrganizationId == 1 && item.Code == "book");
         var now = timeProvider!.GetUtcNow().UtcDateTime;
-        var roleOrdinal = role switch { "staff" => 1, "admin" => 2, _ => 3 };
         var barcode = $"200000000021{roleOrdinal}{(configured ? 1 : 0)}";
         TitleRequest NewRequest(string status) => new()
         {
             LibraryOrganizationId = 2, MaterialFormatId = format.Id, Barcode = barcode, Title = $"Scoped mail {Guid.NewGuid():N}",
+            PatronIdSnapshot = provider.PatronId,
             Status = status, BibId = status == "pending_hold" ? 9001 : null,
             BibIdStaffVerified = status == "pending_hold", AutoHold = true, PreferredPickupBranchId = 101,
             PreferredPickupBranchName = "Main Library", IsbnCheckStatus = status == "pending_hold" ? "found" : "not_found", CreatedUtc = now, UpdatedUtc = now,
@@ -173,6 +175,24 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
+            var copyIds = await context.AdditionalCopyRequests.AsNoTracking()
+                .Where(item => item.SourceTitleRequestId == source.Id)
+                .Select(item => item.Id).ToArrayAsync();
+            var ownedPrefixes = new[]
+            {
+                $"title-assignment:{title.Id}:", $"purchase-reminder:{title.Id}:",
+                $"staff-patron-action:purchase_approved:{title.Id}:", $"title-hold-placed:{source.Id}:"
+            }.Concat(copyIds.Select(id => $"additional-copy-assignment:{id}:")).ToArray();
+            var copyReminderKeys = copyIds.Select(id => $"additional-copy-reminder:{id}").ToHashSet(StringComparer.Ordinal);
+            var candidateOutboxes = await context.EmailOutbox.AsNoTracking()
+                .Where(item => item.OrganizationId == 2 && item.Id > beforeId).ToListAsync();
+            await DeleteCommittedOutboxIdsAsync(candidateOutboxes
+                .Where(item => item.BusinessKey is { } key &&
+                    (ownedPrefixes.Any(prefix => key.StartsWith(prefix, StringComparison.Ordinal)) || copyReminderKeys.Contains(key)))
+                .Select(item => item.Id));
+            await context.AdditionalCopyRequests.Where(item => item.SourceTitleRequestId == source.Id).ExecuteDeleteAsync();
+            await DeleteRequestAsync(title.Id);
+            await DeleteRequestAsync(source.Id);
             if (createdEmail) context.EmailSettings.Remove(email); else email.FromAddress = previousSender;
             await context.SaveChangesAsync();
             var current = await context.StaffUsers.AsNoTracking().SingleAsync(item => item.Id == staff.Id);

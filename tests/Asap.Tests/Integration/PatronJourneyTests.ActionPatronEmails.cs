@@ -30,7 +30,8 @@ public sealed partial class PatronJourneyTests
             .Select(item => item.Id).FirstAsync();
         seed.Organizations.Add(new Organization
         {
-            Id = libraryId, DisplayName = "Action email test library", Abbreviation = "AET", IsActive = true
+            Id = libraryId, DisplayName = "Action email test library", Abbreviation = "AET",
+            OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
         });
         await seed.SaveChangesAsync();
         seed.EmailSettings.Add(new EmailSettings
@@ -87,21 +88,28 @@ public sealed partial class PatronJourneyTests
                 SubjectTemplate = "Library owns: {{title}}", BodyTemplate = "Hello {{firstName}}, {{title}} exists"
             });
 
-        TitleRequest Request(string title, int? bib, bool autoHold, string? email = "patron@example.org") => new()
+        TitleRequest Request(string title, int? bib, bool autoHold, string? email = "patron@example.org")
         {
-            LibraryOrganizationId = libraryId,
-            Barcode = $"2{Guid.NewGuid():N}"[..14],
-            Email = email,
-            NameFirst = "Pat",
-            Title = title,
-            MaterialFormatId = formatId,
-            Status = "suggestion",
-            BibId = bib,
-            BibIdStaffVerified = bib is not null,
-            AutoHold = autoHold,
-            CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
-            UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
-        };
+            var barcode = $"2{Guid.NewGuid():N}"[..14];
+            var patronId = libraryId * 100 + patronProvider.PatronIds.Count + 1;
+            patronProvider.PatronIds.Add(barcode, patronId);
+            return new TitleRequest
+            {
+                LibraryOrganizationId = libraryId,
+                Barcode = barcode,
+                PatronIdSnapshot = patronId,
+                Email = email,
+                NameFirst = "Pat",
+                Title = title,
+                MaterialFormatId = formatId,
+                Status = "suggestion",
+                BibId = bib,
+                BibIdStaffVerified = bib is not null,
+                AutoHold = autoHold,
+                CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
+            };
+        }
         var purchase = Request("Purchase title", null, true);
         var purchaseWithBib = Request("Pending title", 9001, true);
         var alreadyOwned = Request("Owned title", 9001, false);
@@ -158,6 +166,8 @@ public sealed partial class PatronJourneyTests
             }.ToCommand(), CancellationToken.None)).Code);
         using var cancellation = new CancellationTokenSource();
         patronProvider.BeforeRefresh = _ => cancellation.Cancel();
+        patronProvider.AfterRefreshFailure = new PolarisOperationalException(
+            "polaris_patron_refresh_failed", "Patron lookup failed after caller cancellation.");
         await Assert.ThrowsAsync<OperationCanceledException>(async () =>
             await mutations.ActionAsync(actor, cancelledPurchase.Id,
                 new TitleRequestActionInput
@@ -165,6 +175,7 @@ public sealed partial class PatronJourneyTests
                     Version = Convert.ToBase64String(cancelledPurchase.RowVersion), Action = "purchase"
                 }.ToCommand(), cancellation.Token));
         patronProvider.BeforeRefresh = null;
+        patronProvider.AfterRefreshFailure = null;
 
         await using var verify = await contexts.CreateDbContextAsync();
         var approved = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
@@ -236,20 +247,26 @@ public sealed partial class PatronJourneyTests
 
     private sealed class ActionPatronEmailProvider : IPatronProvider
     {
+        public Dictionary<string, int> PatronIds { get; } = new(StringComparer.Ordinal);
         public string? MissingEmailBarcode { get; set; }
         public string? UnavailableBarcode { get; set; }
         public HashSet<string> UnavailableBarcodes { get; } = [];
         public Action<CancellationToken>? BeforeRefresh { get; set; }
+        public Exception? AfterRefreshFailure { get; set; }
 
         public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken)
         {
             BeforeRefresh?.Invoke(cancellationToken);
+            if (AfterRefreshFailure is { } failure)
+            {
+                throw failure;
+            }
             cancellationToken.ThrowIfCancellationRequested();
             if (barcode == UnavailableBarcode || UnavailableBarcodes.Contains(barcode))
             {
                 throw new PolarisOperationalException("polaris_patron_refresh_failed", "Patron lookup unavailable.");
             }
-            return Task.FromResult(new PatronSnapshot(7001, barcode,
+            return Task.FromResult(new PatronSnapshot(PatronIds[barcode], barcode,
                 barcode == MissingEmailBarcode ? null : "current-patron@example.org",
                 "Current", "Patron", 1, "Adult", 101, 2, "Test Library", 101));
         }

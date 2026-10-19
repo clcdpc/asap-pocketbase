@@ -51,6 +51,11 @@ public static class MigrationCli
             return RunReconcile(args[1..], output, error);
         }
 
+        if (args[0] == "recover-report")
+        {
+            return RunRecoverReport(args[1..], output, error);
+        }
+
         error.WriteLine($"Unknown argument: {args[0]}");
         error.WriteLine("Run with --help to see the implemented migration surface.");
         return 2;
@@ -197,6 +202,45 @@ public static class MigrationCli
         }
     }
 
+    private static int RunRecoverReport(string[] args, TextWriter output, TextWriter error)
+    {
+        try
+        {
+            var parsed = ParseOptions(
+                args,
+                ["--package", "--connection-string-env", "--report", "--external-config"],
+                []);
+            var environmentName = Require(parsed.Values, "--connection-string-env");
+            MigrationReconciler.RecoverReport(new MigrationReconcileOptions(
+                Require(parsed.Values, "--package"),
+                Environment.GetEnvironmentVariable(environmentName) ?? string.Empty,
+                Require(parsed.Values, "--report"),
+                Require(parsed.Values, "--external-config")));
+            output.WriteLine("The committed import report is recovered and independently verified.");
+            return 0;
+        }
+        catch (Exception exception) when (
+            exception is MigrationOperationException or ArgumentException or SqlException or JsonException or IOException or UnauthorizedAccessException)
+        {
+            if (exception is MigrationOperationException operation)
+            {
+                error.WriteLine(operation.Code);
+                error.WriteLine(operation.Message);
+            }
+            else if (exception is ArgumentException)
+            {
+                error.WriteLine("invalid_arguments");
+                error.WriteLine(exception.Message);
+            }
+            else
+            {
+                error.WriteLine("reconciliation_report_recovery_failed");
+                error.WriteLine("The target was not changed; inspect the pending report and target before any retry.");
+            }
+            return 1;
+        }
+    }
+
     private static ParsedOptions ParseOptions(
         IReadOnlyList<string> args,
         IReadOnlyCollection<string> valueOptions,
@@ -260,8 +304,9 @@ public static class MigrationCli
         output.WriteLine("      --allowed-tenant-ids <comma-separated-guids> --report <path>");
         output.WriteLine("      --external-config <path> [--postmark-token-env <name>]");
         output.WriteLine("  Asap.Migration reconcile --package <package-dir> --connection-string-env <name> --report <path> --external-config <path>");
+        output.WriteLine("  Asap.Migration recover-report --package <package-dir> --connection-string-env <name> --report <path> --external-config <path>");
         output.WriteLine();
         output.WriteLine("Export reads a stopped PocketBase SQLite database and writes normalized hashed JSON.");
-        output.WriteLine("Import validates a fresh target and writes a deterministic reconciliation report.");
+        output.WriteLine("Import validates a fresh target and writes a deterministic reconciliation report; a committed import with a report-promotion failure can be recovered without retrying import.");
     }
 }

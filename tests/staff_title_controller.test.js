@@ -51,6 +51,55 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
       first.dispose(); replacement.dispose(); host.dispose();
     });
   }
+  await fixture(async ({ load, get }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createDetailHost } = await load('detail-host');
+    const { createTitleDetailController } = await load('title-detail');
+    const session = createSessionIdentity();
+    const owner = session.accept(actorA);
+    const host = createDetailHost({ root: get('#request-dialog') });
+    const source = { ...snapshot, bibid: 9001, status: 'pending_hold', holdOperation: {
+      id: '71', version: 'operation-v1', state: 'outcome_unknown', phase: 'acquired', attemptNumber: 1,
+      canResolveNotPerformed: true
+    } };
+    const posts = [], receipts = [], notices = [];
+    const controller = createTitleDetailController({ host, sessionIdentity: session,
+      polarisLookup: { close() {}, invalidate() {} },
+      copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
+      announce: message => notices.push(message), beforeOpen: () => ({ isCurrent: () => true }),
+      isNavigationCurrent: () => true, getNavigationGeneration: () => 1, getScope: () => '2',
+      onAlign: async () => ({ scope: '2', commit: () => 1 }), onOpened() {}, beforeClose: () => true, onClosed() {},
+      getFocusReturn: () => null, refreshQueue: async () => true, queueSequence: () => 1,
+      rememberOpened() {}, forgetUnavailable() {}, onReceipt: (...args) => receipts.push(args), clearReceipt() {},
+      request: async (path, init = {}) => {
+        if (init.method === 'POST') {
+          posts.push({ path, init });
+          throw Object.assign(new Error('HTTP 200 hold-resolution result is unknown.'), {
+            status: 200, outcomeUnknown: true
+          });
+        }
+        return path.includes('/title-requests/') ? source
+          : { availableFormats: ['book'], formatLabels: { book: 'Book' }, publicationOptions: [], formatRules: {} };
+      } });
+    await controller.open(source.id);
+    const reason = get('.resolution-form textarea[required]');
+    assert.ok(reason, 'the acquired uncertain hold has a resolution form');
+    reason.value = 'Operator confirms the acquired attempt was never dispatched.';
+    get('.resolution-form button[type="submit"]').click();
+    for (let attempt = 0; attempt < 10 && posts.length === 0; attempt++) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    for (let attempt = 0; attempt < 3; attempt++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(posts.length, 1, 'hold resolution dispatches once and is never replayed automatically');
+    assert.equal(posts[0].path, '/api/asap/staff/hold-operations/71/resolve');
+    assert.equal(posts[0].init.body.outcome, 'not_performed');
+    assert.equal(posts[0].init.body.version, 'operation-v1');
+    assert.equal(receipts.length, 1, 'status-200 unknown resolution produces one recovery receipt');
+    assert.equal(receipts[0][1].id, owner.id, 'recovery receipt remains with the dispatching staff actor');
+    assert.equal(receipts[0][2].outcome, 'uncertain');
+    assert.match(notices.join(' '), /hold recovery outcome could not be confirmed/i);
+    controller.dispose(); host.dispose();
+  });
   await fixture(async ({ load, get, dom }) => {
     const { createDraftScope } = await load('draft-scope');
     const { createRequestEditor } = await load('request-editor');

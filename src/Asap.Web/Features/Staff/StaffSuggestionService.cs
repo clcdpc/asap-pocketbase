@@ -76,13 +76,14 @@ public sealed class StaffSuggestionService(
         try
         {
             candidates = await polaris.SearchPatronsAsync(query!, scope.OrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             throw ProviderFailure(exception);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -295,7 +296,9 @@ public sealed class StaffSuggestionService(
     {
         try
         {
-            return await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
+            var patron = await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return patron;
         }
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
@@ -312,7 +315,7 @@ public sealed class StaffSuggestionService(
 
             throw ProviderFailure(exception);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -366,10 +369,12 @@ public sealed class StaffSuggestionService(
         var organizationIds = new[] { patron.PatronOrganizationId, patron.HomeLibraryOrganizationId };
         var organizations = await context.Organizations.AsNoTracking()
             .Where(item => organizationIds.Contains(item.Id))
-            .Select(item => new { item.Id, item.IsActive })
+            .Select(item => new { item.Id, item.OrganizationCodeId, item.IsActive })
             .ToListAsync(cancellationToken);
         var byId = organizations.ToDictionary(item => item.Id);
         return byId.Count == organizationIds.Distinct().Count() &&
+               OrganizationAuthority.IsLibrary(patron.HomeLibraryOrganizationId,
+                   byId[patron.HomeLibraryOrganizationId].OrganizationCodeId) &&
                byId[patron.HomeLibraryOrganizationId].IsActive;
     }
 
@@ -412,7 +417,9 @@ public sealed class StaffSuggestionService(
     {
         try
         {
-            return await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
+            var branches = await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return branches;
         }
         catch (Exception exception) when (exception is PolarisOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
@@ -423,7 +430,7 @@ public sealed class StaffSuggestionService(
                 "Eligible pickup locations could not be loaded from Polaris.",
                 innerException: exception);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }

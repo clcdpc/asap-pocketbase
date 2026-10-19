@@ -116,17 +116,12 @@ internal static class TitleRequestActionBinding
         {
             foreach (var property in input.CustomFields.EnumerateObject())
             {
-                var value = property.Value;
-                if (value.ValueKind == JsonValueKind.Object && value.TryGetProperty("value", out var nested))
-                {
-                    value = nested;
-                }
-                if (value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                if (!TryReadCustomFieldValue(property.Value, out var fieldValue))
                 {
                     error ??= "invalid_custom_fields";
                     continue;
                 }
-                if (!fields.TryAdd(property.Name, value.ValueKind == JsonValueKind.String ? value.GetString() : null))
+                if (!fields.TryAdd(property.Name, fieldValue))
                 {
                     error ??= "invalid_custom_fields";
                 }
@@ -153,5 +148,66 @@ internal static class TitleRequestActionBinding
             StaffSelectedBibId = input.StaffSelectedBibId, StaffSelectedBibIdSupplied = input.StaffSelectedBibIdSupplied,
             Notes = input.Notes, Format = input.Format, EmailPurchaseReminder = input.EmailPurchaseReminder,
             RejectionTemplateId = input.RejectionTemplateId, ValidationError = error };
+    }
+
+    private static bool TryReadCustomFieldValue(JsonElement value, out string? fieldValue)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            JsonElement nestedValue = default;
+            var valueSeen = false;
+            foreach (var property in value.EnumerateObject())
+            {
+                if (!seen.Add(property.Name))
+                {
+                    fieldValue = null;
+                    return false;
+                }
+
+                switch (property.Name.ToLowerInvariant())
+                {
+                    case "value":
+                        nestedValue = property.Value;
+                        valueSeen = true;
+                        break;
+                    case "label":
+                    case "type":
+                    case "displayvalue":
+                        if (property.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                        {
+                            fieldValue = null;
+                            return false;
+                        }
+                        break;
+                    default:
+                        fieldValue = null;
+                        return false;
+                }
+            }
+
+            if (!valueSeen)
+            {
+                fieldValue = null;
+                return false;
+            }
+
+            value = nestedValue;
+        }
+
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            fieldValue = value.GetString();
+            return true;
+        }
+
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            fieldValue = null;
+            return true;
+        }
+
+        fieldValue = null;
+        return false;
     }
 }

@@ -230,8 +230,9 @@ public sealed partial class PatronJourneyTests
         var seed = await SeedLifecycleAutoClaimRaceAsync("349-invalid-email");
         const string barcode = "349-invalid-claim";
         factory.Services.GetRequiredService<DeterministicTestingPatronProvider>().AddPatron(
-            new PatronSnapshot(7001, barcode, "claim@example.org", "Claim", "Patron", 1, "Adult", 101, 2, "Test Library", 101),
+            new PatronSnapshot(734901, barcode, "claim@example.org", "Claim", "Patron", 1, "Adult", 101, 2, "Test Library", 101),
             [new PickupBranch(101, "Main Library")], 2);
+        var session = await IssueTestPatronSessionAsync(barcode);
         try
         {
             await using (var connection = new SqlConnection(databaseConnectionString))
@@ -243,20 +244,21 @@ public sealed partial class PatronJourneyTests
                 change.Parameters.AddWithValue("@id", seed.StaffId);
                 await change.ExecuteNonQueryAsync();
             }
-            var result = await factory.Services.GetRequiredService<PatronSuggestionService>().CreateAsync(
-                new PatronSessionContext(0, barcode, 2, 2, 2, timeProvider!.GetUtcNow().UtcDateTime.AddHours(1)),
+            var result = await factory!.Services.GetRequiredService<PatronSuggestionService>().CreateAsync(
+                session,
                 new PatronSuggestionInput("book", "Invalid claimant", "Policy author", null, "Coming soon", 101, true,
                     new Dictionary<string, string?>()), CancellationToken.None);
-            await using var context = await factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
+            await using var context = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
                 .CreateDbContextAsync();
             var request = await context.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == result.Id);
             Assert.IsNull(request.ClaimedByStaffUserId);
-            Assert.AreEqual(timeProvider.GetUtcNow().UtcDateTime, request.CreatedUtc);
+            Assert.AreEqual(timeProvider!.GetUtcNow().UtcDateTime, request.CreatedUtc);
             Assert.IsTrue(await context.TitleRequestEvents.AnyAsync(item =>
                 item.TitleRequestId == result.Id && item.EventType == "claim_auto_skipped"));
         }
         finally
         {
+            await DeleteTestPatronSessionAsync(session.Id);
             await using var connection = new SqlConnection(databaseConnectionString);
             await connection.OpenAsync();
             await using var cleanup = new SqlCommand(
@@ -275,6 +277,9 @@ public sealed partial class PatronJourneyTests
         var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         long closedId;
         long pendingId;
+        byte[] unprotectedVersion;
+        byte[] protectedVersion;
+        bool actorInitiallyActive;
         await using (var setup = await contexts.CreateDbContextAsync())
         {
             var format = await setup.MaterialFormats.SingleAsync(item => item.Code == "book");
@@ -290,11 +295,15 @@ public sealed partial class PatronJourneyTests
             {
                 LibraryOrganizationId = 2, Barcode = "349-authority-pending", Title = "Protected pending",
                 MaterialFormatId = format.Id, Status = RequestStatus.PendingHold,
-                BibId = 34902, BibIdStaffVerified = true, AutoHold = true, LegacyHoldProtected = true,
+                BibId = 34902, BibIdStaffVerified = true, AutoHold = true, LegacyHoldProtected = false,
                 CreatedUtc = now, UpdatedUtc = now
             };
             setup.TitleRequests.AddRange(closed, pending);
             await setup.SaveChangesAsync();
+            unprotectedVersion = pending.RowVersion.ToArray();
+            pending.LegacyHoldProtected = true;
+            await setup.SaveChangesAsync();
+            protectedVersion = pending.RowVersion.ToArray();
             setup.TitleRequestEvents.Add(new TitleRequestEvent
             {
                 TitleRequestId = closed.Id, EventType = "legacy", ActorType = "system",
@@ -303,7 +312,16 @@ public sealed partial class PatronJourneyTests
             await setup.SaveChangesAsync();
             closedId = closed.Id;
             pendingId = pending.Id;
+            actorInitiallyActive = await setup.StaffUsers.AsNoTracking()
+                .Where(item => item.Id == actor.Id).Select(item => item.IsActive).SingleAsync();
         }
+        Assert.IsTrue(actorInitiallyActive);
+        Assert.IsFalse(unprotectedVersion.SequenceEqual(protectedVersion));
+        var provider = factory.Services.GetRequiredService<DeterministicTestingPatronProvider>();
+        var refreshCount = provider.Calls.Count(item => item.Operation == TestingPolarisOperation.Refresh &&
+            item.Key == "349-authority-pending");
+        var createCount = provider.CreateCommands.Count;
+        var actorRevoked = false;
         try
         {
             await using var read = await contexts.CreateDbContextAsync();
@@ -318,15 +336,95 @@ public sealed partial class PatronJourneyTests
                 new VersionInput(StaffVersion.Encode(closed.RowVersion), StaffVersion.Encode(actor.RowVersion)), CancellationToken.None);
             Assert.AreEqual("hold_history_retained", delete.Code);
             var pending = await read.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == pendingId);
-            var place = await factory.Services.GetRequiredService<HoldPlacementService>()
-                .PlaceAsync(actor, pendingId, new VersionInput(StaffVersion.Encode(pending.RowVersion)), CancellationToken.None);
+            var placement = factory.Services.GetRequiredService<HoldPlacementService>();
+            var stalePlace = await placement.PlaceAsync(
+                actor, pendingId, new VersionInput(StaffVersion.Encode(unprotectedVersion)), CancellationToken.None);
+            Assert.AreEqual("stale_version", stalePlace.Code);
+            var place = await placement.PlaceAsync(
+                actor, pendingId, new VersionInput(StaffVersion.Encode(pending.RowVersion)), CancellationToken.None);
             Assert.AreEqual("hold_history_retained", place.Code);
             Assert.IsFalse(await read.HoldPlacementOperations.AnyAsync(item => item.TitleRequestId == pendingId));
             Assert.IsTrue(await read.TitleRequests.AnyAsync(item => item.Id == closedId && item.LegacyHoldProtected));
+            Assert.AreEqual(refreshCount, provider.Calls.Count(item => item.Operation == TestingPolarisOperation.Refresh &&
+                item.Key == "349-authority-pending"));
+            Assert.AreEqual(createCount, provider.CreateCommands.Count);
+
+            await ExecuteNonQueryAsync(
+                "UPDATE [asap].[StaffUser] SET [IsActive] = 0 WHERE [Id] = @id;",
+                ("@id", actor.Id));
+            actorRevoked = true;
+            var revokedPlace = await placement.PlaceAsync(
+                actor, pendingId, new VersionInput(StaffVersion.Encode(protectedVersion)), CancellationToken.None);
+            Assert.AreEqual("staff_scope_forbidden", revokedPlace.Code);
+            Assert.AreEqual(refreshCount, provider.Calls.Count(item => item.Operation == TestingPolarisOperation.Refresh &&
+                item.Key == "349-authority-pending"));
+            Assert.AreEqual(createCount, provider.CreateCommands.Count);
+            Assert.IsFalse(await read.HoldPlacementOperations.AnyAsync(item => item.TitleRequestId == pendingId));
         }
         finally
         {
+            if (actorRevoked)
+            {
+                await ExecuteNonQueryAsync(
+                    "UPDATE [asap].[StaffUser] SET [IsActive] = @active WHERE [Id] = @id;",
+                    ("@active", actorInitiallyActive), ("@id", actor.Id));
+            }
             await DeleteBibOwnershipRequestsAsync([closedId, pendingId]);
+        }
+
+        const int raceOrganizationId = 38134;
+        var raceProvider = new PickupJournalProvider(raceOrganizationId);
+        await using var raceFactory = CreatePickupJournalFactory(raceProvider);
+        var raceContexts = raceFactory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var staffProvider = raceFactory.Services.GetRequiredService<DeterministicTestingPatronProvider>();
+        var holdCreateCount = staffProvider.CreateCommands.Count;
+        var raceRequest = await SeedPickupJournalRequestAsync(raceContexts, raceProvider);
+        var refreshReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRefresh = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        raceProvider.AfterRefresh = async token =>
+        {
+            refreshReached.TrySetResult();
+            await releaseRefresh.Task.WaitAsync(token);
+        };
+        var placementAttempt = raceFactory.Services.GetRequiredService<HoldPlacementService>().PlaceAsync(
+            actor,
+            raceRequest.Id,
+            new VersionInput(StaffVersion.Encode(raceRequest.RowVersion)),
+            CancellationToken.None);
+        try
+        {
+            await refreshReached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await using (var update = await raceContexts.CreateDbContextAsync())
+            {
+                var current = await update.TitleRequests.SingleAsync(item => item.Id == raceRequest.Id);
+                current.LegacyHoldProtected = true;
+                await update.SaveChangesAsync();
+                Assert.IsFalse(raceRequest.RowVersion.SequenceEqual(current.RowVersion));
+            }
+
+            releaseRefresh.TrySetResult();
+            var raced = await placementAttempt.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.AreEqual("stale_version", raced.Code);
+            Assert.AreEqual(1, raceProvider.Reads);
+            Assert.AreEqual(0, raceProvider.Writes);
+            Assert.AreEqual(holdCreateCount, staffProvider.CreateCommands.Count);
+            await using var verify = await raceContexts.CreateDbContextAsync();
+            Assert.AreEqual(0, await verify.HoldPlacementOperations.CountAsync(item => item.TitleRequestId == raceRequest.Id));
+            Assert.IsTrue(await verify.TitleRequests.AnyAsync(item =>
+                item.Id == raceRequest.Id && item.LegacyHoldProtected));
+        }
+        finally
+        {
+            releaseRefresh.TrySetResult();
+            raceProvider.AfterRefresh = null;
+            try
+            {
+                await placementAttempt;
+            }
+            catch (Exception)
+            {
+            }
+            await CleanupNativeIdentityPickupLibraryAsync(raceOrganizationId);
         }
     }
     private async Task DeletePolicyOutboxAsync(SeededSensitiveOutbox seeded)

@@ -20,7 +20,8 @@ public sealed record EmailOperationItem(
     string? SuppressionReason,
     DateTime CreatedUtc,
     DateTime? SentUtc,
-    string Version);
+    string Version,
+    bool CanRetry);
 
 public sealed record EmailOperationResult(string Code, object? Data = null);
 
@@ -54,7 +55,10 @@ public sealed class EmailOperationsService(
         {
             await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
             var active = await context.Organizations.AsNoTracking()
-                .Where(item => item.Id == organizationId)
+                .Where(item => item.Id == organizationId &&
+                               (item.Id == LibraryScope.SystemOrganizationId ||
+                                item.Id > LibraryScope.SystemOrganizationId &&
+                                item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId))
                 .Select(item => item.IsActive)
                 .SingleOrDefaultAsync(cancellationToken);
             if (!active)
@@ -99,7 +103,7 @@ public sealed class EmailOperationsService(
         {
             var organization = await preflight.Organizations.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.Id == targetOrganizationId, cancellationToken);
-            if (organization?.IsActive != true)
+            if (organization is null || !OrganizationAuthority.IsActiveScope(organization))
             {
                 return new EmailOperationResult("organization_inactive");
             }
@@ -111,9 +115,13 @@ public sealed class EmailOperationsService(
         try
         {
             readiness = await emailSender.CheckReadinessAsync(targetOrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
-        catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
-            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException or OperationCanceledException)
         {
             return new EmailOperationResult("email_transport_unavailable");
         }
@@ -180,8 +188,8 @@ public sealed class EmailOperationsService(
         context.EmailOutbox.Add(outbox);
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        var dispatchDelayed = false;
-        if (suppression is null)
+        var dispatchDelayed = suppression is null && cancellationToken.IsCancellationRequested;
+        if (suppression is null && !dispatchDelayed)
         {
             try
             {
@@ -223,16 +231,39 @@ public sealed class EmailOperationsService(
         {
             query = query.Where(item => item.Status == "failed");
         }
-        return await query
+        var rows = await query
             .OrderByDescending(item => item.Status == "failed")
             .ThenByDescending(item => item.CreatedUtc)
             .Take(500)
-            .Select(item => new EmailOperationItem(
-                item.Id.ToString(CultureInfo.InvariantCulture), item.OrganizationId, item.Status,
-                item.BusinessKey, item.DeliveryClass,
-                item.RecipientAddressKind, item.AttemptCount, item.LastErrorCode, item.SuppressionReason,
-                item.CreatedUtc, item.SentUtc, StaffVersion.Encode(item.RowVersion)))
+            .Select(item => new
+            {
+                item.Id,
+                item.OrganizationId,
+                item.Status,
+                item.BusinessKey,
+                item.DeliveryClass,
+                item.RecipientAddressKind,
+                item.AttemptCount,
+                item.LastErrorCode,
+                item.SuppressionReason,
+                item.CreatedUtc,
+                item.SentUtc,
+                item.RowVersion,
+                item.ProviderMessageId,
+                item.SendingStartedUtc,
+                item.LeaseId,
+                item.LeaseExpiresUtc,
+                item.NextAttemptUtc
+            })
             .ToListAsync(cancellationToken);
+        return rows.Select(item => new EmailOperationItem(
+            item.Id.ToString(CultureInfo.InvariantCulture), item.OrganizationId, item.Status,
+            item.BusinessKey, item.DeliveryClass,
+            item.RecipientAddressKind, item.AttemptCount, item.LastErrorCode, item.SuppressionReason,
+            item.CreatedUtc, item.SentUtc, StaffVersion.Encode(item.RowVersion),
+            IsCertifiedForRetry(item.Status, item.LastErrorCode, item.ProviderMessageId, item.SendingStartedUtc,
+                item.LeaseId, item.LeaseExpiresUtc, item.NextAttemptUtc)))
+            .ToArray();
     }
 
     public async Task<EmailOperationResult> RetryAsync(
@@ -297,7 +328,8 @@ public sealed class EmailOperationsService(
             return new EmailOperationResult("stale_version");
         }
 
-        if (row.Status != "failed")
+        if (!IsCertifiedForRetry(row.Status, row.LastErrorCode, row.ProviderMessageId, row.SendingStartedUtc,
+                row.LeaseId, row.LeaseExpiresUtc, row.NextAttemptUtc))
         {
             return new EmailOperationResult("email_not_retryable");
         }
@@ -315,17 +347,20 @@ public sealed class EmailOperationsService(
         {
             return new EmailOperationResult("stale_version");
         }
-        var dispatchDelayed = false;
-        try
+        var dispatchDelayed = cancellationToken.IsCancellationRequested;
+        if (!dispatchDelayed)
         {
-            dispatcher.Enqueue(row.Id);
-        }
-        // Retry state is committed; report delayed dispatch and retain the pending row for the sweep.
-        catch (Exception exception)
-        {
-            dispatchDelayed = true;
-            logger?.LogWarning("Email outbox {OutboxId} awaits the scheduled sweep after dispatch failure ({FailureType}).",
-                row.Id, exception.GetType().Name);
+            try
+            {
+                dispatcher.Enqueue(row.Id);
+            }
+            // Retry state is committed; report delayed dispatch and retain the pending row for the sweep.
+            catch (Exception exception)
+            {
+                dispatchDelayed = true;
+                logger?.LogWarning("Email outbox {OutboxId} awaits the scheduled sweep after dispatch failure ({FailureType}).",
+                    row.Id, exception.GetType().Name);
+            }
         }
         return new EmailOperationResult("queued", new
         {
@@ -356,6 +391,22 @@ public sealed class EmailOperationsService(
 
     private static int[] LockedOrganizations(CurrentStaff actor, int targetOrganizationId) =>
         new[] { actor.OrganizationId, targetOrganizationId }.Distinct().Order().ToArray();
+
+    private static bool IsCertifiedForRetry(
+        string status,
+        string? lastErrorCode,
+        string? providerMessageId,
+        DateTime? sendingStartedUtc,
+        Guid? leaseId,
+        DateTime? leaseExpiresUtc,
+        DateTime? nextAttemptUtc) =>
+        status == "failed" &&
+        string.Equals(lastErrorCode, "mail_not_configured", StringComparison.Ordinal) &&
+        providerMessageId is null &&
+        !sendingStartedUtc.HasValue &&
+        !leaseId.HasValue &&
+        !leaseExpiresUtc.HasValue &&
+        !nextAttemptUtc.HasValue;
 
     private static async Task<EffectiveEmailSettings> ReadEffectiveSettingsAsync(
         AsapDbContext context,

@@ -40,6 +40,7 @@ public sealed partial class WorkflowProcessingService(
     HoldPlacementService holdPlacement,
     PatronSuggestionService suggestionService,
     IStaffPolarisProvider polaris,
+    IPatronProvider patronProvider,
     IPolarisReferenceProvider referenceProvider,
     ExternalConfiguration configuration,
     WorkflowProcessingGuard workflowGuard,
@@ -150,10 +151,20 @@ public sealed partial class WorkflowProcessingService(
         }
 
         var snapshots = await referenceProvider.GetOrganizationsAsync(cancellationToken);
+        if (snapshots.Count == 0)
+        {
+            return new WorkflowRunResult("organization_snapshot_empty");
+        }
+        if (snapshots.Any(item => item is null || item.Id <= 0 || string.IsNullOrWhiteSpace(item.DisplayName)) ||
+            snapshots.Select(item => item.Id).Distinct().Count() != snapshots.Count)
+        {
+            return new WorkflowRunResult("organization_snapshot_invalid");
+        }
+
         var patronCodes = await referenceProvider.GetPatronCodesAsync(cancellationToken);
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var changed = 0;
-        foreach (var snapshot in snapshots.Where(item => item.Id > 1))
+        foreach (var snapshot in snapshots.Where(item => item.Id > LibraryScope.SystemOrganizationId))
         {
             var organization = await context.Organizations.SingleOrDefaultAsync(item => item.Id == snapshot.Id, cancellationToken);
             if (organization is null)
@@ -163,19 +174,40 @@ public sealed partial class WorkflowProcessingService(
                     Id = snapshot.Id,
                     DisplayName = snapshot.DisplayName,
                     Abbreviation = snapshot.Abbreviation,
+                    OrganizationCodeId = snapshot.OrganizationCodeId,
+                    ParentOrganizationId = snapshot.ParentOrganizationId,
                     IsActive = false
                 };
                 context.Organizations.Add(organization);
                 changed++;
-                continue;
             }
-            if (organization.DisplayName != snapshot.DisplayName || organization.Abbreviation != snapshot.Abbreviation)
+            else
             {
-                organization.DisplayName = snapshot.DisplayName;
-                organization.Abbreviation = snapshot.Abbreviation;
-                changed++;
+                if (organization.DisplayName != snapshot.DisplayName || organization.Abbreviation != snapshot.Abbreviation ||
+                    organization.OrganizationCodeId != snapshot.OrganizationCodeId ||
+                    organization.ParentOrganizationId != snapshot.ParentOrganizationId)
+                {
+                    organization.DisplayName = snapshot.DisplayName;
+                    organization.Abbreviation = snapshot.Abbreviation;
+                    organization.OrganizationCodeId = snapshot.OrganizationCodeId;
+                    organization.ParentOrganizationId = snapshot.ParentOrganizationId;
+                    changed++;
+                }
             }
             organization.LastSyncedUtc = UtcNow();
+
+            if (!OrganizationAuthority.IsLibrary(snapshot.Id, snapshot.OrganizationCodeId))
+            {
+                organization.IsActive = false;
+                var sessions = await context.PatronSessions
+                    .Where(item => item.EffectiveOrganizationId == snapshot.Id && item.RevokedUtc == null)
+                    .ToListAsync(cancellationToken);
+                var revokedUtc = UtcNow();
+                foreach (var session in sessions)
+                {
+                    session.RevokedUtc = revokedUtc;
+                }
+            }
         }
         await context.SaveChangesAsync(cancellationToken);
         return new WorkflowRunResult("completed", snapshots.Count + patronCodes.Count, changed);
@@ -229,7 +261,7 @@ public sealed partial class WorkflowProcessingService(
                 : await context.TitleRequests.FromSqlInterpolated(
                         $"SELECT * FROM [asap].[TitleRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {candidate.Id}")
                     .SingleOrDefaultAsync(cancellationToken);
-            var eligible = organization?.IsActive == true && request is not null &&
+            var eligible = organization is not null && OrganizationAuthority.IsActiveLibrary(organization) && request is not null &&
                           request.LibraryOrganizationId == candidate.LibraryOrganizationId &&
                           request.RowVersion.SequenceEqual(candidate.RowVersion) &&
                           request.Status == RequestStatus.Suggestion && request.IsbnCheckStatus == IdentifierCheckState.Pending;
@@ -296,6 +328,11 @@ public sealed partial class WorkflowProcessingService(
                 LocalCommit: lookup.QueueProgressVersion is not null,
                 ProgressVersion: lookup.QueueProgressVersion);
         }
+        catch (PolarisOperationalException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Preserve the provider's actual failure before trying to record a row outcome or progress.
+            throw;
+        }
         catch (PolarisOperationalException)
         {
             return new WorkflowItemResult("operational_failure", Stop: true);
@@ -333,7 +370,7 @@ public sealed partial class WorkflowProcessingService(
                 .SingleOrDefaultAsync(cancellationToken);
         var code = "skipped";
         var changed = false;
-        if (organization?.IsActive == true && request is not null &&
+        if (organization is not null && OrganizationAuthority.IsActiveLibrary(organization) && request is not null &&
             request.LibraryOrganizationId == candidate.LibraryOrganizationId &&
             request.RowVersion.SequenceEqual(candidate.RowVersion) &&
             request.Status == RequestStatus.OutstandingPurchase)
@@ -351,7 +388,8 @@ public sealed partial class WorkflowProcessingService(
             {
                 var otherOpenBibs = request.AutoHold ? await context.TitleRequests.AsNoTracking().Where(item =>
                     item.LibraryOrganizationId == request.LibraryOrganizationId &&
-                    item.Barcode == request.Barcode && item.BibId != null &&
+                    ((request.PatronIdSnapshot.HasValue && item.PatronIdSnapshot == request.PatronIdSnapshot) ||
+                     item.PatronIdSnapshot == null && item.Barcode == request.Barcode) && item.BibId != null &&
                     item.Id != request.Id && item.Status != RequestStatus.Closed)
                     .Select(item => item.BibId!)
                     .ToListAsync(cancellationToken) : [];
@@ -525,7 +563,10 @@ public sealed partial class WorkflowProcessingService(
     private static async Task<bool> SaveWithConcurrencyAsync(AsapDbContext context, CancellationToken cancellationToken)
     {
         try { await context.SaveChangesAsync(cancellationToken); return true; }
-        catch (DbUpdateConcurrencyException) { return false; }
+        catch (DbUpdateConcurrencyException)
+        {
+            return false;
+        }
     }
     private static bool StopsWorkflow(string code) =>
         code is "sql_failure" or "stale_progress_fence" or "operational_failure";

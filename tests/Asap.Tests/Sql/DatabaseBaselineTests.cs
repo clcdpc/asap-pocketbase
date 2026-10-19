@@ -83,7 +83,9 @@ public sealed partial class DatabaseBaselineTests
 
         Assert.AreEqual(16, Convert.ToInt32(await Scalar(connection, "SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS int);")));
         Assert.AreEqual(160, Convert.ToInt32(await Scalar(connection, "SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME();")));
-        Assert.AreEqual(10, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+        Assert.AreEqual(12, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+        Assert.AreEqual(2, Convert.ToInt32(await Scalar(connection,
+            "SELECT COUNT(*) FROM sys.columns WHERE [object_id] = OBJECT_ID(N'[asap].[Organization]') AND [name] IN (N'OrganizationCodeId', N'ParentOrganizationId') AND [is_nullable] = 1;")));
         Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, "SELECT COUNT(*) FROM [asap].[DeploymentState] WHERE [Id] = 1;")));
         var expectedHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(_dacpacPath))).ToLowerInvariant();
@@ -105,7 +107,7 @@ public sealed partial class DatabaseBaselineTests
         try
         {
             new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
-            Assert.AreEqual(10, Convert.ToInt32(await Scalar(connection,
+            Assert.AreEqual(12, Convert.ToInt32(await Scalar(connection,
                 "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
             Assert.AreEqual("native-eight-preservation", await Scalar(connection,
                 "SELECT [AccessId] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;"));
@@ -116,6 +118,78 @@ public sealed partial class DatabaseBaselineTests
         {
             new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
             await NonQuery(connection, "UPDATE [asap].[PolarisSettings] SET [AccessId] = NULL WHERE [OrganizationId] = 1;");
+        }
+    }
+
+    [TestMethod]
+    public async Task NativeSchemaTenUpgradeAddsNullableOrganizationAuthorityWithoutLosingReferencesOrHistory()
+    {
+        const int organizationId = 98991;
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        long requestId = 0;
+        long eventId = 0;
+        try
+        {
+            await NonQuery(connection, "ALTER TABLE [asap].[Organization] DROP COLUMN [OrganizationCodeId], [ParentOrganizationId];");
+            await NonQuery(connection, $"""
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive])
+                VALUES ({organizationId}, N'Unclassified schema-ten library', 1);
+                INSERT INTO [asap].[PatronCodeEligibilitySet] ([OrganizationId]) VALUES ({organizationId});
+                INSERT INTO [asap].[TitleRequest]
+                    ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [AutoHold],
+                     [MaterialFormatId], [Status], [CloseReason], [CreatedUtc], [UpdatedUtc])
+                SELECT {organizationId}, {organizationId}, N'98991000000001', N'Preserved request', 0,
+                    [Id], N'closed', N'manual', SYSUTCDATETIME(), SYSUTCDATETIME()
+                FROM [asap].[MaterialFormat]
+                WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book';
+                INSERT INTO [asap].[TitleRequestEvent]
+                    ([TitleRequestId], [EventType], [Status], [CloseReason], [ActorType], [MetadataJson], [CreatedUtc])
+                SELECT [Id], N'legacy_history', N'closed', N'manual', N'system',
+                    NCHAR(123) + N'"kept":true' + NCHAR(125), SYSUTCDATETIME()
+                FROM [asap].[TitleRequest] WHERE [Barcode] = N'98991000000001';
+                UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;
+                """);
+            requestId = Convert.ToInt64(await Scalar(connection,
+                "SELECT [Id] FROM [asap].[TitleRequest] WHERE [Barcode] = N'98991000000001';"));
+            eventId = Convert.ToInt64(await Scalar(connection,
+                $"SELECT [Id] FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = {requestId};"));
+
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+
+            Assert.AreEqual(12, Convert.ToInt32(await Scalar(connection,
+                "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+            Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, $"""
+                SELECT COUNT(*) FROM [asap].[Organization]
+                WHERE [Id] = {organizationId} AND [IsActive] = 1
+                    AND [OrganizationCodeId] IS NULL AND [ParentOrganizationId] IS NULL;
+                """)), "Old active rows stay unclassified until a trusted reference refresh supplies native identity.");
+            Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, $"""
+                SELECT COUNT(*) FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = {organizationId};
+                """)), "Existing organization foreign keys remain available.");
+            Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, $"""
+                SELECT COUNT(*) FROM [asap].[TitleRequest]
+                WHERE [Id] = {requestId} AND [LibraryOrganizationId] = {organizationId}
+                    AND [PatronOrganizationId] = {organizationId} AND [Barcode] = N'98991000000001';
+                """)), "Request and patron organization references keep their IDs.");
+            Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, $"""
+                SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
+                WHERE [Id] = {eventId} AND [TitleRequestId] = {requestId}
+                    AND [EventType] = N'legacy_history'
+                    AND [MetadataJson] = NCHAR(123) + N'"kept":true' + NCHAR(125);
+                """)), "Request history keeps its identity and contents.");
+        }
+        finally
+        {
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+            await NonQuery(connection, $"""
+                DELETE FROM [asap].[TitleRequestEvent]
+                WHERE [TitleRequestId] IN
+                    (SELECT [Id] FROM [asap].[TitleRequest] WHERE [Barcode] = N'98991000000001');
+                DELETE FROM [asap].[TitleRequest] WHERE [Barcode] = N'98991000000001';
+                DELETE FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = {organizationId};
+                DELETE FROM [asap].[Organization] WHERE [Id] = {organizationId};
+                """);
         }
     }
 
@@ -247,7 +321,9 @@ public sealed partial class DatabaseBaselineTests
                     ([PatronId] > 0 AND [LibraryOrganizationId] > 1 AND [ToPickupBranchId] > 0
                      AND ([FromPickupBranchId] IS NULL OR [FromPickupBranchId] > 0)
                      AND ([ObservedPickupBranchId] IS NULL OR [ObservedPickupBranchId] > 0));
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (775511, N'Journal upgrade fixture', 1);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (775511, N'Journal upgrade fixture', 2, 1, 1);
                 """);
             await using (var insert = new SqlCommand("""
                 INSERT INTO [asap].[PickupPreferenceOperation]
@@ -392,7 +468,7 @@ public sealed partial class DatabaseBaselineTests
             await NonQuery(connection, """
                 ALTER TABLE [asap].[DeploymentState] ALTER COLUMN [LastHangfireSchemaVersion] int NULL;
                 UPDATE [asap].[DeploymentState] SET [LastHangfireSchemaVersion] = NULL WHERE [Id] = 1;
-                UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;
+                UPDATE [asap].[SchemaVersion] SET [Version] = 12 WHERE [Id] = 1;
                 """);
         }
     }
@@ -416,7 +492,7 @@ public sealed partial class DatabaseBaselineTests
         {
             await NonQuery(connection, """
                 INSERT INTO [asap].[SchemaVersion] ([Id], [Version], [UpdatedUtc])
-                VALUES (1, 10, SYSUTCDATETIME());
+                VALUES (1, 12, SYSUTCDATETIME());
                 """);
         }
     }
@@ -494,7 +570,7 @@ public sealed partial class DatabaseBaselineTests
         {
             context.Entry(settings).CurrentValues.SetValues(original);
             await context.SaveChangesAsync();
-            await context.Database.ExecuteSqlRawAsync("UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;");
+            await context.Database.ExecuteSqlRawAsync("UPDATE [asap].[SchemaVersion] SET [Version] = 12 WHERE [Id] = 1;");
         }
     }
 
@@ -531,7 +607,9 @@ public sealed partial class DatabaseBaselineTests
         try
         {
             await NonQuery(connection, """
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (73470, N'Native upgrade library', 1);
+                INSERT INTO [asap].[Organization]
+                    ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                VALUES (73470, N'Native upgrade library', 2, 1, 1);
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status],
                      [BibId], [BibIdStaffVerified], [PatronCodeId], [CreatedUtc], [UpdatedUtc])
@@ -565,7 +643,7 @@ public sealed partial class DatabaseBaselineTests
                 await Scalar(connection, "SELECT [WorkstationId] FROM [asap].[PolarisSettings];"));
             Assert.AreEqual(userId > 0 ? (object)userId : DBNull.Value,
                 await Scalar(connection, "SELECT [SystemPolarisUserId] FROM [asap].[PolarisSettings];"));
-            Assert.AreEqual(10, Convert.ToInt32(await Scalar(connection,
+            Assert.AreEqual(12, Convert.ToInt32(await Scalar(connection,
                 "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
             var preservedVersion = (byte[])(await Scalar(connection,
                 "SELECT [RowVersion] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 73470;"))!;
@@ -598,7 +676,7 @@ public sealed partial class DatabaseBaselineTests
                     ALTER TABLE [asap].[PolarisSettings] ADD CONSTRAINT [CK_PolarisSettings_IntegrationIdentity]
                         CHECK (([WorkstationId] IS NULL OR [WorkstationId] > 0) AND
                                ([SystemPolarisUserId] IS NULL OR [SystemPolarisUserId] > 0));
-                UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;
+                UPDATE [asap].[SchemaVersion] SET [Version] = 12 WHERE [Id] = 1;
                 """);
         }
     }
@@ -629,7 +707,7 @@ public sealed partial class DatabaseBaselineTests
         {
             await using var connection = new SqlConnection(_databaseConnectionString);
             await connection.OpenAsync();
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;");
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 12 WHERE [Id] = 1;");
         }
     }
 
@@ -640,7 +718,7 @@ public sealed partial class DatabaseBaselineTests
         await connection.OpenAsync();
         await NonQuery(
             connection,
-            "INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (2, N'Library', 1);");
+            "INSERT INTO [asap].[Organization] ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive]) VALUES (2, N'Library', 2, 1, 1);");
         await NonQuery(
             connection,
             """
@@ -676,7 +754,7 @@ public sealed partial class DatabaseBaselineTests
         await connection.OpenAsync();
         await NonQuery(
             connection,
-            "INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (70001, N'Email identity library', 1);");
+            "INSERT INTO [asap].[Organization] ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive]) VALUES (70001, N'Email identity library', 2, 1, 1);");
         await NonQuery(
             connection,
             """
@@ -720,7 +798,7 @@ public sealed partial class DatabaseBaselineTests
             await NonQuery(
                 connection,
                 $"""
-                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (6, N'Eligibility Library', 1);
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive]) VALUES (6, N'Eligibility Library', 2, 1, 1);
                 INSERT INTO [asap].[StaffUser]
                     ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
                      [Role], [OrganizationId], [IsActive])
@@ -824,7 +902,7 @@ public sealed partial class DatabaseBaselineTests
         await NonQuery(
             connection,
             """
-            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (4, N'Claim Test Library', 1);
+            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive]) VALUES (4, N'Claim Test Library', 2, 1, 1);
             INSERT INTO [asap].[MaterialFormat]
                 ([OwnerOrganizationId], [Code], [Label], [SortOrder], [IsEnabled], [CreatedUtc], [UpdatedUtc])
             VALUES
@@ -855,7 +933,7 @@ public sealed partial class DatabaseBaselineTests
         await NonQuery(
             connection,
             """
-            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (5, N'Ordering Test Library', 1);
+            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive]) VALUES (5, N'Ordering Test Library', 2, 1, 1);
             INSERT INTO [asap].[CommonCreatorSet] ([OrganizationId]) VALUES (5);
             INSERT INTO [asap].[CommonCreatorTerm] ([OrganizationId], [Value], [SortOrder])
             VALUES (5, N'First tied term', 10), (5, N'Second tied term', 10);

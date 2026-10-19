@@ -30,7 +30,7 @@ UpdatedUtc datetime2 NOT NULL
 
 The integer changes only for contract-affecting schema changes. Application startup compares the expected build value with SQL. Mismatch keeps liveness healthy but readiness unhealthy and blocks normal application functions. It is not used to decide whether a DACPAC needs deployment.
 
-Schema 7 is the pre-release reset boundary for native Polaris identities; current schema 10 upgrades native schema-7/8/9 targets in place and adds the pickup operation journal. Recreate pre-7 databases from the current DACPAC; no string-to-number upgrade or compatibility columns are retained. Run the DACPAC's embedded pre-deployment script before plan generation: it rejects unidentified/pre-7/newer targets, retires only the two obsolete global requesting/pickup columns, and clears nonpositive integration IDs to NULL. Valid credentials, identity and native business data survive. Publish retains normal data-loss protection and preserves unowned objects; the post-deployment script advances compatible schema 7/8/9 to 10. Fresh import parses numeric source identities, and repeat deployment preserves existing native data.
+Schema 7 is the pre-release reset boundary for native Polaris identities; current schema 12 upgrades native schema-7/8/9/10/11 targets in place and adds nullable native organization type, parent and patron identity snapshots. Recreate pre-7 databases from the current DACPAC; no string-to-number upgrade or compatibility columns are retained. Run the DACPAC's embedded pre-deployment script before plan generation: it rejects unidentified/pre-7/newer targets, retires only the two obsolete global requesting/pickup columns, clears nonpositive integration IDs and the former system pickup reference to NULL, and preserves valid credentials, identity and native business data. Newly added organization type/parent values remain unclassified on old rows until trusted synchronization supplies them, so unknown rows do not gain library authority from their existing active flag. Nullable patron ID snapshots remain unknown on preexisting rows; no barcode-based identity backfill occurs. Publish retains normal data-loss protection and preserves unowned objects; the post-deployment script advances compatible schema 7/8/9/10/11 to 12. Fresh import parses numeric source identities, and repeat deployment preserves existing native data.
 
 ### `[asap].[DeploymentState]`
 
@@ -216,7 +216,7 @@ CommonCreatorTerm:
   UNIQUE (OrganizationId, SortOrder)
 ```
 
-System set at Organization `1` is seeded. No library set means inherit system; a library set means complete replacement. To preserve current behavior, clearing all terms removes the library set and resumes inheritance.
+System set at Organization `1` is seeded. No library set means inherit system; a library set means complete replacement, including a set with zero terms. In target settings writes, an omitted collection property makes no edit, `null` at library scope removes the library set and resumes inheritance, and `[]` stores an intentional empty set. At system scope, both `null` and `[]` clear common creators to an empty system set. This whole-set behavior is distinct from ordinary blank library text, which may normalize to no override.
 
 ### `[asap].[PatronCodeEligibilitySet]` / `[asap].[PatronCodeEligibilityMember]`
 
@@ -231,7 +231,7 @@ PatronCodeEligibilityMember:
   PRIMARY KEY (OrganizationId, PatronCodeId)
 ```
 
-Patron codes remain Polaris reference data rather than durable lookup rows. Validate configured IDs against current reference data when practical. Set-row presence marks a meaningful replacement. At library scope, clearing all IDs removes the set and resumes inheritance.
+Patron codes remain Polaris reference data rather than durable lookup rows. Validate configured IDs against current reference data when practical. Set-row presence marks a replacement even when it has no members. At library scope, an explicit reset removes the set and resumes inheritance; an empty replacement retains the set row with no members. An empty system member list is represented by the system set row with no members; system `null` is rejected, so use `[]` to clear the system set.
 
 ### `[asap].[PatronSettings]`
 
@@ -330,7 +330,7 @@ PublicationOption:
   UNIQUE (OrganizationId, SortOrder)
 ```
 
-`OptionKey` preserves the current normalized publication-option ID. Organization `1` owns the system list. No library set means inherit the full system list; a library set is the entire replacement list. At library scope, clearing the list removes the set and resumes inheritance. Reset deletes the library set and children.
+`OptionKey` preserves the current normalized publication-option ID. Organization `1` owns the system list. No library set means inherit the full system list; a library set is the entire replacement list, including an empty list. Target settings writes distinguish omitted (no edit), library `null` (reset/inherit), and `[]` (empty replacement set). At system scope, both `null` and `[]` store an empty system list. Reset deletes the library set and children.
 
 ### `[asap].[PatronCustomField]` / `[asap].[PatronCustomFieldOption]`
 
@@ -730,9 +730,9 @@ Deterministic business keys are globally namespaced by notification semantics; t
 
 For `staff_authorization_sensitive`, `RecipientStaffUserId`, `RecipientAuthenticationEmail`, `AuthorizationOrganizationId`, and `RecipientAddressKind` are required. Snapshot the normalized authentication email at intent creation. Every send/retry requires that snapshot to equal the current StaffUser authentication email, plus current active/role/scope/participation and exact destination ownership checks. Stored Entra metadata is irrelevant. An authentication-email change suppresses the stale row; an OID change does not.
 
-DB/application invariants for deliverable rows (`pending`/`sending`/`failed`) require usable recipient/sender/content snapshots. `suppressed` may retain null recipient/sender when those values were the reason the notification intent could not be delivered. Missing required notification configuration at business-transaction time creates a terminal suppressed intent rather than rolling back the business mutation; optional staff notifications with no configured destination may instead create no row where the product contract says no notification is requested. If transport configuration disappears only after a valid row was queued, record `failed`/`mail_not_configured` and retain the payload for manual retry.
+DB/application invariants for deliverable rows (`pending`/`sending`/`failed`) require usable recipient/sender/content snapshots. `suppressed` may retain null recipient/sender when those values were the reason the notification intent could not be delivered. Missing required notification configuration at business-transaction time creates a terminal suppressed intent rather than rolling back the business mutation; optional staff notifications with no configured destination may instead create no row where the product contract says no notification is requested. If transport configuration disappears only after a valid row was queued, record `failed`/`mail_not_configured` and retain the payload for manual retry only when persisted state also proves there is no provider message ID, send-start timestamp, lease, expiry, or scheduled retry.
 
-Do not snapshot the reusable Postmark token here. Resolve effective transport config at each send/retry. A claim atomically sets `Status=sending`, `SendingStartedUtc=claim time`, a new `LeaseId`, and `LeaseExpiresUtc=SendingStartedUtc + 2 minutes`, and returns the resulting rowversion before commit. The provider call must start within 30 seconds of `SendingStartedUtc` and the complete provider operation has a hard 30-second timeout, so its latest legitimate completion is at least 60 seconds before lease expiry. Do not start the provider call after the start deadline. The sweeper runs every five minutes and may reclaim only after lease expiry; treat every expired `sending` row as potentially transport-ambiguous, move it through the existing bounded retry path with a new ownership state, and never claim that a pre-call crash is distinguishable from provider ambiguity. Every terminal or retry-scheduling update from a worker is a compare-and-set on `Status=sending`, its expected `LeaseId`, and its post-claim rowversion/equivalent ownership state. A stale worker that returns after reclaim cannot update the row or enqueue another retry. A crash or timeout after possible provider acceptance may cause a duplicate retry, so transport remains at-least-once and exactly-once delivery is not promised. `failed` remains manually retryable and retains its full delivery payload. Only terminal `sent` and `suppressed` rows are eligible for subject/body payload purge after 90 days; retain status/provider/attempt/lease/suppression metadata needed for operational history.
+Do not snapshot the reusable Postmark token here. Resolve effective transport config at each send/retry. A claim atomically sets `Status=sending`, `SendingStartedUtc=claim time`, a new `LeaseId`, and `LeaseExpiresUtc=SendingStartedUtc + 2 minutes`, and returns the resulting rowversion before commit. The provider call must start within 30 seconds of `SendingStartedUtc` and the complete provider operation has a hard 30-second timeout, so its latest legitimate completion is at least 60 seconds before lease expiry. Do not start the provider call after the start deadline. The sweeper runs every five minutes and may dispatch committed due rows missed by immediate enqueue. An expired `sending` lease after `TryBeginProviderSend` clears `pre_send_check_pending` is transport-ambiguous: quarantine it as `failed/ambiguous_expired_lease`, preserve attempt/start/error evidence, clear the live lease, leave `NextAttemptUtc` null, and do not enqueue or return it to `pending`. A row retaining `pre_send_check_pending` proves the provider call was not entered and may be safely released/requeued. Never infer no dispatch from a crash alone. Every terminal or retry-scheduling update from a worker is a compare-and-set on `Status=sending`, its expected `LeaseId`, and its post-claim rowversion/equivalent ownership state. A stale worker cannot update the row or enqueue another attempt. The only manual retry is the certified no-send `mail_not_configured` case when provider ID, send-start timestamp, lease, expiry, and scheduled retry are all absent. A crash or timeout after possible provider acceptance remains ambiguous and is never automatically or manually replayed; the provider offers no exactly-once guarantee. Failed rows retain the payload for authorized recovery/inspection; only terminal `sent` and `suppressed` rows are eligible for subject/body payload purge after 90 days, while operational metadata is retained.
 
 ### `[asap].[EmailDeliveryEvent]`
 
@@ -760,8 +760,8 @@ TitleRequestId bigint NOT NULL FK TitleRequest
 PatronBarcodeSnapshot nvarchar(...) NOT NULL
 PatronIdSnapshot int NULL
 BibIdSnapshot int NOT NULL
-PickupBranchIdSnapshot int NULL
-RequestingOrganizationIdSnapshot int NULL
+PickupBranchIdSnapshot int NULL                  -- verified PAPI pickup at create marker or existing hold; NULL when unknown
+RequestingOrganizationIdSnapshot int NULL        -- native PatronOrgID sent as PAPI RequestingOrgID; NULL for adopted holds with unknown original route
 WorkstationIdSnapshot int NULL
 PolarisUserIdSnapshot int NULL
 AttemptNumber int NOT NULL

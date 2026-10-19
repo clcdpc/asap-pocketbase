@@ -299,6 +299,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         if (scenarioOptions.mutationMalformedCommit) {
           return response(200, { committed: true });
         }
+        if (scenarioOptions.mutationMalformedJson) {
+          return { ...response(200, null), json: async () => { throw new SyntaxError('Malformed accepted JSON body.'); } };
+        }
         if (scenarioOptions.mutationDefiniteUnavailable) {
           return response(503, { code: 'notification_dependency_unavailable',
             message: 'Notification configuration is temporarily unavailable. The request was not changed.' });
@@ -783,7 +786,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     }
     if (scenarioOptions.mutationDependencyAbort || scenarioOptions.mutationNetworkFailure ||
         scenarioOptions.mutationServerFailure || scenarioOptions.mutationEmptySuccess ||
-        scenarioOptions.mutationMalformedCommit) {
+        scenarioOptions.mutationMalformedCommit || scenarioOptions.mutationMalformedJson) {
       await until(() => /outcome could not be confirmed/.test(document.querySelector('#app-status').textContent),
         'uncancelled mutation dependency abort reports unconfirmed outcome');
       assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
@@ -899,6 +902,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('reject', false, false, { mutationServerFailure: true });
   await scenario('reject', false, false, { mutationEmptySuccess: true });
   await scenario('reject', false, false, { mutationMalformedCommit: true });
+  await scenario('reject', false, false, { mutationMalformedJson: true });
   await scenario('reject', false, false, { mutationDefiniteUnavailable: true });
   await scenario('reject', false, false, { mutationNetworkFailureAfter401: true });
   await scenario('reject', false, false, { templateDependencyAbort: true });

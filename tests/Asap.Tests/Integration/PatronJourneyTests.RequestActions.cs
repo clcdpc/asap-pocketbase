@@ -89,6 +89,7 @@ public sealed partial class PatronJourneyTests
                     {
                         LibraryOrganizationId = 2,
                         Barcode = $"20000000203{index:00}",
+                        PatronIdSnapshot = 7001 + index,
                         Email = "patron@example.org",
                         NameFirst = "Test",
                         Title = $"Action title {index}",

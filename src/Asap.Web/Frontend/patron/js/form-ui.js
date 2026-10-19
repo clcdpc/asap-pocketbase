@@ -106,7 +106,9 @@ export function populatePublicationOptions(options) {
   const select = byId('publication');
   if (!select) return;
   const currentValue = select.value;
-  const optionNodes = publicationOptions.map(option => optionNode(option, option));
+  const optionNodes = publicationOptions.length > 0
+    ? [optionNode('', 'Select publication timing...'), ...publicationOptions.map(option => optionNode(option, option))]
+    : [];
   replaceChildren(select, ...optionNodes);
   if (publicationOptions.includes(currentValue)) {
     select.value = currentValue;
@@ -192,7 +194,7 @@ export function updateFormatLabels() {
   const select = formatSelect;
   if (!select) return;
 
-  if (available && available.length > 0) {
+  if (Array.isArray(available)) {
     replaceChildren(select, ...available.map(key => optionNode(key, labels[key] || key)));
   } else {
     Array.from(select.options).forEach(option => {

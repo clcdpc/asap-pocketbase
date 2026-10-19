@@ -98,6 +98,16 @@ function normalizeFormats(values) {
         label: clean(property(nested, 'label') ?? property(value, `${name}Label`)) || (name === 'title' ? 'Title' : name === 'identifier' ? 'Identifier number' : name === 'publication' ? 'Publication Timing' : 'Author')
       };
     }
+    const customFields = {};
+    const rawCustomFields = property(value, 'customFields');
+    if (rawCustomFields && typeof rawCustomFields === 'object' && !Array.isArray(rawCustomFields)) {
+      for (const [key, rule] of Object.entries(rawCustomFields)) {
+        customFields[key] = {
+          mode: clean(property(rule, 'mode')) || 'hidden',
+          labelOverride: property(rule, 'labelOverride') ?? property(rule, 'label') ?? null
+        };
+      }
+    }
     return {
       id: stringId(property(value, 'id') ?? property(value, 'materialFormatId')),
       version: stringId(property(value, 'version')),
@@ -109,6 +119,7 @@ function normalizeFormats(values) {
       messageBehavior: clean(property(value, 'messageBehavior')) || 'none',
       message: property(value, 'message') ?? null,
       fields,
+      customFields,
       overridden: bool(property(value, 'overridden'))
     };
   });
@@ -189,6 +200,380 @@ function snapshotSet(value) {
   return value && value.exists ? array(value.values) : [];
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateCustomRuleMap(value, description) {
+  if (!isRecord(value)) throw new Error(`${description} must be an object.`);
+  for (const [key, rule] of Object.entries(value)) {
+    if (!key || !isRecord(rule) || !['required', 'optional', 'hidden'].includes(property(rule, 'mode'))) {
+      throw new Error(`${description} contains an unsupported field rule.`);
+    }
+    const labelOverride = property(rule, 'labelOverride') ?? property(rule, 'label');
+    if (labelOverride !== undefined && labelOverride !== null && typeof labelOverride !== 'string') {
+      throw new Error(`${description} contains an invalid label override.`);
+    }
+  }
+}
+
+function validateSnapshotOptions(values, description) {
+  const keys = new Set();
+  for (const value of values) {
+    const key = clean(property(value, 'id') ?? property(value, 'key'));
+    const label = clean(property(value, 'label'));
+    if (!isRecord(value) || !key || !label || keys.has(key.toLowerCase()) ||
+        property(value, 'enabled') !== undefined && typeof property(value, 'enabled') !== 'boolean') {
+      throw new Error(`The ${description} snapshot is malformed. Reload settings before saving.`);
+    }
+    keys.add(key.toLowerCase());
+  }
+}
+
+function validateCreatorSnapshot(values, description) {
+  for (const value of values) {
+    const creator = typeof value === 'string' ? value : isRecord(value) ? property(value, 'value') : null;
+    if (typeof creator !== 'string' || !clean(creator)) {
+      throw new Error(`The ${description} snapshot is malformed. Reload settings before saving.`);
+    }
+  }
+}
+
+function validateProviders(values, description) {
+  const identities = new Set();
+  for (const provider of values) {
+    if (!isRecord(provider)) throw new Error(`The ${description} snapshot is malformed. Reload settings before saving.`);
+    const id = property(provider, 'id');
+    const key = clean(property(provider, 'key'));
+    if (id !== undefined && id !== null && !validPositiveIdentity(id) ||
+        id === undefined && !key ||
+        property(provider, 'label') !== undefined && property(provider, 'label') !== null && typeof property(provider, 'label') !== 'string' ||
+        property(provider, 'urlTemplate') !== undefined && property(provider, 'urlTemplate') !== null && typeof property(provider, 'urlTemplate') !== 'string' ||
+        property(provider, 'isEnabled') !== undefined && property(provider, 'isEnabled') !== null && typeof property(provider, 'isEnabled') !== 'boolean') {
+      throw new Error(`The ${description} snapshot is malformed. Reload settings before saving.`);
+    }
+    const identity = id !== undefined && id !== null ? `id:${String(id)}` : `key:${key.toLowerCase()}`;
+    if (identities.has(identity)) throw new Error(`The ${description} snapshot contains duplicate providers. Reload settings before saving.`);
+    identities.add(identity);
+  }
+}
+
+function validateFormats(values, description) {
+  const codes = new Set();
+  for (const format of values) {
+    const code = clean(property(format, 'code'));
+    const id = property(format, 'id');
+    if (!isRecord(format) || !code || codes.has(code) ||
+        id !== undefined && id !== null && !validPositiveIdentity(id) ||
+        property(format, 'isEnabled') !== undefined && typeof property(format, 'isEnabled') !== 'boolean') {
+      throw new Error(`The ${description} snapshot is malformed. Reload settings before saving.`);
+    }
+    codes.add(code);
+    if (property(format, 'customFields') !== undefined) {
+      validateCustomRuleMap(property(format, 'customFields'), `${description} format ${code} customFields`);
+    }
+  }
+}
+
+function validateRawFormats(values, description) {
+  const overrides = values.filter(value => property(value, 'kind') === 'systemOverride');
+  validateFormats(values.filter(value => property(value, 'kind') !== 'systemOverride'), description);
+  const identities = new Set();
+  for (const value of overrides) {
+    const id = property(value, 'materialFormatId');
+    if (!validPositiveIdentity(id) || identities.has(String(id)) ||
+        String(property(value, 'ownerOrganizationId')) !== '1' ||
+        typeof property(value, 'version') !== 'string' || !clean(property(value, 'version')) ||
+        property(value, 'code') !== null) {
+      throw new Error(`The ${description} snapshot is malformed. Reload settings before saving.`);
+    }
+    identities.add(String(id));
+  }
+}
+
+function validateCollectionMetadata(stored, configured, libraryOverride, effective, system, organizationId) {
+  const providerOverrides = new Set(array(property(libraryOverride, 'providers')).map(value => String(property(value, 'id'))));
+  const storedProviders = new Map(property(stored, 'providers').map(value => [String(property(value, 'id')), value]));
+  for (const value of property(effective, 'externalSearchProviders')) {
+    const id = String(property(value, 'id'));
+    const storedValue = storedProviders.get(id);
+    const overridden = property(value, 'overridden');
+    if (!storedValue || typeof overridden !== 'boolean' ||
+        overridden !== (!system && providerOverrides.has(id)) ||
+        property(storedValue, 'overridden') !== overridden) {
+      throw new Error('The effective provider override metadata snapshot is malformed. Reload settings before saving.');
+    }
+  }
+  if (storedProviders.size !== property(effective, 'externalSearchProviders').length) {
+    throw new Error('The effective provider override metadata snapshot is incomplete. Reload settings before saving.');
+  }
+  const owned = new Map(property(configured, 'formats').map(value => [String(property(value, 'id')), value]));
+  const overrides = new Map();
+  for (const value of array(property(libraryOverride, 'formats'))) {
+    if (property(value, 'kind') === 'systemOverride') overrides.set(String(property(value, 'materialFormatId')), value);
+    else owned.set(String(property(value, 'id')), value);
+  }
+  const storedFormats = new Map(property(stored, 'formats').map(value => [String(property(value, 'id')), value]));
+  for (const value of property(effective, 'formats')) {
+    const id = String(property(value, 'id'));
+    const original = owned.get(id);
+    const storedValue = storedFormats.get(id);
+    const override = overrides.get(id);
+    const owner = String(property(value, 'ownerOrganizationId'));
+    const version = property(value, 'version');
+    const overridden = property(value, 'overridden');
+    if (!original || !storedValue || !['1', String(organizationId)].includes(owner) ||
+        owner !== String(property(original, 'ownerOrganizationId')) ||
+        owner !== String(property(storedValue, 'ownerOrganizationId')) ||
+        typeof overridden !== 'boolean' || overridden !== Boolean(override) ||
+        property(storedValue, 'overridden') !== overridden ||
+        typeof version !== 'string' || !clean(version) ||
+        version !== property(override || original, 'version') || version !== property(storedValue, 'version')) {
+      throw new Error('The effective format owner, version, or override metadata snapshot is malformed. Reload settings before saving.');
+    }
+  }
+  if (storedFormats.size !== property(effective, 'formats').length ||
+      [...overrides.keys()].some(id => !storedFormats.has(id))) {
+    throw new Error('The effective format metadata snapshot is incomplete. Reload settings before saving.');
+  }
+}
+
+function validateTemplates(values, description) {
+  const keys = new Set();
+  for (const template of values) {
+    const key = clean(property(template, 'templateKey') ?? property(template, 'key'));
+    const id = property(template, 'id');
+    const organizationId = stringId(property(template, 'organizationId'));
+    const identity = `${organizationId}:${key}`;
+    if (!isRecord(template) || !key || keys.has(identity) ||
+        id !== undefined && id !== null && !validPositiveIdentity(id) ||
+        property(template, 'enabled') !== undefined && typeof property(template, 'enabled') !== 'boolean') {
+      throw new Error(`The ${description} snapshot is malformed. Reload settings before saving.`);
+    }
+    keys.add(identity);
+  }
+}
+
+function validateAutoClaimRules(values, description) {
+  for (const rule of values) {
+    if (!isRecord(rule) || !validPositiveIdentity(property(rule, 'materialFormatId') ?? property(rule, 'formatId')) ||
+        property(rule, 'staffUserId') !== null && property(rule, 'staffUserId') !== undefined &&
+          !validPositiveIdentity(property(rule, 'staffUserId')) ||
+        property(rule, 'active') !== undefined && typeof property(rule, 'active') !== 'boolean') {
+      throw new Error(`The ${description} snapshot is malformed. Reload settings before saving.`);
+    }
+  }
+}
+
+function validateEditorSnapshot(data, system) {
+  const stored = property(data, 'stored');
+  const effective = property(data, 'effective');
+  const configured = property(stored, 'configuredSystem');
+  if (!isRecord(stored) || !isRecord(effective) || !isRecord(configured) ||
+      !Array.isArray(property(effective, 'formats')) ||
+      !Array.isArray(property(stored, 'customFields')) ||
+      !Array.isArray(property(stored, 'formatRules')) ||
+      !Array.isArray(property(configured, 'formats'))) {
+    throw new Error('The settings snapshot is incomplete. Reload settings before saving.');
+  }
+  const libraryOverride = property(stored, 'libraryOverride');
+  if (!system && (!isRecord(libraryOverride) || !Array.isArray(property(libraryOverride, 'formats')))) {
+    throw new Error('The selected library settings snapshot is incomplete. Reload settings before saving.');
+  }
+  if (!Array.isArray(property(configured, 'providers')) ||
+      !Array.isArray(property(stored, 'providers')) ||
+      !Array.isArray(property(effective, 'externalSearchProviders'))) {
+    throw new Error('The provider settings snapshot is incomplete. Reload settings before saving.');
+  }
+  if (!Array.isArray(property(configured, 'templates')) || !Array.isArray(property(stored, 'templates'))) {
+    throw new Error('The template settings snapshot is incomplete. Reload settings before saving.');
+  }
+  if (!system && (!Array.isArray(property(libraryOverride, 'providers')) ||
+      !Array.isArray(property(libraryOverride, 'templates')))) {
+    throw new Error('The selected library provider or template snapshot is incomplete. Reload settings before saving.');
+  }
+  for (const key of ['publicationOptions', 'commonCreators', 'allowedPatronCodeIds']) {
+    const systemSet = property(configured, key);
+    let librarySet = null;
+    if (!isRecord(systemSet) || typeof property(systemSet, 'exists') !== 'boolean' ||
+        !Array.isArray(property(systemSet, 'values'))) {
+      throw new Error(`The system ${key} snapshot is incomplete. Reload settings before saving.`);
+    }
+    if (!system) {
+      librarySet = property(libraryOverride, key);
+      if (!isRecord(librarySet) || typeof property(librarySet, 'exists') !== 'boolean' ||
+          !Array.isArray(property(librarySet, 'values'))) {
+        throw new Error(`The selected library ${key} snapshot is incomplete. Reload settings before saving.`);
+      }
+    }
+    if (key === 'publicationOptions') {
+      validateSnapshotOptions(property(systemSet, 'values'), `system ${key}`);
+      if (!system) validateSnapshotOptions(property(librarySet, 'values'), `library ${key}`);
+    } else if (key === 'commonCreators') {
+      validateCreatorSnapshot(property(systemSet, 'values'), `system ${key}`);
+      if (!system) validateCreatorSnapshot(property(librarySet, 'values'), `library ${key}`);
+    }
+  }
+  for (const key of ['providers', 'formats', 'templates']) {
+    if (!Array.isArray(property(stored, key))) {
+      throw new Error(`The stored ${key} snapshot is incomplete. Reload settings before saving.`);
+    }
+  }
+  if (!Array.isArray(property(effective, 'customFields'))) {
+    throw new Error('The effective custom-field snapshot is incomplete. Reload settings before saving.');
+  }
+  for (const [collection, description] of [
+    [property(configured, 'providers'), 'system provider'],
+    [property(stored, 'providers'), 'stored provider'],
+    [property(effective, 'externalSearchProviders'), 'effective provider']
+  ]) validateProviders(collection, description);
+  validateProviders(property(libraryOverride, 'providers') || [], 'library override provider');
+  for (const [collection, description] of [
+    [property(stored, 'formats'), 'stored format'],
+    [property(effective, 'formats'), 'effective format']
+  ]) validateFormats(collection, description);
+  validateRawFormats(property(configured, 'formats'), 'system format');
+  if (!system) validateRawFormats(property(libraryOverride, 'formats'), 'library override format');
+  validateCollectionMetadata(stored, configured, libraryOverride, effective, system,
+    system ? 1 : property(data, 'orgId'));
+  for (const [collection, description] of [
+    [property(configured, 'templates'), 'system template'],
+    [property(stored, 'templates'), 'stored template']
+  ]) validateTemplates(collection, description);
+  if (!system) validateTemplates(property(libraryOverride, 'templates'), 'library override template');
+  validateAutoClaimRules(property(stored, 'autoClaimRules'), 'auto-claim rule');
+  const origins = property(stored, 'origins');
+  if (!Array.isArray(origins)) throw new Error('The embed-origin snapshot is incomplete. Reload settings before saving.');
+  for (const value of origins) {
+    const origin = typeof value === 'string' ? value : isRecord(value) ? property(value, 'origin') : null;
+    if (typeof origin !== 'string' || !clean(origin)) {
+      throw new Error('The embed-origin snapshot is malformed. Reload settings before saving.');
+    }
+  }
+  const patronCodeChoices = property(data, 'patronCodeChoices');
+  if (!Array.isArray(patronCodeChoices)) {
+    throw new Error('The patron-code choices snapshot is incomplete. Reload settings before saving.');
+  }
+  for (const choice of patronCodeChoices) {
+    if (!isRecord(choice) || !normalizePatronCodeId(property(choice, 'id')) ||
+        typeof property(choice, 'description') !== 'string') {
+      throw new Error('The patron-code choices snapshot is malformed. Reload settings before saving.');
+    }
+  }
+
+  const autoClaimStaff = property(data, 'autoClaimStaff');
+  if (!Array.isArray(autoClaimStaff)) {
+    throw new Error('The auto-claim staff snapshot is incomplete. Reload settings before saving.');
+  }
+  for (const staff of autoClaimStaff) {
+    const id = property(staff, 'id');
+    if (!isRecord(staff) || typeof id !== 'string' || !/^[1-9]\d*$/.test(id) ||
+        !validPositiveIdentity(id) || typeof property(staff, 'label') !== 'string') {
+      throw new Error('The auto-claim staff snapshot is malformed. Reload settings before saving.');
+    }
+  }
+
+  const definitions = property(stored, 'customFields');
+  const fieldKeys = new Set();
+  const validateFields = (values, keys) => {
+    for (const fieldValue of values) {
+      const key = clean(property(fieldValue, 'key') ?? property(fieldValue, 'fieldKey'));
+      const type = clean(property(fieldValue, 'type') ?? property(fieldValue, 'fieldType'));
+      const options = property(fieldValue, 'options');
+      if (!isRecord(fieldValue) || !key || keys.has(key) ||
+          !['text', 'textarea', 'select'].includes(type) || !Array.isArray(options)) {
+        throw new Error('The custom-field snapshot is malformed. Reload settings before saving.');
+      }
+      keys.add(key);
+      const optionKeys = new Set();
+      for (const option of options) {
+        const optionKey = clean(property(option, 'id') ?? property(option, 'key'));
+        if (!isRecord(option) || !optionKey || optionKeys.has(optionKey) ||
+            typeof property(option, 'label') !== 'string' || !clean(property(option, 'label')) ||
+            property(option, 'enabled') !== undefined && typeof property(option, 'enabled') !== 'boolean') {
+          throw new Error('A custom-field option snapshot is malformed. Reload settings before saving.');
+        }
+        optionKeys.add(optionKey);
+      }
+    }
+  };
+  validateFields(definitions, fieldKeys);
+  validateFields(property(effective, 'customFields'), new Set());
+
+  const effectiveFormatCodes = new Set();
+  for (const format of property(effective, 'formats')) {
+    const code = clean(property(format, 'code'));
+    if (!isRecord(format) || !code || !isRecord(property(format, 'customFields'))) {
+      throw new Error('The effective format snapshot is incomplete. Reload settings before saving.');
+    }
+    effectiveFormatCodes.add(code);
+    validateCustomRuleMap(property(format, 'customFields'), `Format ${code} customFields`);
+  }
+  const ruleCodes = new Set();
+  for (const rule of property(stored, 'formatRules')) {
+    const code = clean(property(rule, 'code'));
+    if (!isRecord(rule) || !code || ruleCodes.has(code)) {
+      throw new Error('The stored format-rule snapshot is malformed. Reload settings before saving.');
+    }
+    if (!system && !effectiveFormatCodes.has(code)) {
+      throw new Error('The effective format snapshot is incomplete. Reload settings before saving.');
+    }
+    ruleCodes.add(code);
+    const customFields = property(rule, 'customFields');
+    validateCustomRuleMap(customFields, `Format ${code} customFields`);
+    if (Object.keys(customFields).some(key => !fieldKeys.has(key))) {
+      throw new Error('A stored format rule refers to a missing custom field. Reload settings before saving.');
+    }
+  }
+
+  const codeSnapshots = [
+    property(configured, 'allowedPatronCodeIds'),
+    property(libraryOverride, 'allowedPatronCodeIds')
+  ];
+  for (const [index, snapshot] of codeSnapshots.entries()) {
+    if (index === 1 && system) continue;
+    if (!isRecord(snapshot) || typeof property(snapshot, 'exists') !== 'boolean' ||
+        !Array.isArray(property(snapshot, 'values'))) {
+      throw new Error('The patron-code snapshot is malformed. Reload settings before saving.');
+    }
+    const ids = new Set();
+    let idKind = null;
+    for (const value of property(snapshot, 'values')) {
+      const raw = typeof value === 'object' && value !== null ? property(value, 'id') : value;
+      const currentKind = typeof raw;
+      const id = normalizePatronCodeId(raw);
+      if (!id || ids.has(id) || idKind !== null && idKind !== currentKind) {
+        throw new Error('The patron-code snapshot contains an invalid or duplicate ID. Reload settings before saving.');
+      }
+      idKind = currentKind;
+      ids.add(id);
+    }
+  }
+}
+
+function normalizePatronCodeId(value) {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) && value > 0 && value <= 2147483647 ? String(value) : null;
+  }
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!/^\d+$/.test(text)) return null;
+  const numericValue = Number(text);
+  return Number.isInteger(numericValue) && numericValue > 0 && numericValue <= 2147483647
+    ? String(numericValue)
+    : null;
+}
+
+function validPositiveIdentity(value) {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0;
+  if (typeof value !== 'string' || !/^\d+$/.test(value.trim())) return false;
+  try {
+    return BigInt(value.trim()) > 0n && BigInt(value.trim()) <= 9223372036854775807n;
+  } catch {
+    return false;
+  }
+}
+
 function rawSnapshot(configuredSystem, libraryOverride, key, system) {
   if (system) return property(configuredSystem, key);
   return property(libraryOverride, key);
@@ -258,9 +643,11 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     system: false,
     data: null,
     models: {},
+    ruleRosterCodes: [],
     baseline: null,
     originalTemplates: [],
-    deletedFormats: []
+    deletedFormats: [],
+    validationError: null
   };
 
   function currentOrganizationId() {
@@ -402,8 +789,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
 
   function readSetRows(container, type) {
     return [...(container?.querySelectorAll('[data-domain-row]') || [])]
-      .map(row => clean(row.querySelector('select, input')?.value))
-      .filter(Boolean);
+      .map(row => clean(row.querySelector('select, input')?.value));
   }
 
   function renderPublication(values) {
@@ -427,8 +813,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
 
   function readPublication() {
     return [...(dom.publication?.querySelectorAll('[data-domain-row]') || [])].map((row, index) => ({
-      id: stringId(row.querySelector('input')?.value) || `option_${index + 1}`,
-      label: clean(row.querySelectorAll('input')[1]?.value) || `Option ${index + 1}`,
+      id: stringId(row.querySelector('input')?.value),
+      label: clean(row.querySelectorAll('input')[1]?.value),
       enabled: Boolean(row.querySelector('input[type="checkbox"]')?.checked),
       sortOrder: (index + 1) * 10
     }));
@@ -448,7 +834,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         className: 'settings-editor-row settings-provider-row',
         'data-domain-row': 'true',
         'data-provider-id': id || '',
-        'data-provider-key': value.key || ''
+        'data-provider-key': value.key || '',
+        'data-provider-sort-order': numeric(value.sortOrder, (index + 1) * 10)
       }, [
         field('Provider key', key),
         field('Label', element('input', { type: 'text', value: value.label || '', 'data-domain-editable': 'true' })),
@@ -476,7 +863,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         label: clean(inputs[1]?.value),
         urlTemplate: clean(inputs[2]?.value),
         isEnabled: Boolean(row.querySelector('input[type="checkbox"]:not(.settings-domain-override-toggle)')?.checked),
-        sortOrder: (index + 1) * 10,
+        sortOrder: numeric(row.dataset.providerSortOrder, (index + 1) * 10),
         overridden: state.system || Boolean(override?.checked),
         reset: !state.system && Boolean(override) && !override.checked
       };
@@ -521,7 +908,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         'data-domain-row': 'true',
         'data-format-id': value.id || '',
         'data-format-owner': value.ownerOrganizationId,
-        'data-format-version': value.version || ''
+        'data-format-version': value.version || '',
+        'data-format-sort-order': value.sortOrder
       }, [
         field('Code', code),
         field('Label', element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true' })),
@@ -567,7 +955,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         code,
         ownerOrganizationId: owner,
         label: clean(inputs[1]?.value) || code,
-        sortOrder: (index + 1) * 10,
+        sortOrder: numeric(row.dataset.formatSortOrder, (index + 1) * 10),
         isEnabled: Boolean(row.querySelector('input[type="checkbox"]:not(.settings-domain-override-toggle)')?.checked),
         overridden: state.system || owner === currentOrganizationId() || Boolean(override?.checked),
         reset: !state.system && owner !== currentOrganizationId() && Boolean(override) && !override.checked
@@ -581,12 +969,13 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     dom.fields.replaceChildren();
     if (values.length === 0) dom.fields.append(element('p', { className: 'settings-empty', text: 'No custom fields configured.' }));
     for (const [index, value] of values.entries()) {
+      const keyInput = element('input', { type: 'text', value: value.key, 'data-domain-editable': 'true' });
       const row = element('div', {
         className: 'settings-editor-row settings-custom-field-row',
         'data-domain-row': 'true',
         'data-field-id': value.id || ''
       }, [
-        field('Stable key', element('input', { type: 'text', value: value.key, 'data-domain-editable': 'true' })),
+        field('Stable key', keyInput),
         field('Label', element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true' })),
         field('Type', select([
           { value: 'text', label: 'Text' },
@@ -600,6 +989,25 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
       ]);
       const optionsEditor = row.querySelector('[data-options-editor]');
       renderFieldOptions(optionsEditor, value.options, value.type === 'select');
+      const originalKey = value.key;
+      listen(keyInput, 'change', event => {
+        const nextKey = clean(event.target.value);
+        if (!originalKey || !nextKey || nextKey === originalKey) return;
+        const rules = readRules();
+        if (rules.some(rule => Object.prototype.hasOwnProperty.call(rule.customFields, nextKey))) {
+          state.validationError = 'Custom field keys must remain unique across saved rules.';
+          return;
+        }
+        for (const rule of rules) {
+          if (Object.prototype.hasOwnProperty.call(rule.customFields, originalKey)) {
+            rule.customFields[nextKey] = rule.customFields[originalKey];
+            delete rule.customFields[originalKey];
+          }
+        }
+        state.models.rules = clone(rules);
+        renderRules(rules);
+        onChange();
+      });
       listen(row.querySelector('select'), 'change', event => {
         optionsEditor.hidden = event.target.value !== 'select';
         onChange();
@@ -644,15 +1052,15 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   function readFields() {
     return [...(dom.fields?.querySelectorAll('[data-domain-row]') || [])].map((row, index) => ({
       id: stringId(row.dataset.fieldId),
-      key: clean(row.querySelectorAll('input')[0]?.value) || `field_${index + 1}`,
-      label: clean(row.querySelectorAll('input')[1]?.value) || `Field ${index + 1}`,
+      key: clean(row.querySelectorAll('input')[0]?.value),
+      label: clean(row.querySelectorAll('input')[1]?.value),
       type: row.querySelector('select')?.value || 'text',
       helpText: clean(row.querySelectorAll('input')[2]?.value),
       enabled: Boolean(row.querySelector('input[type="checkbox"]')?.checked),
       sortOrder: (index + 1) * 10,
       options: [...(row.querySelectorAll('[data-option-row]') || [])].map((option, optionIndex) => ({
-        id: stringId(option.querySelectorAll('input')[0]?.value) || `option_${optionIndex + 1}`,
-        label: clean(option.querySelectorAll('input')[1]?.value) || `Option ${optionIndex + 1}`,
+        id: stringId(option.querySelectorAll('input')[0]?.value),
+        label: clean(option.querySelectorAll('input')[1]?.value),
         enabled: Boolean(option.querySelector('input[type="checkbox"]')?.checked),
         sortOrder: (optionIndex + 1) * 10
       }))
@@ -665,6 +1073,11 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     if (values.length === 0) dom.rules.append(element('p', { className: 'settings-empty', text: 'No format rules configured.' }));
     const customFields = readFields();
     for (const [index, value] of values.entries()) {
+      const customFieldsByKey = new Map(customFields.map(item => [item.key, item]));
+      const customFieldKeys = [...customFields.map(item => item.key)];
+      for (const key of Object.keys(value.customFields || {})) {
+        if (!customFieldsByKey.has(key)) customFieldKeys.push(key);
+      }
       const row = element('div', { className: 'settings-editor-row settings-rule-row', 'data-domain-row': 'true', 'data-rule-code': value.code }, [
         element('div', { className: 'settings-rule-heading' }, [element('strong', { text: value.code }), actions(index, values.length, (from, offset) => reorder('rules', from, offset), from => remove('rules', from))]),
         field('Message behavior', select([
@@ -677,16 +1090,21 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         element('div', { className: 'settings-rule-fields' }, ['title', 'author', 'identifier', 'publication'].map(name => fieldPair(name, value[name]))),
         element('div', { className: 'settings-rule-custom-fields' }, [
           element('strong', { text: 'Custom field rules' }),
-          ...customFields.map(fieldValue => {
-            const current = value.customFields[fieldValue.key] || { mode: 'hidden', labelOverride: null };
-            return element('div', { className: 'settings-custom-rule-row', 'data-custom-rule-key': fieldValue.key }, [
-              element('span', { text: fieldValue.label }),
+          ...customFieldKeys.map(key => {
+            const fieldValue = customFieldsByKey.get(key);
+            const fieldLabel = fieldValue?.label || `Retired field (${key})`;
+            const current = value.customFields[key] || { mode: 'hidden', labelOverride: null };
+            return element('div', { className: 'settings-custom-rule-row', 'data-custom-rule-key': key }, [
+              element('span', { text: fieldLabel }),
               select([
                 { value: 'hidden', label: 'Hidden' },
                 { value: 'optional', label: 'Optional' },
                 { value: 'required', label: 'Required' }
-              ], current.mode, { 'data-custom-rule-property': 'mode', 'data-domain-editable': 'true' }),
-              element('input', { type: 'text', value: current.labelOverride || '', placeholder: 'Label override', 'data-custom-rule-property': 'labelOverride', 'data-domain-editable': 'true' })
+              ], current.mode, { 'data-custom-rule-property': 'mode', 'data-domain-editable': 'true',
+                'aria-label': `${fieldLabel} mode for ${value.code}` }),
+              element('input', { type: 'text', value: current.labelOverride || '', placeholder: 'Label override',
+                'data-custom-rule-property': 'labelOverride', 'data-domain-editable': 'true',
+                'aria-label': `${fieldLabel} label override for ${value.code}` })
             ]);
           })
         ])
@@ -739,8 +1157,12 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   function readClaims() {
     return [...(dom.claims?.querySelectorAll('[data-domain-row]') || [])].map(row => {
       const selects = [...row.querySelectorAll('select')];
-      return { materialFormatId: stringId(selects[0]?.value), staffUserId: stringId(selects[1]?.value), active: true };
-    }).filter(item => item.materialFormatId && item.staffUserId);
+      return {
+        materialFormatId: stringId(selects[0]?.value) || '',
+        staffUserId: stringId(selects[1]?.value) || '',
+        active: true
+      };
+    });
   }
 
   function templateEditorValues(data) {
@@ -887,7 +1309,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         displayNameChanged: !lineage || currentDisplayName !== baselineDisplayName,
         enabledChanged: !lineage || currentEnabled !== baselineEnabled
       };
-    }).filter(item => item.templateKey);
+    });
   }
 
   function readSnapshot() {
@@ -905,18 +1327,33 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   }
 
   function reorder(name, index, offset) {
+    const rules = name === 'fields' ? readRules() : null;
     const values = readDomain(name);
     const next = index + offset;
     if (next < 0 || next >= values.length) return;
     [values[index], values[next]] = [values[next], values[index]];
+    if (name === 'formats' || name === 'providers') {
+      values.forEach((value, order) => { value.sortOrder = (order + 1) * 10; });
+    }
     renderDomain(name, values);
+    if (name === 'fields') renderRules(rules);
     onChange();
   }
 
   function remove(name, index) {
     const values = readDomain(name);
-    values.splice(index, 1);
+    const rules = name === 'fields' ? readRules() : null;
+    const removedFieldKey = name === 'fields' ? values[index]?.key : null;
+    const [removed] = values.splice(index, 1);
+    if (name === 'rules' && removed) {
+      state.ruleRosterCodes = state.ruleRosterCodes.filter(code => code !== removed.code);
+    }
     renderDomain(name, values);
+    if (name === 'fields') {
+      for (const rule of rules || []) delete rule.customFields[removedFieldKey];
+      state.models.rules = clone(rules);
+      renderRules(rules);
+    }
     onChange();
   }
 
@@ -946,6 +1383,77 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     else if (name === 'templates') renderTemplates(values);
   }
 
+  function validateRenderedRules() {
+    const fieldKeys = new Set(readFields().map(item => item.key));
+    const expectedCodes = new Set(state.ruleRosterCodes);
+    const renderedCodes = new Set();
+    for (const row of dom.rules.querySelectorAll('[data-domain-row]')) {
+      const code = clean(row.dataset.ruleCode);
+      if (!code || renderedCodes.has(code) || !row.querySelector('[data-rule-property="messageBehavior"]') ||
+          !row.querySelector('[data-rule-property="message"]')) {
+        throw new Error('A format-rule editor is incomplete. Reload settings before saving.');
+      }
+      renderedCodes.add(code);
+      for (const name of ['title', 'author', 'identifier', 'publication']) {
+        if (!row.querySelector(`[data-format-field="${name}"]`) ||
+            !row.querySelector(`[data-format-label="${name}"]`)) {
+          throw new Error('A format-rule editor is missing a required control. Reload settings before saving.');
+        }
+      }
+      const baselineRule = state.models.rules.find(item => item.code === code);
+      const expectedKeys = new Set([
+        ...fieldKeys,
+        ...Object.keys(baselineRule?.customFields || {})
+      ]);
+      const actualKeys = new Set();
+      for (const customRow of row.querySelectorAll('[data-custom-rule-key]')) {
+        const key = customRow.dataset.customRuleKey;
+        if (!key || actualKeys.has(key) ||
+            !customRow.querySelector('[data-custom-rule-property="mode"]') ||
+            !customRow.querySelector('[data-custom-rule-property="labelOverride"]')) {
+          throw new Error('A custom field rule editor is incomplete. Reload settings before saving.');
+        }
+        actualKeys.add(key);
+      }
+      if ([...expectedKeys].some(key => !actualKeys.has(key))) {
+        throw new Error('A custom field rule control is unavailable. Reload settings before saving.');
+      }
+    }
+    if (renderedCodes.size !== expectedCodes.size ||
+        [...expectedCodes].some(code => !renderedCodes.has(code))) {
+      throw new Error('The format-rule editor is incomplete. Reload settings before saving.');
+    }
+  }
+
+  function validateCurrentFields() {
+    if (readSetRows(dom.creators, 'creator').some(value => !value) ||
+        readSetRows(dom.codes, 'code').some(value => !normalizePatronCodeId(value))) {
+      throw new Error('Remove or complete blank creator and patron-code rows before saving.');
+    }
+    if (readPublication().some(option => !option.id || !option.label)) {
+      throw new Error('Publication options require stable IDs and labels. Delete a row to remove it.');
+    }
+    if (readTemplates().some(template => !template.templateKey)) {
+      throw new Error('Email templates require a stable key. Delete a row to remove it.');
+    }
+    const fields = readFields();
+    const keys = new Set();
+    for (const fieldValue of fields) {
+      if (!fieldValue.key || !fieldValue.label ||
+          !['text', 'textarea', 'select'].includes(fieldValue.type) || keys.has(fieldValue.key)) {
+        throw new Error('Custom fields require unique stable keys, labels, and supported types.');
+      }
+      keys.add(fieldValue.key);
+      const optionKeys = new Set();
+      for (const option of fieldValue.options) {
+        if (!option.id || !option.label || optionKeys.has(option.id)) {
+          throw new Error('Custom-field options require unique stable IDs and labels.');
+        }
+        optionKeys.add(option.id);
+      }
+    }
+  }
+
   function bindSetToggle(input, name, render) {
     if (!input) return;
     listen(input, 'change', () => {
@@ -956,9 +1464,15 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
 
   function bindAdd(name, factory) {
     listen(addButtons[name], 'click', () => {
+      const rules = name === 'fields' ? readRules() : null;
       const values = readDomain(name);
-      values.push(factory(values));
+      const added = factory(values);
+      values.push(added);
+      if (name === 'rules' && !state.ruleRosterCodes.includes(added.code)) {
+        state.ruleRosterCodes = [...state.ruleRosterCodes, added.code];
+      }
       renderDomain(name, values);
+      if (name === 'fields') renderRules(rules);
       onChange();
     });
   }
@@ -1011,29 +1525,48 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     if (disposed) return;
     state.data = data || {};
     state.system = Boolean(system);
+    state.validationError = null;
+    try {
+      validateEditorSnapshot(state.data, state.system);
+    } catch (error) {
+      state.validationError = error instanceof Error ? error.message : 'The settings snapshot cannot be safely edited.';
+    }
     dom.codeSearch.value = '';
     const configured = systemConfig(data);
     const library = libraryConfig(data);
     const publication = useSet('publicationOptions', state.system).map(normalizeOption);
     const creators = useSet('commonCreators', state.system).map(item => clean(typeof item === 'string' ? item : property(item, 'value'))).filter(Boolean);
-    const codes = useSet('allowedPatronCodeIds', state.system).map(item => stringId(typeof item === 'string' ? item : property(item, 'id'))).filter(Boolean);
+    const codes = useSet('allowedPatronCodeIds', state.system)
+      .map(item => stringId(typeof item === 'string' || typeof item === 'number' ? item : property(item, 'id')))
+      .filter(Boolean);
     const providerValues = state.system
       ? array(property(configured, 'providers'))
       : array(effective(data, 'externalSearchProviders')).map(item => ({ ...item, id: stringId(property(item, 'id')), overridden: bool(property(item, 'overridden')) }));
     const formats = normalizeFormats(state.system ? property(configured, 'formats') : effective(data, 'formats'));
     const effectiveFormats = normalizeFormats(effective(data, 'formats'));
     const fields = normalizeCustomFields(property(property(data, 'stored'), 'customFields'));
-    const rules = effectiveFormats.map(format => normalizeRule({
-      code: format.code,
-      messageBehavior: format.messageBehavior,
-      message: format.message,
-      ...format.fields
-    }, format));
+    const storedFormatRules = array(property(property(data, 'stored'), 'formatRules'));
+    const storedRulesByCode = new Map(storedFormatRules.map(item => [
+      clean(property(item, 'code')),
+      property(item, 'customFields') || {}
+    ]).filter(([code]) => code));
+    const rules = effectiveFormats.map(format => {
+      const persistedCustomFields = storedRulesByCode.get(format.code) || {};
+      const customFields = { ...format.customFields, ...persistedCustomFields };
+      return normalizeRule({
+        code: format.code,
+        messageBehavior: format.messageBehavior,
+        message: format.message,
+        customFields,
+        ...format.fields
+      }, format);
+    });
     const claims = state.system ? [] : array(property(property(data, 'stored'), 'autoClaimRules')).filter(item => property(item, 'active') !== false);
     const templates = templateEditorValues(data);
     state.originalTemplates = clone(templates.filter(item => item.isCustom));
     state.deletedFormats = [];
     state.models = { publication, creators, codes, providers: providerValues, formats, fields, rules, claims, templates };
+    state.ruleRosterCodes = rules.map(item => item.code);
 
     if (addButtons.providers) addButtons.providers.hidden = !state.system;
     if (addButtons.formats) addButtons.formats.hidden = state.system;
@@ -1068,6 +1601,26 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   }
 
   function collect() {
+    if (!state.data || !state.baseline) {
+      throw new Error('Settings are still loading. Reload settings before saving.');
+    }
+    if ([
+      dom.publication,
+      dom.creators,
+      dom.codes,
+      dom.providers,
+      dom.formats,
+      dom.fields,
+      dom.rules,
+      dom.claims,
+      dom.templates
+    ].some(container => !container)) {
+      throw new Error('The settings editor is incomplete. Reload settings before saving.');
+    }
+    if (state.validationError) throw new Error(state.validationError);
+    validateCurrentFields();
+    validateRenderedRules();
+
     const values = {
       publication: readPublication(),
       creators: readSetRows(dom.creators, 'creator'),
@@ -1079,6 +1632,13 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
       claims: readClaims(),
       templates: readTemplates()
     };
+    if (values.claims.some(item => !item.materialFormatId || !item.staffUserId)) {
+      throw new Error('Each auto-claim rule needs a format and an eligible staff user.');
+    }
+    const normalizedCodes = values.codes.map(normalizePatronCodeId);
+    if (normalizedCodes.some(value => value === null) || new Set(normalizedCodes).size !== normalizedCodes.length) {
+      throw new Error('Patron-code IDs must be unique positive Polaris integers.');
+    }
     const deletedFormats = state.deletedFormats.map(item => ({ ...item }));
     const current = JSON.parse(readSnapshot());
     const baseline = state.baseline ? JSON.parse(state.baseline) : {};
@@ -1089,6 +1649,13 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     const changed = Object.values(domainsChanged).some(Boolean);
     const collectedValues = {
       ...values,
+      rules: state.system
+        ? values.rules.map(rule => {
+            const serialized = { ...rule };
+            delete serialized.customFields;
+            return serialized;
+          })
+        : values.rules,
       publicationUseSystem: Boolean(current.publication?.useSystem),
       creatorsUseSystem: Boolean(current.creators?.useSystem),
       codesUseSystem: Boolean(current.codes?.useSystem)

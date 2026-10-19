@@ -42,6 +42,7 @@ CREATE TABLE [asap].[TitleRequest]
     [CreatedUtc] datetime2(7) NOT NULL,
     [UpdatedUtc] datetime2(7) NOT NULL,
     [RowVersion] rowversion NOT NULL,
+    [PatronIdSnapshot] int NULL,
     CONSTRAINT [FK_TitleRequest_LibraryOrganization] FOREIGN KEY ([LibraryOrganizationId]) REFERENCES [asap].[Organization]([Id]),
     CONSTRAINT [FK_TitleRequest_PatronOrganization] FOREIGN KEY ([PatronOrganizationId]) REFERENCES [asap].[Organization]([Id]),
     CONSTRAINT [FK_TitleRequest_StaffLibraryOrganization] FOREIGN KEY ([StaffLibraryOrganizationIdCreatedBy]) REFERENCES [asap].[Organization]([Id]),
@@ -63,6 +64,7 @@ CREATE TABLE [asap].[TitleRequest]
     CONSTRAINT [CK_TitleRequest_IsbnRetryCount] CHECK ([IsbnCheckRetryCount] >= 0),
     CONSTRAINT [CK_TitleRequest_BibId] CHECK ([BibId] IS NULL OR [BibId] > 0),
     CONSTRAINT [CK_TitleRequest_PatronCodeId] CHECK ([PatronCodeId] IS NULL OR [PatronCodeId] > 0),
+    CONSTRAINT [CK_TitleRequest_PatronIdSnapshot] CHECK ([PatronIdSnapshot] IS NULL OR [PatronIdSnapshot] > 0),
     CONSTRAINT [CK_TitleRequest_StaffVerifiedBib] CHECK ([BibIdStaffVerified] = 0 OR [BibId] IS NOT NULL),
     CONSTRAINT [CK_TitleRequest_FoundHasBib] CHECK ([IsbnCheckStatus] <> N'found' OR [BibId] IS NOT NULL),
     CONSTRAINT [CK_TitleRequest_Timestamps] CHECK ([UpdatedUtc] >= [CreatedUtc])
@@ -75,6 +77,11 @@ GO
 
 CREATE INDEX [IX_TitleRequest_PatronLimit]
     ON [asap].[TitleRequest]([LibraryOrganizationId], [Barcode], [CreatedUtc], [Id]);
+GO
+
+CREATE INDEX [IX_TitleRequest_PatronIdentityLimit]
+    ON [asap].[TitleRequest]([LibraryOrganizationId], [PatronIdSnapshot], [CreatedUtc], [Id])
+    WHERE [PatronIdSnapshot] IS NOT NULL;
 GO
 
 CREATE INDEX [IX_TitleRequest_PatronIdentifier]

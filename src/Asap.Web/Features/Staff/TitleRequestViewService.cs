@@ -76,7 +76,7 @@ public sealed record TitleRequestDto(
     string? Identifier,
     string? Publication,
     DateOnly? ExactPublicationDate,
-    IReadOnlyDictionary<string, JsonElement> CustomFields,
+    IReadOnlyDictionary<string, JsonElement>? CustomFields,
     bool Autohold,
     string Format,
     string FormatLabel,
@@ -110,6 +110,7 @@ public sealed record TitleRequestDto(
     string? PatronNotificationStatus = null,
     string? PatronNotificationReason = null)
 {
+    public bool CustomFieldsValid { get; init; } = true;
     public RelatedRequestSummary? RelatedRequests { get; init; }
     public RequestWorkflowContext? WorkflowContext { get; init; }
     public PickupOperationSummary? PickupOperation { get; init; }
@@ -130,7 +131,8 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var organizations = await context.Organizations.AsNoTracking()
-            .Where(item => item.Id != 1 && item.IsActive)
+            .Where(item => item.Id > LibraryScope.SystemOrganizationId &&
+                           item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive)
             .OrderBy(item => item.DisplayName)
             .ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
@@ -174,7 +176,11 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
 
         var request = await context.TitleRequests.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == requestId.Value, cancellationToken);
-        if (request is null || !CanAccess(staff, request.LibraryOrganizationId))
+        if (request is null || !CanAccess(staff, request.LibraryOrganizationId) ||
+            !await context.Organizations.AsNoTracking().AnyAsync(item =>
+                item.Id == request.LibraryOrganizationId && item.Id > LibraryScope.SystemOrganizationId &&
+                item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId,
+                cancellationToken))
         {
             return null;
         }
@@ -184,7 +190,9 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             if (selectedScope.Kind != LibraryScopeKind.Library ||
                 selectedScope.OrganizationId != request.LibraryOrganizationId ||
                 !await context.Organizations.AsNoTracking().AnyAsync(item =>
-                    item.Id == selectedScope.OrganizationId && item.IsActive, cancellationToken))
+                    item.Id == selectedScope.OrganizationId && item.Id > LibraryScope.SystemOrganizationId &&
+                    item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive,
+                    cancellationToken))
             {
                 return null;
             }
@@ -322,6 +330,17 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                 .OrderBy(item => item.LibraryOrgName)
                 .ThenBy(item => item.Status)
                 .ToArray();
+            IReadOnlyDictionary<string, JsonElement>? customFields;
+            var customFieldsValid = true;
+            try
+            {
+                customFields = ParseCustomFields(request.CustomFieldsJson);
+            }
+            catch (JsonException)
+            {
+                customFields = null;
+                customFieldsValid = false;
+            }
             result.Add(new TitleRequestDto(
                 request.Id.ToString(CultureInfo.InvariantCulture),
                 "title_request",
@@ -342,7 +361,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                 request.Identifier,
                 request.Publication,
                 request.ExactPublicationDate,
-                ParseCustomFields(request.CustomFieldsJson),
+                customFields,
                 request.AutoHold,
                 format?.Code ?? request.MaterialFormatId.ToString(CultureInfo.InvariantCulture),
                 format?.Label ?? string.Empty,
@@ -389,6 +408,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                     item.Message,
                     AsUtc(item.CreatedUtc))).ToArray() : [])
             {
+                CustomFieldsValid = customFieldsValid,
                 PickupOperation = pendingPickup is null ? null : new PickupOperationSummary(pendingPickup.Id,
                     pendingPickup.State, pendingPickup.TargetBranchId, pendingPickup.TargetBranchName),
                 RelatedRequests = new RelatedRequestSummary(related.Count, relatedCounts),
@@ -433,20 +453,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         new((value ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
     private static IReadOnlyDictionary<string, JsonElement> ParseCustomFields(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return new Dictionary<string, JsonElement>();
-        }
-        try
-        {
-            return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(value) ?? [];
-        }
-        catch (JsonException)
-        {
-            return new Dictionary<string, JsonElement>();
-        }
-    }
+        => TitleRequestCustomFieldsSnapshot.Parse(value);
 
     private static string MaskBarcode(string value) =>
         value.Length <= 4 ? new string('*', value.Length) : $"{new string('*', value.Length - 4)}{value[^4..]}";

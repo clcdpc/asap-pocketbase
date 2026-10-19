@@ -18,7 +18,6 @@ public sealed partial class PatronSuggestionService
 {
     private async Task<(long RequestId, long? OutboxId, string EmailStatus, byte[] RowVersion, string? Identifier)> InsertStaffAsync(
         CurrentStaff actor,
-        string barcode,
         PatronSnapshot patron,
         PickupBranch selectedBranch,
         StaffSuggestionInput input,
@@ -28,12 +27,14 @@ public sealed partial class PatronSuggestionService
         EmailTransportReadiness emailTransportReadiness,
         CreationActor creationActor,
         PickupMutationReceipt? pickupReceipt,
+        int verifiedPatronId,
         CancellationToken cancellationToken)
     {
         if (contextFactory is null || staffEligibility is null)
         {
             throw new PatronFlowException(500, "Staff suggestion creation is not configured.");
         }
+        RequireStaffPatronIdentity(patron, verifiedPatronId, Clean(input.Barcode) ?? string.Empty);
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await using var databaseTransaction = await context.Database.BeginTransactionAsync(
@@ -55,8 +56,8 @@ public sealed partial class PatronSuggestionService
             var isPatronOrganization = currentOrganizationId == patron.PatronOrganizationId;
             var isPatronHomeOrganization = currentOrganizationId == patron.HomeLibraryOrganizationId;
             if (organization is null ||
-                isTargetOrganization && !organization.IsActive ||
-                isPatronHomeOrganization && !organization.IsActive)
+                isTargetOrganization && !OrganizationAuthority.IsActiveLibrary(organization) ||
+                isPatronHomeOrganization && !OrganizationAuthority.IsActiveLibrary(organization))
             {
                 throw new PatronFlowException(
                     409,
@@ -98,26 +99,31 @@ public sealed partial class PatronSuggestionService
         }
 
         EnforceStaffPatronEligibility(currentConfiguration, patron);
-        var currentSuggestion = Validate(
-            new PatronSuggestionInput(
-                input.Format,
-                input.Title,
-                input.Author,
-                input.Identifier,
-                input.Publication,
-                input.PreferredPickupBranchId,
-                input.Autohold,
-                input.CustomFields),
-            currentConfiguration,
-            allowInformationalMessage: true,
-            forcedAutoHold: input.Autohold ?? true,
-            exactPublicationDate: input.ExactPublicationDate,
-            notes: input.Notes,
-            verifiedBibId: preProviderSuggestion.VerifiedBibId);
-        if (currentSuggestion.Format.Id != preProviderSuggestion.Format.Id)
+        ValidatedSuggestion currentSuggestion;
+        try
         {
-            throw FormatChanged();
+            currentSuggestion = Validate(
+                new PatronSuggestionInput(
+                    input.Format,
+                    input.Title,
+                    input.Author,
+                    input.Identifier,
+                    input.Publication,
+                    input.PreferredPickupBranchId,
+                    input.Autohold,
+                    input.CustomFields),
+                currentConfiguration,
+                allowInformationalMessage: true,
+                forcedAutoHold: input.Autohold ?? true,
+                exactPublicationDate: input.ExactPublicationDate,
+                notes: input.Notes,
+                verifiedBibId: preProviderSuggestion.VerifiedBibId);
         }
+        catch (PatronFlowException exception) when (exception.StatusCode == 400)
+        {
+            throw SubmissionConfigurationChanged(exception);
+        }
+        EnsureSameAcceptedSubmission(preProviderSuggestion, currentSuggestion);
 
         var autoClaimTarget = await LockAutoClaimTargetAsync(
             connection,
@@ -134,7 +140,8 @@ public sealed partial class PatronSuggestionService
         await EnforceDuplicateAsync(
             connection,
             transaction,
-            barcode,
+            patron.PatronId,
+            patron.KnownBarcodeAliases,
             currentSuggestion,
             currentConfiguration,
             cancellationToken);
@@ -143,14 +150,14 @@ public sealed partial class PatronSuggestionService
         await using (var insert = new SqlCommand(
             """
             INSERT INTO [asap].[TitleRequest]
-                ([LibraryOrganizationId], [PatronOrganizationId], [StaffLibraryOrganizationIdCreatedBy], [Barcode], [Email],
+                ([LibraryOrganizationId], [PatronOrganizationId], [StaffLibraryOrganizationIdCreatedBy], [Barcode], [PatronIdSnapshot], [Email],
                  [NameFirst], [NameLast], [PatronCodeId], [PatronCodeDescription],
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
                  [Title], [Author], [Identifier], [Publication], [ExactPublicationDate], [CustomFieldsJson], [AutoHold], [Notes],
                  [BibId], [BibIdStaffVerified], [MaterialFormatId], [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
             OUTPUT inserted.[Id]
             VALUES
-                (@libraryOrganizationId, @patronOrganizationId, @staffLibraryOrganizationIdCreatedBy, @barcode, @email,
+                (@libraryOrganizationId, @patronOrganizationId, @staffLibraryOrganizationIdCreatedBy, @barcode, @patronId, @email,
                  @nameFirst, @nameLast, @patronCodeId, @patronCodeDescription,
                  @pickupBranchId, @pickupBranchName, @libraryName,
                  @title, @author, @identifier, @publication, @exactPublicationDate, @customFieldsJson, @autoHold, @notes,
@@ -163,7 +170,8 @@ public sealed partial class PatronSuggestionService
             Add(insert, "@libraryOrganizationId", SqlDbType.Int, currentConfiguration.OrganizationId);
             Add(insert, "@patronOrganizationId", SqlDbType.Int, patron.PatronOrganizationId);
             Add(insert, "@staffLibraryOrganizationIdCreatedBy", SqlDbType.Int, creationActor.StaffLibraryOrganizationId);
-            Add(insert, "@barcode", SqlDbType.NVarChar, barcode, 50);
+            Add(insert, "@barcode", SqlDbType.NVarChar, patron.Barcode, 50);
+            Add(insert, "@patronId", SqlDbType.Int, patron.PatronId);
             Add(insert, "@email", SqlDbType.NVarChar, patron.Email, 320);
             Add(insert, "@nameFirst", SqlDbType.NVarChar, patron.NameFirst, 256);
             Add(insert, "@nameLast", SqlDbType.NVarChar, patron.NameLast, 256);
@@ -201,7 +209,8 @@ public sealed partial class PatronSuggestionService
             connection,
             transaction,
             requestId,
-            barcode,
+            patron.PatronId,
+            patron.KnownBarcodeAliases,
             currentConfiguration.OrganizationId,
             currentSuggestion.Identifier,
             cancellationToken);
@@ -235,7 +244,7 @@ public sealed partial class PatronSuggestionService
         }
 
         await PickupPreferenceMutationService.CompleteAsync(connection, transaction, pickupReceipt,
-            requestId, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
+            requestId, patron.PatronId, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
         await databaseTransaction.CommitAsync(cancellationToken);
         return (requestId, email.OutboxId, email.Status, rowVersion, currentSuggestion.Identifier);
     }
@@ -254,9 +263,10 @@ public sealed partial class PatronSuggestionService
     }
 
     private async Task<(long RequestId, long? OutboxId, string EmailStatus, byte[] RowVersion)> InsertAsync(
-        string barcode,
+        PatronSessionContext session,
         PatronSnapshot patron,
         PickupBranch selectedBranch,
+        PatronSuggestionInput input,
         ValidatedSuggestion suggestion,
         EffectivePatronConfiguration configuration,
         AutoClaimCandidate? autoClaimCandidate,
@@ -267,6 +277,14 @@ public sealed partial class PatronSuggestionService
         bool sendSubmissionEmail,
         CancellationToken cancellationToken)
     {
+        var barcode = patron.Barcode;
+        var barcodeAliases = patron.KnownBarcodeAliases;
+        if (patron.PatronId <= 0 || session.NativePatronId != patron.PatronId || barcodeAliases.Count == 0 ||
+            !barcodeAliases.Contains(session.Barcode, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new PatronFlowException(401, "Your patron identity is no longer valid.",
+                new { code = "patron_session_invalid" });
+        }
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(
@@ -277,7 +295,22 @@ public sealed partial class PatronSuggestionService
             connection,
             transaction,
             configuration,
+            patron.HomeLibraryOrganizationId,
             cancellationToken);
+        await EnsureCurrentPatronSessionAsync(connection, transaction, session, cancellationToken);
+        // Settings writes take these same organization locks. Read the complete
+        // current configuration on this transaction before accepting original input.
+        configuration = await LoadCurrentPublicConfigurationAsync(
+            connection, transaction, configuration.OrganizationId, cancellationToken);
+        ValidateCurrentPublicSubmission(input, suggestion, configuration);
+        CurrentPatronSubmissionPolicy? currentPatronPolicy = null;
+        if (enforcePatronLimit)
+        {
+            currentPatronPolicy = await LoadCurrentPatronSubmissionPolicyAsync(
+                connection, transaction, configuration.OrganizationId, patron.PatronCodeId, cancellationToken);
+            EnforcePatronCodeEligibility(currentPatronPolicy, patron);
+            EnforceCurrentPatronScope(session, patron, currentPatronPolicy);
+        }
         var autoClaimTarget = await LockAutoClaimTargetAsync(
             connection,
             transaction,
@@ -295,14 +328,17 @@ public sealed partial class PatronSuggestionService
             await EnforceLimitAsync(
                 connection,
                 transaction,
-                barcode,
-                configuration,
+                patron.PatronId,
+                barcodeAliases,
+                configuration.OrganizationId,
+                currentPatronPolicy!,
                 cancellationToken);
         }
         await EnforceDuplicateAsync(
             connection,
             transaction,
-            barcode,
+            patron.PatronId,
+            barcodeAliases,
             suggestion,
             configuration,
             cancellationToken);
@@ -311,7 +347,7 @@ public sealed partial class PatronSuggestionService
         await using (var insert = new SqlCommand(
             """
             INSERT INTO [asap].[TitleRequest]
-                ([LibraryOrganizationId], [PatronOrganizationId], [StaffLibraryOrganizationIdCreatedBy], [Barcode], [Email],
+                ([LibraryOrganizationId], [PatronOrganizationId], [StaffLibraryOrganizationIdCreatedBy], [Barcode], [PatronIdSnapshot], [Email],
                  [NameFirst], [NameLast], [PatronCodeId], [PatronCodeDescription],
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
                  [Title], [Author], [Identifier], [Publication], [ExactPublicationDate], [CustomFieldsJson], [AutoHold], [Notes],
@@ -319,7 +355,7 @@ public sealed partial class PatronSuggestionService
                  [MaterialFormatId], [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
             OUTPUT inserted.[Id]
             VALUES
-                (@libraryOrganizationId, @patronOrganizationId, @staffLibraryOrganizationIdCreatedBy, @barcode, @email,
+                (@libraryOrganizationId, @patronOrganizationId, @staffLibraryOrganizationIdCreatedBy, @barcode, @patronId, @email,
                  @nameFirst, @nameLast, @patronCodeId, @patronCodeDescription,
                  @pickupBranchId, @pickupBranchName, @libraryName,
                  @title, @author, @identifier, @publication, @exactPublicationDate, @customFieldsJson, @autoHold, @notes,
@@ -334,6 +370,7 @@ public sealed partial class PatronSuggestionService
             Add(insert, "@patronOrganizationId", SqlDbType.Int, patron.PatronOrganizationId);
             Add(insert, "@staffLibraryOrganizationIdCreatedBy", SqlDbType.Int, creationActor.StaffLibraryOrganizationId);
             Add(insert, "@barcode", SqlDbType.NVarChar, barcode, 50);
+            Add(insert, "@patronId", SqlDbType.Int, patron.PatronId);
             Add(insert, "@email", SqlDbType.NVarChar, patron.Email, 320);
             Add(insert, "@nameFirst", SqlDbType.NVarChar, patron.NameFirst, 256);
             Add(insert, "@nameLast", SqlDbType.NVarChar, patron.NameLast, 256);
@@ -375,7 +412,8 @@ public sealed partial class PatronSuggestionService
             connection,
             transaction,
             requestId,
-            barcode,
+            patron.PatronId,
+            barcodeAliases,
             configuration.OrganizationId,
             suggestion.Identifier,
             cancellationToken);
@@ -409,28 +447,108 @@ public sealed partial class PatronSuggestionService
         }
 
         await PickupPreferenceMutationService.CompleteAsync(connection, transaction, pickupReceipt,
-            requestId, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
+            requestId, patron.PatronId, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return (requestId, email.OutboxId, email.Status, rowVersion);
+    }
+
+    private async Task<EffectivePatronConfiguration> LoadCurrentPublicConfigurationAsync(
+        SqlConnection connection, SqlTransaction transaction, int organizationId, CancellationToken cancellationToken)
+    {
+        await using var context = new AsapDbContext(
+            new DbContextOptionsBuilder<AsapDbContext>().UseSqlServer(connection).Options);
+        await context.Database.UseTransactionAsync(transaction, cancellationToken);
+        return await configurationService.GetAsync(context, organizationId, cancellationToken)
+            ?? throw new PatronFlowException(403, "Your library could not be determined.");
     }
 
     private static async Task LockAndValidateOrganizationAsync(
         SqlConnection connection,
         SqlTransaction transaction,
         EffectivePatronConfiguration configuration,
+        int homeOrganizationId,
         CancellationToken cancellationToken)
     {
-        foreach (var id in new[] { LibraryScope.SystemOrganizationId, configuration.OrganizationId }.Distinct().Order())
+        foreach (var id in new[]
+                 {
+                     LibraryScope.SystemOrganizationId,
+                     configuration.OrganizationId,
+                     homeOrganizationId
+                 }.Distinct().Order())
         {
             await using var command = new SqlCommand(
-                "SELECT [IsActive] FROM [asap].[Organization] WITH (UPDLOCK, HOLDLOCK) WHERE [Id] = @id;",
+                "SELECT [Id], [OrganizationCodeId], [IsActive] FROM [asap].[Organization] WITH (UPDLOCK, HOLDLOCK) WHERE [Id] = @id;",
                 connection,
                 transaction);
             Add(command, "@id", SqlDbType.Int, id);
-            if (await command.ExecuteScalarAsync(cancellationToken) is not true)
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
             {
                 throw new PatronFlowException(403, configuration.SystemNotEnabledMessage);
             }
+
+            var codeId = reader.IsDBNull(1) ? (int?)null : reader.GetInt32(1);
+            var active = reader.GetBoolean(2);
+            await reader.CloseAsync();
+            if (id == LibraryScope.SystemOrganizationId && !active ||
+                id == configuration.OrganizationId &&
+                (!active || codeId != OrganizationAuthority.LibraryOrganizationCodeId) ||
+                id == homeOrganizationId && codeId != OrganizationAuthority.LibraryOrganizationCodeId)
+            {
+                throw new PatronFlowException(403, configuration.SystemNotEnabledMessage,
+                    new { code = "organization_inactive" });
+            }
+        }
+    }
+
+    private static async Task EnsureCurrentPatronSessionAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        PatronSessionContext session,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand("""
+            SELECT COUNT(*) FROM [asap].[PatronSession] WITH (UPDLOCK,HOLDLOCK)
+            WHERE [Id] = @sessionId AND [Barcode] = @barcode
+              AND [NativePatronId] = @nativePatronId
+              AND [HomeOrganizationId] = @homeOrganizationId
+              AND ([ExperienceOrganizationId] = @experienceOrganizationId OR
+                   [ExperienceOrganizationId] IS NULL AND @experienceOrganizationId IS NULL)
+              AND [EffectiveOrganizationId] = @organizationId
+              AND [ExpiresUtc] = @expiresUtc AND [ExpiresUtc] > SYSUTCDATETIME()
+              AND [RevokedUtc] IS NULL;
+            """, connection, transaction);
+        Add(command, "@sessionId", SqlDbType.BigInt, session.Id);
+        Add(command, "@barcode", SqlDbType.NVarChar, session.Barcode, 50);
+        Add(command, "@nativePatronId", SqlDbType.Int, session.NativePatronId);
+        Add(command, "@homeOrganizationId", SqlDbType.Int, session.HomeOrganizationId);
+        Add(command, "@experienceOrganizationId", SqlDbType.Int, session.ExperienceOrganizationId);
+        Add(command, "@organizationId", SqlDbType.Int, session.EffectiveOrganizationId);
+        Add(command, "@expiresUtc", SqlDbType.DateTime2, session.ExpiresUtc);
+        if (Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) != 1)
+        {
+            throw new PatronFlowException(401, "Your patron session is no longer valid.",
+                new { code = "patron_session_invalid" });
+        }
+    }
+
+    private static void EnforceCurrentPatronScope(
+        PatronSessionContext session,
+        PatronSnapshot patron,
+        CurrentPatronSubmissionPolicy policy)
+    {
+        if (patron.PatronId != session.NativePatronId || patron.HomeLibraryOrganizationId <= 1)
+        {
+            throw new PatronFlowException(401, "Your patron identity is no longer valid.",
+                new { code = "patron_session_invalid" });
+        }
+
+        if (patron.HomeLibraryOrganizationId != session.EffectiveOrganizationId &&
+            (session.ExperienceOrganizationId != session.EffectiveOrganizationId ||
+             !policy.AllowAnyRegisteredCardLogin))
+        {
+            throw new PatronFlowException(403, "Your current library is not authorized for this suggestion session.",
+                new { code = "patron_library_scope_changed" });
         }
     }
 
@@ -519,33 +637,127 @@ public sealed partial class PatronSuggestionService
         }
     }
 
-    private static PatronFlowException FormatChanged() =>
-        new(
-            409,
-            "The selected material format changed while the suggestion was being submitted. Refresh the form and try again.",
-            new { code = "material_format_changed" });
+    private static PatronFlowException FormatChanged()
+    {
+        const string message = "The selected material format changed while the suggestion was being submitted. Refresh the form and try again.";
+        return new PatronFlowException(409, message, new { code = "material_format_changed", message });
+    }
+
+    private async Task<CurrentPatronSubmissionPolicy> LoadCurrentPatronSubmissionPolicyAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int organizationId,
+        int? patronCodeId,
+        CancellationToken cancellationToken)
+    {
+        int suggestionLimit;
+        string suggestionLimitMessage;
+        bool allowAnyRegisteredCardLogin;
+        bool eligibilityEnabled;
+        string eligibilityMessage;
+        int codeOwnerId;
+        await using (var settings = new SqlCommand("""
+            SELECT COALESCE(library.[SuggestionLimit], system.[SuggestionLimit], 5),
+                   COALESCE(NULLIF(LTRIM(RTRIM(library.[SuggestionLimitMessage])), N''),
+                       NULLIF(LTRIM(RTRIM(system.[SuggestionLimitMessage])), N''),
+                       N'Weekly suggestion limit reached. You can try again after {{next_available_date}}.'),
+                   CONVERT(bit, COALESCE(library.[AllowAnyRegisteredCardLogin], system.[AllowAnyRegisteredCardLogin], 0)),
+                   CONVERT(bit, COALESCE(library.[PatronCodeEligibilityEnabled], system.[PatronCodeEligibilityEnabled], 0)),
+                   COALESCE(NULLIF(LTRIM(RTRIM(library.[PatronCodeEligibilityMessage])), N''),
+                       NULLIF(LTRIM(RTRIM(system.[PatronCodeEligibilityMessage])), N''),
+                       N'Your library card is not eligible to use this suggestion service.'),
+                   CASE WHEN @organizationId <> 1 AND EXISTS
+                       (SELECT 1 FROM [asap].[PatronCodeEligibilitySet] AS localSet WITH (UPDLOCK,HOLDLOCK)
+                        WHERE localSet.[OrganizationId] = @organizationId)
+                       THEN @organizationId ELSE 1 END
+            FROM [asap].[WorkflowSettings] AS system WITH (UPDLOCK,HOLDLOCK)
+            LEFT JOIN [asap].[WorkflowSettings] AS library WITH (UPDLOCK,HOLDLOCK)
+              ON library.[OrganizationId] = @organizationId
+            WHERE system.[OrganizationId] = 1;
+            """, connection, transaction))
+        {
+            Add(settings, "@organizationId", SqlDbType.Int, organizationId);
+            await using var reader = await settings.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                throw new PatronFlowException(500, "Patron submission settings are unavailable.");
+            }
+            suggestionLimit = reader.GetInt32(0);
+            suggestionLimitMessage = reader.GetString(1);
+            allowAnyRegisteredCardLogin = reader.GetBoolean(2);
+            eligibilityEnabled = reader.GetBoolean(3);
+            eligibilityMessage = reader.GetString(4);
+            codeOwnerId = reader.GetInt32(5);
+        }
+
+        int allowedCodeCount;
+        bool patronCodeAllowed;
+        await using (var codes = new SqlCommand("""
+            SELECT COUNT_BIG(*),
+                   SUM(CASE WHEN [PatronCodeId] = @patronCodeId THEN CONVERT(bigint, 1) ELSE CONVERT(bigint, 0) END)
+            FROM [asap].[PatronCodeEligibilityMember] WITH (UPDLOCK,HOLDLOCK)
+            WHERE [OrganizationId] = @organizationId;
+            """, connection, transaction))
+        {
+            Add(codes, "@organizationId", SqlDbType.Int, codeOwnerId);
+            Add(codes, "@patronCodeId", SqlDbType.Int, patronCodeId);
+            await using var reader = await codes.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            var count = reader.GetInt64(0);
+            var matching = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
+            allowedCodeCount = checked((int)Math.Min(count, int.MaxValue));
+            patronCodeAllowed = count == 0 || !patronCodeId.HasValue || matching > 0;
+        }
+
+        return new CurrentPatronSubmissionPolicy(
+            suggestionLimit,
+            suggestionLimitMessage,
+            allowAnyRegisteredCardLogin,
+            eligibilityEnabled,
+            eligibilityMessage,
+            allowedCodeCount,
+            patronCodeAllowed);
+    }
+
+    private static void EnforcePatronCodeEligibility(
+        CurrentPatronSubmissionPolicy policy,
+        PatronSnapshot patron)
+    {
+        if (!policy.PatronCodeEligibilityEnabled || policy.AllowedPatronCodeCount == 0 ||
+            !patron.PatronCodeId.HasValue || policy.PatronCodeAllowed)
+        {
+            return;
+        }
+
+        throw new PatronFlowException(403, policy.PatronCodeEligibilityMessage,
+            new { code = "patron_ineligible" });
+    }
 
     private async Task EnforceLimitAsync(
         SqlConnection connection,
         SqlTransaction transaction,
-        string barcode,
-        EffectivePatronConfiguration configuration,
+        int nativePatronId,
+        IReadOnlyList<string> barcodeAliases,
+        int organizationId,
+        CurrentPatronSubmissionPolicy policy,
         CancellationToken cancellationToken)
     {
-        await using var command = new SqlCommand(
-            """
+        await using var command = new SqlCommand();
+        var aliasParameters = AddBarcodeAliasParameters(command, barcodeAliases);
+        command.Connection = connection;
+        command.Transaction = transaction;
+        command.CommandText = $"""
             SELECT TOP (@limit) [CreatedUtc]
             FROM [asap].[TitleRequest] WITH (UPDLOCK, HOLDLOCK)
             WHERE [LibraryOrganizationId] = @organizationId
-              AND [Barcode] = @barcode
+              AND ([PatronIdSnapshot] = @nativePatronId OR
+                   [PatronIdSnapshot] IS NULL AND [Barcode] IN ({aliasParameters}))
               AND [CreatedUtc] >= @cutoffUtc
             ORDER BY [CreatedUtc] DESC, [Id] DESC;
-            """,
-            connection,
-            transaction);
-        Add(command, "@limit", SqlDbType.Int, configuration.SuggestionLimit);
-        Add(command, "@organizationId", SqlDbType.Int, configuration.OrganizationId);
-        Add(command, "@barcode", SqlDbType.NVarChar, barcode, 50);
+            """;
+        Add(command, "@limit", SqlDbType.Int, policy.SuggestionLimit);
+        Add(command, "@organizationId", SqlDbType.Int, organizationId);
+        Add(command, "@nativePatronId", SqlDbType.Int, nativePatronId);
         Add(
             command,
             "@cutoffUtc",
@@ -558,7 +770,7 @@ public sealed partial class PatronSuggestionService
             dates.Add(reader.GetDateTime(0));
         }
 
-        if (dates.Count < configuration.SuggestionLimit)
+        if (dates.Count < policy.SuggestionLimit)
         {
             return;
         }
@@ -567,7 +779,7 @@ public sealed partial class PatronSuggestionService
             new DateTimeOffset(DateTime.SpecifyKind(dates[^1], DateTimeKind.Utc)),
             7);
         var localNext = TimeZoneInfo.ConvertTime(next, businessTimeZone);
-        var message = configuration.SuggestionLimitMessage.Replace(
+        var message = policy.SuggestionLimitMessage.Replace(
             "{{next_available_date}}",
             localNext.ToString("dddd, MMMM d, yyyy h:mm tt", CultureInfo.GetCultureInfo("en-US")),
             StringComparison.Ordinal);
@@ -608,13 +820,17 @@ public sealed partial class PatronSuggestionService
     private async Task EnforceDuplicateAsync(
         SqlConnection connection,
         SqlTransaction transaction,
-        string barcode,
+        int nativePatronId,
+        IReadOnlyList<string> barcodeAliases,
         ValidatedSuggestion suggestion,
         EffectivePatronConfiguration configuration,
         CancellationToken cancellationToken)
     {
-        await using var command = new SqlCommand(
-            """
+        await using var command = new SqlCommand();
+        var aliasParameters = AddBarcodeAliasParameters(command, barcodeAliases);
+        command.Connection = connection;
+        command.Transaction = transaction;
+        command.CommandText = $"""
             SELECT TOP (1)
                 candidate.[Id], candidate.[CreatedUtc], candidate.[Status], candidate.[CloseReason],
                 candidate.[Title], candidate.[Author], candidate.[FormatCode], candidate.[MatchType]
@@ -626,7 +842,8 @@ public sealed partial class PatronSuggestionService
                 FROM [asap].[TitleRequest] AS request WITH (UPDLOCK, HOLDLOCK)
                 JOIN [asap].[MaterialFormat] AS format ON format.[Id] = request.[MaterialFormatId]
                 WHERE request.[LibraryOrganizationId] = @organizationId
-                  AND request.[Barcode] = @barcode
+                  AND (request.[PatronIdSnapshot] = @nativePatronId OR
+                       request.[PatronIdSnapshot] IS NULL AND request.[Barcode] IN ({aliasParameters}))
                   AND @identifier IS NOT NULL
                   AND request.[Identifier] = @identifier
 
@@ -638,7 +855,8 @@ public sealed partial class PatronSuggestionService
                 FROM [asap].[TitleRequest] AS request WITH (UPDLOCK, HOLDLOCK)
                 JOIN [asap].[MaterialFormat] AS format ON format.[Id] = request.[MaterialFormatId]
                 WHERE request.[LibraryOrganizationId] = @organizationId
-                  AND request.[Barcode] = @barcode
+                  AND (request.[PatronIdSnapshot] = @nativePatronId OR
+                       request.[PatronIdSnapshot] IS NULL AND request.[Barcode] IN ({aliasParameters}))
                   AND @bibId IS NOT NULL
                   AND request.[BibId] = @bibId
 
@@ -650,16 +868,15 @@ public sealed partial class PatronSuggestionService
                 FROM [asap].[TitleRequest] AS request WITH (UPDLOCK, HOLDLOCK)
                 JOIN [asap].[MaterialFormat] AS format ON format.[Id] = request.[MaterialFormatId]
                 WHERE request.[LibraryOrganizationId] = @organizationId
-                  AND request.[Barcode] = @barcode
+                  AND (request.[PatronIdSnapshot] = @nativePatronId OR
+                       request.[PatronIdSnapshot] IS NULL AND request.[Barcode] IN ({aliasParameters}))
                   AND request.[Title] = @title
                   AND request.[MaterialFormatId] = @materialFormatId
             ) AS candidate
             ORDER BY candidate.[MatchPriority], candidate.[CreatedUtc] DESC, candidate.[Id] DESC;
-            """,
-            connection,
-            transaction);
+            """;
         Add(command, "@organizationId", SqlDbType.Int, configuration.OrganizationId);
-        Add(command, "@barcode", SqlDbType.NVarChar, barcode, 50);
+        Add(command, "@nativePatronId", SqlDbType.Int, nativePatronId);
         Add(command, "@identifier", SqlDbType.NVarChar, suggestion.Identifier, 100);
         Add(command, "@bibId", SqlDbType.Int, suggestion.VerifiedBibId);
         Add(command, "@title", SqlDbType.NVarChar, suggestion.Title, 500);
@@ -928,7 +1145,8 @@ public sealed partial class PatronSuggestionService
         SqlConnection connection,
         SqlTransaction transaction,
         long requestId,
-        string barcode,
+        int nativePatronId,
+        IReadOnlyList<string> barcodeAliases,
         int organizationId,
         string? identifier,
         CancellationToken cancellationToken)
@@ -938,16 +1156,22 @@ public sealed partial class PatronSuggestionService
             return;
         }
 
-        await using var command = new SqlCommand(
-            """
+        await using var command = new SqlCommand();
+        var aliasParameters = AddBarcodeAliasParameters(command, barcodeAliases);
+        command.Connection = connection;
+        command.Transaction = transaction;
+        command.CommandText = $"""
             IF EXISTS
             (
                 SELECT 1
-                FROM [asap].[TitleRequest] WITH (UPDLOCK, HOLDLOCK)
-                WHERE [LibraryOrganizationId] = @organizationId
-                  AND [Identifier] = @identifier
-                  AND [Barcode] <> @barcode
-                  AND [Id] <> @requestId
+                FROM [asap].[TitleRequest] AS candidate WITH (UPDLOCK, HOLDLOCK)
+                WHERE candidate.[LibraryOrganizationId] = @organizationId
+                  AND candidate.[Identifier] = @identifier
+                  AND candidate.[Id] <> @requestId
+                  AND (
+                      candidate.[PatronIdSnapshot] IS NOT NULL AND candidate.[PatronIdSnapshot] <> @nativePatronId
+                      OR candidate.[PatronIdSnapshot] IS NULL AND candidate.[Barcode] NOT IN ({aliasParameters})
+                  )
             )
             BEGIN
                 INSERT INTO [asap].[TitleRequestWorkflowTag] ([TitleRequestId], [WorkflowTagId])
@@ -967,13 +1191,11 @@ public sealed partial class PatronSuggestionService
                     [UpdatedUtc] = @now
                 WHERE [Id] = @requestId;
             END;
-            """,
-            connection,
-            transaction);
+            """;
         Add(command, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
         Add(command, "@organizationId", SqlDbType.Int, organizationId);
         Add(command, "@identifier", SqlDbType.NVarChar, identifier, 100);
-        Add(command, "@barcode", SqlDbType.NVarChar, barcode, 50);
+        Add(command, "@nativePatronId", SqlDbType.Int, nativePatronId);
         Add(command, "@requestId", SqlDbType.BigInt, requestId);
         Add(
             command,
@@ -982,6 +1204,23 @@ public sealed partial class PatronSuggestionService
             "Tagged as a duplicate suggestion because another patron has a suggestion with the same identifier number.",
             -1);
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static string AddBarcodeAliasParameters(SqlCommand command, IReadOnlyList<string> aliases)
+    {
+        if (aliases.Count is < 1 or > 3)
+        {
+            throw new ArgumentException("A native patron identity requires one to three verified barcode aliases.", nameof(aliases));
+        }
+
+        var names = new string[aliases.Count];
+        for (var index = 0; index < aliases.Count; index++)
+        {
+            names[index] = $"@barcodeAlias{index}";
+            Add(command, names[index], SqlDbType.NVarChar, aliases[index], 50);
+        }
+
+        return string.Join(", ", names);
     }
 
     private async Task InsertCreationEventAsync(

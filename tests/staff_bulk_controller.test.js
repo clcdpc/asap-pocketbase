@@ -5,7 +5,7 @@ const actorB = { ...actorA, id: '21', authenticationEmail: 'b@example.org' };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 (async () => {
-  for (const outcome of ['deleted', 'outcome_unconfirmed']) {
+  for (const outcome of ['deleted', 'outcome_unconfirmed', 'status_200_unknown']) {
     await fixture(async ({ load, get, dom }) => {
       const { createSessionIdentity } = await load('session-identity');
       const { createBulkDeleteController } = await load('bulk-delete');
@@ -38,12 +38,17 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       first.dispose(); session.accept(actorB);
       const replacement = createBulkDeleteController({ ...options, sessionRequest: async () => ({ authenticated: true, accessAllowed: true, staff: actorB }) });
       replacement.open(); first.dispose(); assert.equal(get('#bulk-delete-dialog').open, true);
-      if (outcome === 'deleted') complete({ deleted: true }); else reject(Object.assign(new Error('Lost response'), { status: 0 }));
+      if (outcome === 'deleted') complete({ deleted: true });
+      else if (outcome === 'status_200_unknown') {
+        reject(Object.assign(new Error('HTTP 200 mutation result is unknown.'), { status: 200, outcomeUnknown: true }));
+      } else reject(Object.assign(new Error('Lost response'), { status: 0 }));
       await flush(); await flush();
       assert.equal(deletes.length, 1, 'interruption never dispatches the later captured item');
       assert.equal(first.hasPendingMutation(), false);
       const receipt = receipts.at(-1);
-      assert.equal(receipt[1].id, actorA.id); assert.match(receipt[0], new RegExp(outcome.replaceAll('_', ' ')));
+      assert.equal(receipt[1].id, actorA.id);
+      if (outcome === 'status_200_unknown') assert.match(receipt[0], /outcome unconfirmed/i);
+      else assert.match(receipt[0], new RegExp(outcome.replaceAll('_', ' ')));
       assert.match(receipt[0], /9007199254740993.*not attempted/); assert.equal(reviews.length, 0);
       assert.equal(get('#bulk-delete-results').children.length, 0, 'old ledger cannot repaint replacement UI');
       assert.equal(replacement.hasPendingMutation(), false); replacement.dispose();

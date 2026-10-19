@@ -1,8 +1,10 @@
 using System.Runtime.ExceptionServices;
+using System.Net;
 using Clc.Polaris.Api;
 using Clc.Polaris.Api.Configuration;
 using Clc.Polaris.Api.Models;
 using Clc.Rest;
+using Microsoft.Extensions.Logging;
 
 namespace Asap.Web.Features.Patron;
 
@@ -12,21 +14,66 @@ public sealed partial class PolarisPatronProvider
         exception is HttpRequestException or TimeoutException or OperationCanceledException or
             System.Text.Json.JsonException or Newtonsoft.Json.JsonException;
 
-    private static void CheckResponse<T>(IRestResponse<T> response, CancellationToken cancellationToken)
+    private static void CheckResponse<T>(
+        IRestResponse<T> response, CancellationToken cancellationToken,
+        bool mutationDispatched, string? mutationPath)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        // Rest.Client beta.3 also stores request preparation and programming errors
-        // in Exception. A missing HTTP response alone is not transport evidence.
-        if (response.Exception is { } exception && !IsExpectedProviderFailure(exception))
+        // Rest.Client beta.3 stores preparation, transport, body-read and formatting
+        // faults in Exception. Mutation response-content disposal is isolated at the
+        // dispatched response boundary, after the package has parsed the result.
+        // Preserve every genuine pre-result fault and actual caller cancellation.
+        if (response.Exception is { } exception)
         {
+            if (!IsExpectedProviderFailure(exception) ||
+                exception is OperationCanceledException && cancellationToken.IsCancellationRequested)
+            {
+                ExceptionDispatchInfo.Capture(exception).Throw();
+            }
+
+            // Keep the established mutation classifications for expected transport and
+            // formatter faults. These faults precede complete response evidence and
+            // callers retain their existing operational/ambiguous handling.
+            if (mutationDispatched && mutationPath?.Contains("/holdrequest", StringComparison.Ordinal) == true)
+            {
+                if (response.Data is null)
+                {
+                    return;
+                }
+
+                throw Operational("polaris_hold_response_failed", exception);
+            }
+            if (mutationDispatched && mutationPath?.Contains("/patron/", StringComparison.Ordinal) == true)
+            {
+                var code = exception is System.Text.Json.JsonException or Newtonsoft.Json.JsonException
+                    ? "polaris_pickup_update_protocol_failed"
+                    : "polaris_pickup_update_failed";
+                throw Operational(code, exception);
+            }
+
             ExceptionDispatchInfo.Capture(exception).Throw();
         }
+
+        // The pinned client parses Data before it disposes the response. A caller token
+        // canceled by that disposal must not erase an already returned mutation response;
+        // the owning provider still applies its strict status and identity classifier.
+        // A missing response or parsed value remains an unknown result.
+        if (mutationDispatched && response.Exception is null &&
+            response.Response is not null && response.Data is not null)
+        {
+            return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
-    private sealed class DispatchAwarePapiClient(HttpClient httpClient, PapiSettings settings)
+    private sealed class DispatchAwarePapiClient(
+        HttpClient httpClient,
+        PapiSettings settings,
+        ILogger<PolarisPatronProvider> logger)
         : PapiClient(httpClient, settings)
     {
         public bool MutationDispatched { get; private set; }
+        public string? MutationPath { get; private set; }
         private Exception? authenticationFailure;
 
         public async Task<IRestResponse<T>> CallAsync<T>(
@@ -46,7 +93,7 @@ public sealed partial class PolarisPatronProvider
                 throw;
             }
             authenticationFailure = null;
-            CheckResponse(response, cancellationToken);
+            CheckResponse(response, cancellationToken, MutationDispatched, MutationPath);
             return response;
         }
 
@@ -55,6 +102,7 @@ public sealed partial class PolarisPatronProvider
         {
             cancellationToken.ThrowIfCancellationRequested();
             var path = request.RequestUri!.AbsolutePath;
+            var isMutationRequest = IsMutationRequest(request.Method, path);
             if (!path.Contains("/authenticator/staff", StringComparison.Ordinal))
             {
                 authenticationFailure = null;
@@ -62,15 +110,20 @@ public sealed partial class PolarisPatronProvider
             // Observe the package's transport hook; PAPI still owns routing,
             // signing, serialization and staff-token acquisition. Authentication
             // requests are reads for mutation-safety purposes.
-            if (request.Method == HttpMethod.Post && path.EndsWith("/holdrequest", StringComparison.Ordinal) ||
-                request.Method == HttpMethod.Put &&
-                (path.Contains("/holdrequest/", StringComparison.Ordinal) || path.Contains("/patron/", StringComparison.Ordinal)))
+            if (isMutationRequest)
             {
                 MutationDispatched = true;
+                MutationPath = path;
             }
             try
             {
                 var response = await base.SendAsync(request, cancellationToken);
+                if (isMutationRequest)
+                {
+                    response.Content = new MutationResponseContent(
+                        response.Content,
+                        RecordMutationResponseCleanupFailure);
+                }
                 if (path.Contains("/authenticator/staff", StringComparison.Ordinal) && !response.IsSuccessStatusCode)
                 {
                     authenticationFailure = new PolarisOperationalException("polaris_staff_authentication_failed", "Polaris staff authentication was unavailable.");
@@ -82,6 +135,30 @@ public sealed partial class PolarisPatronProvider
                 authenticationFailure = IsExpectedProviderFailure(exception)
                     ? Operational("polaris_staff_authentication_failed", exception) : exception;
                 throw;
+            }
+        }
+
+        private static bool IsMutationRequest(HttpMethod method, string path) =>
+            method == HttpMethod.Post && path.EndsWith("/holdrequest", StringComparison.Ordinal) ||
+            method == HttpMethod.Put &&
+            (path.Contains("/holdrequest/", StringComparison.Ordinal) ||
+             path.Contains("/patron/", StringComparison.Ordinal));
+
+        private void RecordMutationResponseCleanupFailure(Exception cause)
+        {
+            var diagnostic = new PolarisMutationResponseCleanupDiagnostic(cause);
+            try
+            {
+                logger.Log(
+                    LogLevel.Warning,
+                    new EventId(36801, "PolarisMutationResponseContentCleanupFailed"),
+                    diagnostic,
+                    exception: null,
+                    static (state, _) => state.ToString());
+            }
+            catch (Exception)
+            {
+                // Diagnostic logging cannot replace an already parsed mutation result.
             }
         }
 
@@ -108,7 +185,72 @@ public sealed partial class PolarisPatronProvider
                 throw;
             }
         }
+
+        private sealed class MutationResponseContent : HttpContent
+        {
+            private readonly HttpContent originalContent;
+            private readonly Action<Exception> onCleanupFailure;
+            private int disposeStarted;
+
+            public MutationResponseContent(
+                HttpContent originalContent,
+                Action<Exception> onCleanupFailure)
+            {
+                this.originalContent = originalContent;
+                this.onCleanupFailure = onCleanupFailure;
+                foreach (var header in originalContent.Headers)
+                {
+                    Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+            }
+
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+                originalContent.CopyToAsync(stream, context);
+
+            protected override Task SerializeToStreamAsync(
+                Stream stream, TransportContext? context, CancellationToken cancellationToken) =>
+                originalContent.CopyToAsync(stream, context, cancellationToken);
+
+            protected override bool TryComputeLength(out long length)
+            {
+                if (originalContent.Headers.ContentLength is long contentLength)
+                {
+                    length = contentLength;
+                    return true;
+                }
+
+                length = 0;
+                return false;
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing && Interlocked.Exchange(ref disposeStarted, 1) == 0)
+                {
+                    try
+                    {
+                        originalContent.Dispose();
+                    }
+                    catch (Exception exception)
+                    {
+                        onCleanupFailure(exception);
+                    }
+                }
+
+                base.Dispose(disposing);
+            }
+        }
     }
+}
+
+internal sealed class PolarisMutationResponseCleanupDiagnostic(Exception cause)
+{
+    private readonly Exception originalException = cause;
+
+    internal Exception GetOriginalException() => originalException;
+
+    public override string ToString() =>
+        $"Polaris mutation response content cleanup failed ({originalException.GetType().Name}).";
 }
 
 /// <summary>Positive evidence that the requested mutation never reached the transport hook.</summary>

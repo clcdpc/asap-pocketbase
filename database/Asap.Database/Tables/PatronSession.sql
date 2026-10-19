@@ -9,8 +9,10 @@ CREATE TABLE [asap].[PatronSession]
     [CreatedUtc] datetime2(7) NOT NULL,
     [ExpiresUtc] datetime2(7) NOT NULL,
     [RevokedUtc] datetime2(7) NULL,
+    [NativePatronId] int NULL,
     CONSTRAINT [FK_PatronSession_EffectiveOrganization] FOREIGN KEY ([EffectiveOrganizationId]) REFERENCES [asap].[Organization]([Id]),
     CONSTRAINT [CK_PatronSession_Expiration] CHECK ([ExpiresUtc] > [CreatedUtc]),
+    CONSTRAINT [CK_PatronSession_NativePatronId] CHECK ([NativePatronId] IS NULL OR [NativePatronId] > 0),
     CONSTRAINT [UQ_PatronSession_TokenHash] UNIQUE ([TokenHash])
 );
 GO
@@ -21,4 +23,8 @@ GO
 
 CREATE INDEX [IX_PatronSession_ExpiresUtc]
     ON [asap].[PatronSession]([ExpiresUtc]);
+GO
+
+CREATE INDEX [IX_PatronSession_NativePatronId]
+    ON [asap].[PatronSession]([NativePatronId], [RevokedUtc]);
 GO

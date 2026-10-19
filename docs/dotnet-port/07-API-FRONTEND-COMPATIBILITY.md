@@ -149,6 +149,10 @@ All staff may see analytics for their own library; super-admin may see all or se
 
 Only super-admins manage allowed origins. Library admins may see the effective embedding state/warning but cannot alter this security boundary.
 
+The Settings API trims outer whitespace, then accepts strict origin authorities only: HTTPS DNS names, IPv4, and bracketed IPv6; HTTP is limited to `localhost`, `127.0.0.1`, and `[::1]`. An optional port must contain decimal digits and be in the inclusive `0`–`65535` range. User information, paths other than `/` on ordinary origins, queries, fragments, whitespace within the origin, and malformed authority syntax are rejected. HTTPS wildcard entries use `https://*.` followed by a multi-label ASCII/Punycode DNS name and carry no path; wildcard IPs and single-label suffixes are invalid.
+
+Settings writes lowercase the scheme and host and remove an explicit default port such as `:443`, while retaining non-default numeric ports. Legacy migration keeps the literal port text in imported rows, including `:443`; the patron CSP middleware deliberately matches a wildcard's explicit port text. Thus an imported `https://*.legacy.example:443` expands the `frame-ancestors` header for `https://child.legacy.example:443`, but not for the same host with the port omitted or changed. Do not replace this text-sensitive compatibility rule with URI default-port equivalence.
+
 Serve other frontend assets statically.
 
 ## 14.1 Staff profile preferences
@@ -216,9 +220,9 @@ Hold placement re-resolves live patron/pickup state immediately before its own e
 
 ## 14.4 Email operations state contract
 
-The administrative email surface must distinguish `pending`, `sending`, `sent`, `failed`, and `suppressed`. Manual **Retry** is available only for `failed` rows and reuses the same business identity/payload; attempting to retry a non-retryable row returns a normal conflict/validation response. `suppressed` is terminal and visible with a safe suppression reason but never exposes Retry. Payload cleanup may remove subject/body only from terminal `sent`/`suppressed` rows after the retention period, so the UI must remain useful from retained delivery metadata even after payload purge. Library admins remain scoped to their own library and super-admins may inspect all authorized contexts.
+The administrative email surface must distinguish `pending`, `sending`, `sent`, `failed`, and `suppressed`. The server exposes Retry only for the certified no-send `mail_not_configured` row whose persisted state has no provider message ID, send-start timestamp, lease, expiry, or scheduled retry; the UI follows that authoritative capability. All other failed rows, including ambiguous expired sends, remain inspectable but cannot be retried, and a rejected retry returns a normal conflict/validation response. `suppressed` is terminal and visible with a safe suppression reason but never exposes Retry. Payload cleanup may remove subject/body only from terminal `sent`/`suppressed` rows after the retention period, so the UI must remain useful from retained delivery metadata even after payload purge. Library admins remain scoped to their own library and super-admins may inspect all authorized contexts.
 
-For `staff_authorization_sensitive` messages, persist recipient StaffUser ID and normalized authentication-email snapshot at intent creation. Delivery/retry revalidates that email, active state, role/resource scope, required Organization activity, and current message-class destination. An authentication-email change suppresses the stale row; stored OID changes do not. Immutable business-event notifications may still drain after later authorization changes.
+For `staff_authorization_sensitive` messages, persist recipient StaffUser ID and normalized authentication-email snapshot at intent creation. Delivery/retry revalidates that email, active state, role/resource scope, required Organization activity, and current message-class destination. Delivery repeats that check after readiness in the short SQL transaction immediately before provider intent: lock System Organization 1 and the authorization scope in ascending ID order, then StaffUser and the fenced EmailOutbox row; verify the target and current owner are active System or library organizations. A moved owner outside those locked organizations is suppressed. Close the transaction before calling the provider. An authentication-email change suppresses the stale row; stored OID changes do not. Immutable business-event notifications may still drain after later authorization changes through the normal worker, subject to the section 14 ambiguous-send quarantine/no-replay rule.
 
 ### AdditionalCopy reopen response
 
@@ -237,11 +241,23 @@ Where a library setting inherits from system defaults, the UI must make the dist
 - whether an override exists;
 - clear reset/use-system-default action.
 
+For whole-set settings, the write payload distinguishes three actions: omit the collection property to make no edit, send `null` at library scope to reset the override and resume inheritance, or send `[]` to persist an intentional empty replacement. At system scope, `null` and `[]` both clear common creators and publication options to an empty system set; system patron-code `null` is rejected, so use `[]` to clear that set. Clearing every row in an editor is therefore different from selecting **Use system default**. An empty allowed-patron-code set remains a valid empty configuration set; current eligibility behavior treats an empty allowed-ID list as no code restriction, independently of whether that set is inherited or library-owned.
+
+The Settings POST accepts the supported collection aliases at the root or in their corresponding `workflow`, `patron`, and `systemSettings` sections. A collection supplied beside an unrelated section still applies; supplying the same collection in both root and section locations is invalid. This includes root common-creator and patron-code sets beside `workflow`, root publication options and legacy format maps beside `patron`, and `systemSettings.origins` as an alias for `systemSettings.patronEmbedAllowedOrigins`.
+
+Common-creator and legacy-format text objects ignore absent or `null` `id`, `key`, `value`, and `name` aliases. Every non-null alias must be a JSON string with identical text; numeric or conflicting text aliases reject the settings update atomically. Typed row identities and numeric patron-code identities keep their separate contracts.
+
 Ordinary inheritable text controls should normalize blank library input to **Use system default** where current behavior treats blank as fallback; do not introduce a hidden explicit-empty override state.
 
 Secret fields are never populated with the actual secret. A blank entry preserves existing value; explicit **Clear** has separate semantics/confirmation.
 
 A library-level **Reset inherited overrides** action affects only inherited configuration. Library-owned custom fields, custom formats, custom rejection templates, and auto-claim rules must remain intact and must not be visually presented as if they inherit from system defaults.
+
+### Frontend mutation and session confirmations
+
+An HTTP 2xx is transport success, not by itself a commit receipt. Settings mutations require their endpoint's success code and matching returned identity/version; organization sync also requires nonnegative counts, logo save/clear requires `hasLogo` to match the requested action, and format deletion requires the exact decimal-string format ID. Known-target Staff Access mutations also require the returned user ID to match the requested target exactly. The read-only Polaris diagnostic is successful only with `polaris_connected`, `connected: true`, and a valid organization count. Workflow acknowledgements carry a nonempty root-level `jobId` and the requested organization ID; forced weekly runs also echo the request's GUID `operationId` as `manualRunId`. Email acknowledgements require the exact decimal-string operation ID and version, with replay status consistent with suppression state.
+
+Patron login and session restoration require a nonempty barcode, a native integer effective library ID greater than one, and a pickup-branch array with positive integer IDs and string labels. Login requires a nonempty session token; restoration does not consume or require a token. A malformed or contradictory success body after dispatch remains unresolved and retains its recovery evidence rather than triggering a blind replay. If a Settings save is already confirmed before a later optional action becomes uncertain, keep that commit and count only individually confirmed follow-up actions. A Settings context or staff-owner change releases the retired owner's sync busy control immediately; its eventual completion cannot release a replacement owner's active sync.
 
 ## 16. Existing behavior intentionally retained
 
@@ -276,7 +292,7 @@ At minimum:
 - analytics aggregation moves to SQL;
 - Polaris calls use system/application credentials rather than staff-specific Polaris identity;
 - organization `IsActive` becomes the broad participation switch;
-- library admins may run own-library background jobs and inspect/retry own-library failed emails;
+- library admins may run own-library background jobs and inspect failed emails in their scope; Retry remains limited to the certified no-send `mail_not_configured` case in section 14;
 - delete audit is intentionally reduced;
 - unsupported/ambiguous legacy values may block migration rather than being silently normalized.
 

@@ -5,6 +5,7 @@ const childProcess = require('child_process');
 
 const root = path.resolve(__dirname, '..');
 const workflow = fs.readFileSync(path.join(root, '.github/workflows/dotnet.yml'), 'utf8').replace(/\r\n/g, '\n');
+const browserRunner = fs.readFileSync(path.join(root, 'tests/browser/run.cjs'), 'utf8').replace(/\r\n/g, '\n');
 const deployment = fs.readFileSync(path.join(root, 'scripts/deployment/Deploy-AsapTest.ps1'), 'utf8');
 const runtimeSchemaVersion = fs.readFileSync(
   path.join(root, 'src', 'Asap.Web', 'Infrastructure', 'Data', 'SchemaVersion.cs'),
@@ -45,7 +46,37 @@ assert.ok(!workflow.includes('\n    concurrency:'), 'build-test-package must not
 assert.ok(workflow.includes('Generate ephemeral SQL test credentials'), 'CI SQL credentials should be generated per run');
 assert.ok(!workflow.includes('Asap_Slice0_SQL_2026'), 'CI must not retain the historical hard-coded SQL password');
 assert.ok(workflow.includes('ref: ${{ github.sha }}'), 'the hosted job should check out the exact event SHA');
-assert.ok(workflow.includes('--minimum-expected-tests 784'), 'the non-browser real-SQL partition must guard the current discovered test count');
+assert.ok(workflow.includes('--minimum-expected-tests 1357'), 'the non-browser real-SQL partition must guard the current discovered test count');
+const nonBrowserFilter = workflow.match(/--filter\s*'([^']+)'/)?.[1];
+assert.ok(nonBrowserFilter, 'the non-browser real-SQL partition must explicitly exclude browser journeys');
+const nonBrowserFilterTerms = nonBrowserFilter.split('&');
+const browserExclusions = nonBrowserFilterTerms
+  .filter((term) => term.startsWith('FullyQualifiedName!~'))
+  .map((term) => term.slice('FullyQualifiedName!~'.length));
+const nonBrowserIncludes = nonBrowserFilterTerms
+  .filter((term) => term.startsWith('FullyQualifiedName~'))
+  .map((term) => term.slice('FullyQualifiedName~'.length));
+const browserJourneys = [...browserRunner.matchAll(/'FullyQualifiedName~([^']+)'/g)]
+  .map((match) => match[1]);
+assert.equal(browserJourneys.length, 8, 'the browser partition must contain all eight current discovered browser journeys');
+assert.equal(nonBrowserIncludes.length, 0, 'the non-browser partition should include all discovered tests except explicit browser exclusions');
+assert.equal(new Set(browserJourneys).size, browserJourneys.length, 'the browser partition must not list a journey twice');
+assert.deepStrictEqual(
+  [...browserExclusions].sort(),
+  [...browserJourneys].sort(),
+  'the non-browser partition must exclude exactly the seven browser journeys'
+);
+assert.equal(
+  new Set(browserExclusions).size,
+  browserExclusions.length,
+  'the non-browser partition must not exclude any browser journey twice'
+);
+assert.ok(
+  nonBrowserIncludes.every((name) => !browserJourneys.includes(name)),
+  'the browser and non-browser partitions must be disjoint'
+);
+assert.match(browserRunner, /'--minimum-expected-tests',\s*'8'/,
+  'the browser runner must guard all eight discovered browser journeys');
 assert.ok(workflow.includes('run: npm test'), 'the frontend test gate must remain');
 assert.ok(workflow.includes('dotnet publish src/Asap.Web/Asap.Web.csproj'), 'Web publish must remain a hosted check');
 assert.ok(workflow.includes('dotnet publish src/Asap.Migration/Asap.Migration.csproj'), 'native migration publish check must remain');
@@ -59,8 +90,8 @@ const schemaVersions = {
   migrationProject: Number(migrationProject.match(/ExpectedSchemaVersion" Value="(\d+)"/)?.[1])
 };
 assert.ok(
-  Object.values(schemaVersions).every((version) => version === 10),
-  `application schema version must be 10 in every package/runtime contract: ${JSON.stringify(schemaVersions)}`
+  Object.values(schemaVersions).every((version) => version === 12),
+  `application schema version must be 12 in every package/runtime contract: ${JSON.stringify(schemaVersions)}`
 );
 assert.match(
   postDeployment,
