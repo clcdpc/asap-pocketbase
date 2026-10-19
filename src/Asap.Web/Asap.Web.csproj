@@ -12,6 +12,8 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
     <PackageReference Include="Microsoft.SqlServer.DacFx" />
     <PackageReference Include="NLog.Web.AspNetCore" />
+    <!-- Override SqlClient's vulnerable transitive CMS dependency. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\Shared\SecurityContract.cs" Link="Infrastructure\Security\SecurityContract.cs" />

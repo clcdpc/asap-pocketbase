@@ -9,6 +9,8 @@
     <PackageReference Include="Microsoft.Data.SqlClient" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="Microsoft.AspNetCore.DataProtection.Extensions" />
+    <!-- Override Data Protection's vulnerable transitive XML/CMS dependencies. -->
+    <PackageReference Include="System.Security.Cryptography.Xml" />
   </ItemGroup>
   <ItemGroup>
     <AssemblyMetadata Include="PocketBaseBaselineSha" Value="150b30b776565194260cc327eeeffdfb46475e81" />
