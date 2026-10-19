@@ -1393,10 +1393,10 @@ public sealed class TitleRequestMutationService(
             .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId &&
                 item.SourceTemplateId == systemTemplate.Id, cancellationToken);
         var (defaultSubject, defaultBody) = templateKey == "purchase_approved"
-            ? ("Update on your suggestion: {{title}}",
-                "Hello {{name}},\n\nYour suggestion for {{title}} has been approved for purchase.")
-            : ("Already in our collection: {{title}}",
-                "Hello {{name}},\n\n{{title}} is already in our collection.");
+            ? ("Purchase approved: {{title}}",
+                "Hello {{name}},\n\nGood news. The library has approved your suggestion for purchase: {{title}} by {{author}} in {{format}} format.\n\nThis request is now awaiting ordering and cataloging.\n\nThank you for your suggestion.")
+            : ("{{title}} is already available",
+                "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nThe library already owns this title or has it on order.\n\nThank you for using the library's suggestion service.");
         var template = new EffectiveEmailTemplate(templateKey,
             Clean(libraryTemplate?.SubjectTemplate) ?? Clean(systemTemplate?.SubjectTemplate) ?? defaultSubject,
             Clean(libraryTemplate?.BodyTemplate) ?? Clean(systemTemplate?.BodyTemplate) ?? defaultBody);

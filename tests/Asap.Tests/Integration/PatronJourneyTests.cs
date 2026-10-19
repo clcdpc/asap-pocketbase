@@ -1290,7 +1290,6 @@ public sealed partial class PatronJourneyTests
         const string expectedBody =
             "Hello {{name}},\n\n" +
             "Thank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\n" +
-            "If we add this item, we will place a hold for you automatically and send another update.\n\n" +
             "Thank you for helping us shape the library collection.";
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();

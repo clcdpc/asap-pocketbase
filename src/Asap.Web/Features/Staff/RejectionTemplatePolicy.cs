@@ -25,7 +25,7 @@ internal static class RejectionTemplatePolicy
             Clean(overrideRow?.SubjectTemplate) ?? Clean(source?.SubjectTemplate) ??
                 "Update on your suggestion: {{title}}",
             Clean(overrideRow?.BodyTemplate) ?? Clean(source?.BodyTemplate) ??
-                "Hello {{name}},\n\nWe are not able to add {{title}} to the collection at this time. Thank you for your suggestion.",
+                "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nAfter review, we are not able to add this item to the collection at this time. We appreciate you taking the time to share your suggestion with us.\n\nThank you for helping us build a collection that reflects our community.",
             source?.IsHidden == true || overrideRow?.IsHidden == true);
     }
 

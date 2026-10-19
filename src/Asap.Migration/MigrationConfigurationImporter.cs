@@ -87,7 +87,8 @@ internal static class MigrationConfigurationImporter
         "patronCodeEligibilityMessage"
     ];
 
-    private static readonly string[] SeededEmailTemplateKeys = ["suggestion_submitted"];
+    private static readonly string[] SeededEmailTemplateKeys =
+        ["suggestion_submitted", "purchase_approved", "already_owned", "hold_placed", "rejected"];
 
     public static void Import(
         SqlConnection connection,

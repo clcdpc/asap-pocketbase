@@ -117,6 +117,12 @@ BEGIN
     VALUES (1, SYSUTCDATETIME());
 END;
 
+-- The transport credential is System-owned. Retire obsolete library ciphertext
+-- without reading it or changing the library's sender identity.
+UPDATE [asap].[EmailSettings]
+SET [ProtectedServerToken] = NULL
+WHERE [OrganizationId] <> 1 AND [ProtectedServerToken] IS NOT NULL;
+
 IF NOT EXISTS (SELECT 1 FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] = 1)
     INSERT INTO [asap].[CommonCreatorSet] ([OrganizationId]) VALUES (1);
 
@@ -199,6 +205,9 @@ IF NOT EXISTS (SELECT 1 FROM [asap].[WorkflowTag] WHERE [Code] = N'polaris_bib_n
 IF NOT EXISTS (SELECT 1 FROM [asap].[WorkflowTag] WHERE [Code] = N'polaris_multiple_matches')
     INSERT INTO [asap].[WorkflowTag] ([Code], [Label], [SortOrder]) VALUES (N'polaris_multiple_matches', N'Multiple Polaris matches', 40);
 
+-- Defaults are missing-row inserts only: preserve saved customizations, blanks,
+-- hidden state and library lineage on every subsequent deployment. The three
+-- hold promises omitted below are not true for every current workflow.
 IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted')
 BEGIN
     INSERT INTO [asap].[EmailTemplate]
@@ -208,7 +217,64 @@ BEGIN
          N'Suggestion received: {{title}}',
          N'Hello {{name}},' + NCHAR(10) + NCHAR(10) +
          N'Thank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.' + NCHAR(10) + NCHAR(10) +
-         N'If we add this item, we will place a hold for you automatically and send another update.' + NCHAR(10) + NCHAR(10) +
          N'Thank you for helping us shape the library collection.',
          0, 0, 10);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'purchase_approved')
+BEGIN
+    INSERT INTO [asap].[EmailTemplate]
+        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+    VALUES
+        (1, N'purchase_approved', N'Purchase approved',
+         N'Purchase approved: {{title}}',
+         N'Hello {{name}},' + NCHAR(10) + NCHAR(10) +
+         N'Good news. The library has approved your suggestion for purchase: {{title}} by {{author}} in {{format}} format.' + NCHAR(10) + NCHAR(10) +
+         N'This request is now awaiting ordering and cataloging.' + NCHAR(10) + NCHAR(10) +
+         N'Thank you for your suggestion.',
+         0, 0, 20);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'already_owned')
+BEGIN
+    INSERT INTO [asap].[EmailTemplate]
+        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+    VALUES
+        (1, N'already_owned', N'Already owned',
+         N'{{title}} is already available',
+         N'Hello {{name}},' + NCHAR(10) + NCHAR(10) +
+         N'Thank you for suggesting {{title}} by {{author}} in {{format}} format.' + NCHAR(10) + NCHAR(10) +
+         N'The library already owns this title or has it on order.' + NCHAR(10) + NCHAR(10) +
+         N'Thank you for using the library''s suggestion service.',
+         0, 0, 30);
+END;
+
+-- This editor default has no configured-template dispatch consumer. The hold
+-- service continues to compose its existing notice from the frozen pickup.
+IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'hold_placed')
+BEGIN
+    INSERT INTO [asap].[EmailTemplate]
+        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+    VALUES
+        (1, N'hold_placed', N'Hold placed',
+         N'Hold placed for {{title}}',
+         N'Hello {{name}},' + NCHAR(10) + NCHAR(10) +
+         N'{{title}} by {{author}} in {{format}} format is now available in the catalog.' + NCHAR(10) + NCHAR(10) +
+         N'We have placed a hold on card {{barcode}}. You will receive the usual pickup notice when the item is ready.' + NCHAR(10) + NCHAR(10) +
+         N'Thank you for your suggestion.',
+         0, 0, 40);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'rejected')
+BEGIN
+    INSERT INTO [asap].[EmailTemplate]
+        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+    VALUES
+        (1, N'rejected', N'Rejected',
+         N'Update on your suggestion: {{title}}',
+         N'Hello {{name}},' + NCHAR(10) + NCHAR(10) +
+         N'Thank you for suggesting {{title}} by {{author}} in {{format}} format.' + NCHAR(10) + NCHAR(10) +
+         N'After review, we are not able to add this item to the collection at this time. We appreciate you taking the time to share your suggestion with us.' + NCHAR(10) + NCHAR(10) +
+         N'Thank you for helping us build a collection that reflects our community.',
+         0, 0, 50);
 END;

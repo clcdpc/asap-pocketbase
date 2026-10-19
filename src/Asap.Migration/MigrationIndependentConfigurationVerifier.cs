@@ -25,7 +25,27 @@ internal static class MigrationIndependentConfigurationVerifier
         int SortOrder,
         IReadOnlyList<ExpectedCustomFieldOption> Options);
 
-    private static readonly string[] SeededSystemEmailTemplateKeys = ["suggestion_submitted"];
+    // Independently pin DACPAC-owned rows. Do not derive this oracle from the
+    // importer, runtime fallback copy or the deployed target's own values.
+    private static readonly (string Key, string Name, string Subject, string Body, int SortOrder)[] SeededSystemEmailTemplates =
+    [
+        ("suggestion_submitted", "Suggestion submitted", "Suggestion received: {{title}}",
+            "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nThank you for helping us shape the library collection.", 10),
+        ("purchase_approved", "Purchase approved", "Purchase approved: {{title}}",
+            "Hello {{name}},\n\nGood news. The library has approved your suggestion for purchase: {{title}} by {{author}} in {{format}} format.\n\nThis request is now awaiting ordering and cataloging.\n\nThank you for your suggestion.", 20),
+        ("already_owned", "Already owned", "{{title}} is already available",
+            "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nThe library already owns this title or has it on order.\n\nThank you for using the library's suggestion service.", 30),
+        ("hold_placed", "Hold placed", "Hold placed for {{title}}",
+            "Hello {{name}},\n\n{{title}} by {{author}} in {{format}} format is now available in the catalog.\n\nWe have placed a hold on card {{barcode}}. You will receive the usual pickup notice when the item is ready.\n\nThank you for your suggestion.", 40),
+        ("rejected", "Rejected", "Update on your suggestion: {{title}}",
+            "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nAfter review, we are not able to add this item to the collection at this time. We appreciate you taking the time to share your suggestion with us.\n\nThank you for helping us build a collection that reflects our community.", 50)
+    ];
+
+    // Missing-only deployment preserves this exact historical DACPAC body on
+    // an otherwise fresh migration target upgraded from the one-template seed.
+    // This is a bounded seed compatibility value, never a target-derived oracle.
+    private const string HistoricalSeededSubmissionBody =
+        "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection.";
 
     private static readonly (string Source, string Target)[] PatronTextFields =
     [
@@ -330,38 +350,36 @@ internal static class MigrationIndependentConfigurationVerifier
         SqlTransaction? transaction,
         ValidatedMigrationPackage package)
     {
-        var sourceRows = MigrationPackageReader.ReadRows(package, "email-templates.json", "email_templates")
+        var normalRows = MigrationPackageReader.ReadRows(package, "email-templates.json", "email_templates");
+        var sourceRows = normalRows
             .Concat(MigrationPackageReader.ReadRows(package, "email-templates.json", "rejection_templates"))
             .ToArray();
         var expectedIds = sourceRows
             .Select(row => ReadMapping(connection, transaction, "email_template", row.RequiredString("id")))
             .ToHashSet();
-        using (var seed = new SqlCommand(
-                   "SELECT [Id], [TemplateKey] FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted';",
-                   connection,
-                   transaction))
+        foreach (var seed in SeededSystemEmailTemplates)
         {
-            using var seedReader = seed.ExecuteReader();
-            Ensure(seedReader.Read() && Same(seedReader, 1, "suggestion_submitted"), "seeded system suggestion template exact key");
-            expectedIds.Add(seedReader.GetInt64(0));
-            Ensure(!seedReader.Read(), "single seeded system suggestion template");
-        }
-        var sourceOverridesSeed = MigrationPackageReader.ReadRows(package, "email-templates.json", "email_templates")
-            .Any(row => string.Equals(row.String("scope"), "system", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(row.String("templateKey"), "suggestion_submitted", StringComparison.Ordinal));
-        if (!sourceOverridesSeed)
-        {
-            const string defaultBody = "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection.";
             using var seedCommand = new SqlCommand(
-                "SELECT [TemplateKey], [SourceTemplateId], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder] FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted';",
+                "SELECT [Id], [TemplateKey], [SourceTemplateId], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder] FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = @key;",
                 connection,
                 transaction);
+            seedCommand.Parameters.AddWithValue("@key", seed.Key);
             using var seedReader = seedCommand.ExecuteReader();
-            Ensure(seedReader.Read() && Same(seedReader, 0, "suggestion_submitted") && seedReader.IsDBNull(1) &&
-                Same(seedReader, 2, "Suggestion submitted") && Same(seedReader, 3, "Suggestion received: {{title}}") &&
-                Same(seedReader, 4, defaultBody) && !seedReader.GetBoolean(5) && !seedReader.GetBoolean(6) &&
-                seedReader.GetInt32(7) == 10,
-                "seeded system suggestion template values");
+            Ensure(seedReader.Read() && Same(seedReader, 1, seed.Key), "seeded system email template exact key");
+            expectedIds.Add(seedReader.GetInt64(0));
+            var sourceOverridesSeed = normalRows.Any(row =>
+                string.Equals(row.RequiredString("scope").Trim(), "system", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(row.RequiredString("templateKey"), seed.Key, StringComparison.Ordinal));
+            if (!sourceOverridesSeed)
+            {
+                var bodyMatchesSeed = Same(seedReader, 5, seed.Body) ||
+                    seed.Key == "suggestion_submitted" && Same(seedReader, 5, HistoricalSeededSubmissionBody);
+                Ensure(seedReader.IsDBNull(2) && Same(seedReader, 3, seed.Name) &&
+                    Same(seedReader, 4, seed.Subject) && bodyMatchesSeed &&
+                    !seedReader.GetBoolean(6) && !seedReader.GetBoolean(7) && seedReader.GetInt32(8) == seed.SortOrder,
+                    "seeded system email template values");
+            }
+            Ensure(!seedReader.Read(), "single seeded system email template");
         }
         var actualIds = TargetLongIds(connection, transaction, "SELECT [Id] FROM [asap].[EmailTemplate];");
         Ensure(actualIds.SetEquals(expectedIds), "exact source and pinned-seed email template population");
@@ -2129,12 +2147,13 @@ internal static class MigrationIndependentConfigurationVerifier
                     {
                         sourceTemplateId = ReadMapping(connection, transaction, "email_template", sourceSystemTemplate.RequiredString("id"));
                     }
-                    else if (SeededSystemEmailTemplateKeys.Contains(templateKey, StringComparer.Ordinal))
+                    else if (SeededSystemEmailTemplates.Any(seed => string.Equals(seed.Key, templateKey, StringComparison.Ordinal)))
                     {
                         using var systemTemplate = new SqlCommand(
-                            "SELECT [Id] FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted';",
+                            "SELECT [Id] FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = @key;",
                             connection,
                             transaction);
+                        systemTemplate.Parameters.AddWithValue("@key", templateKey);
                         var value = systemTemplate.ExecuteScalar();
                         sourceTemplateId = value is null or DBNull
                             ? null
