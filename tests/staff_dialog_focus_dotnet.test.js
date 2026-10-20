@@ -27,7 +27,7 @@ async function settleGridWork(window) {
   await new Promise(resolve => window.setTimeout(resolve, 0));
 }
 
-async function runJourney(scenario, pipelineOverlap = false) {
+async function runJourney(scenario, pipelineOverlap = false, registrationOverlap = false) {
   const titleRequest = ['title-return', 'new-dialog'].includes(scenario);
   const replacesFocusedOpener = ['copy-replaced', 'replacement-user-focus'].includes(scenario);
   const apiPath = titleRequest ? '/title-requests' : '/additional-copies';
@@ -56,10 +56,39 @@ async function runJourney(scenario, pipelineOverlap = false) {
     const gridModule = path.join(source, 'vendor/gridjs/6.2.0/gridjs.umd.js');
     delete require.cache[require.resolve(gridModule)];
     dom.window.gridjs = require(gridModule);
-    let renderedGrid;
+    let renderedGrid, registrationPipeline, registrationRead;
+    let registrationHeld = false, registrationReleased = false;
     const originalRender = dom.window.gridjs.Grid.prototype.render;
     dom.window.gridjs.Grid.prototype.render = function (container) {
       renderedGrid = this;
+      if (registrationOverlap && !registrationPipeline) {
+        const pipeline = this.config.pipeline;
+        registrationPipeline = pipeline;
+        const register = pipeline.register;
+        let release, sortRegistered = false;
+        pipeline.register = function (step, priority) {
+          const result = register.call(this, step, priority);
+          if (step.type === 7) {
+            sortRegistered = true;
+            if (release) release();
+          }
+          if (step.type === 8 && !registrationRead && !this.steps.some(item => item.type === 7)) {
+            const process = step.process;
+            step.process = function (...args) {
+              this.process = process;
+              const value = process.apply(this, args);
+              registrationHeld = true;
+              return new Promise(resolve => {
+                release = () => { registrationReleased = true; resolve(value); };
+                if (sortRegistered) release();
+              });
+            };
+            // Hold an ordinary-array read while the initial Sort hook mounts.
+            registrationRead = this.process();
+          }
+          return result;
+        };
+      }
       return originalRender.call(this, container);
     };
 
@@ -111,6 +140,17 @@ async function runJourney(scenario, pipelineOverlap = false) {
       assert.equal(header.hasAttribute('tabindex'), false, 'The Open header must not become a sorting tab stop');
     };
     assertOpenNotSortable();
+    if (registrationOverlap) {
+      assert.ok(registrationHeld && registrationReleased, 'The initial registration overlap must occur');
+      await registrationRead;
+      await registrationPipeline.process();
+      await settleGridWork(dom.window);
+      assert.ok(opener() && opener('92') && opener('93'),
+        'Every source row must remain visible after overlapping initial registration');
+      assertOpenNotSortable();
+      console.log(`Staff normal-array read and initial Sort registration passed: ${scenario}`);
+      return;
+    }
     if (scenario === 'new-dialog') {
       opener('92').click();
       const dialog = document.getElementById('request-dialog');
@@ -288,13 +328,14 @@ async function runJourney(scenario, pipelineOverlap = false) {
 
 (async () => {
   if (process.argv[2]) {
-    await runJourney(process.argv[2], process.argv[3] === 'pipeline-overlap');
+    await runJourney(process.argv[2], process.argv[3] === 'pipeline-overlap', process.argv[3] === 'registration-overlap');
     return;
   }
   // Grid.js retains scheduled render work. Give each DOM journey its own browser-like global lifetime.
   const journeys = ['copy-return', 'copy-replaced', 'title-return', 'view-navigation', 'new-dialog',
     'user-focus', 'replacement-user-focus', 'sign-out', 'library-navigation'].map(scenario => [scenario]);
   journeys.push(['copy-return', 'pipeline-overlap'], ['title-return', 'pipeline-overlap']);
+  journeys.push(['copy-return', 'registration-overlap'], ['title-return', 'registration-overlap']);
   for (const journey of journeys) {
     const scenario = journey.join(' ');
     const result = spawnSync(process.execPath, [__filename, ...journey], { encoding: 'utf8', timeout: 20000 });

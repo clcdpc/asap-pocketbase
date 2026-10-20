@@ -31,6 +31,7 @@ function createQueueGrid(options, container) {
     }
     const pipeline = grid.config.pipeline;
     const process = pipeline.process.bind(pipeline);
+    let tail = Promise.resolve();
     let retired = false, pending = 0, destroyed = false;
     const cleanup = () => {
       if (retired && !pending && !destroyed) {
@@ -43,11 +44,15 @@ function createQueueGrid(options, container) {
       // finishes against its detached frame before destroy unregisters Sort.
       if (retired) return Promise.resolve(null);
       pending++;
-      let result;
-      try { result = process(...args); }
-      catch (error) { pending--; cleanup(); throw error; }
+      const result = tail.then(() => {
+        if (retired) return null;
+        // Mounting Sort can invalidate an earlier run's cache marker. Recompute
+        // these local array rows in order, including every current processor.
+        pipeline.clearCache();
+        return process(...args);
+      });
       const complete = () => { pending--; cleanup(); };
-      Promise.resolve(result).then(complete, complete);
+      tail = result.then(complete, complete);
       return result;
     };
     const frame = document.createElement('div');
