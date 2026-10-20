@@ -12,7 +12,7 @@ public sealed partial class PatronJourneyTests
     [DataRow(true)]
     public async Task Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload(bool libraryAdmin)
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         var superAdmin = await ReadConfiguredSuperAdminAsync();
         using var client = factory.CreateClient();
         AddTestingStaffHeaders(client, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.AuthenticationEmail);
@@ -108,6 +108,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(0, process.ExitCode, output);
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "settings-browser-results.json")));
             Assert.IsTrue(report.RootElement.GetProperty(libraryAdmin ? "campaign2LibraryAdmin" : "campaign2SystemAndInheritance").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("namedOverrideEditsBackToSystem").GetBoolean());
             Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
             Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
             Assert.HasCount(7, report.RootElement.GetProperty("states").EnumerateArray().ToArray());

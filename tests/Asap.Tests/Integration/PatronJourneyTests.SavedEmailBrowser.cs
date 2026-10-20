@@ -44,7 +44,7 @@ public sealed partial class PatronJourneyTests
             services.AddSingleton<IEmailOutboxDispatcher>(provider => new SavedEmailFixtureDispatcher(
                 new BackgroundJobClient(provider.GetRequiredService<JobStorage>(), new SavedEmailQueueFilters(queue)), queue, jobIds));
         }));
-        application.UseKestrel(0);
+        application.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         using var client = application.CreateClient();
         await SeedSavedEmailScopeAsync(scope);
         try

@@ -124,6 +124,27 @@ const { JSDOM } = require('jsdom');
     assert.ok(reset.templates.some(item => item.reset && item.sourceTemplateId === systemTemplate.id));
     assert.strictEqual(reset.templates.find(item => item.reset).sourceTemplateId, systemTemplate.id);
 
+    const overriddenData = { ...data, stored: { ...data.stored, templates: storedTemplates.map(item =>
+      item.id === '21' ? { ...item, displayName: 'Library rejection', subject: 'Library subject',
+        body: 'Library body', enabled: false } : item) } };
+    for (const property of ['subject', 'body', 'displayName', 'enabled']) {
+      editors.populate(overriddenData, false);
+      let current = document.querySelector('#email-templates-editor [data-template-kind="lineage"]');
+      const controlClass = { subject: 'subject', body: 'body', displayName: 'display-name', enabled: 'enabled' }[property];
+      const control = current.querySelector(`.template-${controlClass}`);
+      if (property === 'enabled') control.checked = systemTemplate.enabled;
+      else control.value = systemTemplate[property];
+      control.dispatchEvent(new dom.window.Event(property === 'enabled' ? 'change' : 'input', { bubbles: true }));
+      document.getElementById('add-email-template').click();
+      document.querySelector('#email-templates-editor [data-template-id=""] [aria-label="Delete"]').click();
+      const edited = editors.collect().templates.find(item => item.sourceTemplateId === systemTemplate.id);
+      assert.strictEqual(edited[property], systemTemplate[property]);
+      for (const field of ['subject', 'body', 'displayName', 'enabled']) {
+        assert.strictEqual(edited[`${field}Changed`], field === property,
+          `Returning ${property} to its system value must submit that edit alone after row rebuilds.`);
+      }
+    }
+
     const systemRoot = document.getElementById('settings-view');
     editors.dispose();
     const systemEditors = module.createSettingsDomainEditors({ root: systemRoot });

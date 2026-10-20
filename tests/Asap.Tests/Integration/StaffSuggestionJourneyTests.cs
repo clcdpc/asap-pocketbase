@@ -242,16 +242,51 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task PolarisPatronSearchTreatsOnlyCoherentEmptyResponsesAsNoMatch()
     {
+        var successEmpty = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
+            (HttpStatusCode.OK,
+             "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":0,\"PatronSearchRows\":[]}")));
+        Assert.AreEqual(0, (await successEmpty.SearchPatronsAsync("none", 2, CancellationToken.None)).Count);
+
         var empty = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
             (HttpStatusCode.OK,
              "{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"\",\"TotalRecordsFound\":0,\"PatronSearchRows\":[]}")));
         Assert.AreEqual(0, (await empty.SearchPatronsAsync("none", 2, CancellationToken.None)).Count);
+
+        foreach (var total in new[] { 1, 20 })
+        {
+            var handler = new ProtectedSequenceResponseHandler(
+                (HttpStatusCode.OK,
+                 $$"""{"PAPIErrorCode":0,"TotalRecordsFound":{{total}},"PatronSearchRows":[{"Barcode":"20000000000045"}]}"""),
+                (HttpStatusCode.OK,
+                 "{\"PAPIErrorCode\":-3000,\"ErrorMessage\":\"Patron not found\",\"PatronBasicData\":null}"));
+            var staleCandidate = await CreatePolarisProviderAsync(handler);
+            Assert.AreEqual(0, (await staleCandidate.SearchPatronsAsync("stale", 2, CancellationToken.None)).Count);
+            Assert.AreEqual(2, handler.RequestUris.Count,
+                "A coherent positive page, including a truncated page, must reach authoritative candidate refresh.");
+        }
 
         var unavailable = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
             (HttpStatusCode.OK,
              "{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"SQL timeout\",\"TotalRecordsFound\":0,\"PatronSearchRows\":[]}")));
         var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
             await unavailable.SearchPatronsAsync("provider-error", 2, CancellationToken.None));
+        Assert.AreEqual("polaris_patron_search_failed", failure.Code);
+    }
+
+    [TestMethod]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"PatronSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":-1,\"TotalRecordsFound\":1,\"PatronSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":-1,\"PatronSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PatronSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":\"0\",\"PatronSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":null,\"PatronSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":0,\"TotalRecordsFound\":1,\"PatronSearchRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"TotalRecordsFound\":0,\"PatronSearchRows\":[{\"Barcode\":\"20000000000045\"}]}")]
+    public async Task PolarisPatronSearchRejectsContradictoryOrMalformedCounts(string payload)
+    {
+        var provider = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler((HttpStatusCode.OK, payload)));
+        var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.SearchPatronsAsync("Alex Example", 2, CancellationToken.None));
         Assert.AreEqual("polaris_patron_search_failed", failure.Code);
     }
 

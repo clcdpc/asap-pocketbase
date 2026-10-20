@@ -1208,10 +1208,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         rawSubject: override?.subject ?? null,
         rawBody: override?.body ?? null,
         rawDisplayName: override?.displayName ?? null,
-        subjectBaseline: system.subject,
-        bodyBaseline: system.body,
-        displayNameBaseline: system.displayName,
-        enabledBaseline: system.enabled
+        subjectBaseline: override?.subject?.trim() ? override.subject : system.subject,
+        bodyBaseline: override?.body?.trim() ? override.body : system.body,
+        displayNameBaseline: override?.displayName ?? system.displayName,
+        enabledBaseline: system.enabled && (!override || override.enabled)
       };
     });
     const custom = libraryRows

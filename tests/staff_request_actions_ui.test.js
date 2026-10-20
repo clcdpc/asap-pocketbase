@@ -687,6 +687,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           'navigation must wait while the mutation has no authoritative result');
         releaseDuplicate();
         await until(() => document.querySelector('.duplicate-recovery'), 'authoritative duplicate response is handled');
+        await until(() => document.querySelector(`a[data-request-id="${otherId}"]`),
+          'the replacement queue must finish rendering before navigating from its current row');
         document.querySelector(`a[data-request-id="${otherId}"]`).click();
         await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
           'newer request takes ownership of the dialog');

@@ -1864,7 +1864,7 @@ internal static class MigrationIndependentEntityVerifier
         {
             return null;
         }
-        return DateTime.TryParse(
+        return DateTimeOffset.TryParse(
             value,
             CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal,

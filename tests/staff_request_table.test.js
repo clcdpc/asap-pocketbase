@@ -37,14 +37,6 @@ async function until(predicate, message) {
     const Grid = dom.window.gridjs.Grid;
     dom.window.gridjs = { ...dom.window.gridjs, Grid: class extends Grid {
       constructor(configuration) { super(configuration); renderedGrid = this; }
-      forceRender() {
-        // A retained header makes Grid register Sort after processing starts,
-        // invalidating its cache. Pin that vendor boundary as well as the
-        // observable sort/page/filter results and zero-error checks below.
-        assert.equal(this.config.store.getState().header, this.config.header,
-          'Grid remount must begin with its current header.');
-        return super.forceRender();
-      }
     } };
     const opened = [], created = [], searches = [], closed = [];
     let context = { activeView: 'queue', scope: '2', status: 'suggestion' };

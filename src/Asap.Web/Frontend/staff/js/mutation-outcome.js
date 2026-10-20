@@ -7,7 +7,9 @@ export function notificationOutcome(status, reason, label = 'Notification') {
   const explanation = reason ? ` (${String(reason).replaceAll('_', ' ')})` : '';
   if (status === 'queued') return { text: ` ${label} queued; delivery is pending.`, partial: false };
   if (status === 'suppressed') return { text: ` ${label} suppressed${explanation}.`, partial: true };
-  if (status === 'dispatch_failed') return { text: ` ${label} could not be queued${explanation}.`, partial: true };
+  if (status === 'dispatch_failed') return {
+    text: ` ${label} saved for delivery; dispatch is delayed${explanation}. Automatic recovery is pending.`, partial: true
+  };
   return { text: ` ${label} ${String(status).replaceAll('_', ' ')}${explanation}.`, partial: true };
 }
 

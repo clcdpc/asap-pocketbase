@@ -1,6 +1,6 @@
 import { byId } from './dom.js';
 
-export function renderCustomFields(definitions, rules) {
+export function renderCustomFields(definitions, rules, values = {}) {
   const container = byId('additional-fields-container');
   if (!container) return;
   const nodes = [];
@@ -8,7 +8,9 @@ export function renderCustomFields(definitions, rules) {
     const rule = rules && rules[def.key] ? rules[def.key] : {};
     const mode = rule.mode || 'hidden';
     if (mode === 'hidden' || def.enabled === false) return;
-    nodes.push(renderField(def, mode === 'required', rule.label));
+    const row = renderField(def, mode === 'required', rule.label);
+    if (Object.hasOwn(values, def.key)) row.querySelector('.custom-field-input').value = values[def.key];
+    nodes.push(row);
   });
   container.replaceChildren(...nodes);
 }

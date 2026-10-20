@@ -183,4 +183,52 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     controller.dispose(); lookup.dispose();
   });
   console.log('Suggestion scope, create outcomes, Title-only Polaris selection/cancel and stale ownership passed');
+  for (const notificationStatus of ['queued', 'suppressed', 'dispatch_failed', 'not_requested', undefined]) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createSuggestionController } = await load('suggestion-controller');
+      const session = createSessionIdentity(); session.accept(actorA);
+      const root = get('#staff-suggestion-dialog');
+      const posted = [], receipts = [], announcements = [], intents = [];
+      const controller = createSuggestionController({ root, trigger: get('#new-suggestion'), sessionIdentity: session,
+        polarisLookup: { close() {}, invalidate() {} }, announce: (...args) => announcements.push(args),
+        getLibraries: () => [{ id: '2', name: 'A' }], beforeOpen: () => true, beforeClose: () => true,
+        openCreatedTitle: async intent => { intents.push(intent); return null; }, openExistingTitle() {},
+        onReceipt: (...args) => receipts.push(args), clearReceipt() {},
+        request: async (target, init = {}) => {
+          if (target.endsWith('/patron-lookup')) return { status: 'verified', libraryOrgId: 2, patron: {
+            patron: { barcode: '20000000000001', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }],
+            currentPreferredPickupBranchId: 101 } };
+          if (target.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+          posted.push(init.body);
+          return { id: '9223372036854775807', libraryOrgId: 2, notificationStatus };
+        } });
+      try {
+        controller.open();
+        const library = root.querySelector('select'); library.value = '2';
+        library.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+        root.querySelector('input[type="search"]').value = 'Patron';
+        const form = get('#staff-suggestion-form');
+        form.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+        await flush(); await flush();
+        const title = root.querySelector('.staff-suggestion-fields input'); title.value = 'Committed suggestion';
+        title.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+        root.querySelectorAll('input[type="checkbox"]')[1].checked = notificationStatus !== 'not_requested';
+        form.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+        await flush(); await flush();
+        assert.equal(posted.length, 1, 'A notification follow-up failure cannot replay request creation.');
+        assert.equal(posted[0].emailPatronConfirmation, notificationStatus !== 'not_requested');
+        assert.equal(receipts[0][2].outcome, 'committed');
+        assert.equal(intents.length, 1, 'The successfully created request remains available for review.');
+        const announcement = announcements.find(item => /created on behalf of the patron/.test(item[0]));
+        const expected = { queued: /Confirmation email queued/, suppressed: /suppressed/,
+          dispatch_failed: /Confirmation email saved for delivery.*Automatic recovery is pending/,
+          not_requested: /No confirmation email was requested/, undefined: /Confirmation email status is unconfirmed/ }[notificationStatus];
+        assert.match(announcement[0], expected);
+        assert.match(receipts[0][0], expected, 'The captured owner receipt must preserve the same notification outcome.');
+        if (notificationStatus === 'dispatch_failed') assert.equal(announcement[1], 'warning');
+      } finally { controller.dispose(); }
+    });
+  }
+  console.log('Suggestion captured scope, committed notification outcomes and actor-safe navigation checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

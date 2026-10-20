@@ -176,15 +176,16 @@ browser) and 57 frontend test files, plus deliberate additions.
   It rejects vendor render errors and uses a changed response count to
   distinguish accepted rows from Grid's retained store. Separate real Chromium
   checks exercise actual refresh/filter transitions and native popovers.
-- The full frontend gate exposed another inherited Grid 6.2 race: remounting
-  first used its retained header, then registered Sort against a replacement
-  header during pipeline processing, leaving an uncached sort step. The title
-  and Additional Copy queues now publish the current header before remounting.
-  The retained delayed-copy focus journey exposed the same race in its second
-  owner; its error and focus assertions remain intact. This small correction
-  stays on the enhancement branch. The real Grid journey pins that invalid-state
-  boundary and retains observable sorting/pagination/filtering and zero-error
-  assertions; it does not suppress the vendor error or change its scheduler.
+- The full frontend gate exposed another inherited Grid 6.2 race involving
+  mutable headers and Sort registration during pipeline processing. Parent
+  PR #344 subsequently fixed both queues with fresh Grid instances, serialized
+  pipeline work and safe retirement of detached renders. That parent work was
+  merged into this branch at `f073106ff8ef0674492627622010d44636ca7f7d`.
+  Title refresh supplies its retained, clamped page to the replacement instance;
+  initial processor registration cannot reset that page. All thirteen retained
+  delayed-focus, older-sort/newer-filter and initial-registration journeys remain,
+  adapted to the eight-column model. Observable sorting, pagination, filtering
+  and zero-error assertions remain mandatory.
 - The delayed catalog regression uses distinct nonempty Title/Author results,
   awaits the held response's completion, proves Author results remain, and
   checks read-only results have no Use BIB controls. Notification assertions

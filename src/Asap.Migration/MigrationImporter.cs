@@ -4838,7 +4838,8 @@ public static class MigrationImporter
             return null;
         }
 
-        if (DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var date))
+        // This is a source calendar date, not an instant to convert to the host timezone.
+        if (DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var date))
         {
             return date.Date;
         }

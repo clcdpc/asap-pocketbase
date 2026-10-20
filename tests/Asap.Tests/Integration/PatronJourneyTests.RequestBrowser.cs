@@ -18,7 +18,7 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses()
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         using var client = factory.CreateClient();
         var repositoryRoot = Path.GetDirectoryName(TestArtifactPaths.FindRepositoryFile("Asap.sln"))!;
         var artifactDirectory = Path.Combine(repositoryRoot, ".artifacts", "browser", Guid.NewGuid().ToString("N"));
@@ -232,7 +232,7 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp()
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         var actor = await ReadConfiguredSuperAdminAsync();
         var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var fieldKey = $"browser_clear_{Guid.NewGuid():N}";

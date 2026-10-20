@@ -3,7 +3,7 @@ import { createLatestLoad } from '../../shared/latest-load.js';
 import { byDisplayLabel } from './display-order.js';
 import { createDraftScope } from './draft-scope.js';
 import { validRequestId } from './recent-requests.js';
-import { unconfirmedResponseError } from './mutation-outcome.js';
+import { notificationOutcome, unconfirmedResponseError } from './mutation-outcome.js';
 import { applyPolarisResultToControls, researchRecordValue } from './research.js';
 import { renderCustomFieldEditor } from './custom-fields.js';
 import { renderPatronText } from '../../shared/html.js';
@@ -396,14 +396,15 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       field.firstElementChild.textContent = `${label}${input.required ? ' *' : ''}`;
     };
     let submitButton;
-    const updateFormat = () => {
+    const updateFormat = (preserveCustomFields = false) => {
       applyFieldRule(titleField, title, 'title', 'Title', true);
       applyFieldRule(authorField, author, 'author', 'Author');
       applyFieldRule(identifierField, identifier, 'identifier', 'Identifier / ISBN');
       applyFieldRule(publicationField, publication, 'publication', 'Publication timing');
       exactDateField.hidden = publicationField.hidden;
       exactDate.disabled = publicationField.hidden;
-      controls.customFieldControls = renderCustomFieldEditor(customFields, fakeRequest, configuration, format.value);
+      controls.customFieldControls = renderCustomFieldEditor(customFields, fakeRequest, configuration, format.value,
+        preserveCustomFields ? controls.customFieldControls : null);
       const formatRule = configuration.formatRules?.[format.value];
       const behavior = formatRule?.messageBehavior;
       const message = behavior === 'ebookMessage'
@@ -414,7 +415,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       formatNotice.hidden = !message;
       if (submitButton) submitButton.disabled = branches.length === 0;
     };
-    listen(format, 'change', updateFormat);
+    listen(format, 'change', () => updateFormat(true));
 
     const patronCard = element('section', { className: 'staff-patron-card', 'aria-labelledby': 'staff-patron-card-title' }, [
       element('h3', { id: 'staff-patron-card-title' }, [researchRecordValue(patron.name || 'Verified patron', context.research, 'patron')]),
@@ -527,18 +528,19 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       if (!validRequestId(created?.id) || !Number.isSafeInteger(created?.libraryOrgId) ||
           created.libraryOrgId !== body.libraryOrgId) throw unconfirmedResponseError();
       attempt.outcome = 'committed'; attempt.pending = false;
-      const notification = created.notificationStatus === 'queued' ? 'Confirmation email queued.'
-        : created.notificationStatus === 'suppressed' ? 'No confirmation email was sent because delivery is suppressed.'
-          : 'No confirmation email was requested.';
-      const message = `Suggestion ${created.id} created on behalf of the patron. ${notification}`;
+      const notification = notificationOutcome(created.notificationStatus, created.notificationReason, 'Confirmation email');
+      const notificationText = notification.text || (created.notificationStatus === 'not_requested'
+        ? ' No confirmation email was requested.' : ' Confirmation email status is unconfirmed.');
+      const partial = notification.partial || (!notification.text && created.notificationStatus !== 'not_requested');
+      const message = `Suggestion ${created.id} created on behalf of the patron.${notificationText}`;
       onReceipt(`${message} Sign in again to review the committed request.`, owner, attempt);
       if (!isCurrent(current)) return;
       current.submitting = false; closeStaffSuggestion({ force: true, focusButton: false });
-      announce(message, 'success');
+      announce(message, partial ? 'warning' : 'success');
       const review = await openCreatedTitle(Object.freeze({ id: created.id, libraryOrgId: String(created.libraryOrgId), owner, opener: trigger }));
       if (review?.queueRefreshed && review.detailLoaded) clearReceipt(attempt);
       if (review?.isCurrent()) announce(`${message}${review.queueRefreshed && review.detailLoaded ? '' : ' Current details could not be refreshed.'}`,
-        review.queueRefreshed && review.detailLoaded ? 'success' : 'warning');
+        review.queueRefreshed && review.detailLoaded && !partial ? 'success' : 'warning');
     } catch (error) {
       if (attempt.outcome === 'committed') return;
       const pickupChanged = error.response?.code === 'request_not_created_pickup_changed' && error.response?.pickupPreferenceChanged === true;
