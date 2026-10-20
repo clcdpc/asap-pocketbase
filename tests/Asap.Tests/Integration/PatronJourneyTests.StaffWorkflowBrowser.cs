@@ -39,7 +39,7 @@ public sealed partial class PatronJourneyTests
             services.AddSingleton<IPatronProvider>(provider);
             services.AddSingleton<IStaffPolarisProvider>(provider);
         }));
-        scopedFactory.UseKestrel(0);
+        scopedFactory.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         using var client = scopedFactory.CreateClient();
         var contexts = scopedFactory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         long sourceId = 0;

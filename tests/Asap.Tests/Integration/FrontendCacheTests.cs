@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using Asap.Tests.Assets;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -24,6 +25,17 @@ public sealed class FrontendCacheTests
         await FrontendPublishTests.RunAsync(repositoryRoot, timeout.Token, "dotnet", "publish",
             "src/Asap.Web/Asap.Web.csproj", "-c", "Release", "--no-build", "--no-restore", "-o", published.FullName);
         await FrontendPublishTests.VerifyAsync(repositoryRoot, published.FullName, timeout.Token);
+        // A derived factory must not silently fall back to the shared default port.
+        using var defaultPort = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        try
+        {
+            defaultPort.Bind(new IPEndPoint(IPAddress.Loopback, 5000));
+            defaultPort.Listen();
+        }
+        catch (SocketException error) when (error.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        {
+            // An existing listener already supplies the default-port collision.
+        }
         application = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.UseEnvironment("Testing");
@@ -31,8 +43,13 @@ public sealed class FrontendCacheTests
             builder.UseWebRoot(Path.Combine(published.FullName, "wwwroot"));
             builder.UseSetting("Asap:ConfigFile", Path.Combine(published.FullName, "missing-configuration.json"));
         });
-        application.UseKestrel(0);
+        // WithWebHostBuilder delegates CreateHost to its parent in the pinned test
+        // library, so the port overload loses the child's port. Configure the listener directly.
+        application.UseKestrel(options => options.Listen(IPAddress.Loopback, 0));
         client = application.CreateClient();
+        Assert.IsNotNull(client.BaseAddress);
+        Assert.IsGreaterThan(0, client.BaseAddress.Port);
+        Assert.AreNotEqual(5000, client.BaseAddress.Port);
         context.WriteLine($"Serving published frontend from {published.FullName} at {client.BaseAddress}");
     }
 

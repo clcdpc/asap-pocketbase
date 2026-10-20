@@ -13,7 +13,7 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task SystemFormatRuleEditorPersistsItsActualPostThroughSqlAndReload()
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         var actor = await ReadConfiguredSuperAdminAsync();
         using var client = factory.CreateClient();
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
@@ -147,7 +147,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("reset-route")]
     public async Task ResetRejectsAnInheritedFormatThatWouldMakeARequiredSelectImpossible(string resetPath)
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         var actor = await ReadConfiguredSuperAdminAsync();
         using var client = factory.CreateClient();
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
@@ -346,7 +346,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("missing-row")]
     public async Task LibraryRuleEditorBlocksAnIncompleteProjectionBeforePostingReplacement(string witness)
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         var actor = await ReadConfiguredSuperAdminAsync();
         using var client = factory.CreateClient();
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);

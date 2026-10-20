@@ -11,7 +11,7 @@ public sealed partial class PatronJourneyTests
     public async Task StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry()
     {
         const int first = 383091;
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         using var client = factory.CreateClient();
         var actor = await ReadConfiguredSuperAdminAsync();
         var contexts = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();

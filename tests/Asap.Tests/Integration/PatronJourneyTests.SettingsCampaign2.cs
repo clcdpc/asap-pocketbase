@@ -12,7 +12,7 @@ public sealed partial class PatronJourneyTests
     [DataRow(true)]
     public async Task Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload(bool libraryAdmin)
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         var superAdmin = await ReadConfiguredSuperAdminAsync();
         using var client = factory.CreateClient();
         AddTestingStaffHeaders(client, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.AuthenticationEmail);

@@ -9,7 +9,7 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata()
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         var actor = await ReadConfiguredSuperAdminAsync();
         using var client = factory.CreateClient();
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);

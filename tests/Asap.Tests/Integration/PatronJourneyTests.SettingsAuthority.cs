@@ -2620,7 +2620,7 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp()
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         const string retiredKey = "authority_retired";
         const string dynamicKey = "browser_select";
         const long autoClaimStaffId = 9_007_199_254_740_993L;

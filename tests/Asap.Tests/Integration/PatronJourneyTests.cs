@@ -320,7 +320,7 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport()
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         using var client = factory.CreateClient();
         var baseAddress = client.BaseAddress
             ?? throw new InvalidOperationException("The Kestrel test host did not expose a base address.");
@@ -378,7 +378,7 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers()
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var snapshot = await contextFactory.CreateDbContextAsync();
         var originalSettings = await snapshot.SystemSettings.AsNoTracking()

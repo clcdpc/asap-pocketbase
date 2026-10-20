@@ -12,7 +12,7 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces()
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         using var client = factory.CreateClient();
         var actor = await ReadConfiguredSuperAdminAsync();
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);

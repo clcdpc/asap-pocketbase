@@ -97,7 +97,7 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures()
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         using var client = factory.CreateClient();
         var baseAddress = client.BaseAddress
             ?? throw new InvalidOperationException("The Kestrel test host did not expose a base address.");

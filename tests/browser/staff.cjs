@@ -91,6 +91,7 @@ async function scan(page, axeSource, artifactRoot, report, viewport, state) {
 }
 
 async function assertReadableMobileQueue(page, selector = '#request-grid') {
+  await page.locator(`${selector} tbody .grid-open`).first().waitFor();
   const geometry = await page.locator(selector).evaluate(root => {
     const wrapper = root.querySelector('.gridjs-wrapper');
     const table = root.querySelector('table.gridjs-table');
