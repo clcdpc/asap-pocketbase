@@ -176,6 +176,13 @@ browser) and 57 frontend test files, plus deliberate additions.
   It rejects vendor render errors and uses a changed response count to
   distinguish accepted rows from Grid's retained store. Separate real Chromium
   checks exercise actual refresh/filter transitions and native popovers.
+- The full frontend gate exposed another inherited Grid 6.2 race: remounting
+  first used its retained header, then registered Sort against a replacement
+  header during pipeline processing, leaving an uncached sort step. The title
+  queue now publishes the current header before remounting. This small correction
+  stays on the enhancement branch. The real Grid journey pins that invalid-state
+  boundary and retains observable sorting/pagination/filtering and zero-error
+  assertions; it does not suppress the vendor error or change its scheduler.
 - The delayed catalog regression uses distinct nonempty Title/Author results,
   awaits the held response's completion, proves Author results remain, and
   checks read-only results have no Use BIB controls. Notification assertions

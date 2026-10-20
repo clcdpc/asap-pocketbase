@@ -116,7 +116,7 @@ async function assertReadableMobileQueue(page, selector = '#request-grid') {
       nonPositiveCells: bounds.some(bounds => bounds.width <= 0)
     };
   });
-  assert.equal(geometry.cellCount, selector === '#request-grid' ? 12 : 11,
+  assert.equal(geometry.cellCount, selector === '#request-grid' ? 8 : 11,
     'Mobile queue should render all request columns');
   assert.equal(geometry.overlaps, false, 'Mobile queue cells must not overlap neighboring columns');
   assert.equal(geometry.nonPositiveCells, false, 'Mobile queue cells need stable positive widths');

@@ -3,8 +3,10 @@ const path = require('node:path');
 const { fixture } = require('./helpers/staff-controller.cjs');
 const pause = () => new Promise(resolve => setTimeout(resolve, 15));
 let renderedGrid;
+let phase = 'initial';
 const isRendered = () => renderedGrid?.config.store.getState().status === 3; // Vendored Grid.js 6.2.0 Rendered state.
 async function until(predicate, message) {
+  phase = message;
   for (let index = 0; index < 250; index++) {
     if (isRendered() && predicate()) {
       // Grid.js attaches sorting/paging effects after its DOM commit. Let the
@@ -35,6 +37,14 @@ async function until(predicate, message) {
     const Grid = dom.window.gridjs.Grid;
     dom.window.gridjs = { ...dom.window.gridjs, Grid: class extends Grid {
       constructor(configuration) { super(configuration); renderedGrid = this; }
+      forceRender() {
+        // A retained header makes Grid register Sort after processing starts,
+        // invalidating its cache. Pin that vendor boundary as well as the
+        // observable sort/page/filter results and zero-error checks below.
+        assert.equal(this.config.store.getState().header, this.config.header,
+          'Grid remount must begin with its current header.');
+        return super.forceRender();
+      }
     } };
     const opened = [], created = [], searches = [], closed = [];
     let context = { activeView: 'queue', scope: '2', status: 'suggestion' };
@@ -54,8 +64,9 @@ async function until(predicate, message) {
       onScopeIntent() {}, onStatusIntent() {}, onScopeAccepted() {}, onLibraries() {}, onRefreshed() {}, onRendered() {},
       request: async () => ({ items: data.map(item => ({ ...item })), scope: context.scope, organizations: [] }) });
     const renderErrors = [], logError = console.error;
+    let completed = false;
     console.error = (...args) => {
-      if (args.some(value => String(value).includes('[Grid.js] [ERROR]'))) renderErrors.push(args.map(String).join(' '));
+      if (args.some(value => String(value).includes('[Grid.js] [ERROR]'))) renderErrors.push(`${phase}: ${args.map(String).join(' ')}`);
       logError(...args);
     };
     try {
@@ -121,11 +132,12 @@ async function until(predicate, message) {
     await queue.refresh(); await until(() => get('#request-grid').textContent.includes('New authorized projection'), 'New scope renders after retirement.');
     const wrapper = get('#request-grid .gridjs-wrapper');
     assert.equal(wrapper.tabIndex, 0); assert.equal(wrapper.getAttribute('role'), 'region');
-    queue.dispose();
+    phase = 'dispose'; queue.dispose();
     assert.equal(staleSearch.isCurrent(), false);
+    completed = true;
     } finally {
       queue.dispose(); await pause(); console.error = logError;
-      assert.deepEqual(renderErrors, [], 'Grid must complete without render errors.');
+      if (completed) assert.deepEqual(renderErrors, [], 'Grid must complete without render errors.');
     }
   });
   console.log('Eight-column real Grid.js table, independent actions/searches, sorting, paging, filters and stale ownership passed');

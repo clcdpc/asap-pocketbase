@@ -416,7 +416,13 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     } else {
       // forceRender remounts Grid's paginator; supply the accepted page rather
       // than briefly rendering page 2 and then resetting it to the default.
-      state.grid.updateConfig({ data: rows, pagination: { limit: 25, summary: true, page, resetPageOnUpdate: false } }).forceRender();
+      state.grid.updateConfig({ data: rows, pagination: { limit: 25, summary: true, page, resetPageOnUpdate: false } });
+      // Grid 6.2 otherwise mounts against the retained header, then swaps it
+      // during processing. Late sort registration can invalidate an uncached
+      // pipeline step. Publish this configuration's header before remounting.
+      const { store, header } = state.grid.config;
+      store.dispatch(current => ({ ...current, header }));
+      state.grid.forceRender();
     }
   }
 
