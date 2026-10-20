@@ -534,8 +534,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       if (otherRequest.status !== currentRequest.status) {
         document.querySelector(`[data-status="${otherRequest.status}"]`).click();
       }
-      await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`), 'other row appears');
-      document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+      await until(() => document.querySelector(`a[data-request-id="${otherId}"]`), 'other row appears');
+      document.querySelector(`a[data-request-id="${otherId}"]`).click();
       await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
         'other detail opens');
     }
@@ -655,18 +655,18 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       document.querySelector('#close-request').click();
       assert.equal(document.querySelector('#request-dialog').open, true,
         'in-flight workflow action must remain visible after Close');
-      await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+      await until(() => document.querySelector(`a[data-request-id="${otherId}"]`),
         'newer request is present in the queue');
-      document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+      document.querySelector(`a[data-request-id="${otherId}"]`).click();
       assert.equal(document.querySelector('#request-dialog-title').textContent, 'Original title',
         'opening another request must not abandon an unresolved workflow mutation');
       releaseMutation();
       await until(() => /Workflow action completed/.test(document.querySelector('#app-status').textContent),
         'the authoritative workflow result must finish before navigation');
       document.querySelector(`[data-status="${otherRequest.status}"]`).click();
-      await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+      await until(() => document.querySelector(`a[data-request-id="${otherId}"]`),
         'the other request is reachable in its authoritative queue stage');
-      document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+      document.querySelector(`a[data-request-id="${otherId}"]`).click();
       await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
         'forced newer request takes ownership of the dialog');
       await new Promise(resolve => setImmediate(resolve));
@@ -680,14 +680,14 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.equal(mutationPayloads[0].version, 'v1');
       if (scenarioOptions.duplicateLateResponse) {
         await until(() => releaseDuplicate, 'duplicate response is pending');
-        await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+        await until(() => document.querySelector(`a[data-request-id="${otherId}"]`),
           'other request is in the queue');
-        document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+        document.querySelector(`a[data-request-id="${otherId}"]`).click();
         assert.equal(document.querySelector('#request-dialog-title').textContent, 'Original title',
           'navigation must wait while the mutation has no authoritative result');
         releaseDuplicate();
         await until(() => document.querySelector('.duplicate-recovery'), 'authoritative duplicate response is handled');
-        document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+        document.querySelector(`a[data-request-id="${otherId}"]`).click();
         await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
           'newer request takes ownership of the dialog');
         await new Promise(resolve => setImmediate(resolve));
@@ -698,9 +698,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       }
       if (scenarioOptions.duplicateNavigateDuringRefresh) {
         await until(() => releaseDuplicateDetail, 'duplicate detail refresh is pending');
-        await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+        await until(() => document.querySelector(`a[data-request-id="${otherId}"]`),
           'other request is in the queue');
-        document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+        document.querySelector(`a[data-request-id="${otherId}"]`).click();
         await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
           'newer request takes ownership during refresh');
         releaseDuplicateDetail();

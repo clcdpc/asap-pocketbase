@@ -421,7 +421,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       return dialog.accept();
     });
     await page.locator('.action-choice button[type="submit"]').click();
-    await page.getByText('Outstanding purchase', { exact: true }).waitFor();
+    await page.locator('#request-dialog').getByText('Outstanding purchase', { exact: true }).waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'edited-claimed-actioned');
 
     await page.getByRole('button', { name: 'Close request details' }).click();
@@ -454,9 +454,9 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       }));
       throw new Error(`${error.message}\n${JSON.stringify(context)}\n${JSON.stringify(observedSessions.slice(-6))}`);
     });
-    await page.getByRole('button', { name: `Open request ${args.primaryRequestId}` }).waitFor();
+    await page.getByRole('link', { name: `Open request ${args.primaryRequestId}:`, exact: false }).waitFor();
     assert.equal(await page.getByText('Other browser library title', { exact: true }).count(), 0);
-    const open = page.getByRole('button', { name: `Open request ${args.primaryRequestId}` });
+    const open = page.getByRole('link', { name: `Open request ${args.primaryRequestId}:`, exact: false });
     await open.click();
     await page.locator('#request-dialog[open]').waitFor();
     await page.keyboard.press('Escape');
@@ -821,7 +821,9 @@ async function runStaleAssignmentCandidates(browser, args, report) {
       await delayed.requested;
       await page.keyboard.press('Escape');
       await page.locator('#request-dialog').waitFor({ state: 'hidden' });
-      await page.getByRole('button', { name: scenario.openLabel(scenario.bId) }).click();
+      await page.locator(scenario.name === 'title request'
+        ? `a.grid-open[data-request-id="${scenario.bId}"]`
+        : `button.grid-open[aria-label="${scenario.openLabel(scenario.bId)}"]`).click();
       await page.locator('#request-dialog[open]').waitFor();
       await page.locator('#request-dialog-kicker').filter({ hasText: scenario.kicker(scenario.bId) }).waitFor();
       delayed.release();
@@ -1001,7 +1003,8 @@ async function runStaleMutationCompletions(browser, args, report) {
       await page.locator(target.claimFilter).selectOption('all');
       const detailResponse = page.waitForResponse(response => response.request().method() === 'GET' &&
         new URL(response.url()).pathname === target.apiPath);
-      await page.locator(`button.grid-open[aria-label="${target.openLabel}"]`).evaluate(node => node.click());
+      await page.locator(type === 'additional_copy'
+        ? `button.grid-open[aria-label="${target.openLabel}"]` : `a.grid-open[data-request-id="${id}"]`).evaluate(node => node.click());
       await detailResponse;
       await page.locator('#request-dialog-kicker').filter({ hasText: target.kicker }).waitFor();
       if (type === 'title_request') {
@@ -1192,7 +1195,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     for (const exit of ['back', 'top-level']) {
       await page.goto(`${args.baseOrigin}/staff/?stage=${createSource.status}&scope=all`, { waitUntil: 'networkidle' });
       await page.locator('#claim-filter').selectOption('all');
-      await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}`, exact: true }).click();
+      await page.getByRole('link', { name: `Open request ${args.staleCreateSourceId}:`, exact: false }).click();
       await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
       await page.locator('#additional-copy-create-dialog[open]').waitFor();
       if (exit === 'back') await page.goBack();
@@ -1315,7 +1318,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.locator('#refresh-additional-copies').click();
     await page.locator('.view-tab[data-view="queue"]').click();
     await page.locator('[data-status="hold_placed"]').click();
-    await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}` }).click();
+    await page.getByRole('link', { name: `Open request ${args.staleCreateSourceId}:`, exact: false }).click();
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#app-status').filter({ hasText: /Refresh the open additional-copy task list/ }).waitFor();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
@@ -1335,7 +1338,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     }));
     assert.equal(queueNavigationState.hidden, false, JSON.stringify(queueNavigationState));
     await page.locator('[data-status="hold_placed"]').click();
-    await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}` }).click();
+    await page.getByRole('link', { name: `Open request ${args.staleCreateSourceId}:`, exact: false }).click();
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
       'a refreshed open list still requires the staff user to review matching tasks');
@@ -1358,7 +1361,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     const earlierTaskId = (await earlierCreation.json()).additionalCopyRequest.id;
     await page.locator('.view-tab[data-view="queue"]').click();
     await page.locator('[data-status="hold_placed"]').click();
-    await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}` }).click();
+    await page.getByRole('link', { name: `Open request ${args.staleCreateSourceId}:`, exact: false }).click();
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     const [fencedRetry] = await Promise.all([
@@ -2697,7 +2700,7 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     await page.locator('#claim-filter').selectOption('all');
     const listUrl = page.url();
     const detail = page.locator('#request-dialog');
-    const opener = page.getByRole('button', { name: `Open request ${args.primaryRequestId}`, exact: true });
+    const opener = page.getByRole('link', { name: `Open request ${args.primaryRequestId}:`, exact: false });
     for (let cycle = 0; cycle < 2; cycle += 1) {
       await opener.click(); await page.locator('#request-dialog[open]').waitFor();
       await page.getByRole('button', { name: 'Close request details' }).click();
@@ -2924,7 +2927,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     try {
       await page.locator('#library-scope').selectOption('2');
       await scopedQueueStarted;
-      await page.waitForFunction(() => document.querySelectorAll('#request-grid button.grid-open').length === 0);
+      await page.waitForFunction(() => document.querySelectorAll('#request-grid a.grid-open').length === 0);
       assert.equal(await page.locator('#similar-filter').inputValue(), 'all');
       assert.match(await page.locator('#queue-automation').textContent(), /appear with requests/);
     } finally {
@@ -2957,7 +2960,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       assert.equal(await page.locator('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
       assert.equal(new URL(page.url()).searchParams.get('stage'), 'pending_hold');
       await page.getByRole('button', { name: 'Close request details' }).click();
-      await page.getByRole('button', { name: `Open request ${args.primaryRequestId}` }).waitFor();
+      await page.getByRole('link', { name: `Open request ${args.primaryRequestId}:`, exact: false }).waitFor();
     } finally {
       await page.unroute(changedDetailPath, changedDetail);
       await page.unroute(changedListPath, changedList);
@@ -3658,7 +3661,7 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     assert.ok(copy, 'Operational retirement journey requires a real persisted Copy projection');
     await page.goto(`${args.baseOrigin}/staff/?stage=${title.status}&scope=2`, { waitUntil: 'networkidle' });
     await page.locator('#claim-filter').selectOption('all');
-    await page.getByRole('button', { name: `Open request ${title.id}`, exact: true }).waitFor();
+    await page.getByRole('link', { name: `Open request ${title.id}:`, exact: false }).waitFor();
     await page.locator('[data-view="additional-copies"]').click();
     await page.locator('#additional-copy-claim-filter').selectOption('all');
     await page.getByRole('button', { name: `Open additional-copy task ${copy.id}`, exact: true }).waitFor();
@@ -3709,7 +3712,7 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.locator('[data-view="queue"]').click();
     await page.locator('#library-scope option[value="2"]').waitFor({ state: 'attached' });
     await page.locator('#library-scope').selectOption('2');
-    await page.getByRole('button', { name: `Open request ${title.id}`, exact: true }).waitFor();
+    await page.getByRole('link', { name: `Open request ${title.id}:`, exact: false }).waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'operational-catalog-reactivated');
     assert.deepEqual(errors, [], 'Operational catalog commits raised browser errors');
     assert.equal(traffic.externalRequests, 0, 'Operational catalog commits requested external assets');

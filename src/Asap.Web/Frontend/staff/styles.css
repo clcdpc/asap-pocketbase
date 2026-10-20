@@ -134,7 +134,7 @@ textarea { min-height: 108px; resize: vertical; }
 .gridjs-container { display: block; width: 100%; overflow: visible; color: var(--ink); font-size: .91rem; }
 .gridjs-wrapper { width: 100%; overflow-x: auto; border-radius: 0; box-shadow: none; border-color: var(--line); }
 table.gridjs-table { width: 100%; min-width: 920px; max-width: none; table-layout: fixed; }
-#request-grid table.gridjs-table { min-width: 1480px; }
+#request-grid table.gridjs-table { min-width: 0; }
 #additional-copy-grid table.gridjs-table { min-width: 1450px; }
 .bulk-delete-items { max-height: 220px; overflow: auto; overflow-wrap: anywhere; }
 #bulk-delete-results { overflow-wrap: anywhere; }
@@ -143,6 +143,41 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .grid-open { display: inline-flex; gap: 6px; align-items: center; min-height: 34px; padding: 5px 10px; color: var(--brand-dark); background: #fff; border: 1px solid #8ca1ae; border-radius: 4px; cursor: pointer; }
 .claim-label { color: var(--muted); }
 .claim-label.mine { color: var(--success); font-weight: 700; }
+.request-table-help { display: none; margin: 8px 0; color: var(--muted); font-size: .84rem; }
+#request-grid td.gridjs-td, #request-grid th.gridjs-th { padding: 9px 8px; }
+#request-grid tbody tr { cursor: pointer; }
+#request-grid tbody tr:hover td { background: #f1f7fa; }
+.request-patron-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.request-patron-text { flex: 1; min-width: 0; font-size: .82rem; }
+.request-patron-text > span, .request-patron-text > a { font-variant-numeric: tabular-nums; }
+.request-patron-text small { display: block; margin-top: 3px; color: var(--muted); }
+.request-patron-cell .grid-new-suggestion { flex: 0 0 32px; min-height: 32px; width: 32px; padding: 4px; color: #fff; background: var(--success); border: 0; border-radius: 4px; cursor: pointer; }
+.request-bibliographic-cell { display: grid; gap: 3px; }
+.request-bibliographic-line { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
+.request-cell-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.request-bibliographic-line > .request-cell-text { flex: 1; min-width: 0; }
+.request-title-link.grid-open { min-height: 32px; padding: 3px 0; border: 0; border-radius: 0; background: transparent; font-weight: 700; text-decoration: underline; }
+.request-author-line { color: var(--muted); font-size: .85rem; }
+.request-search-shortcut { flex: 0 0 32px; width: 32px; min-height: 32px; padding: 4px; color: var(--brand-dark); background: transparent; border: 1px solid transparent; border-radius: 4px; cursor: pointer; }
+.request-search-shortcut:hover { border-color: var(--line); background: #fff; }
+.request-search-shortcut:disabled { color: var(--muted); cursor: default; }
+.request-bib-link { font-size: .78rem; }
+.request-row-flags { gap: 4px; }
+.request-row-flags .tag { padding: 2px 4px; font-size: .7rem; }
+#request-grid time { display: block; font-size: .85rem; }
+#request-grid time > span, #request-grid small { display: block; }
+#request-grid time small { margin-top: 3px; color: var(--muted); font-size: .78rem; }
+#request-grid .claim-label { font-size: .85rem; }
+.request-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.request-row-actions > button { min-height: 32px; padding: 5px 6px; font-size: .78rem; }
+.request-row-actions > .request-row-more { min-width: 32px; }
+.request-table-menu { position: fixed; inset: auto; margin: 0; min-width: 180px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: auto; padding: 6px; background: #fff; border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 6px 20px #0003; }
+.request-table-menu:popover-open { display: grid; gap: 4px; }
+.request-table-menu > button { justify-content: flex-start; }
+@media (max-width: 1100px) {
+  #request-grid table.gridjs-table { min-width: 1080px; }
+  .request-table-help { display: block; }
+}
 .status-badge { display: inline-block; padding: 3px 7px; border-radius: 3px; background: #dceaf0; color: #164c64; font-size: .8rem; font-weight: 700; }
 .status-badge.closed { background: #e7e7e7; color: #4c4c4c; }
 .status-badge.blocked { background: #fae5c1; color: #704800; }
@@ -434,8 +469,8 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .inline-form label { display: grid; gap: 4px; flex: 1 1 220px; font-weight: 700; }
 .notes-history { margin: 18px 0 0; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--soft); border-left: 4px solid var(--brand); font: inherit; }
 .source-link { display: inline-flex; align-items: center; gap: 7px; color: var(--brand-dark); }
-/* Title details have one scrolling middle pane. Header, tabs and save footer
-   stay in the modal frame, so the final field is never covered by a footer. */
+/* Title details have one scrolling pane for context, tabs and fields. The
+   title and save footer stay in the frame even with long context at zoom. */
 #request-dialog:has(.title-detail-content) { height: min(900px, calc(100dvh - 28px)); overflow: hidden; }
 #request-dialog:has(.title-detail-content) > .dialog-shell { height: 100%; min-height: 0; display: flex; flex-direction: column; }
 #request-dialog:has(.title-detail-content) .dialog-header { position: static; flex: 0 0 auto; padding-block: 12px; }
@@ -453,8 +488,8 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .request-detail-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 20px 0; border-bottom: 1px solid var(--line); }
 .request-detail-tabs > button { min-height: 36px; padding: 6px 10px; border: 0; border-bottom: 3px solid transparent; color: var(--muted); background: transparent; cursor: pointer; }
 .request-detail-tabs > button[aria-selected="true"] { color: var(--brand-dark); border-bottom-color: var(--brand-dark); font-weight: 700; }
-.request-middle { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 20px 20px; }
-.request-middle > [role="tabpanel"] { min-width: 0; }
+.request-middle { flex: 1; min-height: 0; overflow-y: auto; }
+.request-middle > [role="tabpanel"] { min-width: 0; padding: 12px 20px 20px; }
 .request-middle .request-activity { margin: 0; padding: 0; border: 0; }
 .request-middle .request-metadata, .request-middle .workflow-context { margin: 0 0 6px; font-size: .82rem; }
 .request-middle .edit-form { padding-top: 8px; }
@@ -480,7 +515,7 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 
 @media (max-width: 760px) {
   .patron-context .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .request-heading-context, .patron-context, .request-middle, .request-detail-tabs, .request-save-footer { padding-inline: 14px; }
+  .request-heading-context, .patron-context, .request-middle > [role="tabpanel"], .request-detail-tabs, .request-save-footer { padding-inline: 14px; }
   .request-save-footer { flex-wrap: wrap; }
   .request-save-footer .form-actions { flex: 1 1 100%; }
   .request-save-footer .form-actions > button { flex: 1; }

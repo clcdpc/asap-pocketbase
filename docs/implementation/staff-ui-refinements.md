@@ -116,3 +116,52 @@ browser) and 57 frontend test files, plus deliberate additions.
   fixture. Its first workflow run reached an obsolete Author auto-population
   expectation; that assertion now verifies the explicitly required retained
   Author. The complete browser and frontend suites remain final gates.
+
+### Checkpoint D
+
+- The queue has eight actual Grid.js columns. Barcode/name and Title/Author are
+  combined; the obsolete standalone Patron, Timing, Tags and Open columns and
+  sort structure were removed. Bibliographic sorting uses Title. Warning tags,
+  related counts and native LEAP links remain available in the combined cells.
+- Title is a real link. Background row clicks open that link's request; native
+  links, search buttons, patron plus and action controls retain independent
+  behavior. Title/Author shortcuts use the existing Polaris controller in an
+  explicitly read-only context. List actions open fresh authoritative details
+  and dispatch existing workflow handlers; no mutation implementation was copied.
+- The real Grid.js unit journey covers 55 exact bigint identities, independent
+  shortcuts, Title sort, paging retained after newly rendered refresh data,
+  Author/Identifier search, claim/tag filters and detached-owner rejection.
+  A focused stale-search assertion was corrected during independent review to
+  inspect the actual search count, avoiding a false-positive open-count check.
+- Narrow tables retain all controls in a labeled keyboard-scrollable region.
+  The real SQL browser fixture now contains 55 additional requests and checks
+  actual shortcut POST modes, a delayed old search, unchanged request versions,
+  row/title/menu isolation and list Purchase/Reject/Claim/Unclaim outcomes.
+
+### Checkpoint E review corrections and evidence in progress
+
+- Independent settings review found that Add after removing a persisted draft
+  provider could reuse its key and library overrides. Add now reserves accepted
+  System keys as well as draft keys; a delete-then-add regression passes.
+- Independent workflow review reproduced lost focus after canceled More actions
+  and Additional-copy cancellation. The visible More summary now owns return
+  focus. It also reproduced footer clipping under actual 200% browser zoom with
+  long context. Context and tabs now share the existing middle scroll pane;
+  the title and Save/Revert footer remain in the frame.
+- Independent migration review identified stale current-target seed expectations
+  in the no-System-source verifier. Those four expectations now match the new
+  DACPAC defaults. Raw imported settings and legacy format/default oracle pins
+  stay unchanged. A narrow read-only four-seed presentation mapping gives newly
+  imported targets plain-text editor/config messages immediately; it neither
+  rewrites imported evidence nor normalizes arbitrary custom HTML.
+- SQL cleanup additionally checks DATALENGTH, preserving a customized seed with
+  a trailing NUL as well as case, space, blank and NULL witnesses. The new real
+  SQL/HTTP presentation test covers all four imported seeds, custom suffixes,
+  library-owned/overridden format messages and unchanged source text.
+- A pre-existing parent defect necessary for #383 was found during creation
+  handoff: native textareas normalize CRLF to LF, which made accepted notes look
+  dirty immediately. The editor compares against its native textarea baseline
+  and submits exact original notes when unchanged. This correction is confined
+  to this enhancement branch and has explicit regression coverage.
+- Final full-suite, native-zoom, publish/package and hosted-CI results will be
+  recorded after execution. No pending check is represented as passed.

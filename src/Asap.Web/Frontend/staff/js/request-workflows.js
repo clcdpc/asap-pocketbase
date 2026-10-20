@@ -96,7 +96,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       bar.append(commandButton(request.autohold ? 'Ready for hold' : 'Close without hold', 'arrow-right', () => runAction(request, 'catalogFound'),
         'primary-button', !allowedActions.has('catalogFound')));
     } else if (request.status === 'pending_hold') {
-      bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
+      bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, actionOpener(event.currentTarget)), 'secondary-button', !request.bibid));
       bar.append(commandButton('Pickup', 'map-marker', event => showPickup(request, actionOpener(event.currentTarget)), 'secondary-button',
         workflowBlocked && request.capabilities?.blockingReason !== 'pickup_reconciliation_required'));
       if (request.capabilities?.canPlaceHold === true) {
@@ -111,7 +111,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         bar.append(commandButton('Close duplicate', 'clone', () => runAction(request, 'closeDuplicate'), 'secondary-button', !allowedActions.has('closeDuplicate')));
       }
     } else if (request.status === 'hold_placed') {
-      bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
+      bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, actionOpener(event.currentTarget)), 'secondary-button', !request.bibid));
       bar.append(commandButton('Close request', 'check', () => runAction(request, 'close'), 'primary-button', !allowedActions.has('close')));
     } else if (request.status === 'closed') {
       if (allowedActions.has('reopen')) {
@@ -137,7 +137,10 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         element('div', { className: 'request-more-items', role: 'group', 'aria-label': 'More request actions' }, secondary)
       ]);
       more.addEventListener('click', event => {
-        if (event.target.closest('button')) more.open = false;
+        if (!event.target.closest('button')) return;
+        const restoreFocus = more.contains(document.activeElement);
+        more.open = false;
+        if (restoreFocus) more.querySelector('summary').focus();
       });
       more.addEventListener('toggle', () => {
         if (!more.open || !isCurrent()) return;
@@ -550,6 +553,14 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     buildActions: () => buildActionBar(request),
     buildHold: () => request.holdOperation ? buildHoldOperation(request, request.holdOperation) : null,
     runAction: action => runAction(request, action),
+    startAction(action) {
+      if (!isCurrent() || isPending()) return;
+      if (action === 'edit') { context.showDetails?.(); root.querySelector('.edit-form input')?.focus(); return; }
+      const label = { purchase: 'Purchase', reject: 'Reject', alreadyOwn: 'Already own', claim: 'Claim', assign: 'Assign', silentClose: 'Close silently' }[action];
+      const button = [...root.querySelectorAll('.action-bar button')].find(control => control.textContent.trim() === label);
+      if (button && !button.disabled) button.click();
+      else announce('That action is no longer available. Review the current request.', 'warning');
+    },
     escape() {
       if (more?.open) { more.open = false; more.querySelector('summary').focus(); return true; }
       if (!actionChoice || isPending()) return false;

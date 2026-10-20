@@ -186,8 +186,8 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
       const { createTitleDetailController } = await load('title-detail');
       const session = createSessionIdentity(); session.accept(actorA);
       const host = createDetailHost({ root: get('#request-dialog') });
-      let complete, reject, finishAssignment, posted = 0;
-      const source = { ...snapshot, claimedByStaffUserId: actorA.id, author: 'Author', formatLabel: 'Book', notes: 'Saved note' };
+      let complete, reject, finishAssignment, posted = 0, postedBody;
+      const source = { ...snapshot, claimedByStaffUserId: actorA.id, author: 'Author', formatLabel: 'Book', notes: 'Saved note\r\nAccepted history' };
       const controller = createTitleDetailController({ host, sessionIdentity: session,
         polarisLookup: { close() {}, invalidate() {} }, copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
         announce() {}, beforeOpen: () => ({ isCurrent: () => true }), isNavigationCurrent: () => true,
@@ -195,13 +195,14 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
         beforeClose: () => true, onClosed() {}, onUpdated() {}, getFocusReturn: () => null, refreshQueue: async () => true,
         queueSequence: () => 1, rememberOpened() {}, forgetUnavailable() {}, onReceipt() {}, clearReceipt() {},
         request: async (path, init = {}) => {
-          if (init.method) { posted++; return new Promise((resolve, fail) => { complete = resolve; reject = fail; }); }
+          if (init.method) { posted++; postedBody = init.body; return new Promise((resolve, fail) => { complete = resolve; reject = fail; }); }
           if (path.includes('/assignment-candidates')) return new Promise(resolve => { finishAssignment = resolve; });
           return path.includes('/title-requests/') ? source : { availableFormats: ['book'] };
         } });
       await controller.open(source.id);
       const tab = name => [...get('#request-dialog').querySelectorAll('[role="tab"]')].find(node => node.textContent === name);
       assert.equal(tab('Details').getAttribute('aria-selected'), 'true');
+      assert.equal(get('.request-save-state').textContent, 'All changes saved', 'SQL CRLF notes are a clean native-textarea baseline.');
       [...get('.action-bar').querySelectorAll('button')].find(button => button.textContent === 'Assign').click();
       tab('Activity').click(); tab('Activity').focus();
       finishAssignment({ candidates: [{ id: actorA.id, displayName: 'Actor' }] });
@@ -223,6 +224,7 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
       replacementTitle.value = 'Submitted title'; replacementTitle.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
       replacementForm.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
       assert.equal(posted, 1); assert.equal(get('.request-save-state').textContent, 'Saving changes…');
+      assert.equal(postedBody.notes, source.notes, 'Editing Title preserves exact accepted notes.');
       assert.equal(get('.request-save-footer button[type="submit"]').disabled, true);
       if (outcome === 'retired') {
         session.clear(); controller.signedOut(); session.accept(actorB); await controller.open(source.id);

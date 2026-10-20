@@ -154,6 +154,9 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     format.setAttribute('aria-label', 'Format');
     const notes = element('textarea', { maxlength: '10000' });
     notes.value = request.notes || '';
+    // Native textareas normalize SQL CRLF notes to LF. Their rendered value is
+    // the edit baseline; an unrelated edit must retain the original notes.
+    const baselineNotes = notes.value;
     const autohold = element('input', {
       type: 'checkbox',
       checked: request.autohold,
@@ -192,7 +195,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       if (exactDate.value !== (request.exactPublicationDate || '')) changed.push('exact publication date');
       if (format.value !== (request.format || '')) changed.push('format');
       if (autohold.checked !== Boolean(request.autohold)) changed.push('automatic hold');
-      if (notes.value !== (request.notes || '')) changed.push('notes');
+      if (notes.value !== baselineNotes) changed.push('notes');
       if ([...customFieldControls].some(([key, control]) => control.mode !== 'hidden' &&
           control.input.value.trim() !== customFieldValue(request.customFields?.[key]).trim())) changed.push('custom fields');
       const claimantId = request.claimedByStaffUserId == null ? null : String(request.claimedByStaffUserId);
@@ -282,7 +285,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
         exactPublicationDate: exactDate.value || null,
         format: format.value,
         autohold: autohold.checked,
-        notes: notes.value,
+        notes: notes.value === baselineNotes ? request.notes || '' : notes.value,
         customFields: collectCustomFields(request, customFieldControls)
       }, 'Request changes saved.', draft);
       if (isCurrent() && form.isConnected) {

@@ -95,7 +95,8 @@ async function runJourney(scenario) {
     const workflow = await import(pathToFileURL(path.join(temporary, 'staff/js/workflow.js')).href);
     app = workflow.createWorkflowApp();
     await app.start();
-    const opener = (id = '91') => document.querySelector(`[aria-label="${openerLabel} ${id}"]`);
+    const opener = (id = '91') => document.querySelector(titleRequest
+      ? `a[data-request-id="${id}"]` : `[aria-label="${openerLabel} ${id}"]`);
     const claimLabel = () => opener()?.closest('tr').querySelector('.claim-label');
     await until(() => opener() && opener('92') && opener('93'), 'The real Grid.js must render the initial tasks');
     const initialOpener = opener();
@@ -129,7 +130,7 @@ async function runJourney(scenario) {
       assert.strictEqual(this.config.container.id, gridId, 'Only the owning grid unclaim render may be held');
       assert.ok(Array.isArray(configuration.data), 'The workflow must supply an array to the held update');
       assert.deepStrictEqual(configuration.data.map(row =>
-        [row[titleRequest ? 11 : 10], row[titleRequest ? 9 : 6]]),
+        [row[titleRequest ? 7 : 10], row[titleRequest ? 5 : 6]]),
       [['91', 'Unclaimed'], ['92', 'Unclaimed']],
         'The held update must be the completed unclaim refresh, not an earlier filter or claim render');
       const rows = configuration.data;

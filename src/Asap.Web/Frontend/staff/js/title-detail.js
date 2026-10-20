@@ -94,7 +94,9 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       if (isPresentationCurrent(mounted, owner) && mounted.content.contains(event.target)) drafts.touch();
     });
     onOpened(request, options); renderRequest(request, configuration); mounted.show();
-    announce(`Opened ${request.title}.`); rememberOpened(request.id); return true;
+    announce(`Opened ${request.title}.`); rememberOpened(request.id);
+    if (options.action) workflows.startAction(options.action);
+    return true;
   }
 
   async function open(id, opener = null, options = {}) {
@@ -492,7 +494,10 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       // Expose invalid fields before native form validation/focus from another tab.
       if (event.target.closest('button[type="submit"]') && !mounted.content.querySelector('.edit-form')?.checkValidity()) activateTab('details');
     });
-    body.append(tablist, middle, footerRoot);
+    // Context can wrap substantially at native browser zoom. Keep it in the
+    // single scrolling pane so it cannot push the save footer out of view.
+    middle.prepend(...body.childNodes, tablist);
+    body.append(middle, footerRoot);
     lease.content.replaceChildren(body);
     activateTab(selectedTab);
     void editor.loadResearch();

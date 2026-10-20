@@ -104,8 +104,8 @@ async function until(predicate, message) {
     staleCopyRead = null;
 
     document.querySelector('[data-view="queue"]').click();
-    await until(() => document.querySelector(`[aria-label="Open request ${firstId}"]`), 'title queue renders');
-    document.querySelector(`[aria-label="Open request ${firstId}"]`).click();
+    await until(() => document.querySelector(`a[data-request-id="${firstId}"]`), 'title queue renders');
+    document.querySelector(`a[data-request-id="${firstId}"]`).click();
     await until(() => document.getElementById('request-dialog-title').textContent === 'First title', 'first detail opens');
     document.getElementById('close-request').click();
     await until(() => !new URL(dom.window.location.href).searchParams.has('request'),
@@ -115,7 +115,7 @@ async function until(predicate, message) {
     document.querySelector('#recent-request-list button').click();
     await until(() => document.getElementById('app-status').textContent.includes('Loading request details'),
       'old recent detail starts');
-    document.querySelector(`[aria-label="Open request ${secondId}"]`).click();
+    document.querySelector(`a[data-request-id="${secondId}"]`).click();
     await until(() => document.getElementById('request-dialog-title').textContent === 'Second title',
       'newer detail takes ownership');
     staleRecentRead.resolve(response(404, { code: 'not_found', message: 'Old request unavailable' }));

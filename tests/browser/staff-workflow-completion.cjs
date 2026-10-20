@@ -4,6 +4,8 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const verifyMixedFieldLayout = require('./form-layout.cjs');
+const verifyStaffNativeZoom = require('./staff-native-zoom.cjs');
+const verifyRequestTable = require('./staff-request-table.cjs');
 const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode, pickup, title] = process.argv.slice(2);
 
 (async () => {
@@ -57,6 +59,8 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
       assert.match(await dialog.locator('#staff-suggestion-pickup-help').textContent(), /Unfilled requests use the live preference when each hold is placed/i);
     };
     await page.goto(`${baseURL}/staff/?stage=queue&scope=${library}&status=suggestion`);
+    report.listActions = await verifyRequestTable({ page, context, baseURL, library, scan });
+    await page.locator('#request-search').fill(barcode);
     await quick().waitFor(); await quick().focus(); await page.keyboard.press('Enter');
     await verifyFresh();
     assert.equal(await dialog.getByLabel(/^Title/).evaluate(node => node === document.activeElement), true);
@@ -82,7 +86,7 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     await page.keyboard.press('Escape');
     assert.equal(await quick().evaluate(node => node === document.activeElement), true);
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.getByRole('button', { name: `Open request ${sourceId}`, exact: true }).click();
+    await page.getByRole('link', { name: `Open request ${sourceId}:`, exact: false }).click();
     await page.locator('#request-dialog[open]').waitFor();
     const detail = page.locator('#request-dialog');
     await verifyMixedFieldLayout(page, '#request-dialog .request-details-panel');
@@ -138,7 +142,8 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     assert.equal(acceptedDetail.id, created.id);
     await page.locator('#request-dialog[open]').waitFor();
     assert.equal(await detail.getByRole('tab', { name: 'Details', exact: true }).getAttribute('aria-selected'), 'true');
-    assert.equal(await detail.locator('.request-save-state').textContent(), 'All changes saved');
+    assert.equal(await detail.locator('.request-save-state').textContent(), 'All changes saved',
+      JSON.stringify({ acceptedDetail, preview: await detail.locator('.pending-audit-preview').textContent() }));
     assert.equal(await detail.locator('.patron-context').getByText('Format', { exact: true }).count(), 0);
     await scan('created-detail');
     assert.ok((await page.locator('#request-dialog').textContent()).includes(acceptedDetail.title));
@@ -149,17 +154,20 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     assert.equal(await page.locator('#status-tabs [aria-selected="true"]').getAttribute('data-status'), 'suggestion');
     const claims = page.locator('#claim-filter');
     await claims.selectOption('all');
-    const row = page.locator('#request-grid tr').filter({ has: page.getByRole('button', { name: `Open request ${created.id}`, exact: true }) });
+    const row = page.locator('#request-grid tr').filter({ has: page.getByRole('link', { name: `Open request ${created.id}:`, exact: false }) });
     await row.waitFor(); assert.match(await row.textContent(), /Browser claimant/); assert.match(await row.textContent(), /Duplicate suggestion/i);
     await claims.selectOption('mine_unclaimed');
     await row.waitFor({ state: 'hidden' });
-    await page.getByRole('button', { name: `Open request ${sourceId}`, exact: true }).waitFor();
+    await page.getByRole('link', { name: `Open request ${sourceId}:`, exact: false }).waitFor();
     await claims.selectOption('all');
     await row.waitFor();
     await scan('created-queue');
     assert.deepEqual(report.externalRequests, []); assert.deepEqual(report.errors, []);
-    await fs.writeFile(path.join(artifacts, 'browser-results.json'), JSON.stringify(report, null, 2));
     await context.close();
+    report.nativeZoom = await verifyStaffNativeZoom({ baseURL, artifacts, sourceId, library, barcode,
+      headers: { 'X-ASAP-Test-Staff-Id': staffId, 'X-ASAP-Test-Tenant-Id': tenantId, 'X-ASAP-Test-Staff-Email': email } });
+    assert.equal(report.nativeZoom.length, 8);
+    await fs.writeFile(path.join(artifacts, 'browser-results.json'), JSON.stringify(report, null, 2));
   } finally { await browser.close(); }
   console.log('Staff queue/detail quick create, fresh context, explicit All scope and queue outcome passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

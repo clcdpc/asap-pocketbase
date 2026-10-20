@@ -26,9 +26,16 @@ public sealed partial class PatronJourneyTests
         provider.AddPatron(patron, [new(pickup, "Live eligible pickup")], library);
         provider.AllowPickupUpdate(barcode, library, pickup);
         provider.SetIdentifierResult("BROWSER-MATCH", library, new(IdentifierLookupOutcome.DefinitiveNotFound));
+        provider.SetBibSearch("title", "Table browser record 00", "", "", library, new([], 0));
+        provider.SetBibSearch("author", "Table browser author 00", "", "", library, new([], 0));
+        for (var index = 0; index < 2; index++)
+        {
+            provider.AddPatron(new PatronSnapshot(394200 + index, $"table-browser-{index:00}", null, "Table", "Browser patron", 1, "Adult",
+                registration, home, "Recorded home library", null), [new(pickup, "Live eligible pickup")], library);
+        }
         await ExecuteNonQueryAsync("""
             INSERT INTO [asap].[Organization] ([Id],[DisplayName],[OrganizationCodeId],[ParentOrganizationId],[IsActive])
-            VALUES (@org,N'Browser servicing library',2,1,1),(@home,N'Recorded home library',2,1,1),
+            VALUES (@org,N'Browser servicing library with a long readable name that wraps across several lines in the native zoom request context',2,1,1),(@home,N'Recorded home library',2,1,1),
                 (@registration,N'Fresh registered branch',3,@home,0),(@pickup,N'Live eligible pickup',3,@home,0);
             INSERT INTO [asap].[WorkflowSettings] ([OrganizationId],[AllowAnyRegisteredCardLogin],[UpdatedUtc]) VALUES (@org,1,SYSUTCDATETIME());
             """, ("@org", library), ("@home", home), ("@registration", registration), ("@pickup", pickup));
@@ -55,13 +62,23 @@ public sealed partial class PatronJourneyTests
                     NormalizedUserPrincipalName = "WORKFLOW-CLAIMANT@EXAMPLE.ORG", DisplayName = "Browser claimant" };
                 setup.StaffUsers.Add(claimant);
                 var source = new TitleRequest { LibraryOrganizationId = library, Barcode = barcode, PatronIdSnapshot = 394199,
-                    PatronOrganizationId = registration, NameFirst = "Old", NameLast = "Snapshot", Email = "old-snapshot@example.org",
-                    PreferredPickupBranchId = 101, PreferredPickupBranchName = "Historical ASAP pickup", Title = "Quick-create source",
+                    PatronOrganizationId = registration, NameFirst = new string('A', 80), NameLast = new string('B', 80), Email = new string('e', 180) + "@example.org",
+                    PreferredPickupBranchId = 101, PreferredPickupBranchName = "Historical ASAP pickup with a long branch name retained for history and wrapping at native zoom", Title = "Quick-create source",
                     Author = "Old author", Identifier = "BROWSER-MATCH", MaterialFormatId = format.Id, Status = "suggestion",
                     CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime, UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime };
                 setup.TitleRequests.Add(source);
                 await setup.SaveChangesAsync();
                 sourceId = source.Id; claimantId = claimant.Id;
+                setup.TitleRequests.AddRange(Enumerable.Range(0, 55).Select(index => new TitleRequest
+                {
+                    LibraryOrganizationId = library, Barcode = $"table-browser-{index:00}",
+                    NameFirst = "A long patron name", NameLast = $"for readable request rows {index:00}",
+                    Title = $"Table browser record {index:00}", Author = $"Table browser author {index:00}",
+                    Identifier = $"TABLE-BROWSER-{index:00}", MaterialFormatId = format.Id,
+                    Status = "suggestion", AutoHold = true,
+                    CreatedUtc = timeProvider.GetUtcNow().UtcDateTime.AddMinutes(-index - 1),
+                    UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
+                }));
                 setup.TitleRequestEvents.AddRange(Enumerable.Range(0, 80).Select(index => new TitleRequestEvent
                 {
                     TitleRequestId = source.Id, EventType = "legacy", ActorType = "system",
@@ -82,6 +99,20 @@ public sealed partial class PatronJourneyTests
                 sourceId.ToString(CultureInfo.InvariantCulture), library.ToString(CultureInfo.InvariantCulture), barcode,
                 pickup.ToString(CultureInfo.InvariantCulture), title);
             Assert.AreEqual(0, exitCode, $"{artifacts}{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
+            using var report = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "browser-results.json")));
+            Assert.HasCount(8, report.RootElement.GetProperty("nativeZoom").EnumerateArray().ToArray());
+            Assert.HasCount(2, report.RootElement.GetProperty("listActions").EnumerateArray().ToArray());
+            foreach (var action in report.RootElement.GetProperty("listActions").EnumerateArray())
+            {
+                var id = long.Parse(action.GetProperty("id").GetString()!, CultureInfo.InvariantCulture);
+                var actioned = await contexts.CreateDbContextAsync();
+                await using (actioned)
+                {
+                    var saved = await actioned.TitleRequests.SingleAsync(item => item.Id == id);
+                    Assert.AreEqual(action.GetProperty("status").GetString(), saved.Status);
+                    Assert.IsTrue(await actioned.TitleRequestEvents.AnyAsync(item => item.TitleRequestId == id && item.StaffUserId == actor.Id));
+                }
+            }
             await using var verify = await contexts.CreateDbContextAsync();
             var created = await verify.TitleRequests.SingleAsync(item => item.LibraryOrganizationId == library && item.Title == title);
             Assert.AreEqual(patron.PatronId, created.PatronIdSnapshot);

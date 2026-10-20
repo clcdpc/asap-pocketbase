@@ -41,7 +41,10 @@ function focusPort({ grid, label, fallback, sessionIdentity, getContext, copy, s
   const owner = sessionIdentity.preferences();
   const context = getContext();
   return { root: grid, fallback,
-    target: () => [...grid().querySelectorAll(selector)].find(button => button.getAttribute('aria-label') === label),
+    target: () => [...grid().querySelectorAll(selector)].find(button => {
+      const name = button.getAttribute('aria-label') || '';
+      return name === label || name.startsWith(`${label}: `);
+    }),
     isCurrent: () => sessionIdentity.isCurrent(owner) && getContext().activeView === context.activeView &&
       getContext().scope === context.scope && (copy ? getContext().additionalCopyStatus === context.additionalCopyStatus : getContext().status === context.status)
   };
@@ -49,7 +52,7 @@ function focusPort({ grid, label, fallback, sessionIdentity, getContext, copy, s
 
 export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   onOpen, onScopeIntent, onStatusIntent, onScopeAccepted, onLibraries, onRefreshed, onRendered,
-  onNewSuggestion = null,
+  onNewSuggestion = null, polarisLookup = null,
   resolveScope = () => getContext().scope,
   request = authorizedJson }) {
   const dom = {
@@ -70,9 +73,19 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   const state = { requests: [], grid: null, gridStatus: null, loadedContext: null, stale: true, sequence: 0 };
   const reads = createLatestLoad();
   const events = new window.AbortController();
-  let disposed = false, acceptingScope = false, targetGeneration = 0;
+  let disposed = false, acceptingScope = false, targetGeneration = 0, lookupContext = null;
+  const gridAccessibility = new window.MutationObserver(() => {
+    const wrapper = dom.grid.querySelector('.gridjs-wrapper');
+    if (!wrapper || disposed) return;
+    wrapper.tabIndex = 0;
+    wrapper.setAttribute('role', 'region');
+    wrapper.setAttribute('aria-label', 'Title requests');
+    wrapper.setAttribute('aria-describedby', 'request-table-help');
+  });
+  gridAccessibility.observe(root, { childList: true, subtree: true });
 
-  function invalidate() { targetGeneration++; reads.begin('queue-target').abort(); reads.begin('queue').abort(); if (!disposed) dom.refresh.disabled = false; }
+  function closeLookup() { if (lookupContext) polarisLookup?.close(lookupContext); lookupContext = null; }
+  function invalidate() { closeLookup(); targetGeneration++; reads.begin('queue-target').abort(); reads.begin('queue').abort(); if (!disposed) dom.refresh.disabled = false; }
 
   async function prepare(context) {
     const owner = sessionIdentity.preferences(), load = reads.begin('queue-target'), ticket = ++targetGeneration;
@@ -220,46 +233,149 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   }
 
   function queueColumns() {
-    const field = (label, value, width = '130px') => ({ label, value, width });
-    const title = field('Title', request => request.title, '220px');
-    const bib = field('BIB ID', request => request.bibid || '—');
-    bib.kind = 'bib';
-    const format = field('Format', request => request.formatLabel || request.format || '—');
-    const library = field('Library', request => request.libraryOrgName, '150px');
-    const patron = field('Patron', request => [request.nameLast, request.nameFirst].filter(Boolean).join(', ') || request.barcode, '150px');
-    patron.kind = 'patron';
-    const claim = field('Claim', request => request.claimedByDisplayName || 'Unclaimed', '145px');
-    claim.kind = 'claim';
-    const notes = field('Notes', request => request.notes?.trim() ? 'Present' : '—', '85px');
-    const tags = field('Tags', request => request.workflowTags?.join(', ') || 'None', '145px');
-    const open = field('Open', request => request.id, '160px');
-    open.kind = 'open';
-    const automation = label => field(label, workflowLabel, '145px');
-    switch (getContext().status) {
-      case 'suggestion':
-        return [title, field('Identifier', request => request.identifier || '—'), format,
-          field('Submitted', request => dateTime(request.created), '155px'), patron, library,
-          field('Related', request => request.relatedRequests?.count ?? '—', '90px'),
-          automation('Suggestion timeout'), tags, claim, notes, open];
-      case 'outstanding_purchase':
-        return [title, field('Identifier', request => request.identifier || '—'), bib, format,
-          field('Submitted', request => dateTime(request.created), '155px'),
-          field('Stage entered', request => dateTime(request.phaseEnteredAt), '155px'),
-          automation('Auto promotion'), library, claim, notes, open];
-      case 'pending_hold':
-        return [title, bib, format, field('Stage entered', request => dateTime(request.phaseEnteredAt), '155px'),
-          automation('Pending timeout'), patron, library, tags, claim, notes, open];
-      case 'hold_placed':
-        return [title, bib, format, field('Stage entered', request => dateTime(request.phaseEnteredAt), '155px'),
-          automation('Pickup timeout'), patron, library, claim, notes, open];
-      default:
-        return [title, bib, format, field('Close reason', request => closeReasonLabel(request.closeReason), '150px'),
-          field('Updated', request => dateTime(request.updated), '155px'), patron, library, claim, notes, open];
+    return [
+      { label: 'Barcode', kind: 'patron', width: '14%', value: request => request.barcode || 'Not recorded' },
+      // The combined bibliographic column sorts by Title; Author has its own search shortcut.
+      { label: 'Bibliographic details', kind: 'bibliographic', width: '23%', value: request => request.title },
+      { label: 'Format', width: '8%', value: request => request.formatLabel || request.format || 'Not recorded' },
+      { label: 'Submitted', kind: 'submitted', width: '10%', value: request => request.created || '' },
+      { label: 'Library', width: '10%', value: request => request.libraryOrgName },
+      { label: 'Claim', kind: 'claim', width: '9%', value: request => request.claimedByDisplayName || 'Unclaimed' },
+      { label: 'Status', kind: 'status', width: '9%', value: request => statusLabel(request.status) },
+      { label: 'Actions', kind: 'actions', width: '17%', value: request => request.id }
+    ];
+  }
+
+  function liveRow(event, owner, request) {
+    return sessionIdentity.isCurrent(owner) && !disposed && !state.stale && state.requests.includes(request) &&
+      request.status === getContext().status && getContext().activeView === 'queue' &&
+      event.currentTarget.isConnected && dom.grid.contains(event.currentTarget);
+  }
+
+  function searchCatalog(request, mode, opener) {
+    if (!polarisLookup) return;
+    const owner = sessionIdentity.preferences(), projection = state.requests, context = getContext();
+    lookupContext = {
+      requestId: request.id, libraryOrgId: request.libraryOrgId, mode,
+      query: mode === 'author' ? request.author || '' : request.title,
+      readOnly: true, canApply: false, returnFocus: opener,
+      isCurrent: () => !disposed && !state.stale && state.requests === projection && sessionIdentity.isCurrent(owner) &&
+        getContext().activeView === 'queue' && getContext().scope === context.scope && getContext().status === context.status && opener.isConnected
+    };
+    polarisLookup.open(lookupContext);
+  }
+
+  function formatCell(column, cell, row, owner) {
+    const h = window.gridjs.h, request = state.requests.find(item => item.id === row.cells.at(-1).data);
+    if (!request) return cell;
+    const live = event => liveRow(event, owner, request);
+    const glyph = name => h('i', { className: `fa fa-${name}`, 'aria-hidden': 'true' });
+    if (column.kind === 'patron') {
+      const name = [request.nameFirst, request.nameLast].filter(Boolean).join(' ') || 'Name not recorded';
+      const url = researchRecordUrl(request.research, 'patron');
+      return h('div', { className: 'request-patron-cell' }, [
+        h('div', { className: 'request-patron-text' }, [
+          url ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', title: String(cell) }, String(cell)) : h('span', {}, cell),
+          h('small', { className: 'request-cell-text', title: name }, name)
+        ]),
+        request.barcode?.trim() && onNewSuggestion ? h('button', {
+          type: 'button', className: 'grid-new-suggestion',
+          'aria-label': `New suggestion for patron ${request.barcode.trim()} from request ${request.id}`,
+          title: `New suggestion for ${name}`,
+          onClick: event => { if (live(event)) onNewSuggestion(request.barcode.trim(), event.currentTarget, request.id); }
+        }, glyph('plus')) : null
+      ]);
     }
+    if (column.kind === 'bibliographic') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('request', request.id);
+      url.searchParams.set('stage', getContext().status);
+      url.searchParams.set('scope', getContext().scope);
+      const search = (mode, value) => h('button', { type: 'button', className: 'request-search-shortcut', disabled: !value?.trim(),
+        'aria-label': `Search Polaris for ${mode}: ${value || 'Not recorded'}`, title: `Search Polaris for ${mode}: ${value || 'Not recorded'}`,
+        onClick: event => { if (live(event)) searchCatalog(request, mode, event.currentTarget); }
+      }, glyph('search'));
+      const bibUrl = researchRecordUrl(request.research, 'bib', request.bibid);
+      const flags = [...new Set([...(request.workflowTags || []),
+        request.isbnCheckStatus === 'not_found' && !(request.workflowTags || []).includes('Polaris BIB not found') ? 'Identifier not found in Polaris' : null,
+        request.relatedRequests?.count > 0 ? `${request.relatedRequests.count} related request(s)` : null].filter(Boolean))];
+      return h('div', { className: 'request-bibliographic-cell' }, [
+        h('div', { className: 'request-bibliographic-line' }, [
+          h('a', { href: url.pathname + url.search, className: 'grid-open request-title-link request-cell-text', title: request.title,
+            'data-request-id': request.id, 'aria-label': `Open request ${request.id}: ${request.title}`,
+            onClick: event => {
+              if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button > 0) return;
+              event.preventDefault(); if (live(event)) onOpen(request.id, event.currentTarget);
+            }
+          }, request.title), search('title', request.title)
+        ]),
+        h('div', { className: 'request-bibliographic-line request-author-line' }, [
+          h('span', { className: 'request-cell-text', title: request.author || 'Author not recorded' }, request.author || 'Author not recorded'), search('author', request.author)
+        ]),
+        bibUrl ? h('a', { className: 'request-bib-link', href: bibUrl, target: '_blank', rel: 'noopener noreferrer' }, `BIB ${request.bibid}`) : null,
+        flags.length ? h('div', { className: 'tags request-row-flags' }, flags.map(flag => h('span', { className: 'tag' }, flag))) : null
+      ]);
+    }
+    if (column.kind === 'submitted') {
+      const date = new Date(cell);
+      return cell && !Number.isNaN(date.getTime()) ? h('time', { dateTime: cell, title: dateTime(cell) }, [
+        h('span', {}, date.toLocaleDateString()), h('small', {}, date.toLocaleTimeString())
+      ]) : dateTime(cell);
+    }
+    if (column.kind === 'claim') return h('span', { className: `claim-label${request.claimedByStaffUserId === owner.id ? ' mine' : ''}`, title: cell }, cell);
+    if (column.kind === 'status') return h('div', {}, [h('span', { className: `status-badge${request.status === 'closed' ? ' closed' : ''}` }, cell),
+      request.status === 'closed' ? h('small', {}, closeReasonLabel(request.closeReason)) : null]);
+    if (column.kind !== 'actions') return cell;
+    const command = (label, action, name, className = 'secondary-button') => h('button', {
+      type: 'button', className, 'aria-label': `${label} request ${request.id}`,
+      onClick: event => {
+        if (!live(event)) return;
+        const popup = event.currentTarget.closest('[popover]');
+        const opener = popup ? popup.parentElement.querySelector('.request-row-more') : event.currentTarget;
+        popup?.hidePopover();
+        onOpen(request.id, opener, { action });
+      }
+    }, [glyph(name), label]);
+    const allowed = new Set(request.capabilities?.allowedActions || []);
+    const options = [command('Open details', 'edit', 'pencil')];
+    if (allowed.has('alreadyOwn')) options.push(command('Already own', 'alreadyOwn', 'book'));
+    if (request.status !== 'closed') {
+      if (!request.claimedByStaffUserId) options.push(command('Claim', 'claim', 'user-plus'));
+      options.push(command('Assign', 'assign', 'users'));
+    }
+    if (allowed.has('silentClose')) options.push(command('Close silently', 'silentClose', 'archive'));
+    const popupId = `request-row-${request.id}-actions`;
+    const more = h('button', { type: 'button', className: 'request-row-more secondary-button', 'aria-label': `More actions for request ${request.id}`,
+      'aria-controls': popupId, 'aria-expanded': 'false', title: 'More actions',
+      onClick: event => {
+        if (!live(event)) return;
+        const popup = event.currentTarget.parentElement.querySelector('[popover]');
+        if (popup.matches(':popover-open')) { popup.hidePopover(); return; }
+        popup.showPopover();
+        const rect = event.currentTarget.getBoundingClientRect();
+        popup.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - popup.offsetWidth - 8))}px`;
+        popup.style.top = `${Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - popup.offsetHeight - 8))}px`;
+        popup.querySelector('button')?.focus();
+      }
+    }, glyph('ellipsis-h'));
+    return h('div', { className: 'request-row-actions' }, [
+      allowed.has('purchase') ? command('Purchase', 'purchase', 'shopping-cart', 'primary-button') : null,
+      allowed.has('reject') ? command('Reject', 'reject', 'ban', 'danger-button') : null,
+      more,
+      h('div', { id: popupId, popover: 'auto', className: 'request-table-menu', role: 'group', 'aria-label': `Actions for request ${request.id}`,
+        onToggle: event => event.currentTarget.parentElement.querySelector('.request-row-more')?.setAttribute('aria-expanded', String(event.newState === 'open')),
+        onKeyDown: event => {
+          if (event.key !== 'Escape') return;
+          event.preventDefault(); event.stopPropagation(); event.currentTarget.hidePopover();
+          event.currentTarget.parentElement.querySelector('.request-row-more')?.focus();
+        }
+      }, options)
+    ]);
   }
 
   function renderGrid() {
     if (disposed) return;
+    closeLookup();
     const owner = sessionIdentity.preferences();
     onRendered();
     const requests = filteredRequests();
@@ -272,8 +388,8 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     }
     const stageRequests = state.requests.filter(request => request.status === getContext().status);
     dom.queueAutomation.textContent = getContext().status === 'closed' ? ''
-      : getContext().scope === 'all' ? 'Workflow rules are shown for each request’s library.'
-      : stageRequests.length ? `${queueColumns().find(column => column.label.includes('timeout') || column.label === 'Auto promotion')?.label || 'Automation'}: ${workflowLabel(stageRequests[0])}.`
+      : getContext().scope === 'all' ? 'Workflow rules follow each request’s library; open Details to review.'
+      : stageRequests.length ? `${({ suggestion: 'Suggestion timeout', outstanding_purchase: 'Auto promotion', pending_hold: 'Pending timeout', hold_placed: 'Pickup timeout' })[getContext().status]}: ${workflowLabel(stageRequests[0])}.`
         : 'Workflow rules will appear with requests in this stage.';
     const definitions = queueColumns();
     const rows = requests.map(request => definitions.map(column => column.value(request)));
@@ -285,50 +401,10 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     if (!state.grid) {
       state.gridStatus = getContext().status;
       state.grid = new window.gridjs.Grid({
-        columns: definitions.map((column, index) => {
-          if (column.kind === 'bib' || column.kind === 'patron') return {
-            name: column.label, width: column.width,
-            formatter: (cell, row) => {
-              const request = state.requests.find(item => item.id === row.cells.at(-1).data);
-              const url = researchRecordUrl(request?.research, column.kind, request?.bibid);
-              return url ? window.gridjs.h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, String(cell)) : cell;
-            }
-          };
-          if (column.kind === 'claim') return {
-            name: column.label, width: column.width,
-            formatter: (cell, row) => {
-              const request = state.requests.find(item => item.id === row.cells.at(-1).data);
-              const mine = request && request.claimedByStaffUserId === sessionIdentity.preferences()?.id;
-              return window.gridjs.h('span', { className: `claim-label${mine ? ' mine' : ''}` }, cell);
-            }
-          };
-          if (column.kind === 'open') return {
-            name: column.label, width: column.width, sort: false,
-            formatter: id => {
-              const request = state.requests.find(item => item.id === id);
-              const live = event => sessionIdentity.isCurrent(owner) && !disposed && !state.stale &&
-                getContext().activeView === 'queue' && event.currentTarget.isConnected && dom.grid.contains(event.currentTarget);
-              const open = window.gridjs.h('button', {
-              type: 'button', className: 'grid-open', 'aria-label': `Open request ${id}`,
-              onClick: event => {
-                if (live(event)) {
-                  onOpen(String(id), event.currentTarget);
-                }
-              }
-              }, [window.gridjs.h('i', { className: 'fa fa-chevron-right', 'aria-hidden': 'true' }), 'Open']);
-              const barcode = typeof request?.barcode === 'string' ? request.barcode.trim() : '';
-              if (!barcode || !onNewSuggestion) return open;
-              return window.gridjs.h('div', {}, [open, window.gridjs.h('button', {
-                type: 'button', className: 'grid-new-suggestion', 'aria-label': `New suggestion for patron ${barcode} from request ${id}`,
-                title: 'New suggestion for this patron',
-                onClick: event => {
-                  if (live(event)) onNewSuggestion(barcode, event.currentTarget, String(id));
-                }
-              }, [window.gridjs.h('i', { className: 'fa fa-plus', 'aria-hidden': 'true' }), 'New suggestion'])]);
-            }
-          };
-          return { name: column.label, width: column.width };
-        }),
+        columns: definitions.map(column => ({
+          name: column.label, width: column.width, sort: column.kind !== 'actions',
+          formatter: (cell, row) => formatCell(column, cell, row, owner)
+        })),
         data: rows,
         sort: true,
         pagination: { limit: 25, summary: true },
@@ -340,6 +416,17 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     }
   }
 
+  root.addEventListener('click', event => {
+    if (event.defaultPrevented || event.button > 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey ||
+        event.target.closest('a, button, input, select, textarea, summary, [popover], [role="button"], [contenteditable]')) return;
+    const row = event.target.closest('tr');
+    if (!row || !dom.grid.contains(row)) return;
+    const link = row.querySelector('.request-title-link');
+    const request = state.requests.find(item => item.id === link?.dataset.requestId);
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && row.contains(selection.anchorNode)) return;
+    if (request && liveRow({ currentTarget: link }, sessionIdentity.preferences(), request)) onOpen(request.id, link);
+  }, { signal: events.signal });
   dom.refresh.addEventListener('click', () => { void refresh(); }, { signal: events.signal });
   dom.scope.addEventListener('change', () => {
     if (!onScopeIntent(dom.scope.value)) dom.scope.value = getContext().scope;
@@ -376,7 +463,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     preferencesChanged() { if (disposed) return; dom.claim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all'; renderGrid(); },
     clear: retireProjection,
     signedOut() { if (disposed) return; invalidate(); state.requests = []; state.loadedContext = null; state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); },
-    dispose() { if (disposed) return; disposed = true; events.abort(); invalidate(); state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); state.requests = []; }
+    dispose() { if (disposed) return; disposed = true; gridAccessibility.disconnect(); events.abort(); invalidate(); state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); state.requests = []; }
   };
 }
 
