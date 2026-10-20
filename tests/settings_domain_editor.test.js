@@ -431,6 +431,52 @@ const axe = require('axe-core');
     assert.strictEqual(missingRuleRowPayloadEmitted, false,
       'A partial rendered rule roster must not produce a replacement payload.');
 
+    const providerData = JSON.parse(JSON.stringify(data));
+    const providers = [
+      { id: '9007199254740993', key: 'external_search_1', label: 'One', urlTemplate: 'https://example.org/?q={{title}}', isEnabled: true, sortOrder: 10, overridden: false },
+      { id: '9007199254740995', key: 'PROVIDER_1', label: 'Two', urlTemplate: 'https://example.org/?q={{author}}', isEnabled: true, sortOrder: 20, overridden: false },
+      { id: '9007199254740997', key: 'provider_3', label: 'Three', urlTemplate: 'https://example.org/', isEnabled: false, sortOrder: 30, overridden: false }
+    ];
+    providerData.stored.configuredSystem.providers = providers;
+    providerData.stored.providers = providers;
+    providerData.effective.externalSearchProviders = providers;
+    const providerEditors = module.createSettingsDomainEditors({ root });
+    providerEditors.populate(providerData, true);
+    const providerRows = () => [...root.querySelectorAll('#external-search-provider-editor [data-domain-row]')];
+    assert.equal(providerRows().length, 3);
+    assert.equal(root.querySelector('#external-search-provider-editor').textContent.includes('Provider key'), false);
+    assert.equal(providerRows()[0].querySelectorAll('input[type="text"]').length, 1, 'Only the label is a visible text input.');
+    providerRows()[0].querySelector('input[type="text"]').value = 'Updated one';
+    providerRows()[0].querySelector('input[type="checkbox"]').checked = false;
+    root.querySelector('#add-provider').click();
+    assert.equal(providerRows().at(-1).dataset.providerKey, 'provider_2', 'Key generation must respect case-insensitive collisions and gaps.');
+    root.querySelector('#add-provider').click();
+    assert.equal(providerRows().at(-1).dataset.providerKey, 'provider_4');
+    let savedProviders = providerEditors.collect().values.providers;
+    assert.equal(savedProviders[0].key, 'external_search_1');
+    assert.equal(savedProviders[0].id, '9007199254740993');
+    assert.equal(savedProviders[0].label, 'Updated one');
+    assert.equal(savedProviders[0].isEnabled, false);
+    providerData.stored.configuredSystem.providers = savedProviders;
+    providerData.stored.providers = savedProviders;
+    providerEditors.populate(providerData, true);
+    assert.deepEqual(providerRows().map(row => row.dataset.providerKey), savedProviders.map(item => item.key), 'Repopulation must never regenerate an existing key.');
+    providerData.stored.configuredSystem.providers = providers;
+    providerData.stored.providers = providers;
+    providerData.effective.externalSearchProviders = providers;
+    providerEditors.populate(providerData, false);
+    assert.equal(root.querySelector('#add-provider').hidden, true);
+    assert.equal(providerRows()[0].querySelector('input[type="text"]').disabled, true);
+    providerRows()[0].querySelector('.settings-domain-override-toggle').click();
+    providerRows()[0].querySelector('input[type="text"]').value = 'Library one';
+    savedProviders = providerEditors.collect().values.providers;
+    assert.equal(savedProviders[0].key, 'external_search_1');
+    assert.equal(savedProviders[0].overridden, true);
+    assert.equal(savedProviders[0].label, 'Library one');
+    providerRows()[0].querySelector('.settings-domain-override-toggle').click();
+    assert.equal(providerEditors.collect().values.providers[0].reset, true);
+    providerEditors.dispose();
+
     dom.window.close();
     console.log('Settings domain editor controls and inheritance checks passed');
   } finally {

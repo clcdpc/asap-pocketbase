@@ -190,9 +190,9 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
                 "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates."),
             Pick(libraryPatron?.SuccessTitle, systemPatron.SuccessTitle, "Suggestion Submitted"),
             Pick(libraryPatron?.SuccessMessage, systemPatron.SuccessMessage,
-                "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>"),
+                "You have successfully submitted your material suggestion! Check your email inbox for status updates.\n\nThank you for using our suggestion service."),
             Pick(libraryPatron?.AlreadySubmittedMessage, systemPatron.AlreadySubmittedMessage,
-                "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library's suggestion service.</div>"),
+                "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.\n\nThank you for using this library's suggestion service."),
             Pick(null, systemSettings.SystemNotEnabledMessage,
                     "{{library}} does not currently participate in this suggestion service.")
                 .Replace("{{library}}", organization.DisplayName, StringComparison.Ordinal),
@@ -200,9 +200,9 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
                     "The {{library}} suggestion system is currently misconfigured. Please contact staff.")
                 .Replace("{{library}}", organization.DisplayName, StringComparison.Ordinal),
             Pick(libraryPatron?.EbookMessage, systemPatron.EbookMessage,
-                "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>"),
+                "This is an eBook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm"),
             Pick(libraryPatron?.EaudiobookMessage, systemPatron.EaudiobookMessage,
-                "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>"),
+                "This is an eAudiobook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm"),
             duplicateStatusLabels,
             externalSearchProviders,
             publicationOptions,

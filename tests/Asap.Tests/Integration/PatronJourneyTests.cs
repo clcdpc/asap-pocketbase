@@ -9226,7 +9226,7 @@ public sealed partial class PatronJourneyTests
             "This patron already has a suggestion for this identifier number.",
             root.GetProperty("message").GetString());
         Assert.AreEqual(
-            "Duplicate Identifier &lt;Winner&gt; is Library declined via identifier number.",
+            "Duplicate Identifier <Winner> is Library declined via identifier number.",
             root.GetProperty("conflictMessage").GetString());
         var duplicate = root.GetProperty("duplicate");
         var duplicateId = duplicate.GetProperty("id");

@@ -160,6 +160,142 @@ public sealed class EmailDefaultsDeploymentTests
             "Repeated credential cleanup must not touch already clean rows.");
     }
 
+    [TestMethod]
+    public async Task PatronPlainTextDefaultsReconcileOnlyExactSeedsAcrossScopesAndRemainIdempotent()
+    {
+        var old = new[]
+        {
+            "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
+            "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library's suggestion service.</div>",
+            "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+            "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>"
+        };
+        var expected = new[]
+        {
+            "You have successfully submitted your material suggestion! Check your email inbox for status updates.\n\nThank you for using our suggestion service.",
+            "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.\n\nThank you for using this library's suggestion service.",
+            "This is an eBook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm",
+            "This is an eAudiobook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm"
+        };
+        await using var connection = new SqlConnection(target);
+        await connection.OpenAsync();
+        var fresh = await ReadPatronMessagesAsync(connection);
+        CollectionAssert.AreEqual(expected, fresh[1].Messages);
+        // Every other editable PatronSettings default is already ordinary text.
+        await using (var command = new SqlCommand("SELECT * FROM [asap].[PatronSettings] WHERE [OrganizationId] = 1;", connection))
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            Assert.IsTrue(await reader.ReadAsync());
+            for (var index = 0; index < reader.FieldCount; index++)
+            {
+                if (!reader.IsDBNull(index) && reader.GetFieldType(index) == typeof(string))
+                {
+                    Assert.IsFalse(reader.GetString(index).Contains('<'), reader.GetName(index));
+                }
+            }
+        }
+        for (var organizationId = 1; organizationId <= 7; organizationId++)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                IF @org <> 1
+                BEGIN
+                    INSERT INTO [asap].[Organization] ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+                    VALUES (@org, N'Patron message regression', 2, 1, 1);
+                    INSERT INTO [asap].[PatronSettings] ([OrganizationId], [UpdatedUtc]) VALUES (@org, SYSUTCDATETIME());
+                END;
+                UPDATE [asap].[PatronSettings] SET [SuccessMessage] = @success, [AlreadySubmittedMessage] = @duplicate,
+                    [EbookMessage] = @ebook, [EaudiobookMessage] = @audio WHERE [OrganizationId] = @org;
+                """;
+            command.Parameters.AddWithValue("@org", organizationId);
+            for (var index = 0; index < old.Length; index++)
+            {
+                string? value = organizationId switch
+                {
+                    3 => old[index] + "\nCustomized",
+                    4 => old[index] + " ",
+                    5 => old[index].ToUpperInvariant(),
+                    6 => string.Empty,
+                    7 => null,
+                    _ => old[index]
+                };
+                command.Parameters.AddWithValue(new[] { "@success", "@duplicate", "@ebook", "@audio" }[index], (object?)value ?? DBNull.Value);
+            }
+            await command.ExecuteNonQueryAsync();
+        }
+        await using (var command = new SqlCommand("""
+            UPDATE [asap].[MaterialFormat] SET [Message] = @ebook WHERE [OwnerOrganizationId] = 1 AND [Code] = N'ebook';
+            INSERT INTO [asap].[MaterialFormatOverride] ([LibraryOrganizationId], [MaterialFormatId], [Message])
+            SELECT 2, [Id], @audio FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1 AND [Code] = N'eaudiobook';
+            """, connection))
+        {
+            command.Parameters.AddWithValue("@ebook", old[2]);
+            command.Parameters.AddWithValue("@audio", old[3]);
+            await command.ExecuteNonQueryAsync();
+        }
+        var before = await ReadPatronMessagesAsync(connection);
+        Deploy();
+        var after = await ReadPatronMessagesAsync(connection);
+        foreach (var id in new[] { 1, 2 })
+        {
+            CollectionAssert.AreEqual(expected, after[id].Messages);
+            Assert.AreNotEqual(before[id].Version, after[id].Version);
+        }
+        foreach (var id in Enumerable.Range(3, 5))
+        {
+            CollectionAssert.AreEqual(before[id].Messages, after[id].Messages, $"Custom/blank/inherited scope {id}");
+            Assert.AreEqual(before[id].Version, after[id].Version, "Nondefault rows must not be touched.");
+        }
+        var formatVersions = new List<string>();
+        for (var iteration = 0; iteration < 2; iteration++)
+        {
+            await using var command = new SqlCommand("""
+                SELECT [Message], CONVERT(varchar(20), [RowVersion], 2) FROM [asap].[MaterialFormat]
+                WHERE [OwnerOrganizationId] = 1 AND [Code] = N'ebook'
+                UNION ALL SELECT [Message], CONVERT(varchar(20), [RowVersion], 2) FROM [asap].[MaterialFormatOverride];
+                """, connection);
+            await using var reader = await command.ExecuteReaderAsync();
+            var rows = new List<string>();
+            while (await reader.ReadAsync())
+            {
+                Assert.AreEqual(expected[rows.Count + 2], reader.GetString(0));
+                rows.Add(reader.GetString(1));
+            }
+            Assert.AreEqual(2, rows.Count);
+            if (iteration == 0)
+            {
+                formatVersions = rows;
+                await reader.DisposeAsync();
+                Deploy();
+            }
+            else
+            {
+                CollectionAssert.AreEqual(formatVersions, rows);
+            }
+        }
+        var repeated = await ReadPatronMessagesAsync(connection);
+        foreach (var id in after.Keys)
+        {
+            CollectionAssert.AreEqual(after[id].Messages, repeated[id].Messages);
+            Assert.AreEqual(after[id].Version, repeated[id].Version, "Reconciliation is idempotent, including rowversions.");
+        }
+    }
+
+    private static async Task<Dictionary<int, (string?[] Messages, string Version)>> ReadPatronMessagesAsync(SqlConnection connection)
+    {
+        await using var command = new SqlCommand("""
+            SELECT [OrganizationId], [SuccessMessage], [AlreadySubmittedMessage], [EbookMessage], [EaudiobookMessage],
+                CONVERT(varchar(20), [RowVersion], 2) FROM [asap].[PatronSettings] ORDER BY [OrganizationId];
+            """, connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        var rows = new Dictionary<int, (string?[], string)>();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(reader.GetInt32(0), (Enumerable.Range(1, 4).Select(index => reader.IsDBNull(index) ? null : reader.GetString(index)).ToArray(), reader.GetString(5)));
+        }
+        return rows;
+    }
+
     private void Deploy() => new DacpacDeploymentService().Deploy(target, TestArtifactPaths.FindDacpac());
 
     private sealed record TemplateRow(long Id, int OrganizationId, string Key, long? SourceId, string? Name,

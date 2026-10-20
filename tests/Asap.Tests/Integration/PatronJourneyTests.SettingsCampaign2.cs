@@ -19,6 +19,7 @@ public sealed partial class PatronJourneyTests
         var libraryId = await ReserveSettingsCourseLibraryIdAsync();
         var originalFormat = await ReadSystemFormatEvidenceAsync("book");
         var originalIdentity = 0L;
+        object originalSuccessMessage = DBNull.Value;
         var auditBefore = await ReadAuditHighWatermarkAsync();
         var outboxBefore = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];");
         var suffix = Guid.NewGuid().ToString("N");
@@ -36,6 +37,8 @@ public sealed partial class PatronJourneyTests
                 await using var command = connection.CreateCommand();
                 command.CommandText = "SELECT CONVERT(bigint, IDENT_CURRENT(N'[asap].[EmailTemplate]'));";
                 originalIdentity = (long)(await command.ExecuteScalarAsync())!;
+                command.CommandText = "SELECT [SuccessMessage] FROM [asap].[PatronSettings] WHERE [OrganizationId] = 1;";
+                originalSuccessMessage = (await command.ExecuteScalarAsync())!;
             }
             await ExecuteNonQueryAsync("""
                 INSERT INTO [asap].[Organization]
@@ -107,7 +110,12 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(report.RootElement.GetProperty(libraryAdmin ? "campaign2LibraryAdmin" : "campaign2SystemAndInheritance").GetBoolean());
             Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
             Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
-            Assert.HasCount(4, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(7, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.IsTrue(report.RootElement.GetProperty("patronTextRoundTrip").GetBoolean());
+            if (!libraryAdmin)
+            {
+                Assert.IsTrue(report.RootElement.GetProperty("providerIdentityRoundTrip").GetBoolean());
+            }
             Assert.AreEqual(outboxBefore, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];"));
             Assert.AreEqual(1, await ReadCountWithParameterAsync("""
                 SELECT COUNT(*) FROM [asap].[EmailTemplate]
@@ -138,13 +146,17 @@ public sealed partial class PatronJourneyTests
                 DELETE FROM [asap].[StaffUser] WHERE [OrganizationId] = @org;
                 DELETE FROM [asap].[EmailSettings] WHERE [OrganizationId] = @org;
                 DELETE FROM [asap].[PatronSettings] WHERE [OrganizationId] = @org;
+                DELETE FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] = @org;
+                DELETE FROM [asap].[ExternalSearchProvider] WHERE [Label] LIKE @providerLabel;
+                UPDATE [asap].[PatronSettings] SET [SuccessMessage] = @success WHERE [OrganizationId] = 1;
                 DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = @org;
                 DELETE FROM [asap].[Organization] WHERE [Id] = @org;
                 UPDATE [asap].[MaterialFormat] SET [MessageBehavior] = @behavior, [Message] = @message
                 WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book';
                 """, ("@org", libraryId), ("@auditBefore", auditBefore),
                 ("@behavior", (object?)originalFormat.MessageBehavior ?? DBNull.Value),
-                ("@message", (object?)originalFormat.Message ?? DBNull.Value));
+                ("@message", (object?)originalFormat.Message ?? DBNull.Value),
+                ("@success", originalSuccessMessage), ("@providerLabel", $"UI refinements provider {suffix}%"));
             if (originalIdentity > 0)
             {
                 await ExecuteNonQueryAsync($"DBCC CHECKIDENT (N'[asap].[EmailTemplate]', RESEED, {originalIdentity}) WITH NO_INFOMSGS;");

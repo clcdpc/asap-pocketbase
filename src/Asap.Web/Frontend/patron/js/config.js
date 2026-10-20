@@ -41,7 +41,7 @@ export const defaultFormatRules = {
   },
   ebook: {
     messageBehavior: 'message',
-    message: '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>',
+    message: 'This is an eBook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm',
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
@@ -51,7 +51,7 @@ export const defaultFormatRules = {
   },
   eaudiobook: {
     messageBehavior: 'message',
-    message: '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>',
+    message: 'This is an eAudiobook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm',
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
@@ -63,8 +63,8 @@ export const defaultFormatRules = {
 
 export const defaultUiText = {
   successTitle: 'Suggestion Submitted',
-  successMessage: 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>',
-  alreadySubmittedMessage: 'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library\'s suggestion service.</div>',
+  successMessage: 'You have successfully submitted your material suggestion! Check your email inbox for status updates.\n\nThank you for using our suggestion service.',
+  alreadySubmittedMessage: 'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.\n\nThank you for using this library\'s suggestion service.',
   pageTitle: 'Material Suggestion',
   barcodeLabel: 'Library Card',
   pinLabel: 'Pin',

@@ -1,6 +1,5 @@
 using System.Data;
 using System.Globalization;
-using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
@@ -924,7 +923,7 @@ public sealed partial class PatronSuggestionService
         var conflictMessage = DuplicatePlaceholderRegex().Replace(
             configuration.AlreadySubmittedMessage,
             match => replacements.TryGetValue(match.Groups[1].Value, out var value)
-                ? WebUtility.HtmlEncode(value)
+                ? value
                 : match.Value);
         var message = matchType switch
         {

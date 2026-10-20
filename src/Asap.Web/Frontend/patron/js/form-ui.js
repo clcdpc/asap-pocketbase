@@ -18,7 +18,7 @@ import {
 } from './config.js';
 import { getFieldRule } from './form-rules.js';
 import { byId, optionNode, replaceChildren, setLabel, setText, setVisible } from './dom.js';
-import { sanitizeHtml, applyPatronTextPlaceholders } from './html.js';
+import { renderPatronText, applyPatronTextPlaceholders } from './html.js';
 import { showSuggestionStep } from './steps.js';
 import { renderCustomFields } from './custom-fields.js';
 
@@ -76,8 +76,7 @@ export function updateFormatUI() {
 
     const msgContainer = byId('econtent-msg-container');
     if (msgContainer) {
-      // Configured message HTML is sanitized before rendering.
-      msgContainer.innerHTML = sanitizeHtml(messageHtmlForBehavior(messageBehavior, format));
+      renderPatronText(msgContainer, messageHtmlForBehavior(messageBehavior, format));
     }
 
     fieldKeys.forEach(field => {
@@ -119,16 +118,14 @@ export function renderSuccessMessage() {
   setText('success-title', applyPatronTextPlaceholders(uiConfig.successTitle || defaultUiText.successTitle, uiConfig));
   const body = byId('success-body');
   if (body) {
-    // Configured message HTML is sanitized before rendering.
-    body.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(uiConfig.successMessage || defaultUiText.successMessage, uiConfig));
+    renderPatronText(body, applyPatronTextPlaceholders(uiConfig.successMessage || defaultUiText.successMessage, uiConfig));
   }
 }
 
 export function renderConflictMessage(message) {
   const body = byId('conflict-body');
   if (body) {
-    // Configured message HTML is sanitized before rendering.
-    body.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(message || uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage, uiConfig));
+    renderPatronText(body, applyPatronTextPlaceholders(message || uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage, uiConfig));
   }
 }
 
@@ -170,7 +167,7 @@ export function handleCommonAuthorSelection() {
   if (!select || !msgContainer || !submitBtn) return;
 
   if (select.value) {
-    setText('common-author-msg', applyPatronTextPlaceholders(uiConfig.commonAuthorsMessage || "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.", uiConfig));
+    renderPatronText(byId('common-author-msg'), applyPatronTextPlaceholders(uiConfig.commonAuthorsMessage || "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.", uiConfig));
     msgContainer.classList.remove('hidden');
     if (physicalFields) physicalFields.classList.add('hidden');
     submitBtn.classList.add('hidden');
@@ -223,19 +220,19 @@ export function applyUiConfig() {
 
   if (uiConfig.suggestionFormNote) {
     const noteEl = byId('ui-note-text');
-    if (noteEl) noteEl.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(uiConfig.suggestionFormNote, uiConfig));
+    if (noteEl) renderPatronText(noteEl, applyPatronTextPlaceholders(uiConfig.suggestionFormNote, uiConfig));
   }
   if (uiConfig.loginNote) {
     const noteEl = byId('ui-login-note-container');
-    if (noteEl) noteEl.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(uiConfig.loginNote, uiConfig));
+    if (noteEl) renderPatronText(noteEl, applyPatronTextPlaceholders(uiConfig.loginNote, uiConfig));
   }
   if (uiConfig.loginPrompt) {
     const promptEl = byId('ui-login-prompt');
-    if (promptEl) promptEl.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(uiConfig.loginPrompt, uiConfig));
+    if (promptEl) renderPatronText(promptEl, applyPatronTextPlaceholders(uiConfig.loginPrompt, uiConfig));
   }
   if (uiConfig.noEmailMessage) {
     const msgEl = byId('no-email-msg');
-    if (msgEl) msgEl.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(uiConfig.noEmailMessage, uiConfig));
+    if (msgEl) renderPatronText(msgEl, applyPatronTextPlaceholders(uiConfig.noEmailMessage, uiConfig));
   }
 
   if (uiConfig.logoUrl) {
@@ -250,8 +247,7 @@ export function applyUiConfig() {
   if (uiConfig.systemNotEnabled) {
     const errorDiv = byId('login-error');
     if (errorDiv) {
-      // Configured message HTML is sanitized before rendering.
-      errorDiv.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(uiConfig.systemNotEnabledMessage || 'Your library does not currently participate in this suggestion service.', uiConfig));
+      renderPatronText(errorDiv, applyPatronTextPlaceholders(uiConfig.systemNotEnabledMessage || 'Your library does not currently participate in this suggestion service.', uiConfig));
       errorDiv.classList.remove('hidden');
     }
     const btn = byId('login-btn');

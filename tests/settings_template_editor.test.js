@@ -185,8 +185,10 @@ const { JSDOM } = require('jsdom');
     identityEditors.populate({ ...data, orgId: 'system', stored: { ...data.stored,
       configuredSystem: { ...completeSystem, providers: [provider] } },
       effective: { ...data.effective, externalSearchProviders: [provider] } }, true);
-    assert.strictEqual(document.querySelector('#external-search-provider-editor input').readOnly, true,
-      'Persisted System provider keys must remain immutable after Boolean construction is fixed.');
+    const persistedProviderRow = document.querySelector('#external-search-provider-editor [data-domain-row]');
+    assert.strictEqual(persistedProviderRow.dataset.providerKey, 'persisted_provider');
+    assert.strictEqual([...persistedProviderRow.querySelectorAll('input')].some(input => input.value === 'persisted_provider'), false,
+      'Persisted System provider keys remain internal and cannot be edited.');
     document.getElementById('add-provider').click();
     assert.strictEqual([...document.querySelectorAll('#external-search-provider-editor [data-domain-row]')].at(-1).querySelector('input').readOnly, false);
     identityEditors.dispose();

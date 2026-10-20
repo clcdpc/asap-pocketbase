@@ -243,6 +243,14 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-field.wide { grid-column: 1 / -1; }
 .settings-grid > .wide { grid-column: 1 / -1; }
 .settings-field textarea { width: 100%; }
+.patron-text-label { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; }
+.patron-placeholder-trigger { min-height: 32px; padding: 4px 8px; font-size: .8rem; }
+.patron-placeholder-picker { position: fixed; inset: auto; margin: 0; padding: 8px; max-width: calc(100vw - 24px); overflow: auto; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.patron-placeholder-picker > strong { display: block; margin: 5px 6px; color: var(--muted); font-size: .8rem; }
+.patron-placeholder-picker > button { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 10px; width: 100%; min-height: 44px; padding: 8px; text-align: left; color: var(--ink); background: transparent; border: 0; border-radius: 3px; cursor: pointer; }
+.patron-placeholder-picker > button:hover { background: var(--soft); }
+.patron-placeholder-picker code { overflow-wrap: anywhere; }
+.patron-placeholder-picker small { flex-basis: 100%; color: var(--muted); }
 .settings-field input, .settings-field textarea { min-width: 0; }
 .settings-field.check-field { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; }
 .settings-field.check-field input { width: 18px; height: 18px; min-height: auto; margin-top: 2px; }
@@ -279,6 +287,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-option-row, .settings-format-row, .settings-provider-row {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+.settings-provider-row { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; }
 .settings-domain-field { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: .78rem; font-weight: 800; }
 .settings-domain-field input, .settings-domain-field select, .settings-domain-field textarea { width: 100%; min-width: 0; color: var(--ink); font-weight: 400; }
 .settings-domain-field textarea { min-height: 86px; }
