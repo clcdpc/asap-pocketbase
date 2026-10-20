@@ -189,9 +189,9 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             Pick(libraryPatron?.NoEmailMessage, systemPatron.NoEmailMessage,
                 "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates."),
             Pick(libraryPatron?.SuccessTitle, systemPatron.SuccessTitle, "Suggestion Submitted"),
-            Pick(libraryPatron?.SuccessMessage, systemPatron.SuccessMessage,
+            PickMessage(libraryPatron?.SuccessMessage, systemPatron.SuccessMessage,
                 "You have successfully submitted your material suggestion! Check your email inbox for status updates.\n\nThank you for using our suggestion service."),
-            Pick(libraryPatron?.AlreadySubmittedMessage, systemPatron.AlreadySubmittedMessage,
+            PickMessage(libraryPatron?.AlreadySubmittedMessage, systemPatron.AlreadySubmittedMessage,
                 "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.\n\nThank you for using this library's suggestion service."),
             Pick(null, systemSettings.SystemNotEnabledMessage,
                     "{{library}} does not currently participate in this suggestion service.")
@@ -199,9 +199,9 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             Pick(null, systemSettings.MisconfiguredMessage,
                     "The {{library}} suggestion system is currently misconfigured. Please contact staff.")
                 .Replace("{{library}}", organization.DisplayName, StringComparison.Ordinal),
-            Pick(libraryPatron?.EbookMessage, systemPatron.EbookMessage,
+            PickMessage(libraryPatron?.EbookMessage, systemPatron.EbookMessage,
                 "This is an eBook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm"),
-            Pick(libraryPatron?.EaudiobookMessage, systemPatron.EaudiobookMessage,
+            PickMessage(libraryPatron?.EaudiobookMessage, systemPatron.EaudiobookMessage,
                 "This is an eAudiobook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm"),
             duplicateStatusLabels,
             externalSearchProviders,
@@ -290,7 +290,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
                     value?.SortOrder ?? format.SortOrder,
                     value?.IsEnabled ?? format.IsEnabled,
                     value?.MessageBehavior ?? format.MessageBehavior ?? "none",
-                    value?.Message ?? format.Message,
+                    PatronMessageDefaults.PlainText(value?.Message ?? format.Message),
                     Field(value?.TitleMode ?? format.TitleMode ?? "required", value?.TitleLabel ?? format.TitleLabel, "Title"),
                     Field(value?.AuthorMode ?? format.AuthorMode ?? "optional", value?.AuthorLabel ?? format.AuthorLabel, "Author"),
                     Field(value?.IdentifierMode ?? format.IdentifierMode ?? "optional", value?.IdentifierLabel ?? format.IdentifierLabel, "Identifier number"),
@@ -504,6 +504,9 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
 
     private static EffectiveFieldRule Field(string mode, string? label, string fallbackLabel) =>
         new(mode, string.IsNullOrWhiteSpace(label) ? fallbackLabel : label);
+
+    private static string PickMessage(string? library, string? system, string fallback) =>
+        PatronMessageDefaults.PlainText(Pick(library, system, fallback))!;
 
     private static string Pick(string? library, string? system, string fallback) =>
         !string.IsNullOrWhiteSpace(library)

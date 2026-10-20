@@ -122,24 +122,24 @@ DECLARE @OldPatronEbook nvarchar(max) = N'<p>This is an eBook suggestion, please
 DECLARE @OldPatronEaudiobook nvarchar(max) = N'<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
 
 UPDATE [asap].[PatronSettings] SET [SuccessMessage] = @PatronSuccess, [UpdatedUtc] = SYSUTCDATETIME()
-WHERE CONVERT(varbinary(max), [SuccessMessage]) = CONVERT(varbinary(max), @OldPatronSuccess);
+WHERE DATALENGTH([SuccessMessage]) = DATALENGTH(@OldPatronSuccess) AND CONVERT(varbinary(max), [SuccessMessage]) = CONVERT(varbinary(max), @OldPatronSuccess);
 UPDATE [asap].[PatronSettings] SET [AlreadySubmittedMessage] = @PatronDuplicate, [UpdatedUtc] = SYSUTCDATETIME()
-WHERE CONVERT(varbinary(max), [AlreadySubmittedMessage]) = CONVERT(varbinary(max), @OldPatronDuplicate);
+WHERE DATALENGTH([AlreadySubmittedMessage]) = DATALENGTH(@OldPatronDuplicate) AND CONVERT(varbinary(max), [AlreadySubmittedMessage]) = CONVERT(varbinary(max), @OldPatronDuplicate);
 UPDATE [asap].[PatronSettings] SET [EbookMessage] = @PatronEbook, [UpdatedUtc] = SYSUTCDATETIME()
-WHERE CONVERT(varbinary(max), [EbookMessage]) = CONVERT(varbinary(max), @OldPatronEbook);
+WHERE DATALENGTH([EbookMessage]) = DATALENGTH(@OldPatronEbook) AND CONVERT(varbinary(max), [EbookMessage]) = CONVERT(varbinary(max), @OldPatronEbook);
 UPDATE [asap].[PatronSettings] SET [EaudiobookMessage] = @PatronEaudiobook, [UpdatedUtc] = SYSUTCDATETIME()
-WHERE CONVERT(varbinary(max), [EaudiobookMessage]) = CONVERT(varbinary(max), @OldPatronEaudiobook);
+WHERE DATALENGTH([EaudiobookMessage]) = DATALENGTH(@OldPatronEaudiobook) AND CONVERT(varbinary(max), [EaudiobookMessage]) = CONVERT(varbinary(max), @OldPatronEaudiobook);
 
 -- Stopped-source imports can retain the same seeds as format-specific copy.
 -- Preserve the importer's forensic/default pins; deployment owns this cleanup.
 UPDATE [asap].[MaterialFormat] SET [Message] = @PatronEbook, [UpdatedUtc] = SYSUTCDATETIME()
-WHERE CONVERT(varbinary(max), [Message]) = CONVERT(varbinary(max), @OldPatronEbook);
+WHERE DATALENGTH([Message]) = DATALENGTH(@OldPatronEbook) AND CONVERT(varbinary(max), [Message]) = CONVERT(varbinary(max), @OldPatronEbook);
 UPDATE [asap].[MaterialFormat] SET [Message] = @PatronEaudiobook, [UpdatedUtc] = SYSUTCDATETIME()
-WHERE CONVERT(varbinary(max), [Message]) = CONVERT(varbinary(max), @OldPatronEaudiobook);
+WHERE DATALENGTH([Message]) = DATALENGTH(@OldPatronEaudiobook) AND CONVERT(varbinary(max), [Message]) = CONVERT(varbinary(max), @OldPatronEaudiobook);
 UPDATE [asap].[MaterialFormatOverride] SET [Message] = @PatronEbook
-WHERE CONVERT(varbinary(max), [Message]) = CONVERT(varbinary(max), @OldPatronEbook);
+WHERE DATALENGTH([Message]) = DATALENGTH(@OldPatronEbook) AND CONVERT(varbinary(max), [Message]) = CONVERT(varbinary(max), @OldPatronEbook);
 UPDATE [asap].[MaterialFormatOverride] SET [Message] = @PatronEaudiobook
-WHERE CONVERT(varbinary(max), [Message]) = CONVERT(varbinary(max), @OldPatronEaudiobook);
+WHERE DATALENGTH([Message]) = DATALENGTH(@OldPatronEaudiobook) AND CONVERT(varbinary(max), [Message]) = CONVERT(varbinary(max), @OldPatronEaudiobook);
 
 IF NOT EXISTS (SELECT 1 FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1)
 BEGIN

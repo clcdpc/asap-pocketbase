@@ -1273,10 +1273,10 @@ public sealed partial class PatronJourneyTests
             "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
             root.GetProperty("noEmailMessage").GetString());
         Assert.AreEqual(
-            "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
+            "You have successfully submitted your material suggestion! Check your email inbox for status updates.\n\nThank you for using our suggestion service.",
             root.GetProperty("successMessage").GetString());
         Assert.AreEqual(
-            "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library's suggestion service.</div>",
+            "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.\n\nThank you for using this library's suggestion service.",
             root.GetProperty("alreadySubmittedMessage").GetString());
         Assert.AreEqual("/jpl.png", root.GetProperty("logoUrl").GetString());
         Assert.AreEqual("Library Logo", root.GetProperty("logoAlt").GetString());

@@ -194,7 +194,7 @@ public sealed class EmailDefaultsDeploymentTests
                 }
             }
         }
-        for (var organizationId = 1; organizationId <= 7; organizationId++)
+        for (var organizationId = 1; organizationId <= 8; organizationId++)
         {
             await using var command = connection.CreateCommand();
             command.CommandText = """
@@ -217,6 +217,7 @@ public sealed class EmailDefaultsDeploymentTests
                     5 => old[index].ToUpperInvariant(),
                     6 => string.Empty,
                     7 => null,
+                    8 => old[index] + "\0",
                     _ => old[index]
                 };
                 command.Parameters.AddWithValue(new[] { "@success", "@duplicate", "@ebook", "@audio" }[index], (object?)value ?? DBNull.Value);
@@ -241,7 +242,7 @@ public sealed class EmailDefaultsDeploymentTests
             CollectionAssert.AreEqual(expected, after[id].Messages);
             Assert.AreNotEqual(before[id].Version, after[id].Version);
         }
-        foreach (var id in Enumerable.Range(3, 5))
+        foreach (var id in Enumerable.Range(3, 6))
         {
             CollectionAssert.AreEqual(before[id].Messages, after[id].Messages, $"Custom/blank/inherited scope {id}");
             Assert.AreEqual(before[id].Version, after[id].Version, "Nondefault rows must not be touched.");

@@ -1518,7 +1518,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   listen(dom.codeEligibilityEnabled, 'change', updateCodeWarning);
   listen(dom.codes, 'change', updateCodeWarning);
   bindAdd('providers', values => {
-    const keys = new Set(values.map(value => String(value.key || '').toLowerCase()));
+    // A removed draft row still owns its persisted identity until save/reload.
+    const accepted = array(property(systemConfig(state.data), 'providers'));
+    const keys = new Set([...accepted, ...values].map(value => String(value.key || '').toLowerCase()));
     let index = 1;
     while (keys.has(`provider_${index}`)) index += 1;
     return { id: null, key: `provider_${index}`, label: 'New provider', urlTemplate: '', isEnabled: false, overridden: true };
