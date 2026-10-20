@@ -69,8 +69,9 @@ public sealed partial class PatronJourneyTests
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "browser-results.json")));
             Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
             Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
-            Assert.AreEqual(1, report.RootElement.GetProperty("posts").GetArrayLength());
-            Assert.AreEqual(3, report.RootElement.GetProperty("states").GetArrayLength());
+            Assert.AreEqual(2, report.RootElement.GetProperty("posts").GetArrayLength(), "One abandoned client submission and one explicit new test.");
+            Assert.IsTrue(Guid.TryParse(report.RootElement.GetProperty("retiredUnrecordedIntent").GetString(), out _));
+            Assert.AreEqual(5, report.RootElement.GetProperty("states").GetArrayLength());
             Assert.IsTrue(report.RootElement.GetProperty("sameReferenceAfterReload").GetBoolean());
             Assert.HasCount(1, handler.Sends, "One explicit browser click must produce exactly one provider POST.");
             Assert.HasCount(1, jobIds, "The ordinary durable dispatcher creates one automatic delivery job.");

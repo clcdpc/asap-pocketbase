@@ -238,9 +238,13 @@
           <div class="form-actions">
             <button id="send-test-email" data-email-test="send" class="secondary-button" type="button">Send test email</button>
             <button data-email-test="refresh" class="secondary-button" type="button">Refresh test status</button>
+            <button data-email-test="retire" class="secondary-button" type="button" hidden>Retire unrecorded request</button>
             <button data-email-test="operations" class="secondary-button" type="button">View email operations</button>
           </div>
           <p data-email-test="result" class="settings-result" role="status" aria-live="polite"></p>
+          <details data-email-test="history" hidden><summary>Retirement review references</summary>
+            <p>Client retirement does not cancel a delayed server request. A message may still arrive. Keep these references for operator review during this browser session.</p><ul></ul>
+          </details>
         </fieldset>
         <div class="operations-columns">
           <section class="operations-panel" aria-labelledby="queue-progress-title">
@@ -415,9 +419,13 @@
                 <div class="form-actions">
                   <button data-email-test="send" class="secondary-button" type="button">Send test email</button>
                   <button data-email-test="refresh" class="secondary-button" type="button">Refresh test status</button>
+                  <button data-email-test="retire" class="secondary-button" type="button" hidden>Retire unrecorded request</button>
                   <button data-email-test="operations" class="secondary-button" type="button">View email operations</button>
                 </div>
                 <p data-email-test="result" class="settings-result" role="status" aria-live="polite"></p>
+                <details data-email-test="history" hidden><summary>Retirement review references</summary>
+                  <p>Client retirement does not cancel a delayed server request. A message may still arrive. Keep these references for operator review during this browser session.</p><ul></ul>
+                </details>
               </fieldset>
             </section>
 
