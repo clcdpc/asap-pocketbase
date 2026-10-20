@@ -62,6 +62,12 @@ public sealed partial class PatronJourneyTests
                 setup.TitleRequests.Add(source);
                 await setup.SaveChangesAsync();
                 sourceId = source.Id; claimantId = claimant.Id;
+                setup.TitleRequestEvents.AddRange(Enumerable.Range(0, 80).Select(index => new TitleRequestEvent
+                {
+                    TitleRequestId = source.Id, EventType = "legacy", ActorType = "system",
+                    Message = $"Deterministic long activity entry {index + 1}: retained history and context.",
+                    CreatedUtc = timeProvider.GetUtcNow().UtcDateTime.AddMinutes(index)
+                }));
                 setup.FormatAutoClaimRules.Add(new FormatAutoClaimRule { LibraryOrganizationId = library,
                     MaterialFormatId = format.Id, StaffUserId = claimant.Id, IsActive = true,
                     CreatedUtc = timeProvider.GetUtcNow().UtcDateTime });

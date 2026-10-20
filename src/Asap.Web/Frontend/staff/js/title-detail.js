@@ -16,6 +16,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   const reads = createLatestLoad(), configurations = new Map();
   let lease = null, actor = null, current = null, returnFocus = null, activeAttempt = null;
   let drafts = createDraftScope(), renderRevision = null, editor = null, workflows = null, copyParent = null, disposed = false, targetGeneration = 0;
+  let selectedTab = 'details', tabRequestId = null;
 
   function isPresentationCurrent(mounted, owner) {
     return !disposed && mounted?.isCurrent() && sessionIdentity.isCurrent(owner);
@@ -84,6 +85,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   function present(target, opener, options, ticket) {
     if (disposed || !sessionIdentity.isCurrent(target.owner) || !isNavigationCurrent(ticket)) return false;
     const { request, configuration, owner } = target;
+    if (!options.authoritativeRefresh) selectedTab = 'details';
     const mounted = host.acquire({ dispose: disposeMounted, onClose: close,
       onEscape: () => { if (!hasPendingMutation() && workflows?.escape()) return; close(); } });
     lease = mounted; actor = owner;
@@ -275,7 +277,11 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         const review = await reloadAfterMutation(attempt);
         if (needsReceipt && review?.refreshed === true && review.detailLoaded === true) clearReceipt(attempt);
         if (review?.isCurrent()) announce(message, 'error');
-      } else if (error.status !== 401 && !isAbortError(error)) announce(error.message || 'The request could not be updated.', 'error');
+      } else if (error.status !== 401 && !isAbortError(error)) {
+        const message = error.message || 'The request could not be updated.';
+        announce(message, 'error');
+        return { outcome: 'rejected', message };
+      }
     } finally { attempt.pending = false; releaseAttempt(attempt); restore(); }
   }
   async function mutateOperation(snapshot, operation, action, body, draft = null) {
@@ -341,10 +347,16 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       if (panel.isConnected && live()) void child.runAction('closeDuplicate');
     } }, 'Close current request as duplicate');
     panel.append(element('div', { className: 'form-actions' }, snapshot.status === 'closed' ? [edit] : [closeDuplicate, edit]));
-    mounted.content.querySelector('.action-bar')?.after(panel); (snapshot.status === 'closed' ? edit : closeDuplicate).focus();
+    const slot = mounted.content.querySelector('.request-workflow-panel');
+    if (slot) {
+      mounted.content.querySelector('.request-detail-tabs [role="tab"]')?.click();
+      slot.append(panel);
+    } else mounted.content.querySelector('.action-bar')?.after(panel);
+    (snapshot.status === 'closed' ? edit : closeDuplicate).focus();
     announce('The attempted change was not saved. Review the duplicate request and choose whether to close this request.', 'error');
   }
   function renderRequest(request, configuration, verified = null) {
+    if (tabRequestId !== String(request.id)) { tabRequestId = String(request.id); selectedTab = 'details'; }
     disposeChildren();
     drafts = createDraftScope();
     current = Object.freeze({ ...request });
@@ -352,8 +364,21 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     renderRevision = revision;
     const scope = drafts;
     const live = () => isPresentationCurrent(mounted, owner) && renderRevision === revision && current === snapshot;
+    const footerRoot = element('div', { className: 'request-footer-slot' });
+    const panels = new Map(), tabs = new Map();
+    function activateTab(name, focus = false) {
+      if (!live() || !panels.has(name)) return;
+      selectedTab = name;
+      for (const [key, panel] of panels) {
+        panel.hidden = key !== name;
+        tabs.get(key).setAttribute('aria-selected', String(key === name));
+        tabs.get(key).tabIndex = key === name ? 0 : -1;
+      }
+      if (focus) tabs.get(name).focus();
+    }
     const context = Object.freeze({ request: snapshot, actor: owner, root: mounted.content, scope,
       isCurrent: live, isPending: hasPendingMutation,
+      showDetails: () => activateTab('details'),
       admit: declaration => live() && allowRequestMutation(snapshot, declaration),
       confirm: (message, draft = null) => live() && allowRequestMutation(snapshot, { consumes: draft }) && window.confirm(message) && live(),
       mutate: (path, body, message, draft = null) => live() ? mutateRequest(snapshot, path, body, message, draft) : Promise.resolve(),
@@ -361,27 +386,31 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       delete: () => live() ? deleteTitleRequest(snapshot) : Promise.resolve(),
       openCopy: opener => live() ? openCopy(snapshot, context, opener) : Promise.resolve(false)
     });
-    editor = createRequestEditor({ context, configuration, polarisLookup, announce, verified, request: send });
+    editor = createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot, verified, request: send });
     workflows = createRequestWorkflows({ context, editor, announce, request: send });
     lease?.heading(request.title, `${request.libraryOrgName} · Request ${request.id}`);
+    mounted.content.classList.add('title-detail-content');
     const body = document.createDocumentFragment();
     const meta = element('div', { className: 'detail-meta' }, [
       element('span', { className: `status-badge${request.status === 'closed' ? ' closed' : ''}`, text: statusLabel(request.status) }),
-      element('span', { text: `Phase entered ${dateTime(request.phaseEnteredAt)}` }),
+      element('span', { text: `Submitted ${dateTime(request.created)}` }),
       element('span', { text: request.claimedByDisplayName ? `Claimed by ${request.claimedByDisplayName}` : 'Unclaimed' })
     ]);
-    body.append(meta, workflows.buildActions());
+    body.append(element('div', { className: 'request-heading-context' }, [meta, workflows.buildActions()]));
+    const detailsPanel = element('section', { className: 'request-details-panel' });
+    detailsPanel.append(element('div', { className: 'request-workflow-panel' }));
+    const patronContext = element('div', { className: 'patron-context' });
     if (typeof request.barcode === 'string' && request.barcode.trim() && onNewSuggestion) {
-      body.append(element('button', { type: 'button', className: 'secondary-button',
+      patronContext.append(element('button', { type: 'button', className: 'grid-new-suggestion',
         'aria-label': `New suggestion for patron ${request.barcode} from request ${request.id}`,
         onclick: event => {
           if (live() && !hasPendingMutation()) onNewSuggestion(request.barcode, event.currentTarget, request.id);
         }
-      }, [icon('plus'), 'New suggestion for this patron']));
+      }, [icon('plus'), element('span', { className: 'sr-only', text: 'New suggestion' })]));
     }
 
     if (request.capabilities && request.capabilities.blockingReason) {
-      body.append(element('p', {
+      detailsPanel.append(element('p', {
         className: 'blocked-callout',
         text: request.capabilities.blockingReason === 'pickup_reconciliation_required'
           ? 'Pickup preference needs reconciliation. Review the live preference before continuing; an uncertain provider write will not be repeated.'
@@ -398,28 +427,25 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     addDetail(details, 'Patron', patronName).replaceChildren(researchRecordValue(patronName, request.research, 'patron'));
     addDetail(details, 'Barcode', request.barcode).replaceChildren(researchRecordValue(request.barcode, request.research, 'patron'));
     addDetail(details, 'Email', request.email);
-    addDetail(details, 'Format', request.formatLabel || request.format);
-    addDetail(details, 'Identifier', request.identifier);
-    addDetail(details, 'BIB ID', request.bibid).replaceChildren(researchRecordValue(request.bibid, request.research, 'bib', request.bibid));
-    addDetail(details, 'Publication', request.publication);
-    addDetail(details, 'Recorded ASAP pickup', request.preferredPickupBranchName || request.preferredPickupBranchId);
-    addDetail(details, 'Identifier check', request.isbnCheckStatus);
-    if (request.status === 'closed') addDetail(details, 'Close reason', closeReasonLabel(request.closeReason));
-    body.append(details);
-    body.append(element('p', { className: 'field-help',
-      text: "Recorded ASAP pickup is a historical snapshot. Each unfilled request uses the patron's live Polaris pickup preference when its hold is placed. Updating pickup changes the patron's account default; existing holds keep their recorded destination." }));
+    addDetail(details, 'Recorded ASAP pickup', request.preferredPickupBranchName || request.preferredPickupBranchId)
+      .append(element('small', { text: 'Historical; holds use live Polaris pickup preference.' }));
+    details.title = "Recorded ASAP pickup is a historical snapshot. Each unfilled request uses the patron's live Polaris pickup preference when its hold is placed. Updating pickup changes the patron's account default; existing holds keep their recorded destination.";
+    patronContext.prepend(details);
+    body.append(patronContext);
+    detailsPanel.append(element('p', { className: 'field-help request-metadata',
+      text: [`Identifier check: ${text(request.isbnCheckStatus)}`, `Phase entered ${dateTime(request.phaseEnteredAt)}`,
+        request.status === 'closed' ? `Close reason: ${closeReasonLabel(request.closeReason)}` : ''].filter(Boolean).join(' · ') }));
 
     if (request.workflowTags && request.workflowTags.length) {
       const tags = element('div', { className: 'tags', 'aria-label': 'Workflow tags' });
       for (const tag of request.workflowTags) tags.append(element('span', { className: 'tag', text: tag }));
-      body.append(tags);
+      detailsPanel.append(tags);
     }
+    const related = element('section', { className: 'related-requests', 'aria-label': 'Related title requests' });
     if (request.relatedRequests && Number.isInteger(request.relatedRequests.count)) {
       const visibleCounts = (request.relatedRequests.statusAndLibraryCounts || [])
         .filter(item => getScope() === 'all' || String(item.libraryOrgId) === getScope());
       const visibleCount = visibleCounts.reduce((total, item) => total + item.count, 0);
-      const related = element('section', { className: 'related-requests', 'aria-label': 'Related title requests' });
-      related.append(element('h3', { text: 'Related title requests' }));
       related.append(element('p', { text: visibleCount === 0
         ? 'No related title requests are visible in your authorized scope.'
         : `${visibleCount} related title request${visibleCount === 1 ? '' : 's'} in your authorized scope.` }));
@@ -430,10 +456,9 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         }
         related.append(counts);
       }
-      body.append(related);
-    }
+    } else related.append(element('p', { text: 'Related request information is unavailable in your authorized scope.' }));
     if (request.workflowContext && request.status !== 'closed') {
-      body.append(element('p', { className: 'workflow-context',
+      detailsPanel.append(element('p', { className: 'workflow-context',
         text: request.status === 'suggestion'
           ? `Suggestion timeout: ${timeoutLabel(request.workflowContext.outstandingTimeoutEnabled, request.workflowContext.outstandingTimeoutDays)}`
           : request.status === 'outstanding_purchase'
@@ -443,11 +468,33 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
               : `Hold pickup timeout: ${timeoutLabel(request.workflowContext.holdPickupTimeoutEnabled, request.workflowContext.holdPickupTimeoutDays)}`
       }));
     }
-    body.append(editor.build());
-    body.append(renderActivity(request.activity));
-    body.append(element('section', { className: 'research-section', hidden: 'hidden' }));
-    if (request.holdOperation) body.append(workflows.buildHold());
+    detailsPanel.append(editor.build());
+    detailsPanel.append(element('section', { className: 'research-section', hidden: true }));
+    if (request.holdOperation) detailsPanel.append(workflows.buildHold());
+    const tablist = element('div', { className: 'request-detail-tabs', role: 'tablist', 'aria-label': 'Request detail sections' });
+    const middle = element('div', { className: 'request-middle' });
+    for (const [name, label, panel] of [['details', 'Details', detailsPanel], ['activity', 'Activity', renderActivity(request.activity)], ['related', 'Related requests', related]]) {
+      panel.id = `request-${request.id}-${name}`;
+      panel.setAttribute('role', 'tabpanel'); panel.tabIndex = 0;
+      panel.setAttribute('aria-labelledby', `${panel.id}-tab`);
+      const tab = element('button', { id: `${panel.id}-tab`, type: 'button', role: 'tab',
+        'aria-controls': panel.id, onclick: () => activateTab(name) }, label);
+      tab.addEventListener('keydown', event => {
+        if (!live() || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const names = [...tabs.keys()], index = names.indexOf(name);
+        activateTab(event.key === 'Home' ? names[0] : event.key === 'End' ? names.at(-1)
+          : names[(index + (event.key === 'ArrowRight' ? 1 : -1) + names.length) % names.length], true);
+      });
+      tabs.set(name, tab); panels.set(name, panel); tablist.append(tab); middle.append(panel);
+    }
+    footerRoot.addEventListener('click', event => {
+      // Expose invalid fields before native form validation/focus from another tab.
+      if (event.target.closest('button[type="submit"]') && !mounted.content.querySelector('.edit-form')?.checkValidity()) activateTab('details');
+    });
+    body.append(tablist, middle, footerRoot);
     lease.content.replaceChildren(body);
+    activateTab(selectedTab);
     void editor.loadResearch();
   }
 

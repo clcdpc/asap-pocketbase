@@ -45,7 +45,7 @@ const [baseURL, artifacts, staffId, tenantId, email, requestId, legacyId, copyId
     assert.equal(await page.locator('#request-dialog').evaluate(node => node.open), false, 'external links have independent keyboard targets');
     await titleRow.locator('button.grid-open').click();
     await page.locator('#request-dialog[open]').waitFor();
-    await checkAnchor(page.locator('#request-dialog dd a[href*="#bib/"]'), bib);
+    await checkAnchor(page.locator('#request-dialog .research-section a[href*="#bib/"]'), bib);
     await checkAnchor(page.locator('#request-dialog dd a[href*="#patron/"]').first(), patron);
     await scan('title-detail'); await page.keyboard.press('Escape');
     await page.locator('[data-status="suggestion"]').click();

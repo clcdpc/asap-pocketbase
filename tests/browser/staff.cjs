@@ -5,6 +5,13 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { URL } = require('node:url');
 
+async function revealRequestActions(page) {
+  const menu = page.locator('#request-dialog .request-more');
+  if (await menu.count() && await menu.locator('summary').isVisible() && !await menu.evaluate(node => node.open)) {
+    await menu.locator('summary').click();
+  }
+}
+
 function parseArguments(argv) {
   if (argv.length !== 25) {
     throw new Error('Usage: node tests/browser/staff.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId>');
@@ -559,7 +566,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(await page.getByLabel('Title', { exact: true }).inputValue(),
       'Catalog title 9001 (Browser staff title edited)');
     assert.equal(await page.getByLabel('Author', { exact: true }).inputValue(),
-      'Catalog author (Browser Author)');
+      'Browser Author');
     assert.equal(await page.getByLabel('Identifier', { exact: true }).inputValue(), '9780000002901');
     assert.equal(await page.getByLabel('Publication timing', { exact: true }).inputValue(), 'Library backlist');
     assert.equal(await page.getByLabel('Format', { exact: true }).inputValue(), 'book');
@@ -605,7 +612,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(reconciledResponse.status(), 200);
     const reconciledRequest = await reconciledResponse.json();
     assert.equal(reconciledRequest.title, 'Catalog title 9001 (Browser staff title edited)');
-    assert.equal(reconciledRequest.author, 'Catalog author (Browser Author)');
+    assert.equal(reconciledRequest.author, 'Browser Author');
     assert.equal(reconciledRequest.identifier, '9780000002901');
     assert.equal(reconciledRequest.publication, 'Library backlist');
     assert.equal(reconciledRequest.format, 'book');
@@ -809,6 +816,7 @@ async function runStaleAssignmentCandidates(browser, args, report) {
       const beforeA = await beforeAResponse.json();
 
       const delayed = await delayNextCandidateResponse(page, candidatePayload);
+      await revealRequestActions(page);
       await page.getByRole('button', { name: 'Assign', exact: true }).click();
       await delayed.requested;
       await page.keyboard.press('Escape');
@@ -832,6 +840,7 @@ async function runStaleAssignmentCandidates(browser, args, report) {
       assert.equal(unchangedA.version, beforeA.version, `${scenario.name} A rowversion changed`);
       assert.equal(unchangedA.claimedByStaffUserId, beforeA.claimedByStaffUserId, `${scenario.name} A claimant changed`);
 
+      await revealRequestActions(page);
       await page.getByRole('button', { name: 'Assign', exact: true }).click();
       const assignment = page.getByLabel(scenario.pickerLabel);
       await assignment.waitFor({ state: 'visible' });
@@ -894,6 +903,7 @@ async function runOrdinaryTitleAssignment(browser, args, report) {
       assert.ok(candidateById.has(args.superIdentity.staffId), `${name} system super-admin was omitted`);
       assert.equal(candidateById.has(args.foreignStaffId), false, `${name} foreign staff candidate leaked`);
 
+      await revealRequestActions(page);
       const assignButton = page.getByRole('button', { name: 'Assign', exact: true });
       await assignButton.waitFor({ state: 'visible' });
       for (const assigneeId of [args.invalidClaimantId, args.superIdentity.staffId]) {
@@ -1010,6 +1020,7 @@ async function runStaleMutationCompletions(browser, args, report) {
         url: page.url()
       };
       const candidates = await delayNextCandidateResponse(page, candidatePayload);
+      await revealRequestActions(page);
       await page.getByRole('button', { name: 'Assign', exact: true }).click();
       await candidates.requested;
       visible.status = await page.locator('#app-status').textContent();
@@ -1115,6 +1126,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     assert.equal(deletedAResponse.status(), 404);
 
     await page.goto(`${args.baseOrigin}/staff/?request=${args.staleTitleAId}`, { waitUntil: 'networkidle' });
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Assign', exact: true }).click();
     const titlePicker = page.getByLabel('Assign to staff member');
     await titlePicker.waitFor({ state: 'visible' });
@@ -1148,6 +1160,7 @@ async function runStaleMutationCompletions(browser, args, report) {
       await ordinaryTitleContext.close();
     }
     await page.goto(`${args.baseOrigin}/staff/?request=${args.staleTitleAId}`, { waitUntil: 'networkidle' });
+    await revealRequestActions(page);
     const titleClear = page.getByRole('button', { name: 'Clear claim' });
     await titleClear.waitFor();
     page.once('dialog', dialog => {
@@ -1156,6 +1169,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     });
     await titleClear.click();
     await page.locator('#request-dialog .detail-meta').filter({ hasText: 'Unclaimed' }).waitFor();
+    await page.getByRole('tab', { name: 'Activity', exact: true }).click();
     await page.locator('#request-dialog .request-activity').filter({
       hasText: `Administrator cleared ${assignedTitleA.claimedByDisplayName}'s claim.`
     }).waitFor();
@@ -1657,6 +1671,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await page.getByRole('button', { name: 'Unclaim' }).waitFor();
     await page.getByRole('button', { name: 'Unclaim' }).click();
     await page.getByRole('button', { name: 'Claim', exact: true }).waitFor();
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Assign', exact: true }).click();
     const assignment = page.getByLabel('Assign additional-copy task');
     await assignment.selectOption({ label: 'Browser Staff' });
@@ -1684,6 +1699,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     const staleClear = await mutate(context, args.baseOrigin,
       `/api/asap/staff/additional-copies/${created.id}/clear-claim`, { version: created.version });
     assert.equal(staleClear.status(), 409, await staleClear.text());
+    await revealRequestActions(page);
     const clearClaim = page.getByRole('button', { name: 'Clear claim' });
     await clearClaim.waitFor();
     page.once('dialog', dialog => {
@@ -1838,8 +1854,9 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     assert.equal(await page.getByLabel('BIB ID', { exact: true }).isDisabled(), true);
     assert.equal(await page.getByLabel('Automatically place hold', { exact: true }).isDisabled(), true);
     assert.equal(await page.getByLabel('Title', { exact: true }).isEnabled(), true);
-    assert.equal(await page.getByRole('button', { name: 'Save changes' }).isEnabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Save changes' }).isEnabled(), false, 'A clean editor stays saved; Claim remains its explicit action.');
     assert.equal(await page.getByRole('button', { name: 'Claim', exact: true }).isEnabled(), true);
+    await revealRequestActions(page);
     for (const name of ['Purchase', 'Already own', 'Reject', 'Close silently']) {
       assert.equal(await page.getByRole('button', { name, exact: true }).isDisabled(), true, `${name} should honor the operation barrier`);
     }
@@ -1909,6 +1926,7 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     assert.equal(rejectedForeign.status(), 400, await rejectedForeign.text());
     assert.equal((await rejectedForeign.json()).code, 'assignee_ineligible');
 
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Assign', exact: true }).click();
     let assignment = page.getByLabel('Assign additional-copy task');
     await assignment.waitFor({ state: 'visible' });
@@ -1926,6 +1944,7 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     await assignment.locator('xpath=ancestor::form').getByRole('button', { name: 'Assign', exact: true }).click();
     await page.getByText(`Claimed by ${candidateById.get(args.superIdentity.staffId).displayName}`, { exact: true }).waitFor();
 
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Assign', exact: true }).click();
     assignment = page.getByLabel('Assign additional-copy task');
     await assignment.selectOption(args.staffIdentity.staffId);
@@ -2165,17 +2184,20 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
     await page.route(detailRoutePattern, detailRoute);
     await page.route(deletePath, singleDeleteRoute);
     await page.goto(args.baseOrigin + '/staff/?request=' + args.staleTitleAId, { waitUntil: 'networkidle' });
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Permanently delete request' }).waitFor();
-    assert.match(await page.locator('#request-dialog .detail-grid').textContent(),
-      /Close reason\s*Rejected/);
+    assert.match(await page.locator('#request-dialog .request-metadata').textContent(),
+      /Close reason:\s*Rejected/);
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'single-closed-title-delete');
     page.once('dialog', dialog => {
       assert.match(dialog.message(), /cannot be undone/);
       return dialog.dismiss();
     });
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Permanently delete request' }).click();
     assert.equal(singleDeletes, 0);
     page.once('dialog', dialog => dialog.accept());
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Permanently delete request' }).click();
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     assert.equal(singleDeletes, 1);
@@ -3441,6 +3463,7 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
       await page.locator('#request-dialog[open]').waitFor();
       const remove = async () => {
         page.once('dialog', dialog => dialog.accept());
+        await revealRequestActions(page);
         await page.getByRole('button', { name: copy ? 'Permanently delete task' : 'Permanently delete request', exact: true }).click();
       };
       await remove(); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
@@ -3705,6 +3728,7 @@ async function runRejectionNotificationAndReopen(browser, args, axeSource, repor
     await page.locator('#request-dialog[open]').waitFor();
     const before = await (await context.request.get(detailURL)).json();
     async function chooseRejection() {
+      await revealRequestActions(page);
       await page.getByRole('button', { name: 'Reject', exact: true }).click();
       await page.getByLabel('Rejection template', { exact: true }).selectOption({ label: 'Browser acceptance rejection' });
       await page.locator('.action-choice button[type="submit"]:not([disabled])').waitFor();
@@ -3744,6 +3768,7 @@ async function runRejectionNotificationAndReopen(browser, args, axeSource, repor
     assert.equal(reopened.claimedByStaffUserId, args.superIdentity.staffId);
     assert.equal(reopened.claimType, 'manual');
     assert.equal(reopened.claimRuleId, null);
+    await revealRequestActions(page);
     await action(page.getByRole('button', { name: 'Close silently', exact: true }), 200);
     await page.locator('#request-dialog .status-badge').filter({ hasText: 'Closed' }).waitFor();
     await page.setViewportSize({ width: 390, height: 844 });

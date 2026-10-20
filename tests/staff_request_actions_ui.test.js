@@ -245,7 +245,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           message: 'Hold placement is blocked or requires reconciliation.' });
       }
       if (url.endsWith('/bib-lookup') && options.method === 'POST') {
-        return response(200, { bibId: 9001, title: 'Original title', author: null });
+        const detail = { bibId: 9001, title: 'Original title', author: null };
+        return response(200, JSON.parse(options.body).mode === 'bib' ? detail : { results: [detail] });
       }
       if (url.includes('/api/asap/config?')) return response(200, configuration);
       if (url.includes('/research-configuration')) return response(200, { externalSearchProviders: [] });
@@ -352,8 +353,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     assert.equal(document.querySelector('.request-activity img'), null);
     assert.equal(document.querySelector('.edit-form textarea').value, 'Editable note');
     if (scenarioOptions.unclaimedPreview) {
-      assert.match(document.querySelector('.pending-audit-preview').textContent, /staff claim/);
-      assert.equal(document.querySelector('.edit-form button[type="submit"]').disabled, false);
+      assert.equal(document.querySelector('.pending-audit-preview').hidden, true);
+      assert.equal(document.querySelector('.request-save-state').textContent, 'All changes saved');
+      assert.equal(document.querySelector('.request-save-footer button[type="submit"]').disabled, true);
       return;
     }
     if (scenarioOptions.autoClaimOther) {
@@ -373,7 +375,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       return;
     }
     assert.match(document.querySelector('.pending-audit-preview').textContent, /No pending changes/);
-    assert.equal(document.querySelector('.edit-form button[type="submit"]').disabled, true);
+    assert.equal(document.querySelector('.request-save-footer button[type="submit"]').disabled, true);
     if (scenarioOptions.unverifiedPendingHold || scenarioOptions.verifiedPendingHold) {
       const placeHold = [...document.querySelectorAll('.action-bar button')]
         .find(item => item.textContent.includes('Place hold'));
@@ -465,7 +467,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       document.querySelector('#polaris-results button').click();
       if (scenarioOptions.verifiedUnchangedBib) {
         assert.match(document.querySelector('.pending-audit-preview').textContent, /No pending changes/);
-        assert.equal(document.querySelector('.edit-form button[type="submit"]').disabled, true);
+        assert.equal(document.querySelector('.request-save-footer button[type="submit"]').disabled, true);
         [...document.querySelectorAll('.action-bar button')]
           .find(item => item.textContent.includes('Already own')).click();
         await until(() => payload !== null, 'unchanged verified BIB action submits');

@@ -179,5 +179,69 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
       } finally { controller.dispose(); host.dispose(); }
     });
   }
-  console.log('Title command outcomes, actor replacement, scoped configuration invalidation and editor Revert/disposal checks passed');
+  for (const outcome of ['success', 'failure', 'retired']) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createDetailHost } = await load('detail-host');
+      const { createTitleDetailController } = await load('title-detail');
+      const session = createSessionIdentity(); session.accept(actorA);
+      const host = createDetailHost({ root: get('#request-dialog') });
+      let complete, reject, finishAssignment, posted = 0;
+      const source = { ...snapshot, claimedByStaffUserId: actorA.id, author: 'Author', formatLabel: 'Book', notes: 'Saved note' };
+      const controller = createTitleDetailController({ host, sessionIdentity: session,
+        polarisLookup: { close() {}, invalidate() {} }, copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
+        announce() {}, beforeOpen: () => ({ isCurrent: () => true }), isNavigationCurrent: () => true,
+        getNavigationGeneration: () => 1, getScope: () => '2', onAlign: async () => ({ scope: '2', commit: () => 1 }), onOpened() {},
+        beforeClose: () => true, onClosed() {}, onUpdated() {}, getFocusReturn: () => null, refreshQueue: async () => true,
+        queueSequence: () => 1, rememberOpened() {}, forgetUnavailable() {}, onReceipt() {}, clearReceipt() {},
+        request: async (path, init = {}) => {
+          if (init.method) { posted++; return new Promise((resolve, fail) => { complete = resolve; reject = fail; }); }
+          if (path.includes('/assignment-candidates')) return new Promise(resolve => { finishAssignment = resolve; });
+          return path.includes('/title-requests/') ? source : { availableFormats: ['book'] };
+        } });
+      await controller.open(source.id);
+      const tab = name => [...get('#request-dialog').querySelectorAll('[role="tab"]')].find(node => node.textContent === name);
+      assert.equal(tab('Details').getAttribute('aria-selected'), 'true');
+      [...get('.action-bar').querySelectorAll('button')].find(button => button.textContent === 'Assign').click();
+      tab('Activity').click(); tab('Activity').focus();
+      finishAssignment({ candidates: [{ id: actorA.id, displayName: 'Actor' }] });
+      for (let index = 0; index < 3; index++) await new Promise(resolve => setImmediate(resolve));
+      assert.equal(tab('Activity').getAttribute('aria-selected'), 'true', 'A delayed action read cannot replace the selected tab.');
+      assert.equal(document.activeElement, tab('Activity'), 'A delayed hidden form cannot steal focus.');
+      get('.inline-form').remove();
+      tab('Details').click();
+      assert.deepEqual([...get('.patron-context').querySelectorAll('dt')].map(node => node.textContent), ['Patron', 'Barcode', 'Email', 'Recorded ASAP pickup']);
+      const form = get('.edit-form'), title = form.querySelector('input');
+      title.value = 'Unsaved title'; title.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      tab('Activity').click(); tab('Related requests').click(); tab('Activity').click();
+      assert.equal(get('.edit-form'), form); assert.equal(title.value, 'Unsaved title'); assert.equal(controller.isDirty(), true);
+      assert.equal(get('.request-save-state').textContent, 'Unsaved changes');
+      get('.request-save-footer button[type="button"]').click();
+      assert.equal(tab('Activity').getAttribute('aria-selected'), 'true');
+      assert.equal(get('.request-save-state').textContent, 'All changes saved'); assert.equal(controller.isDirty(), false);
+      const replacementForm = get('.edit-form'), replacementTitle = replacementForm.querySelector('input');
+      replacementTitle.value = 'Submitted title'; replacementTitle.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      replacementForm.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+      assert.equal(posted, 1); assert.equal(get('.request-save-state').textContent, 'Saving changes…');
+      assert.equal(get('.request-save-footer button[type="submit"]').disabled, true);
+      if (outcome === 'retired') {
+        session.clear(); controller.signedOut(); session.accept(actorB); await controller.open(source.id);
+      }
+      if (outcome === 'failure') reject(Object.assign(new Error('Controlled validation failure'), { status: 400 }));
+      else complete({ committed: true, request: { ...source, title: 'Submitted title', version: 'v2' } });
+      for (let index = 0; index < 5; index++) await new Promise(resolve => setImmediate(resolve));
+      if (outcome === 'failure') {
+        assert.equal(get('.edit-form input').value, 'Submitted title'); assert.equal(controller.isDirty(), true);
+        assert.match(get('.request-save-state').textContent, /not saved.*Controlled validation failure/);
+      } else if (outcome === 'success') {
+        assert.equal(tab('Activity').getAttribute('aria-selected'), 'true', 'An authoritative save retains the selected tab.');
+        assert.equal(get('.request-save-state').textContent, 'All changes saved'); assert.equal(controller.isDirty(), false);
+      } else {
+        assert.equal(get('.edit-form input').value, 'A', 'The previous actor’s save cannot replace the new owner.');
+        assert.equal(get('.request-save-state').textContent, 'All changes saved');
+      }
+      controller.dispose(); host.dispose();
+    });
+  }
+  console.log('Title commands, tabbed drafts/footer, save outcomes, actor replacement and scoped configuration passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

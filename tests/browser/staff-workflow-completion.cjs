@@ -84,6 +84,15 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.getByRole('button', { name: `Open request ${sourceId}`, exact: true }).click();
     await page.locator('#request-dialog[open]').waitFor();
+    const detail = page.locator('#request-dialog');
+    await verifyMixedFieldLayout(page, '#request-dialog .request-details-panel');
+    await detail.getByRole('tab', { name: 'Activity', exact: true }).click();
+    assert.equal(await detail.locator('.request-activity li').count(), 80);
+    await detail.locator('.request-middle').evaluate(node => { node.scrollTop = node.scrollHeight; });
+    const footer = await detail.locator('.request-save-footer').boundingBox();
+    assert.ok(footer.y + footer.height <= 900);
+    await scan('detail-long-activity');
+    await detail.getByRole('tab', { name: 'Details', exact: true }).click();
     assert.match(await page.locator('#request-dialog').textContent(), /Recorded ASAP pickup/);
     assert.match(await page.locator('#request-dialog').textContent(), /Historical ASAP pickup/);
     assert.match(await page.locator('#request-dialog').textContent(), /live Polaris pickup preference/);
@@ -128,6 +137,10 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     const acceptedDetail = await (await detailLoaded).json();
     assert.equal(acceptedDetail.id, created.id);
     await page.locator('#request-dialog[open]').waitFor();
+    assert.equal(await detail.getByRole('tab', { name: 'Details', exact: true }).getAttribute('aria-selected'), 'true');
+    assert.equal(await detail.locator('.request-save-state').textContent(), 'All changes saved');
+    assert.equal(await detail.locator('.patron-context').getByText('Format', { exact: true }).count(), 0);
+    await scan('created-detail');
     assert.ok((await page.locator('#request-dialog').textContent()).includes(acceptedDetail.title));
     await page.keyboard.press('Escape');
     await page.locator('#library-scope').selectOption(library);

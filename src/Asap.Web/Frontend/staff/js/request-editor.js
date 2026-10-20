@@ -4,7 +4,7 @@ import { applyPolarisResultToControls, renderResearchLinks, selectedStaffBibId, 
 import { customFieldValue, renderCustomFieldEditor, collectCustomFields } from './custom-fields.js';
 import { element, icon, commandButton, labeledInput, selectWithHistorical } from './ui.js';
 
-export function createRequestEditor({ context, configuration, polarisLookup, announce, verified = null, request: send = authorizedJson }) {
+export function createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot = null, verified = null, request: send = authorizedJson }) {
   const { request, actor, root, scope: interactionScope, isCurrent, isPending, admit, confirm, mutate } = context;
   const reads = createLatestLoad();
   let editControls = null, editorDirty = false, editorDraft = null, verifiedBib = verified, research = null, lookupContext = null;
@@ -59,7 +59,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       });
     }
 
-    const form = element('form', { className: 'edit-form' });
+    const form = element('form', { className: 'edit-form', id: `request-edit-${request.id}` });
     formEvents?.abort();
     const events = new window.AbortController(); formEvents = events;
     const listen = (node, name, listener) => node.addEventListener(name, event => {
@@ -93,10 +93,9 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
         returnFocus: searchButton,
         editorFocus: bib,
         canApply: row => !bib.disabled || row.bibId === positivePolarisId(bib.value),
-        mode: bib.value.trim() ? 'bib' : identifier.value.trim() ? 'identifier' : 'title',
-        query: bib.value.trim() || identifier.value.trim() || title.value.trim(),
+        mode: 'title',
+        query: title.value.trim(),
         title: title.value.trim(),
-        author: author.value.trim(),
         apply: (selected, verifiedDetail) => {
           applyPolarisResultToControls(selected, { bib, title, author, identifier });
           verifiedBib = {
@@ -163,7 +162,8 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     const customFields = element('div', { className: 'custom-fields wide' });
     let customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value);
     const pendingPreview = element('p', { className: 'pending-audit-preview wide', role: 'status' });
-    const save = element('button', { type: 'submit', className: 'primary-button' }, [icon('save'), 'Save changes']);
+    const saveState = element('strong', { className: 'request-save-state', role: 'status', 'aria-live': 'polite' });
+    const save = element('button', { type: 'submit', form: form.id, className: 'primary-button' }, [icon('save'), 'Save changes']);
     const revert = commandButton('Revert changes', 'undo', () => {
       if (!form.isConnected || !isCurrent() || isPending()) return;
       if (editorDirty && !window.confirm('Discard unsaved request changes and revert this editor?')) return;
@@ -171,7 +171,8 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       if (lookupContext) polarisLookup.invalidate(lookupContext);
       interactionScope.release(draft);
       form.replaceWith(buildEditForm(request, configuration));
-      root.querySelector('.edit-form input')?.focus();
+      const updated = root.querySelector('.edit-form');
+      (updated.closest('[hidden]') ? root.querySelector('[role="tab"][aria-selected="true"]') : updated.querySelector('input'))?.focus();
       announce('Unsaved request changes discarded.');
     });
     function updatePreview() {
@@ -201,7 +202,10 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       pendingPreview.textContent = changed.length
         ? `Pending changes (not saved): ${changed.join(', ')}.`
         : 'No pending changes.';
-      save.disabled = changed.length === 0;
+      pendingPreview.hidden = !editorDirty;
+      saveState.textContent = editorDirty ? 'Unsaved changes' : 'All changes saved';
+      saveState.dataset.state = editorDirty ? 'dirty' : 'clean';
+      save.disabled = !editorDirty;
       revert.disabled = !editorDirty;
     }
     listen(format, 'change', () => {
@@ -219,12 +223,15 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       labeledInput('Publication timing', publication),
       labeledInput('Exact publication date', exactDate),
       labeledInput('Format', format),
+      element('label', { className: 'form-field form-field-checkbox' }, [element('span', { text: 'Automatically place hold' }), autohold]),
       customFields,
-      element('label', { className: 'check-field' }, [autohold, element('span', { text: 'Automatically place hold' })]),
-      labeledInput('Notes', notes, 'wide'),
-      pendingPreview,
-      element('div', { className: 'form-actions wide' }, [save, revert])
+      labeledInput('Notes', notes, 'wide')
     );
+    const footer = element('footer', { className: 'request-save-footer wide' }, [
+      element('div', { className: 'request-save-feedback' }, [saveState, pendingPreview]),
+      element('div', { className: 'form-actions' }, [save, revert])
+    ]);
+    if (footerRoot) footerRoot.replaceChildren(footer); else form.append(footer);
     updatePreview();
     listen(form, 'submit', async event => {
       event.preventDefault();
@@ -259,7 +266,9 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
         if (!confirm(`${formatConsequence} ${claimConsequence}`, draft)) return;
       }
       if (!isCurrent() || !form.isConnected) return;
-      await mutate(`/api/asap/staff/title-requests/${request.id}/action`, {
+      saveState.textContent = 'Saving changes…';
+      saveState.dataset.state = 'saving';
+      const outcome = await mutate(`/api/asap/staff/title-requests/${request.id}/action`, {
         version: request.version,
         action: 'edit',
         title: title.value,
@@ -276,6 +285,11 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
         notes: notes.value,
         customFields: collectCustomFields(request, customFieldControls)
       }, 'Request changes saved.', draft);
+      if (isCurrent() && form.isConnected) {
+        updatePreview();
+        saveState.textContent = `Changes were not saved. ${outcome?.message || 'Review the error before trying again.'}`;
+        saveState.dataset.state = 'error';
+      }
     });
     return form;
   }

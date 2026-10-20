@@ -91,3 +91,28 @@ browser) and 57 frontend test files, plus deliberate additions.
 - Permanent controller coverage additionally verifies selected-title-only
   population, retained verified BIB after Cancel and rejection of a delayed
   selection after the suggestion owner is replaced.
+
+### Checkpoint C
+
+- Title Detail keeps its existing authoritative controller, editor drafts,
+  workflow commands, detail host and mutation recovery. The modal now has a
+  compact contextual header/patron strip, Details/Activity/Related tabs, one
+  scroll pane and a persistent footer. Editable Format/Identifier/BIB/publication
+  summaries were removed; native LEAP links remain in compact research tools.
+- Clean/dirty/saving/rejected states are distinct. Save is disabled when clean;
+  Claim remains an explicit action. Revert affects only the editor draft. Tab
+  selection survives authoritative saves, and hidden delayed assignment/pickup
+  reads cannot change the selected tab or steal focus.
+- Release build passed with zero warnings/errors. Controller, action and owner
+  replacement frontend files passed, including tab drafts, delayed success,
+  validation failure, actor replacement and concurrent inline drafts.
+- The real-SQL/Kestrel request-contract and creation-handoff browser cases
+  passed (2/2): rejected saves preserve SQL versions, accepted saves preserve
+  custom-field history, tabs/search/Revert preserve drafts, and a forwarded
+  delayed real save blocks close until its response arrives. Footer geometry
+  establishes that the final field is not covered; desktop/mobile axe and
+  existing traffic/error/image/overflow guards pass.
+- Broader workflow/LEAP coverage is running with a new 80-event SQL history
+  fixture. Its first workflow run reached an obsolete Author auto-population
+  expectation; that assertion now verifies the explicitly required retained
+  Author. The complete browser and frontend suites remain final gates.

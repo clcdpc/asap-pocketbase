@@ -100,6 +100,37 @@ async function runDesktop(browser, args, axeSource, report) {
     const originalVersion = original.version;
     const originalRetiredChoice = original.customFields[args.retiredSelectKey];
     const originalRetiredHistory = original.customFields.retired_history;
+    const detail = page.locator('#request-dialog');
+    assert.deepEqual(await detail.locator('[role="tab"]').allTextContents(), ['Details', 'Activity', 'Related requests']);
+    assert.deepEqual(await detail.locator('.patron-context dt').allTextContents(), ['Patron', 'Barcode', 'Email', 'Recorded ASAP pickup']);
+    const titleInput = page.getByLabel('Title', { exact: true });
+    await titleInput.fill('Draft across tabs');
+    await detail.getByRole('tab', { name: 'Activity', exact: true }).click();
+    await detail.getByRole('tab', { name: 'Related requests', exact: true }).click();
+    assert.equal(await titleInput.inputValue(), 'Draft across tabs');
+    assert.equal(await detail.locator('.request-save-state').textContent(), 'Unsaved changes');
+    await detail.getByRole('tab', { name: 'Details', exact: true }).click();
+    await detail.getByRole('button', { name: 'Search Polaris catalog', exact: true }).click();
+    assert.equal(await page.locator('#polaris-mode').inputValue(), 'title');
+    assert.equal(await page.locator('#polaris-query').inputValue(), 'Draft across tabs');
+    assert.equal(await page.locator('#polaris-author').inputValue(), '');
+    await page.keyboard.press('Escape'); assert.equal(await titleInput.inputValue(), 'Draft across tabs');
+    await detail.getByRole('tab', { name: 'Activity', exact: true }).click();
+    page.once('dialog', dialog => dialog.dismiss()); await page.keyboard.press('Escape');
+    assert.equal(await detail.evaluate(node => node.open), true);
+    page.once('dialog', dialog => dialog.accept());
+    await detail.getByRole('button', { name: 'Revert changes', exact: true }).click();
+    assert.equal(await titleInput.inputValue(), original.title);
+    assert.equal(await detail.getByRole('tab', { name: 'Activity', exact: true }).getAttribute('aria-selected'), 'true');
+    assert.equal(await detail.locator('.request-save-state').textContent(), 'All changes saved');
+    await detail.getByRole('tab', { name: 'Details', exact: true }).click();
+    const footerGeometry = await detail.evaluate(root => {
+      const middle = root.querySelector('.request-middle'), footer = root.querySelector('.request-save-footer');
+      middle.scrollTop = middle.scrollHeight;
+      return { frame: root.getBoundingClientRect().toJSON(), middle: middle.getBoundingClientRect().toJSON(), footer: footer.getBoundingClientRect().toJSON() };
+    });
+    assert.ok(footerGeometry.footer.bottom <= footerGeometry.frame.bottom + 1);
+    assert.ok(footerGeometry.middle.bottom <= footerGeometry.footer.top + 1, 'The save footer cannot cover the last field.');
     const clearInput = page.getByLabel(args.fieldLabel, { exact: true });
     await clearInput.waitFor();
     const retiredChoice = page.getByLabel(args.retiredSelectLabel, { exact: true });
@@ -121,16 +152,35 @@ async function runDesktop(browser, args, axeSource, report) {
     const unchanged = await requestDetail(context, args.baseOrigin, args.requestId);
     assert.equal(unchanged.title, original.title, 'Rejected title changed the request title.');
     assert.equal(unchanged.version, originalVersion, 'Rejected title changed the SQL rowversion.');
+    assert.match(await detail.locator('.request-save-state').textContent(), /Changes were not saved/);
 
     await page.getByLabel('Title', { exact: true }).fill('Browser saved after clear');
     await clearInput.fill('');
+    await detail.getByRole('tab', { name: 'Activity', exact: true }).click();
+    const actionPath = `**/api/asap/staff/title-requests/${args.requestId}/action`;
+    let releaseSave;
+    await page.route(actionPath, async route => {
+      const response = await route.fetch();
+      await new Promise(resolve => { releaseSave = resolve; });
+      await route.fulfill({ response });
+    });
     const acceptedResponsePromise = page.waitForResponse(response =>
       allowedOrigin(response.request(), args.baseOrigin) && response.request().method() === 'POST' &&
       new URL(response.url()).pathname === `/api/asap/staff/title-requests/${args.requestId}/action`);
     await page.getByRole('button', { name: 'Save changes' }).click();
+    await page.waitForFunction(() => document.querySelector('.request-save-state')?.dataset.state === 'saving');
+    assert.equal(await detail.getByRole('button', { name: 'Revert changes' }).isDisabled(), true);
+    await detail.getByRole('button', { name: 'Close request details' }).click();
+    assert.equal(await detail.evaluate(node => node.open), true, 'A pending save keeps its modal and draft.');
+    while (!releaseSave) await new Promise(resolve => setTimeout(resolve, 10));
+    releaseSave();
     const acceptedResponse = await acceptedResponsePromise;
     assert.equal(acceptedResponse.status(), 200, await acceptedResponse.text());
     await page.getByText('Request changes saved.').waitFor();
+    await page.unroute(actionPath);
+    assert.equal(await detail.getByRole('tab', { name: 'Activity', exact: true }).getAttribute('aria-selected'), 'true');
+    assert.equal(await detail.locator('.request-save-state').textContent(), 'All changes saved');
+    await detail.getByRole('tab', { name: 'Details', exact: true }).click();
     const clearBody = actionBodies.at(-1);
     assert.equal(clearBody.title, 'Browser saved after clear');
     assert.equal(clearBody.customFields[args.fieldKey], null,
