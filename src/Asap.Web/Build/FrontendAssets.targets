@@ -1,0 +1,76 @@
+<Project>
+  <PropertyGroup>
+    <!-- UseStaticFiles serves the primary files, not SDK precompressed endpoints.
+         Avoid unused representations cached against an earlier build manifest. -->
+    <CompressionEnabled>false</CompressionEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrontendSource Include="Frontend\**\*" Exclude="Frontend\README.md" />
+  </ItemGroup>
+  <UsingTask TaskName="FingerprintFrontend" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <SourceFiles ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+      <WebRoot ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Linq" />
+      <Using Namespace="System.Security.Cryptography" />
+      <Using Namespace="System.Text" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        const string marker = "__ASAP_FRONTEND_VERSION__";
+        using (var sha = SHA256.Create())
+        {
+            var files = SourceFiles.Select(file => new
+            {
+                Source = file.ItemSpec,
+                Relative = (file.GetMetadata("RecursiveDir") + file.GetMetadata("Filename") +
+                    file.GetMetadata("Extension")).Replace('\\', '/')
+            }).OrderBy(file => file.Relative, StringComparer.Ordinal).ToArray();
+            var identity = string.Join("\n", files.Select(file => file.Relative + "|" +
+                BitConverter.ToString(sha.ComputeHash(file.Relative == "staff/index.html" || file.Relative == "patron/index.html"
+                    ? Encoding.UTF8.GetBytes(File.ReadAllText(file.Source)) : File.ReadAllBytes(file.Source)))
+                    .Replace("-", "").ToLowerInvariant()));
+            var version = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(identity)))
+                .Replace("-", "").ToLowerInvariant();
+            foreach (var file in files.Where(file => file.Relative == "staff/index.html" || file.Relative == "patron/index.html"))
+            {
+                var template = File.ReadAllText(file.Source);
+                if (!template.Contains(marker))
+                {
+                    Log.LogError("Frontend entry page is missing its asset version placeholder: " + file.Source);
+                    return false;
+                }
+                var html = template.Replace(marker, version);
+                var destination = Path.Combine(WebRoot, file.Relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                if (!File.Exists(destination) || File.ReadAllText(destination) != html)
+                {
+                    File.WriteAllText(destination, html, new UTF8Encoding(false));
+                }
+            }
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+  <!-- Run before static-web-asset discovery and publish collection, including
+       publishing without building. Never copy raw templates over generated HTML. -->
+  <Target Name="CopyFrontendToWebRoot" BeforeTargets="AssignTargetPaths;ComputeFilesToPublish">
+    <ItemGroup>
+      <ExpectedFrontendOutput Include="@(FrontendSource->'wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" />
+      <StaleFrontendOutput Include="wwwroot\**\*" Exclude="@(ExpectedFrontendOutput)" />
+      <FrontendCopy Include="@(FrontendSource)" Exclude="Frontend\staff\index.html;Frontend\patron\index.html" />
+      <Content Remove="wwwroot\**\*;Frontend\**\*" />
+      <Content Include="@(ExpectedFrontendOutput)" CopyToPublishDirectory="Always" ExcludeFromSingleFile="true" />
+    </ItemGroup>
+    <Delete Files="@(StaleFrontendOutput)" />
+    <Copy SourceFiles="@(FrontendCopy)"
+          DestinationFiles="@(FrontendCopy->'wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="false" />
+    <FingerprintFrontend SourceFiles="@(FrontendSource)" WebRoot="wwwroot" />
+  </Target>
+  <Target Name="CleanFrontendWebRoot" AfterTargets="Clean">
+    <RemoveDir Directories="$(MSBuildProjectDirectory)\wwwroot" />
+  </Target>
+</Project>

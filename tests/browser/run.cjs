@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const repositoryRoot = path.resolve(__dirname, '..', '..');
 const browserTests = [
+  'FullyQualifiedName~NormalNavigationRefreshesPublishedEntryAndNestedModulesWithRealBrowserCaching',
   'FullyQualifiedName~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport',
   'FullyQualifiedName~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers',
   'FullyQualifiedName~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures',
@@ -33,7 +34,7 @@ const child = spawn(
     '--no-build',
     '--no-restore',
     '--minimum-expected-tests',
-    '16',
+    '17',
     '--filter',
     browserTests,
   ],

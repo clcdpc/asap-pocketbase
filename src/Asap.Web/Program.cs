@@ -5,6 +5,7 @@ using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Development;
 using Asap.Web.Infrastructure.Health;
+using Asap.Web.Infrastructure.Http;
 using Asap.Web.Infrastructure.Jobs;
 using Asap.Web.Infrastructure.Logging;
 using Asap.Web.Infrastructure.Security;
@@ -192,7 +193,7 @@ if (externalConfiguration is not null)
     app.UseMiddleware<PatronContentSecurityPolicyMiddleware>();
     app.UseMiddleware<BusinessReadinessMiddleware>();
 }
-app.UseStaticFiles();
+app.UseFrontendStaticFiles();
 
 if (externalConfiguration is not null)
 {

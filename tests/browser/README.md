@@ -1,8 +1,8 @@
 # Browser acceptance suite
 
 `npm run test:browser` is the full browser-suite entry point. It selects the
-sixteen real-SQL integration cases and runs them through the same
-Testing Kestrel fixtures used by the .NET test suite:
+seventeen integration cases and runs them through the same Testing Kestrel
+fixtures used by the .NET test suite (sixteen use real SQL):
 
 - `patron.cjs`: 10 desktop/mobile patron states and 3 authentication/session
   race scenarios.
@@ -47,8 +47,13 @@ Testing Kestrel fixtures used by the .NET test suite:
   authoritative verification, explicit All scope, live pickup context and real
   HTTP/SQL creation with deterministic provider boundaries.
 
-The fifteen selected methods are named explicitly in `run.cjs`; the two Settings
-role DataRows make sixteen discovered cases. Several methods own more
+- `frontend-cache.cjs`: published staff/patron files served through Program,
+  with a controlled deployment, real Chromium cache, stale-module negative
+  control, normal navigation/reload and unchanged-resource 304/vendor reuse.
+  Request routing is deliberately disabled because routing disables caching.
+
+The sixteen selected methods are named explicitly in `run.cjs`; the two Settings
+role DataRows make seventeen discovered cases. Several methods own more
 than one Node runner. Other .NET cases also contain embedded browser checks.
 Counts refer to discovered .NET cases, not scanned states or assertions.
 

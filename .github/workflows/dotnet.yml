@@ -94,9 +94,9 @@ jobs:
       - name: Run .NET and real SQL tests (non-browser partition)
         run: >-
           dotnet test --project tests/Asap.Tests/Asap.Tests.csproj
-          --configuration Release --no-build --minimum-expected-tests 1391
+          --configuration Release --no-build --minimum-expected-tests 1410
           --filter
-          'FullyQualifiedName!~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport&FullyQualifiedName!~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers&FullyQualifiedName!~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures&FullyQualifiedName!~PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses&FullyQualifiedName!~StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp&FullyQualifiedName!~SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp&FullyQualifiedName!~LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata&FullyQualifiedName!~ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery&FullyQualifiedName!~OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes&FullyQualifiedName!~EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance&FullyQualifiedName!~Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload&FullyQualifiedName!~StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry&FullyQualifiedName!~LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces&FullyQualifiedName!~SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference&FullyQualifiedName!~StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope'
+          'FullyQualifiedName!~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport&FullyQualifiedName!~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers&FullyQualifiedName!~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures&FullyQualifiedName!~PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses&FullyQualifiedName!~StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp&FullyQualifiedName!~SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp&FullyQualifiedName!~LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata&FullyQualifiedName!~ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery&FullyQualifiedName!~OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes&FullyQualifiedName!~EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance&FullyQualifiedName!~Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload&FullyQualifiedName!~StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry&FullyQualifiedName!~LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces&FullyQualifiedName!~SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference&FullyQualifiedName!~StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope&FullyQualifiedName!~NormalNavigationRefreshesPublishedEntryAndNestedModulesWithRealBrowserCaching'
 
       - name: Run legacy/frontend unit tests
         run: npm test
@@ -117,6 +117,7 @@ jobs:
         shell: pwsh
         run: |
           dotnet publish src/Asap.Web/Asap.Web.csproj -c Release -o .artifacts/web
+          & scripts/build/Test-FrontendPublish.ps1 -PublishRoot .artifacts/web
           dotnet publish src/Asap.Migration/Asap.Migration.csproj -c Release -r win-x64 --self-contained true -o .artifacts/migration
           if (Get-ChildItem .artifacts -Recurse -File | Where-Object Name -Match 'pocketbase|node(.exe)?|npm(.cmd)?') {
             throw 'Published artifacts contain a forbidden PocketBase or Node runtime file.'
@@ -193,6 +194,7 @@ jobs:
             Copy-Item -LiteralPath $source.FullName -Destination $destination -Force
           }
 
+          & scripts/build/Test-FrontendPublish.ps1 -PublishRoot $packageWeb
           Copy-Item -LiteralPath scripts/deployment/Deploy-AsapTest.ps1 -Destination (Join-Path $packageDeployment 'Deploy-AsapTest.ps1') -Force
           Copy-Item -LiteralPath scripts/hangfire/1.8.25/install.sql -Destination (Join-Path $packageHangfire 'install.sql') -Force
 
@@ -250,6 +252,7 @@ jobs:
           $bootstrapRoot = Join-Path $env:RUNNER_TEMP ("asap-test-package-validation-" + [guid]::NewGuid().ToString('N'))
           try {
             Expand-Archive -LiteralPath $zipPath -DestinationPath $bootstrapRoot -Force
+            & scripts/build/Test-FrontendPublish.ps1 -PublishRoot (Join-Path $bootstrapRoot 'web')
             & (Join-Path $bootstrapRoot 'deployment/Deploy-AsapTest.ps1') `
               -DeploymentZip $zipPath `
               -ExpectedZipSha256 $expectedHash `

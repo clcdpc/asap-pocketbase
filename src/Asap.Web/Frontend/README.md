@@ -1,8 +1,22 @@
 # Frontend source
 
-This directory is tracked source. MSBuild copies it incrementally to the
+This directory is tracked source. MSBuild copies it to the
 ignored generated wwwroot directory for build, publish, and F5. The copy
-target invokes no Node or npm command.
+target invokes no Node or npm command. `Build/FrontendAssets.targets` computes a
+SHA-256 identity over sorted published frontend paths and source bytes, replacing
+`__ASAP_FRONTEND_VERSION__` only in generated staff/patron HTML. Identical inputs
+retain the same version and unchanged generated HTML retains its timestamp.
+The target runs before static asset discovery and publish collection, including
+`publish --no-build`; tracked templates and module imports stay unchanged.
+SDK endpoint precompression is disabled because this application serves files
+through `UseStaticFiles`; unused compressed copies can otherwise retain a prior
+build's HTML. Publish validation recomputes the identity from the packaged bytes.
+
+First-party HTML, JavaScript (including shared/nested modules and the patron
+embed loader), and CSS require HTTP revalidation. Static-file ETag/Last-Modified
+validators allow unchanged responses to return 304. Pinned `/vendor/` URLs use
+one-year immutable caching; images/fonts outside that directory retain the
+default policy. Already-open pages are never automatically reloaded.
 
 The patron and staff shells are the shipped application frontend. They use the
 ASP.NET Core JSON endpoints and shared browser helpers; Node and npm are only
