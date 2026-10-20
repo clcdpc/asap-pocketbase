@@ -84,17 +84,22 @@ public sealed partial class PolarisPatronProvider
                 codeElement.ValueKind != JsonValueKind.Number ||
                 !codeElement.TryGetInt32(out var code) ||
                 code != data.PAPIErrorCode || code < -1 ||
+                !TryGetUniqueProperty(root, "TotalRecordsFound", out var totalElement) ||
+                totalElement.ValueKind != JsonValueKind.Number ||
+                !totalElement.TryGetInt32(out var total) || total < 0 ||
+                total != data.TotalRecordsFound ||
                 !TryGetUniqueProperty(root, "PatronSearchRows", out var rows) ||
                 rows.ValueKind != JsonValueKind.Array ||
                 data.PatronSearchRows is null ||
-                data.PatronSearchRows.Count != rows.GetArrayLength())
+                data.PatronSearchRows.Count != rows.GetArrayLength() ||
+                total < rows.GetArrayLength())
             {
                 return false;
             }
 
             if (rows.GetArrayLength() == 0)
             {
-                return code == 0 || code == -1 && HasNoSearchErrorMessage(root);
+                return total == 0 && (code == 0 || code == -1 && HasNoSearchErrorMessage(root));
             }
 
             return code >= 0;
