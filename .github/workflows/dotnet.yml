@@ -28,7 +28,8 @@ jobs:
   build-test-package:
     name: Build, test and package
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The retained SQL/frontend/browser guard already takes about 44 minutes.
+    timeout-minutes: 60
     outputs:
       artifact_name: ${{ steps.identity.outputs.artifact_name }}
       deployment_label: ${{ steps.identity.outputs.deployment_label }}

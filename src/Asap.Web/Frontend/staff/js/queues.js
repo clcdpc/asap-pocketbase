@@ -10,6 +10,67 @@ function detachGridContainer(container) {
   return replacement;
 }
 
+function createQueueGrid(options, container) {
+  // Grid.js 6 forceRender reuses a mutable store/pipeline: old sort completions
+  // can replace newer filtered rows. Give each revision its own instance while
+  // keeping the outer queue/focus owner stable and preserving its selected sort.
+  let disposed = false;
+  let current = create(options);
+
+  function create(configuration, sort = null) {
+    // Grid.js normalizes columns in place; retain pristine options for later revisions.
+    // A newly mounted sort button initializes direction from its column.
+    const columns = configuration.columns.map((column, index) => {
+      const selected = sort?.columns.find(item => item.index === index);
+      return selected ? { ...column, sort: { ...column.sort, direction: selected.direction } } : { ...column };
+    });
+    const grid = new window.gridjs.Grid({ ...configuration, columns });
+    if (sort) {
+      grid.config.store.dispatch(state => ({ ...state,
+        sort: { ...sort, columns: sort.columns.map(column => ({ ...column })) } }));
+    }
+    const pipeline = grid.config.pipeline;
+    const process = pipeline.process.bind(pipeline);
+    let retired = false, pending = 0, destroyed = false;
+    const cleanup = () => {
+      if (retired && !pending && !destroyed) {
+        destroyed = true;
+        grid.destroy();
+      }
+    };
+    pipeline.process = (...args) => {
+      // A throttled render may enter after retirement. Already-entered work
+      // finishes against its detached frame before destroy unregisters Sort.
+      if (retired) return Promise.resolve(null);
+      pending++;
+      let result;
+      try { result = process(...args); }
+      catch (error) { pending--; cleanup(); throw error; }
+      const complete = () => { pending--; cleanup(); };
+      Promise.resolve(result).then(complete, complete);
+      return result;
+    };
+    const frame = document.createElement('div');
+    container.replaceChildren(frame);
+    grid.render(frame);
+    return { grid, retire() { frame.remove(); retired = true; cleanup(); } };
+  }
+
+  return {
+    replaceRows(rows) {
+      if (disposed) return;
+      const sort = current.grid.config.store.getState().sort;
+      current.retire();
+      current = create({ ...options, data: rows }, sort);
+    },
+    destroy() {
+      if (disposed) return;
+      disposed = true;
+      current.retire();
+    }
+  };
+}
+
 function bindStatusTabs(tabs, key, intent, signal) {
   for (const tab of tabs) {
     tab.addEventListener('click', () => intent(tab.dataset[key]), { signal });
@@ -284,7 +345,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     }
     if (!state.grid) {
       state.gridStatus = getContext().status;
-      state.grid = new window.gridjs.Grid({
+      state.grid = createQueueGrid({
         columns: definitions.map((column, index) => {
           if (column.kind === 'bib' || column.kind === 'patron') return {
             name: column.label, width: column.width,
@@ -330,13 +391,14 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
           return { name: column.label, width: column.width };
         }),
         data: rows,
+        // Columns own their widths. Grid.js 6 sizing headers can replace the live Sort processor during a render.
+        autoWidth: false,
         sort: true,
         pagination: { limit: 25, summary: true },
         language: { noRecordsFound: 'No requests match these filters.' }
-      });
-      state.grid.render(dom.grid);
+      }, dom.grid);
     } else {
-      state.grid.updateConfig({ data: rows }).forceRender();
+      state.grid.replaceRows(rows);
     }
   }
 
@@ -559,7 +621,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
       request.id
     ]);
     if (!state.additionalCopyGrid) {
-      state.additionalCopyGrid = new window.gridjs.Grid({
+      state.additionalCopyGrid = createQueueGrid({
         columns: [
           { name: 'Title', width: '220px' },
           { name: 'Author', width: '155px' },
@@ -600,13 +662,14 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
           }
         ],
         data: rows,
+        // Keep sizing headers from replacing the live Sort processor during a render; every column has a width.
+        autoWidth: false,
         sort: true,
         pagination: { limit: 25, summary: true },
         language: { noRecordsFound: 'No additional-copy tasks match these filters.' }
-      });
-      state.additionalCopyGrid.render(dom.additionalCopyGrid);
+      }, dom.additionalCopyGrid);
     } else {
-      state.additionalCopyGrid.updateConfig({ data: rows }).forceRender();
+      state.additionalCopyGrid.replaceRows(rows);
     }
   }
 

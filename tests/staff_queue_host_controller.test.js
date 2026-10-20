@@ -39,7 +39,12 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
         settingsScope: () => 'system', operationsScope: () => '2', findTitle() {}, openRecentTitle() {},
         onViewIntent() {}, onSignOutIntent() {} });
       dom.window.gridjs = { h: () => null, Grid: class {
-        constructor(config) { this.config = config; grids.push(this); }
+        constructor(config) {
+          let state = { sort: null };
+          this.config = { ...config, pipeline: { process: () => Promise.resolve(null) },
+            store: { getState: () => state, dispatch: change => { state = change(state); } } };
+          grids.push(this);
+        }
         render() {} updateConfig(config) { Object.assign(this.config, config); return this; }
         forceRender() { return this; } destroy() { this.destroyed = true; }
       } };
