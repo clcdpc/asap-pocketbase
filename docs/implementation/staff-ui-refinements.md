@@ -138,7 +138,7 @@ browser) and 57 frontend test files, plus deliberate additions.
   actual shortcut POST modes, a delayed old search, unchanged request versions,
   row/title/menu isolation and list Purchase/Reject/Claim/Unclaim outcomes.
 
-### Checkpoint E review corrections and evidence in progress
+### Checkpoint E review corrections and validation record
 
 - Independent settings review found that Add after removing a persisted draft
   provider could reuse its key and library overrides. Add now reserves accepted
@@ -196,5 +196,6 @@ browser) and 57 frontend test files, plus deliberate additions.
   markup. Browser creation supplies a manual required Author and proves catalog
   selection retains it; independent list actions return through Suggestions
   after the preceding action follows its request to a different workflow stage.
-- Final full-suite, native-zoom, publish/package and hosted-CI results will be
-  recorded after execution. No pending check is represented as passed.
+- Final full-suite, native-zoom, publish/package and hosted-CI results are
+  maintained in [the PR #385 validation record](https://github.com/clcdpc/asap-pocketbase/pull/385).
+  That record distinguishes completed checks from any pending gates.

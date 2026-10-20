@@ -3625,7 +3625,7 @@ async function runSettingsLayout(browser, args, axeSource, report) {
         }
         const layout = await page.evaluate(section => {
           const bounds = id => {
-            const label = document.getElementById(id).closest('label');
+            const label = document.getElementById(id).closest('.settings-field');
             const rect = label.getBoundingClientRect();
             return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom,
               width: rect.width, gridWidth: label.closest('.settings-grid').getBoundingClientRect().width };
