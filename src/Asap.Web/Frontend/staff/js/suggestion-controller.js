@@ -6,7 +6,7 @@ import { validRequestId } from './recent-requests.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
 import { applyPolarisResultToControls, researchRecordValue } from './research.js';
 import { renderCustomFieldEditor } from './custom-fields.js';
-import { sanitizedHtmlFragment } from '../../shared/html.js';
+import { renderPatronText } from '../../shared/html.js';
 import { element, icon, labeledInput, selectWithHistorical, dateTime } from './ui.js';
 
 export function createSuggestionController({ root, trigger, sessionIdentity, polarisLookup, announce, getLibraries,
@@ -410,7 +410,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
         ? configuration.ebookMessage
         : behavior === 'eaudiobookMessage' ? configuration.eaudiobookMessage : formatRule?.message;
       formatNotice.replaceChildren();
-      if (message) formatNotice.append(sanitizedHtmlFragment(message));
+      if (message) renderPatronText(formatNotice, message);
       formatNotice.hidden = !message;
       if (submitButton) submitButton.disabled = branches.length === 0;
     };

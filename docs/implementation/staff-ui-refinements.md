@@ -188,5 +188,11 @@ browser) and 57 frontend test files, plus deliberate additions.
   checks read-only results have no Use BIB controls. Notification assertions
   distinguish the intentional list-action intents from quick-create's explicit
   no-confirmation behavior; no live delivery is made.
+- The staff format-message preview now shares the same plain-text/link renderer
+  as the patron view, preserving clickable Libby URLs after the default cleanup.
+  Existing preview tests now verify exact multiline text and literal malicious
+  markup. Browser creation supplies a manual required Author and proves catalog
+  selection retains it; independent list actions return through Suggestions
+  after the preceding action follows its request to a different workflow stage.
 - Final full-suite, native-zoom, publish/package and hosted-CI results will be
   recorded after execution. No pending check is represented as passed.

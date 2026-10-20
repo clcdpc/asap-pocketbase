@@ -95,9 +95,21 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await closeDetail();
   const actions = [];
   for (const [index, action, status] of [['00', 'Purchase', 'outstanding_purchase'], ['01', 'Reject', 'closed']]) {
+    // Accepted actions follow the request to its new stage. Return through the
+    // actual Suggestions tab before choosing the next independent request.
+    await page.locator('#status-tabs [data-status="suggestion"]').click();
+    await page.locator('#refresh-queue:not([disabled])').waitFor();
     await search.fill(`TABLE-BROWSER-${index}`);
-    await page.waitForFunction(text => document.querySelectorAll('#request-grid .request-title-link').length === 1 &&
-      document.querySelector('#request-grid .request-title-link').textContent === text, `Table browser record ${index}`);
+    try {
+      await page.waitForFunction(text => document.querySelectorAll('#request-grid .request-title-link').length === 1 &&
+        document.querySelector('#request-grid .request-title-link').textContent === text, `Table browser record ${index}`);
+    } catch (error) {
+      throw new Error(`List action ${action}: ${JSON.stringify(await page.evaluate(() => ({
+        url: location.href, search: document.querySelector('#request-search').value,
+        summary: document.querySelector('#queue-summary').textContent,
+        titles: [...document.querySelectorAll('#request-grid .request-title-link')].map(node => node.textContent)
+      })))}`, { cause: error });
+    }
     const requestId = await row.locator('.request-title-link').getAttribute('data-request-id');
     await row.getByRole('button', { name: `${action} request ${requestId}`, exact: true }).click();
     const dialog = page.locator('#request-dialog[open]');
@@ -113,6 +125,8 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
     await page.waitForFunction(() => !document.querySelector('#request-dialog .action-choice'));
     actions.push({ id: requestId, status }); await closeDetail();
   }
+  await page.locator('#status-tabs [data-status="suggestion"]').click();
+  await page.locator('#refresh-queue:not([disabled])').waitFor();
   await search.fill('TABLE-BROWSER-02');
   await page.waitForFunction(() => document.querySelector('#request-grid .request-title-link')?.textContent === 'Table browser record 02');
   const claimId = await row.locator('.request-title-link').getAttribute('data-request-id');

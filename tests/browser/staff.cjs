@@ -2543,6 +2543,8 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     const title = desktopPage.locator('#staff-suggestion-form label')
       .filter({ hasText: /title/i }).locator('input').first();
     await title.fill(titleSeed);
+    const manualAuthor = 'Manually entered staff suggestion author';
+    await desktopPage.getByLabel(/^Author/).fill(manualAuthor);
     const audience = desktopPage.getByLabel('Audience note', { exact: true });
     await audience.waitFor();
     await audience.fill('Created by the staff browser journey.');
@@ -2551,7 +2553,8 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     const formatNotice = desktopPage.locator('.staff-format-notice');
     await formatNotice.waitFor({ state: 'visible' });
     assert.match(await formatNotice.textContent(), /This is an eBook suggestion/);
-    assert.equal(await formatNotice.locator('p').count(), 2);
+    assert.equal(await formatNotice.textContent(), 'This is an eBook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm');
+    assert.equal(await formatNotice.evaluate(node => getComputedStyle(node).whiteSpace), 'pre-wrap');
     assert.equal(await formatNotice.locator('a').getAttribute('href'),
       'https://help.libbyapp.com/en-us/6260.htm');
     assert.equal((await formatNotice.textContent()).includes('<p>'), false);
@@ -2575,6 +2578,7 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     await desktopPage.getByRole('button', { name: 'Use BIB 9001' }).click();
     await desktopPage.locator('#polaris-dialog').waitFor({ state: 'hidden' });
     assert.match(await title.inputValue(), /Catalog title 9001/);
+    assert.equal(await desktopPage.getByLabel(/^Author/).inputValue(), manualAuthor);
     assert.equal(await desktopPage.getByLabel('Email patron confirmation (optional)', { exact: true }).isChecked(), false);
     assert.equal(await desktopPage.getByLabel('Automatically place hold', { exact: true }).isChecked(), true);
     const invalidSuggestionFields = await desktopPage.locator('#staff-suggestion-form').evaluate(form =>

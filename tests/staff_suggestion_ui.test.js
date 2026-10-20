@@ -97,7 +97,7 @@ async function until(predicate, message) {
         options: [{ id: 'adult', label: 'Adult', enabled: true }]
       }],
       allowPatronAutoholdOptOut: false,
-      ebookMessage: '<p>Use the library eBook collection.</p><p><a href="https://example.org/help" target="_blank" rel="noreferrer">Learn more</a></p>',
+      ebookMessage: 'Use the library eBook collection.\n\nLearn more:\nhttps://example.org/help',
       eaudiobookMessage: ''
     };
     const createdRequest = {
@@ -275,11 +275,11 @@ async function until(predicate, message) {
     format.value = 'ebook';
     format.dispatchEvent(new dom.window.Event('change'));
     const notice = document.querySelector('.staff-format-notice');
-    assert.equal(notice.textContent.includes('<p>'), false);
-    assert.equal(notice.textContent.includes('<a'), false);
-    assert.equal(notice.querySelector('p').textContent, 'Use the library eBook collection.');
+    assert.equal(notice.textContent, configuration.ebookMessage);
+    assert.equal(notice.querySelector('p'), null);
     assert.equal(notice.querySelector('a').getAttribute('href'), 'https://example.org/help');
-    assert.equal(notice.querySelector('a').textContent, 'Learn more');
+    assert.equal(notice.querySelector('a').textContent, 'https://example.org/help');
+    assert.equal(notice.querySelector('a').rel, 'noopener noreferrer');
     assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, false,
       'informational eBook format must remain available for staff creation');
     assert.equal(document.querySelector('.staff-suggestion-fields input[maxlength="500"]').required, true);
@@ -287,9 +287,8 @@ async function until(predicate, message) {
     format.dispatchEvent(new dom.window.Event('change'));
     assert.equal(notice.querySelector('script'), null);
     assert.equal(dom.window.staffMessageScriptRan, undefined);
-    assert.equal(notice.querySelectorAll('a').length, 3);
-    assert.ok([...notice.querySelectorAll('a')].every(anchor => !anchor.hasAttribute('href')));
-    assert.equal(notice.querySelector('span').hasAttribute('onclick'), false);
+    assert.equal(notice.textContent, configuration.ebookMessage, 'Custom markup must remain literal text.');
+    assert.equal(notice.querySelectorAll('a, span').length, 0);
     configuration.ebookMessage = '';
     format.dispatchEvent(new dom.window.Event('change'));
     assert.equal(notice.hidden, true);
