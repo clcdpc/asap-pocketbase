@@ -2,17 +2,23 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { fixture } = require('./helpers/staff-controller.cjs');
 const pause = () => new Promise(resolve => setTimeout(resolve, 15));
+let renderedGrid;
+const isRendered = () => renderedGrid?.config.store.getState().status === 3; // Vendored Grid.js 6.2.0 Rendered state.
 async function until(predicate, message) {
   for (let index = 0; index < 250; index++) {
-    if (predicate()) {
+    if (isRendered() && predicate()) {
       // Grid.js attaches sorting/paging effects after its DOM commit. Let the
       // actual browser-like frame finish before starting another pipeline.
       await new Promise(resolve => window.requestAnimationFrame(() => window.requestAnimationFrame(() => window.setTimeout(resolve, 0))));
-      if (predicate()) return;
+      // Grid also debounces pipeline effects (100 ms in the pinned vendor).
+      // Drain those effects between distinct fixture actions, just as the
+      // real-browser journey waits for its accepted render before continuing.
+      await new Promise(resolve => window.setTimeout(resolve, renderedGrid.config.processingThrottleMs + 16));
+      if (isRendered() && predicate()) return;
     }
     await pause();
   }
-  assert.ok(predicate(), message);
+  assert.ok(isRendered() && predicate(), message);
 }
 
 (async () => {
@@ -26,6 +32,10 @@ async function until(predicate, message) {
     global.requestAnimationFrame = dom.window.requestAnimationFrame.bind(dom.window);
     global.cancelAnimationFrame = dom.window.cancelAnimationFrame.bind(dom.window);
     dom.window.gridjs = require(path.join(__dirname, '../src/Asap.Web/Frontend/vendor/gridjs/6.2.0/gridjs.umd.js'));
+    const Grid = dom.window.gridjs.Grid;
+    dom.window.gridjs = { ...dom.window.gridjs, Grid: class extends Grid {
+      constructor(configuration) { super(configuration); renderedGrid = this; }
+    } };
     const opened = [], created = [], searches = [], closed = [];
     let context = { activeView: 'queue', scope: '2', status: 'suggestion' };
     let data = Array.from({ length: 55 }, (_, index) => ({
@@ -43,6 +53,11 @@ async function until(predicate, message) {
       polarisLookup: { open: value => searches.push(value), close: value => closed.push(value) },
       onScopeIntent() {}, onStatusIntent() {}, onScopeAccepted() {}, onLibraries() {}, onRefreshed() {}, onRendered() {},
       request: async () => ({ items: data.map(item => ({ ...item })), scope: context.scope, organizations: [] }) });
+    const renderErrors = [], logError = console.error;
+    console.error = (...args) => {
+      if (args.some(value => String(value).includes('[Grid.js] [ERROR]'))) renderErrors.push(args.map(String).join(' '));
+      logError(...args);
+    };
     try {
     queue.setStaff(staff); await queue.refresh();
     const rows = () => [...get('#request-grid').querySelectorAll('tbody tr')];
@@ -71,8 +86,10 @@ async function until(predicate, message) {
     const next = get('#request-grid button[aria-label="Next"]'); next.click();
     await until(() => first()?.querySelector('.request-title-link')?.textContent === 'Title 25', 'Pagination reaches the second sorted page.');
     const beforeRefresh = first().querySelector('.request-title-link');
+    data = data.slice(1); // A genuinely new 54-row response, not Grid's retained old store.
     await queue.refresh();
-    await until(() => first()?.querySelector('.request-title-link') && first().querySelector('.request-title-link') !== beforeRefresh,
+    await until(() => first()?.querySelector('.request-title-link') && first().querySelector('.request-title-link') !== beforeRefresh &&
+      get('#request-grid .gridjs-summary')?.textContent.includes('of 54'),
       'Refresh must render its new accepted rows before retention is assessed.');
     await until(() => first()?.querySelector('.request-title-link')?.textContent === 'Title 25', 'Refresh preserves sort and the current page.');
     const full = data;
@@ -81,18 +98,18 @@ async function until(predicate, message) {
     await until(() => rows().length === 10 && get('#request-grid .gridjs-currentPage')?.textContent === '1', 'A shrinking accepted result clamps the saved page.');
     data = full;
     await queue.refresh();
-    await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 55'), 'The full accepted result renders before filtering.');
+    await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 54'), 'The full accepted result renders before filtering.');
     get('#request-search').value = 'Author 03'; get('#request-search').dispatchEvent(new dom.window.Event('input'));
     await until(() => rows().length === 1 && first().textContent.includes('Title 03'), 'Author search resets paging and finds its request.');
     assert.match(get('#queue-summary').textContent, /^1 suggestion request$/);
     get('#request-search').value = 'IDENTIFIER-4'; get('#request-search').dispatchEvent(new dom.window.Event('input'));
     await until(() => rows().length === 11 && get('#request-grid .gridjs-summary')?.textContent.includes('of 11'), 'Identifier search remains supported.');
     get('#request-search').value = ''; get('#request-search').dispatchEvent(new dom.window.Event('input'));
-    await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 55'), 'Clearing search renders its accepted rows.');
+    await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 54'), 'Clearing search renders its accepted rows.');
     get('#claim-filter').value = 'mine'; get('#claim-filter').dispatchEvent(new dom.window.Event('change'));
     await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 27'), 'Mine filtering retains exact staff identity.');
     get('#claim-filter').value = 'all'; get('#claim-filter').dispatchEvent(new dom.window.Event('change'));
-    await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 55'), 'Clearing claim renders before another filter action.');
+    await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 54'), 'Clearing claim renders before another filter action.');
     get('#tag-filter').value = 'Visible warning'; get('#tag-filter').dispatchEvent(new dom.window.Event('change'));
     await until(() => rows().length === 1 && first().textContent.includes('Visible warning'), 'Warnings remain visible and filterable without a Tags column.');
     const staleButton = first().querySelector('.request-search-shortcut'); staleButton.click();
@@ -106,7 +123,10 @@ async function until(predicate, message) {
     assert.equal(wrapper.tabIndex, 0); assert.equal(wrapper.getAttribute('role'), 'region');
     queue.dispose();
     assert.equal(staleSearch.isCurrent(), false);
-    } finally { queue.dispose(); await pause(); }
+    } finally {
+      queue.dispose(); await pause(); console.error = logError;
+      assert.deepEqual(renderErrors, [], 'Grid must complete without render errors.');
+    }
   });
   console.log('Eight-column real Grid.js table, independent actions/searches, sorting, paging, filters and stale ownership passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -171,6 +171,11 @@ browser) and 57 frontend test files, plus deliberate additions.
   replacement rows and settled paginator, rather than transient DOM or the
   synchronous result-count announcement. The Node fixture exposes its native
   animation-frame APIs before Grid to match the browser scheduler.
+- The retained Grid unit journey also waits for the vendored Rendered state and
+  its configured pipeline throttle to drain between distinct fixture actions.
+  It rejects vendor render errors and uses a changed response count to
+  distinguish accepted rows from Grid's retained store. Separate real Chromium
+  checks exercise actual refresh/filter transitions and native popovers.
 - The delayed catalog regression uses distinct nonempty Title/Author results,
   awaits the held response's completion, proves Author results remain, and
   checks read-only results have no Use BIB controls. Notification assertions
