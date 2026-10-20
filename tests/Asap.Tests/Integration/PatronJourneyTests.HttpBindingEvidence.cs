@@ -94,6 +94,17 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task LibraryLogoHttpRoutesUploadAndDeleteWithVersionedScopeAndEffectiveReload()
     {
+        await AssertLibraryLogoImageClearPreservesAltTextAsync(multipartClear: false);
+    }
+
+    [TestMethod]
+    public async Task LibraryLogoMultipartImageClearPreservesIndependentAltText()
+    {
+        await AssertLibraryLogoImageClearPreservesAltTextAsync(multipartClear: true);
+    }
+
+    private async Task AssertLibraryLogoImageClearPreservesAltTextAsync(bool multipartClear)
+    {
         var actor = await ReadConfiguredSuperAdminAsync();
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var auditBefore = await ReadAuditHighWatermarkAsync();
@@ -144,9 +155,14 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("Library logo from multipart route",
                 afterUpload.RootElement.GetProperty("effective").GetProperty("logoAltText").GetString());
 
-            var deleteUrl = "/api/asap/staff/settings/logo?orgId=2&version=" +
-                            Uri.EscapeDataString(afterUpload.RootElement.GetProperty("version").GetString()!);
-            using var deleteRequest = new HttpRequestMessage(HttpMethod.Delete, deleteUrl);
+            var deleteUrl = "/api/asap/staff/settings/logo?orgId=2";
+            using var clearForm = new MultipartFormDataContent();
+            clearForm.Add(new StringContent("true"), "clearLogo");
+            clearForm.Add(new StringContent(afterUpload.RootElement.GetProperty("version").GetString()!), "version");
+            using var deleteRequest = multipartClear
+                ? new HttpRequestMessage(HttpMethod.Post, deleteUrl) { Content = clearForm }
+                : new HttpRequestMessage(HttpMethod.Delete, deleteUrl + "&version=" +
+                    Uri.EscapeDataString(afterUpload.RootElement.GetProperty("version").GetString()!));
             using var delete = await client.SendAsync(deleteRequest);
             Assert.AreEqual(HttpStatusCode.OK, delete.StatusCode, await delete.Content.ReadAsStringAsync());
             using var deleteBody = JsonDocument.Parse(await delete.Content.ReadAsStringAsync());
@@ -155,7 +171,12 @@ public sealed partial class PatronJourneyTests
 
             await using (var cleared = await contextFactory.CreateDbContextAsync())
             {
-                Assert.IsNull(await cleared.Branding.AsNoTracking().SingleOrDefaultAsync(item => item.OrganizationId == 2));
+                var branding = await cleared.Branding.AsNoTracking().SingleAsync(item => item.OrganizationId == 2);
+                Assert.IsNull(branding.LogoData);
+                Assert.IsNull(branding.LogoContentType);
+                Assert.IsNull(branding.LogoFileName);
+                Assert.AreEqual("Library logo from multipart route", branding.LogoAltText,
+                    "An image-only clear must preserve the independently owned alt-text override.");
             }
 
             using var afterDelete = await ReadSettingsDocumentAsync(client, "2");
@@ -163,9 +184,17 @@ public sealed partial class PatronJourneyTests
                 .GetProperty("branding");
             Assert.AreEqual(systemLogo.GetProperty("hasLogo").GetBoolean(),
                 afterDelete.RootElement.GetProperty("effective").GetProperty("hasLogo").GetBoolean());
-            var systemAltText = systemLogo.GetProperty("altText").GetString();
-            Assert.AreEqual(string.IsNullOrEmpty(systemAltText) ? "Library Logo" : systemAltText,
+            Assert.AreEqual("Library logo from multipart route",
                 afterDelete.RootElement.GetProperty("effective").GetProperty("logoAltText").GetString());
+
+            using var clearAlt = new MultipartFormDataContent();
+            clearAlt.Add(new StringContent(string.Empty), "logoAlt");
+            clearAlt.Add(new StringContent(afterDelete.RootElement.GetProperty("version").GetString()!), "version");
+            using var altCleared = await client.PostAsync(deleteUrl, clearAlt);
+            Assert.AreEqual(HttpStatusCode.OK, altCleared.StatusCode, await altCleared.Content.ReadAsStringAsync());
+            await using var noOverrides = await contextFactory.CreateDbContextAsync();
+            Assert.IsNull(await noOverrides.Branding.AsNoTracking().SingleOrDefaultAsync(item => item.OrganizationId == 2),
+                "Explicitly clearing the last independent override removes the empty library row.");
         }
         finally
         {

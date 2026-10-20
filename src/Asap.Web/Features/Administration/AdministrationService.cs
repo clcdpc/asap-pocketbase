@@ -863,7 +863,7 @@ public sealed partial class AdministrationService(
             branding.LogoContentType = logoInfo!.ContentType;
             branding.LogoFileName = Clean(fileName) ?? "logo";
         }
-        if (altText is not null || (clearLogo && organizationId != LibraryScope.SystemOrganizationId))
+        if (altText is not null)
         {
             branding.LogoAltText = Clean(altText);
         }

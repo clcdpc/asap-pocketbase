@@ -738,6 +738,43 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     assert.equal(await custom.locator('.template-body').inputValue(), body);
   }
   report.campaign2CustomUsageCapabilities = true;
+
+  const source = customSaved.stored.templates.find(item =>
+    item.organizationId === '1' && item.templateKey === 'rejection:template_3');
+  let returning = await row(source.templateKey);
+  await returning.locator('.settings-template-override').check();
+  await returning.locator('.template-display-name').fill('Library-owned display override');
+  await returning.locator('.template-subject').fill('Library subject override');
+  await returning.locator('.template-body').fill('Library body override');
+  await returning.locator('.template-enabled').uncheck();
+  await saveSettings();
+  await reload(library);
+  await page.locator('#settings-nav-templates').click();
+  for (const property of ['subject', 'body', 'displayName', 'enabled']) {
+    const before = await read(library);
+    const priorOverride = before.stored.templates.find(item =>
+      item.organizationId === library && item.sourceTemplateId === source.id);
+    returning = await row(source.templateKey);
+    const controlClass = { subject: 'subject', body: 'body', displayName: 'display-name', enabled: 'enabled' }[property];
+    const control = returning.locator(`.template-${controlClass}`);
+    if (property === 'enabled') await control.setChecked(source.enabled);
+    else await control.fill(source[property]);
+    const payload = await saveSettings();
+    const submitted = payload.templates.find(item => item.sourceTemplateId === source.id);
+    assert.equal(submitted?.[property], source[property], `The ${property} edit back to System must reach the actual POST.`);
+    for (const sibling of ['subject', 'body', 'displayName', 'enabled'].filter(key => key !== property)) {
+      assert.equal(Object.hasOwn(submitted, sibling), false, `An untouched ${sibling} must remain omitted.`);
+    }
+    await reload(library);
+    await page.locator('#settings-nav-templates').click();
+    const after = await read(library);
+    const savedOverride = after.stored.templates.find(item => item.id === priorOverride.id);
+    assert.equal(savedOverride[property], source[property], `${property} must survive real SQL and editor reload.`);
+    for (const sibling of ['subject', 'body', 'displayName', 'enabled'].filter(key => key !== property)) {
+      assert.equal(savedOverride[sibling], priorOverride[sibling], `Saving ${property} must preserve saved ${sibling}.`);
+    }
+  }
+  report.namedOverrideEditsBackToSystem = true;
   await scan(page, axeSource, args.artifactRoot, report, 'campaign2-desktop');
   await page.setViewportSize({ width: 390, height: 844 });
   await scan(page, axeSource, args.artifactRoot, report, 'campaign2-mobile');
