@@ -6,6 +6,7 @@ const path = require('node:path');
 const { URL } = require('node:url');
 
 async function revealRequestActions(page) {
+  await page.locator('#request-dialog[open] .action-bar').waitFor();
   const menu = page.locator('#request-dialog .request-more');
   if (await menu.count() && await menu.locator('summary').isVisible() && !await menu.evaluate(node => node.open)) {
     await menu.locator('summary').click();

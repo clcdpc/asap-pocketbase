@@ -3,6 +3,11 @@ const assert = require('node:assert/strict');
 
 module.exports = async function verifyRequestTable({ page, context, baseURL, library, scan }) {
   const grid = page.locator('#request-grid'), search = page.locator('#request-search');
+  const closeDetail = async () => {
+    await page.keyboard.press('Escape');
+    await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+    await page.waitForFunction(() => !new URL(location.href).searchParams.has('request'));
+  };
   await page.locator('#library-scope').selectOption(library);
   await page.locator('#refresh-queue:not([disabled])').waitFor();
   await page.locator('#claim-filter').selectOption('all');
@@ -84,9 +89,10 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   page.once('dialog', dialog => dialog.dismiss());
   await page.locator('#request-dialog').getByRole('button', { name: 'Close silently', exact: true }).press('Enter');
   assert.equal(await page.locator('#request-dialog .request-more summary').evaluate(node => node === document.activeElement), true);
-  await page.keyboard.press('Escape');
+  await closeDetail();
   await row.locator('.request-title-link').focus(); await page.keyboard.press('Enter');
-  await page.locator('#request-dialog[open]').waitFor(); await page.keyboard.press('Escape');
+  await page.locator('#request-dialog[open] .edit-form').waitFor();
+  await closeDetail();
   const actions = [];
   for (const [index, action, status] of [['00', 'Purchase', 'outstanding_purchase'], ['01', 'Reject', 'closed']]) {
     await search.fill(`TABLE-BROWSER-${index}`);
@@ -105,7 +111,7 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
     const response = await committed; assert.equal(response.status(), 200, await response.text());
     const saved = await response.json(); assert.equal(saved.finalStatus, status);
     await page.waitForFunction(() => !document.querySelector('#request-dialog .action-choice'));
-    actions.push({ id: requestId, status }); await page.keyboard.press('Escape');
+    actions.push({ id: requestId, status }); await closeDetail();
   }
   await search.fill('TABLE-BROWSER-02');
   await page.waitForFunction(() => document.querySelector('#request-grid .request-title-link')?.textContent === 'Table browser record 02');
@@ -115,6 +121,6 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await page.locator('#request-dialog').getByRole('button', { name: 'Unclaim', exact: true }).waitFor();
   await page.locator('#request-dialog').getByRole('button', { name: 'Unclaim', exact: true }).click();
   await page.locator('#request-dialog').getByRole('button', { name: 'Claim', exact: true }).waitFor();
-  await page.keyboard.press('Escape');
+  await closeDetail();
   return actions;
 };
