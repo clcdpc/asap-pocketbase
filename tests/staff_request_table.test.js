@@ -3,7 +3,15 @@ const path = require('node:path');
 const { fixture } = require('./helpers/staff-controller.cjs');
 const pause = () => new Promise(resolve => setTimeout(resolve, 15));
 async function until(predicate, message) {
-  for (let index = 0; index < 250; index++) { if (predicate()) return; await pause(); }
+  for (let index = 0; index < 250; index++) {
+    if (predicate()) {
+      // Grid.js attaches sorting/paging effects after its DOM commit. Let the
+      // actual browser-like frame finish before starting another pipeline.
+      await new Promise(resolve => window.requestAnimationFrame(() => window.requestAnimationFrame(() => window.setTimeout(resolve, 0))));
+      if (predicate()) return;
+    }
+    await pause();
+  }
   assert.ok(predicate(), message);
 }
 
@@ -13,6 +21,10 @@ async function until(predicate, message) {
     const { createTitleQueue } = await load('queues');
     const staff = { id: '20', tenantId: 'a', authenticationEmail: 'a@example.org', role: 'super_admin', organizationId: 1 };
     const session = createSessionIdentity(); session.accept(staff);
+    // Preact detects the browser frame API on the global object. Expose the
+    // existing visual JSDOM API before loading Grid, as the browser does.
+    global.requestAnimationFrame = dom.window.requestAnimationFrame.bind(dom.window);
+    global.cancelAnimationFrame = dom.window.cancelAnimationFrame.bind(dom.window);
     dom.window.gridjs = require(path.join(__dirname, '../src/Asap.Web/Frontend/vendor/gridjs/6.2.0/gridjs.umd.js'));
     const opened = [], created = [], searches = [], closed = [];
     let context = { activeView: 'queue', scope: '2', status: 'suggestion' };
@@ -54,7 +66,6 @@ async function until(predicate, message) {
     first().querySelector('.grid-new-suggestion').click(); assert.equal(created.length, 1); assert.equal(opened.length, 2);
     first().querySelector('[aria-label^="Purchase request"]').click();
     assert.equal(opened.length, 3); assert.deepEqual(opened[2][2], { action: 'purchase' });
-    await new Promise(resolve => setTimeout(resolve, 100));
     get('#request-grid th:nth-child(2) button').click();
     await until(() => first()?.querySelector('.request-title-link')?.textContent === 'Title 00', 'Bibliographic details sort by Title.');
     const next = get('#request-grid button[aria-label="Next"]'); next.click();
@@ -64,15 +75,24 @@ async function until(predicate, message) {
     await until(() => first()?.querySelector('.request-title-link') && first().querySelector('.request-title-link') !== beforeRefresh,
       'Refresh must render its new accepted rows before retention is assessed.');
     await until(() => first()?.querySelector('.request-title-link')?.textContent === 'Title 25', 'Refresh preserves sort and the current page.');
+    const full = data;
+    data = data.slice(-10);
+    await queue.refresh();
+    await until(() => rows().length === 10 && get('#request-grid .gridjs-currentPage')?.textContent === '1', 'A shrinking accepted result clamps the saved page.');
+    data = full;
+    await queue.refresh();
+    await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 55'), 'The full accepted result renders before filtering.');
     get('#request-search').value = 'Author 03'; get('#request-search').dispatchEvent(new dom.window.Event('input'));
     await until(() => rows().length === 1 && first().textContent.includes('Title 03'), 'Author search resets paging and finds its request.');
     assert.match(get('#queue-summary').textContent, /^1 suggestion request$/);
     get('#request-search').value = 'IDENTIFIER-4'; get('#request-search').dispatchEvent(new dom.window.Event('input'));
-    await until(() => get('#queue-summary').textContent.startsWith('11 '), 'Identifier search remains supported.');
+    await until(() => rows().length === 11 && get('#request-grid .gridjs-summary')?.textContent.includes('of 11'), 'Identifier search remains supported.');
     get('#request-search').value = ''; get('#request-search').dispatchEvent(new dom.window.Event('input'));
+    await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 55'), 'Clearing search renders its accepted rows.');
     get('#claim-filter').value = 'mine'; get('#claim-filter').dispatchEvent(new dom.window.Event('change'));
-    await until(() => get('#queue-summary').textContent.startsWith('27 '), 'Mine filtering retains exact staff identity.');
+    await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 27'), 'Mine filtering retains exact staff identity.');
     get('#claim-filter').value = 'all'; get('#claim-filter').dispatchEvent(new dom.window.Event('change'));
+    await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 55'), 'Clearing claim renders before another filter action.');
     get('#tag-filter').value = 'Visible warning'; get('#tag-filter').dispatchEvent(new dom.window.Event('change'));
     await until(() => rows().length === 1 && first().textContent.includes('Visible warning'), 'Warnings remain visible and filterable without a Tags column.');
     const staleButton = first().querySelector('.request-search-shortcut'); staleButton.click();

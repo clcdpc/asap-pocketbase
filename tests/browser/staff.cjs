@@ -909,6 +909,7 @@ async function runOrdinaryTitleAssignment(browser, args, report) {
       const assignButton = page.getByRole('button', { name: 'Assign', exact: true });
       await assignButton.waitFor({ state: 'visible' });
       for (const assigneeId of [args.invalidClaimantId, args.superIdentity.staffId]) {
+        await revealRequestActions(page);
         await assignButton.click();
         const picker = page.getByLabel('Assign to staff member');
         await picker.waitFor({ state: 'visible' });
@@ -1196,6 +1197,7 @@ async function runStaleMutationCompletions(browser, args, report) {
       await page.goto(`${args.baseOrigin}/staff/?stage=${createSource.status}&scope=all`, { waitUntil: 'networkidle' });
       await page.locator('#claim-filter').selectOption('all');
       await page.getByRole('link', { name: `Open request ${args.staleCreateSourceId}:`, exact: false }).click();
+      await revealRequestActions(page);
       await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
       await page.locator('#additional-copy-create-dialog[open]').waitFor();
       if (exit === 'back') await page.goBack();
@@ -1217,6 +1219,7 @@ async function runStaleMutationCompletions(browser, args, report) {
       return { storageKey: copyCreationStorageKey(staff), actorKey: actorKey(staff) };
     });
     const copyRecoveryKey = copyRecoveryIdentity.storageKey;
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     await page.locator('#additional-copy-reminder').uncheck();
@@ -1267,6 +1270,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     // its old controls to retire before opening another child workflow.
     await page.waitForFunction(form => !form.isConnected, sourceDetail);
     await sourceDetail.dispose();
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     const uncertainPreview = await context.request.get(
@@ -1303,11 +1307,13 @@ async function runStaleMutationCompletions(browser, args, report) {
     releaseOldCopyList();
     await page.unroute(/\/api\/asap\/staff\/additional-copies\?/, oldCopyList);
     await page.getByRole('button', { name: 'Cancel' }).click();
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
       'an uncertain create cannot be retried from a fresh dialog before task-list refresh');
     await page.locator('#app-status').filter({ hasText: /Refresh the open additional-copy task list/ }).waitFor();
     await page.reload({ waitUntil: 'networkidle' });
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
       'an uncertain create remains blocked after a full page reload');
@@ -1319,6 +1325,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.locator('.view-tab[data-view="queue"]').click();
     await page.locator('[data-status="hold_placed"]').click();
     await page.getByRole('link', { name: `Open request ${args.staleCreateSourceId}:`, exact: false }).click();
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#app-status').filter({ hasText: /Refresh the open additional-copy task list/ }).waitFor();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
@@ -1339,6 +1346,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     assert.equal(queueNavigationState.hidden, false, JSON.stringify(queueNavigationState));
     await page.locator('[data-status="hold_placed"]').click();
     await page.getByRole('link', { name: `Open request ${args.staleCreateSourceId}:`, exact: false }).click();
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
       'a refreshed open list still requires the staff user to review matching tasks');
@@ -1362,6 +1370,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.locator('.view-tab[data-view="queue"]').click();
     await page.locator('[data-status="hold_placed"]').click();
     await page.getByRole('link', { name: `Open request ${args.staleCreateSourceId}:`, exact: false }).click();
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     const [fencedRetry] = await Promise.all([
@@ -1535,6 +1544,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     assert.equal(source.updated, '2026-09-01T12:14:15Z');
     assert.equal(new Date(source.claimedAt).toISOString(), '2026-09-01T12:13:14.000Z');
     const createAction = page.getByRole('button', { name: 'Additional copy', exact: true });
+    await revealRequestActions(page);
     await createAction.click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'cancel-additional-copy');
@@ -1543,8 +1553,9 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'additional-copy-create-preview');
     await page.keyboard.press('Escape');
     await page.locator('#additional-copy-create-dialog').waitFor({ state: 'hidden' });
-    assert.equal(await createAction.evaluate(node => document.activeElement === node), true);
+    assert.equal(await page.locator('#request-dialog .request-more summary').evaluate(node => document.activeElement === node), true);
 
+    await revealRequestActions(page);
     await createAction.click();
     await page.locator('#additional-copy-reminder').check();
     const [createResponse] = await Promise.all([

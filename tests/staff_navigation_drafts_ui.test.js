@@ -992,7 +992,7 @@ test('closing only the Additional Copy preview returns focus to its live parent 
     ui.get('#cancel-additional-copy').click(); await settle();
     assert.equal(ui.get('#request-dialog').open, true);
     assert.equal(ui.get('#additional-copy-create-dialog').open, false);
-    assert.equal(document.activeElement.textContent.trim(), 'Additional copy');
+    assert.equal(document.activeElement, ui.get('#request-dialog .request-more summary'));
   }, { status: 'pending_hold', staff: actorA }));
 
 test('Additional Copy submission blocks departure; unresolved creation safely closes on navigation and survives reload', async () => {
@@ -2102,7 +2102,7 @@ test('Additional Copy reminder owns a guarded draft and explicit Cancel lifetime
     assert.equal(ui.get('#additional-copy-create-dialog').open, false);
     assert.equal(ui.get('#additional-copy-reminder').checked, false);
     assert.equal(protectedUnload(ui), false, 'Cancel releases only the reminder registration');
-    assert.equal(document.activeElement, opener);
+    assert.equal(document.activeElement, ui.get('#request-dialog .request-more summary'));
     assert.equal(requestMutations(ui).length, 0);
   }, { status: 'pending_hold' }));
 
@@ -2357,8 +2357,9 @@ for (const copy of [false, true]) {
           assert.match(ui.get(grid).textContent, /Old format/);
         } else {
           await until(() => queueReads === before + 1 && /New format/.test(ui.get(grid).textContent), 'affected same-scope DTO refreshed');
-          assert.match(ui.get(grid).textContent, /9 days/);
-          assert.doesNotMatch(ui.get(grid).textContent, /Old format|5 days/);
+          const automation = copy ? ui.get(grid) : ui.get('#queue-automation');
+          assert.match(automation.textContent, /9 days/);
+          assert.doesNotMatch(`${ui.get(grid).textContent} ${automation.textContent}`, /Old format|5 days/);
         }
       }, { copyRequest: {} }));
   }

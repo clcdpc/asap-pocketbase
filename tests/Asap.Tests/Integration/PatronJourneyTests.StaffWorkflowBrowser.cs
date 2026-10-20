@@ -26,8 +26,10 @@ public sealed partial class PatronJourneyTests
         provider.AddPatron(patron, [new(pickup, "Live eligible pickup")], library);
         provider.AllowPickupUpdate(barcode, library, pickup);
         provider.SetIdentifierResult("BROWSER-MATCH", library, new(IdentifierLookupOutcome.DefinitiveNotFound));
-        provider.SetBibSearch("title", "Table browser record 00", "", "", library, new([], 0));
-        provider.SetBibSearch("author", "Table browser author 00", "", "", library, new([], 0));
+        provider.SetBibSearch("title", "Table browser record 00", "", "", library,
+            new([new(394301, "Stale Title lookup result must never replace Author results", "Catalog author", null, "book", null)], 1));
+        provider.SetBibSearch("author", "Table browser author 00", "", "", library,
+            new([new(394302, "Current Author lookup result retained", "Table browser author 00", null, "book", null)], 1));
         for (var index = 0; index < 2; index++)
         {
             provider.AddPatron(new PatronSnapshot(394200 + index, $"table-browser-{index:00}", null, "Table", "Browser patron", 1, "Adult",
@@ -105,13 +107,10 @@ public sealed partial class PatronJourneyTests
             foreach (var action in report.RootElement.GetProperty("listActions").EnumerateArray())
             {
                 var id = long.Parse(action.GetProperty("id").GetString()!, CultureInfo.InvariantCulture);
-                var actioned = await contexts.CreateDbContextAsync();
-                await using (actioned)
-                {
-                    var saved = await actioned.TitleRequests.SingleAsync(item => item.Id == id);
-                    Assert.AreEqual(action.GetProperty("status").GetString(), saved.Status);
-                    Assert.IsTrue(await actioned.TitleRequestEvents.AnyAsync(item => item.TitleRequestId == id && item.StaffUserId == actor.Id));
-                }
+                await using var actioned = await contexts.CreateDbContextAsync();
+                var saved = await actioned.TitleRequests.SingleAsync(item => item.Id == id);
+                Assert.AreEqual(action.GetProperty("status").GetString(), saved.Status);
+                Assert.IsTrue(await actioned.TitleRequestEvents.AnyAsync(item => item.TitleRequestId == id && item.StaffUserId == actor.Id));
             }
             await using var verify = await contexts.CreateDbContextAsync();
             var created = await verify.TitleRequests.SingleAsync(item => item.LibraryOrganizationId == library && item.Title == title);
@@ -126,7 +125,18 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(await (from link in verify.TitleRequestWorkflowTags join tag in verify.WorkflowTags on link.WorkflowTagId equals tag.Id
                 where link.TitleRequestId == created.Id && tag.Code == "duplicate_suggestion" select link).AnyAsync());
             Assert.AreEqual(1, provider.Calls.Count(call => call.Operation == TestingPolarisOperation.PickupUpdate));
-            Assert.IsFalse(await verify.EmailOutbox.AnyAsync(item => item.OrganizationId == library));
+            var listActions = report.RootElement.GetProperty("listActions").EnumerateArray().ToArray();
+            var purchaseKey = "staff-patron-action:purchase_approved:" + listActions.Single(item => item.GetProperty("status").GetString() == "outstanding_purchase").GetProperty("id").GetString() + ":";
+            var rejectionKey = "rejection:" + listActions.Single(item => item.GetProperty("status").GetString() == "closed").GetProperty("id").GetString() + ":";
+            var notifications = await verify.EmailOutbox.Where(item => item.OrganizationId == library).ToArrayAsync();
+            Assert.IsTrue(notifications.Length is >= 1 and <= 2);
+            foreach (var notification in notifications)
+            {
+                Assert.IsTrue(notification.BusinessKey?.StartsWith(purchaseKey, StringComparison.Ordinal) == true ||
+                    notification.BusinessKey?.StartsWith(rejectionKey, StringComparison.Ordinal) == true,
+                    "Only the explicit list actions may record email intents; quick creation requested none.");
+                Assert.AreEqual("suppressed", notification.Status, "The list patrons have no email address; no delivery is attempted.");
+            }
             Assert.IsTrue(provider.Calls.Where(call => call.Operation == TestingPolarisOperation.Refresh).All(call => call.OrganizationId == library));
         }
         finally
@@ -137,6 +147,8 @@ public sealed partial class PatronJourneyTests
                 await DeleteRequestAsync(id);
             }
             await ExecuteNonQueryAsync("""
+                DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [OrganizationId]=@org);
+                DELETE FROM [asap].[EmailOutbox] WHERE [OrganizationId]=@org;
                 DELETE FROM [asap].[PickupPreferenceOperation] WHERE [LibraryOrganizationId]=@org;
                 DELETE FROM [asap].[FormatAutoClaimRule] WHERE [LibraryOrganizationId]=@org;
                 DELETE FROM [asap].[StaffUser] WHERE [Id]=@claimant;

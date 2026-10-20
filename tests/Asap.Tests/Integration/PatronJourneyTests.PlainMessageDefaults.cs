@@ -68,7 +68,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(expected[3], formats.Single(item => item.GetProperty("code").GetString() == "ebook").GetProperty("message").GetString());
             var systemFormats = stored.GetProperty("configuredSystem").GetProperty("formats").EnumerateArray().ToArray();
             Assert.AreEqual(expected[2], systemFormats.Single(item => item.GetProperty("code").GetString() == "ebook").GetProperty("message").GetString(), "The System format editor must receive plain text too.");
-            var libraryFormats = stored.GetProperty("configuredLibrary").GetProperty("formats").EnumerateArray().ToArray();
+            var libraryFormats = stored.GetProperty("libraryOverride").GetProperty("formats").EnumerateArray().ToArray();
             Assert.AreEqual(expected[2], libraryFormats.Single(item => item.GetProperty("kind").GetString() == "custom").GetProperty("message").GetString());
             Assert.AreEqual(expected[3], libraryFormats.Single(item => item.GetProperty("kind").GetString() == "systemOverride").GetProperty("message").GetString());
             await using var connection = new SqlConnection(databaseConnectionString);

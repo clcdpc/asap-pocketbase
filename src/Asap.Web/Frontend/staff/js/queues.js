@@ -104,7 +104,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     state.loadedContext = Object.freeze({ scope: result.scope, status: getContext().status });
     state.stale = false;
     if (sessionIdentity.actor()?.role === 'super_admin') { setLibraries(result.organizations); onLibraries(result.organizations); }
-    populateTags(); renderGrid();
+    populateTags(); renderGrid({ preservePage: true });
     onRefreshed({ sequence, items: state.requests, context: state.loadedContext });
   }
 
@@ -373,7 +373,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     ]);
   }
 
-  function renderGrid() {
+  function renderGrid({ preservePage = false } = {}) {
     if (disposed) return;
     closeLookup();
     const owner = sessionIdentity.preferences();
@@ -393,6 +393,8 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
         : 'Workflow rules will appear with requests in this stage.';
     const definitions = queueColumns();
     const rows = requests.map(request => definitions.map(column => column.value(request)));
+    const currentPage = Number(dom.grid.querySelector('.gridjs-currentPage')?.textContent || 1) - 1;
+    const page = preservePage ? Math.max(0, Math.min(currentPage, Math.ceil(rows.length / 25) - 1)) : 0;
     if (state.grid && state.gridStatus !== getContext().status) {
       state.grid.destroy?.();
       dom.grid = detachGridContainer(dom.grid);
@@ -412,7 +414,9 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       });
       state.grid.render(dom.grid);
     } else {
-      state.grid.updateConfig({ data: rows }).forceRender();
+      // forceRender remounts Grid's paginator; supply the accepted page rather
+      // than briefly rendering page 2 and then resetting it to the default.
+      state.grid.updateConfig({ data: rows, pagination: { limit: 25, summary: true, page, resetPageOnUpdate: false } }).forceRender();
     }
   }
 

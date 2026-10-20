@@ -13,16 +13,23 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await page.waitForFunction(() => document.querySelector('#request-grid .request-title-link')?.textContent === 'Quick-create source');
   await grid.getByRole('button', { name: 'Next', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#request-grid .request-title-link')?.textContent === 'Table browser record 24');
+  const previous = await grid.locator('.request-title-link').first().elementHandle();
   await page.locator('#refresh-queue').click();
+  await page.waitForFunction(node => !node.isConnected, previous);
+  await previous.dispose();
   await page.waitForFunction(() => !document.querySelector('#refresh-queue').disabled &&
     document.querySelector('#request-grid .request-title-link')?.textContent === 'Table browser record 24');
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)))));
+  assert.equal(await grid.locator('.gridjs-currentPage').textContent(), '2');
+  assert.match(await grid.locator('.gridjs-summary').textContent(), /26 to 50 of 56/);
   await search.fill('TABLE-BROWSER-00');
   await page.waitForFunction(() => document.querySelectorAll('#request-grid .request-title-link').length === 1);
   const row = grid.locator('tbody tr');
   const id = await row.locator('.request-title-link').getAttribute('data-request-id');
   const before = await (await context.request.get(`${baseURL}/api/asap/staff/title-requests/${id}`)).json();
-  let release, started;
+  let release, started, completed;
   const held = new Promise(done => { release = done; }), pending = new Promise(done => { started = done; });
+  const completion = new Promise(done => { completed = done; });
   const lookupRoute = '**/staff/bib-lookup';
   await context.route(lookupRoute, async route => {
     const body = route.request().postDataJSON();
@@ -30,7 +37,7 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
     const response = await route.fetch(); started(body); await held;
     try { await route.fulfill({ response }); } catch (error) {
       if (!/closed|canceled|cancelled|invalid interception/i.test(error.message)) throw error;
-    }
+    } finally { completed(); }
   });
   try {
     await row.getByRole('button', { name: 'Search Polaris for title: Table browser record 00', exact: true }).click();
@@ -48,8 +55,11 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
     await lookup.getByRole('button', { name: 'Search Polaris', exact: true }).click();
     const response = await found; assert.equal(response.status(), 200, await response.text());
     assert.equal(response.request().postDataJSON().query, before.author);
+    await lookup.getByText('Current Author lookup result retained', { exact: true }).waitFor();
     release();
-    await page.waitForFunction(() => document.querySelector('#polaris-status').textContent.includes('No Polaris matches'));
+    await completion;
+    assert.match(await lookup.textContent(), /Current Author lookup result retained/);
+    assert.doesNotMatch(await lookup.textContent(), /Stale Title lookup result/);
     assert.equal(await page.locator('#polaris-mode').inputValue(), 'author');
     assert.equal(await lookup.getByRole('button', { name: /^Use BIB/ }).count(), 0);
     await page.keyboard.press('Escape');

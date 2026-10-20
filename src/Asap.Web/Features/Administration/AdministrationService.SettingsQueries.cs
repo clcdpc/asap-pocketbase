@@ -459,7 +459,7 @@ public sealed partial class AdministrationService
             sortOrder = item.SortOrder,
             isEnabled = item.IsEnabled,
             messageBehavior = item.MessageBehavior,
-            message = item.Message,
+            message = PatronMessageDefaults.PlainText(item.Message),
             titleMode = item.TitleMode,
             titleLabel = item.TitleLabel,
             authorMode = item.AuthorMode,

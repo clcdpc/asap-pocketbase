@@ -79,7 +79,8 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       const footer = await detail.locator('.request-save-footer').boundingBox();
       assert.ok(footer.y >= 0 && footer.y + footer.height <= await page.evaluate(() => innerHeight), 'The save footer remains in the actual zoomed viewport.');
       await scan('detail');
-      await detail.getByRole('button', { name: 'Revert', exact: true }).click();
+      page.once('dialog', dialog => dialog.accept());
+      await detail.getByRole('button', { name: 'Revert changes', exact: true }).click();
       assert.equal(await detail.locator('.request-save-state').textContent(), 'All changes saved');
       await page.keyboard.press('Escape');
       await page.getByRole('button', { name: `New suggestion for patron ${barcode} from request ${sourceId}`, exact: true }).click();

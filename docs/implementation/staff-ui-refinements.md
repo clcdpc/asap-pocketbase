@@ -163,5 +163,18 @@ browser) and 57 frontend test files, plus deliberate additions.
   dirty immediately. The editor compares against its native textarea baseline
   and submits exact original notes when unchanged. This correction is confined
   to this enhancement branch and has explicit regression coverage.
+- A second inherited defect was independently reproduced with unmodified Grid
+  in Chromium: refresh briefly rendered the retained page before its effects
+  reset pagination to page 1. The title queue now supplies the current page on
+  accepted refresh and clamps it to the new result count. Explicit filter/status
+  changes still reset paging. Unit and browser assertions now await the real
+  replacement rows and settled paginator, rather than transient DOM or the
+  synchronous result-count announcement. The Node fixture exposes its native
+  animation-frame APIs before Grid to match the browser scheduler.
+- The delayed catalog regression uses distinct nonempty Title/Author results,
+  awaits the held response's completion, proves Author results remain, and
+  checks read-only results have no Use BIB controls. Notification assertions
+  distinguish the intentional list-action intents from quick-create's explicit
+  no-confirmation behavior; no live delivery is made.
 - Final full-suite, native-zoom, publish/package and hosted-CI results will be
   recorded after execution. No pending check is represented as passed.
