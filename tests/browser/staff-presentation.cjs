@@ -123,6 +123,48 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
           });
           assert.ok(geometry.horizontal >= 7 || geometry.vertical >= 7, `${buttonId}: natural heading/action gap`);
         };
+        const measureActions = async selector => page.locator(`${selector} > button`).evaluateAll(buttons => {
+          const bounds = buttons.map(button => button.getBoundingClientRect());
+          return bounds.slice(1).map((current, index) => {
+            const previous = bounds[index];
+            return current.top < previous.bottom && previous.top < current.bottom
+              ? current.left - previous.right
+              : current.top - previous.bottom;
+          });
+        });
+        for (const scope of ['system', '383091']) {
+          await page.locator('#settings-scope').selectOption(scope);
+          await page.waitForFunction(scope => document.getElementById('settings-scope').value === scope &&
+            document.getElementById('settings-version').value && !document.getElementById('settings-form').inert &&
+            !document.getElementById('settings-refresh').disabled, scope);
+          await page.locator('#settings-nav-workflow').click();
+          await measureHeading('#add-common-creator');
+          await measureHeading('#add-patron-code');
+          if (await page.locator('#add-provider').isVisible()) await measureHeading('#add-provider');
+          const inherit = page.locator('#common-creators-use-system');
+          if (await inherit.isVisible() && await inherit.isChecked()) await inherit.uncheck();
+          await page.locator('#add-common-creator').click();
+          await page.locator('#common-creators-editor [data-domain-row]').last().locator('input').fill('Spacing regression creator');
+          const bulkGaps = await measureActions('.settings-inline-actions:has(#patron-codes-select-all)');
+          const rowGaps = await measureActions('#common-creators-editor [data-domain-row]:last-child .settings-row-actions');
+          assert.equal(bulkGaps.length, 1);
+          assert.equal(rowGaps.length, 2);
+          assert.ok([...bulkGaps, ...rowGaps].every(gap => gap >= 7),
+            `${scope}: adjacent Settings actions need visible separation: ${JSON.stringify({ bulkGaps, rowGaps })}`);
+          await scan(`workflow-actions-${scope}`);
+          page.once('dialog', dialog => dialog.accept());
+          await page.locator('#settings-discard').click();
+          await page.locator('#settings-discard').waitFor({ state: 'hidden' });
+          await page.locator('#settings-refresh:not([disabled])').waitFor();
+          await page.locator('#settings-nav-patron').click();
+          for (const buttonId of ['#add-publication-option', '#add-material-format', '#add-custom-field', '#add-format-rule', '#add-auto-claim-rule']) {
+            if (await page.locator(buttonId).isVisible()) await measureHeading(buttonId);
+          }
+          await page.locator('#settings-nav-templates').click();
+          await measureHeading('#add-email-template');
+          await scan(`settings-headings-${scope}`);
+          await page.locator('#settings-nav-workflow').click();
+        }
         await measureHeading('#add-common-creator');
         await page.locator('#settings-nav-templates').click();
         await measureHeading('#add-email-template');

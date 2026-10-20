@@ -263,7 +263,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 #patron-public-links { min-width: 0; }
 #patron-public-links .settings-field { margin-top: 12px; }
 #patron-public-links input, #patron-public-links textarea { width: 100%; overflow-wrap: anywhere; }
-.settings-inline-actions { flex-wrap: wrap; align-items: center; }
+.settings-inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-row-editor { display: grid; gap: 10px; min-width: 0; }
 .settings-editor-row {
   display: grid;
@@ -284,7 +284,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-domain-field textarea { min-height: 86px; }
 .settings-domain-check, .settings-inline-check { display: inline-flex; align-items: center; gap: 7px; min-width: 0; min-height: 40px; color: var(--ink); font-size: .84rem; font-weight: 700; }
 .settings-domain-check input, .settings-inline-check input { width: 18px; height: 18px; min-height: auto; flex: 0 0 auto; margin: 0; }
-.settings-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-height: 40px; min-width: 0; }
+.settings-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 40px; min-width: 0; }
 .settings-icon-button { width: 40px; height: 40px; padding: 0; color: var(--brand-dark); background: #fff; border: 1px solid #9aa5ae; border-radius: 4px; cursor: pointer; }
 .settings-icon-button:hover { background: #e2edf1; }
 .settings-editor-row > .settings-row-actions { grid-column: 1 / -1; }
