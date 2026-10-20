@@ -205,7 +205,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       revert.disabled = !editorDirty;
     }
     listen(format, 'change', () => {
-      customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value);
+      customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value, customFieldControls);
       updatePreview();
     });
     listen(form, 'input', updatePreview);

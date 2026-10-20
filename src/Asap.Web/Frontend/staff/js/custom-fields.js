@@ -6,7 +6,7 @@ export function customFieldValue(value) {
   return String(value);
 }
 
-export function renderCustomFieldEditor(container, request, configuration, formatCode) {
+export function renderCustomFieldEditor(container, request, configuration, formatCode, previousControls = null) {
   const controls = new Map();
   const definitions = Array.isArray(configuration.additionalFieldDefinitions)
     ? configuration.additionalFieldDefinitions
@@ -23,7 +23,10 @@ export function renderCustomFieldEditor(container, request, configuration, forma
     const rule = customRules[key] || { mode: 'hidden' };
     const hasHistorical = Object.prototype.hasOwnProperty.call(existing, key);
     if (rule.mode === 'hidden' && !hasHistorical) continue;
-    const currentValue = customFieldValue(existing[key]);
+    const previous = previousControls?.get(key);
+    const currentValue = rule.mode !== 'hidden' && previous && previous.mode !== 'hidden'
+      ? previous.input.value
+      : customFieldValue(existing[key]);
     let input;
     if (definition.type === 'textarea') {
       input = element('textarea', { maxlength: '2000' });
@@ -53,6 +56,7 @@ export function renderCustomFieldEditor(container, request, configuration, forma
     const configuredLabel = rule.label || definition.label || key;
     const label = `${configuredLabel}${required ? ' *' : ''}`;
     input.required = required;
+    input.disabled = rule.mode === 'hidden';
     input.setAttribute('aria-required', String(required));
     input.setAttribute('aria-label', label);
     controls.set(key, { definition, input, mode: rule.mode, label: configuredLabel });

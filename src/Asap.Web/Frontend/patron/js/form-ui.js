@@ -20,7 +20,7 @@ import { getFieldRule } from './form-rules.js';
 import { byId, optionNode, replaceChildren, setLabel, setText, setVisible } from './dom.js';
 import { sanitizeHtml, applyPatronTextPlaceholders } from './html.js';
 import { showSuggestionStep } from './steps.js';
-import { renderCustomFields } from './custom-fields.js';
+import { collectCustomFieldValues, renderCustomFields } from './custom-fields.js';
 
 export function fieldElements(field) {
   const ids = {
@@ -64,7 +64,8 @@ export function updateFieldRuleUi(fieldKey, rule) {
   setLabel(els.label, rule.label, required && !hidden);
 }
 
-export function updateFormatUI() {
+export function updateFormatUI({ preserveCustomFields = false } = {}) {
+  const customFieldValues = preserveCustomFields ? collectCustomFieldValues() : {};
   const format = (formatSelect && formatSelect.value) || 'book';
   const rule = formatRules[format] || formatRules.book;
   const messageBehavior = rule.messageBehavior || 'none';
@@ -98,7 +99,7 @@ export function updateFormatUI() {
   fieldKeys.forEach(field => {
     updateFieldRuleUi(field, getFieldRule(formatRules, format, field, defaultFormatRules));
   });
-  renderCustomFields(additionalFieldDefinitions, rule.customFields || {});
+  renderCustomFields(additionalFieldDefinitions, rule.customFields || {}, customFieldValues);
 }
 
 export function populatePublicationOptions(options) {
@@ -309,7 +310,7 @@ export function bindFormEvents() {
         resetCommonAuthorSelection();
         setLastSelectedFormat(nextFormat);
       }
-      updateFormatUI();
+      updateFormatUI({ preserveCustomFields: true });
     });
   }
 }

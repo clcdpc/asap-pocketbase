@@ -1671,7 +1671,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await page.route(assignmentPath, partialAssignment);
     await assignment.locator('xpath=ancestor::form').getByRole('button', { name: 'Assign', exact: true }).click();
     await page.getByText('Claimed by Browser Staff', { exact: true }).waitFor();
-    await page.locator('#app-status').filter({ hasText: /Assignment notification could not be queued/ }).waitFor();
+    await page.locator('#app-status').filter({ hasText: /Assignment notification saved for delivery.*Automatic recovery is pending/ }).waitFor();
     assert.match(await page.locator('#app-status').getAttribute('class'), /warning/);
     await page.unroute(assignmentPath, partialAssignment);
     const assignedForClear = await context.request.get(
