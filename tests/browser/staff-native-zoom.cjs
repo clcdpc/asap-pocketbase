@@ -26,15 +26,19 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       page.on('pageerror', error => errors.push(error.message));
       await page.goto(`${baseURL}/staff/?scope=${library}`, { waitUntil: 'networkidle' });
       const ratio = await page.evaluate(() => devicePixelRatio);
-      const zoom = await worker.evaluate(async origin => {
-        const tab = (await chrome.tabs.query({})).find(tab => tab.url.startsWith(origin));
-        if (!tab) throw new Error('The actual application tab must exist.');
-        await chrome.tabs.setZoomSettings(tab.id, { mode: 'automatic', scope: 'per-tab' });
-        await chrome.tabs.setZoom(tab.id, 2);
-        return chrome.tabs.getZoom(tab.id);
-      }, new URL(baseURL).origin);
-      assert.equal(zoom, 2);
-      await page.waitForFunction(prior => devicePixelRatio > prior, ratio);
+      const applyNativeZoom = async () => {
+        const zoom = await worker.evaluate(async origin => {
+          const tab = (await chrome.tabs.query({})).find(tab => tab.url.startsWith(origin));
+          if (!tab) throw new Error('The actual application tab must exist.');
+          await chrome.tabs.setZoomSettings(tab.id, { mode: 'automatic', scope: 'per-tab' });
+          await chrome.tabs.setZoom(tab.id, 2);
+          return chrome.tabs.getZoom(tab.id);
+        }, new URL(baseURL).origin);
+        assert.equal(zoom, 2);
+        await page.waitForFunction(prior => Math.abs(devicePixelRatio / prior - 2) < 0.01, ratio);
+        return zoom;
+      };
+      const zoom = await applyNativeZoom();
       const scan = async name => {
         await page.evaluate(axe);
         const result = await page.evaluate(async () => ({
@@ -90,6 +94,9 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       await scan('new-suggestion');
       await page.keyboard.press('Escape');
       await page.goto(`${baseURL}/staff/?stage=settings&settingsScope=system#settings-patron`, { waitUntil: 'networkidle' });
+      // Chromium resets per-tab zoom on a full navigation. Exercise Settings
+      // at actual 200% as well, with the same DPR/CDP assertions below.
+      await applyNativeZoom();
       await page.waitForFunction(() => document.querySelector('#settings-version').value && !document.querySelector('#settings-form').inert);
       await page.locator('#settings-nav-patron').click();
       const message = page.locator('#patron-success-message');
