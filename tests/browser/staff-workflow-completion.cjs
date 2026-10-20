@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const verifyMixedFieldLayout = require('./form-layout.cjs');
 const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode, pickup, title] = process.argv.slice(2);
 
 (async () => {
@@ -62,11 +63,22 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     assert.equal(report.lookups.length, 1);
     assert.equal(report.lookups[0].barcode, barcode); assert.equal(report.lookups[0].libraryOrgId, Number(library));
     assert.equal(report.lookups[0].query, null, 'quick create uses explicit identity rather than name fallback');
+    report.mixedFields = await verifyMixedFieldLayout(page, '#staff-suggestion-body');
+    const aligned = await dialog.evaluate(root => {
+      const date = root.querySelector('input[type="date"]'), pickup = root.querySelector('[aria-label="Preferred pickup location"]');
+      return { date: date.getBoundingClientRect().toJSON(), pickup: pickup.getBoundingClientRect().toJSON() };
+    });
+    assert.ok(Math.abs(aligned.date.top - aligned.pickup.top) <= 1, 'Exact publication date and pickup start at the same height.');
+    await dialog.getByRole('button', { name: 'Search Polaris catalog', exact: true }).click();
+    assert.equal(await page.locator('#polaris-query').inputValue(), '');
+    await page.keyboard.press('Escape');
+    assert.equal(await dialog.getByRole('button', { name: 'Search Polaris catalog', exact: true }).evaluate(node => document.activeElement === node), true);
     await scan('quick-create-desktop');
     await page.evaluate(() => { document.documentElement.style.zoom = '2'; });
     await scan('quick-create-zoom-200');
     await page.evaluate(() => { document.documentElement.style.zoom = ''; });
     await page.setViewportSize({ width: 390, height: 844 }); await scan('quick-create-mobile');
+    await verifyMixedFieldLayout(page, '#staff-suggestion-body');
     await page.keyboard.press('Escape');
     assert.equal(await quick().evaluate(node => node === document.activeElement), true);
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -96,6 +108,16 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     await dialog.getByLabel(/Identifier number/i).fill('BROWSER-MATCH');
     await dialog.getByLabel(/Publication Timing/i).selectOption({ index: 1 });
     await dialog.getByLabel('Preferred pickup location', { exact: true }).selectOption(pickup);
+    const catalog = dialog.getByRole('button', { name: 'Search Polaris catalog', exact: true });
+    await catalog.click();
+    assert.equal(await page.locator('#polaris-mode').inputValue(), 'title');
+    assert.equal(await page.locator('#polaris-query').inputValue(), title);
+    assert.equal(await page.locator('#polaris-author').inputValue(), '');
+    await page.locator('#polaris-query').fill('Temporary query'); await page.keyboard.press('Escape');
+    assert.equal(await dialog.getByLabel(/^Title/).inputValue(), title);
+    assert.equal(await dialog.getByLabel(/^Author/).inputValue(), 'Current staff author');
+    assert.equal(await dialog.getByLabel(/Identifier number/i).inputValue(), 'BROWSER-MATCH');
+    await catalog.click(); assert.equal(await page.locator('#polaris-query').inputValue(), title); await page.keyboard.press('Escape');
     assert.equal(await dialog.getByLabel('Email patron confirmation (optional)', { exact: true }).isChecked(), false);
     const accepted = page.waitForResponse(response => response.url().endsWith('/staff/suggestions') && response.request().method() === 'POST');
     const detailLoaded = page.waitForResponse(response => /\/staff\/title-requests\/\d+$/.test(new URL(response.url()).pathname) && response.request().method() === 'GET');

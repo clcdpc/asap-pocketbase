@@ -345,7 +345,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       'Pickup choices refreshed: ', element('time', { datetime: context.pickupBranchesRefreshedAt,
         text: dateTime(context.pickupBranchesRefreshedAt) })
     ]);
-    pickupField.append(pickupHelp, pickupWarning, refreshed);
+    pickupField.append(element('div', { className: 'form-field-help' }, [pickupHelp, pickupWarning, refreshed]));
 
     const bib = element('input', { type: 'hidden' });
     const catalogStatus = element('p', { className: 'field-help', role: 'status', 'aria-live': 'polite' });
@@ -360,7 +360,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
           mode: 'title',
           query: title.value,
           title: title.value,
-          author: author.value,
+          returnFocus: catalogButton,
           canApply: true,
           isCurrent: () => isCurrentGeneration(token) && suggestion?.stage === 'create' &&
             !suggestion.submitting && !suggestion.outcomeUnconfirmed,
@@ -375,14 +375,8 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
         polarisLookup.open(lookupContext);
       }
     }, [icon('search'), 'Search Polaris catalog']);
-    const catalogPanel = element('section', {
-      className: 'staff-suggestion-catalog wide',
-      'aria-label': 'Polaris catalog lookup'
-    }, [
-      element('p', { text: 'Use the integrated Polaris search to verify a catalog record and fill the suggestion fields. Manual text is not treated as a verified BIB.' }),
-      catalogButton,
-      catalogStatus
-    ]);
+    catalogButton.title = 'Search and select a verified Polaris record. Manual text remains unverified.';
+    const catalogPanel = element('div', { className: 'polaris-edit-tools wide' }, [catalogButton, catalogStatus]);
 
     const controls = {
       format, title, author, identifier, publication, exactDate, notes,
@@ -438,13 +432,13 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     ]);
     const fields = element('div', { className: 'edit-form staff-suggestion-fields' }, [
       patronCard,
-      labeledInput('Material format', format),
+      labeledInput('Material format', format, 'wide'),
       formatNotice,
-      catalogPanel,
       titleField,
       authorField,
       identifierField,
       publicationField,
+      catalogPanel,
       exactDateField,
       pickupField,
       customFields,

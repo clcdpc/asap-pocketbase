@@ -303,7 +303,7 @@ async function until(predicate, message) {
     assert.ok(autohold);
     assert.equal(autohold.disabled, false, 'staff AutoHold stays enabled when patron opt-out is disabled');
     autohold.checked = false;
-    document.querySelector('.staff-suggestion-catalog button').click();
+    document.querySelector('.staff-suggestion-fields .polaris-edit-tools button').click();
     await until(() => document.getElementById('polaris-dialog').open, 'staff form must reuse the Task 01 Polaris dialog');
     document.getElementById('close-polaris').click();
     const title = document.querySelector('.staff-suggestion-fields input[maxlength="500"]');

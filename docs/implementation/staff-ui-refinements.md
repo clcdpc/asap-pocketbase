@@ -70,3 +70,24 @@ browser) and 57 frontend test files, plus deliberate additions.
   remain unchanged. Nonblank multiline messages retain boundary whitespace
   through both Settings save paths; existing blank-to-inheritance semantics
   are preserved.
+
+### Checkpoint B
+
+- Native date controls exist in Suggestion and Request Editor. The mismatch was
+  caused by stretched, independent label grid tracks beside multi-line help.
+  Shared three-track label/control/help subgrids now align mixed controls and
+  wrapped labels; pickup help is grouped beneath its select. Settings scalar
+  fields use the same track pattern; narrow layouts preserve source order.
+- Polaris now opens from a compact action below bibliographic fields. Each
+  opening uses the current Title only. Selection retains the existing BIB
+  verification and Title reconciliation, preserving Author/Identifier drafts.
+- Release build passed without warnings/errors. Research, suggestion controller,
+  suggestion UI, quick-create and Settings accessibility frontend files passed.
+  The real-SQL/Kestrel quick-create browser case passed (1/1), including actual
+  date/pickup geometry, date/select/text/number mixed-field probes with wrapping
+  labels/help/validation, narrow stacking, blank and repeated search openings,
+  cancellation and unchanged creation/claim/pickup behavior. Existing axe,
+  image, exception, traffic and overflow guards remain active.
+- Permanent controller coverage additionally verifies selected-title-only
+  population, retained verified BIB after Cancel and rejection of a delayed
+  selection after the suggestion owner is replaced.

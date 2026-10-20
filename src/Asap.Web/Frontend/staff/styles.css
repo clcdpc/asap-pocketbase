@@ -361,8 +361,10 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .staff-suggestion-candidate:hover { background: var(--soft); }
 .staff-suggestion-candidate span { color: var(--muted); font-size: .87rem; }
 .staff-suggestion-fields { margin-top: 4px; }
-.staff-suggestion-catalog { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 13px 15px; background: var(--soft); border: 1px solid #d6dde1; border-left: 4px solid var(--brand); }
-.staff-suggestion-catalog p { flex: 1 1 260px; margin: 0; color: var(--muted); }
+.polaris-edit-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.polaris-edit-tools p { margin: 0; }
+.polaris-edit-tools p:empty { display: none; }
+.staff-format-notice { white-space: pre-wrap; }
 .staff-patron-card { grid-column: 1 / -1; padding: 13px 15px; background: var(--soft); border-left: 4px solid var(--brand); }
 .staff-patron-card h3 { margin: 0; font-size: 1.08rem; }
 .staff-patron-card p { margin: 3px 0 0; color: var(--muted); overflow-wrap: anywhere; }
@@ -392,6 +394,20 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .edit-form label { display: grid; gap: 5px; font-weight: 700; }
 .edit-form .wide { grid-column: 1 / -1; }
 .edit-form .check-field { display: flex; }
+.form-field { min-width: 0; align-content: start; }
+.form-field > span:first-child { overflow-wrap: anywhere; }
+.form-field > input, .form-field > select, .form-field > textarea { width: 100%; min-width: 0; margin-block: 0; }
+.form-field-help { display: grid; align-content: start; gap: 5px; font-weight: 400; }
+.form-field-help > * { margin-block: 0; }
+/* Shared label/control/help tracks keep controls aligned even when one label
+   wraps or its help is longer. Native date inputs retain their calendar UI. */
+.edit-form, .resolution-form, .settings-grid { align-items: start; }
+.settings-grid > .settings-field { grid-row: span 3; }
+.edit-form > .form-field, .resolution-form > .form-field, .settings-grid > .settings-field:not(.check-field) {
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  row-gap: 5px;
+}
 .research-section { border-top: 1px solid var(--line); padding-top: 16px; }
 .research-section h3 { margin: 0 0 10px; font-size: 1rem; }
 .research-links { display: flex; flex-wrap: wrap; gap: 8px 16px; }
