@@ -179,7 +179,9 @@ browser) and 57 frontend test files, plus deliberate additions.
 - The full frontend gate exposed another inherited Grid 6.2 race: remounting
   first used its retained header, then registered Sort against a replacement
   header during pipeline processing, leaving an uncached sort step. The title
-  queue now publishes the current header before remounting. This small correction
+  and Additional Copy queues now publish the current header before remounting.
+  The retained delayed-copy focus journey exposed the same race in its second
+  owner; its error and focus assertions remain intact. This small correction
   stays on the enhancement branch. The real Grid journey pins that invalid-state
   boundary and retains observable sorting/pagination/filtering and zero-error
   assertions; it does not suppress the vendor error or change its scheduler.

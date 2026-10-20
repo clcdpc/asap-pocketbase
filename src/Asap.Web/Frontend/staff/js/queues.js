@@ -703,7 +703,12 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
       });
       state.additionalCopyGrid.render(dom.additionalCopyGrid);
     } else {
-      state.additionalCopyGrid.updateConfig({ data: rows }).forceRender();
+      state.additionalCopyGrid.updateConfig({ data: rows });
+      // The shared modal's delayed copy renders need the same current-header
+      // boundary as title requests; a stale header can invalidate Grid's cache.
+      const { store, header } = state.additionalCopyGrid.config;
+      store.dispatch(current => ({ ...current, header }));
+      state.additionalCopyGrid.forceRender();
     }
   }
 

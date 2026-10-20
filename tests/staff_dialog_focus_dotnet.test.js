@@ -56,6 +56,12 @@ async function runJourney(scenario) {
     const gridModule = path.join(source, 'vendor/gridjs/6.2.0/gridjs.umd.js');
     delete require.cache[require.resolve(gridModule)];
     dom.window.gridjs = require(gridModule);
+    const forceRender = dom.window.gridjs.Grid.prototype.forceRender;
+    dom.window.gridjs.Grid.prototype.forceRender = function () {
+      assert.strictEqual(this.config.store.getState().header, this.config.header,
+        'Each real Grid remount must start with its current header, including delayed copy data.');
+      return forceRender.call(this);
+    };
 
     const staff = { id: '20', role: scenario === 'library-navigation' ? 'super_admin' : 'staff',
       organizationId: scenario === 'library-navigation' ? '1' : '2', displayName: 'Library staff' };
