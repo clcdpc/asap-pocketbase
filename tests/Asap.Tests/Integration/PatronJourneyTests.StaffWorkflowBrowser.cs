@@ -24,13 +24,19 @@ public sealed partial class PatronJourneyTests
         var patron = new PatronSnapshot(394101, barcode, "fresh-browser@example.org", "Fresh", "Browser Patron", 1, "Adult",
             registration, home, "Recorded home library", null);
         provider.AddPatron(patron, [new(pickup, "Live eligible pickup")], library);
+        var excluded = patron with { Barcode = barcode + "-ineligible", PatronId = 394102, PatronCodeId = 999 };
+        provider.AddPatron(excluded, [new(pickup, "Live eligible pickup")], library);
+        provider.SetPatronSearch("Excluded Patron", library, [excluded]);
         provider.AllowPickupUpdate(barcode, library, pickup);
         provider.SetIdentifierResult("BROWSER-MATCH", library, new(IdentifierLookupOutcome.DefinitiveNotFound));
         await ExecuteNonQueryAsync("""
             INSERT INTO [asap].[Organization] ([Id],[DisplayName],[OrganizationCodeId],[ParentOrganizationId],[IsActive])
             VALUES (@org,N'Browser servicing library',2,1,1),(@home,N'Recorded home library',2,1,1),
                 (@registration,N'Fresh registered branch',3,@home,0),(@pickup,N'Live eligible pickup',3,@home,0);
-            INSERT INTO [asap].[WorkflowSettings] ([OrganizationId],[AllowAnyRegisteredCardLogin],[UpdatedUtc]) VALUES (@org,1,SYSUTCDATETIME());
+            INSERT INTO [asap].[WorkflowSettings] ([OrganizationId],[AllowAnyRegisteredCardLogin],[PatronCodeEligibilityEnabled],[PatronCodeEligibilityMessage],[UpdatedUtc])
+            VALUES (@org,1,1,N'Please contact the library.',SYSUTCDATETIME());
+            INSERT INTO [asap].[PatronCodeEligibilitySet] ([OrganizationId]) VALUES (@org);
+            INSERT INTO [asap].[PatronCodeEligibilityMember] ([OrganizationId],[PatronCodeId]) VALUES (@org,1);
             """, ("@org", library), ("@home", home), ("@registration", registration), ("@pickup", pickup));
         await using var scopedFactory = factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
         {

@@ -14,6 +14,9 @@ public sealed class StaffSuggestionService(
     PatronSuggestionService suggestions,
     TimeProvider timeProvider)
 {
+    internal const string PatronCodeEligibilityMessage =
+        "This patron cannot submit suggestions because their Polaris patron code is not eligible for the selected servicing library. Staff cannot override this restriction in this workflow.";
+
     private static readonly Regex BarcodeLike = new(
         "^[A-Za-z0-9._:-]+$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -118,12 +121,15 @@ public sealed class StaffSuggestionService(
         // configuration again before filtering candidates or returning form context.
         scope = await ResolveScopeAsync(actor, input.LibraryOrgId, cancellationToken);
         var matches = new List<StaffPatronMatch>();
-        var ineligibleCount = 0;
+        var codeRejected = false;
+        var libraryRejected = false;
         foreach (var patron in refreshedPatrons)
         {
-            if (!await IsPatronInScopeAsync(patron, scope.Configuration, cancellationToken))
+            var rejection = await PatronRejectionCodeAsync(patron, scope.Configuration, cancellationToken);
+            if (rejection is not null)
             {
-                ineligibleCount++;
+                codeRejected |= rejection == "patron_ineligible";
+                libraryRejected |= rejection == "patron_library_forbidden";
                 continue;
             }
 
@@ -132,16 +138,23 @@ public sealed class StaffSuggestionService(
 
         if (matches.Count == 0)
         {
+            var code = codeRejected
+                ? libraryRejected ? "patron_selection_ineligible" : "patron_ineligible"
+                : libraryRejected ? "patron_library_forbidden" : null;
             return new StaffPatronLookupResult(
-                ineligibleCount > 0 ? "ineligible" : "no_match",
+                code is not null ? "ineligible" : "no_match",
                 scope.OrganizationId,
                 scope.Configuration.OrganizationName,
                 !scope.Configuration.AllowAnyRegisteredCardLogin,
                 null,
                 [],
-                ineligibleCount > 0
-                    ? "The matching patron is not eligible for the selected servicing library."
-                    : "No patron matched that search.");
+                code switch
+                {
+                    "patron_ineligible" => PatronCodeEligibilityMessage,
+                    "patron_selection_ineligible" => "No matching patron can be selected. Matches were excluded by the selected servicing library's registration or participation rules, or by Polaris patron-code eligibility. Staff cannot override these restrictions in this workflow.",
+                    "patron_library_forbidden" => "The matching patron is not eligible for the selected servicing library.",
+                    _ => "No patron matched that search."
+                }) { Code = code };
         }
 
         if (matches.Count > 1)
@@ -326,43 +339,39 @@ public sealed class StaffSuggestionService(
         EffectivePatronConfiguration configuration,
         CancellationToken cancellationToken)
     {
-        if (!await IsPatronInScopeAsync(patron, configuration, cancellationToken))
+        var code = await PatronRejectionCodeAsync(patron, configuration, cancellationToken);
+        if (code is not null)
         {
+            var message = code == "patron_ineligible"
+                ? PatronCodeEligibilityMessage
+                : "This patron is not eligible for the selected servicing library.";
             throw new StaffSuggestionException(
                 StatusCodes.Status403Forbidden,
-                "patron_library_forbidden",
-                "This patron is not eligible for the selected servicing library.",
+                code,
+                message,
                 new
                 {
-                    code = "patron_library_forbidden",
+                    code,
                     status = "ineligible",
-                    message = "This patron is not eligible for the selected servicing library."
+                    message
                 });
         }
     }
 
-    private async Task<bool> IsPatronInScopeAsync(
+    private async Task<string?> PatronRejectionCodeAsync(
         PatronSnapshot patron,
         EffectivePatronConfiguration configuration,
         CancellationToken cancellationToken)
     {
         if (patron.PatronOrganizationId <= 1 || patron.HomeLibraryOrganizationId <= 1)
         {
-            return false;
+            return "patron_library_forbidden";
         }
 
         if (!configuration.AllowAnyRegisteredCardLogin &&
             patron.HomeLibraryOrganizationId != configuration.OrganizationId)
         {
-            return false;
-        }
-
-        if (configuration.PatronCodeEligibilityEnabled &&
-            configuration.AllowedPatronCodeIds.Count > 0 &&
-            patron.PatronCodeId.HasValue &&
-            !configuration.AllowedPatronCodeIds.Contains(patron.PatronCodeId.Value))
-        {
-            return false;
+            return "patron_library_forbidden";
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -372,10 +381,22 @@ public sealed class StaffSuggestionService(
             .Select(item => new { item.Id, item.OrganizationCodeId, item.IsActive })
             .ToListAsync(cancellationToken);
         var byId = organizations.ToDictionary(item => item.Id);
-        return byId.Count == organizationIds.Distinct().Count() &&
-               OrganizationAuthority.IsLibrary(patron.HomeLibraryOrganizationId,
-                   byId[patron.HomeLibraryOrganizationId].OrganizationCodeId) &&
-               byId[patron.HomeLibraryOrganizationId].IsActive;
+        if (byId.Count != organizationIds.Distinct().Count() ||
+            !OrganizationAuthority.IsLibrary(patron.HomeLibraryOrganizationId,
+                byId[patron.HomeLibraryOrganizationId].OrganizationCodeId) ||
+            !byId[patron.HomeLibraryOrganizationId].IsActive)
+        {
+            return "patron_library_forbidden";
+        }
+
+        // Only explain code policy after library admission; excluded candidates must
+        // not reveal their patron-code eligibility through a name search.
+        return configuration.PatronCodeEligibilityEnabled &&
+               configuration.AllowedPatronCodeIds.Count > 0 &&
+               patron.PatronCodeId.HasValue &&
+               !configuration.AllowedPatronCodeIds.Contains(patron.PatronCodeId.Value)
+            ? "patron_ineligible"
+            : null;
     }
 
     private async Task<StaffPatronLookupResult> VerifiedResultAsync(

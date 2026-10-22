@@ -176,5 +176,80 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       } finally { controller.dispose(); }
     });
   }
-  console.log('Suggestion captured scope, committed notification outcomes and actor-safe navigation checks passed');
+  const codeMessage = 'This patron cannot submit suggestions because their Polaris patron code is not eligible for the selected servicing library. Staff cannot override this restriction in this workflow.';
+  for (const outcome of ['barcode', 'name', 'candidate', 'submit']) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createSuggestionController } = await load('suggestion-controller');
+      const session = createSessionIdentity(); session.accept(actorA);
+      const root = get('#staff-suggestion-dialog'), calls = [];
+      const denied = () => Object.assign(new Error('Generic error'), {
+        status: 403, response: { code: 'patron_ineligible', status: 'ineligible', message: codeMessage }
+      });
+      const controller = createSuggestionController({ root, trigger: get('#new-suggestion'), sessionIdentity: session,
+        getScope: () => '2', getLibraries: () => [{ id: '2', name: 'Servicing library' }],
+        polarisLookup: { close() {}, invalidate() {} }, announce() {}, beforeOpen: () => true, beforeClose: () => true,
+        onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
+          calls.push({ path, body: init.body });
+          if (path.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+          if (path.endsWith('/suggestions')) throw denied();
+          if (outcome === 'submit') return { status: 'verified', libraryOrgId: 2, patron: {
+            patron: { barcode: 'verified-card', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101 } };
+          if (outcome === 'name') return { status: 'ineligible', code: 'patron_ineligible', message: codeMessage };
+          if (outcome === 'candidate' && !init.body.barcode) return { status: 'multiple_matches', matches: [
+            { barcode: 'candidate-card', name: 'Candidate', homeLibraryOrganizationId: 2 }
+          ] };
+          throw denied();
+        } });
+      try {
+        controller.open();
+        root.querySelector('input[type="search"]').value = outcome === 'barcode' ? 'excluded-card' : 'Candidate Name';
+        const form = get('#staff-suggestion-form');
+        form.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+        await flush(); await flush();
+        if (outcome === 'candidate') {
+          root.querySelector('.staff-suggestion-candidate').click();
+          await flush(); await flush();
+          assert.equal(calls[1].body.barcode, 'candidate-card');
+          assert.equal(calls[1].body.query, null, 'Candidate selection always re-verifies the explicit barcode.');
+        }
+        if (outcome === 'submit') {
+          const title = root.querySelector('.staff-suggestion-fields input');
+          title.value = 'Retain this title'; title.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+          const notes = root.querySelector('.staff-suggestion-fields textarea');
+          notes.value = 'Retain these staff notes';
+          form.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+          await flush(); await flush();
+          assert.equal(title.value, 'Retain this title'); assert.equal(notes.value, 'Retain these staff notes');
+          assert.equal(root.querySelector('.staff-suggestion-fields').inert, true);
+          assert.equal(root.querySelector('button[type="submit"]').disabled, true);
+          assert.equal(controller.inspectDeparture().blocked, false, 'A definite admission rejection does not become an uncertain outcome.');
+          form.dispatchEvent(new dom.window.Event('submit', { cancelable: true })); await flush();
+          assert.equal(calls.filter(call => call.path.endsWith('/suggestions')).length, 1);
+          assert.equal([...root.querySelectorAll('button')].find(button => button.textContent === 'Change patron').disabled, false);
+          assert.equal(document.activeElement.textContent, 'Change patron');
+        } else {
+          assert.equal(root.querySelector('.staff-suggestion-fields'), null, 'Ineligible patrons cannot enable the request form.');
+          assert.equal(root.querySelector('.staff-suggestion-matches'), null, 'Rejected candidates are retired.');
+          assert.equal(calls.some(call => call.path.includes('/suggestion-configuration')), false);
+        }
+        const status = get('#staff-suggestion-status');
+        assert.equal(status.textContent, codeMessage); assert.ok(status.classList.contains('error'));
+        assert.equal(status.getAttribute('role'), 'status'); assert.equal(status.getAttribute('aria-live'), 'polite');
+        assert.equal(status.children.length, 0, 'The rejection explanation is plain text.');
+        assert.equal(root.open, true);
+        if (outcome === 'submit') {
+          [...root.querySelectorAll('button')].find(button => button.textContent === 'Change patron').click();
+          get('#staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+          await flush(); await flush();
+          assert.equal(root.querySelector('button[type="submit"]').disabled, false, 'Fresh verification permits a new deliberate attempt.');
+          root.querySelector('.staff-suggestion-fields input').value = 'New verified attempt';
+          get('#staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+          await flush(); await flush();
+          assert.equal(calls.filter(call => call.path.endsWith('/suggestions')).length, 2);
+        }
+      } finally { controller.dispose(); }
+    });
+  }
+  console.log('Suggestion scope, notification, actor safety and accessible patron-code rejections passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

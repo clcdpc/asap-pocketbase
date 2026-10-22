@@ -1,5 +1,37 @@
 # Staff workflow architecture
 
+## Staff patron-code policy (October 22, 2026)
+
+The [authoritative #301 decision](https://github.com/clcdpc/asap-pocketbase/issues/301#issuecomment-6344805395)
+supersedes the historical requirement to bypass patron-code eligibility (AC10).
+Staff-created suggestions bypass the weekly submission-count limit and retain
+the effective servicing library's patron-code restrictions. Staff cannot override
+those restrictions through New suggestion or quick-create.
+
+Lookup and every creation admission boundary explain code rejection with
+`patron_ineligible` and fixed staff-facing text identifying the Polaris patron
+code and selected servicing library, independently of the configurable patron
+message. Library-scope rejection retains `patron_library_forbidden`. Name search
+retains its `ineligible` status and adds a `code`: all code exclusions use
+`patron_ineligible`; mixed code/library exclusions use `patron_selection_ineligible`
+with a general explanation. Excluded candidate details never enter the response,
+and a library-excluded candidate's code eligibility is not disclosed.
+
+Disabled restrictions, an empty effective allowed-code set and absent patron-code
+IDs remain unrestricted. Library overrides and system fallback keep their existing
+resolution. Patron self-service messages and policy remain unchanged. Pickup-intent
+and final SQL checks still revalidate current policy; a successful external pickup
+change followed by a rejection retains the existing partial-outcome response and
+includes the staff explanation. No compensating provider write is attempted.
+
+The dialog uses its existing plain-text live status. Lookup cannot enable the form
+for excluded patrons. A submission denial retains entered values and disables
+creation while leaving Change patron available for authoritative re-verification.
+
+Automated SQL, controller and browser coverage supports technical acceptance.
+Human keyboard/actual screen-reader acceptance, including native 200% zoom, and
+separately authorized live Polaris acceptance coordinated with #298 remain open.
+
 Implementation campaign: [#351](https://github.com/clcdpc/asap-pocketbase/issues/351).
 
 The dedicated branch is `refactor/staff-workflow-architecture`, based on

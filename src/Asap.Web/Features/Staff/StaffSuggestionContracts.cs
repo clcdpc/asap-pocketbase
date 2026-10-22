@@ -39,7 +39,10 @@ public sealed record StaffPatronLookupResult(
     bool SearchLibraryLimited,
     StaffPatronContext? Patron,
     IReadOnlyList<StaffPatronMatch> Matches,
-    string? Message = null);
+    string? Message = null)
+{
+    public string? Code { get; init; }
+}
 
 public sealed record StaffSuggestionInput(
     int? LibraryOrgId,

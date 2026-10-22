@@ -122,6 +122,24 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     await claims.selectOption('all');
     await row.waitFor();
     await scan('created-queue');
+    for (const query of [`${barcode}-ineligible`, 'Excluded Patron']) {
+      await page.getByRole('button', { name: 'New suggestion', exact: true }).click();
+      await dialog.getByRole('searchbox').fill(query);
+      await dialog.getByRole('button', { name: 'Look up patron', exact: true }).click();
+      const status = dialog.locator('#staff-suggestion-status');
+      await page.waitForFunction(() => document.querySelector('#staff-suggestion-status').textContent.includes('Polaris patron code'));
+      assert.match(await status.textContent(), /selected servicing library.*Staff cannot override/);
+      assert.equal(await status.getAttribute('role'), 'status');
+      assert.equal(await status.getAttribute('aria-live'), 'polite');
+      assert.equal(await dialog.getByRole('searchbox').inputValue(), query);
+      assert.equal(await dialog.getByRole('button', { name: 'Create suggestion', exact: true }).count(), 0);
+      await scan(query === 'Excluded Patron' ? 'code-rejection-name-desktop' : 'code-rejection-barcode-desktop');
+      await page.setViewportSize({ width: 390, height: 844 });
+      await scan(query === 'Excluded Patron' ? 'code-rejection-name-mobile' : 'code-rejection-barcode-mobile');
+      await page.keyboard.press('Escape');
+      assert.equal(await page.getByRole('button', { name: 'New suggestion', exact: true }).evaluate(node => node === document.activeElement), true);
+      await page.setViewportSize({ width: 1280, height: 900 });
+    }
     assert.deepEqual(report.externalRequests, []); assert.deepEqual(report.errors, []);
     await fs.writeFile(path.join(artifacts, 'browser-results.json'), JSON.stringify(report, null, 2));
     await context.close();
