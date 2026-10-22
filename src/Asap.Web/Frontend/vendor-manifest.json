@@ -1,0 +1,55 @@
+{
+  "sourceBaselineSha": "150b30b776565194260cc327eeeffdfb46475e81",
+  "packages": [
+    {
+      "name": "bootstrap",
+      "version": "4.1.3",
+      "npmTarballSha1": "0eb371af2c8448e8c210411d0cb824a6409a12be",
+      "npmTarballSha256": "42494265fdb01dc77c2791ff2b3c6ca73f185744495529be8add0193da31b795",
+      "sourceReference": "https://cdn.jsdelivr.net/npm/bootstrap@4.1.3/dist/css/bootstrap.min.css",
+      "licenseFile": "vendor/bootstrap/4.1.3/LICENSE",
+      "files": {
+        "vendor/bootstrap/4.1.3/css/bootstrap.min.css": "7928b5ab63c6e89ee0ee26f5ef201a58c72baf91abb688580a1aa26eb57b3c11",
+        "vendor/bootstrap/4.1.3/LICENSE": "7bdab4494c73e3d7271a70d395947a9eb2a68f08d98740fc2308843e319298f9",
+        "vendor/bootstrap/4.1.3/package.json": "bac3424a0e29f3d4a58436346047606f2cc8419847fd4d86ad977403bfe7920c"
+      }
+    },
+    {
+      "name": "font-awesome",
+      "version": "4.7.0",
+      "npmTarballSha1": "8fa8cf0411a1a31afd07b06d2902bb9fc815a133",
+      "npmTarballSha256": "92042b715919e17499ded134884b0318fd88041efac9b0f3204069df52222a61",
+      "sourceReference": "https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.css",
+      "licenseFile": "vendor/font-awesome/4.7.0/README.md",
+      "files": {
+        "vendor/font-awesome/4.7.0/css/font-awesome.css": "36e0a7e08bee65774168528938072c536437669c1b7458ac77976ec788e4439c",
+        "vendor/font-awesome/4.7.0/fonts/fontawesome-webfont.eot": "7bfcab6db99d5cfbf1705ca0536ddc78585432cc5fa41bbd7ad0f009033b2979",
+        "vendor/font-awesome/4.7.0/fonts/fontawesome-webfont.svg": "ad6157926c1622ba4e1d03d478f1541368524bfc46f51e42fe0d945f7ef323e4",
+        "vendor/font-awesome/4.7.0/fonts/fontawesome-webfont.ttf": "aa58f33f239a0fb02f5c7a6c45c043d7a9ac9a093335806694ecd6d4edc0d6a8",
+        "vendor/font-awesome/4.7.0/fonts/fontawesome-webfont.woff": "ba0c59deb5450f5cb41b3f93609ee2d0d995415877ddfa223e8a8a7533474f07",
+        "vendor/font-awesome/4.7.0/fonts/fontawesome-webfont.woff2": "2adefcbc041e7d18fcf2d417879dc5a09997aa64d675b7a3c4b6ce33da13f3fe",
+        "vendor/font-awesome/4.7.0/fonts/FontAwesome.otf": "444dd4366615ffc4a16d012b2fa90137065d3ccb410fa6fd5e4ddd7b5e4ffcd5",
+        "vendor/font-awesome/4.7.0/HELP-US-OUT.txt": "3034ebb0f7c42896648f5303e3499cd7dfe4db010f9578ff45fb42af2884ed6b",
+        "vendor/font-awesome/4.7.0/package.json": "f84631c8d0429309d83438af2f4ad73ef39fd6b1ee3022244425c1e79dbd5afc",
+        "vendor/font-awesome/4.7.0/README.md": "610427fe917f2b51ef69b5bfa9a7bfe3fcba59b1ccaf86a500a47e5fa1da322b"
+      }
+    },
+    {
+      "name": "gridjs",
+      "version": "6.2.0",
+      "npmTarballSha1": "c04008d43e8426298a04ef8637cde1e787138514",
+      "npmTarballSha256": "866be122453ff88b246b1d4411bf22a6c5b3f37356cbc94ad30210fa727fbeef",
+      "sourceReferences": [
+        "https://cdn.jsdelivr.net/npm/gridjs@6.2.0/dist/gridjs.umd.js",
+        "https://cdn.jsdelivr.net/npm/gridjs@6.2.0/dist/theme/mermaid.min.css"
+      ],
+      "licenseFile": "vendor/gridjs/6.2.0/LICENSE",
+      "files": {
+        "vendor/gridjs/6.2.0/gridjs.umd.js": "f7402f347715568c73f061781edd8e7dceeecdd7e2503c28a1012b7ccbc12509",
+        "vendor/gridjs/6.2.0/LICENSE": "479a9ad0bd0150ec8892f67eb0bad10fe9699edb06c5d7f8968e5e464c8426bd",
+        "vendor/gridjs/6.2.0/package.json": "432499831980bdcd5b0d4c09edaa41a210cd70e1f8213483a4707bafdf6e7181",
+        "vendor/gridjs/6.2.0/theme/mermaid.min.css": "ab9585e3983a57267a8f22f708fe40ad70f8c1bd5688ebfba31d11a0c7cca331"
+      }
+    }
+  ]
+}

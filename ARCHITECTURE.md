@@ -1,77 +1,58 @@
-# Auto Suggest a Purchase (ASAP) Architecture Document
+# ASAP Architecture
 
-## 1. High-Level Overview
+## Runtime
 
-Auto Suggest a Purchase (ASAP) is a self-hosted, lightweight material suggestion management system for public libraries. It serves as a bridge between library patrons, staff collection development teams, and the Polaris Integrated Library System (ILS).
+ASAP is an ASP.NET Core 10 application targeting .NET 10. `Asap.Web` owns the
+HTTP host, Entra authentication, authorization, feature services, JSON APIs,
+static frontend delivery, email outbox orchestration, and Hangfire recurring
+jobs. External infrastructure/bootstrap configuration is loaded from an
+ACL-controlled JSON file through `Asap:ConfigFile`; ordinary application data
+and settings live in SQL Server.
 
-The project is built on **PocketBase**, which acts as both the database (SQLite) and the backend server (Go). Custom business logic is implemented using **PocketBase Hooks (JavaScript via the Goja engine)**. The application adheres to a "Zero Dependencies" philosophy for runtime: there is no frontend build step and no production Node runtime requirement.
+The frontend is a vanilla JavaScript, HTML, and CSS application with patron
+and staff entry points under `src/Asap.Web/Frontend`. MSBuild copies that
+tracked source to ignored `wwwroot` for local runs, builds, and publishes.
+Node/npm are development and CI tooling only. Browser assets are pinned under
+`Frontend/vendor` with their manifest and license files.
 
-### Core Components
-1. **Frontend (Vanilla JS/HTML/CSS):** Served statically from `pb_public/`. It is split into two Single Page Applications (SPAs):
-   - `/patron/`: patrons log in with barcode/PIN and submit suggestions.
-   - `/staff/`: staff manage suggestions, configure settings, and oversee jobs.
-2. **Backend (PocketBase + JS Hooks):** Hook entrypoint in `pb_hooks/main.pb.js`, with modular backend code in root-level `lib/`.
-3. **Database (SQLite):** Managed via PocketBase migrations (`pb_migrations/`).
+## Persistence and schema ownership
 
----
+SQL Server 2022 is the application datastore. The SDK-style
+`database/Asap.Database` project targets `Sql160` and is the source of truth
+for the `[asap]` schema. Hangfire owns its `[HangFire]` schema and its versioned
+SQL asset is kept under `scripts/hangfire`.
 
-## 2. Data Models
+The web layer uses EF Core directly for normal aggregates and feature services.
+Where a feature needs reporting, queue, or reconciliation queries, it uses the
+existing parameterized Dapper/ADO.NET boundaries. Transactions, constraints,
+rowversion checks, scope predicates, and outbox/event writes are part of the
+observable contract rather than in-memory substitutes.
 
-The system relies on several core PocketBase collections:
+`LegacyPocketBaseMapping` is intentional migration data. It maps source IDs to
+new IDs so old request links and audit references remain resolvable after
+cutover; it does not make the retired runtime a second application backend.
 
-- **`title_requests`**: Primary suggestion record.
-  - **Fields:** `barcode`, `title`, `author`, `format`, `status`, `bibid`, `closeReason`, `libraryOrgId`, etc.
-  - **Statuses:** `suggestion`, `outstanding_purchase`, `pending_hold`, `hold_placed`, `closed`.
-- **`patron_users`**: Cached patron profiles.
-- **`staff_users`**: Staff accounts with RBAC (`staff`, `admin`, `super_admin`).
-- **`system_settings`, `polaris_settings`, `smtp_settings`**: global integration/system config.
-- **`workflow_settings`, `ui_settings`, `email_templates`, `patron_settings_overrides`**: scoped settings and override records.
-- **`polaris_organizations`**: cached Polaris organization hierarchy.
+## Feature boundaries
 
----
+- Patron endpoints authenticate and scope the effective library context before
+  loading options or accepting a suggestion.
+- Staff endpoints enforce Entra identity, role, library scope, rowversion
+  mutation barriers, and stale-result protections for concurrent workflows.
+- Workflow services coordinate purchase promotion, hold placement,
+  fulfillment, timeout, identifier, and summary jobs through Hangfire and the
+  SQL outbox.
+- Settings are split by system, library, and system-default-with-library-
+  override scope. Effective values are resolved in one service and reset is an
+  explicit operation that preserves library-owned records.
+- `Asap.Migration` is a separate executable. It reads a stopped legacy SQLite
+  source, creates a normalized package, validates identity and integrity,
+  imports into SQL, and reconciles counts/fingerprints. It is not used by the
+  web request path.
 
-## 3. Request, Route, and Job Architecture
+## Safety boundaries
 
-### 3.1 Hook Entrypoint + Route Registry
-
-`pb_hooks/main.pb.js` boots the application, then delegates route wiring to the root-level route registry (`lib/route_registry.js`). This keeps endpoint registration centralized and makes route availability explicit.
-
-### 3.2 Route Facades
-
-- **Staff route facade:** `lib/staff_routes.js` re-exports grouped route installers from `lib/staff/*` (auth, users, lookup, title-request actions, settings, analytics, admin).
-- **Patron/setup/job facades:** `lib/patron_routes.js`, `lib/setup_routes.js`, and `lib/job_routes.js` expose cohesive registration surfaces for their domains.
-
-### 3.3 Shared Backend Modules
-
-Root-level `lib/` is organized by domain:
-
-- `lib/config/*`: config defaults, normalization, scoped resolution, SMTP/email/polaris config helpers.
-- `lib/jobs/*`: automation pipelines (ISBN checks, purchase promotion, hold placement, fulfillment tracking, timeouts, weekly summary).
-- `lib/polaris/*`: auth helpers and endpoint-specific Polaris clients.
-- `lib/records/*`: title request, patron, staff, duplicate, and tagging data access helpers.
-- Route and utility modules such as `route_utils.js`, `http_utils.js`, `authz.js`, and `html_utils.js`.
-
-### 3.4 Workflow Summary
-
-1. **Patron submission:** authenticate against Polaris, validate, de-duplicate, enforce limits, create `suggestion`.
-2. **Staff review:** reject, close, place manual hold/already-own, or promote for purchase flow.
-3. **Automations (cron + manual triggers):** promote to `pending_hold`, place holds, track fulfillment, and timeout stale states.
-
----
-
-## 4. Integration Details (Polaris PAPI)
-
-The application communicates with Polaris REST APIs using HMAC-SHA1 signatures.
-
-- **Auth pattern:** signed requests using API key + access credentials + request metadata.
-- **Representative endpoints:** patron/staff auth, patron basic data, bib search, hold placement, and patron checkout retrieval.
-- **Payload safety:** XML payload generation escapes unsafe characters before hold request submission.
-
----
-
-## 5. Security, Scope, and Access Control
-
-- **RBAC + scope:** route handlers enforce `super_admin` (global), `admin` (library-scoped admin), and `staff` (library-scoped ops).
-- **Library scoping:** runtime queries and analytics are constrained by effective library scope, not UI-only filtering.
-- **Settings scoping:** system-level defaults plus library overrides are resolved explicitly at read-time; writes target an intentional scope.
-- **Operational safety:** logging and notes paths avoid leaking sensitive patron and credential data.
+The application never needs a writable legacy runtime to serve current traffic.
+The source identity and schema version used by migration are pinned and
+recorded in the package. Deterministic provider fakes and real SQL are used in
+ordinary CI; live Polaris, Postmark, production infrastructure, and IIS host
+activation remain separately authorized release work.

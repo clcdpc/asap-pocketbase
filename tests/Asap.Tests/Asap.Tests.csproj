@@ -1,0 +1,17 @@
+<Project Sdk="MSTest.Sdk/4.4.0">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Asap.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+    <PackageReference Include="Microsoft.SqlServer.DacFx" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Asap.Web\Asap.Web.csproj" />
+    <ProjectReference Include="..\..\src\Asap.Migration\Asap.Migration.csproj" />
+    <ProjectReference Include="..\..\database\Asap.Database\Asap.Database.sqlproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,234 @@
+const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { pathToFileURL } = require('url');
+const { JSDOM } = require('jsdom');
+
+function response(status, body) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: 'OK',
+    json: async () => body
+  };
+}
+
+function settingsData(librarySetsExist = false) {
+  const emptySet = { exists: false, values: [] };
+  const librarySet = { exists: librarySetsExist, values: [] };
+  return {
+    orgId: '2',
+    version: 'library-2-version',
+    organization: { id: 2, name: 'Library Two', abbreviation: 'TWO', active: true },
+    stored: {
+      systemSettings: {},
+      polaris: {},
+      configuredSystem: {
+        workflow: {},
+        patron: {},
+        email: { fromAddress: 'system@example.org', fromName: 'System' },
+        publicationOptions: emptySet,
+        commonCreators: emptySet,
+        allowedPatronCodeIds: emptySet,
+        providers: [],
+        formats: [],
+        templates: [],
+        branding: { hasLogo: false, altText: 'System alt' }
+      },
+      libraryOverride: {
+        workflow: { outstandingTimeoutRejectionTemplateId: '9007199254740993' },
+        patron: { loginNote: 'Existing library note' },
+        email: { hasPostmarkToken: true },
+        publicationOptions: librarySet,
+        commonCreators: librarySet,
+        allowedPatronCodeIds: emptySet,
+        providers: [],
+        formats: [],
+        templates: [],
+        branding: { hasLogo: false, altText: null }
+      },
+      workflow: {},
+      patron: {},
+      email: {},
+      origins: [],
+      publicationOptions: [],
+      commonCreators: [],
+      allowedPatronCodeIds: [],
+      providers: [],
+      formats: [],
+      customFields: [],
+      templates: [{ id: '9007199254740993', organizationId: '2', templateKey: 'rejection:used',
+        displayName: 'Used rejection', subject: 'Subject', body: 'Body', enabled: true, isCustom: true }],
+      autoClaimRules: [],
+      branding: { hasLogo: false, altText: null }
+    },
+    effective: {
+      allowedPatronCodeIds: [],
+      publicationOptions: [],
+      commonCreators: [],
+      externalSearchProviders: [],
+      formats: [],
+      customFields: [],
+      email: { fromAddress: 'system@example.org', fromName: 'System' },
+      logoAltText: 'System alt'
+    },
+    workflow: {},
+    ui_text: {},
+    emails: { fromAddress: 'system@example.org', fromName: 'System', templates: [] }
+  };
+}
+
+async function flush() {
+  await new Promise(resolve => setImmediate(resolve));
+  await Promise.resolve();
+}
+
+(async () => {
+  const repositoryRoot = path.join(__dirname, '..');
+  const frontendRoot = path.join(repositoryRoot, 'src', 'Asap.Web', 'Frontend');
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-settings-staff-scope-'));
+  fs.cpSync(path.join(frontendRoot, 'staff'), path.join(temporary, 'staff'), { recursive: true });
+  fs.cpSync(path.join(frontendRoot, 'shared'), path.join(temporary, 'shared'), { recursive: true });
+  fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}\n');
+
+  try {
+    const settingsModule = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings.js')).href);
+    const dom = new JSDOM(fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8'), {
+      url: 'http://localhost/staff/'
+    });
+    global.window = dom.window;
+    global.document = dom.window.document;
+    global.FormData = dom.window.FormData;
+    global.Node = dom.window.Node;
+    global.Event = dom.window.Event;
+    window.confirm = () => true;
+
+    const settingsRequests = [];
+    const organizations = [
+      { id: 1, name: 'System', organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'system-v1' },
+      { id: 2, name: 'Library Two', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'library-v1' }
+    ];
+    let saveBody;
+    const saveBodies = [];
+    let librarySetsExist = false;
+    let saveCompleted;
+    const saveFinished = new Promise(resolve => { saveCompleted = resolve; });
+    global.fetch = async (url, options = {}) => {
+      const requestUrl = String(url);
+      if (requestUrl.endsWith('/api/asap/staff/session')) {
+        return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
+      }
+      if (requestUrl.includes('/api/asap/staff/settings?orgId=')) {
+        settingsRequests.push(requestUrl);
+        return response(200, settingsData(librarySetsExist));
+      }
+      if (requestUrl.endsWith('/api/asap/staff/organizations')) {
+        return response(200, { code: 'ok', data: organizations });
+      }
+      if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
+        return response(200, { code: 'ok', data: [] });
+      }
+      if (requestUrl.endsWith('/api/asap/staff/settings')) {
+        saveBody = JSON.parse(options.body);
+        saveBodies.push(saveBody);
+        librarySetsExist = saveBodies.length === 1;
+        if (saveBodies.length === 1) saveCompleted();
+        return response(200, { code: 'saved', data: { orgId: '2', version: 'library-2-saved' } });
+      }
+      throw new Error(`Unexpected request: ${requestUrl}`);
+    };
+
+    const controller = settingsModule.createSettingsController({
+      root: document.getElementById('settings-view'),
+      tab: document.getElementById('settings-view-tab'),
+      announce: () => {},
+      getStaff: () => ({ role: 'admin', organizationId: 2 })
+    });
+    controller.bind();
+    controller.setStaff({
+      id: '2',
+      tenantId: 'tenant-1',
+      objectId: 'object-2',
+      role: 'admin',
+      organizationId: 2
+    });
+    await controller.activate();
+
+    assert.deepStrictEqual(settingsRequests, ['/api/asap/staff/settings?orgId=2']);
+    assert.strictEqual(document.getElementById('settings-scope').value, '2');
+    assert.strictEqual(document.getElementById('settings-scope-field').hidden, true);
+    assert.match(document.getElementById('settings-library-context-title').textContent, /Editing Library Two settings/);
+    assert.match(document.getElementById('settings-library-context-guidance').textContent, /apply to every library/);
+    assert.strictEqual(document.getElementById('settings-switch-system').hidden, true);
+    assert.strictEqual(document.querySelector('#settings-nav-polaris .settings-scope-badge').hidden, false);
+    assert.strictEqual(document.querySelector('#settings-nav-smtp .settings-scope-badge'), null);
+    assert.match(document.querySelector('#settings-smtp .settings-scope-explanation').textContent, /Library Two.*managed centrally/);
+    assert.strictEqual(document.getElementById('email-postmark-token').disabled, true);
+    assert.strictEqual(document.getElementById('email-clear-postmark-token').disabled, true);
+    assert.strictEqual(document.querySelector('[data-setting-key="postmarkToken"] .settings-override-toggle'), null);
+    const usedTemplate = document.querySelector('#email-templates-editor [data-template-id="9007199254740993"]');
+    usedTemplate.querySelector('[aria-label="Delete"]').click();
+    assert.strictEqual(usedTemplate.isConnected, true);
+    assert.match(document.getElementById('settings-message').textContent, /used by auto-rejection/);
+    document.getElementById('email-postmark-token').value = 'forged-browser-token';
+    document.getElementById('email-clear-postmark-token').checked = true;
+
+    const fromToggle = document.querySelector('[data-setting-key="fromAddress"] .settings-override-toggle');
+    fromToggle.checked = true;
+    fromToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    document.getElementById('email-from-address').value = 'library@example.org';
+
+    for (const id of ['publication-options-use-system', 'common-creators-use-system']) {
+      const toggle = document.getElementById(id);
+      toggle.checked = false;
+      toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    }
+
+    const note = document.getElementById('patron-login-note');
+    note.value = 'Own library edit';
+    note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
+      bubbles: true,
+      cancelable: true
+    }));
+    await saveFinished;
+    await flush();
+
+    assert.strictEqual(saveBody.orgId, '2');
+    assert.strictEqual(saveBody.patron.loginNote, 'Own library edit');
+    assert.strictEqual(saveBody.email.fromAddress, 'library@example.org');
+    assert.deepStrictEqual(saveBody.patron.publicationOptions, []);
+    assert.deepStrictEqual(saveBody.workflow.commonAuthorsList, []);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody.email, 'postmarkToken'), false);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody.email, 'clearPostmarkToken'), false);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody, 'systemSettings'), false);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody, 'polaris'), false);
+    assert.ok(settingsRequests.every(url => url === '/api/asap/staff/settings?orgId=2'));
+
+    for (let attempt = 0; attempt < 20 &&
+      document.getElementById('settings-save-title').textContent !== 'No changes'; attempt++) await flush();
+    for (const id of ['publication-options-use-system', 'common-creators-use-system']) {
+      const toggle = document.getElementById(id);
+      assert.strictEqual(toggle.checked, false);
+      toggle.checked = true;
+      toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    }
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
+      bubbles: true,
+      cancelable: true
+    }));
+    for (let attempt = 0; attempt < 20 && saveBodies.length < 2; attempt++) await flush();
+    assert.strictEqual(saveBodies.length, 2);
+    assert.strictEqual(saveBodies[1].patron.publicationOptions, null);
+    assert.strictEqual(saveBodies[1].workflow.commonAuthorsList, null);
+
+    dom.window.close();
+    console.log('Non-super-admin settings scope survives initial option population and save');
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+})().catch(error => {
+  console.error(error);
+  process.exit(1);
+});

@@ -1,0 +1,90 @@
+services:
+  sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: "${ASAP_REVIEW_SA_PASSWORD}"
+    volumes:
+      - sql-data:/var/opt/mssql
+    networks:
+      - review
+    restart: unless-stopped
+
+  db-init:
+    image: "asap-review-init:${ASAP_REVIEW_SHORT_SHA}"
+    build:
+      context: "${ASAP_REVIEW_SOURCE}"
+      dockerfile: ".review-harness/docker/Dockerfile"
+      target: db-init
+      args:
+        REVIEW_COMMIT_SHA: "${ASAP_REVIEW_SHA}"
+        REVIEW_TOOLING_VERSION: "${ASAP_REVIEW_TOOLING_VERSION}"
+    environment:
+      REVIEW_SQL_SERVER: "sql,1433"
+      REVIEW_SA_PASSWORD: "${ASAP_REVIEW_SA_PASSWORD}"
+      REVIEW_DATABASE_NAME: "AsapReview"
+      REVIEW_INPUT_CONFIG: "/review/input/review.json"
+      REVIEW_OUTPUT_CONFIG: "/review/config/application.json"
+      REVIEW_PFX_PATH: "/review/config/dataprotection.pfx"
+      REVIEW_PFX_PASSWORD_PATH: "/review/config/dataprotection-password.txt"
+      REVIEW_DACPAC_PATH: "/review/assets/Asap.Database.dacpac"
+      REVIEW_HANGFIRE_SCRIPT: "/review/assets/Hangfire/1.8.25/install.sql"
+      REVIEW_DATA_PROTECTION_PATH: "/review/dpkeys"
+    volumes:
+      - type: bind
+        source: "${ASAP_REVIEW_CONFIG}"
+        target: /review/input/review.json
+        read_only: true
+      - runtime-config:/review/config
+      - data-protection:/review/dpkeys
+    depends_on:
+      - sql
+    networks:
+      - review
+    restart: "no"
+
+  web:
+    image: "asap-review-web:${ASAP_REVIEW_SHORT_SHA}"
+    build:
+      context: "${ASAP_REVIEW_SOURCE}"
+      dockerfile: ".review-harness/docker/Dockerfile"
+      target: web
+      args:
+        REVIEW_COMMIT_SHA: "${ASAP_REVIEW_SHA}"
+        REVIEW_TOOLING_VERSION: "${ASAP_REVIEW_TOOLING_VERSION}"
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Testing"
+      ASPNETCORE_URLS: "https://+:8443"
+      ASPNETCORE_Kestrel__Certificates__Default__Path: "/review/tls/localhost.pfx"
+      ASPNETCORE_Kestrel__Certificates__Default__Password: "${ASAP_REVIEW_TLS_PASSWORD}"
+      Testing__UseDeterministicPatronProvider: "true"
+    ports:
+      - "127.0.0.1:${ASAP_REVIEW_PORT}:8443"
+    volumes:
+      - runtime-config:/review/config:ro
+      - data-protection:/review/dpkeys
+      - type: bind
+        source: "${ASAP_REVIEW_LOGS}"
+        target: /review/logs
+      - type: bind
+        source: "${ASAP_REVIEW_EMAIL}"
+        target: /app/.artifacts/dev-email
+      - type: bind
+        source: "${ASAP_REVIEW_TLS_CERTIFICATE}"
+        target: /review/tls/localhost.pfx
+        read_only: true
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - review
+    restart: unless-stopped
+
+networks:
+  review:
+
+volumes:
+  sql-data:
+  runtime-config:
+  data-protection:

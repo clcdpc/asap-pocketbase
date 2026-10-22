@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework Condition="'$(MSBuildProjectExtension)' == '.csproj'">net10.0</TargetFramework>
+    <Nullable Condition="'$(MSBuildProjectExtension)' == '.csproj'">enable</Nullable>
+    <ImplicitUsings Condition="'$(MSBuildProjectExtension)' == '.csproj'">enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <!-- Enforce the repository's safety-relevant style in shipped C# projects.
+         Existing test fixtures retain their formatting; new tests use braces. -->
+    <EnforceCodeStyleInBuild Condition="'$(MSBuildProjectExtension)' == '.csproj' and '$(MSBuildProjectName)' != 'Asap.Tests'">true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+</Project>

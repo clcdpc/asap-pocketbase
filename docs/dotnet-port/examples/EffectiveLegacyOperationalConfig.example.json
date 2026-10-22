@@ -1,0 +1,181 @@
+{
+  "contract": "effective legacy external cron and queue-processing configuration used for cutover parity",
+  "capturedFromPocketBaseSha": "150b30b776565194260cc327eeeffdfb46475e81",
+  "capturedAtUtc": "2026-09-11T00:00:00Z",
+  "schedules": {
+    "asap-hold-check": {
+      "value": "0 * * * *",
+      "provenance": "code_default",
+      "source": "ASAP_CRON_SCHEDULE",
+      "targetScheduleKey": "WorkflowProcessing"
+    },
+    "asap-organization-sync": {
+      "value": "0 2 * * *",
+      "provenance": "code_default",
+      "source": "ASAP_ORG_SYNC_CRON_SCHEDULE",
+      "targetScheduleKey": "OrganizationRefresh"
+    },
+    "asap-weekly-staff-action-summary": {
+      "value": "0 20 * * 0",
+      "provenance": "code_default",
+      "source": "ASAP_WEEKLY_STAFF_ACTION_SUMMARY_CRON_SCHEDULE",
+      "targetScheduleKey": "WeeklyStaffSummary"
+    },
+    "asap-isbn-check": {
+      "value": "*/5 * * * *",
+      "provenance": "code_default",
+      "source": "ASAP_ISBN_CHECK_CRON_SCHEDULE",
+      "targetScheduleKey": "IdentifierProcessing"
+    }
+  },
+  "processingLimits": {
+    "global": {
+      "pageSize": {
+        "value": 50,
+        "provenance": "code_default",
+        "source": "ASAP_JOB_PAGE_SIZE"
+      },
+      "maxPerRun": {
+        "value": 500,
+        "provenance": "code_default",
+        "source": "ASAP_JOB_MAX_PER_RUN"
+      }
+    },
+    "timeouts": {
+      "pageSize": {
+        "value": 50,
+        "provenance": "inherited_global",
+        "source": "ASAP_TIMEOUT_PAGE_SIZE"
+      },
+      "maxPerRun": {
+        "value": 500,
+        "provenance": "inherited_global",
+        "source": "ASAP_TIMEOUT_MAX_PER_RUN"
+      }
+    },
+    "effectiveQueues": {
+      "pending_suggestion_isbn_checks": {
+        "targetQueue": "IdentifierProcessing",
+        "pageSize": {
+          "value": 50,
+          "provenance": "inherited_global",
+          "queueOverrideSource": "ASAP_PENDING_SUGGESTION_ISBN_CHECKS_PAGE_SIZE"
+        },
+        "maxPerRun": {
+          "value": 500,
+          "provenance": "inherited_global",
+          "queueOverrideSource": "ASAP_PENDING_SUGGESTION_ISBN_CHECKS_MAX_PER_RUN"
+        },
+        "fallbackFamily": "global"
+      },
+      "outstanding_purchases": {
+        "targetQueue": "PurchasePromotion",
+        "pageSize": {
+          "value": 50,
+          "provenance": "inherited_global",
+          "queueOverrideSource": "ASAP_OUTSTANDING_PURCHASES_PAGE_SIZE"
+        },
+        "maxPerRun": {
+          "value": 500,
+          "provenance": "inherited_global",
+          "queueOverrideSource": "ASAP_OUTSTANDING_PURCHASES_MAX_PER_RUN"
+        },
+        "fallbackFamily": "global"
+      },
+      "pending_holds": {
+        "targetQueue": "HoldPlacement",
+        "pageSize": {
+          "value": 50,
+          "provenance": "inherited_global",
+          "queueOverrideSource": "ASAP_PENDING_HOLDS_PAGE_SIZE"
+        },
+        "maxPerRun": {
+          "value": 500,
+          "provenance": "inherited_global",
+          "queueOverrideSource": "ASAP_PENDING_HOLDS_MAX_PER_RUN"
+        },
+        "fallbackFamily": "global"
+      },
+      "checked_out": {
+        "targetQueue": "FulfillmentTracking",
+        "pageSize": {
+          "value": 50,
+          "provenance": "inherited_global",
+          "queueOverrideSource": "ASAP_CHECKED_OUT_PAGE_SIZE"
+        },
+        "maxPerRun": {
+          "value": 500,
+          "provenance": "inherited_global",
+          "queueOverrideSource": "ASAP_CHECKED_OUT_MAX_PER_RUN"
+        },
+        "fallbackFamily": "global"
+      },
+      "outstanding_timeout": {
+        "targetQueue": "OutstandingTimeout",
+        "pageSize": {
+          "value": 50,
+          "provenance": "inherited_timeout",
+          "queueOverrideSource": "ASAP_OUTSTANDING_TIMEOUT_PAGE_SIZE"
+        },
+        "maxPerRun": {
+          "value": 500,
+          "provenance": "inherited_timeout",
+          "queueOverrideSource": "ASAP_OUTSTANDING_TIMEOUT_MAX_PER_RUN"
+        },
+        "fallbackFamily": "timeouts"
+      },
+      "pending_hold_timeout": {
+        "targetQueue": "PendingHoldTimeout",
+        "pageSize": {
+          "value": 50,
+          "provenance": "inherited_timeout",
+          "queueOverrideSource": "ASAP_PENDING_HOLD_TIMEOUT_PAGE_SIZE"
+        },
+        "maxPerRun": {
+          "value": 500,
+          "provenance": "inherited_timeout",
+          "queueOverrideSource": "ASAP_PENDING_HOLD_TIMEOUT_MAX_PER_RUN"
+        },
+        "fallbackFamily": "timeouts"
+      },
+      "hold_pickup_timeout": {
+        "targetQueue": "HoldPickupTimeout",
+        "pageSize": {
+          "value": 50,
+          "provenance": "inherited_timeout",
+          "queueOverrideSource": "ASAP_HOLD_PICKUP_TIMEOUT_PAGE_SIZE"
+        },
+        "maxPerRun": {
+          "value": 500,
+          "provenance": "inherited_timeout",
+          "queueOverrideSource": "ASAP_HOLD_PICKUP_TIMEOUT_MAX_PER_RUN"
+        },
+        "fallbackFamily": "timeouts"
+      },
+      "additional_copy_timeout": {
+        "targetQueue": "AdditionalCopyTimeout",
+        "pageSize": {
+          "value": 50,
+          "provenance": "inherited_timeout",
+          "queueOverrideSource": "ASAP_ADDITIONAL_COPY_TIMEOUT_PAGE_SIZE"
+        },
+        "maxPerRun": {
+          "value": 500,
+          "provenance": "inherited_timeout",
+          "queueOverrideSource": "ASAP_ADDITIONAL_COPY_TIMEOUT_MAX_PER_RUN"
+        },
+        "fallbackFamily": "timeouts"
+      }
+    },
+    "obsoletePathOverrides": {
+      "pending_isbn_checks": {
+        "pageSize": null,
+        "maxPerRun": null,
+        "resolution": "retired_with_hourly_identifier_path; if explicitly configured in production, record an explicit transform decision before cutover",
+        "pageSizeEnvKey": "ASAP_PENDING_ISBN_CHECKS_PAGE_SIZE",
+        "maxPerRunEnvKey": "ASAP_PENDING_ISBN_CHECKS_MAX_PER_RUN"
+      }
+    },
+    "configuredQueueOverrides": {}
+  }
+}
