@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="786" viewBox="0 0 1700 786" role="img" aria-labelledby="ttl desc"><title id="ttl">Approved compact Title requests table design reference</title><desc id="desc">C# port requests list mockup with Barcode plus patron name and green add-request icon, Bibliographic details with distinct Polaris searches for title and author, Format, Submitted, Library, Claim, Status, and Actions; no Tags, Timing, or separate Patron columns.</desc>
+<rect x="0" y="0" width="1700" height="786" rx="0" fill="#f9fafb" stroke="none" stroke-width="1"/>
+<rect x="0" y="0" width="1700" height="46" rx="0" fill="#fff" stroke="none" stroke-width="1"/>
+<text x="32" y="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#006caa" >▤ Requests</text>
+<rect x="24" y="43" width="154" height="3" rx="0" fill="#007cba" stroke="none" stroke-width="1"/>
+<text x="196" y="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="17" font-weight="500" fill="#50627a" >▣ Additional copies</text>
+<text x="410" y="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="17" font-weight="500" fill="#50627a" >▥ Analytics</text>
+<text x="575" y="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="17" font-weight="500" fill="#50627a" >♙ Profile</text>
+<text x="718" y="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="17" font-weight="500" fill="#50627a" >⚙ Operations</text>
+<text x="900" y="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="17" font-weight="500" fill="#50627a" >☷ Settings</text>
+<line x1="26" y1="46" x2="1674" y2="46" stroke="#d9e1e9" stroke-width="1"/>
+<rect x="26" y="60" width="1648" height="45" rx="5" fill="#fff4da" stroke="none" stroke-width="1"/>
+<rect x="26" y="60" width="4" height="45" rx="0" fill="#d79710" stroke="none" stroke-width="1"/>
+<text x="48" y="89" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="500" fill="#8d5600" >Email delivery is not configured for this scope. Requests and staff workflows remain available.</text>
+<text x="26" y="151" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="27" font-weight="700" fill="#13283d" >Title requests</text>
+<text x="26" y="177" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#67778d" >5 requests</text>
+<text x="1390" y="133" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#506477" >Library scope</text>
+<rect x="1390" y="142" width="145" height="39" rx="4" fill="#fff" stroke="#a8b6c5" stroke-width="1"/>
+<text x="1462.5" y="166" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="500" fill="#1e354a" text-anchor="middle">Fairfield County</text>
+<rect x="1548" y="142" width="126" height="39" rx="4" fill="#056395" stroke="#056395" stroke-width="1"/>
+<text x="1611" y="166" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="600" fill="#fff" text-anchor="middle">+ New suggestion</text>
+<text x="39" y="225" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="700" fill="#006da9" >Suggestions (5)</text>
+<rect x="26" y="241" width="155" height="3" rx="0" fill="#007dbd" stroke="none" stroke-width="1"/>
+<text x="210" y="225" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="500" fill="#526277" >Purchases (0)</text>
+<text x="356" y="225" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="500" fill="#526277" >Pending holds (0)</text>
+<text x="557" y="225" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="500" fill="#526277" >Placed holds (0)</text>
+<text x="743" y="225" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="500" fill="#526277" >Closed (0)</text>
+<line x1="26" y1="245" x2="1674" y2="245" stroke="#d9e1e9" stroke-width="1"/>
+<rect x="26" y="264" width="1005" height="46" rx="5" fill="#fff" stroke="#b5c3d3" stroke-width="1"/>
+<circle cx="50" cy="284" r="7" fill="none" stroke="#38516b" stroke-width="2"/><path d="M55 289l8 8" stroke="#38516b" stroke-width="2"/>
+<text x="76" y="294" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="400" fill="#788799" >Search title, author, barcode, or identifier...</text>
+<text x="1045" y="257" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="13" font-weight="600" fill="#53657a" >Claims</text>
+<rect x="1045" y="267" width="176" height="43" rx="4" fill="#fff" stroke="#a8b6c5" stroke-width="1"/>
+<text x="1133" y="293" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="500" fill="#1e354a" text-anchor="middle">All claims</text>
+<text x="1235" y="257" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="13" font-weight="600" fill="#53657a" >Status</text>
+<rect x="1235" y="267" width="180" height="43" rx="4" fill="#fff" stroke="#a8b6c5" stroke-width="1"/>
+<text x="1325" y="293" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="500" fill="#1e354a" text-anchor="middle">All statuses</text>
+<rect x="1430" y="267" width="120" height="43" rx="4" fill="#fff" stroke="#a8b6c5" stroke-width="1"/>
+<text x="1490" y="293" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="500" fill="#1e354a" text-anchor="middle">↻ Reset</text>
+<rect x="26" y="330" width="1648" height="395" rx="5" fill="#fff" stroke="#d6e0e9" stroke-width="1"/>
+<rect x="26" y="330" width="1648" height="45" rx="5" fill="#f3f7fa" stroke="none" stroke-width="1"/>
+<text x="40" y="358" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="700" fill="#46586a" >Barcode</text>
+<text x="273" y="358" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="700" fill="#46586a" >Bibliographic details</text>
+<text x="711" y="358" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="700" fill="#46586a" >Format</text>
+<text x="822" y="358" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="700" fill="#46586a" >Submitted ↓</text>
+<text x="982" y="358" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="700" fill="#46586a" >Library</text>
+<text x="1176" y="358" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="700" fill="#46586a" >Claim</text>
+<text x="1338" y="358" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="700" fill="#46586a" >Status</text>
+<text x="1470" y="358" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="700" fill="#46586a" >Actions</text>
+<line x1="257" y1="330" x2="257" y2="725" stroke="#d9e1e9" stroke-width="1"/>
+<line x1="696" y1="330" x2="696" y2="725" stroke="#d9e1e9" stroke-width="1"/>
+<line x1="807" y1="330" x2="807" y2="725" stroke="#d9e1e9" stroke-width="1"/>
+<line x1="968" y1="330" x2="968" y2="725" stroke="#d9e1e9" stroke-width="1"/>
+<line x1="1160" y1="330" x2="1160" y2="725" stroke="#d9e1e9" stroke-width="1"/>
+<line x1="1323" y1="330" x2="1323" y2="725" stroke="#d9e1e9" stroke-width="1"/>
+<line x1="1454" y1="330" x2="1454" y2="725" stroke="#d9e1e9" stroke-width="1"/>
+<line x1="26" y1="375" x2="1674" y2="375" stroke="#d9e1e9" stroke-width="1"/>
+<rect x="27" y="376" width="1646" height="68" rx="0" fill="#edf8ff" stroke="none" stroke-width="1"/>
+<line x1="26" y1="445" x2="1674" y2="445" stroke="#d9e1e9" stroke-width="1"/>
+<text x="40" y="402" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="600" fill="#0277ce" >3331679583</text>
+<text x="40" y="427" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="400" fill="#54697d" >Patricia Hanna</text>
+<circle cx="234" cy="411" r="11" fill="#37aa67"/><path d="M229 411h10M234 406v10" stroke="white" stroke-width="2" stroke-linecap="round"/>
+<text x="274" y="402" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="600" fill="#182d41" >Mord Fall: Disciple</text>
+<text x="274" y="427" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#596b7f" >Rodwell Garfunkel</text>
+<circle cx="651" cy="398" r="5.5" fill="none" stroke="#0078de" stroke-width="2.5"/><line x1="655" y1="402" x2="660" y2="407" stroke="#0078de" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="651" cy="423" r="5.5" fill="none" stroke="#0078de" stroke-width="2.5"/><line x1="655" y1="427" x2="660" y2="432" stroke="#0078de" stroke-width="2.5" stroke-linecap="round"/>
+<text x="713" y="415" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#1f3447" >Book</text>
+<text x="823" y="404" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#1f3447" >10/17/2026</text>
+<text x="823" y="426" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="13" font-weight="400" fill="#64798d" >10:05 PM</text>
+<text x="981" y="415" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#203447" >Fairfield County</text>
+<rect x="1176" y="399" width="111" height="27" rx="5" fill="#f0f4f7" stroke="none" stroke-width="1"/>
+<text x="1231.5" y="417.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#52657b" text-anchor="middle">Unclaimed</text>
+<rect x="1341" y="399" width="72" height="27" rx="5" fill="#e8f3ff" stroke="none" stroke-width="1"/>
+<text x="1377" y="417.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#0070c9" text-anchor="middle">Open</text>
+<rect x="1470" y="391" width="90" height="39" rx="4" fill="#056395" stroke="#056395" stroke-width="1"/>
+<text x="1515" y="414.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#fff" text-anchor="middle">Purchase</text>
+<rect x="1566" y="391" width="66" height="39" rx="4" fill="#fff" stroke="#cc3845" stroke-width="1"/>
+<text x="1599" y="414.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="500" fill="#bc293a" text-anchor="middle">Reject</text>
+<rect x="1638" y="391" width="29" height="39" rx="4" fill="#fff" stroke="#a8b6c5" stroke-width="1"/>
+<text x="1652.5" y="416" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="17" font-weight="500" fill="#1e354a" text-anchor="middle">⋯</text>
+<line x1="26" y1="515" x2="1674" y2="515" stroke="#d9e1e9" stroke-width="1"/>
+<text x="40" y="472" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="600" fill="#0277ce" >3332004435</text>
+<text x="40" y="497" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="400" fill="#54697d" >Georgiana Van S...</text>
+<circle cx="234" cy="481" r="11" fill="#37aa67"/><path d="M229 481h10M234 476v10" stroke="white" stroke-width="2" stroke-linecap="round"/>
+<text x="274" y="472" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="600" fill="#182d41" >We Chase Shadows</text>
+<text x="274" y="497" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#596b7f" >Osman, Richard</text>
+<circle cx="651" cy="468" r="5.5" fill="none" stroke="#0078de" stroke-width="2.5"/><line x1="655" y1="472" x2="660" y2="477" stroke="#0078de" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="651" cy="493" r="5.5" fill="none" stroke="#0078de" stroke-width="2.5"/><line x1="655" y1="497" x2="660" y2="502" stroke="#0078de" stroke-width="2.5" stroke-linecap="round"/>
+<text x="713" y="485" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#1f3447" >Book</text>
+<text x="823" y="474" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#1f3447" >10/15/2026</text>
+<text x="823" y="496" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="13" font-weight="400" fill="#64798d" >2:14 PM</text>
+<text x="981" y="485" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#203447" >Fairfield County</text>
+<rect x="1176" y="469" width="111" height="27" rx="5" fill="#f0f4f7" stroke="none" stroke-width="1"/>
+<text x="1231.5" y="487.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#52657b" text-anchor="middle">Unclaimed</text>
+<rect x="1341" y="469" width="72" height="27" rx="5" fill="#e8f3ff" stroke="none" stroke-width="1"/>
+<text x="1377" y="487.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#0070c9" text-anchor="middle">Open</text>
+<rect x="1470" y="461" width="90" height="39" rx="4" fill="#056395" stroke="#056395" stroke-width="1"/>
+<text x="1515" y="484.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#fff" text-anchor="middle">Purchase</text>
+<rect x="1566" y="461" width="66" height="39" rx="4" fill="#fff" stroke="#cc3845" stroke-width="1"/>
+<text x="1599" y="484.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="500" fill="#bc293a" text-anchor="middle">Reject</text>
+<rect x="1638" y="461" width="29" height="39" rx="4" fill="#fff" stroke="#a8b6c5" stroke-width="1"/>
+<text x="1652.5" y="486" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="17" font-weight="500" fill="#1e354a" text-anchor="middle">⋯</text>
+<rect x="27" y="516" width="1646" height="68" rx="0" fill="#fbfdff" stroke="none" stroke-width="1"/>
+<line x1="26" y1="585" x2="1674" y2="585" stroke="#d9e1e9" stroke-width="1"/>
+<text x="40" y="542" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="600" fill="#0277ce" >3331563860</text>
+<text x="40" y="567" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="400" fill="#54697d" >Arlene Armstrong</text>
+<circle cx="234" cy="551" r="11" fill="#37aa67"/><path d="M229 551h10M234 546v10" stroke="white" stroke-width="2" stroke-linecap="round"/>
+<text x="274" y="542" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="600" fill="#182d41" >Salty, Not Sweet</text>
+<text x="274" y="567" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#596b7f" >Florence fabricant</text>
+<circle cx="651" cy="538" r="5.5" fill="none" stroke="#0078de" stroke-width="2.5"/><line x1="655" y1="542" x2="660" y2="547" stroke="#0078de" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="651" cy="563" r="5.5" fill="none" stroke="#0078de" stroke-width="2.5"/><line x1="655" y1="567" x2="660" y2="572" stroke="#0078de" stroke-width="2.5" stroke-linecap="round"/>
+<text x="713" y="555" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#1f3447" >Book</text>
+<text x="823" y="544" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#1f3447" >10/5/2026</text>
+<text x="823" y="566" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="13" font-weight="400" fill="#64798d" >11:32 AM</text>
+<text x="981" y="555" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#203447" >Fairfield County</text>
+<rect x="1176" y="539" width="111" height="27" rx="5" fill="#f0f4f7" stroke="none" stroke-width="1"/>
+<text x="1231.5" y="557.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#52657b" text-anchor="middle">Unclaimed</text>
+<rect x="1341" y="539" width="72" height="27" rx="5" fill="#e8f3ff" stroke="none" stroke-width="1"/>
+<text x="1377" y="557.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#0070c9" text-anchor="middle">Open</text>
+<rect x="1470" y="531" width="90" height="39" rx="4" fill="#056395" stroke="#056395" stroke-width="1"/>
+<text x="1515" y="554.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#fff" text-anchor="middle">Purchase</text>
+<rect x="1566" y="531" width="66" height="39" rx="4" fill="#fff" stroke="#cc3845" stroke-width="1"/>
+<text x="1599" y="554.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="500" fill="#bc293a" text-anchor="middle">Reject</text>
+<rect x="1638" y="531" width="29" height="39" rx="4" fill="#fff" stroke="#a8b6c5" stroke-width="1"/>
+<text x="1652.5" y="556" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="17" font-weight="500" fill="#1e354a" text-anchor="middle">⋯</text>
+<line x1="26" y1="655" x2="1674" y2="655" stroke="#d9e1e9" stroke-width="1"/>
+<text x="40" y="612" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="600" fill="#0277ce" >3331452437</text>
+<text x="40" y="637" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="400" fill="#54697d" >Patricia Rosenson</text>
+<circle cx="234" cy="621" r="11" fill="#37aa67"/><path d="M229 621h10M234 616v10" stroke="white" stroke-width="2" stroke-linecap="round"/>
+<text x="274" y="612" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="600" fill="#182d41" >Warrior Mom</text>
+<text x="274" y="637" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#596b7f" >Tracy Slepcevic</text>
+<circle cx="651" cy="608" r="5.5" fill="none" stroke="#0078de" stroke-width="2.5"/><line x1="655" y1="612" x2="660" y2="617" stroke="#0078de" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="651" cy="633" r="5.5" fill="none" stroke="#0078de" stroke-width="2.5"/><line x1="655" y1="637" x2="660" y2="642" stroke="#0078de" stroke-width="2.5" stroke-linecap="round"/>
+<text x="713" y="625" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#1f3447" >Book</text>
+<text x="823" y="614" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#1f3447" >10/1/2026</text>
+<text x="823" y="636" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="13" font-weight="400" fill="#64798d" >4:21 PM</text>
+<text x="981" y="625" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#203447" >Fairfield County</text>
+<rect x="1176" y="609" width="111" height="27" rx="5" fill="#f0f4f7" stroke="none" stroke-width="1"/>
+<text x="1231.5" y="627.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#52657b" text-anchor="middle">Unclaimed</text>
+<rect x="1341" y="609" width="72" height="27" rx="5" fill="#e8f3ff" stroke="none" stroke-width="1"/>
+<text x="1377" y="627.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#0070c9" text-anchor="middle">Open</text>
+<rect x="1470" y="601" width="90" height="39" rx="4" fill="#056395" stroke="#056395" stroke-width="1"/>
+<text x="1515" y="624.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#fff" text-anchor="middle">Purchase</text>
+<rect x="1566" y="601" width="66" height="39" rx="4" fill="#fff" stroke="#cc3845" stroke-width="1"/>
+<text x="1599" y="624.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="500" fill="#bc293a" text-anchor="middle">Reject</text>
+<rect x="1638" y="601" width="29" height="39" rx="4" fill="#fff" stroke="#a8b6c5" stroke-width="1"/>
+<text x="1652.5" y="626" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="17" font-weight="500" fill="#1e354a" text-anchor="middle">⋯</text>
+<rect x="27" y="656" width="1646" height="68" rx="0" fill="#fbfdff" stroke="none" stroke-width="1"/>
+<line x1="26" y1="725" x2="1674" y2="725" stroke="#d9e1e9" stroke-width="1"/>
+<text x="40" y="682" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="600" fill="#0277ce" >3331452437</text>
+<text x="40" y="707" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="400" fill="#54697d" >Patricia Rosenson</text>
+<circle cx="234" cy="691" r="11" fill="#37aa67"/><path d="M229 691h10M234 686v10" stroke="white" stroke-width="2" stroke-linecap="round"/>
+<text x="274" y="682" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="16" font-weight="600" fill="#182d41" >The Bequest</text>
+<text x="274" y="707" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#596b7f" >Andrew Wakefield</text>
+<circle cx="651" cy="678" r="5.5" fill="none" stroke="#0078de" stroke-width="2.5"/><line x1="655" y1="682" x2="660" y2="687" stroke="#0078de" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="651" cy="703" r="5.5" fill="none" stroke="#0078de" stroke-width="2.5"/><line x1="655" y1="707" x2="660" y2="712" stroke="#0078de" stroke-width="2.5" stroke-linecap="round"/>
+<text x="713" y="695" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#1f3447" >Book</text>
+<text x="823" y="684" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#1f3447" >10/1/2026</text>
+<text x="823" y="706" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="13" font-weight="400" fill="#64798d" >9:17 AM</text>
+<text x="981" y="695" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#203447" >Fairfield County</text>
+<rect x="1176" y="679" width="111" height="27" rx="5" fill="#f0f4f7" stroke="none" stroke-width="1"/>
+<text x="1231.5" y="697.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#52657b" text-anchor="middle">Unclaimed</text>
+<rect x="1341" y="679" width="72" height="27" rx="5" fill="#e8f3ff" stroke="none" stroke-width="1"/>
+<text x="1377" y="697.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#0070c9" text-anchor="middle">Open</text>
+<rect x="1470" y="671" width="90" height="39" rx="4" fill="#056395" stroke="#056395" stroke-width="1"/>
+<text x="1515" y="694.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#fff" text-anchor="middle">Purchase</text>
+<rect x="1566" y="671" width="66" height="39" rx="4" fill="#fff" stroke="#cc3845" stroke-width="1"/>
+<text x="1599" y="694.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="500" fill="#bc293a" text-anchor="middle">Reject</text>
+<rect x="1638" y="671" width="29" height="39" rx="4" fill="#fff" stroke="#a8b6c5" stroke-width="1"/>
+<text x="1652.5" y="696" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="17" font-weight="500" fill="#1e354a" text-anchor="middle">⋯</text>
+<text x="36" y="748" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#65788c" >Showing 1 to 5 of 5 requests</text>
+<text x="1315" y="748" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="14" font-weight="400" fill="#63778b" >Rows per page</text>
+<rect x="1420" y="718" width="78" height="38" rx="4" fill="#fff" stroke="#a8b6c5" stroke-width="1"/>
+<text x="1459" y="741.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="500" fill="#1e354a" text-anchor="middle">25</text>
+<rect x="1515" y="718" width="78" height="38" rx="4" fill="#fff" stroke="#a8b6c5" stroke-width="1"/>
+<text x="1554" y="741.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="500" fill="#1e354a" text-anchor="middle">Previous</text>
+<rect x="1596" y="718" width="31" height="38" rx="4" fill="#056395" stroke="#056395" stroke-width="1"/>
+<text x="1611.5" y="741.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="600" fill="#fff" text-anchor="middle">1</text>
+<rect x="1633" y="718" width="41" height="38" rx="4" fill="#fff" stroke="#a8b6c5" stroke-width="1"/>
+<text x="1653.5" y="741.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="15" font-weight="500" fill="#1e354a" text-anchor="middle">Next</text>
+</svg>
