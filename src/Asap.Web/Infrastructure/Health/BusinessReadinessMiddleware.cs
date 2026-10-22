@@ -6,7 +6,10 @@ public sealed class BusinessReadinessMiddleware(RequestDelegate next)
     {
         if (context.Request.Path.StartsWithSegments("/api/asap"))
         {
-            var result = await readiness.CheckAsync(context.RequestAborted);
+            // Settings and recovery APIs must remain reachable while integrations are
+            // being configured. Provider-dependent features validate at their boundary;
+            // deployment readiness additionally requires usable local Polaris settings.
+            var result = await readiness.CheckAsync(context.RequestAborted, requirePolarisConfiguration: false);
             if (!result.IsReady)
             {
                 context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;

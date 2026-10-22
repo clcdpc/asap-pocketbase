@@ -52,7 +52,7 @@ public sealed class BackgroundWorkflowJobs(
     [DisableConcurrentExecution(timeoutInSeconds: 1800)]
     [Queue("asap-admin")]
     public Task<WorkflowRunResult> SendWeeklyStaffSummaryAsync(
-        string? manualRunId,
+        Guid? manualRunId,
         int? scopeOrganizationId,
         CancellationToken cancellationToken) =>
         workflow.SendWeeklyStaffSummaryAsync(manualRunId, scopeOrganizationId, cancellationToken);
@@ -83,7 +83,7 @@ public sealed class BackgroundWorkflowJobs(
     public async Task<WorkflowRunResult> SendForcedWeeklyStaffSummaryAsync(
         StaffJobEvidence evidence,
         int? scopeOrganizationId,
-        string manualRunId,
+        Guid manualRunId,
         CancellationToken cancellationToken)
     {
         if (!await IsAuthorizedAsync(evidence, scopeOrganizationId, cancellationToken))

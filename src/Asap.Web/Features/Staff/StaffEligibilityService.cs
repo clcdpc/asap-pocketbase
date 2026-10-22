@@ -36,7 +36,8 @@ public sealed record CurrentStaff(
     bool PurchaseReminderDefault,
     bool AdditionalCopyReminderDefault,
     bool DefaultMineUnclaimedFilter,
-    byte[] RowVersion);
+    byte[] RowVersion,
+    int? OrganizationCodeId = null);
 
 public sealed record StaffEligibilityResult(
     StaffEligibilityOutcome Outcome,
@@ -51,10 +52,46 @@ public sealed class StaffEligibilityService(
         .Select(Guid.Parse)
         .ToHashSet();
 
-    public bool IsAssignmentEligible(StaffUser row, int organizationId) =>
-        row.IsActive && HasValidAuthenticationEmail(row) &&
-        (row.Role == "super_admin" && row.OrganizationId == 1 ||
-         row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
+    public static bool IsAssignmentEligible(StaffUser row, int organizationId) =>
+        row.IsActive && HasValidAuthenticationEmail(row) && IsValidRoleOrganization(row.Role, row.OrganizationId) &&
+        CanAccess(row.Role, row.OrganizationId, organizationId);
+
+    public bool IsCurrentIdentity(StaffIdentityEvidence evidence, StaffUser row) =>
+        row.Id == evidence.StaffUserId && row.IsActive && evidence.TenantId != Guid.Empty &&
+        allowedTenantIds.Contains(evidence.TenantId) && StaffEmail.MatchesAuthenticationEmail(row, evidence.AuthenticationEmail);
+
+    public bool IsCurrentIdentity(CurrentStaff ticket, StaffUser row) =>
+        IsCurrentIdentity(new StaffIdentityEvidence(ticket.Id, ticket.AuthenticationEmail, ticket.EntraTenantId), row);
+
+    public bool IsCurrentAndEligible(CurrentStaff ticket, StaffUser row, int organizationId,
+        StaffRoleRequirement requirement = StaffRoleRequirement.Any) =>
+        IsCurrentIdentity(ticket, row) && IsAssignmentEligible(row, organizationId) && RoleMeets(row.Role, requirement);
+
+    public bool IsCurrentAndEligible(StaffIdentityEvidence evidence, StaffUser row, int organizationId,
+        StaffRoleRequirement requirement) =>
+        IsCurrentIdentity(evidence, row) && IsAssignmentEligible(row, organizationId) && RoleMeets(row.Role, requirement);
+
+    public static bool HasLockedActiveOrganization(AsapDbContext context, StaffUser row) =>
+        context.Organizations.Local.SingleOrDefault(item => item.Id == row.OrganizationId) is { } organization &&
+        (row.Role == StaffRole.SuperAdmin
+            ? OrganizationAuthority.IsActiveScope(organization) && organization.Id == LibraryScope.SystemOrganizationId
+            : OrganizationAuthority.IsActiveLibrary(organization));
+
+    public static async Task<bool> LockOrganizationsAsync(
+        AsapDbContext context, IEnumerable<int> organizationIds, CancellationToken cancellationToken)
+    {
+        foreach (var id in organizationIds.Distinct().Order())
+        {
+            var organization = await context.Organizations.FromSqlInterpolated(
+                $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {id}")
+                .SingleOrDefaultAsync(cancellationToken);
+            if (organization is null)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 
     public async Task<StaffEligibilityResult> EvaluateAsync(
         StaffIdentityEvidence evidence,
@@ -198,7 +235,8 @@ public sealed class StaffEligibilityService(
             row.PurchaseReminderDefault,
             row.AdditionalCopyReminderDefault,
             row.DefaultMineUnclaimedFilter,
-            row.RowVersion);
+            row.RowVersion,
+            organization.OrganizationCodeId);
 
         var result = await EvaluateLoadedAsync(
             context,
@@ -209,7 +247,9 @@ public sealed class StaffEligibilityService(
             cancellationToken);
         return result.Outcome == StaffEligibilityOutcome.Allowed &&
                requireActorParticipation &&
-               !current.OrganizationIsActive
+               !(row.Role == StaffRole.SuperAdmin
+                   ? OrganizationAuthority.IsActiveScope(organization)
+                   : OrganizationAuthority.IsActiveLibrary(organization))
             ? Forbidden()
             : result;
     }
@@ -218,7 +258,7 @@ public sealed class StaffEligibilityService(
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var candidates = await context.StaffUsers.AsNoTracking()
-            .Where(item => item.IsActive && item.Role == "super_admin" && item.OrganizationId == 1)
+            .Where(item => item.IsActive && item.Role == StaffRole.SuperAdmin && item.OrganizationId == LibraryScope.SystemOrganizationId)
             .Select(item => new { item.UserPrincipalName, item.NormalizedUserPrincipalName })
             .ToListAsync(cancellationToken);
         return candidates.Any(item => HasValidAuthenticationEmail(
@@ -235,8 +275,20 @@ public sealed class StaffEligibilityService(
         CancellationToken cancellationToken)
     {
         if (!IsValidRoleOrganization(row.Role, row.OrganizationId) ||
+            !HasRoleOrganizationAuthority(row.Role, row.OrganizationId, row.OrganizationCodeId) ||
             !RoleMeets(row.Role, roleRequirement) ||
             (requestedOrganizationId.HasValue && !CanAccess(row, requestedOrganizationId.Value)))
+        {
+            return Forbidden();
+        }
+
+        if (requestedOrganizationId.HasValue &&
+            !await context.Organizations.AsNoTracking().AnyAsync(
+                item => item.Id == requestedOrganizationId.Value &&
+                        (item.Id == LibraryScope.SystemOrganizationId ||
+                         item.Id > LibraryScope.SystemOrganizationId &&
+                         item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId),
+                cancellationToken))
         {
             return Forbidden();
         }
@@ -244,11 +296,16 @@ public sealed class StaffEligibilityService(
         if (requireParticipation)
         {
             var participationOrganizationId = requestedOrganizationId ??
-                (row.Role == "super_admin" ? 1 : row.OrganizationId);
+                (row.Role == StaffRole.SuperAdmin ? LibraryScope.SystemOrganizationId : row.OrganizationId);
             var isActive = participationOrganizationId == row.OrganizationId
-                ? row.OrganizationIsActive
+                ? row.Role == StaffRole.SuperAdmin
+                    ? row.OrganizationIsActive && participationOrganizationId == LibraryScope.SystemOrganizationId
+                    : row.OrganizationIsActive && row.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId
                 : await context.Organizations.AsNoTracking()
-                    .Where(item => item.Id == participationOrganizationId)
+                    .Where(item => item.Id == participationOrganizationId &&
+                                   (item.Id == LibraryScope.SystemOrganizationId ||
+                                    item.Id > LibraryScope.SystemOrganizationId &&
+                                    item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId))
                     .Select(item => item.IsActive)
                     .SingleOrDefaultAsync(cancellationToken);
             if (!isActive)
@@ -268,7 +325,11 @@ public sealed class StaffEligibilityService(
         await (from staff in context.StaffUsers.AsNoTracking()
          join organization in context.Organizations.AsNoTracking()
              on staff.OrganizationId equals organization.Id
-         where staff.Id == staffUserId && staff.IsActive
+         where staff.Id == staffUserId && staff.IsActive &&
+               (staff.Role == StaffRole.SuperAdmin && organization.Id == LibraryScope.SystemOrganizationId ||
+                (staff.Role == StaffRole.Staff || staff.Role == StaffRole.Admin) &&
+                organization.Id > LibraryScope.SystemOrganizationId &&
+                organization.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId)
          select new { Staff = staff, Organization = organization })
         .SingleOrDefaultAsync(cancellationToken) is { } loaded &&
         StaffEmail.TryNormalizeAuthenticationEmail(
@@ -295,7 +356,8 @@ public sealed class StaffEligibilityService(
                 loaded.Staff.PurchaseReminderDefault,
                 loaded.Staff.AdditionalCopyReminderDefault,
                 loaded.Staff.DefaultMineUnclaimedFilter,
-                loaded.Staff.RowVersion)
+                loaded.Staff.RowVersion,
+                loaded.Organization.OrganizationCodeId)
             : null;
 
     private static bool HasValidAuthenticationEmail(StaffUser row) =>
@@ -305,21 +367,31 @@ public sealed class StaffEligibilityService(
         StaffEmail.TryNormalizeAuthenticationEmail(email, out _, out var expectedNormalizedEmail) &&
         string.Equals(expectedNormalizedEmail, normalizedEmail, StringComparison.Ordinal);
 
-    private static bool IsValidRoleOrganization(string role, int organizationId) =>
-        role == "super_admin" ? organizationId == 1 :
-        role is "staff" or "admin" && organizationId != 1;
+    public static bool IsValidRoleOrganization(string role, int organizationId) =>
+        role == StaffRole.SuperAdmin ? organizationId == LibraryScope.SystemOrganizationId :
+        role is StaffRole.Staff or StaffRole.Admin && organizationId > LibraryScope.SystemOrganizationId;
 
-    private static bool RoleMeets(string role, StaffRoleRequirement requirement) => requirement switch
+    public static bool RoleMeets(string role, StaffRoleRequirement requirement) => requirement switch
     {
-        StaffRoleRequirement.Any => role is "staff" or "admin" or "super_admin",
-        StaffRoleRequirement.Admin => role is "admin" or "super_admin",
-        StaffRoleRequirement.SuperAdmin => role == "super_admin",
+        StaffRoleRequirement.Any => role is StaffRole.Staff or StaffRole.Admin or StaffRole.SuperAdmin,
+        StaffRoleRequirement.Admin => role is StaffRole.Admin or StaffRole.SuperAdmin,
+        StaffRoleRequirement.SuperAdmin => role == StaffRole.SuperAdmin,
         _ => false
     };
 
-    private static bool CanAccess(CurrentStaff staff, int organizationId) =>
-        staff.Role == "super_admin" ||
-        (organizationId != 1 && staff.OrganizationId == organizationId);
+    public static bool CanAccess(CurrentStaff staff, int organizationId) =>
+        IsValidRoleOrganization(staff.Role, staff.OrganizationId) &&
+        HasRoleOrganizationAuthority(staff.Role, staff.OrganizationId, staff.OrganizationCodeId) &&
+        CanAccess(staff.Role, staff.OrganizationId, organizationId);
+
+    private static bool HasRoleOrganizationAuthority(string role, int organizationId, int? organizationCodeId) =>
+        role == StaffRole.SuperAdmin
+            ? organizationId == LibraryScope.SystemOrganizationId
+            : OrganizationAuthority.IsLibrary(organizationId, organizationCodeId);
+
+    private static bool CanAccess(string role, int actorOrganizationId, int organizationId) =>
+        organizationId > 0 && (role == StaffRole.SuperAdmin ||
+            organizationId > LibraryScope.SystemOrganizationId && actorOrganizationId == organizationId);
 
     private static StaffEligibilityResult Invalid() =>
         new(StaffEligibilityOutcome.InvalidIdentity, null, "staff_session_invalid");

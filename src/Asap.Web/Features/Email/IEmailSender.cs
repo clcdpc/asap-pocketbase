@@ -9,11 +9,20 @@ public interface IEmailSender
     Task<EmailSendResult> SendAsync(EmailEnvelope envelope, CancellationToken cancellationToken);
 }
 
-public sealed record EmailTransportReadiness(bool IsConfigured)
+// Expected transport/configuration failures are normalized at the email adapter boundary.
+public sealed class EmailOperationalException(string message, Exception? innerException = null)
+    : Exception(message, innerException);
+
+public sealed record EmailTransportReadiness(bool IsConfigured, bool IsLiveDelivery = true)
 {
+    public string DeliveryMode { get; init; } = IsLiveDelivery ? "postmark" : "non_delivery";
     public static EmailTransportReadiness Configured { get; } = new(true);
 
     public static EmailTransportReadiness NotConfigured { get; } = new(false);
+
+    public static EmailTransportReadiness LocalCapture { get; } = new(true, false) { DeliveryMode = "file" };
+
+    public static EmailTransportReadiness Sandbox { get; } = new(true, false) { DeliveryMode = "postmark_sandbox" };
 }
 
 public sealed record EmailEnvelope(
@@ -25,20 +34,29 @@ public sealed record EmailEnvelope(
     string? FromName,
     string Subject,
     string? BodyText,
-    string? BodyHtml);
+    string? BodyHtml)
+{
+    public string? TestConfigurationVersion { get; init; }
+    public string? IntendedDeliveryMode { get; init; }
+}
 
 public enum EmailSendOutcome
 {
     Sent,
-    NotConfigured
+    NotConfigured,
+    ConfigurationChanged
 }
 
 public sealed record EmailSendResult(EmailSendOutcome Outcome, string? ProviderMessageId)
 {
+    public string? DeliveryMode { get; init; }
     public EmailSendResult(string providerMessageId) : this(EmailSendOutcome.Sent, providerMessageId)
     {
     }
 
     public static EmailSendResult NotConfigured { get; } =
         new(EmailSendOutcome.NotConfigured, null);
+
+    public static EmailSendResult ConfigurationChanged { get; } =
+        new(EmailSendOutcome.ConfigurationChanged, null);
 }

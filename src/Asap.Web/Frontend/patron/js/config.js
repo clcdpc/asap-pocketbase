@@ -111,7 +111,10 @@ export function normalizePublicationOptions(options) {
     .filter(option => !(option && typeof option === 'object') || option.enabled !== false)
     .map(option => String(option && typeof option === 'object' ? option.label : option || '').trim())
     .filter(Boolean);
-  return cleaned.length ? Array.from(new Set(cleaned)) : defaultPublicationOptions.slice();
+  if (cleaned.length === 0 && !Array.isArray(options)) {
+    return defaultPublicationOptions.slice();
+  }
+  return Array.from(new Set(cleaned));
 }
 
 export function setPublicationOptions(options) {

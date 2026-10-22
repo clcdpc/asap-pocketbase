@@ -70,6 +70,10 @@ public static partial class ExternalConfigurationValidator
         ValidateEntra(value.Authentication.Entra, errors);
         ValidateApplication(value.Application, errors);
         ValidateRecipientDomains(value.EmailSafety.AllowedRecipientDomains, errors);
+        if (value.EmailSafety.DeliveryMode is not ("capture" or "postmark"))
+        {
+            errors.Add("email_delivery_mode_invalid");
+        }
         ValidatePatronLoginRateLimit(value.PatronLoginRateLimit, errors);
         ValidateHangfire(value.Hangfire, errors);
 

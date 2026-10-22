@@ -1,5 +1,33 @@
 # Pinned Migration Boundary Notes
 
+## Built-in patron email defaults
+
+The DACPAC inserts missing System rows for `suggestion_submitted`,
+`purchase_approved`, `already_owned`, `hold_placed`, and `rejected`, in that
+order. It never updates an existing template, including old seeded copy,
+administrator copy, intentional blanks, hidden rows, or library overrides.
+Migration retains exact source keys, source identities, nullable override
+values and parent relationships. Reconciliation independently permits only
+the five pinned defaults plus mapped source rows and checks every default
+that was not replaced by a source System row.
+For an otherwise eligible target upgraded from the old one-template DACPAC,
+the independent verifier also accepts the exact historical submission body
+with its automatic-hold paragraph. All other seed metadata stays pinned;
+arbitrary edits, near matches and extra rows remain reconciliation failures.
+
+New defaults preserve the established legacy copy with three factual changes:
+submission omits the paragraph promising an automatic hold; purchase approval
+keeps the ordering/cataloging sentence and omits the following automatic-hold
+sentence; already-owned omits the sentence claiming a hold was placed. These
+workflows can validly complete with AutoHold disabled or before hold creation.
+The configured purchase, already-owned and rejection fallbacks use the same
+new copy. No saved content or delivery policy is rewritten.
+
+`hold_placed` is a populated editor default without a configured-template
+dispatch consumer. The existing hold notice continues to use its confirmed
+operation and frozen pickup information. Seeding this editor does not change
+that notice or add a new delivery path.
+
 Read-only preparation and acceptance context, not completion evidence. Source
 is exact PocketBase `150b30b776565194260cc327eeeffdfb46475e81`. These notes
 complement the source/schema notes for each domain and do not replace the

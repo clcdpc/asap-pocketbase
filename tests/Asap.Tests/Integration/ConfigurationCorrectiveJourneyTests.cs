@@ -2,6 +2,7 @@ using System.Text.Json;
 using Asap.Web.Features.Administration;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
+using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -12,6 +13,287 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    public async Task FailedPolarisOrganizationFetchReportsDependencyFailureWithoutLocalWrite()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        await using var failingFactory = CreateApplicationFactory(
+            configurationPath, new FailingOrganizationReferenceProvider());
+        using var client = failingFactory.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        var service = failingFactory.Services.GetRequiredService<AdministrationService>();
+        async Task<string?> VersionAsync() => JsonSerializer.SerializeToElement(
+            (await service.GetSettingsAsync(actor, LibraryScope.System, CancellationToken.None)).Data)
+            .GetProperty("version").GetString();
+        var before = await VersionAsync();
+        using var response = await client.PostAsync("/api/asap/staff/organizations/sync", null);
+        Assert.AreEqual(System.Net.HttpStatusCode.BadGateway, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("polaris_unavailable", body.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(before, await VersionAsync());
+    }
+
+    private sealed class FailingOrganizationReferenceProvider : IPolarisReferenceProvider
+    {
+        public Task<PolarisConnectionTestResult> TestConnectionAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new PolarisConnectionTestResult(false, 0));
+
+        public Task<IReadOnlyList<PolarisOrganizationSnapshot>> GetOrganizationsAsync(CancellationToken cancellationToken) =>
+            throw new PolarisOperationalException("testing_organization_failure", "Organization fetch failed.");
+
+        public Task<IReadOnlyList<PolarisPatronCodeSnapshot>> GetPatronCodesAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<PolarisPatronCodeSnapshot>>([]);
+    }
+
+    [TestMethod]
+    public async Task RepeatedScopedSetSavePreservesRowsAndDoesNotCreateEmptyOverrides()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var administration = factory.Services.GetRequiredService<AdministrationService>();
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        const int organizationId = 91906;
+        await using var context = await contextFactory.CreateDbContextAsync();
+        context.Organizations.Add(new Organization
+        {
+            Id = organizationId, DisplayName = "Set preservation", OrganizationCodeId = 2,
+            ParentOrganizationId = 1, IsActive = true
+        });
+        await context.SaveChangesAsync();
+        async Task<string> VersionAsync() => JsonSerializer.SerializeToElement(
+            (await administration.GetSettingsAsync(actor, LibraryScope.ForLibrary(organizationId), CancellationToken.None)).Data)
+            .GetProperty("version").GetString()!;
+        try
+        {
+            var version = await VersionAsync();
+            var first = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor, JsonSerializer.SerializeToElement(new
+            {
+                orgId = organizationId.ToString(), version,
+                workflow = new { commonCreators = new[] { "Creator A" }, allowedPatronCodeIds = new[] { "1" } },
+                patron = new { publicationOptions = new[] { new { key = "year", label = "Year", enabled = true, sortOrder = 10 } } }
+            })), CancellationToken.None);
+            Assert.AreEqual("saved", first.Code);
+            version = await VersionAsync();
+            var creatorId = await context.CommonCreatorTerms.Where(item => item.OrganizationId == organizationId)
+                .Select(item => item.Id).SingleAsync();
+            var optionId = await context.PublicationOptions.Where(item => item.OrganizationId == organizationId)
+                .Select(item => item.Id).SingleAsync();
+            var creatorVersion = await context.CommonCreatorSets.Where(item => item.OrganizationId == organizationId)
+                .Select(item => item.RowVersion).SingleAsync();
+            var patronCodeVersion = await context.PatronCodeEligibilitySets.Where(item => item.OrganizationId == organizationId)
+                .Select(item => item.RowVersion).SingleAsync();
+            var publicationVersion = await context.PublicationOptionSets.Where(item => item.OrganizationId == organizationId)
+                .Select(item => item.RowVersion).SingleAsync();
+            var second = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor, JsonSerializer.SerializeToElement(new
+            {
+                orgId = organizationId.ToString(), version,
+                workflow = new { commonCreators = new[] { "Creator A" }, allowedPatronCodeIds = new[] { "1" } },
+                patron = new { publicationOptions = new[] { new { key = "year", label = "Year", enabled = true, sortOrder = 10 } } }
+            })), CancellationToken.None);
+            Assert.AreEqual("saved", second.Code);
+            Assert.AreEqual(version, await VersionAsync());
+            Assert.AreEqual(creatorId, await context.CommonCreatorTerms.Where(item => item.OrganizationId == organizationId)
+                .Select(item => item.Id).SingleAsync());
+            Assert.AreEqual(optionId, await context.PublicationOptions.Where(item => item.OrganizationId == organizationId)
+                .Select(item => item.Id).SingleAsync());
+            CollectionAssert.AreEqual(creatorVersion, await context.CommonCreatorSets.Where(item => item.OrganizationId == organizationId)
+                .Select(item => item.RowVersion).SingleAsync());
+            CollectionAssert.AreEqual(patronCodeVersion, await context.PatronCodeEligibilitySets.Where(item => item.OrganizationId == organizationId)
+                .Select(item => item.RowVersion).SingleAsync());
+            CollectionAssert.AreEqual(publicationVersion, await context.PublicationOptionSets.Where(item => item.OrganizationId == organizationId)
+                .Select(item => item.RowVersion).SingleAsync());
+            Assert.IsFalse(await context.WorkflowSettings.AnyAsync(item => item.OrganizationId == organizationId));
+            Assert.IsFalse(await context.PatronSettings.AnyAsync(item => item.OrganizationId == organizationId));
+            Assert.IsFalse(await context.EmailSettings.AnyAsync(item => item.OrganizationId == organizationId));
+
+            var empty = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor, JsonSerializer.SerializeToElement(new
+            {
+                orgId = organizationId.ToString(), version = await VersionAsync(),
+                workflow = new { commonCreators = Array.Empty<string>(), allowedPatronCodeIds = Array.Empty<int>() },
+                patron = new { publicationOptions = Array.Empty<object>() }
+            })), CancellationToken.None);
+            Assert.AreEqual("saved", empty.Code);
+            var emptySettings = JsonSerializer.SerializeToElement(
+                (await administration.GetSettingsAsync(actor, LibraryScope.ForLibrary(organizationId), CancellationToken.None)).Data);
+            var emptyOverrides = emptySettings.GetProperty("stored").GetProperty("libraryOverride");
+            Assert.IsTrue(emptyOverrides.GetProperty("commonCreators").GetProperty("exists").GetBoolean());
+            Assert.IsTrue(emptyOverrides.GetProperty("allowedPatronCodeIds").GetProperty("exists").GetBoolean());
+            Assert.IsTrue(emptyOverrides.GetProperty("publicationOptions").GetProperty("exists").GetBoolean());
+            Assert.AreEqual(0, emptyOverrides.GetProperty("commonCreators").GetProperty("values").GetArrayLength());
+            Assert.AreEqual(0, emptyOverrides.GetProperty("allowedPatronCodeIds").GetProperty("values").GetArrayLength());
+            Assert.AreEqual(0, emptyOverrides.GetProperty("publicationOptions").GetProperty("values").GetArrayLength());
+            Assert.IsTrue(await context.PatronCodeEligibilitySets.AnyAsync(item => item.OrganizationId == organizationId));
+            Assert.IsFalse(await context.PatronCodeEligibilityMembers.AnyAsync(item => item.OrganizationId == organizationId));
+            var configurations = factory.Services.GetRequiredService<PatronConfigurationService>();
+            var effectiveEmpty = await configurations.GetAsync(organizationId, CancellationToken.None);
+            Assert.AreEqual(0, effectiveEmpty!.CommonCreators.Count);
+            Assert.AreEqual(0, effectiveEmpty.AllowedPatronCodeIds.Count);
+            Assert.AreEqual(0, effectiveEmpty.PublicationOptions.Count);
+
+            var reset = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor, JsonSerializer.SerializeToElement(new
+            {
+                orgId = organizationId.ToString(), version = await VersionAsync(),
+                workflow = new { commonCreators = (string[]?)null, allowedPatronCodeIds = (int[]?)null },
+                patron = new { publicationOptions = (object[]?)null }
+            })), CancellationToken.None);
+            Assert.AreEqual("saved", reset.Code);
+            var resetSettings = JsonSerializer.SerializeToElement(
+                (await administration.GetSettingsAsync(actor, LibraryScope.ForLibrary(organizationId), CancellationToken.None)).Data);
+            var resetOverrides = resetSettings.GetProperty("stored").GetProperty("libraryOverride");
+            Assert.IsFalse(resetOverrides.GetProperty("commonCreators").GetProperty("exists").GetBoolean());
+            Assert.IsFalse(resetOverrides.GetProperty("allowedPatronCodeIds").GetProperty("exists").GetBoolean());
+            Assert.IsFalse(resetOverrides.GetProperty("publicationOptions").GetProperty("exists").GetBoolean());
+            Assert.IsFalse(await context.PatronCodeEligibilitySets.AnyAsync(item => item.OrganizationId == organizationId));
+            var inherited = await configurations.GetAsync(organizationId, CancellationToken.None);
+            var system = await configurations.GetAsync(1, CancellationToken.None);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(system!.PageTitle));
+            CollectionAssert.AreEqual(system!.CommonCreators.ToArray(), inherited!.CommonCreators.ToArray());
+            CollectionAssert.AreEquivalent(system!.AllowedPatronCodeIds.ToArray(), inherited!.AllowedPatronCodeIds.ToArray());
+            CollectionAssert.AreEqual(system.PublicationOptions.ToArray(), inherited.PublicationOptions.ToArray());
+
+            var blankText = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor, JsonSerializer.SerializeToElement(new
+            {
+                orgId = organizationId.ToString(), version = await VersionAsync(),
+                patron = new { pageTitle = "   " }
+            })), CancellationToken.None);
+            Assert.AreEqual("saved", blankText.Code);
+            Assert.IsFalse(await context.PatronSettings.AnyAsync(item => item.OrganizationId == organizationId));
+            Assert.AreEqual(system.PageTitle,
+                (await configurations.GetAsync(organizationId, CancellationToken.None))!.PageTitle);
+        }
+        finally
+        {
+            context.CommonCreatorTerms.RemoveRange(context.CommonCreatorTerms.Where(item => item.OrganizationId == organizationId));
+            context.CommonCreatorSets.RemoveRange(context.CommonCreatorSets.Where(item => item.OrganizationId == organizationId));
+            context.PatronCodeEligibilityMembers.RemoveRange(context.PatronCodeEligibilityMembers.Where(item => item.OrganizationId == organizationId));
+            context.PatronCodeEligibilitySets.RemoveRange(context.PatronCodeEligibilitySets.Where(item => item.OrganizationId == organizationId));
+            context.PublicationOptions.RemoveRange(context.PublicationOptions.Where(item => item.OrganizationId == organizationId));
+            context.PublicationOptionSets.RemoveRange(context.PublicationOptionSets.Where(item => item.OrganizationId == organizationId));
+            context.AdministrativeAudits.RemoveRange(context.AdministrativeAudits.Where(item => item.OrganizationId == organizationId));
+            await context.SaveChangesAsync();
+            context.Organizations.Remove(await context.Organizations.SingleAsync(item => item.Id == organizationId));
+            await context.SaveChangesAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task SystemNullClearsCommonCreatorsAndPublicationOptionsToEmptySets()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var administration = factory.Services.GetRequiredService<AdministrationService>();
+
+        async Task<JsonElement> ReadSystemAsync() => JsonSerializer.SerializeToElement(
+            (await administration.GetSettingsAsync(actor, LibraryScope.System, CancellationToken.None)).Data);
+
+        static (string Id, string Label, bool Enabled, int SortOrder)[] ReadOptions(JsonElement settings) => settings
+            .GetProperty("stored").GetProperty("configuredSystem").GetProperty("publicationOptions")
+            .GetProperty("values").EnumerateArray()
+            .Select(item => (
+                item.GetProperty("id").GetString()!,
+                item.GetProperty("label").GetString()!,
+                item.GetProperty("enabled").GetBoolean(),
+                item.GetProperty("sortOrder").GetInt32()))
+            .ToArray();
+
+        var original = await ReadSystemAsync();
+        var originalCreatorsSnapshot = original.GetProperty("stored").GetProperty("configuredSystem").GetProperty("commonCreators");
+        var originalOptionsSnapshot = original.GetProperty("stored").GetProperty("configuredSystem").GetProperty("publicationOptions");
+        Assert.IsTrue(originalCreatorsSnapshot.GetProperty("exists").GetBoolean());
+        Assert.IsTrue(originalOptionsSnapshot.GetProperty("exists").GetBoolean());
+        var originalCreators = originalCreatorsSnapshot.GetProperty("values").EnumerateArray()
+            .Select(item => item.GetProperty("value").GetString()!).ToArray();
+        var originalOptions = originalOptionsSnapshot.GetProperty("values").EnumerateArray()
+            .Select(item => new
+            {
+                id = item.GetProperty("id").GetString()!,
+                label = item.GetProperty("label").GetString()!,
+                enabled = item.GetProperty("enabled").GetBoolean(),
+                sortOrder = item.GetProperty("sortOrder").GetInt32()
+            }).ToArray();
+        var changed = false;
+
+        async Task RestoreSystemSetsAsync()
+        {
+            var latest = await ReadSystemAsync();
+            var restored = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor,
+                JsonSerializer.SerializeToElement(new
+                {
+                    orgId = "system",
+                    version = latest.GetProperty("version").GetString(),
+                    workflow = new { commonAuthorsList = originalCreators },
+                    patron = new { publicationOptions = originalOptions }
+                })), CancellationToken.None);
+            Assert.AreEqual("saved", restored.Code);
+            changed = false;
+        }
+
+        try
+        {
+            changed = true;
+            var seeded = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor,
+                JsonSerializer.SerializeToElement(new
+                {
+                    orgId = "system",
+                    version = original.GetProperty("version").GetString(),
+                    workflow = new { commonAuthorsList = new[] { $"System null clear {Guid.NewGuid():N}" } },
+                    patron = new
+                    {
+                        publicationOptions = new[]
+                        {
+                            new
+                            {
+                                id = $"system_null_{Guid.NewGuid():N}",
+                                label = "System null clear option",
+                                enabled = true,
+                                sortOrder = 10
+                            }
+                        }
+                    }
+                })), CancellationToken.None);
+            Assert.AreEqual("saved", seeded.Code);
+
+            var beforeClear = await ReadSystemAsync();
+            var cleared = await administration.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor,
+                JsonSerializer.SerializeToElement(new
+                {
+                    orgId = "system",
+                    version = beforeClear.GetProperty("version").GetString(),
+                    workflow = new { commonAuthorsList = (string[]?)null },
+                    patron = new { publicationOptions = (object[]?)null }
+                })), CancellationToken.None);
+            Assert.AreEqual("saved", cleared.Code);
+
+            var empty = await ReadSystemAsync();
+            var configuredSystem = empty.GetProperty("stored").GetProperty("configuredSystem");
+            Assert.IsTrue(configuredSystem.GetProperty("commonCreators").GetProperty("exists").GetBoolean());
+            Assert.AreEqual(0, configuredSystem.GetProperty("commonCreators").GetProperty("values").GetArrayLength());
+            Assert.IsTrue(configuredSystem.GetProperty("publicationOptions").GetProperty("exists").GetBoolean());
+            Assert.AreEqual(0, configuredSystem.GetProperty("publicationOptions").GetProperty("values").GetArrayLength());
+            Assert.AreEqual(1, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] = 1;"));
+            Assert.AreEqual(0, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] = 1;"));
+            Assert.AreEqual(1, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = 1;"));
+            Assert.AreEqual(0, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[PublicationOption] WHERE [OrganizationId] = 1;"));
+
+            await RestoreSystemSetsAsync();
+            var restoredSettings = await ReadSystemAsync();
+            CollectionAssert.AreEqual(originalCreators,
+                restoredSettings.GetProperty("stored").GetProperty("configuredSystem").GetProperty("commonCreators")
+                    .GetProperty("values").EnumerateArray().Select(item => item.GetProperty("value").GetString()).ToArray());
+            CollectionAssert.AreEqual(ReadOptions(original), ReadOptions(restoredSettings));
+        }
+        finally
+        {
+            if (changed)
+            {
+                await RestoreSystemSetsAsync();
+            }
+        }
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task SystemVersionMutationsLockEveryOrganizationBeforeActor(bool branding)
@@ -20,7 +302,7 @@ public sealed partial class PatronJourneyTests
         await startup.GetAsync("/api/asap/staff/session");
         var actor = await ReadConfiguredSuperAdminAsync();
         var service = factory.Services.GetRequiredService<AdministrationService>();
-        var settings = JsonSerializer.SerializeToElement((await service.GetSettingsAsync(actor, "system", CancellationToken.None)).Data);
+        var settings = JsonSerializer.SerializeToElement((await service.GetSettingsAsync(actor, LibraryScope.System, CancellationToken.None)).Data);
         var version = settings.GetProperty("version").GetString();
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var context = await contextFactory.CreateDbContextAsync();
@@ -31,8 +313,8 @@ public sealed partial class PatronJourneyTests
         await using (var organizationLock = new SqlCommand("SELECT [Id] FROM [asap].[Organization] WITH (XLOCK,HOLDLOCK) WHERE [Id] = 2;", blocker, transaction))
             await organizationLock.ExecuteScalarAsync();
         var mutation = branding
-            ? service.SaveLogoAsync(actor, "system", [], "", "", "Ordering probe", false, version, CancellationToken.None)
-            : service.SaveSettingsAsync(actor, JsonSerializer.SerializeToElement(new { orgId = "system", version, patron = new { } }), CancellationToken.None);
+            ? service.SaveLogoAsync(actor, LibraryScope.System, [], "", "", "Ordering probe", false, version, CancellationToken.None)
+            : service.SaveSettingsAsync(actor, AdministrationSettingsBinding.Bind(actor, JsonSerializer.SerializeToElement(new { orgId = "system", version, patron = new { } })), CancellationToken.None);
         try
         {
             await WaitForCorrectiveSqlBlockAsync(blocker.ServerProcessId);
@@ -69,12 +351,16 @@ public sealed partial class PatronJourneyTests
         var administration = factory.Services.GetRequiredService<AdministrationService>();
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var context = await contextFactory.CreateDbContextAsync();
-        var organization = new Organization { Id = 91905, DisplayName = "Version participation", IsActive = true };
+        var organization = new Organization
+        {
+            Id = 91905, DisplayName = "Version participation",
+            OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
+        };
         context.Organizations.Add(organization);
         await context.SaveChangesAsync();
         async Task<string> VersionAsync(string scope)
         {
-            var result = await administration.GetSettingsAsync(actor, scope, CancellationToken.None);
+            var result = await administration.GetSettingsAsync(actor, ParseScope(scope), CancellationToken.None);
             Assert.AreEqual("ok", result.Code);
             return JsonSerializer.SerializeToElement(result.Data).GetProperty("version").GetString()!;
         }
@@ -86,14 +372,14 @@ public sealed partial class PatronJourneyTests
             var after = await VersionAsync(scope);
             Assert.AreNotEqual(before, after);
             var rejected = await administration.SaveSettingsAsync(actor,
-                JsonSerializer.SerializeToElement(new { orgId = scope, version = before, patron = new { loginNote = "Stale draft" } }), CancellationToken.None);
+                AdministrationSettingsBinding.Bind(actor, JsonSerializer.SerializeToElement(new { orgId = scope, version = before, patron = new { loginNote = "Stale draft" } })), CancellationToken.None);
             Assert.AreEqual("stale_version", rejected.Code, scope);
             Assert.AreEqual(after, await VersionAsync(scope), "A rejected write must leave the snapshot unchanged.");
         }
         var origin = new PatronEmbedAllowedOrigin
         {
             OrganizationId = 1, Origin = "https://version-corrective.example.org",
-            NormalizedOrigin = "https://version-corrective.example.org", CreatedUtc = DateTime.UtcNow
+            NormalizedOrigin = "https://version-corrective.example.org", CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime
         };
         var systemBranding = await context.Branding.SingleOrDefaultAsync(item => item.OrganizationId == 1);
         var libraryBranding = await context.Branding.SingleOrDefaultAsync(item => item.OrganizationId == 2);
@@ -180,7 +466,8 @@ public sealed partial class PatronJourneyTests
             var localDispatcher = new RecordingOutboxDispatcher();
             var service = CreatePatronSuggestionService(["example.org"], localDispatcher, sender);
             var title = $"Template visibility {Guid.NewGuid():N}";
-            var result = await service.CreateAsync(new PatronSessionContext(9091, "20000000003910", 2, 2, 2, DateTime.UtcNow.AddHours(1)),
+            var session = await IssueTestPatronSessionAsync("20000000003910");
+            var result = await service.CreateAsync(session,
                 Suggestion(title), CancellationToken.None);
             var committedTitle = await context.TitleRequests.Where(item => item.Id == result.Id).Select(item => item.Title).SingleAsync();
             var outboxId = await FindSubmissionOutboxIdAsync(result.Id);
@@ -201,6 +488,9 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
+            await ExecuteNonQueryAsync(
+                "DELETE FROM [asap].[PatronSession] WHERE [Barcode] = @barcode;",
+                ("@barcode", "20000000003910"));
             system.IsHidden = oldSystemHidden;
             system.SubjectTemplate = oldSubject;
             system.BodyTemplate = oldBody;
@@ -218,4 +508,10 @@ public sealed partial class PatronJourneyTests
             await context.SaveChangesAsync();
         }
     }
+    private static LibraryScope ParseScope(string value)
+    {
+        Assert.IsTrue(LibraryScope.TryParse(value, LibraryScope.System, out var scope));
+        return scope;
+    }
+
 }

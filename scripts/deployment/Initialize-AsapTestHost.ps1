@@ -45,6 +45,7 @@ $applicationTemplateJson = @'
     "LogPath": "REPLACE-LOG-PATH"
   },
   "EmailSafety": {
+    "DeliveryMode": "capture",
     "AllowedRecipientDomains": [
       "REPLACE-ALLOWED-DOMAIN"
     ]

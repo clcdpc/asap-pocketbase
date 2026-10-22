@@ -7,6 +7,8 @@
     <BlockOnPossibleDataLoss>true</BlockOnPossibleDataLoss>
   </PropertyGroup>
   <ItemGroup>
+    <Build Remove="Scripts\PreDeployment.sql" />
+    <PreDeploy Include="Scripts\PreDeployment.sql" />
     <Build Remove="Scripts\PostDeployment.sql" />
     <PostDeploy Include="Scripts\PostDeployment.sql" />
   </ItemGroup>

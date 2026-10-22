@@ -10,6 +10,12 @@ on:
     tags:
       - 'v*.*.*-test.*'
   workflow_dispatch:
+    inputs:
+      deploy_test_iis:
+        description: Deploy the tested artifact to test IIS
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -22,7 +28,8 @@ jobs:
   build-test-package:
     name: Build, test and package
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The retained SQL/frontend/browser guard already takes about 44 minutes.
+    timeout-minutes: 60
     outputs:
       artifact_name: ${{ steps.identity.outputs.artifact_name }}
       deployment_label: ${{ steps.identity.outputs.deployment_label }}
@@ -88,9 +95,9 @@ jobs:
       - name: Run .NET and real SQL tests (non-browser partition)
         run: >-
           dotnet test --project tests/Asap.Tests/Asap.Tests.csproj
-          --configuration Release --no-build --minimum-expected-tests 319
+          --configuration Release --no-build --minimum-expected-tests 1420
           --filter
-          'FullyQualifiedName!~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport&FullyQualifiedName!~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers&FullyQualifiedName!~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures'
+          'FullyQualifiedName!~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport&FullyQualifiedName!~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers&FullyQualifiedName!~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures&FullyQualifiedName!~PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses&FullyQualifiedName!~StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp&FullyQualifiedName!~SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp&FullyQualifiedName!~LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata&FullyQualifiedName!~ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery&FullyQualifiedName!~OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes&FullyQualifiedName!~EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance&FullyQualifiedName!~Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload&FullyQualifiedName!~StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry&FullyQualifiedName!~LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces&FullyQualifiedName!~SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference&FullyQualifiedName!~StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope&FullyQualifiedName!~NormalNavigationRefreshesPublishedEntryAndNestedModulesWithRealBrowserCaching'
 
       - name: Run legacy/frontend unit tests
         run: npm test
@@ -111,6 +118,7 @@ jobs:
         shell: pwsh
         run: |
           dotnet publish src/Asap.Web/Asap.Web.csproj -c Release -o .artifacts/web
+          & scripts/build/Test-FrontendPublish.ps1 -PublishRoot .artifacts/web
           dotnet publish src/Asap.Migration/Asap.Migration.csproj -c Release -r win-x64 --self-contained true -o .artifacts/migration
           if (Get-ChildItem .artifacts -Recurse -File | Where-Object Name -Match 'pocketbase|node(.exe)?|npm(.cmd)?') {
             throw 'Published artifacts contain a forbidden PocketBase or Node runtime file.'
@@ -187,6 +195,7 @@ jobs:
             Copy-Item -LiteralPath $source.FullName -Destination $destination -Force
           }
 
+          & scripts/build/Test-FrontendPublish.ps1 -PublishRoot $packageWeb
           Copy-Item -LiteralPath scripts/deployment/Deploy-AsapTest.ps1 -Destination (Join-Path $packageDeployment 'Deploy-AsapTest.ps1') -Force
           Copy-Item -LiteralPath scripts/hangfire/1.8.25/install.sql -Destination (Join-Path $packageHangfire 'install.sql') -Force
 
@@ -216,7 +225,7 @@ jobs:
             versionOrLabel = $env:DEPLOYMENT_LABEL
             commitSha = $env:GITHUB_SHA
             buildUtc = $buildUtc
-            applicationSchemaVersion = 6
+            applicationSchemaVersion = 13
             hangfireSchemaVersion = 9
             dacpacSha256 = $dacpacHash
             webPayloadSha256 = $webIdentityHash
@@ -244,6 +253,7 @@ jobs:
           $bootstrapRoot = Join-Path $env:RUNNER_TEMP ("asap-test-package-validation-" + [guid]::NewGuid().ToString('N'))
           try {
             Expand-Archive -LiteralPath $zipPath -DestinationPath $bootstrapRoot -Force
+            & scripts/build/Test-FrontendPublish.ps1 -PublishRoot (Join-Path $bootstrapRoot 'web')
             & (Join-Path $bootstrapRoot 'deployment/Deploy-AsapTest.ps1') `
               -DeploymentZip $zipPath `
               -ExpectedZipSha256 $expectedHash `
@@ -273,7 +283,7 @@ jobs:
   deploy-test-iis:
     name: Deploy exact artifact to test IIS
     needs: build-test-package
-    if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}
+    if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && ((github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis) || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}
     runs-on: [self-hosted, windows, x64, asap-test-iis]
     environment: asap-test-iis
     timeout-minutes: 20

@@ -31,7 +31,8 @@ GO
 CREATE TABLE [asap].[PatronCodeEligibilityMember]
 (
     [OrganizationId] int NOT NULL,
-    [PatronCodeId] nvarchar(100) NOT NULL,
+    [PatronCodeId] int NOT NULL,
+    CONSTRAINT [CK_PatronCodeEligibilityMember_PatronCodeId] CHECK ([PatronCodeId] > 0),
     CONSTRAINT [PK_PatronCodeEligibilityMember] PRIMARY KEY ([OrganizationId], [PatronCodeId]),
     CONSTRAINT [FK_PatronCodeEligibilityMember_Set] FOREIGN KEY ([OrganizationId]) REFERENCES [asap].[PatronCodeEligibilitySet]([OrganizationId]) ON DELETE CASCADE
 );

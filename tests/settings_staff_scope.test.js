@@ -14,8 +14,9 @@ function response(status, body) {
   };
 }
 
-function settingsData() {
+function settingsData(librarySetsExist = false) {
   const emptySet = { exists: false, values: [] };
+  const librarySet = { exists: librarySetsExist, values: [] };
   return {
     orgId: '2',
     version: 'library-2-version',
@@ -36,11 +37,11 @@ function settingsData() {
         branding: { hasLogo: false, altText: 'System alt' }
       },
       libraryOverride: {
-        workflow: {},
+        workflow: { outstandingTimeoutRejectionTemplateId: '9007199254740993' },
         patron: { loginNote: 'Existing library note' },
-        email: {},
-        publicationOptions: emptySet,
-        commonCreators: emptySet,
+        email: { hasPostmarkToken: true },
+        publicationOptions: librarySet,
+        commonCreators: librarySet,
         allowedPatronCodeIds: emptySet,
         providers: [],
         formats: [],
@@ -57,7 +58,8 @@ function settingsData() {
       providers: [],
       formats: [],
       customFields: [],
-      templates: [],
+      templates: [{ id: '9007199254740993', organizationId: '2', templateKey: 'rejection:used',
+        displayName: 'Used rejection', subject: 'Subject', body: 'Body', enabled: true, isCustom: true }],
       autoClaimRules: [],
       branding: { hasLogo: false, altText: null }
     },
@@ -103,7 +105,13 @@ async function flush() {
     window.confirm = () => true;
 
     const settingsRequests = [];
+    const organizations = [
+      { id: 1, name: 'System', organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'system-v1' },
+      { id: 2, name: 'Library Two', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'library-v1' }
+    ];
     let saveBody;
+    const saveBodies = [];
+    let librarySetsExist = false;
     let saveCompleted;
     const saveFinished = new Promise(resolve => { saveCompleted = resolve; });
     global.fetch = async (url, options = {}) => {
@@ -113,18 +121,20 @@ async function flush() {
       }
       if (requestUrl.includes('/api/asap/staff/settings?orgId=')) {
         settingsRequests.push(requestUrl);
-        return response(200, settingsData());
+        return response(200, settingsData(librarySetsExist));
       }
       if (requestUrl.endsWith('/api/asap/staff/organizations')) {
-        return response(200, []);
+        return response(200, { code: 'ok', data: organizations });
       }
       if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
         return response(200, { code: 'ok', data: [] });
       }
       if (requestUrl.endsWith('/api/asap/staff/settings')) {
         saveBody = JSON.parse(options.body);
-        saveCompleted();
-        return response(200, { code: 'saved', data: { version: 'library-2-saved' } });
+        saveBodies.push(saveBody);
+        librarySetsExist = saveBodies.length === 1;
+        if (saveBodies.length === 1) saveCompleted();
+        return response(200, { code: 'saved', data: { orgId: '2', version: 'library-2-saved' } });
       }
       throw new Error(`Unexpected request: ${requestUrl}`);
     };
@@ -148,6 +158,32 @@ async function flush() {
     assert.deepStrictEqual(settingsRequests, ['/api/asap/staff/settings?orgId=2']);
     assert.strictEqual(document.getElementById('settings-scope').value, '2');
     assert.strictEqual(document.getElementById('settings-scope-field').hidden, true);
+    assert.match(document.getElementById('settings-library-context-title').textContent, /Editing Library Two settings/);
+    assert.match(document.getElementById('settings-library-context-guidance').textContent, /apply to every library/);
+    assert.strictEqual(document.getElementById('settings-switch-system').hidden, true);
+    assert.strictEqual(document.querySelector('#settings-nav-polaris .settings-scope-badge').hidden, false);
+    assert.strictEqual(document.querySelector('#settings-nav-smtp .settings-scope-badge'), null);
+    assert.match(document.querySelector('#settings-smtp .settings-scope-explanation').textContent, /Library Two.*managed centrally/);
+    assert.strictEqual(document.getElementById('email-postmark-token').disabled, true);
+    assert.strictEqual(document.getElementById('email-clear-postmark-token').disabled, true);
+    assert.strictEqual(document.querySelector('[data-setting-key="postmarkToken"] .settings-override-toggle'), null);
+    const usedTemplate = document.querySelector('#email-templates-editor [data-template-id="9007199254740993"]');
+    usedTemplate.querySelector('[aria-label="Delete"]').click();
+    assert.strictEqual(usedTemplate.isConnected, true);
+    assert.match(document.getElementById('settings-message').textContent, /used by auto-rejection/);
+    document.getElementById('email-postmark-token').value = 'forged-browser-token';
+    document.getElementById('email-clear-postmark-token').checked = true;
+
+    const fromToggle = document.querySelector('[data-setting-key="fromAddress"] .settings-override-toggle');
+    fromToggle.checked = true;
+    fromToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    document.getElementById('email-from-address').value = 'library@example.org';
+
+    for (const id of ['publication-options-use-system', 'common-creators-use-system']) {
+      const toggle = document.getElementById(id);
+      toggle.checked = false;
+      toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    }
 
     const note = document.getElementById('patron-login-note');
     note.value = 'Own library edit';
@@ -161,9 +197,31 @@ async function flush() {
 
     assert.strictEqual(saveBody.orgId, '2');
     assert.strictEqual(saveBody.patron.loginNote, 'Own library edit');
+    assert.strictEqual(saveBody.email.fromAddress, 'library@example.org');
+    assert.deepStrictEqual(saveBody.patron.publicationOptions, []);
+    assert.deepStrictEqual(saveBody.workflow.commonAuthorsList, []);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody.email, 'postmarkToken'), false);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody.email, 'clearPostmarkToken'), false);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody, 'systemSettings'), false);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody, 'polaris'), false);
     assert.ok(settingsRequests.every(url => url === '/api/asap/staff/settings?orgId=2'));
+
+    for (let attempt = 0; attempt < 20 &&
+      document.getElementById('settings-save-title').textContent !== 'No changes'; attempt++) await flush();
+    for (const id of ['publication-options-use-system', 'common-creators-use-system']) {
+      const toggle = document.getElementById(id);
+      assert.strictEqual(toggle.checked, false);
+      toggle.checked = true;
+      toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    }
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
+      bubbles: true,
+      cancelable: true
+    }));
+    for (let attempt = 0; attempt < 20 && saveBodies.length < 2; attempt++) await flush();
+    assert.strictEqual(saveBodies.length, 2);
+    assert.strictEqual(saveBodies[1].patron.publicationOptions, null);
+    assert.strictEqual(saveBodies[1].workflow.commonAuthorsList, null);
 
     dom.window.close();
     console.log('Non-super-admin settings scope survives initial option population and save');

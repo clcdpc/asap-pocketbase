@@ -267,8 +267,8 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(typeof(BackgroundWorkflowJobs), job.Type);
                 Assert.AreEqual(nameof(BackgroundWorkflowJobs.SendForcedWeeklyStaffSummaryAsync), job.Method.Name);
                 Assert.AreEqual(4, job.Args.Count);
-                Assert.AreEqual(manualRunId, job.Args[2] as string);
-                Assert.AreEqual(manualRunId, ReadEnqueuedHangfireJob(storage, jobId!).Args[2] as string);
+                Assert.AreEqual(Guid.Parse(manualRunId!), (Guid)job.Args[2]);
+                Assert.AreEqual(Guid.Parse(manualRunId!), (Guid)ReadEnqueuedHangfireJob(storage, jobId!).Args[2]);
             }
 
             Assert.AreNotEqual(manualRunIds[0], manualRunIds[1]);
@@ -277,6 +277,37 @@ public sealed partial class PatronJourneyTests
         {
             DeleteHangfireJobs(jobs, jobIds);
             await DeactivateCorrectiveStaffAsync(admin.Id);
+        }
+    }
+
+    [TestMethod]
+    public async Task ForcedWeeklySummaryHttpRetryPreservesItsDurableManualRunIdentity()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var jobs = factory!.Services.GetRequiredService<IBackgroundJobClient>();
+        var storage = factory.Services.GetRequiredService<JobStorage>();
+        var operationId = Guid.Parse("d6fbf6a3-7f16-4f8f-b74e-4bef3d570100");
+        var jobIds = new List<string>();
+        try
+        {
+            using var client = factory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                using var response = await client.PostAsync(
+                    $"/api/asap/staff/workflow/weekly-summary/run-now?force=true&operationId={operationId:D}", null);
+                Assert.AreEqual(System.Net.HttpStatusCode.Accepted, response.StatusCode);
+                using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                Assert.AreEqual(operationId, body.RootElement.GetProperty("manualRunId").GetGuid());
+                var jobId = body.RootElement.GetProperty("jobId").GetString()!;
+                jobIds.Add(jobId);
+                Assert.AreEqual(operationId, (Guid)ReadEnqueuedHangfireJob(storage, jobId).Args[2]);
+            }
+        }
+        finally
+        {
+            DeleteHangfireJobs(jobs, jobIds);
         }
     }
 
@@ -358,6 +389,73 @@ public sealed partial class PatronJourneyTests
                 "DELETE FROM [asap].[TitleRequest] WHERE [Id] = @current;",
                 ("@current", requestId));
             await using var restore = await contextFactory.CreateDbContextAsync();
+            var system = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            system.StaffApplicationUrl = oldStaffUrl;
+            await restore.SaveChangesAsync();
+            await DeactivateCorrectiveStaffAsync(admin.Id);
+        }
+    }
+
+    [TestMethod]
+    public async Task WeeklySummaryRetainsCommittedOutboxWhenImmediateDispatchFails()
+    {
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var scope = Slice5IsolatedLibraryId;
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
+        var admin = await CreateCorrectiveStaffAsync(superAdmin, "admin", scope);
+        await using var scoped = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IEmailOutboxDispatcher>();
+                services.AddSingleton<IEmailOutboxDispatcher>(new FailingEmailDispatcher());
+            }));
+        var scopedContextFactory = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var businessKeyPrefix = $"weekly-summary:{admin.Id}:";
+        long requestId = 0;
+        string? oldStaffUrl = null;
+        await using (var seed = await scopedContextFactory.CreateDbContextAsync())
+        {
+            var system = await seed.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            oldStaffUrl = system.StaffApplicationUrl;
+            system.StaffApplicationUrl = "https://staff.example.org/staff/";
+            var staff = await seed.StaffUsers.SingleAsync(item => item.Id == admin.Id);
+            staff.WeeklyActionSummaryEnabled = true;
+            staff.WeeklyActionSummaryEmail = "weekly-dispatch@example.org";
+            var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+                .Select(item => item.Id).SingleAsync();
+            var request = new TitleRequest
+            {
+                LibraryOrganizationId = scope,
+                Barcode = $"s5-weekly-dispatch-{Guid.NewGuid():N}"[..35],
+                Title = "Weekly dispatch recovery",
+                MaterialFormatId = formatId,
+                Status = "suggestion",
+                CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
+            };
+            seed.TitleRequests.Add(request);
+            await seed.SaveChangesAsync();
+            requestId = request.Id;
+        }
+
+        try
+        {
+            var result = await scoped.Services.GetRequiredService<WorkflowProcessingService>()
+                .SendWeeklyStaffSummaryAsync(null, scope, CancellationToken.None);
+            Assert.AreEqual("completed", result.Code);
+            Assert.AreEqual(1, result.Changed);
+            await using var verify = await scopedContextFactory.CreateDbContextAsync();
+            var outbox = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
+                item.BusinessKey != null && item.BusinessKey.StartsWith(businessKeyPrefix));
+            Assert.AreEqual("pending", outbox.Status);
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;",
+                ("@prefix", businessKeyPrefix + "%"));
+            await DeleteRequestIdsAsync(scopedContextFactory, [requestId]);
+            await using var restore = await scopedContextFactory.CreateDbContextAsync();
             var system = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
             system.StaffApplicationUrl = oldStaffUrl;
             await restore.SaveChangesAsync();
@@ -524,8 +622,9 @@ public sealed partial class PatronJourneyTests
         await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
         var admin = await CreateCorrectiveStaffAsync(superAdmin, "admin", scope);
         var actor = await ReadCorrectiveStaffAsync(admin);
-        const string manualRunId = "slice5-weekly-manual-01";
-        var businessPrefix = $"weekly-summary-force:{manualRunId}:";
+        var manualRunId = Guid.Parse("5676ae00-1c84-43e5-a346-73c9b9cc49be");
+        var manualRunAuditKey = manualRunId.ToString("N");
+        var businessPrefix = $"weekly-summary-force:{manualRunId:N}:";
         var requestIds = new List<long>();
         var copyIds = new List<long>();
         string? oldStaffUrl;
@@ -554,7 +653,7 @@ public sealed partial class PatronJourneyTests
             seed.TitleRequests.AddRange(submission, purchase);
             var copy = new AdditionalCopyRequest
             {
-                LibraryOrganizationId = scope, BibId = "9001", Title = "Weekly additional copy",
+                LibraryOrganizationId = scope, BibId = 9001, Title = "Weekly additional copy",
                 Author = "Copy Author", Status = "open", CreatedUtc = now, UpdatedUtc = now
             };
             seed.AdditionalCopyRequests.Add(copy);
@@ -580,7 +679,7 @@ public sealed partial class PatronJourneyTests
             var expectedNew = await verify.TitleRequests.CountAsync(item =>
                 item.LibraryOrganizationId == scope && item.Status == "suggestion");
             var expectedPurchases = await verify.TitleRequests.CountAsync(item =>
-                item.LibraryOrganizationId == scope && item.Status == "outstanding_purchase" && string.IsNullOrWhiteSpace(item.BibId));
+                item.LibraryOrganizationId == scope && item.Status == "outstanding_purchase" && item.BibId == null);
             var expectedCopies = await verify.AdditionalCopyRequests.CountAsync(item =>
                 item.LibraryOrganizationId == scope && item.Status == "open");
             Assert.AreEqual("pending", outbox.Status);
@@ -596,7 +695,7 @@ public sealed partial class PatronJourneyTests
             StringAssert.Contains(outbox.BodyText!, "stage=purchased_waiting_for_bib");
             StringAssert.Contains(outbox.BodyText!, "stage=additional_copies");
             Assert.AreEqual(1, await verify.AdministrativeAudits.CountAsync(item =>
-                item.Action == "weekly_summary_force_queued" && item.TargetId == manualRunId));
+                item.Action == "weekly_summary_force_queued" && item.TargetId == manualRunAuditKey));
 
             var second = await service.SendWeeklyStaffSummaryAsync(
                 manualRunId,
@@ -609,7 +708,7 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;", ("@prefix", businessPrefix + "%"));
-            await ExecuteNonQueryAsync("DELETE FROM [asap].[AdministrativeAudit] WHERE [TargetId] = @id;", ("@id", manualRunId));
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[AdministrativeAudit] WHERE [TargetId] = @id;", ("@id", manualRunId.ToString("N")));
             await ExecuteNonQueryAsync("DELETE FROM [asap].[AdditionalCopyRequest] WHERE [Id] IN (SELECT [Id] FROM [asap].[AdditionalCopyRequest] WHERE [Id] = @id);", ("@id", copyIds[0]));
             await ExecuteNonQueryAsync("DELETE FROM [asap].[TitleRequest] WHERE [Id] IN (@first, @second);", ("@first", requestIds[0]), ("@second", requestIds[1]));
             await using var restore = await contextFactory.CreateDbContextAsync();

@@ -5,6 +5,7 @@ const childProcess = require('child_process');
 
 const root = path.resolve(__dirname, '..');
 const workflow = fs.readFileSync(path.join(root, '.github/workflows/dotnet.yml'), 'utf8').replace(/\r\n/g, '\n');
+const browserRunner = fs.readFileSync(path.join(root, 'tests/browser/run.cjs'), 'utf8').replace(/\r\n/g, '\n');
 const deployment = fs.readFileSync(path.join(root, 'scripts/deployment/Deploy-AsapTest.ps1'), 'utf8');
 const runtimeSchemaVersion = fs.readFileSync(
   path.join(root, 'src', 'Asap.Web', 'Infrastructure', 'Data', 'SchemaVersion.cs'),
@@ -45,7 +46,37 @@ assert.ok(!workflow.includes('\n    concurrency:'), 'build-test-package must not
 assert.ok(workflow.includes('Generate ephemeral SQL test credentials'), 'CI SQL credentials should be generated per run');
 assert.ok(!workflow.includes('Asap_Slice0_SQL_2026'), 'CI must not retain the historical hard-coded SQL password');
 assert.ok(workflow.includes('ref: ${{ github.sha }}'), 'the hosted job should check out the exact event SHA');
-assert.ok(workflow.includes('--minimum-expected-tests 319'), 'the non-browser real-SQL partition must retain its test-count guard');
+assert.ok(workflow.includes('--minimum-expected-tests 1420'), 'the non-browser real-SQL partition must guard the current discovered test count');
+const nonBrowserFilter = workflow.match(/--filter\s*'([^']+)'/)?.[1];
+assert.ok(nonBrowserFilter, 'the non-browser real-SQL partition must explicitly exclude browser journeys');
+const nonBrowserFilterTerms = nonBrowserFilter.split('&');
+const browserExclusions = nonBrowserFilterTerms
+  .filter((term) => term.startsWith('FullyQualifiedName!~'))
+  .map((term) => term.slice('FullyQualifiedName!~'.length));
+const nonBrowserIncludes = nonBrowserFilterTerms
+  .filter((term) => term.startsWith('FullyQualifiedName~'))
+  .map((term) => term.slice('FullyQualifiedName~'.length));
+const browserJourneys = [...browserRunner.matchAll(/'FullyQualifiedName~([^']+)'/g)]
+  .map((match) => match[1]);
+assert.equal(browserJourneys.length, 16, 'the browser partition must retain all sixteen designated methods (seventeen discovered cases)');
+assert.equal(nonBrowserIncludes.length, 0, 'the non-browser partition should include all discovered tests except explicit browser exclusions');
+assert.equal(new Set(browserJourneys).size, browserJourneys.length, 'the browser partition must not list a journey twice');
+assert.deepStrictEqual(
+  [...browserExclusions].sort(),
+  [...browserJourneys].sort(),
+  'the non-browser partition must exclude exactly the designated browser methods'
+);
+assert.equal(
+  new Set(browserExclusions).size,
+  browserExclusions.length,
+  'the non-browser partition must not exclude any browser journey twice'
+);
+assert.ok(
+  nonBrowserIncludes.every((name) => !browserJourneys.includes(name)),
+  'the browser and non-browser partitions must be disjoint'
+);
+assert.match(browserRunner, /'--minimum-expected-tests',\s*'17'/,
+  'the browser runner must guard all seventeen discovered browser cases');
 assert.ok(workflow.includes('run: npm test'), 'the frontend test gate must remain');
 assert.ok(workflow.includes('dotnet publish src/Asap.Web/Asap.Web.csproj'), 'Web publish must remain a hosted check');
 assert.ok(workflow.includes('dotnet publish src/Asap.Migration/Asap.Migration.csproj'), 'native migration publish check must remain');
@@ -59,13 +90,13 @@ const schemaVersions = {
   migrationProject: Number(migrationProject.match(/ExpectedSchemaVersion" Value="(\d+)"/)?.[1])
 };
 assert.ok(
-  Object.values(schemaVersions).every((version) => version === 6),
-  `application schema version must be 6 in every package/runtime contract: ${JSON.stringify(schemaVersions)}`
+  Object.values(schemaVersions).every((version) => version === 13),
+  `application schema version must be 13 in every package/runtime contract: ${JSON.stringify(schemaVersions)}`
 );
 assert.match(
   postDeployment,
-  /Schema 6 is a pre-release reset boundary\. Recreate the application database from this DACPAC\./,
-  'the DACPAC must reject in-place upgrades from pre-schema-6 databases'
+  /Schema 7 is a pre-release reset boundary\. Recreate the application database from this DACPAC\./,
+  'the DACPAC must reject in-place upgrades from pre-schema-7 databases'
 );
 
 const deploymentJobStart = workflow.indexOf('  deploy-test-iis:');
@@ -74,11 +105,16 @@ const hostedJobs = workflow.slice(0, deploymentJobStart);
 const deploymentJob = workflow.slice(deploymentJobStart);
 assert.ok(!hostedJobs.includes('self-hosted'), 'hosted build/test/package jobs must not use self-hosted labels');
 assert.ok(!hostedJobs.includes('ASAP_TEST_DEPLOYMENT_ENABLED'), 'hosted build/test/package jobs must not depend on activation');
+assert.match(
+  workflow,
+  /  workflow_dispatch:\n    inputs:\n      deploy_test_iis:\n(?:        [^\n]+\n)*        default: false\n/,
+  'manual workflow dispatch must default to no test-IIS deployment'
+);
 assert.ok(
   workflow.slice(deploymentJobStart).includes(
-    "if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}"
+    "if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && ((github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis) || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}"
   ),
-  'deployment must require the explicit activation variable and an eligible event'
+  'deployment must require the activation variable and manual opt-in or an eligible tag push'
 );
 assert.ok(
   workflow.slice(deploymentJobStart).includes('runs-on: [self-hosted, windows, x64, asap-test-iis]'),
@@ -130,6 +166,21 @@ assert.ok(!deployment.includes('SkipCertificateCheck'), 'readiness must use norm
 assert.ok(!deployment.includes('[asap].[DeploymentState]'), 'test deployment must not repurpose application DeploymentState');
 assert.ok(deployment.includes("'/p:BlockOnPossibleDataLoss=True'"), 'deployment must retain DACPAC data-loss protection');
 assert.ok(deployment.includes("'/p:DropObjectsNotInSource=False'"), 'deployment must preserve objects outside the DACPAC');
+assert.ok(deployment.includes("'/p:CreateNewDatabase=False'"), 'deployment must not recreate the database');
+assert.ok(deployment.includes("'/p:ScriptDatabaseOptions=False'"), 'DACPAC must leave generic environment options alone');
+assert.match(fs.readFileSync(path.join(root, 'src/Asap.Web/Infrastructure/Development/DacpacDeploymentService.cs'), 'utf8'),
+  /ScriptDatabaseOptions = false/, 'development publication must also preserve environment options');
+const recovery = deployment.indexOf('    Set-NonProductionDatabaseRecovery `', deployment.indexOf('$hostConfig = Read-HostConfiguration'));
+const exactSuccess = deployment.indexOf('The exact test-IIS artifact is already recorded and ready');
+assert.ok(recovery > deployment.indexOf('if ($hangfireVersion -gt 9)') && recovery < exactSuccess,
+  'recovery enforcement must follow host/schema preflight and precede exact-artifact success');
+assert.ok(recovery < deployment.indexOf('    if ($needsDacpac)'), 'recovery must run independently of DACPAC publication');
+assert.match(deployment.slice(recovery, exactSuccess), /-ConnectionString \$hostConfig\.AsapDatabaseConnectionString/);
+assert.strictEqual((deployment.match(/    Set-NonProductionDatabaseRecovery `/g) || []).length, 1, 'Hangfire must not receive a separate recovery command');
+assert.ok(!/RECOVERY\s+SIMPLE/i.test(postDeployment + fs.readFileSync(path.join(root, 'database/Asap.Database/Scripts/PreDeployment.sql'), 'utf8')),
+  'DACPAC scripts must not own recovery policy');
+assert.match(postDeployment, /ALTER DATABASE CURRENT SET COMPATIBILITY_LEVEL = 160;/);
+assert.ok(activation.includes('Environment.IsNonProduction=true') && activation.includes('SIMPLE recovery'));
 assert.ok(deployment.includes("[string] $ConfigPath = 'C:\\ProgramData\\clc-asap\\Config\\deployment.json'"), 'deployment should default to the conventional host config path');
 assert.ok(deployment.includes("(^|/)(application|deployment)\\.json$"), 'host-owned application and deployment JSON must be forbidden from the artifact');
 const archiveValidation = deployment.indexOf('$archive = Test-DeploymentArchive', deployment.indexOf('$hostConfig = Read-HostConfiguration'));

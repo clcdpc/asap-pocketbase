@@ -20,9 +20,9 @@ public sealed record PolarisOrganizationSnapshot(
     int Id,
     string DisplayName,
     string? Abbreviation,
-    int OrganizationCodeId,
+    int? OrganizationCodeId,
     int? ParentOrganizationId);
 
 public sealed record PolarisPatronCodeSnapshot(
-    string Id,
+    int Id,
     string Description);

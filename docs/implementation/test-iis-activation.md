@@ -12,6 +12,20 @@ The responsibility boundary is deliberate:
 - Deployment operates against the already-provisioned host and verifies the
   running application.
 
+`Deploy-AsapTest.ps1` requires the external application configuration to contain
+`Environment.IsNonProduction=true` (a JSON boolean). After non-mutating host
+preflight, it checks the configured ASAP application database and enforces
+SIMPLE recovery, including when the exact artifact is already installed and
+ready. An already-SIMPLE database needs no change; a change is queried again
+and must be verified. A separately configured Hangfire database is not altered.
+
+SqlPackage publishes with `ScriptDatabaseOptions=False` so generic DACPAC
+database options do not overwrite environment policy. The explicit
+post-deployment compatibility-level requirement of 160 still executes.
+Production recovery mode is an operations decision and is not set by the
+application DACPAC. `-ValidateOnly` validates the artifact without reading host
+configuration or enforcing recovery.
+
 ## Step 1 - Copy The Provisioning Scripts
 
 Copy `Initialize-AsapTestHost.ps1` and

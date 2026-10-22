@@ -186,13 +186,14 @@ public sealed partial class PatronJourneyTests
         };
         var copy = new AdditionalCopyRequest
         {
-            LibraryOrganizationId = 2, BibId = "9001", Title = "Historical assignment target", Status = "open", CreatedUtc = now, UpdatedUtc = now
+            LibraryOrganizationId = 2, BibId = 9001, Title = "Historical assignment target", Status = "open", CreatedUtc = now, UpdatedUtc = now
         };
         context.TitleRequests.Add(title);
         context.AdditionalCopyRequests.Add(copy);
         await context.SaveChangesAsync();
         var previousRules = await context.FormatAutoClaimRules.Where(item => item.LibraryOrganizationId == 2 && item.MaterialFormatId == format.Id && item.IsActive).ToListAsync();
         FormatAutoClaimRule? historicalRule = null;
+        PatronSessionContext? patronSession = null;
         try
         {
             Assert.IsTrue((await lifecycle.ListAssignmentCandidatesAsync(2, CancellationToken.None)).Any(item => item.Id == historical.Id));
@@ -201,7 +202,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("updated", (await factory.Services.GetRequiredService<AdditionalCopyService>().AssignAsync(actor, copy.Id,
                 new AssignAdditionalCopyInput(StaffVersion.Encode(copy.RowVersion), historical.Id), CancellationToken.None)).Code);
             var administration = factory.Services.GetRequiredService<AdministrationService>();
-            var settings = JsonSerializer.SerializeToElement((await administration.GetSettingsAsync(actor, "2", CancellationToken.None)).Data);
+            var settings = JsonSerializer.SerializeToElement((await administration.GetSettingsAsync(actor, LibraryScope.ForLibrary(2), CancellationToken.None)).Data);
             Assert.IsTrue(settings.GetProperty("autoClaimStaff").EnumerateArray().Any(item => item.GetProperty("id").GetString() == historical.Id.ToString()));
             await context.Entry(title).ReloadAsync();
             await context.Entry(copy).ReloadAsync();
@@ -216,8 +217,9 @@ public sealed partial class PatronJourneyTests
             };
             context.FormatAutoClaimRules.Add(historicalRule);
             await context.SaveChangesAsync();
+            patronSession = await IssueTestPatronSessionAsync("20000000003921");
             var result = await CreatePatronSuggestionService(["example.org"], new RecordingOutboxDispatcher(), new RecordingEmailSender()).CreateAsync(
-                new PatronSessionContext(9092, "20000000003921", 2, 2, 2, DateTime.UtcNow.AddHours(1)),
+                patronSession,
                 Suggestion($"Historical auto claim {Guid.NewGuid():N}"), CancellationToken.None);
             var submitted = await context.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == result.Id);
             Assert.AreEqual(historical.Id, submitted.ClaimedByStaffUserId);
@@ -225,6 +227,10 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
+            if (patronSession is not null)
+            {
+                await DeleteTestPatronSessionAsync(patronSession.Id);
+            }
             if (historicalRule is not null)
             {
                 await context.TitleRequests
@@ -248,8 +254,8 @@ public sealed partial class PatronJourneyTests
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var context = await contextFactory.CreateDbContextAsync();
         context.Organizations.AddRange(
-            new Organization { Id = 91907, DisplayName = "Cleanup source", IsActive = true },
-            new Organization { Id = 91908, DisplayName = "Cleanup destination", IsActive = true });
+            new Organization { Id = 91907, DisplayName = "Cleanup source", OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true },
+            new Organization { Id = 91908, DisplayName = "Cleanup destination", OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true });
         await context.SaveChangesAsync();
         var target = await CreateCorrectiveStaffAsync(actor, "admin", 91907);
         var formatId = await context.MaterialFormats.Where(item => item.OwnerOrganizationId == 1 && item.Code == "book").Select(item => item.Id).SingleAsync();
@@ -265,7 +271,7 @@ public sealed partial class PatronJourneyTests
         };
         AdditionalCopyRequest Copy(string status) => new()
         {
-            LibraryOrganizationId = 91907, BibId = "9001", Title = "Cleanup copy", Status = status,
+            LibraryOrganizationId = 91907, BibId = 9001, Title = "Cleanup copy", Status = status,
             ClaimedByStaffUserId = target.Id, ClaimedByDisplayName = target.DisplayName ?? target.UserPrincipalName,
             ClaimType = "manual", ClaimedAtUtc = now,
             CreatedUtc = now, UpdatedUtc = now, ClosedUtc = status == "closed" ? now : null, Notes = "Committed copy history."
@@ -357,7 +363,11 @@ public sealed partial class PatronJourneyTests
         var superAdmin = await ReadConfiguredSuperAdminAsync();
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var context = await contextFactory.CreateDbContextAsync();
-        var organization = new Organization { Id = 91906, DisplayName = "Profile participation", IsActive = true };
+        var organization = new Organization
+        {
+            Id = 91906, DisplayName = "Profile participation",
+            OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
+        };
         context.Organizations.Add(organization);
         await context.SaveChangesAsync();
         var staff = await CreateCorrectiveStaffAsync(superAdmin, "staff", organization.Id);
@@ -389,7 +399,11 @@ public sealed partial class PatronJourneyTests
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using (var context = await contextFactory.CreateDbContextAsync())
         {
-            context.Organizations.Add(new Organization { Id = 91903, DisplayName = "Cookie recovery", IsActive = true });
+            context.Organizations.Add(new Organization
+            {
+                Id = 91903, DisplayName = "Cookie recovery",
+                OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
+            });
             await context.SaveChangesAsync();
         }
         var staff = await CreateCorrectiveStaffAsync(superAdmin, "staff", 91903);
@@ -619,7 +633,11 @@ public sealed partial class PatronJourneyTests
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using (var context = await contextFactory.CreateDbContextAsync())
         {
-            context.Organizations.Add(new Organization { Id = 91901, DisplayName = "Corrective destination", IsActive = true });
+            context.Organizations.Add(new Organization
+            {
+                Id = 91901, DisplayName = "Corrective destination",
+                OrganizationCodeId = 2, ParentOrganizationId = 1, IsActive = true
+            });
             await context.SaveChangesAsync();
         }
 

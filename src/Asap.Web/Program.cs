@@ -5,6 +5,7 @@ using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Development;
 using Asap.Web.Infrastructure.Health;
+using Asap.Web.Infrastructure.Http;
 using Asap.Web.Infrastructure.Jobs;
 using Asap.Web.Infrastructure.Logging;
 using Asap.Web.Infrastructure.Security;
@@ -19,6 +20,10 @@ using Asap.Web.Features.Administration;
 using Asap.Web.Features.Analytics;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.AllowDuplicateProperties = false;
+});
 
 var configurationResult = ExternalConfigurationLoader.Load(
     builder.Configuration,
@@ -106,9 +111,12 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<IntegrationCredentialProtector>();
     builder.Services.AddSingleton(TimeProvider.System);
     builder.Services.AddHttpClient("Polaris");
+    builder.Services.AddHttpClient("Postmark");
     builder.Services.AddSingleton<PatronConfigurationService>();
     builder.Services.AddSingleton<PatronSessionService>();
     builder.Services.AddSingleton<PatronSuggestionService>();
+    builder.Services.AddSingleton<PickupPreferenceMutationService>();
+    builder.Services.AddSingleton<StaffSuggestionService>();
     builder.Services.AddTransient<IdentifierLookupJobs>();
     builder.Services.AddSingleton<IIdentifierLookupDispatcher, IdentifierLookupDispatcher>();
     builder.Services.AddSingleton<StaffEligibilityService>();
@@ -152,8 +160,16 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<EmailOperationsService>();
     builder.Services.AddSingleton<IEmailOutboxDispatcher, EmailOutboxDispatcher>();
     builder.Services.AddSingleton<IHangfireSchemaCompatibilityChecker, HangfireSchemaCompatibilityChecker>();
-    builder.Services.AddSingleton<IEmailSender>(_ => new FileEmailSender(
-        Path.Combine(builder.Environment.ContentRootPath, ".artifacts", "dev-email")));
+    if (externalConfiguration.EmailSafety.DeliveryMode == "postmark")
+    {
+        builder.Services.AddSingleton<IEmailSender, PostmarkEmailSender>();
+    }
+    else
+    {
+        builder.Services.AddSingleton<IEmailSender>(services => new FileEmailSender(
+            Path.Combine(builder.Environment.ContentRootPath, ".artifacts", "dev-email"),
+            services.GetRequiredService<TimeProvider>()));
+    }
     builder.Services.AddSingleton<DacpacDeploymentService>();
     builder.Services.AddHostedService<DevelopmentDatabaseInitializer>();
     builder.Services.AddHostedService<StaffBootstrapHostedService>();
@@ -177,7 +193,7 @@ if (externalConfiguration is not null)
     app.UseMiddleware<PatronContentSecurityPolicyMiddleware>();
     app.UseMiddleware<BusinessReadinessMiddleware>();
 }
-app.UseStaticFiles();
+app.UseFrontendStaticFiles();
 
 if (externalConfiguration is not null)
 {

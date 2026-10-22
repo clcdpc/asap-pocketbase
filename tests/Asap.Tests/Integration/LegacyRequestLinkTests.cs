@@ -97,7 +97,7 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures()
     {
-        factory!.UseKestrel(0);
+        factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         using var client = factory.CreateClient();
         var baseAddress = client.BaseAddress
             ?? throw new InvalidOperationException("The Kestrel test host did not expose a base address.");
@@ -176,7 +176,7 @@ public sealed partial class PatronJourneyTests
         var missingCopyLegacyId = $"legacy-missing-copy-{suffix}";
         var deletedCopyLegacyId = $"legacy-deleted-copy-{suffix}";
         var outOfScopeCopyLegacyId = $"legacy-out-copy-{suffix}";
-        var now = DateTime.UtcNow;
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
 
         await using var context = await contextFactory.CreateDbContextAsync();
@@ -187,6 +187,8 @@ public sealed partial class PatronJourneyTests
                 Id = outOfScopeOrganizationId,
                 DisplayName = "Out-of-scope legacy-link library",
                 Abbreviation = "OLL",
+                OrganizationCodeId = 2,
+                ParentOrganizationId = 1,
                 IsActive = true
             });
         }
@@ -303,7 +305,7 @@ public sealed partial class PatronJourneyTests
             SourceTitleRequestId = sourceTitleRequestId,
             LibraryOrganizationId = organizationId,
             LibraryNameSnapshot = organizationId == 2 ? "Test Library" : "Out-of-scope library",
-            BibId = $"legacy-copy-{suffix}",
+            BibId = 9342,
             Title = title,
             MaterialFormatId = formatId,
             FormatSnapshot = "book",

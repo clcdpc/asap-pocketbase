@@ -17,6 +17,16 @@ public sealed class ExternalConfigurationValidatorTests
     }
 
     [TestMethod]
+    public void EmailDeliveryModeRequiresAnExplicitSupportedTransport()
+    {
+        var value = TestConfigurationFactory.Create();
+        value.EmailSafety.DeliveryMode = "smtp";
+
+        CollectionAssert.Contains(
+            ExternalConfigurationValidator.Validate(value).ToList(), "email_delivery_mode_invalid");
+    }
+
+    [TestMethod]
     public void GeneratedTestHostTemplateIsValid()
     {
         var repositoryRoot = FindRepositoryRoot();

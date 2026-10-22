@@ -12,6 +12,8 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
     <PackageReference Include="Microsoft.SqlServer.DacFx" />
     <PackageReference Include="NLog.Web.AspNetCore" />
+    <!-- Override SqlClient's vulnerable transitive CMS dependency. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\Shared\SecurityContract.cs" Link="Infrastructure\Security\SecurityContract.cs" />
@@ -20,7 +22,7 @@
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup>
-    <FrontendSource Include="Frontend\**\*" />
+    <Content Remove="Frontend\**\*" />
     <Content Include="..\..\scripts\hangfire\1.8.25\**\*"
              Link="Database\Hangfire\1.8.25\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest"
@@ -28,21 +30,7 @@
     <Content Remove=".artifacts\dev-email\**\*" />
     <None Remove=".artifacts\dev-email\**\*" />
   </ItemGroup>
-  <Target Name="CopyFrontendToWebRoot"
-          BeforeTargets="Build;Publish">
-    <ItemGroup>
-      <ExpectedFrontendOutput Include="@(FrontendSource->'wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" />
-      <StaleFrontendOutput Include="wwwroot\**\*" Exclude="@(ExpectedFrontendOutput)" />
-      <Content Remove="@(StaleFrontendOutput)" />
-    </ItemGroup>
-    <Delete Files="@(StaleFrontendOutput)" />
-    <Copy SourceFiles="@(FrontendSource)"
-          DestinationFiles="@(FrontendSource->'wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
-  </Target>
-  <Target Name="CleanFrontendWebRoot" AfterTargets="Clean">
-    <RemoveDir Directories="$(MSBuildProjectDirectory)\wwwroot" />
-  </Target>
+  <Import Project="Build\FrontendAssets.targets" />
   <Target Name="CopyDacpacToOutput" AfterTargets="Build">
     <PropertyGroup>
       <AsapDacpacSource>$(MSBuildProjectDirectory)\..\..\database\Asap.Database\bin\$(Configuration)\Asap.Database.dacpac</AsapDacpacSource>

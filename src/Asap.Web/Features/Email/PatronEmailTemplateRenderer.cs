@@ -8,6 +8,9 @@ public sealed record RenderedEmailTemplate(string Subject, string BodyText, stri
 
 public static partial class PatronEmailTemplateRenderer
 {
+    public static IReadOnlyList<string> SupportedPlaceholders { get; } =
+        BuildValues("", "", "", null, "", "").Keys.ToArray();
+
     public static RenderedEmailTemplate Render(
         EffectiveEmailTemplate template,
         PatronSnapshot patron,
@@ -18,7 +21,26 @@ public static partial class PatronEmailTemplateRenderer
     {
         var firstName = patron.NameFirst ?? string.Empty;
         var lastName = patron.NameLast ?? string.Empty;
-        var values = new Dictionary<string, string>(StringComparer.Ordinal)
+        var values = BuildValues(firstName, lastName, title, author, formatLabel, barcode);
+
+        var subjectTemplate = RemoveBlankAuthorPhrase(template.SubjectTemplate, values["author"]);
+        var bodyTemplate = RemoveBlankAuthorPhrase(template.BodyTemplate, values["author"])
+            .Replace("\\n", "\n", StringComparison.Ordinal);
+        return new RenderedEmailTemplate(
+            Replace(subjectTemplate, values, escape: false),
+            Replace(bodyTemplate, values, escape: false),
+            Replace(bodyTemplate, values, escape: true)
+                .Replace("\r\n", "<br>", StringComparison.Ordinal)
+                .Replace("\n", "<br>", StringComparison.Ordinal));
+    }
+
+    private static Dictionary<string, string> BuildValues(
+        string firstName,
+        string lastName,
+        string title,
+        string? author,
+        string formatLabel,
+        string barcode) => new(StringComparer.Ordinal)
         {
             ["name"] = string.Join(' ', new[] { firstName, lastName }
                 .Where(item => !string.IsNullOrWhiteSpace(item))).Trim() is { Length: > 0 } name
@@ -31,17 +53,6 @@ public static partial class PatronEmailTemplateRenderer
             ["format"] = formatLabel,
             ["barcode"] = barcode
         };
-
-        var subjectTemplate = RemoveBlankAuthorPhrase(template.SubjectTemplate, values["author"]);
-        var bodyTemplate = RemoveBlankAuthorPhrase(template.BodyTemplate, values["author"])
-            .Replace("\\n", "\n", StringComparison.Ordinal);
-        return new RenderedEmailTemplate(
-            Replace(subjectTemplate, values, escape: false),
-            Replace(bodyTemplate, values, escape: false),
-            Replace(bodyTemplate, values, escape: true)
-                .Replace("\r\n", "<br>", StringComparison.Ordinal)
-                .Replace("\n", "<br>", StringComparison.Ordinal));
-    }
 
     private static string Replace(
         string template,

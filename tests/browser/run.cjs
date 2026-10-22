@@ -5,9 +5,22 @@ const path = require('node:path');
 
 const repositoryRoot = path.resolve(__dirname, '..', '..');
 const browserTests = [
+  'FullyQualifiedName~NormalNavigationRefreshesPublishedEntryAndNestedModulesWithRealBrowserCaching',
   'FullyQualifiedName~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport',
   'FullyQualifiedName~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers',
   'FullyQualifiedName~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures',
+  'FullyQualifiedName~PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses',
+  'FullyQualifiedName~StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp',
+  'FullyQualifiedName~SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp',
+  'FullyQualifiedName~LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata',
+  'FullyQualifiedName~ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery',
+  'FullyQualifiedName~OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes',
+  'FullyQualifiedName~EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance',
+  'FullyQualifiedName~Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload',
+  'FullyQualifiedName~StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry',
+  'FullyQualifiedName~LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces',
+  'FullyQualifiedName~SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference',
+  'FullyQualifiedName~StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope',
 ].join('|');
 
 const child = spawn(
@@ -21,7 +34,7 @@ const child = spawn(
     '--no-build',
     '--no-restore',
     '--minimum-expected-tests',
-    '3',
+    '17',
     '--filter',
     browserTests,
   ],

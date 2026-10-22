@@ -148,13 +148,16 @@ internal static class MigrationOperationalConfiguration
     {
         foreach (var property in value.EnumerateObject())
         {
-            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) return property.Value;
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return property.Value;
+            }
         }
         throw new KeyNotFoundException(name);
     }
 
     private static string? StringProperty(JsonElement value, string name) =>
-        Property(value, name).GetString()?.Trim();
+        Property(value, name).GetString();
 
     private static int RequiredInt(JsonElement value, string name) =>
         Property(value, name).GetInt32();

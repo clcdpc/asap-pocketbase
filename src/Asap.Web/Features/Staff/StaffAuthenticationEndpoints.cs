@@ -75,6 +75,8 @@ public static class StaffAuthenticationEndpoints
     internal static object ToSessionDto(CurrentStaff staff) => new
     {
         id = staff.Id.ToString(),
+        tenantId = staff.EntraTenantId.ToString("D"),
+        authenticationEmail = staff.AuthenticationEmail,
         userPrincipalName = staff.UserPrincipalName,
         displayName = staff.DisplayName,
         notificationEmail = staff.NotificationEmail,

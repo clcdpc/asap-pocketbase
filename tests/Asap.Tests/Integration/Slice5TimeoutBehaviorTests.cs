@@ -106,7 +106,7 @@ public sealed partial class PatronJourneyTests
             var copy = new AdditionalCopyRequest
             {
                 LibraryOrganizationId = scope,
-                BibId = "timeout-copy-bib",
+                BibId = 96001,
                 Title = "Timeout copy",
                 Status = "open",
                 CreatedUtc = old,

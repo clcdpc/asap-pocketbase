@@ -5,7 +5,7 @@ CREATE TABLE [asap].[AdditionalCopyRequest]
     [SourceTitleRequestId] bigint NULL,
     [LibraryOrganizationId] int NOT NULL,
     [LibraryNameSnapshot] nvarchar(256) NULL,
-    [BibId] nvarchar(128) NOT NULL,
+    [BibId] int NOT NULL,
     [Title] nvarchar(500) NOT NULL,
     [Author] nvarchar(500) NULL,
     [Identifier] nvarchar(100) NULL,
@@ -41,6 +41,7 @@ CREATE TABLE [asap].[AdditionalCopyRequest]
         REFERENCES [asap].[FormatAutoClaimRule]([Id]),
     CONSTRAINT [FK_AdditionalCopyRequest_ClosedByStaffUser] FOREIGN KEY ([ClosedByStaffUserId])
         REFERENCES [asap].[StaffUser]([Id]),
+    CONSTRAINT [CK_AdditionalCopyRequest_BibId] CHECK ([BibId] > 0),
     CONSTRAINT [CK_AdditionalCopyRequest_Status] CHECK ([Status] IN (N'open', N'closed')),
     CONSTRAINT [CK_AdditionalCopyRequest_Updated] CHECK ([UpdatedUtc] >= [CreatedUtc]),
     CONSTRAINT [CK_AdditionalCopyRequest_Closed] CHECK

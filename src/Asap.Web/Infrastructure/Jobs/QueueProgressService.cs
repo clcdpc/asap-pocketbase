@@ -1,3 +1,4 @@
+using System.Globalization;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -25,15 +26,15 @@ public sealed record QueueProgressSnapshot(
     string QueueName,
     int ScopeOrganizationId,
     DateTime? LastCreatedUtc,
-    long? LastItemId,
-    long? CycleMaxId,
-    long? LastOutcomeItemId,
+    string? LastItemId,
+    string? CycleMaxId,
+    string? LastOutcomeItemId,
     string? LastOutcomeCode,
     DateTime? LastOutcomeUtc,
     DateTime UpdatedUtc,
     string Version);
 
-public sealed class QueueProgressService(IDbContextFactory<AsapDbContext> contextFactory)
+public sealed class QueueProgressService(IDbContextFactory<AsapDbContext> contextFactory, TimeProvider timeProvider)
 {
     public async Task<QueueProgress> GetOrCreateAsync(
         string queueName,
@@ -61,7 +62,7 @@ public sealed class QueueProgressService(IDbContextFactory<AsapDbContext> contex
             QueueName = queueName,
             ScopeOrganizationId = scope,
             CycleMaxId = null,
-            UpdatedUtc = DateTime.UtcNow
+            UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
         };
         context.QueueProgress.Add(progress);
         await context.SaveChangesAsync(cancellationToken);
@@ -95,15 +96,20 @@ public sealed class QueueProgressService(IDbContextFactory<AsapDbContext> contex
             : new QueueProgressSnapshot(
                 progress.QueueName,
                 progress.ScopeOrganizationId,
-                progress.LastCreatedUtc,
-                progress.LastItemId,
-                progress.CycleMaxId,
-                progress.LastOutcomeItemId,
+                AsUtc(progress.LastCreatedUtc),
+                progress.LastItemId?.ToString(CultureInfo.InvariantCulture),
+                progress.CycleMaxId?.ToString(CultureInfo.InvariantCulture),
+                progress.LastOutcomeItemId?.ToString(CultureInfo.InvariantCulture),
                 progress.LastOutcomeCode,
-                progress.LastOutcomeUtc,
-                progress.UpdatedUtc,
+                AsUtc(progress.LastOutcomeUtc),
+                AsUtc(progress.UpdatedUtc),
                 Convert.ToBase64String(progress.RowVersion));
     }
 
-    public static int NormalizeScope(int? scopeOrganizationId) => scopeOrganizationId ?? 1;
+    // SQL datetime2 stores UTC clock values without retaining DateTime.Kind.
+    private static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
+
+    private static DateTime? AsUtc(DateTime? value) => value.HasValue ? AsUtc(value.Value) : null;
+
+    public static int NormalizeScope(int? scopeOrganizationId) => scopeOrganizationId ?? LibraryScope.SystemOrganizationId;
 }

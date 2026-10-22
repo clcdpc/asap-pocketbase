@@ -32,6 +32,7 @@ public sealed class StaffBootstrapHostedService(
         {
             throw;
         }
+        // Startup is a fail-closed readiness boundary; any bootstrap defect keeps business routes unavailable.
         catch (Exception exception)
         {
             initializationState.MarkFailed("staff_startup_validation_failed");
@@ -66,8 +67,8 @@ public sealed class StaffBootstrapHostedService(
             NormalizedUserPrincipalName = normalizedEmail,
             DisplayName = Clean(options.DisplayName),
             NotificationEmail = notificationEmail ?? email,
-            Role = "super_admin",
-            OrganizationId = 1,
+            Role = StaffRole.SuperAdmin,
+            OrganizationId = LibraryScope.SystemOrganizationId,
             IsActive = true,
             LastLoginUtc = null
         });

@@ -1,16 +1,17 @@
 using System.Net.Mail;
+using System.Text.Json.Serialization;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace Asap.Web.Features.Staff;
 
 public sealed record StaffProfileInput(
-    string? Version,
-    bool WeeklyActionSummaryEnabled,
-    string? WeeklyActionSummaryEmail,
-    bool PurchaseReminderDefault,
-    bool AdditionalCopyReminderDefault,
-    bool DefaultMineUnclaimedFilter);
+    [property: JsonRequired] string? Version,
+    [property: JsonRequired] bool WeeklyActionSummaryEnabled,
+    [property: JsonRequired] string? WeeklyActionSummaryEmail,
+    [property: JsonRequired] bool PurchaseReminderDefault,
+    [property: JsonRequired] bool AdditionalCopyReminderDefault,
+    [property: JsonRequired] bool DefaultMineUnclaimedFilter);
 
 public sealed record StaffMutationResult(string Code, CurrentStaff? Staff = null);
 
@@ -44,12 +45,24 @@ public sealed class StaffProfileService(
         var organization = await context.Organizations.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {organizationId.Value}")
             .SingleOrDefaultAsync(cancellationToken);
-        if (organization is null) return new StaffMutationResult("staff_session_invalid");
+        if (organization is null)
+        {
+            return new StaffMutationResult("staff_session_invalid");
+        }
+
         var locked = await eligibility.RevalidateLockedAsync(context, currentStaff, null, StaffRoleRequirement.Any,
             true, new HashSet<int> { organization.Id }, cancellationToken);
-        if (locked.Outcome != StaffEligibilityOutcome.Allowed) return new StaffMutationResult(locked.Code);
+        if (locked.Outcome != StaffEligibilityOutcome.Allowed)
+        {
+            return new StaffMutationResult(locked.Code);
+        }
+
         var row = context.StaffUsers.Local.Single(item => item.Id == currentStaff.Id);
-        if (!row.RowVersion.SequenceEqual(expectedVersion)) return new StaffMutationResult("stale_version");
+        if (!row.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new StaffMutationResult("stale_version");
+        }
+
         context.Entry(row).Property(item => item.RowVersion).OriginalValue = expectedVersion;
         row.WeeklyActionSummaryEnabled = input.WeeklyActionSummaryEnabled;
         row.WeeklyActionSummaryEmail = weeklyEmail;

@@ -3,7 +3,7 @@ CREATE TABLE [asap].[DeploymentState]
     [Id] tinyint NOT NULL
         CONSTRAINT [PK_DeploymentState] PRIMARY KEY,
     [LastDacpacSha256] char(64) NULL,
-    [LastHangfireSchemaVersion] nvarchar(100) NULL,
+    [LastHangfireSchemaVersion] int NULL,
     [LastHangfireSchemaAssetSha256] char(64) NULL,
     [LastReleaseVersion] nvarchar(100) NULL,
     [LastReleaseCommitSha] char(40) NULL,

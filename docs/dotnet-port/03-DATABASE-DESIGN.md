@@ -30,7 +30,7 @@ UpdatedUtc datetime2 NOT NULL
 
 The integer changes only for contract-affecting schema changes. Application startup compares the expected build value with SQL. Mismatch keeps liveness healthy but readiness unhealthy and blocks normal application functions. It is not used to decide whether a DACPAC needs deployment.
 
-Schema 6 is the pre-release hard-reset boundary for email identity. A database carrying an earlier application schema is disposable and must be recreated from the schema-6 DACPAC; the post-deployment script refuses to advance a pre-6 version in place. Fresh creation contains only the final email-based staff and EmailOutbox shape.
+Schema 7 is the pre-release reset boundary for native Polaris identities; current schema 13 upgrades native schema-7/8/9/10/11/12 targets in place. Earlier revisions added nullable native organization type, parent and patron identity snapshots; schema 13 appends nullable test-email actor, configuration and delivery-mode evidence without rewriting historical outbox payloads, timestamps or rowversions. Recreate pre-7 databases from the current DACPAC; no string-to-number upgrade or compatibility columns are retained. Run the DACPAC's embedded pre-deployment script before plan generation: it rejects unidentified/pre-7/newer targets, retires only the two obsolete global requesting/pickup columns, clears nonpositive integration IDs and the former system pickup reference to NULL, and preserves valid credentials, identity and native business data. Newly added organization type/parent values remain unclassified on old rows until trusted synchronization supplies them, so unknown rows do not gain library authority from their existing active flag. Nullable patron ID snapshots remain unknown on preexisting rows; no barcode-based identity backfill occurs. Publish retains normal data-loss protection and preserves unowned objects; the post-deployment script advances compatible schema 7/8/9/10/11/12 to 13. Fresh import parses numeric source identities, and repeat deployment preserves existing native data.
 
 ### `[asap].[DeploymentState]`
 
@@ -39,7 +39,7 @@ Purpose: deployment bookkeeping independent of the application/database compatib
 ```text
 Id tinyint NOT NULL PK/check single row
 LastDacpacSha256 char(64) NULL
-LastHangfireSchemaVersion nvarchar(...) NULL
+LastHangfireSchemaVersion int NULL
 LastHangfireSchemaAssetSha256 char(64) NULL
 LastReleaseVersion nvarchar(...) NULL
 LastReleaseCommitSha char(40) NULL
@@ -158,13 +158,13 @@ Host nvarchar(...) NULL
 AccessId nvarchar(...) NULL
 ProtectedApiKey nvarchar(max) NULL
 ... other required non-legacy system/application credential fields ...
-WorkstationId nvarchar(...) NULL
-SystemPolarisUserId nvarchar(...) NULL
+WorkstationId int NULL CHECK (WorkstationId IS NULL OR WorkstationId > 0)
+SystemPolarisUserId int NULL CHECK (SystemPolarisUserId IS NULL OR SystemPolarisUserId > 0)
 UpdatedUtc datetime2 NOT NULL
 RowVersion rowversion
 ```
 
-Do not reproduce legacy per-staff Polaris authentication fields. Protected credential columns contain Data Protection ciphertext, never plaintext.
+Do not reproduce legacy per-staff Polaris authentication or global member requesting/pickup fields. The system-only seed contains no invented operational defaults. Protected credential columns contain Data Protection ciphertext, never plaintext.
 
 ### `[asap].[WorkflowSettings]`
 
@@ -216,7 +216,7 @@ CommonCreatorTerm:
   UNIQUE (OrganizationId, SortOrder)
 ```
 
-System set at Organization `1` is seeded. No library set means inherit system; a library set means complete replacement. To preserve current behavior, clearing all terms removes the library set and resumes inheritance.
+System set at Organization `1` is seeded. No library set means inherit system; a library set means complete replacement, including a set with zero terms. In target settings writes, an omitted collection property makes no edit, `null` at library scope removes the library set and resumes inheritance, and `[]` stores an intentional empty set. At system scope, both `null` and `[]` clear common creators to an empty system set. This whole-set behavior is distinct from ordinary blank library text, which may normalize to no override.
 
 ### `[asap].[PatronCodeEligibilitySet]` / `[asap].[PatronCodeEligibilityMember]`
 
@@ -227,11 +227,11 @@ PatronCodeEligibilitySet:
 
 PatronCodeEligibilityMember:
   OrganizationId int NOT NULL FK PatronCodeEligibilitySet(OrganizationId)
-  PatronCodeId nvarchar(...) NOT NULL
+  PatronCodeId int NOT NULL
   PRIMARY KEY (OrganizationId, PatronCodeId)
 ```
 
-Patron codes remain Polaris reference data rather than durable lookup rows. Validate configured IDs against current reference data when practical. Set-row presence marks a meaningful replacement. At library scope, clearing all IDs removes the set and resumes inheritance.
+Patron codes remain Polaris reference data rather than durable lookup rows. Validate configured IDs against current reference data when practical. Set-row presence marks a replacement even when it has no members. At library scope, an explicit reset removes the set and resumes inheritance; an empty replacement retains the set row with no members. An empty system member list is represented by the system set row with no members; system `null` is rejected, so use `[]` to clear the system set.
 
 ### `[asap].[PatronSettings]`
 
@@ -269,7 +269,7 @@ Use explicit columns for the fixed status-label taxonomy; do not reintroduce a g
 
 ### `[asap].[EmailSettings]`
 
-Postmark transport/sender configuration with system + library field-level inheritance.
+System-only Postmark credential plus System defaults and library field-level overrides for From address/name.
 
 ```text
 OrganizationId int PK/FK Organization
@@ -281,7 +281,7 @@ UpdatedUtc datetime2 NOT NULL
 RowVersion rowversion
 ```
 
-A null library field inherits from Organization `1`. Protected token/secret values are opaque Data Protection ciphertext in SQL. Secret API semantics remain blank=preserve, explicit Clear=remove override/system value according to authorization/confirmation rules.
+A null library sender field inherits from Organization `1`. Only organization `1` owns `ProtectedServerToken`; delivery ignores obsolete non-System ciphertext and DACPAC post-deployment clears it without decrypting or altering sender fields. Protected token values are opaque Data Protection ciphertext in SQL. Secret API semantics are blank=preserve and explicit authorized System Clear=remove; library credential writes and clears are rejected.
 
 ### `[asap].[ExternalSearchProvider]`
 
@@ -330,7 +330,7 @@ PublicationOption:
   UNIQUE (OrganizationId, SortOrder)
 ```
 
-`OptionKey` preserves the current normalized publication-option ID. Organization `1` owns the system list. No library set means inherit the full system list; a library set is the entire replacement list. At library scope, clearing the list removes the set and resumes inheritance. Reset deletes the library set and children.
+`OptionKey` preserves the current normalized publication-option ID. Organization `1` owns the system list. No library set means inherit the full system list; a library set is the entire replacement list, including an empty list. Target settings writes distinguish omitted (no edit), library `null` (reset/inherit), and `[]` (empty replacement set). At system scope, both `null` and `[]` store an empty system list. Reset deletes the library set and children.
 
 ### `[asap].[PatronCustomField]` / `[asap].[PatronCustomFieldOption]`
 
@@ -497,7 +497,7 @@ Barcode nvarchar(...) NOT NULL               -- historical snapshot
 Email nvarchar(...) NULL                     -- historical submission snapshot
 NameFirst nvarchar(...) NULL
 NameLast nvarchar(...) NULL
-PatronCodeId nvarchar(...) NULL
+PatronCodeId int NULL
 PatronCodeDescription nvarchar(...) NULL
 PreferredPickupBranchId int NULL                    -- current recorded pickup; mutable only via dedicated validated pickup workflow
 PreferredPickupBranchName nvarchar(...) NULL
@@ -514,7 +514,8 @@ MaterialFormatId bigint NOT NULL FK MaterialFormat
 
 Status nvarchar(...) NOT NULL CHECK (...)
 CloseReason nvarchar(...) NULL CHECK (...)
-BibId nvarchar(...) NULL
+BibId int NULL
+BibIdStaffVerified bit NOT NULL DEFAULT (0) CHECK (BibIdStaffVerified = 0 OR BibId IS NOT NULL)
 Notes nvarchar(max) NULL
 
 ClaimedByStaffUserId bigint NULL FK StaffUser
@@ -536,6 +537,8 @@ RowVersion rowversion
 ```
 
 `LegacyId` is provenance/business-history data and is not the PocketBase mapping key used by migration. Keep a separate migration mapping table.
+
+`BibIdStaffVerified` is set only when the target staff workflow deliberately establishes and validates the current BIB. Identifier reconciliation may replace or clear a BIB only while this flag is false; identifier edits clear the old BIB and reset the flag before processing the new identifier. Migration follows the pinned-source authority classification and blocker rules in `04-MIGRATION-CUTOVER.md`; it explicitly inserts the flag and reconciles it instead of relying on the database default. The default supports ordinary new rows only. Adding the column to a nonempty pre-cutover target is unsupported because a default cannot recover legacy BIB provenance.
 
 Use indexes for library/status, claim state, format, created/updated, background-job selection fields, and any currently frequent duplicate/identifier lookups. Normalize blank `BibId` to null and add a CHECK equivalent to `IsbnCheckStatus <> 'found' OR NULLIF(LTRIM(RTRIM(BibId)), '') IS NOT NULL` so SQL cannot contain a canonical `found` row without supporting BIB state. The application/migration additionally keeps the identifier-found workflow tag coherent with that state.
 
@@ -590,7 +593,7 @@ PRIMARY KEY (TitleRequestId, WorkflowTagId)
 Id bigint IDENTITY PK
 SourceTitleRequestId bigint NULL FK TitleRequest ON DELETE SET NULL
 LibraryOrganizationId int NOT NULL FK Organization
-BibId nvarchar(...) NULL
+BibId int NULL
 Title nvarchar(...) NOT NULL
 Author nvarchar(...) NULL
 MaterialFormatId bigint NULL FK MaterialFormat
@@ -631,7 +634,7 @@ LibraryOrganizationId int NOT NULL
 Title nvarchar(...) NULL
 Author nvarchar(...) NULL
 Identifier nvarchar(...) NULL
-BibId nvarchar(...) NULL
+BibId int NULL
 Status nvarchar(...) NULL
 CloseReason nvarchar(...) NULL
 MaskedBarcode nvarchar(...) NULL
@@ -692,6 +695,10 @@ RecipientStaffUserId bigint NULL FK StaffUser
 RecipientAuthenticationEmail nvarchar(320) NULL -- normalized identity snapshot for sensitive mail
 AuthorizationOrganizationId int NULL FK Organization
 RecipientAddressKind nvarchar(32) NULL CHECK (notification_email/weekly_summary)
+TestRequestedByStaffUserId bigint NULL      -- operational-test actor snapshot; retained after staff retirement
+TestConfigurationVersion varchar(64) NULL   -- saved sender/System credential rowversion fingerprint, no secret
+IntendedDeliveryMode nvarchar(32) NULL      -- live UI test intent is postmark
+AttemptDeliveryMode nvarchar(32) NULL       -- actual attempt/transport evidence; old results remain unknown
 ToAddress nvarchar(...) NULL                -- nullable only for terminal suppressed intent
 FromAddress nvarchar(...) NULL              -- nullable only for terminal suppressed intent
 FromName nvarchar(...) NULL
@@ -723,13 +730,21 @@ CREATE UNIQUE INDEX UX_EmailOutbox_BusinessKey
     WHERE BusinessKey IS NOT NULL;
 ```
 
-Deterministic business keys are globally namespaced by notification semantics; test/ad-hoc repeatable messages may leave the key null. When two writers race on the same key, SQL uniqueness is authoritative and the loser resolves the existing row as an idempotent success rather than reporting a failed enqueue. Ordinary weekly summaries use one key per recipient/reporting period. Forced weekly summaries use one generated `ManualRunId` per accepted forced invocation and keys such as `weekly-summary-force:{ManualRunId}:{StaffUserId}`; retries of that same forced Hangfire job reuse the ID.
+Deterministic business keys are globally namespaced by notification semantics. Public operational-test requests require an actor/scope/click key; internal ad-hoc messages may leave it null. When two writers race on the same key, SQL uniqueness is authoritative and the loser resolves the existing row as an idempotent success rather than reporting a failed enqueue. Ordinary weekly summaries use one key per recipient/reporting period. Forced weekly summaries use one generated `ManualRunId` per accepted forced invocation and keys such as `weekly-summary-force:{ManualRunId}:{StaffUserId}`; retries of that same forced Hangfire job reuse the ID.
+
+Schema 13 adds nullable operational-test metadata without inventing historical
+live-send evidence or changing the immutable `operational_test` delivery class.
+New live tests bind their saved configuration and intended mode before enqueue;
+the worker and final Postmark adapter reject changed configuration/mode before
+the provider POST. A successful result records actual transport evidence, rather
+than reading current configuration when status is requested. The actor snapshot
+is audit metadata and does not create another staff authorization tuple.
 
 For `staff_authorization_sensitive`, `RecipientStaffUserId`, `RecipientAuthenticationEmail`, `AuthorizationOrganizationId`, and `RecipientAddressKind` are required. Snapshot the normalized authentication email at intent creation. Every send/retry requires that snapshot to equal the current StaffUser authentication email, plus current active/role/scope/participation and exact destination ownership checks. Stored Entra metadata is irrelevant. An authentication-email change suppresses the stale row; an OID change does not.
 
-DB/application invariants for deliverable rows (`pending`/`sending`/`failed`) require usable recipient/sender/content snapshots. `suppressed` may retain null recipient/sender when those values were the reason the notification intent could not be delivered. Missing required notification configuration at business-transaction time creates a terminal suppressed intent rather than rolling back the business mutation; optional staff notifications with no configured destination may instead create no row where the product contract says no notification is requested. If transport configuration disappears only after a valid row was queued, record `failed`/`mail_not_configured` and retain the payload for manual retry.
+DB/application invariants for deliverable rows (`pending`/`sending`/`failed`) require usable recipient/sender/content snapshots. `suppressed` may retain null recipient/sender when those values were the reason the notification intent could not be delivered. Missing required notification configuration at business-transaction time creates a terminal suppressed intent rather than rolling back the business mutation; optional staff notifications with no configured destination may instead create no row where the product contract says no notification is requested. If transport configuration disappears only after a valid row was queued, record `failed`/`mail_not_configured` and retain the payload for manual retry only when persisted state also proves there is no provider message ID, send-start timestamp, lease, expiry, or scheduled retry.
 
-Do not snapshot the reusable Postmark token here. Resolve effective transport config at each send/retry. A claim atomically sets `Status=sending`, `SendingStartedUtc=claim time`, a new `LeaseId`, and `LeaseExpiresUtc=SendingStartedUtc + 2 minutes`, and returns the resulting rowversion before commit. The provider call must start within 30 seconds of `SendingStartedUtc` and the complete provider operation has a hard 30-second timeout, so its latest legitimate completion is at least 60 seconds before lease expiry. Do not start the provider call after the start deadline. The sweeper runs every five minutes and may reclaim only after lease expiry; treat every expired `sending` row as potentially transport-ambiguous, move it through the existing bounded retry path with a new ownership state, and never claim that a pre-call crash is distinguishable from provider ambiguity. Every terminal or retry-scheduling update from a worker is a compare-and-set on `Status=sending`, its expected `LeaseId`, and its post-claim rowversion/equivalent ownership state. A stale worker that returns after reclaim cannot update the row or enqueue another retry. A crash or timeout after possible provider acceptance may cause a duplicate retry, so transport remains at-least-once and exactly-once delivery is not promised. `failed` remains manually retryable and retains its full delivery payload. Only terminal `sent` and `suppressed` rows are eligible for subject/body payload purge after 90 days; retain status/provider/attempt/lease/suppression metadata needed for operational history.
+Do not snapshot the reusable Postmark token here. Resolve effective transport config at each send/retry. A claim atomically sets `Status=sending`, `SendingStartedUtc=claim time`, a new `LeaseId`, and `LeaseExpiresUtc=SendingStartedUtc + 2 minutes`, and returns the resulting rowversion before commit. The provider call must start within 30 seconds of `SendingStartedUtc` and the complete provider operation has a hard 30-second timeout, so its latest legitimate completion is at least 60 seconds before lease expiry. Do not start the provider call after the start deadline. The sweeper runs every five minutes and may dispatch committed due rows missed by immediate enqueue. An expired `sending` lease after `TryBeginProviderSend` clears `pre_send_check_pending` is transport-ambiguous: quarantine it as `failed/ambiguous_expired_lease`, preserve attempt/start/error evidence, clear the live lease, leave `NextAttemptUtc` null, and do not enqueue or return it to `pending`. A row retaining `pre_send_check_pending` proves the provider call was not entered and may be safely released/requeued. Never infer no dispatch from a crash alone. Every terminal or retry-scheduling update from a worker is a compare-and-set on `Status=sending`, its expected `LeaseId`, and its post-claim rowversion/equivalent ownership state. A stale worker cannot update the row or enqueue another attempt. The only manual retry is the certified no-send `mail_not_configured` case when provider ID, send-start timestamp, lease, expiry, and scheduled retry are all absent. A crash or timeout after possible provider acceptance remains ambiguous and is never automatically or manually replayed; the provider offers no exactly-once guarantee. Failed rows retain the payload for authorized recovery/inspection; only terminal `sent` and `suppressed` rows are eligible for subject/body payload purge after 90 days, while operational metadata is retained.
 
 ### `[asap].[EmailDeliveryEvent]`
 
@@ -755,12 +770,12 @@ Purpose-specific durable journal, not a generic external-operation framework. `0
 Id bigint IDENTITY PK
 TitleRequestId bigint NOT NULL FK TitleRequest
 PatronBarcodeSnapshot nvarchar(...) NOT NULL
-PatronIdSnapshot nvarchar(...) NULL
-BibIdSnapshot nvarchar(...) NOT NULL
-PickupBranchIdSnapshot int NULL
-RequestingOrganizationIdSnapshot int NULL
+PatronIdSnapshot int NULL
+BibIdSnapshot int NOT NULL
+PickupBranchIdSnapshot int NULL                  -- verified PAPI pickup at create marker or existing hold; NULL when unknown
+RequestingOrganizationIdSnapshot int NULL        -- native PatronOrgID sent as PAPI RequestingOrgID; NULL for adopted holds with unknown original route
 WorkstationIdSnapshot int NULL
-PolarisUserIdSnapshot nvarchar(...) NULL
+PolarisUserIdSnapshot int NULL
 AttemptNumber int NOT NULL
 State nvarchar(...) NOT NULL CHECK (in_progress/ambiguous/operator_required/succeeded/no_hold/failed)
 Phase nvarchar(...) NOT NULL CHECK (acquired/create_started/reply_ready/reply_started/result_recorded)
@@ -773,14 +788,14 @@ CreateResponseObservedUtc datetime2 NULL
 ReplyStartedUtc datetime2 NULL                -- committed before first reply call
 ReplyResponseObservedUtc datetime2 NULL
 CompletedUtc datetime2 NULL
-PolarisRequestGuid nvarchar(...) NULL         -- create/reply/recovery RequestGUID; not a final HoldRequestID
-PolarisHoldId nvarchar(...) NULL              -- authoritative final HoldRequestID for this placed/adopted hold
+PolarisRequestGuid uniqueidentifier NULL         -- create/reply/recovery RequestGUID; not a final HoldRequestID
+PolarisHoldId int NULL              -- authoritative final HoldRequestID for this placed/adopted hold
 TxnGroupQualifier nvarchar(...) NULL
 TxnQualifier nvarchar(...) NULL
-ReplyAnswer nvarchar(...) NULL
-ReplyState nvarchar(...) NULL
-ProviderStatusType nvarchar(...) NULL
-ProviderStatusValue nvarchar(...) NULL
+ReplyAnswer int NULL
+ReplyState int NULL
+ProviderStatusType int NULL
+ProviderStatusValue int NULL
 ResultCode nvarchar(...) NULL
 OutcomeEvidenceKind nvarchar(...) NULL
 RecoveryAttemptCount int NOT NULL DEFAULT 0

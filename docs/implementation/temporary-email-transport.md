@@ -1,5 +1,14 @@
 # Temporary Final Email Transport
 
+**Historical decision, superseded by the current implementation (2026-10-19).**
+ASAP now has a shared `PostmarkEmailSender` using the cancellable Postmark HTTPS
+API with the protected System credential. `FileEmailSender` remains an explicit
+non-delivery development mode. The dependency substitution and deferred adapter
+steps below record the September decision; they are not current implementation
+instructions. See [saved test-email operation and acceptance](../operations/test-email.md)
+for current configuration, mode, backlog review and separately authorized live
+mailbox acceptance. File output does not establish live delivery.
+
 User-authorized implementation substitution, 2026-09-12, for PR #264. This
 overrides only the final Postmark provider transport requirement while the
 incompatible CLC package is unavailable. It does not reopen the architecture
