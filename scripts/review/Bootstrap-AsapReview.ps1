@@ -2,7 +2,7 @@
 param(
     [string]$Workspace = (Join-Path $HOME 'ASAP-Review'),
     [string]$RepositoryUrl = 'https://github.com/clcdpc/asap-pocketbase.git',
-    [string]$ToolingRef = 'codex/csharp-port'
+    [string]$ToolingRef = 'main'
 )
 
 $ErrorActionPreference = 'Stop'

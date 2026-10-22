@@ -11,10 +11,14 @@ feature services with selective parameterized Dapper/ADO.NET where the feature
 contract needs it, and Hangfire for recurring work. The tracked frontend lives
 under `src/Asap.Web/Frontend` and is copied to generated `wwwroot` by MSBuild.
 
-Development work is complete; the combined final batch is integrated on
-`codex/csharp-port`. See the [completion record](docs/implementation/final-development-completion.md)
-for exact-milestone CI and acceptance. Production readiness and test-IIS runner
-activation remain separate deferred work; PR #264 remains draft.
+The development-ready .NET port includes staff/patron parity from
+[PR #344](https://github.com/clcdpc/asap-pocketbase/pull/344) and integrates into
+`main` through [PR #264](https://github.com/clcdpc/asap-pocketbase/pull/264).
+Use `main` for subsequent development. See the
+[current status](docs/implementation/PORT-STATUS.md) and the original
+[completion record](docs/implementation/final-development-completion.md) for
+validation and accepted history. Production readiness and test-IIS runner
+activation remain separate deferred work.
 
 ## Prerequisites
 
@@ -62,7 +66,7 @@ The Node suite discovers the retained frontend regression files under
 Polaris/Postmark boundaries:
 
 ```powershell
-dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --minimum-expected-tests 702
+dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --minimum-expected-tests 1437
 ```
 
 Set `ASAP_TEST_SQL_CONNECTION_STRING` when the local SQL connection is not the

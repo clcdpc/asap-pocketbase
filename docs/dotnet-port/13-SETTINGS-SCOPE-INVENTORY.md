@@ -1,6 +1,6 @@
 # ASAP Settings Scope and Storage Inventory
 
-**Status:** Normative implementation contract  
+**Status:** Normative implementation contract\
 **Applies to:** .NET port configuration, SQL design, migration, API behavior, settings UX, reset behavior, and tests
 
 ## 1. Purpose and precedence

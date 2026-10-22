@@ -5,7 +5,29 @@ Server 2022, and IIS under the authoritative `docs/dotnet-port/` pack. This
 record preserves accepted-slice evidence while the current target is a
 development-complete port. Production readiness and cutover remain deferred.
 
-## Current Status - Development Complete - 2026-09-16
+## Current integration - 2026-10-21
+
+[PR #264](https://github.com/clcdpc/asap-pocketbase/pull/264) is the source
+integration boundary into `main` for the complete development-ready .NET port.
+Use `main` for subsequent development and review tooling. Staff/patron parity
+from [PR #344](https://github.com/clcdpc/asap-pocketbase/pull/344) is included
+through merge commit `8ab67b346d599d6d0ae0146c050ccde31d37872a`, preserving
+the audited source `f073106ff8ef0674492627622010d44636ca7f7d` and its ancestry.
+The current-main issue-triage workflow and approved requests-list reference
+remain included. Exact integration candidate, validation and final merge
+receipts are maintained on PR #264.
+
+[PR #385](https://github.com/clcdpc/asap-pocketbase/pull/385) remains separate
+and unmerged for staff UI enhancements #378-#384. Source integration does not
+complete outstanding human, provider or product acceptance, production
+readiness, migration cutover or backup/recovery rehearsal.
+`test_cd_activation: pending_runner_setup` remains the documented deferred
+operational contract; this integration performs no deployment or activation.
+
+## Accepted development-completion milestone - 2026-09-16
+
+This section records the original accepted milestone. Current integration
+topology and later validation receipts are described above and on PR #264.
 
 **Development work is COMPLETE. No required development slice remains.**
 Slices 0-8 are accepted; reduced Slices 9 and 11 are complete as one combined

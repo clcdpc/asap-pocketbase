@@ -4,7 +4,11 @@ Reduced Slice 9 and Slice 11 completed as one combined batch on
 `codex/final-development-completion`, merged into `codex/csharp-port` through
 [PR #272](https://github.com/clcdpc/asap-pocketbase/pull/272).
 
-## Current state
+## Accepted batch milestone - 2026-09-16
+
+This file preserves the original development-completion batch. See the
+[current port status](PORT-STATUS.md) for the subsequent staff/patron parity
+and integration into `main` through PRs #344 and #264.
 
 Development work is **COMPLETE**; no required development slice remains.
 The final reviewed candidate is `245c5ff5cd07cd1c4e3bb061ffc6ab199b5bcac8`,
@@ -22,8 +26,9 @@ was pending; its exact SHA/run/result and acceptance are maintained in the
 No further repository commit is needed merely to record green CI.
 
 Slice 10 is deferred/optional, test-IIS activation remains
-`pending_runner_setup`, production readiness is deferred, and PR #264 stays
-open/draft into `main`.
+`pending_runner_setup`, and production readiness is deferred. At this batch
+milestone, PR #264 remained open/draft into `main`; its current integration
+status is tracked separately above.
 
 ## Historical pre-integration receipt
 

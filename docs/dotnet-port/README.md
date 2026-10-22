@@ -1,9 +1,9 @@
 # ASAP PocketBase -> .NET Porting Documentation Pack
 
 **Status:** Slices 0-6 accepted; post-Slice-6 correction complete with successful exact-SHA CI; Slice 7 not started. Beginning with Slice 7, Astra High is the default thin supervisor with PR-backed state and bounded Astra Max escalation; all objective acceptance/release gates retained.
-**Prepared:** 2026-09-12  
-**Repository:** `clcdpc/asap-pocketbase`  
-**Source snapshot:** `150b30b776565194260cc327eeeffdfb46475e81` (`Improve staff login diagnostics and library-aware email formatting`, 2026-09-09)  
+**Prepared:** 2026-09-12\
+**Repository:** `clcdpc/asap-pocketbase`\
+**Source snapshot:** `150b30b776565194260cc327eeeffdfb46475e81` (`Improve staff login diagnostics and library-aware email formatting`, 2026-09-09)\
 **Target:** .NET 10 / ASP.NET Core 10 / SQL Server 2022 / IIS
 
 ## Purpose

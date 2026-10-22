@@ -1,6 +1,6 @@
 # Current PocketBase Reference Map
 
-**Pinned source:** `clcdpc/asap-pocketbase@150b30b776565194260cc327eeeffdfb46475e81`  
+**Pinned source:** `clcdpc/asap-pocketbase@150b30b776565194260cc327eeeffdfb46475e81`\
 **Purpose:** implementation/review reference only. The target architecture is defined by `01-PORTING-SPEC.md` and related pack documents.
 
 ## 1. Current architecture anchors
