@@ -102,8 +102,12 @@ self-contained migration output, and the test-IIS ZIP. The package uses the
 exact tested commit and a digest-before-extract gate. The deployment script's
 `-ValidateOnly` mode checks extraction and manifest integrity without mutating
 an IIS host. See [test-IIS activation](docs/implementation/test-iis-activation.md)
-for the separately pending runner/host task. The IIS job remains skipped until
-`test_cd_activation: pending_runner_setup` is changed by that authorized task.
+for the separately pending runner/host task. The IIS job requires
+`ASAP_TEST_DEPLOYMENT_ENABLED=true` and an explicit deployment dispatch or a
+matching test-tag push; a push to `main` alone cannot deploy. This integration
+leaves deployment activation settings unchanged. The documented
+`test_cd_activation: pending_runner_setup` contract requires a separate
+authorized operational task to update its deployment evidence.
 
 ## Scope and release boundary
 
