@@ -15,9 +15,10 @@ function createQueueGrid(options, container) {
   // can replace newer filtered rows. Give each revision its own instance while
   // keeping the outer queue/focus owner stable and preserving its selected sort.
   let disposed = false;
+  let displayed = null;
   let current = create(options);
 
-  function create(configuration, sort = null) {
+  function create(configuration, sort = null, stage = false) {
     // Grid.js normalizes columns in place; retain pristine options for later revisions.
     // A newly mounted sort button initializes direction from its column.
     const columns = configuration.columns.map((column, index) => {
@@ -33,6 +34,7 @@ function createQueueGrid(options, container) {
     const process = pipeline.process.bind(pipeline);
     let tail = Promise.resolve();
     let retired = false, pending = 0, destroyed = false;
+    let observer = null, unsubscribe = null;
     const cleanup = () => {
       if (retired && !pending && !destroyed) {
         destroyed = true;
@@ -56,22 +58,56 @@ function createQueueGrid(options, container) {
       return result;
     };
     const frame = document.createElement('div');
-    container.replaceChildren(frame);
+    const revision = { grid, frame, retire() {
+      retired = true;
+      observer?.disconnect(); unsubscribe?.();
+      frame.remove(); cleanup();
+    } };
+    if (stage) {
+      // A status selection filters accepted rows. Grid.js first mounts an empty
+      // body, then commits data asynchronously. Keep the previous frame inert
+      // until the replacement has committed its own rows, including an empty result.
+      const present = () => {
+        const state = grid.config.store.getState(), body = frame.querySelector('tbody');
+        // Vendored Grid.js 6.2.0 status 3 is Rendered; its store may lead the DOM.
+        if (disposed || retired || pending || state.status !== 3 ||
+            !body || body.rows.length !== Math.max(1, state.data?.rows.length ?? 0)) return;
+        observer.disconnect(); unsubscribe();
+        displayed?.retire();
+        container.replaceChildren(frame);
+        displayed = revision;
+      };
+      observer = new window.MutationObserver(present);
+      observer.observe(frame, { childList: true, subtree: true });
+      unsubscribe = grid.config.store.subscribe(present);
+    } else {
+      container.replaceChildren(frame);
+      displayed = revision;
+    }
     grid.render(frame);
-    return { grid, retire() { frame.remove(); retired = true; cleanup(); } };
+    return revision;
   }
 
   return {
-    replaceRows(rows, page = 0) {
+    // A pending status revision has already reset pagination; the retained
+    // visible frame still belongs to the previous status until the atomic swap.
+    page: () => current === displayed ? Number(container.querySelector('.gridjs-currentPage')?.textContent || 1) - 1 : 0,
+    replaceRows(rows, page = 0, stage = false) {
       if (disposed) return;
-      const sort = current.grid.config.store.getState().sort;
-      current.retire();
-      current = create({ ...options, data: rows, pagination: { ...options.pagination, page } }, sort);
+      const sort = stage ? null : current.grid.config.store.getState().sort;
+      if (current !== displayed) current.retire();
+      if (stage) {
+        displayed.frame.inert = true;
+        displayed.frame.setAttribute('aria-hidden', 'true');
+      }
+      else displayed?.retire();
+      current = create({ ...options, data: rows, pagination: { ...options.pagination, page } }, sort, stage);
     },
     destroy() {
       if (disposed) return;
       disposed = true;
       current.retire();
+      if (displayed !== current) displayed?.retire();
     }
   };
 }
@@ -136,7 +172,9 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     grid: root.querySelector('#request-grid'),
     empty: root.querySelector('#queue-empty'),
   };
-  const state = { requests: [], grid: null, gridStatus: null, loadedContext: null, stale: true, sequence: 0 };
+  const state = { requests: [], grid: null, gridStatus: null, loadedContext: null, stale: true, refreshRequired: false, sequence: 0 };
+  // The API accepts a library scope and returns every title status in that scope.
+  const isReady = context => !state.stale && !state.refreshRequired && state.loadedContext?.scope === context.scope;
   const reads = createLatestLoad();
   const events = new window.AbortController();
   let disposed = false, acceptingScope = false, targetGeneration = 0, lookupContext = null;
@@ -169,6 +207,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     state.requests = Object.freeze(Array.isArray(result.items) ? result.items.map(item => Object.freeze({ ...item })) : []);
     state.loadedContext = Object.freeze({ scope: result.scope, status: getContext().status });
     state.stale = false;
+    state.refreshRequired = false;
     if (sessionIdentity.actor()?.role === 'super_admin') { setLibraries(result.organizations); onLibraries(result.organizations); }
     populateTags(); renderGrid({ preservePage: true });
     onRefreshed({ sequence, items: state.requests, context: state.loadedContext });
@@ -179,6 +218,9 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     if (disposed || !owner) return false;
     const load = reads.begin('queue');
     const sequence = ++state.sequence;
+    // A canceled authoritative reload still requires a read on navigation, while
+    // accepted rows remain usable to open fresh details during that reload.
+    state.refreshRequired = true;
     dom.refresh.disabled = true;
     const clearLoading = !options.silent ? announce('Loading authorized requests...') : null;
     try {
@@ -459,13 +501,8 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
         : 'Workflow rules will appear with requests in this stage.';
     const definitions = queueColumns();
     const rows = requests.map(request => definitions.map(column => column.value(request)));
-    const currentPage = Number(dom.grid.querySelector('.gridjs-currentPage')?.textContent || 1) - 1;
+    const currentPage = state.grid?.page() ?? 0;
     const page = preservePage ? Math.max(0, Math.min(currentPage, Math.ceil(rows.length / 25) - 1)) : 0;
-    if (state.grid && state.gridStatus !== getContext().status) {
-      state.grid.destroy?.();
-      dom.grid = detachGridContainer(dom.grid);
-      state.grid = null;
-    }
     if (!state.grid) {
       state.gridStatus = getContext().status;
       state.grid = createQueueGrid({
@@ -482,7 +519,8 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       }, dom.grid);
     } else {
       // Refresh retains the current page, clamped to the accepted rows. Filters reset it.
-      state.grid.replaceRows(rows, page);
+      state.grid.replaceRows(rows, page, state.gridStatus !== getContext().status);
+      state.gridStatus = getContext().status;
     }
   }
 
@@ -506,7 +544,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   for (const input of [dom.claim, dom.tag, dom.similar]) input.addEventListener('change', renderGrid, { signal: events.signal });
   return {
     refresh, prepare, invalidate, markStale, render: renderGrid, resetFilters: resetQueueFilters, setStaff, setLibraries,
-    isReady: context => !state.stale && state.loadedContext?.scope === context.scope && state.loadedContext?.status === context.status,
+    isReady,
     find: id => state.requests.find(item => item.id === id), sequence: () => state.sequence,
     libraryScope: scopeForLibraryOrAll,
     quickCreateFocusReturn: id => {
@@ -520,13 +558,16 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     focusReturn: (id, fallback) => focusPort({ grid: () => dom.grid, label: `Open request ${id}`, fallback, sessionIdentity, getContext }),
     activate({ previous }) { if (disposed) return; if (previous !== 'queue') resetQueueFilters(); updateStatusTabs(); },
     deactivate: invalidate,
-    refreshOnEntry() { if (state.stale || state.loadedContext?.scope !== getContext().scope) return refresh(); },
+    refreshOnEntry() { if (!isReady(getContext())) return refresh(); },
     contextChanged(next, previous) {
       if (disposed) return;
       dom.scope.value = next.scope;
       if (next.status !== previous.status) {
         invalidate(); resetQueueFilters(); updateStatusTabs();
-        if (next.scope === previous.scope) renderGrid();
+        if (next.scope === previous.scope) {
+          if (isReady(next)) renderGrid();
+          else retireProjection();
+        }
       }
       if (next.scope !== previous.scope) { resetQueueFilters(); retireProjection(); }
     },

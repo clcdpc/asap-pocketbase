@@ -200,3 +200,48 @@ browser) and 57 frontend test files, plus deliberate additions.
 - Final full-suite, native-zoom, publish/package and hosted-CI results are
   maintained in [the PR #385 validation record](https://github.com/clcdpc/asap-pocketbase/pull/385).
   That record distinguishes completed checks from any pending gates.
+
+### Follow-up #386: stable Title requests status transitions
+
+- The confirmed report affects the results below every status tab on the
+  development site in Firefox, with a second reported Chrome occurrence.
+  Local real-browser instrumentation reproduced the defect in Chromium and
+  Firefox using the actual frontend modules and vendored Grid.js. Chromium
+  was also measured at 4x CPU throttling. Each original status change issued
+  one Title requests GET, called `renderGrid()` twice and constructed two grids.
+  Animation-frame samples showed populated rows, an empty startup body, the
+  selected rows, another empty body and the selected rows again.
+- Title readiness now follows the accepted library scope and freshness because
+  the list endpoint returns every status. Fresh same-scope tab/history changes
+  filter locally. Starting an authoritative reload records a required refresh,
+  so canceling it still requires a replacement read while accepted rows can
+  continue opening fresh authorized details. Scope changes, explicit
+  refresh, invalidation and mutation reloads keep authoritative reads. A fresh
+  detail whose status differs from the accepted row also reloads the collection.
+- Only Title status replacements are staged in a detached frame until Grid's
+  Rendered state and committed body agree. The previous frame remains inert and
+  excluded from accessibility while the replacement loads, then is retired in
+  the same DOM update. Fresh instances, serialized pipelines, cache clearing
+  and destruction after pending work drains remain intact. Scope retirement and
+  sign-out retire both displayed and pending revisions immediately. Copy
+  status loading and ordinary filter/refresh replacement behavior are preserved.
+- Corrected Chromium and Firefox traces show zero Title GETs, one render call,
+  one fresh grid and one ready table swap per status change, without a painted
+  empty startup body. The SQL-backed workflow browser journey records all five
+  statuses at normal and 4x CPU speed, genuinely empty/single-row/multi-page
+  results, rapid selection, a held old sort, Refresh during a pending status
+  reset, delayed canceled HTTP responses, scope changes and keyboard/history.
+  The new frontend regression also checks readiness, authoritative detail
+  alignment, invalidation and the separate Copy endpoint.
+- The new tests fail against the original queue/navigation sources. Independent
+  review additionally reproduced and verified corrections for cross-view
+  history resetting filters without rows and pending status Refresh inheriting
+  the previous page. Held replacement checks covered scope, filters, sign-out
+  and rapid reversal. The retained staff journey checks a fresh Recent detail
+  whose authoritative status changed, and the thirteen Grid/focus regressions
+  continue to protect asynchronous sorting and registration.
+- Final validation and commit/CI references are maintained on
+  [issue #386](https://github.com/clcdpc/asap-pocketbase/issues/386) and
+  [PR #385](https://github.com/clcdpc/asap-pocketbase/pull/385). Local Firefox
+  evidence uses deterministic loopback responses; deployment-site acceptance
+  remains manual. This work does not deploy or merge the draft PR.

@@ -203,7 +203,9 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     if (!allow()) return false;
     closeTransient(); invalidate(); align(changes);
     writeStage(name);
-    void views[name].refresh?.({ silent: name === 'queue' && !Object.hasOwn(changes, 'scope') });
+    if (name !== 'queue' || Object.hasOwn(changes, 'scope') || !views.queue.isReady(context)) {
+      void views[name].refresh?.({ silent: name === 'queue' && !Object.hasOwn(changes, 'scope') });
+    }
     return true;
   }
 
@@ -253,6 +255,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       return false;
     }
     const requested = router.requested();
+    const previousView = context.activeView;
     const nextSettingsScope = requested.settingsScope || (owner.role === 'super_admin' ? 'system' : String(owner.organizationId));
     const options = { settings: context.activeView === 'settings' &&
       (requested.stage !== 'settings' || nextSettingsScope !== views.settings.currentScope()) };
@@ -299,7 +302,9 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       if (target.warning) announce(target.warning, 'error');
       if (queue) queue.accept();
       if (detail) views[target.name].presentDetail(detail, {}, ticket);
-      else await views[target.name]?.refresh?.({ skipDeepLink: true });
+      else if (target.name !== 'queue' || previousView !== 'queue' || !views.queue.isReady?.(context)) {
+        await views[target.name]?.refresh?.({ skipDeepLink: true });
+      }
       return true;
     } catch (error) {
       if (load.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
@@ -366,8 +371,10 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     if (!departure?.isCurrent() || !sessionIdentity.isCurrent(owner)) return null;
     const scope = owner.role === 'super_admin' && (options.align || options.fromRecent) && context.scope !== 'all'
       ? views.queue.libraryScope(request.libraryOrgId) : context.scope;
+    const accepted = views.queue.find(request.id);
     return prepareDetailAlignment('queue', { ...context, scope,
-      status: titleStages.includes(request.status) ? request.status : context.status }, owner, departure, Boolean(options.align || options.fromRecent));
+      status: titleStages.includes(request.status) ? request.status : context.status }, owner, departure,
+      Boolean(options.align || options.fromRecent), !accepted || accepted.status !== request.status);
   }
   async function alignCopy(request, options, owner, departure) {
     if (!departure?.isCurrent() || !sessionIdentity.isCurrent(owner)) return null;
@@ -376,8 +383,8 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     return prepareDetailAlignment('additional-copies', { ...context, scope,
       additionalCopyStatus: ['open', 'closed'].includes(request.status) ? request.status : context.additionalCopyStatus }, owner, departure);
   }
-  async function prepareDetailAlignment(name, target, owner, departure, resetFilters = false) {
-    const queue = views[name].isReady(target)
+  async function prepareDetailAlignment(name, target, owner, departure, resetFilters = false, requireRefresh = false) {
+    const queue = !requireRefresh && views[name].isReady(target)
       ? { scope: target.scope, isCurrent: departure.isCurrent, accept() {} }
       : await views[name].prepare(target);
     if (!queue?.isCurrent() || !departure.isCurrent() || !sessionIdentity.isCurrent(owner)) return null;

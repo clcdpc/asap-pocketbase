@@ -81,6 +81,17 @@ public sealed partial class PatronJourneyTests
                     CreatedUtc = timeProvider.GetUtcNow().UtcDateTime.AddMinutes(-index - 1),
                     UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
                 }));
+                foreach (var status in new[] { "outstanding_purchase", "hold_placed", "closed" })
+                {
+                    setup.TitleRequests.AddRange(Enumerable.Range(0, status == "closed" ? 27 : 1).Select(index => new TitleRequest
+                    {
+                        LibraryOrganizationId = library, Barcode = $"status-browser-{status}-{index:00}",
+                        Title = $"Status transition {status} {index:00}", MaterialFormatId = format.Id, Status = status,
+                        CloseReason = status == "closed" ? "manual" : null,
+                        CreatedUtc = timeProvider.GetUtcNow().UtcDateTime.AddHours(-1).AddMinutes(-index),
+                        UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
+                    }));
+                }
                 setup.TitleRequestEvents.AddRange(Enumerable.Range(0, 80).Select(index => new TitleRequestEvent
                 {
                     TitleRequestId = source.Id, EventType = "legacy", ActorType = "system",
@@ -104,6 +115,7 @@ public sealed partial class PatronJourneyTests
             using var report = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "browser-results.json")));
             Assert.HasCount(8, report.RootElement.GetProperty("nativeZoom").EnumerateArray().ToArray());
             Assert.HasCount(2, report.RootElement.GetProperty("listActions").EnumerateArray().ToArray());
+            Assert.HasCount(10, report.RootElement.GetProperty("statusTransitions").GetProperty("transitions").EnumerateArray().ToArray());
             foreach (var action in report.RootElement.GetProperty("listActions").EnumerateArray())
             {
                 var id = long.Parse(action.GetProperty("id").GetString()!, CultureInfo.InvariantCulture);

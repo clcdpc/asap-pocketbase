@@ -6,6 +6,7 @@ const { chromium } = require('playwright');
 const verifyMixedFieldLayout = require('./form-layout.cjs');
 const verifyStaffNativeZoom = require('./staff-native-zoom.cjs');
 const verifyRequestTable = require('./staff-request-table.cjs');
+const statusTransitions = require('./staff-status-transitions.cjs');
 const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode, pickup, title] = process.argv.slice(2);
 
 (async () => {
@@ -19,6 +20,7 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
       report.externalRequests.push(route.request().url()); return route.abort();
     });
     const page = await context.newPage();
+    await statusTransitions.instrument(page);
     page.on('pageerror', error => report.errors.push(error.message));
     page.on('request', request => {
       if (request.url().endsWith('/patron-lookup') && request.method() === 'POST') report.lookups.push(request.postDataJSON());
@@ -59,6 +61,7 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
       assert.match(await dialog.locator('#staff-suggestion-pickup-help').textContent(), /Unfilled requests use the live preference when each hold is placed/i);
     };
     await page.goto(`${baseURL}/staff/?stage=queue&scope=${library}&status=suggestion`);
+    report.statusTransitions = await statusTransitions.verify({ page, context, baseURL, library, scan });
     report.listActions = await verifyRequestTable({ page, context, baseURL, library, scan });
     await page.locator('#request-search').fill(barcode);
     await quick().waitFor(); await quick().focus(); await page.keyboard.press('Enter');
