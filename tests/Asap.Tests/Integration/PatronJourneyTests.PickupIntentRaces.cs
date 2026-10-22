@@ -462,7 +462,8 @@ public sealed partial class PatronJourneyTests
         }
     }
 
-    private sealed class PolicyMutatingReadinessEmailSender(int organizationId) : IEmailSender
+    private sealed class PolicyMutatingReadinessEmailSender(
+        int organizationId, bool replaceAllowedCodes = false, Func<bool>? shouldMutate = null) : IEmailSender
     {
         public int ReadinessCalls { get; private set; }
 
@@ -471,8 +472,17 @@ public sealed partial class PatronJourneyTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (shouldMutate?.Invoke() == false)
+            {
+                return EmailTransportReadiness.NotConfigured;
+            }
             Assert.AreEqual(organizationId, requestedOrganizationId);
             ReadinessCalls++;
+            if (replaceAllowedCodes)
+            {
+                await ExecuteNonQueryAsync("DELETE FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId]=@org;",
+                    ("@org", organizationId));
+            }
             await EnableIneligiblePatronCodePolicyAsync(organizationId);
             return EmailTransportReadiness.Configured;
         }

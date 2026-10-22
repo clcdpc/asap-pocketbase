@@ -217,9 +217,14 @@ public sealed partial class PatronJourneyTests
             provider.AddPatron(patrons[0] with { PatronCodeId = 999 }, [new(pickup, "Live remote pickup")], library);
             using var excluded = await staff.PostAsJsonAsync("/api/asap/staff/patron-lookup", new { barcode = patrons[0].Barcode, libraryOrgId = library });
             Assert.AreEqual(HttpStatusCode.Forbidden, excluded.StatusCode);
+            using var excludedBody = JsonDocument.Parse(await excluded.Content.ReadAsStringAsync());
+            Assert.AreEqual("patron_ineligible", excludedBody.RootElement.GetProperty("code").GetString());
+            AssertStaffPatronCodeMessage(excludedBody.RootElement.GetProperty("message").GetString()!);
             await ExecuteNonQueryAsync("UPDATE [asap].[WorkflowSettings] SET [AllowAnyRegisteredCardLogin]=0 WHERE [OrganizationId]=@org;", ("@org", library));
             using var wrongHome = await staff.PostAsJsonAsync("/api/asap/staff/patron-lookup", new { barcode = patrons[1].Barcode, libraryOrgId = library });
             Assert.AreEqual(HttpStatusCode.Forbidden, wrongHome.StatusCode);
+            using var wrongHomeBody = JsonDocument.Parse(await wrongHome.Content.ReadAsStringAsync());
+            Assert.AreEqual("patron_library_forbidden", wrongHomeBody.RootElement.GetProperty("code").GetString());
             using var wrongHomeCreate = await staff.PostAsJsonAsync("/api/asap/staff/suggestions", new
             {
                 libraryOrgId = library, barcode = patrons[1].Barcode, format = "book", title = "Forbidden home cannot create",

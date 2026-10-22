@@ -229,7 +229,8 @@ public sealed partial class PatronSuggestionService
 
     private static void EnforcePatronCodeEligibility(
         EffectivePatronConfiguration configuration,
-        PatronSnapshot patron)
+        PatronSnapshot patron,
+        bool staffCreated = false)
     {
         if (!configuration.PatronCodeEligibilityEnabled ||
             configuration.AllowedPatronCodeIds.Count == 0 ||
@@ -237,6 +238,14 @@ public sealed partial class PatronSuggestionService
             configuration.AllowedPatronCodeIds.Contains(patron.PatronCodeId.Value))
         {
             return;
+        }
+
+        if (staffCreated)
+        {
+            throw new PatronFlowException(
+                403,
+                StaffSuggestionService.PatronCodeEligibilityMessage,
+                new { code = "patron_ineligible", message = StaffSuggestionService.PatronCodeEligibilityMessage });
         }
 
         throw new PatronFlowException(
@@ -259,7 +268,7 @@ public sealed partial class PatronSuggestionService
                 new { code = "patron_library_forbidden" });
         }
 
-        EnforcePatronCodeEligibility(configuration, patron);
+        EnforcePatronCodeEligibility(configuration, patron, staffCreated: true);
     }
 
     private static string? Missing(

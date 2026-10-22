@@ -468,6 +468,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       configuration,
       controls,
       verifiedBibId: null,
+      patronIneligible: false,
       submitting: false
     };
     updateFormat();
@@ -494,7 +495,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
 
   async function createStaffSuggestion() {
     const current = suggestion;
-    if (!isCurrent(current) || current.stage !== 'create' || current.submitting || current.outcomeUnconfirmed ||
+    if (!isCurrent(current) || current.stage !== 'create' || current.submitting || current.outcomeUnconfirmed || current.patronIneligible ||
         !drafts.admit({ consumes: draft }).allowed || !dom.staffSuggestionForm.reportValidity()) return;
     const owner = actor, controls = current.controls, result = current.result;
     const body = Object.freeze({
@@ -553,6 +554,16 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
         current.outcomeUnconfirmed = true;
         setStaffSuggestionStatus('Suggestion creation is unconfirmed. Reload and review the servicing library queue before attempting another submission.', 'error'); return;
       }
+      if (error.response?.code === 'patron_ineligible' || error.response?.reasonCode === 'patron_ineligible') {
+        current.patronIneligible = true;
+        for (const field of dom.staffSuggestionBody.querySelectorAll('.staff-suggestion-fields input, .staff-suggestion-fields textarea')) {
+          if (field.type === 'checkbox') field.disabled = true;
+          else field.readOnly = true;
+        }
+        for (const control of dom.staffSuggestionBody.querySelectorAll('.staff-suggestion-fields select, .staff-suggestion-fields button')) {
+          control.disabled = true;
+        }
+      }
       dom.staffSuggestionBody.querySelector('.staff-suggestion-conflict')?.remove();
       const duplicateId = error.response?.duplicate?.id;
       if (error.status === 409 && validRequestId(duplicateId)) {
@@ -573,8 +584,9 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       attempt.pending = false; if (activeAttempt === attempt) activeAttempt = null;
       if (isCurrent(current)) {
         current.submitting = false; dom.staffSuggestionForm.inert = current.outcomeUnconfirmed === true;
-        if (submit?.isConnected) submit.disabled = current.outcomeUnconfirmed === true;
+        if (submit?.isConnected) submit.disabled = current.outcomeUnconfirmed === true || current.patronIneligible === true;
         if (controls.changeButton?.isConnected) controls.changeButton.disabled = current.outcomeUnconfirmed === true;
+        if (current.patronIneligible && controls.changeButton?.isConnected) controls.changeButton.focus();
       }
     }
   }

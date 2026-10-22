@@ -163,6 +163,7 @@ public static class TitleRequestEndpoints
                     code = partial.Code,
                     partial.Message,
                     partial.PickupPreferenceChanged,
+                    partial.ReasonCode,
                     conflictTitle = partial.DuplicateConflict?.ConflictTitle,
                     conflictMessage = partial.DuplicateConflict?.ConflictMessage,
                     duplicateMessage = partial.DuplicateConflict?.Message,
