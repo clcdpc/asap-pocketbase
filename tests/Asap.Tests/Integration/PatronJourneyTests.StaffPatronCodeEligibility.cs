@@ -275,6 +275,7 @@ public sealed partial class PatronJourneyTests
             AssertStaffPatronCodeMessage(body.RootElement.GetProperty("message").GetString()!);
             if (partial)
             {
+                Assert.AreEqual("patron_ineligible", body.RootElement.GetProperty("reasonCode").GetString());
                 Assert.IsTrue(body.RootElement.GetProperty("pickupPreferenceChanged").GetBoolean());
                 StringAssert.Contains(body.RootElement.GetProperty("message").GetString()!, "changed successfully");
             }

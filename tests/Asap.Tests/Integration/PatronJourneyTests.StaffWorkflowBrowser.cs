@@ -1,8 +1,10 @@
 using System.Globalization;
+using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Testing;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -26,7 +28,13 @@ public sealed partial class PatronJourneyTests
         provider.AddPatron(patron, [new(pickup, "Live eligible pickup")], library);
         var excluded = patron with { Barcode = barcode + "-ineligible", PatronId = 394102, PatronCodeId = 999 };
         provider.AddPatron(excluded, [new(pickup, "Live eligible pickup")], library);
+        provider.AddPatron(patron with { Barcode = barcode + "-late-denied", PatronId = 394103, PreferredPickupBranchId = pickup },
+            [new(pickup, "Live eligible pickup")], library);
         provider.SetPatronSearch("Excluded Patron", library, [excluded]);
+        // Read-only readiness checks must not arm the final-acceptance race.
+        var requestContext = new HttpContextAccessor();
+        var sender = new PolicyMutatingReadinessEmailSender(library, replaceAllowedCodes: true,
+            shouldMutate: () => requestContext.HttpContext?.Request.Path == "/api/asap/staff/suggestions");
         provider.AllowPickupUpdate(barcode, library, pickup);
         provider.SetIdentifierResult("BROWSER-MATCH", library, new(IdentifierLookupOutcome.DefinitiveNotFound));
         await ExecuteNonQueryAsync("""
@@ -44,6 +52,10 @@ public sealed partial class PatronJourneyTests
             services.RemoveAll<IStaffPolarisProvider>();
             services.AddSingleton<IPatronProvider>(provider);
             services.AddSingleton<IStaffPolarisProvider>(provider);
+            services.RemoveAll<IEmailSender>();
+            services.AddSingleton<IEmailSender>(sender);
+            services.RemoveAll<IHttpContextAccessor>();
+            services.AddSingleton<IHttpContextAccessor>(requestContext);
         }));
         scopedFactory.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         using var client = scopedFactory.CreateClient();
@@ -95,6 +107,8 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(await (from link in verify.TitleRequestWorkflowTags join tag in verify.WorkflowTags on link.WorkflowTagId equals tag.Id
                 where link.TitleRequestId == created.Id && tag.Code == "duplicate_suggestion" select link).AnyAsync());
             Assert.AreEqual(1, provider.Calls.Count(call => call.Operation == TestingPolarisOperation.PickupUpdate));
+            Assert.AreEqual(1, sender.ReadinessCalls);
+            Assert.IsFalse(await verify.TitleRequests.AnyAsync(item => item.LibraryOrganizationId == library && item.Barcode == barcode + "-late-denied"));
             Assert.IsFalse(await verify.EmailOutbox.AnyAsync(item => item.OrganizationId == library));
             Assert.IsTrue(provider.Calls.Where(call => call.Operation == TestingPolarisOperation.Refresh).All(call => call.OrganizationId == library));
         }

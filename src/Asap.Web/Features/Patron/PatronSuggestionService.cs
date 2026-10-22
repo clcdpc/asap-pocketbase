@@ -55,6 +55,8 @@ public sealed record PatronSuggestionPickupChangedFailure(
 {
     public string Code => "request_not_created_pickup_changed";
     public bool PickupPreferenceChanged => true;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ReasonCode { get; init; }
 }
 
 public sealed class PatronFlowException(

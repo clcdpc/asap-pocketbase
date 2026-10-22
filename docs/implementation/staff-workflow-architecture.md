@@ -21,12 +21,14 @@ Disabled restrictions, an empty effective allowed-code set and absent patron-cod
 IDs remain unrestricted. Library overrides and system fallback keep their existing
 resolution. Patron self-service messages and policy remain unchanged. Pickup-intent
 and final SQL checks still revalidate current policy; a successful external pickup
-change followed by a rejection retains the existing partial-outcome response and
-includes the staff explanation. No compensating provider write is attempted.
+change followed by a code rejection retains `request_not_created_pickup_changed`,
+adds `reasonCode: patron_ineligible` on the staff response and includes the staff
+explanation. No compensating provider write is attempted.
 
 The dialog uses its existing plain-text live status. Lookup cannot enable the form
 for excluded patrons. A submission denial retains entered values and disables
 creation while leaving Change patron available for authoritative re-verification.
+Retained text remains read-only, selectable and present in the accessibility tree.
 
 Automated SQL, controller and browser coverage supports technical acceptance.
 Human keyboard/actual screen-reader acceptance, including native 200% zoom, and

@@ -206,16 +206,24 @@ public sealed class StaffSuggestionService(
         }
         catch (PatronFlowException exception)
         {
+            var response = exception.Response;
+            if (response is PatronSuggestionPickupChangedFailure partialFailure &&
+                exception.InnerException is PatronFlowException { Response: { } cause } &&
+                cause.GetType().GetProperty("code")?.GetValue(cause) is "patron_ineligible")
+            {
+                response = partialFailure with { ReasonCode = "patron_ineligible" };
+            }
+
             throw new StaffSuggestionException(
                 exception.StatusCode,
-                exception.Response is PatronSuggestionPickupChangedFailure partial
+                response is PatronSuggestionPickupChangedFailure partial
                     ? partial.Code
-                    : exception.Response is { } response &&
-                    response.GetType().GetProperty("code")?.GetValue(response) is string code
+                    : response is { } details &&
+                    details.GetType().GetProperty("code")?.GetValue(details) is string code
                         ? code
                         : "staff_suggestion_invalid",
                 exception.Message,
-                exception.Response,
+                response,
                 exception);
         }
     }

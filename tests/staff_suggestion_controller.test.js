@@ -177,14 +177,17 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     });
   }
   const codeMessage = 'This patron cannot submit suggestions because their Polaris patron code is not eligible for the selected servicing library. Staff cannot override this restriction in this workflow.';
-  for (const outcome of ['barcode', 'name', 'candidate', 'submit']) {
+  for (const outcome of ['barcode', 'name', 'candidate', 'submit', 'submit_partial']) {
     await fixture(async ({ load, get, dom }) => {
       const { createSessionIdentity } = await load('session-identity');
       const { createSuggestionController } = await load('suggestion-controller');
       const session = createSessionIdentity(); session.accept(actorA);
       const root = get('#staff-suggestion-dialog'), calls = [];
       const denied = () => Object.assign(new Error('Generic error'), {
-        status: 403, response: { code: 'patron_ineligible', status: 'ineligible', message: codeMessage }
+        status: 403, response: outcome === 'submit_partial'
+          ? { code: 'request_not_created_pickup_changed', pickupPreferenceChanged: true, reasonCode: 'patron_ineligible',
+              message: 'The suggestion was not confirmed, but the patron\'s preferred pickup location was changed successfully. ' + codeMessage }
+          : { code: 'patron_ineligible', status: 'ineligible', message: codeMessage }
       });
       const controller = createSuggestionController({ root, trigger: get('#new-suggestion'), sessionIdentity: session,
         getScope: () => '2', getLibraries: () => [{ id: '2', name: 'Servicing library' }],
@@ -193,7 +196,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
           calls.push({ path, body: init.body });
           if (path.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
           if (path.endsWith('/suggestions')) throw denied();
-          if (outcome === 'submit') return { status: 'verified', libraryOrgId: 2, patron: {
+          if (outcome.startsWith('submit')) return { status: 'verified', libraryOrgId: 2, patron: {
             patron: { barcode: 'verified-card', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101 } };
           if (outcome === 'name') return { status: 'ineligible', code: 'patron_ineligible', message: codeMessage };
           if (outcome === 'candidate' && !init.body.barcode) return { status: 'multiple_matches', matches: [
@@ -213,7 +216,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
           assert.equal(calls[1].body.barcode, 'candidate-card');
           assert.equal(calls[1].body.query, null, 'Candidate selection always re-verifies the explicit barcode.');
         }
-        if (outcome === 'submit') {
+        if (outcome.startsWith('submit')) {
           const title = root.querySelector('.staff-suggestion-fields input');
           title.value = 'Retain this title'; title.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
           const notes = root.querySelector('.staff-suggestion-fields textarea');
@@ -221,7 +224,9 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
           form.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
           await flush(); await flush();
           assert.equal(title.value, 'Retain this title'); assert.equal(notes.value, 'Retain these staff notes');
-          assert.equal(root.querySelector('.staff-suggestion-fields').inert, true);
+          assert.notEqual(root.querySelector('.staff-suggestion-fields').inert, true, 'Retained draft and patron context remain accessible.');
+          assert.equal(title.readOnly, true); assert.equal(notes.readOnly, true);
+          assert.equal(root.querySelector('.staff-suggestion-fields select').disabled, true);
           assert.equal(root.querySelector('button[type="submit"]').disabled, true);
           assert.equal(controller.inspectDeparture().blocked, false, 'A definite admission rejection does not become an uncertain outcome.');
           form.dispatchEvent(new dom.window.Event('submit', { cancelable: true })); await flush();
@@ -234,11 +239,11 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
           assert.equal(calls.some(call => call.path.includes('/suggestion-configuration')), false);
         }
         const status = get('#staff-suggestion-status');
-        assert.equal(status.textContent, codeMessage); assert.ok(status.classList.contains('error'));
+        assert.equal(status.textContent, denied().response.message); assert.ok(status.classList.contains('error'));
         assert.equal(status.getAttribute('role'), 'status'); assert.equal(status.getAttribute('aria-live'), 'polite');
         assert.equal(status.children.length, 0, 'The rejection explanation is plain text.');
         assert.equal(root.open, true);
-        if (outcome === 'submit') {
+        if (outcome.startsWith('submit')) {
           [...root.querySelectorAll('button')].find(button => button.textContent === 'Change patron').click();
           get('#staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
           await flush(); await flush();

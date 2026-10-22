@@ -560,9 +560,15 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
         current.outcomeUnconfirmed = true;
         setStaffSuggestionStatus('Suggestion creation is unconfirmed. Reload and review the servicing library queue before attempting another submission.', 'error'); return;
       }
-      if (error.response?.code === 'patron_ineligible') {
+      if (error.response?.code === 'patron_ineligible' || error.response?.reasonCode === 'patron_ineligible') {
         current.patronIneligible = true;
-        dom.staffSuggestionBody.querySelector('.staff-suggestion-fields').inert = true;
+        for (const field of dom.staffSuggestionBody.querySelectorAll('.staff-suggestion-fields input, .staff-suggestion-fields textarea')) {
+          if (field.type === 'checkbox') field.disabled = true;
+          else field.readOnly = true;
+        }
+        for (const control of dom.staffSuggestionBody.querySelectorAll('.staff-suggestion-fields select, .staff-suggestion-fields button')) {
+          control.disabled = true;
+        }
       }
       dom.staffSuggestionBody.querySelector('.staff-suggestion-conflict')?.remove();
       const duplicateId = error.response?.duplicate?.id;
