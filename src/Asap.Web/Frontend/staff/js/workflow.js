@@ -90,8 +90,8 @@ export function createWorkflowApp() {
     }
   });
 
-  const titleQueue = createTitleQueue({ root: get('#queue-view'), sessionIdentity, announce,
-    getContext: navigation.context, onOpen: (id, opener) => titleDetail.open(id, opener, { history: 'push' }),
+  const titleQueue = createTitleQueue({ root: get('#queue-view'), sessionIdentity, announce, polarisLookup,
+    getContext: navigation.context, onOpen: (id, opener, options = {}) => titleDetail.open(id, opener, { history: 'push', ...options }),
     onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) }),
     onScopeIntent: scope => navigation.changeQueueContext('queue', { scope }),
     onStatusIntent: status => navigation.changeQueueContext('queue', { status }),

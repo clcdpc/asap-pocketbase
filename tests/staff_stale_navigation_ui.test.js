@@ -29,7 +29,7 @@ async function until(predicate, message) {
 
 (async () => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-stale-nav-'));
-  let dom;
+  let dom, app;
   try {
     fs.cpSync(path.join(frontend, 'staff'), path.join(temporary, 'staff'), { recursive: true });
     fs.cpSync(path.join(frontend, 'shared'), path.join(temporary, 'shared'), { recursive: true });
@@ -43,6 +43,8 @@ async function until(predicate, message) {
     global.HTMLElement = dom.window.HTMLElement;
     global.FormData = dom.window.FormData;
     global.URLSearchParams = dom.window.URLSearchParams;
+    global.requestAnimationFrame = dom.window.requestAnimationFrame.bind(dom.window);
+    global.cancelAnimationFrame = dom.window.cancelAnimationFrame.bind(dom.window);
     dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
     dom.window.gridjs = require(path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js'));
@@ -89,7 +91,8 @@ async function until(predicate, message) {
     };
 
     const workflow = await import(pathToFileURL(path.join(temporary, 'staff/js/workflow.js')).href);
-    await workflow.createWorkflowApp().start();
+    app = workflow.createWorkflowApp();
+    await app.start();
     const copyTabs = [...document.querySelectorAll('[data-copy-status]')];
     staleCopyRead = deferred();
     document.getElementById('refresh-additional-copies').click();
@@ -104,8 +107,8 @@ async function until(predicate, message) {
     staleCopyRead = null;
 
     document.querySelector('[data-view="queue"]').click();
-    await until(() => document.querySelector(`[aria-label="Open request ${firstId}"]`), 'title queue renders');
-    document.querySelector(`[aria-label="Open request ${firstId}"]`).click();
+    await until(() => document.querySelector(`a[data-request-id="${firstId}"]`), 'title queue renders');
+    document.querySelector(`a[data-request-id="${firstId}"]`).click();
     await until(() => document.getElementById('request-dialog-title').textContent === 'First title', 'first detail opens');
     document.getElementById('close-request').click();
     await until(() => !new URL(dom.window.location.href).searchParams.has('request'),
@@ -115,7 +118,7 @@ async function until(predicate, message) {
     document.querySelector('#recent-request-list button').click();
     await until(() => document.getElementById('app-status').textContent.includes('Loading request details'),
       'old recent detail starts');
-    document.querySelector(`[aria-label="Open request ${secondId}"]`).click();
+    document.querySelector(`a[data-request-id="${secondId}"]`).click();
     await until(() => document.getElementById('request-dialog-title').textContent === 'Second title',
       'newer detail takes ownership');
     staleRecentRead.resolve(response(404, { code: 'not_found', message: 'Old request unavailable' }));
@@ -125,6 +128,13 @@ async function until(predicate, message) {
     assert.equal(document.getElementById('request-dialog-title').textContent, 'Second title');
     console.log('Staff stale additional-copy error and recent-detail 404 UI checks passed');
   } finally {
+    app?.dispose();
+    if (dom) {
+      // Retire the app's Grid subscriptions while its browser document is
+      // alive, then drain the already scheduled visual work before closing it.
+      await new Promise(resolve => dom.window.requestAnimationFrame(() =>
+        dom.window.requestAnimationFrame(() => dom.window.setTimeout(resolve, 0))));
+    }
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });
   }

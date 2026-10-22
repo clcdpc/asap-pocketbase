@@ -24,13 +24,10 @@ export function mergeCatalogValue(catalogValue, existingValue) {
 }
 
 export function applyPolarisResultToControls(selected, controls) {
+  // Selection verifies the BIB association and reconciles Title only. Author,
+  // identifier, publication and ASAP format remain the staff member's draft.
   controls.bib.value = String(selected.bibId);
   controls.title.value = mergeCatalogValue(selected.title, controls.title.value);
-  controls.author.value = mergeCatalogValue(selected.author, controls.author.value);
-  if (!controls.identifier.disabled && !String(controls.identifier.value ?? '').trim()) {
-    const catalogIdentifier = String(selected.identifier ?? '').trim();
-    if (catalogIdentifier) controls.identifier.value = catalogIdentifier;
-  }
 }
 
 export function selectedStaffBibId(selection, requestId, bibId) {
@@ -210,6 +207,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce }) 
         `BIB: ${row.bibId}`].filter(Boolean);
       item.append(node('p', { text: metadata.join(' · ') }));
       if (exactDetail) item.append(node('p', { text: contextText(exactDetail) }));
+      if (current.readOnly === true) { results.append(item); return; }
       const select = node('button', { type: 'button', className: 'primary-button', text: `Use BIB ${row.bibId}` });
       select.disabled = !(typeof current.canApply === 'function' ? current.canApply(row) : current.canApply);
       select.addEventListener('click', () => selectResult(current, row, exactDetail));
@@ -308,6 +306,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce }) 
       title.value = next.title || '';
       author.value = next.author || '';
       modeChanged();
+      if (next.readOnly === true) status.textContent = 'Catalog research only. Open request details to select and save a BIB.';
       dialog.showModal();
       (mode.value === 'title_author' ? title : query).focus();
       announce('Polaris search opened.');

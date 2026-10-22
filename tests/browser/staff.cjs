@@ -5,6 +5,14 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { URL } = require('node:url');
 
+async function revealRequestActions(page) {
+  await page.locator('#request-dialog[open] .action-bar').waitFor();
+  const menu = page.locator('#request-dialog .request-more');
+  if (await menu.count() && await menu.locator('summary').isVisible() && !await menu.evaluate(node => node.open)) {
+    await menu.locator('summary').click();
+  }
+}
+
 function parseArguments(argv) {
   if (argv.length !== 25) {
     throw new Error('Usage: node tests/browser/staff.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId>');
@@ -109,7 +117,7 @@ async function assertReadableMobileQueue(page, selector = '#request-grid') {
       nonPositiveCells: bounds.some(bounds => bounds.width <= 0)
     };
   });
-  assert.equal(geometry.cellCount, selector === '#request-grid' ? 12 : 11,
+  assert.equal(geometry.cellCount, selector === '#request-grid' ? 8 : 11,
     'Mobile queue should render all request columns');
   assert.equal(geometry.overlaps, false, 'Mobile queue cells must not overlap neighboring columns');
   assert.equal(geometry.nonPositiveCells, false, 'Mobile queue cells need stable positive widths');
@@ -415,7 +423,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       return dialog.accept();
     });
     await page.locator('.action-choice button[type="submit"]').click();
-    await page.getByText('Outstanding purchase', { exact: true }).waitFor();
+    await page.locator('#request-dialog').getByText('Outstanding purchase', { exact: true }).waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'edited-claimed-actioned');
 
     await page.getByRole('button', { name: 'Close request details' }).click();
@@ -448,9 +456,9 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       }));
       throw new Error(`${error.message}\n${JSON.stringify(context)}\n${JSON.stringify(observedSessions.slice(-6))}`);
     });
-    await page.getByRole('button', { name: `Open request ${args.primaryRequestId}` }).waitFor();
+    await page.getByRole('link', { name: `Open request ${args.primaryRequestId}:`, exact: false }).waitFor();
     assert.equal(await page.getByText('Other browser library title', { exact: true }).count(), 0);
-    const open = page.getByRole('button', { name: `Open request ${args.primaryRequestId}` });
+    const open = page.getByRole('link', { name: `Open request ${args.primaryRequestId}:`, exact: false });
     await open.click();
     await page.locator('#request-dialog[open]').waitFor();
     await page.keyboard.press('Escape');
@@ -560,7 +568,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(await page.getByLabel('Title', { exact: true }).inputValue(),
       'Catalog title 9001 (Browser staff title edited)');
     assert.equal(await page.getByLabel('Author', { exact: true }).inputValue(),
-      'Catalog author (Browser Author)');
+      'Browser Author');
     assert.equal(await page.getByLabel('Identifier', { exact: true }).inputValue(), '9780000002901');
     assert.equal(await page.getByLabel('Publication timing', { exact: true }).inputValue(), 'Library backlist');
     assert.equal(await page.getByLabel('Format', { exact: true }).inputValue(), 'book');
@@ -606,7 +614,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(reconciledResponse.status(), 200);
     const reconciledRequest = await reconciledResponse.json();
     assert.equal(reconciledRequest.title, 'Catalog title 9001 (Browser staff title edited)');
-    assert.equal(reconciledRequest.author, 'Catalog author (Browser Author)');
+    assert.equal(reconciledRequest.author, 'Browser Author');
     assert.equal(reconciledRequest.identifier, '9780000002901');
     assert.equal(reconciledRequest.publication, 'Library backlist');
     assert.equal(reconciledRequest.format, 'book');
@@ -810,11 +818,14 @@ async function runStaleAssignmentCandidates(browser, args, report) {
       const beforeA = await beforeAResponse.json();
 
       const delayed = await delayNextCandidateResponse(page, candidatePayload);
+      await revealRequestActions(page);
       await page.getByRole('button', { name: 'Assign', exact: true }).click();
       await delayed.requested;
       await page.keyboard.press('Escape');
       await page.locator('#request-dialog').waitFor({ state: 'hidden' });
-      await page.getByRole('button', { name: scenario.openLabel(scenario.bId) }).click();
+      await page.locator(scenario.name === 'title request'
+        ? `a.grid-open[data-request-id="${scenario.bId}"]`
+        : `button.grid-open[aria-label="${scenario.openLabel(scenario.bId)}"]`).click();
       await page.locator('#request-dialog[open]').waitFor();
       await page.locator('#request-dialog-kicker').filter({ hasText: scenario.kicker(scenario.bId) }).waitFor();
       delayed.release();
@@ -833,6 +844,7 @@ async function runStaleAssignmentCandidates(browser, args, report) {
       assert.equal(unchangedA.version, beforeA.version, `${scenario.name} A rowversion changed`);
       assert.equal(unchangedA.claimedByStaffUserId, beforeA.claimedByStaffUserId, `${scenario.name} A claimant changed`);
 
+      await revealRequestActions(page);
       await page.getByRole('button', { name: 'Assign', exact: true }).click();
       const assignment = page.getByLabel(scenario.pickerLabel);
       await assignment.waitFor({ state: 'visible' });
@@ -895,9 +907,11 @@ async function runOrdinaryTitleAssignment(browser, args, report) {
       assert.ok(candidateById.has(args.superIdentity.staffId), `${name} system super-admin was omitted`);
       assert.equal(candidateById.has(args.foreignStaffId), false, `${name} foreign staff candidate leaked`);
 
+      await revealRequestActions(page);
       const assignButton = page.getByRole('button', { name: 'Assign', exact: true });
       await assignButton.waitFor({ state: 'visible' });
       for (const assigneeId of [args.invalidClaimantId, args.superIdentity.staffId]) {
+        await revealRequestActions(page);
         await assignButton.click();
         const picker = page.getByLabel('Assign to staff member');
         await picker.waitFor({ state: 'visible' });
@@ -992,7 +1006,8 @@ async function runStaleMutationCompletions(browser, args, report) {
       await page.locator(target.claimFilter).selectOption('all');
       const detailResponse = page.waitForResponse(response => response.request().method() === 'GET' &&
         new URL(response.url()).pathname === target.apiPath);
-      await page.locator(`button.grid-open[aria-label="${target.openLabel}"]`).evaluate(node => node.click());
+      await page.locator(type === 'additional_copy'
+        ? `button.grid-open[aria-label="${target.openLabel}"]` : `a.grid-open[data-request-id="${id}"]`).evaluate(node => node.click());
       await detailResponse;
       await page.locator('#request-dialog-kicker').filter({ hasText: target.kicker }).waitFor();
       if (type === 'title_request') {
@@ -1011,6 +1026,7 @@ async function runStaleMutationCompletions(browser, args, report) {
         url: page.url()
       };
       const candidates = await delayNextCandidateResponse(page, candidatePayload);
+      await revealRequestActions(page);
       await page.getByRole('button', { name: 'Assign', exact: true }).click();
       await candidates.requested;
       visible.status = await page.locator('#app-status').textContent();
@@ -1116,6 +1132,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     assert.equal(deletedAResponse.status(), 404);
 
     await page.goto(`${args.baseOrigin}/staff/?request=${args.staleTitleAId}`, { waitUntil: 'networkidle' });
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Assign', exact: true }).click();
     const titlePicker = page.getByLabel('Assign to staff member');
     await titlePicker.waitFor({ state: 'visible' });
@@ -1149,6 +1166,7 @@ async function runStaleMutationCompletions(browser, args, report) {
       await ordinaryTitleContext.close();
     }
     await page.goto(`${args.baseOrigin}/staff/?request=${args.staleTitleAId}`, { waitUntil: 'networkidle' });
+    await revealRequestActions(page);
     const titleClear = page.getByRole('button', { name: 'Clear claim' });
     await titleClear.waitFor();
     page.once('dialog', dialog => {
@@ -1157,6 +1175,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     });
     await titleClear.click();
     await page.locator('#request-dialog .detail-meta').filter({ hasText: 'Unclaimed' }).waitFor();
+    await page.getByRole('tab', { name: 'Activity', exact: true }).click();
     await page.locator('#request-dialog .request-activity').filter({
       hasText: `Administrator cleared ${assignedTitleA.claimedByDisplayName}'s claim.`
     }).waitFor();
@@ -1179,7 +1198,8 @@ async function runStaleMutationCompletions(browser, args, report) {
     for (const exit of ['back', 'top-level']) {
       await page.goto(`${args.baseOrigin}/staff/?stage=${createSource.status}&scope=all`, { waitUntil: 'networkidle' });
       await page.locator('#claim-filter').selectOption('all');
-      await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}`, exact: true }).click();
+      await page.getByRole('link', { name: `Open request ${args.staleCreateSourceId}:`, exact: false }).click();
+      await revealRequestActions(page);
       await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
       await page.locator('#additional-copy-create-dialog[open]').waitFor();
       if (exit === 'back') await page.goBack();
@@ -1201,6 +1221,7 @@ async function runStaleMutationCompletions(browser, args, report) {
       return { storageKey: copyCreationStorageKey(staff), actorKey: actorKey(staff) };
     });
     const copyRecoveryKey = copyRecoveryIdentity.storageKey;
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     await page.locator('#additional-copy-reminder').uncheck();
@@ -1251,6 +1272,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     // its old controls to retire before opening another child workflow.
     await page.waitForFunction(form => !form.isConnected, sourceDetail);
     await sourceDetail.dispose();
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     const uncertainPreview = await context.request.get(
@@ -1287,11 +1309,13 @@ async function runStaleMutationCompletions(browser, args, report) {
     releaseOldCopyList();
     await page.unroute(/\/api\/asap\/staff\/additional-copies\?/, oldCopyList);
     await page.getByRole('button', { name: 'Cancel' }).click();
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
       'an uncertain create cannot be retried from a fresh dialog before task-list refresh');
     await page.locator('#app-status').filter({ hasText: /Refresh the open additional-copy task list/ }).waitFor();
     await page.reload({ waitUntil: 'networkidle' });
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
       'an uncertain create remains blocked after a full page reload');
@@ -1302,7 +1326,8 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.locator('#refresh-additional-copies').click();
     await page.locator('.view-tab[data-view="queue"]').click();
     await page.locator('[data-status="hold_placed"]').click();
-    await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}` }).click();
+    await page.getByRole('link', { name: `Open request ${args.staleCreateSourceId}:`, exact: false }).click();
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#app-status').filter({ hasText: /Refresh the open additional-copy task list/ }).waitFor();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
@@ -1322,7 +1347,8 @@ async function runStaleMutationCompletions(browser, args, report) {
     }));
     assert.equal(queueNavigationState.hidden, false, JSON.stringify(queueNavigationState));
     await page.locator('[data-status="hold_placed"]').click();
-    await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}` }).click();
+    await page.getByRole('link', { name: `Open request ${args.staleCreateSourceId}:`, exact: false }).click();
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
       'a refreshed open list still requires the staff user to review matching tasks');
@@ -1345,7 +1371,8 @@ async function runStaleMutationCompletions(browser, args, report) {
     const earlierTaskId = (await earlierCreation.json()).additionalCopyRequest.id;
     await page.locator('.view-tab[data-view="queue"]').click();
     await page.locator('[data-status="hold_placed"]').click();
-    await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}` }).click();
+    await page.getByRole('link', { name: `Open request ${args.staleCreateSourceId}:`, exact: false }).click();
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     const [fencedRetry] = await Promise.all([
@@ -1519,6 +1546,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     assert.equal(source.updated, '2026-09-01T12:14:15Z');
     assert.equal(new Date(source.claimedAt).toISOString(), '2026-09-01T12:13:14.000Z');
     const createAction = page.getByRole('button', { name: 'Additional copy', exact: true });
+    await revealRequestActions(page);
     await createAction.click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'cancel-additional-copy');
@@ -1527,8 +1555,9 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'additional-copy-create-preview');
     await page.keyboard.press('Escape');
     await page.locator('#additional-copy-create-dialog').waitFor({ state: 'hidden' });
-    assert.equal(await createAction.evaluate(node => document.activeElement === node), true);
+    assert.equal(await page.locator('#request-dialog .request-more summary').evaluate(node => document.activeElement === node), true);
 
+    await revealRequestActions(page);
     await createAction.click();
     await page.locator('#additional-copy-reminder').check();
     const [createResponse] = await Promise.all([
@@ -1658,6 +1687,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await page.getByRole('button', { name: 'Unclaim' }).waitFor();
     await page.getByRole('button', { name: 'Unclaim' }).click();
     await page.getByRole('button', { name: 'Claim', exact: true }).waitFor();
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Assign', exact: true }).click();
     const assignment = page.getByLabel('Assign additional-copy task');
     await assignment.selectOption({ label: 'Browser Staff' });
@@ -1685,6 +1715,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     const staleClear = await mutate(context, args.baseOrigin,
       `/api/asap/staff/additional-copies/${created.id}/clear-claim`, { version: created.version });
     assert.equal(staleClear.status(), 409, await staleClear.text());
+    await revealRequestActions(page);
     const clearClaim = page.getByRole('button', { name: 'Clear claim' });
     await clearClaim.waitFor();
     page.once('dialog', dialog => {
@@ -1839,8 +1870,9 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     assert.equal(await page.getByLabel('BIB ID', { exact: true }).isDisabled(), true);
     assert.equal(await page.getByLabel('Automatically place hold', { exact: true }).isDisabled(), true);
     assert.equal(await page.getByLabel('Title', { exact: true }).isEnabled(), true);
-    assert.equal(await page.getByRole('button', { name: 'Save changes' }).isEnabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Save changes' }).isEnabled(), false, 'A clean editor stays saved; Claim remains its explicit action.');
     assert.equal(await page.getByRole('button', { name: 'Claim', exact: true }).isEnabled(), true);
+    await revealRequestActions(page);
     for (const name of ['Purchase', 'Already own', 'Reject', 'Close silently']) {
       assert.equal(await page.getByRole('button', { name, exact: true }).isDisabled(), true, `${name} should honor the operation barrier`);
     }
@@ -1910,6 +1942,7 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     assert.equal(rejectedForeign.status(), 400, await rejectedForeign.text());
     assert.equal((await rejectedForeign.json()).code, 'assignee_ineligible');
 
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Assign', exact: true }).click();
     let assignment = page.getByLabel('Assign additional-copy task');
     await assignment.waitFor({ state: 'visible' });
@@ -1927,6 +1960,7 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     await assignment.locator('xpath=ancestor::form').getByRole('button', { name: 'Assign', exact: true }).click();
     await page.getByText(`Claimed by ${candidateById.get(args.superIdentity.staffId).displayName}`, { exact: true }).waitFor();
 
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Assign', exact: true }).click();
     assignment = page.getByLabel('Assign additional-copy task');
     await assignment.selectOption(args.staffIdentity.staffId);
@@ -2166,17 +2200,20 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
     await page.route(detailRoutePattern, detailRoute);
     await page.route(deletePath, singleDeleteRoute);
     await page.goto(args.baseOrigin + '/staff/?request=' + args.staleTitleAId, { waitUntil: 'networkidle' });
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Permanently delete request' }).waitFor();
-    assert.match(await page.locator('#request-dialog .detail-grid').textContent(),
-      /Close reason\s*Rejected/);
+    assert.match(await page.locator('#request-dialog .request-metadata').textContent(),
+      /Close reason:\s*Rejected/);
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'single-closed-title-delete');
     page.once('dialog', dialog => {
       assert.match(dialog.message(), /cannot be undone/);
       return dialog.dismiss();
     });
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Permanently delete request' }).click();
     assert.equal(singleDeletes, 0);
     page.once('dialog', dialog => dialog.accept());
+    await revealRequestActions(page);
     await page.getByRole('button', { name: 'Permanently delete request' }).click();
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     assert.equal(singleDeletes, 1);
@@ -2507,6 +2544,8 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     const title = desktopPage.locator('#staff-suggestion-form label')
       .filter({ hasText: /title/i }).locator('input').first();
     await title.fill(titleSeed);
+    const manualAuthor = 'Manually entered staff suggestion author';
+    await desktopPage.getByLabel(/^Author/).fill(manualAuthor);
     const audience = desktopPage.getByLabel('Audience note', { exact: true });
     await audience.waitFor();
     await audience.fill('Created by the staff browser journey.');
@@ -2515,7 +2554,8 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     const formatNotice = desktopPage.locator('.staff-format-notice');
     await formatNotice.waitFor({ state: 'visible' });
     assert.match(await formatNotice.textContent(), /This is an eBook suggestion/);
-    assert.equal(await formatNotice.locator('p').count(), 2);
+    assert.equal(await formatNotice.textContent(), 'This is an eBook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm');
+    assert.equal(await formatNotice.evaluate(node => getComputedStyle(node).whiteSpace), 'pre-wrap');
     assert.equal(await formatNotice.locator('a').getAttribute('href'),
       'https://help.libbyapp.com/en-us/6260.htm');
     assert.equal((await formatNotice.textContent()).includes('<p>'), false);
@@ -2539,6 +2579,7 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     await desktopPage.getByRole('button', { name: 'Use BIB 9001' }).click();
     await desktopPage.locator('#polaris-dialog').waitFor({ state: 'hidden' });
     assert.match(await title.inputValue(), /Catalog title 9001/);
+    assert.equal(await desktopPage.getByLabel(/^Author/).inputValue(), manualAuthor);
     assert.equal(await desktopPage.getByLabel('Email patron confirmation (optional)', { exact: true }).isChecked(), false);
     assert.equal(await desktopPage.getByLabel('Automatically place hold', { exact: true }).isChecked(), true);
     const invalidSuggestionFields = await desktopPage.locator('#staff-suggestion-form').evaluate(form =>
@@ -2676,7 +2717,7 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     await page.locator('#claim-filter').selectOption('all');
     const listUrl = page.url();
     const detail = page.locator('#request-dialog');
-    const opener = page.getByRole('button', { name: `Open request ${args.primaryRequestId}`, exact: true });
+    const opener = page.getByRole('link', { name: `Open request ${args.primaryRequestId}:`, exact: false });
     for (let cycle = 0; cycle < 2; cycle += 1) {
       await opener.click(); await page.locator('#request-dialog[open]').waitFor();
       await page.getByRole('button', { name: 'Close request details' }).click();
@@ -2903,7 +2944,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     try {
       await page.locator('#library-scope').selectOption('2');
       await scopedQueueStarted;
-      await page.waitForFunction(() => document.querySelectorAll('#request-grid button.grid-open').length === 0);
+      await page.waitForFunction(() => document.querySelectorAll('#request-grid a.grid-open').length === 0);
       assert.equal(await page.locator('#similar-filter').inputValue(), 'all');
       assert.match(await page.locator('#queue-automation').textContent(), /appear with requests/);
     } finally {
@@ -2936,7 +2977,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       assert.equal(await page.locator('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
       assert.equal(new URL(page.url()).searchParams.get('stage'), 'pending_hold');
       await page.getByRole('button', { name: 'Close request details' }).click();
-      await page.getByRole('button', { name: `Open request ${args.primaryRequestId}` }).waitFor();
+      await page.getByRole('link', { name: `Open request ${args.primaryRequestId}:`, exact: false }).waitFor();
     } finally {
       await page.unroute(changedDetailPath, changedDetail);
       await page.unroute(changedListPath, changedList);
@@ -3442,6 +3483,7 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
       await page.locator('#request-dialog[open]').waitFor();
       const remove = async () => {
         page.once('dialog', dialog => dialog.accept());
+        await revealRequestActions(page);
         await page.getByRole('button', { name: copy ? 'Permanently delete task' : 'Permanently delete request', exact: true }).click();
       };
       await remove(); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
@@ -3584,7 +3626,7 @@ async function runSettingsLayout(browser, args, axeSource, report) {
         }
         const layout = await page.evaluate(section => {
           const bounds = id => {
-            const label = document.getElementById(id).closest('label');
+            const label = document.getElementById(id).closest('.settings-field');
             const rect = label.getBoundingClientRect();
             return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom,
               width: rect.width, gridWidth: label.closest('.settings-grid').getBoundingClientRect().width };
@@ -3636,7 +3678,7 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     assert.ok(copy, 'Operational retirement journey requires a real persisted Copy projection');
     await page.goto(`${args.baseOrigin}/staff/?stage=${title.status}&scope=2`, { waitUntil: 'networkidle' });
     await page.locator('#claim-filter').selectOption('all');
-    await page.getByRole('button', { name: `Open request ${title.id}`, exact: true }).waitFor();
+    await page.getByRole('link', { name: `Open request ${title.id}:`, exact: false }).waitFor();
     await page.locator('[data-view="additional-copies"]').click();
     await page.locator('#additional-copy-claim-filter').selectOption('all');
     await page.getByRole('button', { name: `Open additional-copy task ${copy.id}`, exact: true }).waitFor();
@@ -3687,7 +3729,7 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.locator('[data-view="queue"]').click();
     await page.locator('#library-scope option[value="2"]').waitFor({ state: 'attached' });
     await page.locator('#library-scope').selectOption('2');
-    await page.getByRole('button', { name: `Open request ${title.id}`, exact: true }).waitFor();
+    await page.getByRole('link', { name: `Open request ${title.id}:`, exact: false }).waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'operational-catalog-reactivated');
     assert.deepEqual(errors, [], 'Operational catalog commits raised browser errors');
     assert.equal(traffic.externalRequests, 0, 'Operational catalog commits requested external assets');
@@ -3706,6 +3748,7 @@ async function runRejectionNotificationAndReopen(browser, args, axeSource, repor
     await page.locator('#request-dialog[open]').waitFor();
     const before = await (await context.request.get(detailURL)).json();
     async function chooseRejection() {
+      await revealRequestActions(page);
       await page.getByRole('button', { name: 'Reject', exact: true }).click();
       await page.getByLabel('Rejection template', { exact: true }).selectOption({ label: 'Browser acceptance rejection' });
       await page.locator('.action-choice button[type="submit"]:not([disabled])').waitFor();
@@ -3745,6 +3788,7 @@ async function runRejectionNotificationAndReopen(browser, args, axeSource, repor
     assert.equal(reopened.claimedByStaffUserId, args.superIdentity.staffId);
     assert.equal(reopened.claimType, 'manual');
     assert.equal(reopened.claimRuleId, null);
+    await revealRequestActions(page);
     await action(page.getByRole('button', { name: 'Close silently', exact: true }), 200);
     await page.locator('#request-dialog .status-badge').filter({ hasText: 'Closed' }).waitFor();
     await page.setViewportSize({ width: 390, height: 844 });

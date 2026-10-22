@@ -1,4 +1,4 @@
-export { escapeHtml, sanitizeHtml } from '../../shared/html.js';
+export { escapeHtml, sanitizeHtml, renderPatronText } from '../../shared/html.js';
 
 export function patronTextPlaceholders(uiText) {
   const barcodeLabel = String(uiText.barcodeLabel || 'Library Card').trim() || 'Library Card';

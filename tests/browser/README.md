@@ -45,7 +45,15 @@ fixtures used by the .NET test suite (sixteen use real SQL):
   durable status/reference reload and scoped Operations handoff. No live mail.
 - `staff-workflow-completion.cjs`: queue/detail quick-create, barcode-only
   authoritative verification, explicit All scope, live pickup context and real
-  HTTP/SQL creation with deterministic provider boundaries.
+  HTTP/SQL creation with deterministic provider boundaries. The request-table
+  helper exercises 55 additional SQL requests, real delayed Title/Author search,
+  sort/page/refresh/filter state, row/title/menu keyboard behavior, Purchase,
+  Reject, Claim and Unclaim. An 80-event history checks the persistent footer.
+  `staff-native-zoom.cjs` uses Chromium's tab zoom API through a test-only local
+  extension at physical widths 1280 and 1440. Eight states cover the table's
+  open menu, long detail context, mixed native controls and patron placeholder
+  insertion. The checks require zoom 2, doubled DPR, CDP zoom 2, CSS zoom 1 and
+  pinch scale 1; CSS zoom is not substituted for this acceptance evidence.
 
 - `frontend-cache.cjs`: published staff/patron files served through Program,
   with a controlled deployment, real Chromium cache, stale-module negative

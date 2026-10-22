@@ -829,7 +829,6 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     if (values.length === 0) dom.providers.append(element('p', { className: 'settings-empty', text: 'No providers configured.' }));
     for (const [index, value] of values.entries()) {
       const id = stringId(value.id);
-      const key = element('input', { type: 'text', value: value.key || '', readOnly: Boolean(id), 'data-domain-editable': 'true' });
       const enabled = element('input', { type: 'checkbox', checked: value.isEnabled, 'data-domain-editable': 'true' });
       const override = checkbox('Override', state.system || value.overridden, 'settings-inline-check settings-domain-override');
       override.input.className = 'settings-domain-override-toggle';
@@ -840,7 +839,6 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         'data-provider-key': value.key || '',
         'data-provider-sort-order': numeric(value.sortOrder, (index + 1) * 10)
       }, [
-        field('Provider key', key),
         field('Label', element('input', { type: 'text', value: value.label || '', 'data-domain-editable': 'true' })),
         field('URL template', element('input', { type: 'url', value: value.urlTemplate || '', 'data-domain-editable': 'true' })),
         element('label', { className: 'settings-domain-check' }, [enabled, element('span', { text: 'Enabled' })]),
@@ -862,9 +860,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
       const override = row.querySelector('.settings-domain-override-toggle');
       return {
         id: stringId(row.dataset.providerId),
-        key: clean(inputs[0]?.value),
-        label: clean(inputs[1]?.value),
-        urlTemplate: clean(inputs[2]?.value),
+        key: row.dataset.providerKey,
+        label: clean(inputs[0]?.value),
+        urlTemplate: clean(inputs[1]?.value),
         isEnabled: Boolean(row.querySelector('input[type="checkbox"]:not(.settings-domain-override-toggle)')?.checked),
         sortOrder: numeric(row.dataset.providerSortOrder, (index + 1) * 10),
         overridden: state.system || Boolean(override?.checked),
@@ -1519,7 +1517,14 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   });
   listen(dom.codeEligibilityEnabled, 'change', updateCodeWarning);
   listen(dom.codes, 'change', updateCodeWarning);
-  bindAdd('providers', values => ({ id: null, key: `provider_${values.length + 1}`, label: 'New provider', urlTemplate: '', isEnabled: false, overridden: true }));
+  bindAdd('providers', values => {
+    // A removed draft row still owns its persisted identity until save/reload.
+    const accepted = array(property(systemConfig(state.data), 'providers'));
+    const keys = new Set([...accepted, ...values].map(value => String(value.key || '').toLowerCase()));
+    let index = 1;
+    while (keys.has(`provider_${index}`)) index += 1;
+    return { id: null, key: `provider_${index}`, label: 'New provider', urlTemplate: '', isEnabled: false, overridden: true };
+  });
   bindAdd('formats', values => ({ id: null, code: `custom_${values.length + 1}`, ownerOrganizationId: currentOrganizationId(), label: 'New format', isEnabled: true, overridden: true }));
   bindAdd('fields', values => ({ id: null, key: `field_${values.length + 1}`, type: 'text', label: 'New field', enabled: true, options: [] }));
   bindAdd('rules', values => {

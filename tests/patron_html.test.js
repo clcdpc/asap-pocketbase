@@ -32,6 +32,20 @@ const { JSDOM } = require('jsdom');
     assert.equal(dom.window.patronHtmlScriptRan, undefined);
     assert.equal(container.querySelectorAll('a')[1].hasAttribute('href'), false);
     assert.equal(container.querySelector('span').hasAttribute('onclick'), false);
+
+    const plain = '<img src=x onerror="alert(1)"> & é\nOne line\n\nParagraph\nhttps://help.libbyapp.com/en-us/6260.htm\n(https://example.org/a?x=1&y=2). javascript:alert(1)';
+    patron.renderPatronText(container, plain);
+    assert.equal(container.textContent, plain, 'Every newline, special character and literal tag must survive.');
+    assert.equal(container.querySelector('img, script, p, span'), null);
+    assert.equal(container.querySelectorAll('a').length, 2);
+    assert.equal(container.querySelectorAll('a')[1].getAttribute('href'), 'https://example.org/a?x=1&y=2');
+    for (const link of container.querySelectorAll('a')) {
+      assert.equal(link.target, '_blank'); assert.equal(link.rel, 'noopener noreferrer');
+    }
+    assert.equal(container.classList.contains('patron-message'), true);
+    patron.renderPatronText(container, patron.applyPatronTextPlaceholders('Use {{barcode_label}}\nand {{pin_label}}.', { barcodeLabel: '<Card &>', pinLabel: 'Secret' }));
+    assert.equal(container.textContent, 'Use <Card &>\nand Secret.');
+    assert.equal(container.children.length, 0, 'Placeholder values cannot become markup.');
   } finally {
     dom.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });

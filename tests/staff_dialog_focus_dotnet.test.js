@@ -131,13 +131,16 @@ async function runJourney(scenario, pipelineOverlap = false, registrationOverlap
     const workflow = await import(pathToFileURL(path.join(temporary, 'staff/js/workflow.js')).href);
     app = workflow.createWorkflowApp();
     await app.start();
-    const opener = (id = '91') => document.querySelector(`[aria-label="${openerLabel} ${id}"]`);
+    const opener = (id = '91') => document.querySelector(titleRequest
+      ? `a[data-request-id="${id}"]` : `[aria-label="${openerLabel} ${id}"]`);
     const claimLabel = () => opener()?.closest('tr').querySelector('.claim-label');
     await until(() => opener() && opener('92') && opener('93'), 'The real Grid.js must render the initial tasks');
+    const actionColumn = titleRequest ? 'actions' : 'open';
+    const titleColumn = titleRequest ? 'bibliographicdetails' : 'title';
     const assertOpenNotSortable = () => {
-      const header = document.querySelector(`#${gridId} th[data-column-id="open"]`);
-      assert.equal(header.querySelector('.gridjs-sort'), null, 'The Open action column must remain unsortable');
-      assert.equal(header.hasAttribute('tabindex'), false, 'The Open header must not become a sorting tab stop');
+      const header = document.querySelector(`#${gridId} th[data-column-id="${actionColumn}"]`);
+      assert.equal(header.querySelector('.gridjs-sort'), null, 'The action column must remain unsortable');
+      assert.equal(header.hasAttribute('tabindex'), false, 'The action header must not become a sorting tab stop');
     };
     assertOpenNotSortable();
     if (registrationOverlap) {
@@ -180,7 +183,7 @@ async function runJourney(scenario, pipelineOverlap = false, registrationOverlap
         return released.promise.then(() => rows);
       };
       releasePriorSort = released.resolve;
-      document.querySelector(`#${gridId} th[data-column-id="title"]`).click();
+      document.querySelector(`#${gridId} th[data-column-id="${titleColumn}"]`).click();
       await started.promise;
     }
     const initialOpener = opener();
@@ -198,7 +201,7 @@ async function runJourney(scenario, pipelineOverlap = false, registrationOverlap
       await priorSort;
       await settleGridWork(dom.window);
       assert.strictEqual(opener('93'), null, 'An older sort must not overwrite the newer accepted filter');
-      document.querySelector(`#${gridId} th[data-column-id="title"]`).click();
+      document.querySelector(`#${gridId} th[data-column-id="${titleColumn}"]`).click();
       await until(() => document.querySelector(`#${gridId} .grid-open`) === opener(),
         'Title descending must sort the real filtered rows');
       const descendingOpener = opener();
@@ -206,7 +209,7 @@ async function runJourney(scenario, pipelineOverlap = false, registrationOverlap
       await until(() => opener() && opener() !== descendingOpener && !opener('93') &&
         document.querySelector(`#${gridId} .grid-open`) === opener(),
       'Refreshing must preserve the selected descending sort and current filter');
-      document.querySelector(`#${gridId} th[data-column-id="title"]`).click();
+      document.querySelector(`#${gridId} th[data-column-id="${titleColumn}"]`).click();
       await until(() => document.querySelector(`#${gridId} .grid-open`) === opener('92'),
         'Title ascending must sort the real filtered rows');
     }
@@ -239,7 +242,7 @@ async function runJourney(scenario, pipelineOverlap = false, registrationOverlap
         dom.window.gridjs.Grid = OriginalGrid;
         assert.ok(Array.isArray(configuration.data), 'The workflow must supply an array to the held update');
         assert.deepStrictEqual(configuration.data.map(row =>
-          [row[titleRequest ? 11 : 10], row[titleRequest ? 9 : 6]]),
+          [row[titleRequest ? 7 : 10], row[titleRequest ? 5 : 6]]),
         [['91', 'Unclaimed'], ['92', 'Unclaimed']],
           'The held update must be the completed unclaim refresh, not an earlier filter or claim render');
         const rows = configuration.data;

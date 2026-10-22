@@ -186,7 +186,7 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   }
 
   await page.locator('#settings-nav-workflow').click();
-  await page.locator(`#external-search-provider-editor [data-provider-id="${providerA}"] input`).nth(1)
+  await page.locator(`#external-search-provider-editor [data-provider-id="${providerA}"] input`).nth(0)
     .fill('Changed provider A');
   let payload = await saveSettings();
   assert.equal(payload.providers.find(item => item.id === providerB).reset, false);
@@ -281,7 +281,7 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
 
   const beforeProviderEdit = untouchedProvider;
   await page.locator('#settings-nav-workflow').click();
-  await page.locator(`#external-search-provider-editor [data-provider-id="${providerB}"] input`).nth(1)
+  await page.locator(`#external-search-provider-editor [data-provider-id="${providerB}"] input`).nth(0)
     .fill('Changed pinned provider B');
   await saveSettings();
   current = await read();
@@ -330,8 +330,8 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   const beforeProviderClear = untouchedProvider;
   await page.locator('#settings-nav-workflow').click();
   const providerRow = page.locator(`#external-search-provider-editor [data-provider-id="${providerB}"]`);
+  await providerRow.locator('input').nth(0).fill('');
   await providerRow.locator('input').nth(1).fill('');
-  await providerRow.locator('input').nth(2).fill('');
   payload = await saveSettings();
   assert.equal(payload.providers.find(item => item.id === providerB).label, null);
   assert.equal(payload.providers.find(item => item.id === providerB).urlTemplate, null);
@@ -426,6 +426,98 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   await page.reload({ waitUntil: 'networkidle' });
   await waitForSettingsReady(args.scopeId);
   report.libraryOverrideMetadataRoundTrip = true;
+}
+
+async function runPatronTextRefinements(page, axeSource, args, report, saveSettings, ready, read, reload, switchScope) {
+  const library = args.scopeId;
+  if (args.mode !== 'campaign2-library-admin') {
+    await switchScope('system');
+    await page.locator('#settings-nav-workflow').click();
+    const before = await read('system');
+    const originalKeys = before.stored.configuredSystem.providers.map(item => [item.id, item.key]);
+    assert.equal(await page.getByText('Provider key', { exact: true }).count(), 0);
+    await page.locator('#add-provider').click();
+    const added = page.locator('#external-search-provider-editor [data-provider-id=""]');
+    await added.getByLabel('Label', { exact: true }).fill(`UI refinements provider ${args.formatCode}`);
+    await added.getByLabel('URL template', { exact: true }).fill(`${args.baseOrigin}/catalog?q={{title}}&fixture=${args.formatCode}`);
+    await added.getByLabel('Enabled', { exact: true }).check();
+    const key = await added.getAttribute('data-provider-key');
+    assert.ok(key && !originalKeys.some(item => item[1].toLowerCase() === key.toLowerCase()));
+    await saveSettings(); await reload('system'); await page.locator('#settings-nav-workflow').click();
+    const saved = await read('system');
+    const provider = saved.stored.configuredSystem.providers.find(item => item.key === key);
+    assert.ok(provider?.id); assert.equal(provider.isEnabled, true);
+    for (const [id, original] of originalKeys) assert.equal(saved.stored.configuredSystem.providers.find(item => item.id === id).key, original);
+    const savedRow = page.locator(`#external-search-provider-editor [data-provider-id="${provider.id}"]`);
+    await savedRow.getByLabel('Label', { exact: true }).fill(`UI refinements provider ${args.formatCode} edited`);
+    await saveSettings(); await reload('system');
+    assert.equal((await read('system')).stored.configuredSystem.providers.find(item => item.id === provider.id).key, key);
+    await page.locator('#settings-nav-patron').click();
+    const systemMessage = 'System <b> & é\nOne line\n\nLibby help:\nhttps://help.libbyapp.com/en-us/6260.htm\n';
+    await page.locator('#patron-success-message').fill(systemMessage);
+    await saveSettings(); await reload('system');
+    assert.equal((await read('system')).stored.configuredSystem.patron.successMessage, systemMessage);
+    await switchScope(library);
+    report.providerIdentityRoundTrip = true;
+  }
+  await page.locator('#settings-nav-patron').click();
+  const systemBefore = (await read(library)).stored.configuredSystem.patron.successMessage;
+  const successField = page.locator('[data-setting-key="successMessage"]');
+  const duplicateField = page.locator('[data-setting-key="alreadySubmittedMessage"]');
+  assert.equal(await successField.locator('textarea').isDisabled(), true);
+  assert.equal(await successField.locator('.patron-placeholder-trigger').isDisabled(), true);
+  await successField.locator('.settings-override-toggle').check();
+  const message = 'Library <img src=x onerror="alert(1)"> & é\nCard: selected\n\nLibby help:\nhttps://help.libbyapp.com/en-us/6260.htm\n';
+  await successField.locator('textarea').fill(message);
+  const start = message.indexOf('selected');
+  await successField.locator('textarea').evaluate((element, start) => element.setSelectionRange(start, start + 8), start);
+  await successField.locator('.patron-placeholder-trigger').focus(); await page.keyboard.press('Enter');
+  assert.deepEqual(await successField.locator('[data-patron-placeholder]').evaluateAll(buttons => buttons.map(button => button.dataset.patronPlaceholder)), ['barcode_label', 'pin_label']);
+  await page.keyboard.press('Enter');
+  const expected = message.replace('selected', '{{barcode_label}}');
+  assert.equal(await successField.locator('textarea').inputValue(), expected);
+  assert.equal(await successField.locator('textarea').evaluate(element => document.activeElement === element), true);
+  assert.equal(await successField.locator('textarea').evaluate(element => element.selectionStart), start + '{{barcode_label}}'.length);
+  await duplicateField.locator('.settings-override-toggle').check();
+  await duplicateField.locator('textarea').fill('Previous: ');
+  await duplicateField.locator('textarea').evaluate(element => element.setSelectionRange(10, 10));
+  await duplicateField.locator('.patron-placeholder-trigger').click();
+  await duplicateField.locator('[data-patron-placeholder="duplicate_title"]').click();
+  await saveSettings(); await reload(library); await page.locator('#settings-nav-patron').click();
+  assert.equal(await successField.locator('textarea').inputValue(), expected);
+  assert.equal(await duplicateField.locator('textarea').inputValue(), 'Previous: {{duplicate_title}}');
+  assert.equal((await read(library)).stored.configuredSystem.patron.successMessage, systemBefore, 'A library edit cannot replace System copy.');
+  const config = await page.evaluate(async library => (await fetch(`/api/asap/config?libraryOrgId=${library}`)).json(), library);
+  assert.equal(config.successMessage, expected);
+  const patron = await page.context().newPage();
+  patron.on('pageerror', error => report.pageErrors.push(error.message));
+  try {
+    await patron.goto(`${args.baseOrigin}/patron/?libraryOrgId=${library}`, { waitUntil: 'networkidle' });
+    const rendered = await patron.evaluate(async config => {
+      const { applyLoadedUiText } = await import('/patron/js/config.js');
+      const { renderSuccessMessage } = await import('/patron/js/form-ui.js');
+      const { showSuccessStep } = await import('/patron/js/steps.js');
+      applyLoadedUiText(config); renderSuccessMessage();
+      showSuccessStep();
+      const body = document.getElementById('success-body');
+      return { text: body.textContent, tags: body.querySelectorAll('img,script,b').length,
+        whiteSpace: getComputedStyle(body).whiteSpace, links: [...body.querySelectorAll('a')].map(link => link.href) };
+    }, config);
+    assert.equal(rendered.text, expected.replace('{{barcode_label}}', config.barcodeLabel));
+    assert.equal(rendered.tags, 0); assert.equal(rendered.whiteSpace, 'pre-wrap');
+    assert.deepEqual(rendered.links, ['https://help.libbyapp.com/en-us/6260.htm']);
+    await scan(patron, axeSource, args.artifactRoot, report, 'patron-plain-text');
+  } finally { await patron.close(); }
+  for (const [name, width, height] of [['patron-picker-desktop', 1280, 900], ['patron-picker-mobile', 390, 844]]) {
+    await page.setViewportSize({ width, height });
+    await duplicateField.locator('.patron-placeholder-trigger').focus(); await page.keyboard.press('Space');
+    await scan(page, axeSource, args.artifactRoot, report, name);
+    await page.keyboard.press('Escape');
+    assert.equal(await duplicateField.locator('.patron-placeholder-trigger').evaluate(element => document.activeElement === element), true);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.locator('#settings-nav-templates').click();
+  report.patronTextRoundTrip = true;
 }
 
 async function runCampaign2Editor(page, axeSource, args, report, saveSettings, ready) {
@@ -775,6 +867,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     }
   }
   report.namedOverrideEditsBackToSystem = true;
+  await runPatronTextRefinements(page, axeSource, args, report, saveSettings, ready, read, reload, switchScope);
   await scan(page, axeSource, args.artifactRoot, report, 'campaign2-desktop');
   await page.setViewportSize({ width: 390, height: 844 });
   await scan(page, axeSource, args.artifactRoot, report, 'campaign2-mobile');

@@ -5,6 +5,7 @@ import { createSettingsDomainEditors } from './settings-domains.js';
 import { actorKey } from './session-identity.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
 import { createEmailTemplatePlaceholders } from './email-template-placeholders.js';
+import { createPatronTextPlaceholders } from './patron-text-placeholders.js';
 import { createEmailTestController } from './email-test.js';
 import { byDisplayLabel } from './display-order.js';
 
@@ -36,15 +37,15 @@ const PATRON_FIELDS = [
   ['pageTitle', 'patron-page-title'],
   ['barcodeLabel', 'patron-barcode-label'],
   ['pinLabel', 'patron-pin-label'],
-  ['loginPrompt', 'patron-login-prompt'],
-  ['loginNote', 'patron-login-note'],
-  ['suggestionFormNote', 'patron-suggestion-form-note'],
-  ['noEmailMessage', 'patron-no-email-message'],
+  ['loginPrompt', 'patron-login-prompt', 'message'],
+  ['loginNote', 'patron-login-note', 'message'],
+  ['suggestionFormNote', 'patron-suggestion-form-note', 'message'],
+  ['noEmailMessage', 'patron-no-email-message', 'message'],
   ['successTitle', 'patron-success-title'],
-  ['successMessage', 'patron-success-message'],
-  ['alreadySubmittedMessage', 'patron-already-submitted-message'],
-  ['ebookMessage', 'patron-ebook-message'],
-  ['eaudiobookMessage', 'patron-eaudiobook-message'],
+  ['successMessage', 'patron-success-message', 'message'],
+  ['alreadySubmittedMessage', 'patron-already-submitted-message', 'message'],
+  ['ebookMessage', 'patron-ebook-message', 'message'],
+  ['eaudiobookMessage', 'patron-eaudiobook-message', 'message'],
   ['suggestionStatusLabel', 'patron-suggestion-status-label'],
   ['outstandingPurchaseStatusLabel', 'patron-outstanding-purchase-status-label'],
   ['pendingHoldStatusLabel', 'patron-pending-hold-status-label'],
@@ -166,6 +167,7 @@ function mergeConfigured(system, override, fallback = {}) {
 
 function readControl(control, kind = 'text') {
   if (!control) return null;
+  if (kind === 'message') return control.value.trim() ? control.value : null;
   if (kind === 'boolean' || control.type === 'checkbox') return control.checked;
   if (kind === 'id') {
     return clean(control.value);
@@ -473,6 +475,13 @@ export function createSettingsController({
       !state.awaitingReload && !state.outcomeUncertain
   });
 
+  const patronPlaceholders = createPatronTextPlaceholders({
+    root, panel: root.querySelector('#settings-patron'), listen,
+    captureContext: captureSettingsContext, isContextCurrent: isSettingsContextCurrent,
+    isActive: () => state.visible && state.activePanel === 'patron' && !state.pendingMutation &&
+      !state.awaitingReload && !state.outcomeUncertain
+  });
+
   function isSystem() {
     return state.scope === 'system';
   }
@@ -557,7 +566,7 @@ export function createSettingsController({
   function cancelSettingsOperations() {
     emailTest.invalidate();
     state.loading = false;
-    placeholders.clear();
+    placeholders.clear(); patronPlaceholders.clear();
     scopePreparation = null;
     cancelPolarisTest();
     dom.syncOrganizations.disabled = false;
@@ -1302,6 +1311,7 @@ export function createSettingsController({
       for (const [key] of fields) state.baselineOverrides.set(`${section}.${key}`, hasRawOverride(section, key));
     }
     configureScopedFields();
+    patronPlaceholders.refresh();
     dom.systemContext.hidden = isSystem();
     root.querySelector('#settings-library-context-title').textContent = `Editing ${data.organization?.name || 'this library'} settings`;
     root.querySelector('#settings-library-context-guidance').textContent =
@@ -1330,7 +1340,7 @@ export function createSettingsController({
     const context = captureSettingsContext();
     state.loading = true;
     emailTest.invalidate();
-    placeholders.clear();
+    placeholders.clear(); patronPlaceholders.clear();
     const snapshot = snapshotDrafts();
     const loadState = reads.begin('administration-settings');
     state.organizationsReady = false;
@@ -1375,6 +1385,7 @@ export function createSettingsController({
           (review.catalogChanged || ['administration-settings-organization-sync', 'administration-settings-participation'].includes(review.slot)) });
       dom.form.hidden = false;
       dom.form.inert = Boolean(state.pendingMutation || state.awaitingReload);
+      patronPlaceholders.refresh();
       if (wasHidden) dom.panels.find(item => item.dataset.settingsPanelContent === state.activePanel)?.focus({ preventScroll: true });
       if (staffReview) {
         const reviewed = await loadStaffAccess({ silent: true, discard: true, owner: options.owner });
@@ -2152,7 +2163,7 @@ export function createSettingsController({
   function activatePanel(name, updateUrl = false) {
     if (disposed || !dom.nav.some(button => button.dataset.settingsPanel === name) ||
         !state.staff || state.staff.role === 'staff') return false;
-    if (name !== state.activePanel) placeholders.clear();
+    if (name !== state.activePanel) { placeholders.clear(); patronPlaceholders.clear(); }
     state.activePanel = name;
     for (const button of dom.nav) {
       const active = button.dataset.settingsPanel === name;
@@ -2161,6 +2172,7 @@ export function createSettingsController({
       button.tabIndex = active ? 0 : -1;
     }
     for (const panel of dom.panels) panel.hidden = panel.dataset.settingsPanelContent !== name;
+    if (name === 'patron') patronPlaceholders.refresh();
     const panel = dom.panels.find(item => item.dataset.settingsPanelContent === name);
     panel?.focus({ preventScroll: true });
     if (name === 'staff') void loadStaffAccess();
@@ -2376,7 +2388,7 @@ export function createSettingsController({
     if (state.pendingMutation || state.outcomeUncertain) return false;
     state.visible = false;
     emailTest.invalidate();
-    placeholders.clear();
+    placeholders.clear(); patronPlaceholders.clear();
     cancelPolarisTest();
     releaseLogoDraft();
     dom.logo.value = '';

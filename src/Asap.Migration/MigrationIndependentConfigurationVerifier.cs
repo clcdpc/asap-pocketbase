@@ -481,10 +481,10 @@ internal static class MigrationIndependentConfigurationVerifier
                 Same(reader, 3, string.Empty) && Same(reader, 4, string.Empty) && Same(reader, 5, string.Empty) &&
                 Same(reader, 6, "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.") &&
                 Same(reader, 7, "Suggestion Submitted") &&
-                Same(reader, 8, "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>") &&
-                Same(reader, 9, "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library's suggestion service.</div>") &&
-                Same(reader, 10, "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>") &&
-                Same(reader, 11, "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>") &&
+                Same(reader, 8, "You have successfully submitted your material suggestion! Check your email inbox for status updates.\n\nThank you for using our suggestion service.") &&
+                Same(reader, 9, "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.\n\nThank you for using this library's suggestion service.") &&
+                Same(reader, 10, "This is an eBook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm") &&
+                Same(reader, 11, "This is an eAudiobook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm") &&
                 Same(reader, 12, "Received") && Same(reader, 13, "Under review") && Same(reader, 14, "Being prepared") &&
                 Same(reader, 15, "Hold placed") && Same(reader, 16, "Completed") && Same(reader, 17, "Not selected for purchase") &&
                 Same(reader, 18, "Completed") && Same(reader, 19, "Closed") && Same(reader, 20, "Closed") && Same(reader, 21, "Closed") &&

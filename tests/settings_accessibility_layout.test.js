@@ -43,7 +43,7 @@ const { JSDOM } = require('jsdom');
     const controls = scope => [...scope.querySelectorAll('input, select, textarea')].map(control => control.id);
     const fieldset = id => document.getElementById(id).closest('fieldset');
     const legend = id => fieldset(id).querySelector('legend').textContent;
-    const wide = id => assert.ok(document.getElementById(id).closest('label').classList.contains('wide'), id);
+    const wide = id => assert.ok(document.getElementById(id).closest('.settings-field').classList.contains('wide'), id);
     assert.deepStrictEqual(controls(document.getElementById('settings-polaris')), [
       'polaris-host', 'polaris-access-id', 'polaris-api-key', 'polaris-domain',
       'polaris-admin-user', 'polaris-admin-pass', 'polaris-workstation-id', 'polaris-system-user-id'
