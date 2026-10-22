@@ -5,7 +5,7 @@ import { applyLoadedUiText, uiConfig } from './config.js';
 import { applyUiConfig, updateFormatUI } from './form-ui.js';
 import { showLoginStep, showSuggestionStep } from './steps.js';
 import { byId, setText, setVisible, setDisabled } from './dom.js';
-import { applyPatronTextPlaceholders } from './html.js';
+import { renderPatronText, applyPatronTextPlaceholders } from './html.js';
 
 let authOperation = 0;
 
@@ -71,7 +71,8 @@ export function populatePatronIdentity(result, submittedBarcode) {
     setVisible('no-email-msg', false);
   } else {
     setText('display-email', '');
-    setText('no-email-msg', applyPatronTextPlaceholders(uiConfig.noEmailMessage || 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.', uiConfig));
+    const noEmail = byId('no-email-msg');
+    if (noEmail) renderPatronText(noEmail, applyPatronTextPlaceholders(uiConfig.noEmailMessage || 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.', uiConfig));
     setVisible('no-email-msg', true);
   }
 

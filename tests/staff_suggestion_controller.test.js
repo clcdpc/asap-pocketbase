@@ -129,6 +129,60 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       controller.dispose();
     });
   }
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createSuggestionController } = await load('suggestion-controller');
+    const { createPolarisLookup } = await load('research');
+    const session = createSessionIdentity(); session.accept(actorA);
+    let finishVerification;
+    const lookup = createPolarisLookup({ announce() {}, isAbortError: error => error.name === 'AbortError',
+      authorizedJson: async (path, init) => init.body.mode === 'bib'
+        ? new Promise(resolve => { finishVerification = resolve; })
+        : { results: [{ bibId: 9001, title: 'Catalog title', author: 'Catalog author', identifier: 'Catalog identifier' }] } });
+    const root = get('#staff-suggestion-dialog');
+    const controller = createSuggestionController({ root, trigger: get('#new-suggestion'), sessionIdentity: session,
+      polarisLookup: lookup, announce() {}, getLibraries: () => [{ id: '2', name: 'A' }],
+      beforeOpen: () => true, beforeClose: () => true, openCreatedTitle() {}, openExistingTitle() {}, onReceipt() {}, clearReceipt() {},
+      request: async path => path.endsWith('/patron-lookup')
+        ? { status: 'verified', libraryOrgId: 2, patron: { patron: { barcode: '20000000000001', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101 } }
+        : { libraryOrgId: 2, configuration: { availableFormats: ['book'] } } });
+    controller.open();
+    root.querySelector('select').value = '2'; root.querySelector('select').dispatchEvent(new dom.window.Event('change'));
+    root.querySelector('input[type="search"]').value = 'Patron';
+    get('#staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush(); await flush();
+    const fields = root.querySelector('.staff-suggestion-fields');
+    const [title, author] = fields.querySelectorAll('input[maxlength="500"]');
+    const identifier = fields.querySelector('input[maxlength="100"]');
+    const button = fields.querySelector('.polaris-edit-tools button');
+    assert.equal(fields.querySelector('.staff-suggestion-catalog'), null);
+    button.click(); assert.equal(get('#polaris-query').value, '', 'An empty form can open search.'); get('#close-polaris').click();
+    title.value = 'Staff title'; author.value = 'Staff author'; identifier.value = 'Staff identifier';
+    title.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    button.click();
+    assert.equal(get('#polaris-mode').value, 'title'); assert.equal(get('#polaris-query').value, 'Staff title');
+    assert.equal(get('#polaris-author').value, '');
+    get('#polaris-query').value = 'Temporary catalog query'; get('#close-polaris').click();
+    assert.equal(title.value, 'Staff title'); assert.equal(author.value, 'Staff author'); assert.equal(identifier.value, 'Staff identifier');
+    assert.equal(document.activeElement, button);
+    title.value = 'Current title'; button.click(); assert.equal(get('#polaris-query').value, 'Current title');
+    get('#polaris-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true })); await flush();
+    get('#polaris-results button').click(); await flush();
+    finishVerification({ bibId: 9001, title: 'Catalog title', author: 'Catalog author', identifier: 'Catalog identifier' });
+    await flush();
+    assert.equal(title.value, 'Catalog title (Current title)'); assert.equal(author.value, 'Staff author');
+    assert.equal(identifier.value, 'Staff identifier'); assert.equal(fields.querySelector('input[type="hidden"]').value, '9001');
+    assert.equal(controller.isDirty(), true);
+    button.click(); get('#close-polaris').click();
+    assert.equal(fields.querySelector('input[type="hidden"]').value, '9001', 'Cancel preserves verification.');
+    button.click(); get('#polaris-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true })); await flush();
+    get('#polaris-results button').click(); await flush();
+    controller.close({ force: true }); controller.open();
+    finishVerification({ bibId: 9001, title: 'Late title' }); await flush();
+    assert.equal(root.querySelector('.staff-suggestion-fields'), null, 'A late selection cannot replace a newer suggestion stage.');
+    controller.dispose(); lookup.dispose();
+  });
+  console.log('Suggestion scope, create outcomes, Title-only Polaris selection/cancel and stale ownership passed');
   for (const notificationStatus of ['queued', 'suppressed', 'dispatch_failed', 'not_requested', undefined]) {
     await fixture(async ({ load, get, dom }) => {
       const { createSessionIdentity } = await load('session-identity');

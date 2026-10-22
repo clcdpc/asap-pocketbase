@@ -239,19 +239,19 @@ public sealed partial class AdministrationService
         }
         if (command.Patron.LoginPrompt.IsSupplied)
         {
-            patron.LoginPrompt = NormalizeScopedText(command.Patron.LoginPrompt.Value);
+            patron.LoginPrompt = NormalizePatronMessage(command.Patron.LoginPrompt.Value);
         }
         if (command.Patron.LoginNote.IsSupplied)
         {
-            patron.LoginNote = NormalizeScopedText(command.Patron.LoginNote.Value);
+            patron.LoginNote = NormalizePatronMessage(command.Patron.LoginNote.Value);
         }
         if (command.Patron.SuggestionFormNote.IsSupplied)
         {
-            patron.SuggestionFormNote = NormalizeScopedText(command.Patron.SuggestionFormNote.Value);
+            patron.SuggestionFormNote = NormalizePatronMessage(command.Patron.SuggestionFormNote.Value);
         }
         if (command.Patron.NoEmailMessage.IsSupplied)
         {
-            patron.NoEmailMessage = NormalizeScopedText(command.Patron.NoEmailMessage.Value);
+            patron.NoEmailMessage = NormalizePatronMessage(command.Patron.NoEmailMessage.Value);
         }
         if (command.Patron.SuccessTitle.IsSupplied)
         {
@@ -259,19 +259,19 @@ public sealed partial class AdministrationService
         }
         if (command.Patron.SuccessMessage.IsSupplied)
         {
-            patron.SuccessMessage = NormalizeScopedText(command.Patron.SuccessMessage.Value);
+            patron.SuccessMessage = NormalizePatronMessage(command.Patron.SuccessMessage.Value);
         }
         if (command.Patron.AlreadySubmittedMessage.IsSupplied)
         {
-            patron.AlreadySubmittedMessage = NormalizeScopedText(command.Patron.AlreadySubmittedMessage.Value);
+            patron.AlreadySubmittedMessage = NormalizePatronMessage(command.Patron.AlreadySubmittedMessage.Value);
         }
         if (command.Patron.EbookMessage.IsSupplied)
         {
-            patron.EbookMessage = NormalizeScopedText(command.Patron.EbookMessage.Value);
+            patron.EbookMessage = NormalizePatronMessage(command.Patron.EbookMessage.Value);
         }
         if (command.Patron.EaudiobookMessage.IsSupplied)
         {
-            patron.EaudiobookMessage = NormalizeScopedText(command.Patron.EaudiobookMessage.Value);
+            patron.EaudiobookMessage = NormalizePatronMessage(command.Patron.EaudiobookMessage.Value);
         }
         if (command.Patron.SuggestionStatusLabel.IsSupplied)
         {
@@ -434,7 +434,12 @@ public sealed partial class AdministrationService
 
     private static void SetPatronText(PatronSettings row, string property, string? value, bool system)
     {
-        var normalized = NormalizeScopedText(value);
+        var normalized = property is nameof(PatronSettings.LoginPrompt) or nameof(PatronSettings.LoginNote) or
+            nameof(PatronSettings.SuggestionFormNote) or nameof(PatronSettings.NoEmailMessage) or
+            nameof(PatronSettings.SuccessMessage) or nameof(PatronSettings.AlreadySubmittedMessage) or
+            nameof(PatronSettings.EbookMessage) or nameof(PatronSettings.EaudiobookMessage)
+            ? NormalizePatronMessage(value)
+            : NormalizeScopedText(value);
         switch (property)
         {
             case nameof(PatronSettings.PageTitle): row.PageTitle = normalized; break;
@@ -475,5 +480,8 @@ public sealed partial class AdministrationService
 
     private static string? NormalizeScopedText(string? value) =>
         Clean(value);
+
+    private static string? NormalizePatronMessage(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
 
 }

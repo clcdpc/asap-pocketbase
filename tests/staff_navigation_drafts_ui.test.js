@@ -165,7 +165,10 @@ async function fixture(route, journey, options = {}) {
           { libraryOrgId: Number(parsed.searchParams.get('libraryOrgId')), configuration });
       }
       if (pathname.endsWith('/research-configuration')) return response(200, {});
-      if (pathname.endsWith('/bib-lookup')) return response(200, { bibId: 9001, title: request.title, author: null });
+      if (pathname.endsWith('/bib-lookup')) {
+        const detail = { bibId: 9001, title: request.title, author: null };
+        return response(200, JSON.parse(init.body).mode === 'bib' ? detail : { results: [detail] });
+      }
       if (pathname.endsWith('/additional-copy') && init.method === 'GET') return response(200, {
         version: request.version, bibid: request.bibid, openCount: 0, emailPurchaseReminderDefault: false });
       if (pathname.endsWith('/assignment-candidates')) return response(200, {
@@ -381,7 +384,7 @@ test('hold recovery guards editor drafts and refreshes authoritatively after its
     reconcile().click(); await settle();
     assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
     assert.equal(ui.get('.edit-form input').value, 'Unsaved recovery draft');
-    [...document.querySelectorAll('.edit-form button')].find(button => button.textContent === 'Revert changes').click();
+    [...document.querySelectorAll('.request-save-footer button')].find(button => button.textContent === 'Revert changes').click();
     let resolve;
     ui.setOperation(() => new Promise(done => { resolve = done; }));
     reconcile().click(); await until(() => resolve, 'hold recovery dispatched');
@@ -419,10 +422,10 @@ test('changed BIB or identifier cannot inherit authoritative verification', () =
 }));
 test('explicit revert keeps the detail and clears only the discarded draft', () => fixture(`?request=${id}`, async ui => {
   ui.edit('.edit-form input', 'Unsaved title');
-  [...document.querySelectorAll('.edit-form button')].find(button => button.textContent === 'Revert changes').click();
+  [...document.querySelectorAll('.request-save-footer button')].find(button => button.textContent === 'Revert changes').click();
   assert.equal(ui.get('.edit-form input').value, 'Unsaved title', 'declined revert retains draft');
   ui.allowDiscard();
-  [...document.querySelectorAll('.edit-form button')].find(button => button.textContent === 'Revert changes').click();
+  [...document.querySelectorAll('.request-save-footer button')].find(button => button.textContent === 'Revert changes').click();
   assert.equal(ui.get('.edit-form input').value, 'Saved title');
   assert.equal(ui.get('#request-dialog').open, true);
   const unload = new ui.dom.window.Event('beforeunload', { cancelable: true });
@@ -989,7 +992,7 @@ test('closing only the Additional Copy preview returns focus to its live parent 
     ui.get('#cancel-additional-copy').click(); await settle();
     assert.equal(ui.get('#request-dialog').open, true);
     assert.equal(ui.get('#additional-copy-create-dialog').open, false);
-    assert.equal(document.activeElement.textContent.trim(), 'Additional copy');
+    assert.equal(document.activeElement, ui.get('#request-dialog .request-more summary'));
   }, { status: 'pending_hold', staff: actorA }));
 
 test('Additional Copy submission blocks departure; unresolved creation safely closes on navigation and survives reload', async () => {
@@ -1260,7 +1263,7 @@ test('editor Save and assignment submission each preserve the competing dirty dr
 for (const finish of ['baseline', 'cancel', 'clean']) {
   test(`${finish} title assignment permits Claim`, () =>
     fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
-      const opener = actionButton('Assign');
+      const opener = ui.get('.request-more summary');
       const form = await openInlineDraft(ui, 'Assign', assignmentLabel);
       if (finish !== 'clean') ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
       if (finish === 'baseline') ui.edit(`select[aria-label="${assignmentLabel}"]`, '20');
@@ -1325,7 +1328,7 @@ test('dirty pickup submits its own branch choice with the observed preference an
 
 test('Cancel pickup discards only pickup and returns focus without another confirmation', () =>
   fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
-    const opener = actionButton('Pickup');
+    const opener = ui.get('.request-more summary');
     const form = await openInlineDraft(ui, 'Pickup', pickupLabel);
     ui.edit(`select[aria-label="${pickupLabel}"]`, '102');
     ui.edit('.edit-form input', 'Retained title');
@@ -2065,7 +2068,7 @@ test('characterization: declined editor Revert preserves both editor and inline 
     const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
     ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
     ui.edit('.edit-form input', 'Editor draft');
-    actionButton('Revert changes', ui.get('.edit-form')).click();
+    actionButton('Revert changes', ui.get('.request-save-footer')).click();
     assert.equal(ui.get('.edit-form input').value, 'Editor draft');
     assert.equal(assignment.querySelector('select').value, '21');
     assert.equal(requestMutations(ui).length, 0);
@@ -2077,7 +2080,7 @@ test('editor Revert preserves competing inline UI and its draft registration', (
     const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
     ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
     ui.edit('.edit-form input', 'Editor draft');
-    ui.allowDiscard(); actionButton('Revert changes', ui.get('.edit-form')).click();
+    ui.allowDiscard(); actionButton('Revert changes', ui.get('.request-save-footer')).click();
     assert.equal(assignment.isConnected, true);
     assert.equal(ui.get('.edit-form input').value, 'Saved title');
     assert.equal(protectedUnload(ui), true);
@@ -2099,7 +2102,7 @@ test('Additional Copy reminder owns a guarded draft and explicit Cancel lifetime
     assert.equal(ui.get('#additional-copy-create-dialog').open, false);
     assert.equal(ui.get('#additional-copy-reminder').checked, false);
     assert.equal(protectedUnload(ui), false, 'Cancel releases only the reminder registration');
-    assert.equal(document.activeElement, opener);
+    assert.equal(document.activeElement, ui.get('#request-dialog .request-more summary'));
     assert.equal(requestMutations(ui).length, 0);
   }, { status: 'pending_hold' }));
 
@@ -2354,8 +2357,9 @@ for (const copy of [false, true]) {
           assert.match(ui.get(grid).textContent, /Old format/);
         } else {
           await until(() => queueReads === before + 1 && /New format/.test(ui.get(grid).textContent), 'affected same-scope DTO refreshed');
-          assert.match(ui.get(grid).textContent, /9 days/);
-          assert.doesNotMatch(ui.get(grid).textContent, /Old format|5 days/);
+          const automation = copy ? ui.get(grid) : ui.get('#queue-automation');
+          assert.match(automation.textContent, /9 days/);
+          assert.doesNotMatch(`${ui.get(grid).textContent} ${automation.textContent}`, /Old format|5 days/);
         }
       }, { copyRequest: {} }));
   }

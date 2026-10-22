@@ -76,7 +76,7 @@ export function addDetail(list, label, value) {
 }
 
 export function labeledInput(label, input, className = '') {
-  return element('label', { className }, [element('span', { text: label }), input]);
+  return element('label', { className: `form-field ${className}`.trim() }, [element('span', { text: label }), input]);
 }
 
 export function selectWithHistorical(options, selectedValue, labels = {}) {

@@ -3,6 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const verifyMixedFieldLayout = require('./form-layout.cjs');
+const verifyStaffNativeZoom = require('./staff-native-zoom.cjs');
+const verifyRequestTable = require('./staff-request-table.cjs');
+const statusTransitions = require('./staff-status-transitions.cjs');
 const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode, pickup, title] = process.argv.slice(2);
 
 (async () => {
@@ -16,6 +20,7 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
       report.externalRequests.push(route.request().url()); return route.abort();
     });
     const page = await context.newPage();
+    await statusTransitions.instrument(page);
     page.on('pageerror', error => report.errors.push(error.message));
     page.on('request', request => {
       if (request.url().endsWith('/patron-lookup') && request.method() === 'POST') report.lookups.push(request.postDataJSON());
@@ -56,22 +61,45 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
       assert.match(await dialog.locator('#staff-suggestion-pickup-help').textContent(), /Unfilled requests use the live preference when each hold is placed/i);
     };
     await page.goto(`${baseURL}/staff/?stage=queue&scope=${library}&status=suggestion`);
+    report.statusTransitions = await statusTransitions.verify({ page, context, baseURL, library, scan });
+    report.listActions = await verifyRequestTable({ page, context, baseURL, library, scan });
+    await page.locator('#request-search').fill(barcode);
     await quick().waitFor(); await quick().focus(); await page.keyboard.press('Enter');
     await verifyFresh();
     assert.equal(await dialog.getByLabel(/^Title/).evaluate(node => node === document.activeElement), true);
     assert.equal(report.lookups.length, 1);
     assert.equal(report.lookups[0].barcode, barcode); assert.equal(report.lookups[0].libraryOrgId, Number(library));
     assert.equal(report.lookups[0].query, null, 'quick create uses explicit identity rather than name fallback');
+    report.mixedFields = await verifyMixedFieldLayout(page, '#staff-suggestion-body');
+    const aligned = await dialog.evaluate(root => {
+      const date = root.querySelector('input[type="date"]'), pickup = root.querySelector('[aria-label="Preferred pickup location"]');
+      return { date: date.getBoundingClientRect().toJSON(), pickup: pickup.getBoundingClientRect().toJSON() };
+    });
+    assert.ok(Math.abs(aligned.date.top - aligned.pickup.top) <= 1, 'Exact publication date and pickup start at the same height.');
+    await dialog.getByRole('button', { name: 'Search Polaris catalog', exact: true }).click();
+    assert.equal(await page.locator('#polaris-query').inputValue(), '');
+    await page.keyboard.press('Escape');
+    assert.equal(await dialog.getByRole('button', { name: 'Search Polaris catalog', exact: true }).evaluate(node => document.activeElement === node), true);
     await scan('quick-create-desktop');
     await page.evaluate(() => { document.documentElement.style.zoom = '2'; });
     await scan('quick-create-zoom-200');
     await page.evaluate(() => { document.documentElement.style.zoom = ''; });
     await page.setViewportSize({ width: 390, height: 844 }); await scan('quick-create-mobile');
+    await verifyMixedFieldLayout(page, '#staff-suggestion-body');
     await page.keyboard.press('Escape');
     assert.equal(await quick().evaluate(node => node === document.activeElement), true);
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.getByRole('button', { name: `Open request ${sourceId}`, exact: true }).click();
+    await page.getByRole('link', { name: `Open request ${sourceId}:`, exact: false }).click();
     await page.locator('#request-dialog[open]').waitFor();
+    const detail = page.locator('#request-dialog');
+    await verifyMixedFieldLayout(page, '#request-dialog .request-details-panel');
+    await detail.getByRole('tab', { name: 'Activity', exact: true }).click();
+    assert.equal(await detail.locator('.request-activity li').count(), 80);
+    await detail.locator('.request-middle').evaluate(node => { node.scrollTop = node.scrollHeight; });
+    const footer = await detail.locator('.request-save-footer').boundingBox();
+    assert.ok(footer.y + footer.height <= 900);
+    await scan('detail-long-activity');
+    await detail.getByRole('tab', { name: 'Details', exact: true }).click();
     assert.match(await page.locator('#request-dialog').textContent(), /Recorded ASAP pickup/);
     assert.match(await page.locator('#request-dialog').textContent(), /Historical ASAP pickup/);
     assert.match(await page.locator('#request-dialog').textContent(), /live Polaris pickup preference/);
@@ -96,6 +124,16 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     await dialog.getByLabel(/Identifier number/i).fill('BROWSER-MATCH');
     await dialog.getByLabel(/Publication Timing/i).selectOption({ index: 1 });
     await dialog.getByLabel('Preferred pickup location', { exact: true }).selectOption(pickup);
+    const catalog = dialog.getByRole('button', { name: 'Search Polaris catalog', exact: true });
+    await catalog.click();
+    assert.equal(await page.locator('#polaris-mode').inputValue(), 'title');
+    assert.equal(await page.locator('#polaris-query').inputValue(), title);
+    assert.equal(await page.locator('#polaris-author').inputValue(), '');
+    await page.locator('#polaris-query').fill('Temporary query'); await page.keyboard.press('Escape');
+    assert.equal(await dialog.getByLabel(/^Title/).inputValue(), title);
+    assert.equal(await dialog.getByLabel(/^Author/).inputValue(), 'Current staff author');
+    assert.equal(await dialog.getByLabel(/Identifier number/i).inputValue(), 'BROWSER-MATCH');
+    await catalog.click(); assert.equal(await page.locator('#polaris-query').inputValue(), title); await page.keyboard.press('Escape');
     assert.equal(await dialog.getByLabel('Email patron confirmation (optional)', { exact: true }).isChecked(), false);
     const accepted = page.waitForResponse(response => response.url().endsWith('/staff/suggestions') && response.request().method() === 'POST');
     const detailLoaded = page.waitForResponse(response => /\/staff\/title-requests\/\d+$/.test(new URL(response.url()).pathname) && response.request().method() === 'GET');
@@ -106,6 +144,11 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     const acceptedDetail = await (await detailLoaded).json();
     assert.equal(acceptedDetail.id, created.id);
     await page.locator('#request-dialog[open]').waitFor();
+    assert.equal(await detail.getByRole('tab', { name: 'Details', exact: true }).getAttribute('aria-selected'), 'true');
+    assert.equal(await detail.locator('.request-save-state').textContent(), 'All changes saved',
+      JSON.stringify({ acceptedDetail, preview: await detail.locator('.pending-audit-preview').textContent() }));
+    assert.equal(await detail.locator('.patron-context').getByText('Format', { exact: true }).count(), 0);
+    await scan('created-detail');
     assert.ok((await page.locator('#request-dialog').textContent()).includes(acceptedDetail.title));
     await page.keyboard.press('Escape');
     await page.locator('#library-scope').selectOption(library);
@@ -114,19 +157,19 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     assert.equal(await page.locator('#status-tabs [aria-selected="true"]').getAttribute('data-status'), 'suggestion');
     const claims = page.locator('#claim-filter');
     await claims.selectOption('all');
-    const row = page.locator('#request-grid tr').filter({ has: page.getByRole('button', { name: `Open request ${created.id}`, exact: true }) });
+    const row = page.locator('#request-grid tr').filter({ has: page.getByRole('link', { name: `Open request ${created.id}:`, exact: false }) });
     await row.waitFor(); assert.match(await row.textContent(), /Browser claimant/); assert.match(await row.textContent(), /Duplicate suggestion/i);
     await claims.selectOption('mine_unclaimed');
     await row.waitFor({ state: 'hidden' });
-    await page.getByRole('button', { name: `Open request ${sourceId}`, exact: true }).waitFor();
+    await page.getByRole('link', { name: `Open request ${sourceId}:`, exact: false }).waitFor();
     await claims.selectOption('all');
     await row.waitFor();
     await scan('created-queue');
-    const acceptDetailDiscard = confirmation => confirmation.accept();
-    page.on('dialog', acceptDetailDiscard);
-    await page.getByRole('button', { name: 'Close request details', exact: true }).click();
     await page.locator('#request-dialog[open]').waitFor({ state: 'hidden' });
-    page.off('dialog', acceptDetailDiscard);
+    // These quick-create checks require code 1, before the late-denial scenario changes policy.
+    report.nativeZoom = await verifyStaffNativeZoom({ baseURL, artifacts, sourceId, library, barcode,
+      headers: { 'X-ASAP-Test-Staff-Id': staffId, 'X-ASAP-Test-Tenant-Id': tenantId, 'X-ASAP-Test-Staff-Email': email } });
+    assert.equal(report.nativeZoom.length, 8);
     for (const query of [`${barcode}-ineligible`, 'Excluded Patron']) {
       await page.getByRole('button', { name: 'New suggestion', exact: true }).click();
       await dialog.getByRole('searchbox').fill(query);
@@ -182,8 +225,8 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     assert.equal(await dialog.getByLabel(/^Title/).evaluate(node => node.readOnly), false);
     await page.keyboard.press('Escape');
     assert.deepEqual(report.externalRequests, []); assert.deepEqual(report.errors, []);
-    await fs.writeFile(path.join(artifacts, 'browser-results.json'), JSON.stringify(report, null, 2));
     await context.close();
+    await fs.writeFile(path.join(artifacts, 'browser-results.json'), JSON.stringify(report, null, 2));
   } finally { await browser.close(); }
   console.log('Staff queue/detail quick create, fresh context, explicit All scope and queue outcome passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -88,6 +88,11 @@ BEGIN
          1, 0, 0, N'Your patron account is not eligible to submit suggestions.', SYSUTCDATETIME());
 END;
 
+DECLARE @PatronSuccess nvarchar(max) = N'You have successfully submitted your material suggestion! Check your email inbox for status updates.' + NCHAR(10) + NCHAR(10) + N'Thank you for using our suggestion service.';
+DECLARE @PatronDuplicate nvarchar(max) = N'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.' + NCHAR(10) + NCHAR(10) + N'Thank you for using this library''s suggestion service.';
+DECLARE @PatronEbook nvarchar(max) = N'This is an eBook suggestion, please use Libby to notify us of your interest.' + NCHAR(10) + NCHAR(10) + N'Learn how to suggest a purchase using Libby here:' + NCHAR(10) + N'https://help.libbyapp.com/en-us/6260.htm';
+DECLARE @PatronEaudiobook nvarchar(max) = N'This is an eAudiobook suggestion, please use Libby to notify us of your interest.' + NCHAR(10) + NCHAR(10) + N'Learn how to suggest a purchase using Libby here:' + NCHAR(10) + N'https://help.libbyapp.com/en-us/6260.htm';
+
 IF NOT EXISTS (SELECT 1 FROM [asap].[PatronSettings] WHERE [OrganizationId] = 1)
 BEGIN
     INSERT INTO [asap].[PatronSettings]
@@ -102,14 +107,39 @@ BEGIN
         (1, N'Material Suggestion', N'Library Card', N'Pin', N'', N'', N'',
          N'No email is specified on your library account, which means we won''t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.',
          N'Suggestion Submitted',
-         N'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>',
-         N'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library''s suggestion service.</div>',
-         N'<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>',
-         N'<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>',
+         @PatronSuccess, @PatronDuplicate, @PatronEbook, @PatronEaudiobook,
          N'Received', N'Under review', N'Being prepared', N'Hold placed', N'Completed',
          N'Not selected for purchase', N'Completed', N'Closed', N'Closed', N'Closed',
          SYSUTCDATETIME());
 END;
+
+-- Only byte-exact historical defaults are reconciled. SQL's normal text
+-- comparison ignores case/trailing spaces and could overwrite a customization.
+-- Apply equally to System and explicit library copies; NULL stays inherited.
+DECLARE @OldPatronSuccess nvarchar(max) = N'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>';
+DECLARE @OldPatronDuplicate nvarchar(max) = N'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library''s suggestion service.</div>';
+DECLARE @OldPatronEbook nvarchar(max) = N'<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
+DECLARE @OldPatronEaudiobook nvarchar(max) = N'<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
+
+UPDATE [asap].[PatronSettings] SET [SuccessMessage] = @PatronSuccess, [UpdatedUtc] = SYSUTCDATETIME()
+WHERE DATALENGTH([SuccessMessage]) = DATALENGTH(@OldPatronSuccess) AND CONVERT(varbinary(max), [SuccessMessage]) = CONVERT(varbinary(max), @OldPatronSuccess);
+UPDATE [asap].[PatronSettings] SET [AlreadySubmittedMessage] = @PatronDuplicate, [UpdatedUtc] = SYSUTCDATETIME()
+WHERE DATALENGTH([AlreadySubmittedMessage]) = DATALENGTH(@OldPatronDuplicate) AND CONVERT(varbinary(max), [AlreadySubmittedMessage]) = CONVERT(varbinary(max), @OldPatronDuplicate);
+UPDATE [asap].[PatronSettings] SET [EbookMessage] = @PatronEbook, [UpdatedUtc] = SYSUTCDATETIME()
+WHERE DATALENGTH([EbookMessage]) = DATALENGTH(@OldPatronEbook) AND CONVERT(varbinary(max), [EbookMessage]) = CONVERT(varbinary(max), @OldPatronEbook);
+UPDATE [asap].[PatronSettings] SET [EaudiobookMessage] = @PatronEaudiobook, [UpdatedUtc] = SYSUTCDATETIME()
+WHERE DATALENGTH([EaudiobookMessage]) = DATALENGTH(@OldPatronEaudiobook) AND CONVERT(varbinary(max), [EaudiobookMessage]) = CONVERT(varbinary(max), @OldPatronEaudiobook);
+
+-- Stopped-source imports can retain the same seeds as format-specific copy.
+-- Preserve the importer's forensic/default pins; deployment owns this cleanup.
+UPDATE [asap].[MaterialFormat] SET [Message] = @PatronEbook, [UpdatedUtc] = SYSUTCDATETIME()
+WHERE DATALENGTH([Message]) = DATALENGTH(@OldPatronEbook) AND CONVERT(varbinary(max), [Message]) = CONVERT(varbinary(max), @OldPatronEbook);
+UPDATE [asap].[MaterialFormat] SET [Message] = @PatronEaudiobook, [UpdatedUtc] = SYSUTCDATETIME()
+WHERE DATALENGTH([Message]) = DATALENGTH(@OldPatronEaudiobook) AND CONVERT(varbinary(max), [Message]) = CONVERT(varbinary(max), @OldPatronEaudiobook);
+UPDATE [asap].[MaterialFormatOverride] SET [Message] = @PatronEbook
+WHERE DATALENGTH([Message]) = DATALENGTH(@OldPatronEbook) AND CONVERT(varbinary(max), [Message]) = CONVERT(varbinary(max), @OldPatronEbook);
+UPDATE [asap].[MaterialFormatOverride] SET [Message] = @PatronEaudiobook
+WHERE DATALENGTH([Message]) = DATALENGTH(@OldPatronEaudiobook) AND CONVERT(varbinary(max), [Message]) = CONVERT(varbinary(max), @OldPatronEaudiobook);
 
 IF NOT EXISTS (SELECT 1 FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1)
 BEGIN

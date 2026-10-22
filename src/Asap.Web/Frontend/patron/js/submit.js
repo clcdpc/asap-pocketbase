@@ -4,7 +4,7 @@ import { applySuccessConfig, defaultUiText, uiConfig } from './config.js';
 import { renderConflictMessage, renderSuccessMessage } from './form-ui.js';
 import { showConflictStep, showSuccessStep } from './steps.js';
 import { byId, setText, setVisible } from './dom.js';
-import { escapeHtml, sanitizeHtml, applyPatronTextPlaceholders } from './html.js';
+import { renderPatronText, applyPatronTextPlaceholders } from './html.js';
 import { captureAuthOperation, handleSessionExpired, isCurrentAuthContext } from './auth.js';
 import { collectCustomFieldValues } from './custom-fields.js';
 
@@ -46,9 +46,8 @@ export function renderConflict(result, fallbackMessage) {
   setText('conflict-title', result.conflictTitle || 'Already Submitted');
   const conflictBody = byId('conflict-body');
   if (conflictBody) {
-    const message = result.conflictMessage || (fallbackMessage ? escapeHtml(fallbackMessage) : (uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage));
-    // Conflict response HTML is sanitized before rendering.
-    conflictBody.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(message, uiConfig));
+    const message = result.conflictMessage || fallbackMessage || uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage;
+    renderPatronText(conflictBody, applyPatronTextPlaceholders(message, uiConfig));
   } else {
     renderConflictMessage();
   }

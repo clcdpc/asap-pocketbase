@@ -245,7 +245,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           message: 'Hold placement is blocked or requires reconciliation.' });
       }
       if (url.endsWith('/bib-lookup') && options.method === 'POST') {
-        return response(200, { bibId: 9001, title: 'Original title', author: null });
+        const detail = { bibId: 9001, title: 'Original title', author: null };
+        return response(200, JSON.parse(options.body).mode === 'bib' ? detail : { results: [detail] });
       }
       if (url.includes('/api/asap/config?')) return response(200, configuration);
       if (url.includes('/research-configuration')) return response(200, { externalSearchProviders: [] });
@@ -352,8 +353,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     assert.equal(document.querySelector('.request-activity img'), null);
     assert.equal(document.querySelector('.edit-form textarea').value, 'Editable note');
     if (scenarioOptions.unclaimedPreview) {
-      assert.match(document.querySelector('.pending-audit-preview').textContent, /staff claim/);
-      assert.equal(document.querySelector('.edit-form button[type="submit"]').disabled, false);
+      assert.equal(document.querySelector('.pending-audit-preview').hidden, true);
+      assert.equal(document.querySelector('.request-save-state').textContent, 'All changes saved');
+      assert.equal(document.querySelector('.request-save-footer button[type="submit"]').disabled, true);
       return;
     }
     if (scenarioOptions.autoClaimOther) {
@@ -373,7 +375,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       return;
     }
     assert.match(document.querySelector('.pending-audit-preview').textContent, /No pending changes/);
-    assert.equal(document.querySelector('.edit-form button[type="submit"]').disabled, true);
+    assert.equal(document.querySelector('.request-save-footer button[type="submit"]').disabled, true);
     if (scenarioOptions.unverifiedPendingHold || scenarioOptions.verifiedPendingHold) {
       const placeHold = [...document.querySelectorAll('.action-bar button')]
         .find(item => item.textContent.includes('Place hold'));
@@ -465,7 +467,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       document.querySelector('#polaris-results button').click();
       if (scenarioOptions.verifiedUnchangedBib) {
         assert.match(document.querySelector('.pending-audit-preview').textContent, /No pending changes/);
-        assert.equal(document.querySelector('.edit-form button[type="submit"]').disabled, true);
+        assert.equal(document.querySelector('.request-save-footer button[type="submit"]').disabled, true);
         [...document.querySelectorAll('.action-bar button')]
           .find(item => item.textContent.includes('Already own')).click();
         await until(() => payload !== null, 'unchanged verified BIB action submits');
@@ -532,8 +534,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       if (otherRequest.status !== currentRequest.status) {
         document.querySelector(`[data-status="${otherRequest.status}"]`).click();
       }
-      await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`), 'other row appears');
-      document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+      await until(() => document.querySelector(`a[data-request-id="${otherId}"]`), 'other row appears');
+      document.querySelector(`a[data-request-id="${otherId}"]`).click();
       await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
         'other detail opens');
     }
@@ -653,18 +655,18 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       document.querySelector('#close-request').click();
       assert.equal(document.querySelector('#request-dialog').open, true,
         'in-flight workflow action must remain visible after Close');
-      await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+      await until(() => document.querySelector(`a[data-request-id="${otherId}"]`),
         'newer request is present in the queue');
-      document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+      document.querySelector(`a[data-request-id="${otherId}"]`).click();
       assert.equal(document.querySelector('#request-dialog-title').textContent, 'Original title',
         'opening another request must not abandon an unresolved workflow mutation');
       releaseMutation();
       await until(() => /Workflow action completed/.test(document.querySelector('#app-status').textContent),
         'the authoritative workflow result must finish before navigation');
       document.querySelector(`[data-status="${otherRequest.status}"]`).click();
-      await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+      await until(() => document.querySelector(`a[data-request-id="${otherId}"]`),
         'the other request is reachable in its authoritative queue stage');
-      document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+      document.querySelector(`a[data-request-id="${otherId}"]`).click();
       await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
         'forced newer request takes ownership of the dialog');
       await new Promise(resolve => setImmediate(resolve));
@@ -678,16 +680,16 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.equal(mutationPayloads[0].version, 'v1');
       if (scenarioOptions.duplicateLateResponse) {
         await until(() => releaseDuplicate, 'duplicate response is pending');
-        await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+        await until(() => document.querySelector(`a[data-request-id="${otherId}"]`),
           'other request is in the queue');
-        document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+        document.querySelector(`a[data-request-id="${otherId}"]`).click();
         assert.equal(document.querySelector('#request-dialog-title').textContent, 'Original title',
           'navigation must wait while the mutation has no authoritative result');
         releaseDuplicate();
         await until(() => document.querySelector('.duplicate-recovery'), 'authoritative duplicate response is handled');
-        await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+        await until(() => document.querySelector(`a[data-request-id="${otherId}"]`),
           'the replacement queue must finish rendering before navigating from its current row');
-        document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+        document.querySelector(`a[data-request-id="${otherId}"]`).click();
         await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
           'newer request takes ownership of the dialog');
         await new Promise(resolve => setImmediate(resolve));
@@ -698,9 +700,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       }
       if (scenarioOptions.duplicateNavigateDuringRefresh) {
         await until(() => releaseDuplicateDetail, 'duplicate detail refresh is pending');
-        await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+        await until(() => document.querySelector(`a[data-request-id="${otherId}"]`),
           'other request is in the queue');
-        document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+        document.querySelector(`a[data-request-id="${otherId}"]`).click();
         await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
           'newer request takes ownership during refresh');
         releaseDuplicateDetail();

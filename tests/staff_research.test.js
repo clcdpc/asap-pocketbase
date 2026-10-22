@@ -124,7 +124,8 @@ const { JSDOM } = require('jsdom');
     };
     applyPolarisResultToControls(catalogSelection, blankIdentifierControls);
     assert.equal(blankIdentifierControls.bib.value, '9001');
-    assert.equal(blankIdentifierControls.identifier.value, '9782222222222');
+    assert.equal(blankIdentifierControls.identifier.value, '', 'Selection cannot fill an identifier.');
+    assert.equal(blankIdentifierControls.author.value, '', 'Selection cannot fill an author.');
     const populatedIdentifierControls = {
       bib: makeControl(''),
       title: makeControl('Patron Title'),
@@ -133,7 +134,7 @@ const { JSDOM } = require('jsdom');
     };
     applyPolarisResultToControls(catalogSelection, populatedIdentifierControls);
     const reconciledTitle = 'Catalog Title (Patron Title)';
-    const retainedAuthor = 'Alice Writer (A. Writer)';
+    const retainedAuthor = 'A. Writer';
     assert.equal(populatedIdentifierControls.title.value, reconciledTitle);
     assert.equal(populatedIdentifierControls.author.value, retainedAuthor);
     assert.equal(populatedIdentifierControls.identifier.value, '9781111111111');
@@ -250,7 +251,7 @@ const { JSDOM } = require('jsdom');
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(editor.bib.value, '9001');
     assert.equal(editor.title.value, 'Catalog Title (Patron Title)');
-    assert.equal(editor.author.value, 'Alice Writer (A. Writer)');
+    assert.equal(editor.author.value, 'A. Writer');
     assert.equal(editor.identifier.value, '9781111111111');
     assert.equal(editor.publication.value, 'Library backlist');
     assert.equal(editor.format.value, 'book');

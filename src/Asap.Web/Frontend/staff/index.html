@@ -126,6 +126,7 @@
 
         <p id="queue-automation" class="queue-automation"></p>
 
+        <p id="request-table-help" class="request-table-help">Scroll the table horizontally to reach every column. Use a request title to open details.</p>
         <div id="request-grid" class="request-grid"></div>
         <p id="queue-empty" class="empty-state" role="status" aria-live="polite" hidden>No requests match these filters.</p>
       </section>
@@ -548,20 +549,19 @@
               </fieldset>
               <fieldset class="settings-fieldset">
                 <legend>Patron text</legend>
-                <p>Rendered patron text supports <code>{{barcode_label}}</code> and <code>{{pin_label}}</code> for the configured labels. Examples include the page title, login and form notes, common-creator text, and success messages. The already-submitted message also supports <code>{{duplicate_date}}</code>, <code>{{duplicate_status}}</code>, <code>{{duplicate_title}}</code>, <code>{{duplicate_author}}</code>, <code>{{duplicate_format}}</code>, and <code>{{duplicate_match_type}}</code>; the legacy <code>{{title}}</code>, <code>{{author}}</code>, and <code>{{format}}</code> aliases also work there.</p>
                 <div class="settings-grid">
-                  <label class="settings-field wide" data-setting-section="patron" data-setting-key="pageTitle"><span>Page title</span><input id="patron-page-title" type="text"></label>
+                  <div class="settings-field wide" data-setting-section="patron" data-setting-key="pageTitle"><div class="patron-text-label"><label for="patron-page-title"><span>Page title</span></label></div><input id="patron-page-title" type="text"></div>
                   <label class="settings-field" data-setting-section="patron" data-setting-key="barcodeLabel"><span>Barcode label</span><input id="patron-barcode-label" type="text"></label>
                   <label class="settings-field" data-setting-section="patron" data-setting-key="pinLabel"><span>PIN label</span><input id="patron-pin-label" type="text"></label>
-                  <label class="settings-field wide" data-setting-section="patron" data-setting-key="loginPrompt"><span>Login prompt</span><textarea id="patron-login-prompt" rows="2"></textarea></label>
-                  <label class="settings-field wide" data-setting-section="patron" data-setting-key="loginNote"><span>Login note</span><textarea id="patron-login-note" rows="3"></textarea></label>
-                  <label class="settings-field wide" data-setting-section="patron" data-setting-key="suggestionFormNote"><span>Suggestion form note</span><textarea id="patron-suggestion-form-note" rows="3"></textarea></label>
-                  <label class="settings-field wide" data-setting-section="patron" data-setting-key="noEmailMessage"><span>No-email message</span><textarea id="patron-no-email-message" rows="3"></textarea></label>
-                  <label class="settings-field" data-setting-section="patron" data-setting-key="successTitle"><span>Success title</span><input id="patron-success-title" type="text"></label>
-                  <label class="settings-field wide" data-setting-section="patron" data-setting-key="successMessage"><span>Success message</span><textarea id="patron-success-message" rows="3"></textarea></label>
-                  <label class="settings-field wide" data-setting-section="patron" data-setting-key="alreadySubmittedMessage"><span>Already submitted message</span><textarea id="patron-already-submitted-message" rows="3"></textarea></label>
-                  <label class="settings-field wide" data-setting-section="patron" data-setting-key="ebookMessage"><span>eBook message</span><textarea id="patron-ebook-message" rows="3"></textarea></label>
-                  <label class="settings-field wide" data-setting-section="patron" data-setting-key="eaudiobookMessage"><span>eAudiobook message</span><textarea id="patron-eaudiobook-message" rows="3"></textarea></label>
+                  <div class="settings-field wide" data-setting-section="patron" data-setting-key="loginPrompt"><div class="patron-text-label"><label for="patron-login-prompt"><span>Login prompt</span></label></div><textarea id="patron-login-prompt" rows="2"></textarea></div>
+                  <div class="settings-field wide" data-setting-section="patron" data-setting-key="loginNote"><div class="patron-text-label"><label for="patron-login-note"><span>Login note</span></label></div><textarea id="patron-login-note" rows="3"></textarea></div>
+                  <div class="settings-field wide" data-setting-section="patron" data-setting-key="suggestionFormNote"><div class="patron-text-label"><label for="patron-suggestion-form-note"><span>Suggestion form note</span></label></div><textarea id="patron-suggestion-form-note" rows="3"></textarea></div>
+                  <div class="settings-field wide" data-setting-section="patron" data-setting-key="noEmailMessage"><div class="patron-text-label"><label for="patron-no-email-message"><span>No-email message</span></label></div><textarea id="patron-no-email-message" rows="3"></textarea></div>
+                  <div class="settings-field" data-setting-section="patron" data-setting-key="successTitle"><div class="patron-text-label"><label for="patron-success-title"><span>Success title</span></label></div><input id="patron-success-title" type="text"></div>
+                  <div class="settings-field wide" data-setting-section="patron" data-setting-key="successMessage"><div class="patron-text-label"><label for="patron-success-message"><span>Success message</span></label></div><textarea id="patron-success-message" rows="3"></textarea></div>
+                  <div class="settings-field wide" data-setting-section="patron" data-setting-key="alreadySubmittedMessage"><div class="patron-text-label"><label for="patron-already-submitted-message"><span>Already submitted message</span></label></div><textarea id="patron-already-submitted-message" rows="3"></textarea></div>
+                  <div class="settings-field wide" data-setting-section="patron" data-setting-key="ebookMessage"><div class="patron-text-label"><label for="patron-ebook-message"><span>eBook message</span></label></div><textarea id="patron-ebook-message" rows="3"></textarea></div>
+                  <div class="settings-field wide" data-setting-section="patron" data-setting-key="eaudiobookMessage"><div class="patron-text-label"><label for="patron-eaudiobook-message"><span>eAudiobook message</span></label></div><textarea id="patron-eaudiobook-message" rows="3"></textarea></div>
                 </div>
                 <div class="settings-grid settings-status-labels">
                   <label class="settings-field" data-setting-section="patron" data-setting-key="suggestionStatusLabel"><span>Suggestion status</span><input id="patron-suggestion-status-label" type="text"></label>
