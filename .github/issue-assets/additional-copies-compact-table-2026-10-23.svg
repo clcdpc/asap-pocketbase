@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="1000" viewBox="0 0 1300 1000" role="img" aria-labelledby="mock-title mock-desc">
+<title id="mock-title">ASAP Additional copies: compact desktop table and mobile task card</title>
+<desc id="mock-desc">Proposed six-column table, no cover thumbnails, no horizontal scrolling, visible Open details buttons, and a compact mobile task card using sample data.</desc>
+<rect x="0" y="0" width="1300" height="1000" rx="0" fill="#f3f5f7" stroke="none" />
+<text x="30" y="37" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="700" fill="#075c86" text-anchor="start" >DESIGN MOCK-UP · ADDITIONAL COPIES</text>
+<text x="1268" y="37" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="500" fill="#566976" text-anchor="end" >No cover images · Sample records only</text>
+<rect x="30" y="61" width="1240" height="586" rx="12" fill="#ffffff" stroke="#cbd7de" />
+<rect x="31" y="62" width="1238" height="63" rx="12" fill="#f9fbfc" stroke="none" />
+<line x1="54" y1="127" x2="1245" y2="127" stroke="#cbd7de" stroke-width="1"/>
+<text x="64" y="105" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="500" fill="#566976" text-anchor="start" >▤ Requests</text>
+<rect x="215" y="77" width="200" height="50" rx="5" fill="#ffffff" stroke="#cbd7de" />
+<text x="233" y="108" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700" fill="#192630" text-anchor="start" >▣ Additional copies</text>
+<text x="447" y="105" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="500" fill="#566976" text-anchor="start" >▥ Analytics</text>
+<text x="588" y="105" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="500" fill="#566976" text-anchor="start" >⚙ Operations</text>
+<text x="735" y="105" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="500" fill="#566976" text-anchor="start" >☷ Settings</text>
+<text x="55" y="170" font-family="Arial,Helvetica,sans-serif" font-size="29" font-weight="700" fill="#192630" text-anchor="start" >Additional copies</text>
+<text x="55" y="197" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="400" fill="#566976" text-anchor="start" >2 open tasks</text>
+<text x="1005" y="159" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#566976" text-anchor="start" >Library scope</text>
+<rect x="1005" y="172" width="225" height="39" rx="4" fill="#ffffff" stroke="#91a4b0" />
+<text x="1021" y="197" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="400" fill="#192630" text-anchor="start" >All libraries</text>
+<text x="1209" y="197" font-family="Arial,Helvetica,sans-serif" font-size="23" font-weight="400" fill="#566976" text-anchor="middle" >⌄</text>
+<line x1="55" y1="265" x2="1235" y2="265" stroke="#cbd7de" stroke-width="1"/>
+<rect x="55" y="222" width="92" height="43" rx="5" fill="#ffffff" stroke="#cbd7de" />
+<text x="76" y="249" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700" fill="#075c86" text-anchor="start" >Open</text>
+<text x="177" y="249" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="500" fill="#566976" text-anchor="start" >Closed</text>
+<rect x="55" y="285" width="862" height="47" rx="5" fill="#ffffff" stroke="#9eafb9" />
+<text x="74" y="314" font-family="Arial,Helvetica,sans-serif" font-size="27" font-weight="400" fill="#566976" text-anchor="start" >⌕</text>
+<text x="111" y="314" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="400" fill="#566976" text-anchor="start" >Search title, author, BIB, or identifier</text>
+<text x="936" y="277" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="700" fill="#566976" text-anchor="start" >Claims</text>
+<rect x="932" y="285" width="229" height="47" rx="5" fill="#ffffff" stroke="#9eafb9" />
+<text x="951" y="314" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="400" fill="#192630" text-anchor="start" >All claims</text>
+<text x="1140" y="314" font-family="Arial,Helvetica,sans-serif" font-size="23" font-weight="400" fill="#566976" text-anchor="middle" >⌄</text>
+<rect x="1174" y="285" width="56" height="47" rx="4" fill="#ffffff" stroke="#075c86" />
+<text x="1202" y="314" font-family="Arial,Helvetica,sans-serif" font-size="25" font-weight="700" fill="#075c86" text-anchor="middle" >↻</text>
+<rect x="55" y="359" width="1175" height="274" rx="5" fill="#ffffff" stroke="#cbd7de" />
+<rect x="55" y="359" width="1175" height="46" rx="0" fill="#eef3f5" stroke="none" />
+<rect x="55" y="358" width="1175" height="4" rx="0" fill="#075c86" stroke="none" />
+<line x1="398" y1="361" x2="398" y2="589" stroke="#e0e7ec" stroke-width="1"/>
+<line x1="567" y1="361" x2="567" y2="589" stroke="#e0e7ec" stroke-width="1"/>
+<line x1="742" y1="361" x2="742" y2="589" stroke="#e0e7ec" stroke-width="1"/>
+<line x1="924" y1="361" x2="924" y2="589" stroke="#e0e7ec" stroke-width="1"/>
+<line x1="1100" y1="361" x2="1100" y2="589" stroke="#e0e7ec" stroke-width="1"/>
+<text x="72" y="391" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="700" fill="#192630" text-anchor="start" >Title / Author</text>
+<text x="412" y="391" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="700" fill="#192630" text-anchor="start" >BIB / Format</text>
+<text x="581" y="391" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="700" fill="#192630" text-anchor="start" >Library</text>
+<text x="756" y="391" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="700" fill="#192630" text-anchor="start" >Staff</text>
+<text x="939" y="391" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="700" fill="#192630" text-anchor="start" >Timing</text>
+<text x="1116" y="391" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="700" fill="#192630" text-anchor="start" >Action</text>
+<line x1="55" y1="405" x2="1230" y2="405" stroke="#cbd7de" stroke-width="1"/>
+<line x1="55" y1="496" x2="1230" y2="496" stroke="#cbd7de" stroke-width="1"/>
+<line x1="55" y1="589" x2="1230" y2="589" stroke="#cbd7de" stroke-width="1"/>
+<text x="72" y="430" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700" fill="#075c86" text-anchor="start" >A forthcoming title with a</text>
+<text x="72" y="450" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700" fill="#075c86" text-anchor="start" >long working title</text>
+<text x="72" y="472" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="400" fill="#566976" text-anchor="start" >Morgan, Avery</text>
+<rect x="296" y="463" width="78" height="23" rx="4" fill="#eaf5fb" stroke="none" />
+<text x="335" y="479" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="700" fill="#075c86" text-anchor="middle" >◉ Notes</text>
+<text x="412" y="442" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="600" fill="#192630" text-anchor="start" >3689312</text>
+<text x="412" y="467" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="400" fill="#566976" text-anchor="start" >Book</text>
+<text x="582" y="442" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="500" fill="#192630" text-anchor="start" >Fairfield</text>
+<text x="582" y="462" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="500" fill="#192630" text-anchor="start" >County</text>
+<text x="756" y="436" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#16734c" text-anchor="start" >Claim: Sam Lee</text>
+<text x="756" y="463" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="400" fill="#566976" text-anchor="start" >By: Alex Rivera</text>
+<text x="939" y="435" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="500" fill="#192630" text-anchor="start" >Created Oct 8, 2026</text>
+<text x="939" y="456" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="400" fill="#566976" text-anchor="start" >1:34 PM</text>
+<text x="939" y="478" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="400" fill="#566976" text-anchor="start" >Timeout: Off</text>
+<rect x="1111" y="429" width="108" height="42" rx="6" fill="#ffffff" stroke="#075c86" /><text x="1165" y="455" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#075c86" text-anchor="middle" >Open details</text>
+<text x="72" y="522" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700" fill="#075c86" text-anchor="start" >Another title to review</text>
+<text x="72" y="545" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="400" fill="#566976" text-anchor="start" >Patel, Riley</text>
+<text x="72" y="568" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="400" fill="#566976" text-anchor="start" >No notes</text>
+<text x="412" y="535" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="600" fill="#192630" text-anchor="start" >5391240</text>
+<text x="412" y="561" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="400" fill="#566976" text-anchor="start" >DVD</text>
+<text x="582" y="534" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="500" fill="#192630" text-anchor="start" >Grandview</text>
+<text x="582" y="555" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="500" fill="#192630" text-anchor="start" >Heights</text>
+<text x="756" y="529" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#566976" text-anchor="start" >Unclaimed</text>
+<text x="756" y="552" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="400" fill="#566976" text-anchor="start" >By: Jordan Ellis</text>
+<text x="939" y="530" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="500" fill="#192630" text-anchor="start" >Created Oct 7, 2026</text>
+<text x="939" y="552" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="400" fill="#566976" text-anchor="start" >11:08 AM</text>
+<text x="939" y="574" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="400" fill="#566976" text-anchor="start" >Timeout: 14 days</text>
+<rect x="1111" y="522" width="108" height="42" rx="6" fill="#ffffff" stroke="#075c86" /><text x="1165" y="548" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#075c86" text-anchor="middle" >Open details</text>
+<text x="72" y="617" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="400" fill="#566976" text-anchor="start" >Showing 1–2 of 2 results</text>
+<rect x="1060" y="596" width="55" height="29" rx="4" fill="#ffffff" stroke="#cbd7de" />
+<text x="1087" y="615" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="400" fill="#566976" text-anchor="middle" >‹</text>
+<rect x="1115" y="596" width="50" height="29" rx="0" fill="#eef3f5" stroke="#cbd7de" />
+<text x="1140" y="615" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="700" fill="#192630" text-anchor="middle" >1</text>
+<rect x="1165" y="596" width="55" height="29" rx="4" fill="#ffffff" stroke="#cbd7de" />
+<text x="1192" y="615" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="400" fill="#566976" text-anchor="middle" >›</text>
+<text x="31" y="695" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="700" fill="#075c86" text-anchor="start" >NARROW-SCREEN / MOBILE</text>
+<rect x="30" y="711" width="543" height="265" rx="12" fill="#ffffff" stroke="#cbd7de" />
+<rect x="30" y="711" width="543" height="47" rx="12" fill="#eef3f5" stroke="none" />
+<text x="50" y="742" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="700" fill="#192630" text-anchor="start" >Open tasks</text>
+<text x="545" y="742" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="500" fill="#566976" text-anchor="end" >1 of 2</text>
+<line x1="50" y1="758" x2="553" y2="758" stroke="#cbd7de" stroke-width="1"/>
+<text x="51" y="784" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700" fill="#075c86" text-anchor="start" >A forthcoming title with a long working title</text>
+<text x="51" y="807" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="400" fill="#566976" text-anchor="start" >Morgan, Avery</text>
+<rect x="455" y="796" width="85" height="24" rx="4" fill="#eaf5fb" stroke="none" />
+<text x="497" y="812" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="700" fill="#075c86" text-anchor="middle" >Notes</text>
+<text x="51" y="839" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="700" fill="#566976" text-anchor="start" >BIB / FORMAT</text>
+<text x="51" y="860" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="500" fill="#192630" text-anchor="start" >3689312 · Book</text>
+<text x="267" y="839" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="700" fill="#566976" text-anchor="start" >LIBRARY</text>
+<text x="267" y="860" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="500" fill="#192630" text-anchor="start" >Fairfield County</text>
+<text x="51" y="883" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="700" fill="#566976" text-anchor="start" >CLAIM</text>
+<text x="51" y="903" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#16734c" text-anchor="start" >Sam Lee</text>
+<text x="267" y="883" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="700" fill="#566976" text-anchor="start" >TIMING</text>
+<text x="267" y="903" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="500" fill="#192630" text-anchor="start" >Oct 8 · Timeout Off</text>
+<rect x="51" y="923" width="500" height="39" rx="6" fill="#075c86" stroke="#075c86" /><text x="301" y="947.5" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#ffffff" text-anchor="middle" >Open details</text>
+<rect x="602" y="734" width="643" height="213" rx="11" fill="#e7f3f8" stroke="#cae4f1" />
+<text x="625" y="772" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="700" fill="#192630" text-anchor="start" >Implementation notes</text>
+<text x="625" y="809" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="500" fill="#192630" text-anchor="start" >✓ Six combined desktop columns; no horizontal scrollbar</text>
+<text x="625" y="841" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="500" fill="#192630" text-anchor="start" >✓ Title, author, BIB, format, library and staff remain visible</text>
+<text x="625" y="873" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="500" fill="#192630" text-anchor="start" >✓ Notes + timeout stay available as compact secondary details</text>
+<text x="625" y="905" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="500" fill="#192630" text-anchor="start" >✓ Full-width mobile Open details button; no cover thumbnails</text>
+</svg>
