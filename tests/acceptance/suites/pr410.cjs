@@ -437,5 +437,5 @@ const uncovered = [
   ['unauthorized-session-race', '#407: server authorization and session change during purchase',
     'No live reviewer role/identity is altered. Existing real-SQL authorization and frontend session-race tests retain this contract.']
 ];
-module.exports = { id: 'pr410', requires: ['docker-review-0.2.0', 'sql-server-2022', 'entra-super-admin', 'review-library-2',
+module.exports = { id: 'pr410', requires: ['docker-review-0.3.0', 'sql-server-2022', 'entra-super-admin', 'review-library-2',
   'deterministic-providers', 'chromium-native-zoom'], mutations: true, scenarios, human, uncovered };

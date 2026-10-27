@@ -1,5 +1,25 @@
 # ASAP Docker review
 
+Start with the two-test smoke suite to validate a newly configured review
+workstation. Run either command from PR #412's tooling checkout:
+
+```powershell
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -AllowReviewWrites
+```
+
+The first test verifies real Entra authentication, the Review Library (2) staff
+workspace and SQL-backed synthetic Suggestion details. The second confirms
+Close silently in the UI and verifies exactly one action POST, persisted Closed
+status and a changed rowversion. It is NOT RUN without `-AllowReviewWrites`.
+Each run gets fresh fixtures; complete normal Entra/MFA in the browser viewer.
+Find `results.json`, `report.md` and privacy-safe screenshots under
+`.artifacts/acceptance/<timestamp-run-id>/`. Two PASS results validate the smoke
+workflow; human acceptance stays INCOMPLETE and PR #410 still needs its full
+acceptance review. The launcher handles all container/browser/certificate setup.
+
+## Full feature review
+
 From PR #412's tooling checkout, run:
 
 ```powershell

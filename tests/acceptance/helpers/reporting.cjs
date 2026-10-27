@@ -57,6 +57,7 @@ async function writeReport(directory, report) {
   report.finishedUtc = new Date().toISOString();
   report.automatedFunctionalAcceptance = functionalStatus(report);
   report.overallAcceptance = 'INCOMPLETE'; // Human acceptance is never inferred from automation.
+  report.screenshots = (await fs.readdir(directory)).filter(name => /^[a-z0-9-]+\.png$/.test(name)).sort();
   const line = value => String(value ?? '').replace(/[|\r\n]/g, ' ');
   const rows = report.scenarios.map(s => `| ${line(s.id)} | ${line(s.requirements.join(', '))} | ${s.status} | ${line(s.detail)} |`);
   const markdown = [
@@ -73,6 +74,7 @@ async function writeReport(directory, report) {
     'Overall acceptance / issue readiness: **INCOMPLETE**', '',
     '| Scenario | Issue / requirement | Result | Evidence / reason |',
     '| --- | --- | --- | --- |', ...rows, '',
+    'Screenshots: ' + (report.screenshots.map(name => `[${name}](${name})`).join(', ') || 'none'), '',
     'Exit 0 means the selected automated mode finished successfully; it never closes acceptance.',
     'Inspect artifacts before sharing. No issue comments, labels, approvals or closures were changed.', ''
   ].join('\n');

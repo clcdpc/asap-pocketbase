@@ -205,10 +205,10 @@ test('reports distinguish PASS, FAIL, BLOCKED, NOT RUN, human review; failures a
   assert.equal(exitCode(report), 2);
   assert.doesNotMatch(safeError(new Error('access_token=secret-canary')), /secret-canary/);
 });
-function fakeBrowser() {
+function fakeBrowser(pageOverrides = {}) {
   const context = { route: async (_pattern, handler) => { context.handler = handler; },
     unroute: async () => {}, newPage: async () => ({
-      on: () => {}, close: async () => {}, isClosed: () => false, url: () => 'about:blank'
+      on: () => {}, close: async () => {}, isClosed: () => false, url: () => 'about:blank', ...pageOverrides
     }) };
   return { context, page: { close: async () => {} }, close: async () => {}, role: 'super_admin', library: 2 };
 }
@@ -326,4 +326,110 @@ test('partial results never report automated completion while required scenarios
     scenarios: [result({ id: 'one', requirements: ['first scenario'] }, 'PASS')] };
   await writeReport(directory, report);
   assert.equal(report.automatedFunctionalAcceptance, 'INCOMPLETE');
+});
+
+test('smoke registers exactly two scenarios with explicit write metadata and preserves pr410', async () => {
+  const registry = require('./suites/index.cjs');
+  assert.deepEqual(Object.keys(registry), ['pr410', 'smoke']);
+  assert.equal(registry.smoke.id, 'smoke');
+  assert.equal(registry.smoke.mutations, true);
+  assert.deepEqual(registry.smoke.scenarios.map(s => [s.id, s.writes]), [
+    ['smoke-authenticated-review', false], ['smoke-synthetic-close', true]
+  ]);
+  for (const suite of Object.values(registry)) {
+    assert.ok(suite.requires.includes('docker-review-0.3.0'));
+    assert.ok(suite.human.length > 0);
+    assert.ok(suite.uncovered.length > 0);
+  }
+  const baseline = execFileSync('git', ['show', '6f928007edf53bb48aeaf9018357aacc2bdaf8dc:tests/acceptance/suites/pr410.cjs'],
+    { cwd: repository, encoding: 'utf8' });
+  const current = await fs.readFile(path.join(__dirname, 'suites/pr410.cjs'), 'utf8');
+  assert.equal(current.replace(/\r\n/g, '\n'), baseline.replace(/\r\n/g, '\n').replace('docker-review-0.2.0', 'docker-review-0.3.0'));
+  assert.equal(registry.pr410.scenarios.length, 20);
+});
+
+const smokeArgs = (...extra) => ['--suite', 'smoke', '--expected-commit', appSha, ...extra];
+test('smoke check-only reports both scenario IDs, requirements and capabilities without claiming acceptance', async t => {
+  const root = await temporary(t);
+  const suite = require('./suites/smoke.cjs');
+  const outcome = await run(smokeArgs('--check-only'), dependencies(root));
+  const saved = JSON.parse(await fs.readFile(path.join(outcome.directory, 'results.json'), 'utf8'));
+  assert.equal(outcome.code, 0);
+  assert.equal(saved.suite, 'smoke');
+  assert.equal(saved.applicationCommit, appSha);
+  assert.equal(saved.toolingCommit, toolSha);
+  assert.deepEqual(saved.requiredCapabilities, suite.requires);
+  assert.deepEqual(saved.requiredScenarioIds, suite.scenarios.map(s => s.id));
+  assert.deepEqual(saved.scenarios.filter(s => s.category === 'functional'), suite.scenarios.map(s =>
+    result(s, 'NOT RUN', 'Environment-only check; no browser scenarios executed.')));
+  assert.equal(saved.automatedFunctionalAcceptance, 'INCOMPLETE');
+  assert.equal(saved.overallAcceptance, 'INCOMPLETE');
+  assert.ok(saved.scenarios.some(s => s.id === 'pr410-feature-acceptance' && s.status === 'NOT RUN'));
+});
+
+test('smoke requires explicit mutation permission before environment verification', async t => {
+  const root = await temporary(t);
+  const outcome = await run(smokeArgs(), dependencies(root, {
+    verifyEnvironment: () => { throw new Error('Unauthorized run must not verify or authenticate'); }
+  }));
+  assert.equal(outcome.code, 2);
+  assert.match(outcome.report.environment.detail, /AllowReviewWrites/);
+  assert.deepEqual(outcome.report.scenarios.filter(s => s.category === 'functional').map(s => s.status), ['BLOCKED', 'BLOCKED']);
+});
+
+test('read-only smoke reports a browser assertion as FAIL and never starts the mutating scenario', async t => {
+  const root = await temporary(t);
+  let navigations = 0, verifications = 0;
+  const browser = fakeBrowser({ goto: async () => {
+    navigations++;
+    assert.fail('Staff workspace must be visible');
+  } });
+  const outcome = await run(smokeArgs('--read-only'), dependencies(root, {
+    authenticate: async () => browser,
+    verifyEnvironment: async () => { verifications++; return environment(root); }
+  }));
+  const rows = outcome.report.scenarios.filter(s => s.category === 'functional');
+  assert.deepEqual(rows.map(s => [s.id, s.status]), [
+    ['smoke-authenticated-review', 'FAIL'], ['smoke-synthetic-close', 'NOT RUN']
+  ]);
+  assert.deepEqual(rows.map(s => s.requirements), require('./suites/smoke.cjs').scenarios.map(s => s.requirements));
+  assert.equal(navigations, 1);
+  assert.equal(verifications, 2, 'Only initial environment and read-only scenario verification');
+  assert.equal(rows[1].executed, false);
+  assert.equal(outcome.code, 1);
+  assert.equal(outcome.report.automatedFunctionalAcceptance, 'FAIL');
+  assert.ok(await fs.stat(path.join(outcome.directory, 'smoke-authenticated-review-failure-trace.json')));
+});
+
+test('a missing closure fixture blocks that smoke scenario before opening or authorizing it', async t => {
+  const root = await temporary(t);
+  const browser = fakeBrowser({ goto: async () => { throw new Blocked('Read-only browser checkpoint unavailable.'); } });
+  const outcome = await run(smokeArgs('--allow-review-writes'), dependencies(root, { authenticate: async () => browser }));
+  const close = outcome.report.scenarios.find(s => s.id === 'smoke-synthetic-close');
+  assert.equal(close.status, 'BLOCKED');
+  assert.equal(close.executed, false);
+  assert.match(close.detail, /Fixture close-reopen is missing or ambiguous/);
+  assert.equal(outcome.code, 2);
+  assert.equal(outcome.report.automatedFunctionalAcceptance, 'BLOCKED');
+  const trace = JSON.parse(await fs.readFile(path.join(outcome.directory, close.diagnostics), 'utf8'));
+  assert.deepEqual(trace.mutations, []);
+});
+
+test('shared reports index screenshot locations while preserving automated PASS and incomplete human acceptance', async t => {
+  const root = await temporary(t);
+  const { createReport, writeReport } = require('./helpers/reporting.cjs');
+  const suite = require('./suites/smoke.cjs');
+  const { directory, report } = await createReport(root, suite.id, appSha, toolSha, false);
+  report.environment.status = 'PASS'; report.authentication.status = 'PASS';
+  report.requiredScenarioIds = suite.scenarios.map(s => s.id);
+  report.scenarios = suite.scenarios.map(s => result(s, 'PASS'));
+  const filenames = suite.scenarios.map(s => s.id + '.png');
+  for (const filename of filenames) await fs.writeFile(path.join(directory, filename), 'synthetic report-index test');
+  await writeReport(directory, report);
+  const saved = JSON.parse(await fs.readFile(path.join(directory, 'results.json'), 'utf8'));
+  assert.deepEqual(saved.screenshots, filenames);
+  assert.equal(saved.automatedFunctionalAcceptance, 'PASS');
+  assert.equal(saved.overallAcceptance, 'INCOMPLETE');
+  const markdown = await fs.readFile(path.join(directory, 'report.md'), 'utf8');
+  for (const filename of filenames) assert.ok(markdown.includes('[' + filename + '](' + filename + ')'));
 });

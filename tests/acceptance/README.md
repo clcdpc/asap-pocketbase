@@ -1,5 +1,28 @@
 # On-demand ASAP acceptance
 
+## Start with smoke
+
+Use the two-test smoke suite first when validating a newly configured review
+workstation:
+
+```powershell
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -AllowReviewWrites
+```
+
+`smoke-authenticated-review` checks the real Entra super-admin session, Review
+Library (2) workspace and SQL-backed synthetic Suggestion details. In read-only
+mode, `smoke-synthetic-close` is NOT RUN. With explicit write authorization it
+confirms Close silently through the UI, verifies one action POST, persisted
+Closed status and a changed rowversion. Each invocation uses fresh fixtures.
+The launcher handles Docker, certificates, Playwright and the browser viewer;
+complete normal Entra/MFA in the viewer. Reports (`results.json`, `report.md`)
+and privacy-safe screenshots are under `.artifacts/acceptance/<timestamp-run-id>/`.
+Two PASS results establish automated smoke success; overall human acceptance
+stays INCOMPLETE. This does not complete PR #410's feature acceptance.
+
+## Full PR #410 suite
+
 ```powershell
 pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites
 ```
