@@ -99,7 +99,7 @@ public sealed partial class PolarisPatronProvider
                         continue;
                     }
                     seen.Add(bibId);
-                    results.Add(row);
+                    results.Add(row with { MaterialTypeId = candidate.MaterialType ?? ParseMaterialTypeId(row.Format) });
                 }
 
                 if (results.Count >= StaffBibSearchLimit)
@@ -123,7 +123,14 @@ public sealed partial class PolarisPatronProvider
                 .Take(StaffBibSearchLimit)
                 .Select(item => item.Row)
                 .ToArray();
-            return new StaffBibSearchResult(rankedResults, Math.Max(totalMatches, results.Count));
+            var presented = await PresentStaffMaterialsAsync(client, rankedResults, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            // Alternative ISBN/UPC/LCCN and title/author attempts are not disjoint sets.
+            // Preserve the largest actual provider count; never fabricate a union count from returned rows.
+            return new StaffBibSearchResult(presented, totalMatches)
+            {
+                TotalMatchesKind = searches.Length == 1 ? "provider" : "provider_maximum"
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -320,7 +327,8 @@ public sealed partial class PolarisPatronProvider
                         "Polaris returned an invalid holdings location.");
                 }
 
-                var owner = ResolveHomeLibrary(organizations, locationId)?.Id ?? locationId;
+                var owner = ResolveHomeLibrary(organizations, locationId)?.Id
+                    ?? throw new PolarisOperationalException("polaris_bib_holdings_failed", "The holdings owner could not be resolved.");
                 var canHold = row.Holdable?.Trim().ToLowerInvariant() is "true" or "1" or "yes" or "y";
                 if (owner == organizationId)
                 {

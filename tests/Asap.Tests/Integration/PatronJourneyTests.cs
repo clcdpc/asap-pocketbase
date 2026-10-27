@@ -7382,9 +7382,10 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("012345678901", byIdentifier.Results[1].Identifier);
         CollectionAssert.AreEqual(
             new[] { "ISBN", "boolean", "LCCN" },
-            handler.RequestUris.Select(uri => uri.AbsolutePath.Split('/').Last()).ToArray());
+            handler.RequestUris.Where(uri => uri.AbsolutePath.Contains("/search/bibs/", StringComparison.Ordinal))
+                .Select(uri => uri.AbsolutePath.Split('/').Last()).ToArray());
         StringAssert.Contains(Uri.UnescapeDataString(handler.RequestUris[1].Query), "q=UPC=\"9780000000001\"");
-        Assert.IsTrue(handler.RequestUris.All(uri =>
+        Assert.IsTrue(handler.RequestUris.Where(uri => uri.AbsolutePath.Contains("/search/bibs/", StringComparison.Ordinal)).All(uri =>
             Uri.UnescapeDataString(uri.Query).Contains("sortby=PDTI", StringComparison.Ordinal) &&
             Uri.UnescapeDataString(uri.Query).Contains("notran=1", StringComparison.Ordinal) &&
             !Uri.UnescapeDataString(uri.Query).Contains("sort=", StringComparison.Ordinal)));

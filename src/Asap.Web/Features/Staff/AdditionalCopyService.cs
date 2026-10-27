@@ -288,25 +288,7 @@ public sealed class AdditionalCopyService(
             .Where(item => item.Id == source.MaterialFormatId)
             .Select(item => item.Code)
             .SingleOrDefaultAsync(cancellationToken);
-        var request = new AdditionalCopyRequest
-        {
-            SourceTitleRequestId = source.Id,
-            LibraryOrganizationId = source.LibraryOrganizationId,
-            LibraryNameSnapshot = source.LibraryNameSnapshot,
-            BibId = source.BibId.Value,
-            Title = source.Title,
-            Author = source.Author,
-            Identifier = source.Identifier,
-            Publication = source.Publication,
-            MaterialFormatId = source.MaterialFormatId,
-            FormatSnapshot = format,
-            Status = "open",
-            Notes = $"Created from request {source.Id} by {DisplayName(locked.Staff[actor.Id])}.",
-            CreatedByStaffUserId = actor.Id,
-            CreatedByDisplayName = DisplayName(locked.Staff[actor.Id]),
-            CreatedUtc = now,
-            UpdatedUtc = now
-        };
+        var request = NewTask(source, format, locked.Staff[actor.Id], now);
         if (snapshot.CandidateStaffUserId.HasValue &&
             locked.Staff.TryGetValue(snapshot.CandidateStaffUserId.Value, out var candidate) &&
             IsRelationshipEligible(candidate, source.LibraryOrganizationId))
@@ -872,7 +854,27 @@ public sealed class AdditionalCopyService(
                 $"SELECT * FROM [asap].[AdditionalCopyRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {id}")
             .SingleOrDefaultAsync(cancellationToken);
 
-    private static async Task<int> LockAndCountOpenAsync(
+    internal static AdditionalCopyRequest NewTask(TitleRequest source, string? format, StaffUser actor, DateTime now) => new()
+    {
+        SourceTitleRequestId = source.Id,
+        LibraryOrganizationId = source.LibraryOrganizationId,
+        LibraryNameSnapshot = source.LibraryNameSnapshot,
+        BibId = source.BibId!.Value,
+        Title = source.Title,
+        Author = source.Author,
+        Identifier = source.Identifier,
+        Publication = source.Publication,
+        MaterialFormatId = source.MaterialFormatId,
+        FormatSnapshot = format,
+        Status = "open",
+        Notes = $"Created from request {source.Id} by {DisplayName(actor)}.",
+        CreatedByStaffUserId = actor.Id,
+        CreatedByDisplayName = DisplayName(actor),
+        CreatedUtc = now,
+        UpdatedUtc = now
+    };
+
+    internal static async Task<int> LockAndCountOpenAsync(
         AsapDbContext context,
         int organizationId,
         int bibId,

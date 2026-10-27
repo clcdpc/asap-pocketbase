@@ -80,7 +80,7 @@ public static class TitleRequestWorkflowPolicy
             "purchase" when current == RequestStatus.Suggestion =>
                 bib is null ? RequestStatus.OutstandingPurchase : RequestStatus.PendingHold,
             "alreadyOwn" when current == RequestStatus.Suggestion => RequestStatus.PendingHold,
-            "catalogFound" when current is RequestStatus.Suggestion or RequestStatus.OutstandingPurchase => RequestStatus.PendingHold,
+            "catalogFound" or "additionalCopy" when current is RequestStatus.Suggestion or RequestStatus.OutstandingPurchase => RequestStatus.PendingHold,
             "reject" or "silentClose" when current == RequestStatus.Suggestion => RequestStatus.Closed,
             "closeDuplicate" when current != RequestStatus.Closed => RequestStatus.Closed,
             "close" when current == RequestStatus.HoldPlaced => RequestStatus.Closed,

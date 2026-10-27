@@ -7,6 +7,8 @@ namespace Asap.Web.Features.Staff;
 public sealed class TitleRequestActionInput
 {
     public string? Version { get; init; }
+    public Guid? OperationId { get; init; }
+    public string? RequestType { get; init; }
     public string? Action { get; init; }
     public string? Status { get; init; }
     public string? Title { get; init; }
@@ -48,7 +50,7 @@ public sealed class TitleRequestActionInput
     public bool StaffSelectedBibIdSupplied { get; private set; }
     public string? Notes { get; init; }
     public string? Format { get; init; }
-    public bool EmailPurchaseReminder { get; init; }
+    public bool? EmailPurchaseReminder { get; init; }
     public string? RejectionTemplateId { get; init; }
     public TitleRequestActionCommand ToCommand() => TitleRequestActionBinding.Bind(this);
 }
@@ -58,6 +60,8 @@ public readonly record struct SuppliedValue<T>(bool IsSupplied, T Value);
 public sealed record TitleRequestActionCommand
 {
     public string? Version { get; init; }
+    public Guid? OperationId { get; init; }
+    public string? RequestType { get; init; }
     public string? Action { get; init; }
     public string? Status { get; init; }
     public string? Title { get; init; }
@@ -73,7 +77,7 @@ public sealed record TitleRequestActionCommand
     public bool StaffSelectedBibIdSupplied { get; init; }
     public string? Notes { get; init; }
     public string? Format { get; init; }
-    public bool EmailPurchaseReminder { get; init; }
+    public bool? EmailPurchaseReminder { get; init; }
     public string? RejectionTemplateId { get; init; }
     public string? ValidationError { get; init; }
 }
@@ -136,7 +140,8 @@ internal static class TitleRequestActionBinding
             error ??= "invalid_autohold";
         }
         return new TitleRequestActionCommand {
-            Version = input.Version, Action = input.Action, Status = input.Status, Title = input.Title, Author = input.Author,
+            Version = input.Version, OperationId = input.OperationId, RequestType = input.RequestType,
+            Action = input.Action, Status = input.Status, Title = input.Title, Author = input.Author,
             Identifier = new(input.Identifier.ValueKind != JsonValueKind.Undefined,
                 input.Identifier.ValueKind == JsonValueKind.String ? input.Identifier.GetString() : null),
             Publication = input.Publication,
