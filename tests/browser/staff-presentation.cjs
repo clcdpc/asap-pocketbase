@@ -1,4 +1,5 @@
 'use strict';
+const { decideConfirmation, rejectNativeDialogs } = require('./confirmation.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -19,7 +20,7 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
           report.externalRequests.push(route.request().url()); return route.abort();
         });
         const page = await context.newPage();
-        page.on('pageerror', error => report.pageErrors.push(error.message));
+        page.on('pageerror', error => report.pageErrors.push(error.message)); rejectNativeDialogs(page, report.pageErrors);
         const quietFeedback = async () => {
           await page.waitForFunction(() => document.querySelector('#app-status').textContent === '');
           const feedback = await page.locator('#app-status').evaluate(node => ({
@@ -75,12 +76,10 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
         assert.equal(await page.evaluate(() => document.activeElement.id), 'profile-title');
         assert.equal(await page.locator('#profile-button').getAttribute('aria-current'), 'page');
         await page.locator('#weekly-email').fill('presentation-draft@example.org');
-        page.once('dialog', dialog => dialog.dismiss());
-        await page.locator('[data-view="queue"]').click();
+        await decideConfirmation(page, () => page.locator('[data-view="queue"]').click(), dialog => dialog.dismiss());
         assert.equal(await page.locator('#profile-view').isVisible(), true, 'header route retains draft departure guard');
         assert.equal(await page.locator('#weekly-email').inputValue(), 'presentation-draft@example.org');
-        page.once('dialog', dialog => dialog.accept());
-        await page.locator('[data-view="queue"]').click();
+        await decideConfirmation(page, () => page.locator('[data-view="queue"]').click(), dialog => dialog.accept());
         await page.locator('#queue-view:not([hidden])').waitFor();
         assert.equal(await page.locator('#profile-button').getAttribute('aria-current'), null);
         await page.locator('#profile-button').focus(); await page.keyboard.press('Space');
@@ -152,8 +151,7 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
           assert.ok([...bulkGaps, ...rowGaps].every(gap => gap >= 7),
             `${scope}: adjacent Settings actions need visible separation: ${JSON.stringify({ bulkGaps, rowGaps })}`);
           await scan(`workflow-actions-${scope}`);
-          page.once('dialog', dialog => dialog.accept());
-          await page.locator('#settings-discard').click();
+          await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
           await page.locator('#settings-discard').waitFor({ state: 'hidden' });
           await page.locator('#settings-refresh:not([disabled])').waitFor();
           await page.locator('#settings-nav-patron').click();

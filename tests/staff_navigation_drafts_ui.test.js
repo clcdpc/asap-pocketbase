@@ -198,7 +198,7 @@ async function fixture(route, journey, options = {}) {
       }
       throw new Error(`Unexpected request: ${url}`);
     };
-    dom.window.confirm = message => { confirms.push(message); return discard; };
+    require('./helpers/confirmation.cjs').answerConfirmations(dom.window, message => { confirms.push(message); return discard; });
     const module = await import(pathToFileURL(path.join(temporary, 'staff/js/workflow.js')).href);
     app = module.createWorkflowApp();
     await app.start();
@@ -384,7 +384,7 @@ test('hold recovery guards editor drafts and refreshes authoritatively after its
     reconcile().click(); await settle();
     assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
     assert.equal(ui.get('.edit-form input').value, 'Unsaved recovery draft');
-    [...document.querySelectorAll('.request-save-footer button')].find(button => button.textContent === 'Revert changes').click();
+    [...document.querySelectorAll('.request-save-footer button')].find(button => button.textContent === 'Revert changes').click(); await settle();
     let resolve;
     ui.setOperation(() => new Promise(done => { resolve = done; }));
     reconcile().click(); await until(() => resolve, 'hold recovery dispatched');
@@ -422,10 +422,10 @@ test('changed BIB or identifier cannot inherit authoritative verification', () =
 }));
 test('explicit revert keeps the detail and clears only the discarded draft', () => fixture(`?request=${id}`, async ui => {
   ui.edit('.edit-form input', 'Unsaved title');
-  [...document.querySelectorAll('.request-save-footer button')].find(button => button.textContent === 'Revert changes').click();
+  [...document.querySelectorAll('.request-save-footer button')].find(button => button.textContent === 'Revert changes').click(); await settle();
   assert.equal(ui.get('.edit-form input').value, 'Unsaved title', 'declined revert retains draft');
   ui.allowDiscard();
-  [...document.querySelectorAll('.request-save-footer button')].find(button => button.textContent === 'Revert changes').click();
+  [...document.querySelectorAll('.request-save-footer button')].find(button => button.textContent === 'Revert changes').click(); await settle();
   assert.equal(ui.get('.edit-form input').value, 'Saved title');
   assert.equal(ui.get('#request-dialog').open, true);
   const unload = new ui.dom.window.Event('beforeunload', { cancelable: true });
@@ -554,7 +554,7 @@ for (const exit of ['close', 'escape', 'search-Escape', 'top-level', 'back', 'si
   test(`new suggestion protects patron lookup draft on ${exit}`, () => fixture('?stage=suggestion&scope=2', async ui => {
     ui.get('[data-view="profile"]').click(); await settle();
     ui.get('[data-view="queue"]').click(); await settle();
-    ui.get('#new-suggestion').click();
+    ui.get('#new-suggestion').click(); await settle();
     ui.edit('[aria-label="Patron barcode or name"]', 'Patron name');
     const activeUrl = ui.dom.window.location.href;
     if (exit === 'close') ui.get('#close-staff-suggestion').click();
@@ -563,6 +563,7 @@ for (const exit of ['close', 'escape', 'search-Escape', 'top-level', 'back', 'si
       const escape = new ui.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
       ui.get('[aria-label="Patron barcode or name"]').dispatchEvent(escape);
       assert.equal(escape.defaultPrevented, true, 'Native search clearing must wait for the draft decision');
+      ui.get('[aria-label="Patron barcode or name"]').dispatchEvent(new ui.dom.window.KeyboardEvent('keyup', { key: 'Escape', bubbles: true, cancelable: true }));
     }
     if (exit === 'top-level') ui.get('[data-view="profile"]').click();
     if (exit === 'back') await ui.back();
@@ -588,7 +589,7 @@ test('operations guard different mutations while pending and uncertain', () => f
   assert.match(ui.get('#app-status').textContent, /uncertain|unconfirmed/i);
 }));
 test('cross-library duplicate aligns the authorized detail and parent route', () => fixture('?stage=suggestion&scope=2', async ui => {
-  ui.get('#new-suggestion').click();
+  ui.get('#new-suggestion').click(); await settle();
   const scope = ui.get('[aria-label="Servicing library"]');
   scope.value = '3'; scope.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
   ui.edit('[aria-label="Patron barcode or name"]', '20000000000001');
@@ -609,7 +610,7 @@ test('cross-library duplicate aligns the authorized detail and parent route', ()
 
 test('pending and uncertain suggestion creation protect its submitted fields and navigation', () =>
   fixture('?stage=suggestion&scope=2', async ui => {
-    ui.get('#new-suggestion').click();
+    ui.get('#new-suggestion').click(); await settle();
     const scope = ui.get('[aria-label="Servicing library"]');
     scope.value = '3'; scope.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
     ui.edit('[aria-label="Patron barcode or name"]', '20000000000001');
@@ -862,7 +863,7 @@ test('uncertain Profile save cannot retry or discard until explicit authoritativ
   }, { staff: profileStaff }));
 
 async function previewBulk(ui, scope = '2') {
-  ui.get('#bulk-delete-closed').click();
+  ui.get('#bulk-delete-closed').click(); await until(() => ui.get('#bulk-delete-dialog').open, 'bulk dialog opened');
   ui.get('#bulk-delete-scope').value = scope;
   ui.get('#bulk-delete-preview').click();
   await until(() => ui.get('#bulk-delete-items li'), 'bulk population previewed');
@@ -871,7 +872,7 @@ async function previewBulk(ui, scope = '2') {
 
 test('active bulk deletion rejects Back, top-level navigation, close, Sign out, and beforeunload', () =>
   fixture('?stage=profile', async ui => {
-    ui.get('[data-view="queue"]').click();
+    ui.get('[data-view="queue"]').click(); await settle();
     ui.get('[data-status="closed"]').click(); await settle();
     await previewBulk(ui);
     let resolve;
@@ -895,7 +896,7 @@ test('active bulk deletion rejects Back, top-level navigation, close, Sign out, 
 for (const exit of ['back', 'top-level']) {
   test(`non-submitting Bulk Delete preview closes cleanly on ${exit}`, () =>
     fixture('?stage=profile', async ui => {
-      ui.get('[data-view="queue"]').click(); ui.get('[data-status="closed"]').click(); await settle();
+      ui.get('[data-view="queue"]').click(); await settle(); ui.get('[data-status="closed"]').click(); await settle();
       await previewBulk(ui);
       if (exit === 'back') await ui.back();
       else ui.get('[data-view="profile"]').click();
@@ -1364,12 +1365,11 @@ test('dirty rejection choice submits its selected template and clears only after
     const form = await openInlineDraft(ui, 'Reject', 'Rejection template');
     await until(() => form.querySelector('select').options.length === 3, 'rejection templates loaded');
     ui.edit('.action-choice select', '2');
-    submitForm(ui, form); await settle();
-    assert.equal(requestMutations(ui).length, 0, 'declined confirmation preserves the choice');
-    assert.equal(form.querySelector('select').value, '2');
-    ui.allowDiscard(); submitForm(ui, form);
+    assert.equal(form.querySelector('button[type="submit"]').textContent, 'Reject and close');
+    submitForm(ui, form);
     await until(() => !form.isConnected, 'rejection authoritative result');
     assert.deepEqual(JSON.parse(requestMutations(ui)[0].init.body), { version: 'v1', action: 'reject', rejectionTemplateId: '2' });
+    assert.equal(ui.confirms.length, 0, 'the rejection review submits without another decision');
     assert.equal(protectedUnload(ui), false);
   }));
 
@@ -1681,7 +1681,7 @@ for (const owner of ['request editor', 'Staff Suggestion']) {
         const scope = ui.get('#library-scope');
         scope.value = '3'; scope.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
         await until(() => ui.params().get('scope') === '3', 'source library selected');
-        ui.get('#new-suggestion').click();
+        ui.get('#new-suggestion').click(); await settle();
         const servicing = ui.get('[aria-label="Servicing library"]');
         servicing.value = '3'; servicing.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
         ui.edit('[aria-label="Patron barcode or name"]', '20000000000001');
@@ -1698,7 +1698,7 @@ for (const owner of ['request editor', 'Staff Suggestion']) {
         if (pathname.endsWith('/bib-lookup')) return response(200,
           JSON.parse(init.body).mode === 'bib' ? selected : { results: [selected], totalMatches: 1 });
       });
-      ui.dom.window.confirm = message => { ui.confirms.push(message); return ui.confirms.length === 1; };
+      require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, message => { ui.confirms.push(message); return ui.confirms.length === 1; });
       ui.dom.window.history.back();
       await until(() => validateScope, 'route validation pending after first consent');
       assert.equal(ui.confirms.length, 1);
@@ -1744,7 +1744,7 @@ test('Analytics view round trip preserves scope/range and rejects the prior acti
     ui.get('#analytics-date-range').value = 'last90';
     ui.get('#analytics-date-range').dispatchEvent(new ui.dom.window.Event('change'));
     await until(() => pending.length === 3, 'selected range request');
-    ui.get('[data-view="profile"]').click();
+    ui.get('[data-view="profile"]').click(); await settle();
     assert.equal(pending[2].init.signal.aborted, true, 'leaving aborts visible reads');
     ui.get('[data-view="analytics"]').click();
     await until(() => pending.length === 4, 'first reactivated request');
@@ -1771,7 +1771,7 @@ test('programmatic hold-resolution Revert invalidates consent while a competing 
     let validateScope;
     ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
       ? new Promise(resolve => { validateScope = resolve; }) : undefined);
-    ui.dom.window.confirm = message => { ui.confirms.push(message); return ui.confirms.length === 1; };
+    require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, message => { ui.confirms.push(message); return ui.confirms.length === 1; });
     ui.dom.window.history.back();
     await until(() => validateScope, 'route validation after initial request consent');
     [...ui.get('.resolution-form').querySelectorAll('button')].find(button => button.textContent === 'Revert resolution changes').click();
@@ -1800,7 +1800,7 @@ for (const settingsScope of ['2', 'system', '1']) {
       ui.dom.window.history.pushState({}, '', `?stage=settings&settingsScope=${settingsScope}`);
       ui.dom.window.dispatchEvent(new ui.dom.window.PopStateEvent('popstate'));
       await until(() => !ui.get('#settings-view').hidden && !ui.get('#settings-form').hidden, 'authoritative configuration refresh');
-      ui.get('[data-view="queue"]').click();
+      ui.get('[data-view="queue"]').click(); await settle();
       await ui.open();
       assert.equal(configurationReads, 2, 'reopen fetches fresh public form configuration');
       assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration B/);
@@ -1852,7 +1852,7 @@ for (const commit of ['library save', 'system save', 'library reset']) {
         }
       });
       await until(() => !ui.get('#settings-form').hidden, 'Settings cached before the Title configuration');
-      ui.get('[data-view="queue"]').click(); await ui.open();
+      ui.get('[data-view="queue"]').click(); await settle(); await ui.open();
       assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration A/);
       ui.get('#close-request').click(); await settle();
       ui.get('[data-view="settings"]').click(); await settle();
@@ -1872,7 +1872,7 @@ for (const commit of ['library save', 'system save', 'library reset']) {
       const posts = ui.calls.filter(call => call.init.method === 'POST').length;
       ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
       await settle(); assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, posts);
-      ui.get('[data-view="queue"]').click(); await ui.open();
+      ui.get('[data-view="queue"]').click(); await settle(); await ui.open();
       assert.equal(configurationReads, 2, 'confirmed source change forces a configuration fetch despite failed refresh');
       assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration B/);
       assert.equal(staleControlsInert, true, 'stale Settings controls cannot be edited as authoritative');
@@ -1905,7 +1905,7 @@ for (const kind of ['Title', 'Additional Copy']) {
           return response(200, { deleted: true });
         }
       });
-      ui.get('[data-view="queue"]').click(); ui.get('[data-status="closed"]').click(); await ui.open();
+      ui.get('[data-view="queue"]').click(); await settle(); ui.get('[data-status="closed"]').click(); await settle(); await ui.open();
       ui.get('#close-request').click(); await settle();
       ui.get('[data-view="settings"]').click(); await settle();
       ui.get('[data-settings-panel="staff"]').click();
@@ -1918,12 +1918,12 @@ for (const kind of ['Title', 'Additional Copy']) {
       assert.equal(ui.get('#notification-email').value, 'new-notification@example.org');
       ui.get('[data-view="profile"]').click(); await settle();
       assert.equal(ui.get('#notification-email').value, 'new-notification@example.org');
-      ui.get('[data-view="queue"]').click(); await ui.open();
+      ui.get('[data-view="queue"]').click(); await settle(); await ui.open();
       assert.equal(configurationReads, 1, 'staff roster mutation preserves the Title configuration cache');
       if (kind === 'Additional Copy') {
         ui.get('#close-request').click(); await settle();
-        ui.get('[data-view="additional-copies"]').click();
-        ui.get('[data-copy-status="closed"]').click();
+        ui.get('[data-view="additional-copies"]').click(); await settle();
+        ui.get('[data-copy-status="closed"]').click(); await settle();
         await until(() => ui.get('#additional-copy-grid .grid-open'), 'closed Copy queue opener');
         ui.get('#additional-copy-grid .grid-open').click();
         await until(() => ui.get('#request-dialog').open, 'Copy opened');
@@ -2004,7 +2004,7 @@ test('programmatic Settings domain changes advance navigation consent without di
     let validateScope;
     ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
       ? new Promise(resolve => { validateScope = resolve; }) : undefined);
-    ui.dom.window.confirm = message => { ui.confirms.push(message); return ui.confirms.length === 1; };
+    require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, message => { ui.confirms.push(message); return ui.confirms.length === 1; });
     ui.dom.window.history.go(-2);
     await until(() => validateScope, 'route validation pending after Settings consent');
     ui.get('#add-publication-option').click();
@@ -2080,7 +2080,7 @@ test('editor Revert preserves competing inline UI and its draft registration', (
     const assignment = await openInlineDraft(ui, 'Assign', assignmentLabel);
     ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
     ui.edit('.edit-form input', 'Editor draft');
-    ui.allowDiscard(); actionButton('Revert changes', ui.get('.request-save-footer')).click();
+    ui.allowDiscard(); actionButton('Revert changes', ui.get('.request-save-footer')).click(); await settle();
     assert.equal(assignment.isConnected, true);
     assert.equal(ui.get('.edit-form input').value, 'Saved title');
     assert.equal(protectedUnload(ui), true);
@@ -2181,7 +2181,7 @@ for (const view of ['additional-copies', 'settings']) {
 
 test('Suggestion lookup returning exactly to baseline releases its draft guard', () =>
   fixture('?stage=suggestion&scope=2', async ui => {
-    ui.get('#new-suggestion').click();
+    ui.get('#new-suggestion').click(); await settle();
     ui.edit('input[aria-label="Patron barcode or name"]', 'Unsaved patron');
     assert.equal(protectedUnload(ui), true);
     ui.edit('input[aria-label="Patron barcode or name"]', '');
@@ -2594,7 +2594,7 @@ for (const outcome of ['failed load', 'changed draft decline', 'changed draft ac
         assert.equal(protectedUnload(ui), false);
       } else {
         ui.edit('#weekly-email', 'New Profile draft'); const initial = ui.confirms.length, accept = outcome.endsWith('accept');
-        ui.dom.window.confirm = message => { ui.confirms.push(message); return accept; };
+        require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, message => { ui.confirms.push(message); return accept; });
         complete(response(200, settingsSnapshot('system', defaultOrganizations)));
         await until(() => ui.confirms.length === initial + 1, 'Settings load requires fresh consent'); await settle();
         assert.equal(ui.get('#profile-view').hidden, accept);
@@ -2611,7 +2611,7 @@ for (const type of ['title', 'copy']) {
     test(`ownership transfer: history ${type} failed ${failure} restores the source`, () =>
       fixture(type === 'title' ? `?stage=suggestion&scope=2&request=${id}` : '?stage=additional_copies&scope=2&request=71', async ui => {
         await until(() => ui.get('#request-dialog').open, 'initial detail ready');
-        ui.get('[data-view="profile"]').click(); ui.edit('#weekly-email', 'History source draft'); ui.allowDiscard();
+        ui.get('[data-view="profile"]').click(); await settle(); ui.edit('#weekly-email', 'History source draft'); ui.allowDiscard();
         const url = ui.dom.window.location.href;
         const path = type === 'title' ? '/title-requests' : '/additional-copies';
         ui.setApi(({ pathname }) => pathname.endsWith(failure === 'detail' ? `${path}/${type === 'title' ? id : '71'}` : path)
@@ -2627,7 +2627,7 @@ for (const type of ['title', 'copy']) {
 
 test('ownership transfer: duplicate target failure retains the Suggestion owner', () =>
   fixture('?stage=suggestion&scope=2', async ui => {
-    ui.get('#new-suggestion').click();
+    ui.get('#new-suggestion').click(); await settle();
     const scope = ui.get('[aria-label="Servicing library"]');
     scope.value = '3'; scope.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
     ui.edit('[aria-label="Patron barcode or name"]', '20000000000001');
@@ -2654,7 +2654,7 @@ for (const source of ['profile', 'settings']) {
     test(`ownership transfer: ${source} Recent Request ${failure} preserves the source`, () =>
       fixture('?stage=suggestion&scope=2&marker=keep#anchor', async ui => {
         await ui.open(); ui.get('#close-request').click(); await settle();
-        ui.get(`[data-view="${source}"]`).click();
+        ui.get(`[data-view="${source}"]`).click(); await settle();
         if (source === 'settings') await until(() => !ui.get('#settings-form').hidden, 'Settings ready');
         const field = source === 'profile' ? '#weekly-email' : '#patron-login-note';
         ui.edit(field, 'Exact unsaved draft'); ui.allowDiscard();
@@ -2683,7 +2683,7 @@ for (const source of ['profile', 'settings']) {
     test(`ownership transfer: ${source} Recent Request changed draft second consent ${accept}`, () =>
       fixture('?stage=suggestion&scope=2', async ui => {
         await ui.open(); ui.get('#close-request').click(); await settle();
-        ui.get(`[data-view="${source}"]`).click();
+        ui.get(`[data-view="${source}"]`).click(); await settle();
         if (source === 'settings') await until(() => !ui.get('#settings-form').hidden, 'Settings ready');
         const field = source === 'profile' ? '#weekly-email' : '#patron-login-note';
         ui.edit(field, 'First draft'); ui.allowDiscard();
@@ -2693,7 +2693,7 @@ for (const source of ['profile', 'settings']) {
         ui.get('#recent-request-list button').click(); await until(() => complete, 'target pending');
         assert.equal(ui.get(field).value, 'First draft'); assert.equal(ui.get('#request-dialog').open, false);
         ui.edit(field, 'Newer draft'); const initial = ui.confirms.length;
-        ui.dom.window.confirm = message => { ui.confirms.push(message); return accept; };
+        require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, message => { ui.confirms.push(message); return accept; });
         complete(response(200, ui.readRequest()));
         await until(() => ui.confirms.length === initial + 1, 'fresh consent requested'); await settle();
         assert.equal(ui.get('#request-dialog').open, accept);
@@ -2780,7 +2780,7 @@ for (const view of ['queue', 'additional-copies']) {
         } else {
           await until(() => complete, 'catalog pending'); ui.edit('#patron-login-note', 'New catalog draft');
           const initial = ui.confirms.length, accept = outcome.endsWith('accept');
-          ui.dom.window.confirm = message => { ui.confirms.push(message); return accept; };
+          require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, message => { ui.confirms.push(message); return accept; });
           complete(response(200, { data: [{ id: 2, name: 'A', isActive: true }] }));
           await until(() => ui.confirms.length === initial + 1, 'catalog requires second consent'); await settle();
           assert.equal(ui.get('#settings-view').hidden, accept);
@@ -2829,7 +2829,7 @@ for (const failure of ['failed load', 'changed draft']) {
       assert.equal(ui.get('#settings-form').hidden, false); assert.equal(ui.get('#patron-login-note').value, 'Scope source draft');
       if (failure === 'failed load') complete(response(500, { message: 'Scope unavailable' }));
       else {
-        ui.edit('#patron-login-note', 'New scope draft'); ui.dom.window.confirm = () => false;
+        ui.edit('#patron-login-note', 'New scope draft'); require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, () => false);
         complete(response(200, { ...settingsSnapshot('2', defaultOrganizations), version: 'target-v1' }));
       }
       await settle();
@@ -2860,6 +2860,97 @@ test('authoritative projections: email readiness refresh survives failed Setting
     ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
     await until(() => /could not be refreshed/.test(ui.get('#settings-message').textContent), 'confirmed configuration with failed review');
     await until(() => readinessReads > before && ui.get('#email-readiness-warning').hidden, 'Shell reviews readiness despite failed Settings reload');
+  }));
+
+for (const copy of [false, true]) {
+  for (const change of ['draft', 'scope', 'session', 'command', 'duplicate']) {
+    test(`pending confirmation ${copy ? 'Copy' : 'Title'} rejects stale ${change}`, () =>
+      fixture(copy ? '?stage=additional_copies&scope=2&request=71' : `?stage=suggestion&scope=2&request=${id}`, async ui => {
+        require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, () => null);
+        const label = copy ? 'Close task' : 'Close silently';
+        let form;
+        if (copy && change === 'draft') form = await openInlineDraft(ui, 'Assign', copyAssignmentLabel);
+        actionButton(label).click();
+        await until(() => ui.get('#confirmation-dialog')?.open, 'decision displayed');
+        const decision = ui.get('#confirmation-dialog');
+        if (change === 'draft') {
+          if (copy) form.querySelector('select').value = '21';
+          else ui.get('.edit-form input').value = 'Programmatic newer draft';
+        }
+        if (change === 'scope') {
+          const scope = ui.get(copy ? '#additional-copy-library-scope' : '#library-scope');
+          scope.value = '3'; scope.dispatchEvent(new ui.dom.window.Event('change'));
+          await settle();
+        }
+        if (change === 'session') {
+          ui.setApi(({ pathname }) => pathname.endsWith(copy ? '/additional-copies' : '/title-requests')
+            ? response(401, { code: 'staff_session_invalid' }) : undefined);
+          ui.get(copy ? '#refresh-additional-copies' : '#refresh-queue').click();
+          await until(() => ui.get('#workspace').hidden, 'session invalidated');
+        }
+        if (change === 'command') { actionButton('Claim').click(); await settle(); }
+        if (change === 'duplicate') { actionButton(label).click(); await settle(); }
+        if (decision.open) decision.querySelector('.primary-button, .danger-button').click();
+        await settle();
+        const closes = requestMutations(ui).filter(call => copy ? call.url.endsWith('/close') : JSON.parse(call.init.body || '{}').action === 'silentClose');
+        assert.equal(closes.length, change === 'duplicate' ? 1 : 0);
+        assert.equal(decision.open, false);
+      }, { copyRequest: {} }));
+  }
+}
+
+for (const owner of ['Title', 'Copy', 'Settings', 'Suggestion']) {
+  test(`pending departure rejects an event-free newer ${owner} draft`, () => {
+    const route = owner === 'Copy' ? '?stage=additional_copies&scope=2&request=71'
+      : owner === 'Settings' ? '?stage=settings&settingsScope=system#settings-patron'
+        : `?stage=suggestion&scope=2${owner === 'Title' ? `&request=${id}` : ''}`;
+    return fixture(route, async ui => {
+      require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, () => null);
+      let field = '.edit-form input', close = '#close-request', container = '#request-dialog';
+      if (owner === 'Copy') {
+        ui.setApi(({ pathname }) => pathname.endsWith('/assignment-candidates') ? response(200, {
+          candidates: ['20', '21', '22'].map(id => ({ id, displayName: `Staff ${id}` })) }) : undefined);
+        await openInlineDraft(ui, 'Assign', copyAssignmentLabel);
+        field = `select[aria-label="${copyAssignmentLabel}"]`;
+      } else if (owner === 'Settings') {
+        field = '#patron-login-note'; close = '[data-view="queue"]'; container = '#settings-view';
+      } else if (owner === 'Suggestion') {
+        ui.get('#new-suggestion').click();
+        await until(() => ui.get('#staff-suggestion-dialog').open, 'suggestion opened');
+        field = '[aria-label="Patron barcode or name"]'; close = '#close-staff-suggestion'; container = '#staff-suggestion-dialog';
+      }
+      ui.edit(field, owner === 'Copy' ? '21' : 'Draft before departure');
+      const accepted = ui.dom.window.location.href;
+      ui.get(close).click();
+      await until(() => ui.get('#confirmation-dialog')?.open, 'departure decision displayed');
+      const newer = owner === 'Copy' ? '22' : 'Newer draft without an event';
+      ui.get(field).value = newer;
+      ui.get('#confirmation-dialog .danger-button').click();
+      await settle();
+      assert.equal(ui.get(field).value, newer);
+      assert.equal(ui.dom.window.location.href, accepted);
+      assert.equal(owner === 'Settings' ? !ui.get(container).hidden : ui.get(container).open, true);
+      assert.equal(requestMutations(ui).length, 0);
+      assert.equal(protectedUnload(ui), true);
+    }, { copyRequest: {} });
+  });
+}
+
+test('inherited reset combines discard and reset and rejects a newer Settings draft', () =>
+  fixture('?stage=settings&settingsScope=2', async ui => {
+    require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, () => null);
+    const toggle = ui.get('[data-setting-key="loginNote"] .settings-override-toggle');
+    toggle.checked = true; toggle.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+    ui.edit('#patron-login-note', 'Draft before reset');
+    ui.get('#settings-reset').click();
+    await until(() => ui.get('#confirmation-dialog')?.open, 'combined reset displayed');
+    const decision = ui.get('#confirmation-dialog');
+    assert.match(decision.textContent, /Discard unsaved settings changes and reset/);
+    assert.match(decision.textContent, /Library-owned custom fields, formats, rejection templates, auto-claim rules and their history are preserved/);
+    ui.get('#patron-login-note').value = 'Newer reset draft';
+    decision.querySelector('.danger-button').click(); await settle();
+    assert.equal(ui.calls.filter(call => call.url.includes('/settings/reset')).length, 0);
+    assert.equal(ui.get('#patron-login-note').value, 'Newer reset draft');
   }));
 
 (async () => {

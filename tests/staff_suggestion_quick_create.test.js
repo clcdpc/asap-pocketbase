@@ -45,7 +45,7 @@ const verified = barcode => ({ status: 'verified', libraryOrgId: 2, libraryOrgNa
         getScope: () => scope, getLibraries: () => [{ id: '2', name: 'Servicing library' }],
         beforeOpen: () => true, beforeClose: () => true, onReceipt() {}, clearReceipt() {},
         request: async () => { calls++; throw Error('Global open must await a patron query'); } });
-      controller.open();
+      await controller.open();
       assert.equal(get('[aria-label="Servicing library"]').value, expected, scope);
       assert.equal(calls, 0);
       controller.dispose();
@@ -67,7 +67,7 @@ const verified = barcode => ({ status: 'verified', libraryOrgId: 2, libraryOrgNa
           return path.includes('patron-lookup') ? verified('CURRENT-BARCODE') :
             { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
         } });
-      controller.open(null, { barcode: 'OLD-BARCODE', email: 'old@example.org', preferredPickupBranchId: 500,
+      await controller.open(null, { barcode: 'OLD-BARCODE', email: 'old@example.org', preferredPickupBranchId: 500,
         focusReturn: { isCurrent: () => true, target: () => target } });
       if (scope === 'all') {
         assert.equal(calls.length, 0, 'All libraries requires an explicit target before any seeded lookup');
@@ -92,7 +92,7 @@ const verified = barcode => ({ status: 'verified', libraryOrgId: 2, libraryOrgNa
       assert.ok(get('#staff-suggestion-pickup-help').textContent.includes('Unfilled requests use the live preference'));
       assert.equal(get('.staff-suggestion-fields input[maxlength="500"]').value, '');
       assert.equal(controller.isDirty(), false);
-      assert.equal(controller.close(), true);
+      assert.equal(await controller.close(), true);
       assert.equal(document.activeElement, target);
       controller.dispose();
     });
@@ -111,8 +111,8 @@ const verified = barcode => ({ status: 'verified', libraryOrgId: 2, libraryOrgNa
         if (path.includes('patron-lookup')) return new Promise(resolve => pending.set(options.body.barcode, resolve));
         return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
       } });
-    controller.open(null, { barcode: 'PATRON-A' });
-    controller.open(null, { barcode: 'PATRON-B' });
+    await controller.open(null, { barcode: 'PATRON-A' });
+    await controller.open(null, { barcode: 'PATRON-B' });
     pending.get('PATRON-B')(verified('PATRON-B')); await settle();
     pending.get('PATRON-A')(verified('PATRON-A')); await settle();
     assert.ok(get('.staff-patron-card').textContent.includes('PATRON-B'));

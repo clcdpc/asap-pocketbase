@@ -266,6 +266,7 @@ async function runJourney(scenario, pipelineOverlap = false, registrationOverlap
     assert.strictEqual(previousOpener, null,
       'A replacement grid must await its own data instead of presenting the prior revision rows');
     dialog.dispatchEvent(new dom.window.Event('cancel', { cancelable: true }));
+    await until(() => !dialog.open, 'The asynchronous close guard must commit');
     assert.strictEqual(dialog.open, false);
     await until(() => !new URL(dom.window.location.href).searchParams.has('request'),
       'Explicit close must complete its history traversal before another navigation');
@@ -273,6 +274,7 @@ async function runJourney(scenario, pipelineOverlap = false, registrationOverlap
     let newerFocus;
     if (scenario === 'view-navigation') {
       document.querySelector('[data-view="profile"]').click();
+      await until(() => !document.getElementById('profile-view').hidden, 'The new view must commit');
       newerFocus = document.getElementById('profile-title');
     } else if (scenario === 'new-dialog') {
       const recent = [...document.querySelectorAll('#recent-request-list button')]

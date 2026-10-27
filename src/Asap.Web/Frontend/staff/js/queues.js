@@ -536,8 +536,11 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     if (request && liveRow({ currentTarget: link }, sessionIdentity.preferences(), request)) onOpen(request.id, link);
   }, { signal: events.signal });
   dom.refresh.addEventListener('click', () => { void refresh(); }, { signal: events.signal });
-  dom.scope.addEventListener('change', () => {
-    if (!onScopeIntent(dom.scope.value)) dom.scope.value = getContext().scope;
+  dom.scope.addEventListener('change', async () => {
+    const scope = dom.scope.value;
+    dom.scope.value = getContext().scope;
+    await onScopeIntent(scope);
+    dom.scope.value = getContext().scope;
   }, { signal: events.signal });
   bindStatusTabs(dom.statusTabs, 'status', onStatusIntent, events.signal);
   dom.search.addEventListener('input', renderGrid, { signal: events.signal });
@@ -810,8 +813,11 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
   }
 
   dom.additionalCopyRefresh.addEventListener('click', () => { void refresh(); }, { signal: events.signal });
-  dom.additionalCopyScope.addEventListener('change', () => {
-    if (!onScopeIntent(dom.additionalCopyScope.value)) dom.additionalCopyScope.value = getContext().scope;
+  dom.additionalCopyScope.addEventListener('change', async () => {
+    const scope = dom.additionalCopyScope.value;
+    dom.additionalCopyScope.value = getContext().scope;
+    await onScopeIntent(scope);
+    dom.additionalCopyScope.value = getContext().scope;
   }, { signal: events.signal });
   bindStatusTabs(dom.additionalCopyStatusTabs, 'copyStatus', onStatusIntent, events.signal);
   dom.additionalCopySearch.addEventListener('input', renderAdditionalCopyGrid, { signal: events.signal });

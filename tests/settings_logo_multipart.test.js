@@ -105,7 +105,7 @@ async function flush() {
     global.Node = dom.window.Node;
     global.Event = dom.window.Event;
     global.File = dom.window.File;
-    window.confirm = () => true;
+    require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
 
     const logoRequests = [];
     let settingsReads = 0;
@@ -165,7 +165,7 @@ async function flush() {
     };
     let currentStaff = initialStaff;
     const controller = settingsModule.createSettingsController({
-      prepareDeparture: () => ({ commit: () => true }),
+      prepareDeparture: async () => ({ revalidate: async () => true, commit: () => true }),
       root: document.getElementById('settings-view'),
       tab: document.getElementById('settings-view-tab'),
       announce: () => {},

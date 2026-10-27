@@ -32,6 +32,7 @@ const organizationCatalog = [
     const accepted = router.snapshot().href;
     router.pushStage('suggestion', { scope: '3' });
     const moving = navigation.navigateFromUrl();
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(disposed, 0);
     blocked = true; stamp += 1;
     finish({ data: organizationCatalog }); await moving;
@@ -42,8 +43,9 @@ const organizationCatalog = [
     blocked = false;
     router.pushStage('suggestion', { scope: '3' });
     const editingDuringValidation = navigation.navigateFromUrl();
+    await new Promise(resolve => setImmediate(resolve));
     dirty = true;
-    dom.window.confirm = () => false;
+    require('./helpers/confirmation.cjs').answerConfirmations(dom.window, () => false);
     finish({ data: organizationCatalog }); await editingDuringValidation;
     assert.equal(disposed, 0, 'a previously clean owner must obtain dirty departure permission even with the same stamp');
     await new Promise(resolve => setTimeout(resolve, 35));

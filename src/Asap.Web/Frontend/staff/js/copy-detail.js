@@ -3,6 +3,7 @@ import { createLatestLoad } from '../../shared/latest-load.js';
 import { byDisplayLabel } from './display-order.js';
 import { researchRecordValue } from './research.js';
 import { createDraftScope } from './draft-scope.js';
+import { confirmAction, controlSnapshot } from './confirmation.js';
 import { unconfirmedResponseError, notificationOutcome, isCommittedRequestResponse } from './mutation-outcome.js';
 import { element, icon, commandButton, statusLabel, dateTime, timeoutLabel, addDetail, labeledInput } from './ui.js';
 
@@ -46,14 +47,14 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
     onOpened(request, options);
     renderAdditionalCopy(request); mounted.show();
     for (const name of ['input', 'change']) mounted.content.addEventListener(name, event => {
-      if (isPresentationCurrent(mounted, owner) && mounted.content.contains(event.target)) drafts.touch();
+      if (isPresentationCurrent(mounted, owner) && mounted.content.contains(event.target)) drafts.touch(event.target);
     });
     announce(`Opened additional-copy task ${request.id}.`); return true;
   }
 
   async function open(id, opener = null, options = {}) {
     if (disposed || !sessionIdentity.actor()) return false;
-    const departure = beforeOpen(options);
+    const departure = await beforeOpen(options);
     if (!departure) return false;
     const owner = sessionIdentity.preferences(), prior = current;
     announce('Loading additional-copy details...');
@@ -62,7 +63,7 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
       if (!target?.isCurrent() || !departure.isCurrent()) return false;
       const alignment = await onAlign(target.request, options, owner, departure);
       if (!alignment || !target.isCurrent() || !departure.isCurrent()) return false;
-      const ticket = alignment.commit();
+      const ticket = await alignment.commit();
       return ticket !== false && present(target, opener, options, ticket);
     } catch (error) {
       if (departure.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
@@ -84,8 +85,13 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
     if (!admission.allowed) announce('Finish or cancel the current request changes before performing another action.', 'warning');
     return admission.allowed;
   }
-  function confirmCurrent(request, type, message) {
-    return allowRequestMutation(request, { consumes: null }) && window.confirm(message) && isCurrentDialogRequest(request);
+  async function confirmCurrent(request, label, message, tone = 'normal') {
+    if (!allowRequestMutation(request, { consumes: null })) return false;
+    const stamp = drafts.stamp(), generation = getNavigationGeneration(), scope = drafts;
+    const mounted = lease, values = controlSnapshot(mounted.content);
+    const isCurrent = () => drafts === scope && drafts.stamp() === stamp && isNavigationCurrent(generation) &&
+      controlSnapshot(mounted.content) === values && allowRequestMutation(request, { consumes: null });
+    return await confirmAction({ title: label, message, confirmLabel: label, tone, isCurrent }) && isCurrent();
   }
   function trackDialogFormDraft(form) {
     const baseline = [...form.querySelectorAll('input, select, textarea')].map(control => ({ control, value: control.value }));
@@ -185,11 +191,13 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
     }
   }
 
-  function close(options = {}) {
+  async function close(options = {}) {
     if (activeAttempt?.pending && !options.force && !options.preserveMutation) {
       announce('The workflow action is in progress. Wait for its authoritative result before closing.', 'warning'); host.focusClose(); return false;
     }
-    if (!options.force && !options.guarded && !options.preserveMutation && !beforeClose(options)) return false;
+    const mounted = lease;
+    if (!options.force && !options.guarded && !options.preserveMutation && !await beforeClose(options)) return false;
+    if (lease !== mounted) return false;
     const focusReturn = options.navigation ? null : getFocusReturn(current?.id, returnFocus);
     lease?.release({ ...options, focusReturn }); onClosed(options); return true;
   }
@@ -245,8 +253,8 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
       bar.append(commandButton('Unclaim', 'user-times', () => mutateAdditionalCopy(request, 'unclaim', 'Task unclaimed.')));
     } else if (request.capabilities?.canClearClaim && request.claimedByStaffUserId &&
                ['admin', 'super_admin'].includes(sessionIdentity.preferences()?.role)) {
-      bar.append(commandButton('Clear claim', 'user-times', () => {
-        if (confirmCurrent(request, 'additional_copy',
+      bar.append(commandButton('Clear claim', 'user-times', async () => {
+        if (await confirmCurrent(request, 'Clear claim',
           `Clear ${request.claimedByDisplayName || 'another staff member'}'s claim? The task will remain open and unclaimed.`)) {
           mutateAdditionalCopy(request, 'clear-claim', 'Additional-copy claim cleared.');
         }
@@ -258,25 +266,25 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
       bar.append(commandButton('Assign', 'users', event => showAdditionalCopyAssignment(request, event.currentTarget)));
     }
     if (request.capabilities?.canClose) {
-      bar.append(commandButton('Close task', 'check', () => {
-        if (confirmCurrent(request, 'additional_copy',
+      bar.append(commandButton('Close task', 'check', async () => {
+        if (await confirmCurrent(request, 'Close task',
           'Close this additional-copy task? It will leave the open work queue; the source patron hold will not change.')) {
           mutateAdditionalCopy(request, 'close', 'Additional-copy task closed.');
         }
       }, 'primary-button'));
     }
     if (request.capabilities?.canReopen) {
-      bar.append(commandButton('Reopen task', 'undo', () => {
-        if (confirmCurrent(request, 'additional_copy',
+      bar.append(commandButton('Reopen task', 'undo', async () => {
+        if (await confirmCurrent(request, 'Reopen task',
           'Reopen this additional-copy task? It will return to open work. An eligible retained claim stays; an invalid claim is cleared.')) {
           mutateAdditionalCopy(request, 'reopen', 'Additional-copy task reopened.');
         }
       }, 'primary-button'));
     }
     if (request.capabilities?.canDelete) {
-      bar.append(commandButton('Permanently delete task', 'trash', () => {
-        if (confirmCurrent(request, 'additional_copy',
-          `Permanently delete closed additional-copy task ${request.id}? This cannot be undone. Its deletion audit will remain.`)) {
+      bar.append(commandButton('Permanently delete task', 'trash', async () => {
+        if (await confirmCurrent(request, 'Delete permanently',
+          `Permanently delete closed additional-copy task ${request.id}? This cannot be undone. Its deletion audit will remain.`, 'danger')) {
           mutateAdditionalCopy(request, 'delete', 'Additional-copy task deleted.');
         }
       }, 'danger-button'));
@@ -329,7 +337,8 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
 
   return { open, prepare, present, close, mutate: mutateAdditionalCopy, invalidate,
     isDirty: () => Boolean(lease?.isCurrent() && drafts.isDirty()),
-    inspectDeparture: () => ({ owner: current || lease, dirty: Boolean(lease?.isCurrent() && drafts.isDirty()), stamp: drafts.stamp(),
+    inspectDeparture: () => ({ owner: current || lease, dirty: Boolean(lease?.isCurrent() && drafts.isDirty()),
+      stamp: JSON.stringify([drafts.revision(), lease ? controlSnapshot(lease.content) : null]),
       blocked: disposed || Boolean(activeAttempt && sessionIdentity.isCurrent(activeAttempt.owner)),
       message: 'The workflow action is in progress. Wait for its authoritative result before navigating away.',
       confirmMessage: 'Discard unsaved request changes and navigate away?' }),

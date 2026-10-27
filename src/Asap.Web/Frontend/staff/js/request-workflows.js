@@ -11,7 +11,8 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
   let actionChoice = null, more = null;
   const isCurrentDialogRequest = () => isCurrent();
   const allowRequestMutation = (snapshot, declaration) => isCurrent() && context.admit(declaration);
-  const confirmCurrent = (snapshot, type, message, draft = null) => context.confirm(message, draft);
+  const confirmCurrent = (snapshot, label, message, draft = null, tone = 'normal') =>
+    context.confirm({ title: label, message, confirmLabel: label, tone }, draft);
   const mutateRequest = (snapshot, path, body, message, draft = null) => context.mutate(path, body, message, draft);
   const mutateOperation = (snapshot, operation, action, body, draft = null) => context.mutateOperation(operation, action, body, draft);
   const deleteTitleRequest = () => context.delete();
@@ -76,8 +77,8 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       } else if (!request.claimedByStaffUserId) {
         bar.append(commandButton('Claim', 'user-plus', () => mutateSimple(request, 'claim'), 'primary-button'));
       } else if (['admin', 'super_admin'].includes(actor?.role)) {
-        bar.append(commandButton('Clear claim', 'user-times', () => {
-          if (confirmCurrent(request, 'title_request',
+        bar.append(commandButton('Clear claim', 'user-times', async () => {
+          if (await confirmCurrent(request, 'Clear claim',
             `Clear ${request.claimedByDisplayName || 'another staff member'}'s claim? The request will remain in ${statusLabel(request.status)} and become unclaimed.`)) {
             mutateSimple(request, 'clear-claim');
           }
@@ -100,8 +101,8 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       bar.append(commandButton('Pickup', 'map-marker', event => showPickup(request, actionOpener(event.currentTarget)), 'secondary-button',
         workflowBlocked && request.capabilities?.blockingReason !== 'pickup_reconciliation_required'));
       if (request.capabilities?.canPlaceHold === true) {
-        bar.append(commandButton('Place hold', 'bookmark', () => {
-          if (confirmCurrent(request, 'title_request',
+        bar.append(commandButton('Place hold', 'bookmark', async () => {
+          if (await confirmCurrent(request, 'Place hold',
             `Place a Polaris hold for BIB ${request.bibid} and this patron? If the provider outcome is uncertain, recovery will be required before another attempt.`)) {
             mutateSimple(request, 'place-hold');
           }
@@ -118,9 +119,9 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         bar.append(commandButton('Reopen', 'undo', () => runAction(request, 'reopen'), 'primary-button'));
       }
       if (['admin', 'super_admin'].includes(actor?.role)) {
-        bar.append(commandButton('Permanently delete request', 'trash', () => {
-          if (confirmCurrent(request, 'title_request',
-            `Permanently delete closed title request ${request.id}? This cannot be undone. Its deletion audit will remain.`)) {
+        bar.append(commandButton('Permanently delete request', 'trash', async () => {
+          if (await confirmCurrent(request, 'Delete permanently',
+            `Permanently delete closed title request ${request.id}? This cannot be undone. Its deletion audit will remain.`, null, 'danger')) {
             deleteTitleRequest(request);
           }
         }, 'danger-button'));
@@ -178,14 +179,14 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     const panel = element('form', { className: 'action-choice', 'aria-label': `${action} options` });
     const heading = element('h3', { text: action === 'reject' ? 'Reject suggestion' : 'Purchase suggestion' });
     const submit = element('button', { type: 'submit', className: action === 'reject' ? 'danger-button' : 'primary-button',
-      disabled: action === 'reject' }, action === 'reject' ? 'Reject' : 'Purchase');
+      disabled: action === 'reject' }, action === 'reject' ? 'Reject and close' : 'Purchase');
     const cancel = commandButton('Cancel', 'times', dismissActionChoice);
     let input;
     if (action === 'purchase') {
       const entersPendingHold = Boolean(request.bibid);
       input = entersPendingHold ? null : element('input', { type: 'checkbox', checked: actor.purchaseReminderDefault });
       panel.append(heading, element('p', { text: request.bibid
-        ? 'Purchase moves this BIB to Pending hold after server verification. A purchase reminder does not apply. The final state comes from the server.'
+        ? `${request.autohold ? 'Purchase moves this verified BIB to Pending hold for automatic hold placement' : 'Automatic hold is off. Purchase closes this request without placing a hold'} after server verification. A purchase reminder does not apply. The final state comes from the server.`
         : 'Purchase moves this request to Outstanding purchase. A reminder is optional.' }));
       if (input) panel.append(element('label', { className: 'check-field' },
         [input, element('span', { text: 'Send purchase reminder' })]));
@@ -201,7 +202,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     let draft = action === 'reject' ? null : trackDialogFormDraft(panel);
     panel.addEventListener('submit', async event => {
       event.preventDefault();
-      if (actionChoice !== choice || !isCurrentDialogRequest(request, 'title_request')) return;
+      if (submit.disabled || actionChoice !== choice || !isCurrentDialogRequest(request, 'title_request')) return;
       submit.disabled = true;
       try {
         await runAction(request, action, undefined, action === 'purchase'
@@ -255,18 +256,16 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       }
     }
     const confirmations = {
-      purchase: request.bibid
-        ? `${request.autohold ? 'Move this request to Pending hold' : 'Close this request without a hold'} using its verified BIB? The server will determine the final state.`
-        : 'Record this purchase decision and move the request to Outstanding purchase?',
       alreadyOwn: `Record that the library already owns this title and ${request.autohold ? 'move the verified BIB to Pending hold' : 'close it without a hold'}?`,
       catalogFound: `${request.autohold ? 'Move this verified catalog title to Pending hold' : 'Close this verified catalog title without a hold'}?`,
-      reject: 'Reject and close this request? A patron rejection email is queued only when a template and delivery are available.',
       silentClose: 'Close this suggestion without a rejection email? It will leave the active queue.',
       closeDuplicate: 'Close this request as a duplicate of an existing patron hold? No new hold will be placed.',
       close: 'Close this hold-placed request? Its placed-hold history will remain.',
       reopen: 'Reopen this closed request as a suggestion? The action will assign a manual claim to you.'
     };
-    if (confirmations[action] && !confirmCurrent(request, 'title_request', confirmations[action], draft)) return;
+    const labels = { alreadyOwn: 'Already own', catalogFound: request.autohold ? 'Ready for hold' : 'Close without hold',
+      silentClose: 'Close silently', closeDuplicate: 'Close duplicate', close: 'Close request', reopen: 'Reopen request' };
+    if (confirmations[action] && !await confirmCurrent(request, labels[action], confirmations[action], draft)) return;
     await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
       version: request.version,
       action,
@@ -402,7 +401,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     if (operation.lastErrorCode) section.append(element('p', { text: `Last diagnostic: ${operation.lastErrorCode}` }));
     if (operation.canReconcile) {
       section.append(commandButton('Reconcile provider state', 'search', async () => {
-        if (!confirmCurrent(request, 'title_request',
+        if (!await confirmCurrent(request, 'Reconcile hold',
           `Reconcile hold operation ${operation.id}, attempt ${operation.attemptNumber}? This may inspect Polaris or retry only when the server confirms the operation is safe to resume.`)) return;
         await mutateOperation(request, operation, 'reconcile', { version: operation.version });
       }));
@@ -526,8 +525,8 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         finalHoldId.focus();
         return;
       }
-      if (!confirmCurrent(request, 'title_request',
-        `Resolve hold operation ${operation.id}, attempt ${operation.attemptNumber}, as ${outcome.value.replaceAll('_', ' ')} using ${evidence.selectedOptions[0]?.textContent || evidence.value}? The recorded evidence will determine whether this request has a placed hold or may be retried.`, draft)) return;
+      if (!await confirmCurrent(request, 'Resolve operation',
+        `Resolve hold operation ${operation.id}, attempt ${operation.attemptNumber}, as ${outcome.value.replaceAll('_', ' ')} using ${evidence.selectedOptions[0]?.textContent || evidence.value}? The recorded evidence will determine whether this request has a placed hold or may be retried.`, draft, 'danger')) return;
       await mutateOperation(request, operation, 'resolve', {
         version: operation.version,
         requestVersion: request.version,

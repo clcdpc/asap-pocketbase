@@ -1,4 +1,5 @@
 'use strict';
+const { rejectNativeDialogs } = require('./confirmation.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -23,7 +24,7 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       });
       const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
       const page = context.pages()[0] || await context.newPage();
-      page.on('pageerror', error => errors.push(error.message));
+      page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
       await page.goto(`${baseURL}/staff/?scope=${library}`, { waitUntil: 'networkidle' });
       const ratio = await page.evaluate(() => devicePixelRatio);
       const applyNativeZoom = async () => {
@@ -83,8 +84,22 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       const footer = await detail.locator('.request-save-footer').boundingBox();
       assert.ok(footer.y >= 0 && footer.y + footer.height <= await page.evaluate(() => innerHeight), 'The save footer remains in the actual zoomed viewport.');
       await scan('detail');
-      page.once('dialog', dialog => dialog.accept());
       await detail.getByRole('button', { name: 'Revert changes', exact: true }).click();
+      const confirmation = page.locator('#confirmation-dialog[open]');
+      await confirmation.waitFor();
+      assert.equal(await confirmation.getByRole('button', { name: 'Keep editing', exact: true }).evaluate(node => node === document.activeElement), true);
+      await scan('confirmation');
+      await page.keyboard.press('Tab');
+      assert.equal(await confirmation.getByRole('button', { name: 'Revert changes', exact: true }).evaluate(node => node === document.activeElement), true);
+      await page.keyboard.press('Tab');
+      assert.equal(await confirmation.getByRole('button', { name: 'Keep editing', exact: true }).evaluate(node => node === document.activeElement), true);
+      await page.keyboard.press('Escape');
+      await confirmation.waitFor({ state: 'hidden' });
+      assert.equal(await detail.getByRole('button', { name: 'Revert changes', exact: true }).evaluate(node => node === document.activeElement), true);
+      assert.equal(await detail.locator('.request-save-state').textContent(), 'Unsaved changes');
+      await detail.getByRole('button', { name: 'Revert changes', exact: true }).click();
+      await confirmation.getByRole('button', { name: 'Revert changes', exact: true }).click();
+      await page.waitForFunction(() => document.querySelector('#request-dialog .request-save-state').textContent === 'All changes saved');
       assert.equal(await detail.locator('.request-save-state').textContent(), 'All changes saved');
       await page.keyboard.press('Escape');
       await page.getByRole('button', { name: `New suggestion for patron ${barcode} from request ${sourceId}`, exact: true }).click();

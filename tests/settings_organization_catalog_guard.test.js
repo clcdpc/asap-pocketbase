@@ -62,7 +62,7 @@ async function runInvalidCatalogCase(settings, organizationBody, expectedMessage
       window: dom.window, document: dom.window.document, FormData: dom.window.FormData,
       Node: dom.window.Node, Event: dom.window.Event
     });
-    dom.window.confirm = () => true;
+    require('./helpers/confirmation.cjs').answerConfirmations(dom.window, () => true);
 
     let settingsPosts = 0;
     global.fetch = async (url, init = {}) => {

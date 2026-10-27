@@ -38,7 +38,7 @@ async function until(predicate, message) {
     dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
     dom.window.gridjs = require(path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js'));
-    window.confirm = () => true;
+    require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
 
     const emptySet = { exists: false, values: [] };
     const configuredSystem = {

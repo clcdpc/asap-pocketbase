@@ -116,6 +116,7 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
     oldTitle.value = 'Unsaved'; oldTitle.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
     assert.equal(drafts.isDirty(), true);
     [...oldForm.querySelectorAll('button')].find(button => button.textContent.includes('Revert changes')).click();
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(drafts.isDirty(), false, 'Revert replaces only its own editor draft');
     oldTitle.value = 'Stale callback'; oldTitle.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
     oldForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
@@ -218,11 +219,13 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
       assert.equal(get('.edit-form'), form); assert.equal(title.value, 'Unsaved title'); assert.equal(controller.isDirty(), true);
       assert.equal(get('.request-save-state').textContent, 'Unsaved changes');
       get('.request-save-footer button[type="button"]').click();
+      await new Promise(resolve => setImmediate(resolve));
       assert.equal(tab('Activity').getAttribute('aria-selected'), 'true');
       assert.equal(get('.request-save-state').textContent, 'All changes saved'); assert.equal(controller.isDirty(), false);
       const replacementForm = get('.edit-form'), replacementTitle = replacementForm.querySelector('input');
       replacementTitle.value = 'Submitted title'; replacementTitle.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
       replacementForm.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+      await new Promise(resolve => setImmediate(resolve));
       assert.equal(posted, 1); assert.equal(get('.request-save-state').textContent, 'Saving changes…');
       assert.equal(postedBody.notes, source.notes, 'Editing Title preserves exact accepted notes.');
       assert.equal(get('.request-save-footer button[type="submit"]').disabled, true);

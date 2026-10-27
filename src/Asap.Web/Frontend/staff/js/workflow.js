@@ -16,6 +16,7 @@ import { createOperationsController } from './operations-controller.js';
 import { createSettingsController } from './settings.js';
 import { createAnalyticsController } from './analytics.js';
 import { createPolarisLookup } from './research.js';
+import { disposeConfirmations } from './confirmation.js';
 
 export function createWorkflowApp() {
   const get = selector => document.querySelector(selector);
@@ -139,6 +140,7 @@ export function createWorkflowApp() {
     onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) })
   });
   const suggestion = createSuggestionController({ root: get('#staff-suggestion-dialog'), trigger: get('#new-suggestion'), sessionIdentity, polarisLookup, announce,
+    getNavigationGeneration: navigation.generation,
     getScope: () => navigation.context().scope,
     getLibraries: titleQueue.libraries, beforeOpen: navigation.prepareSuggestion, beforeClose: () => navigation.allow({ settings: false, request: false }),
     openCreatedTitle: navigation.openCreatedTitle, openExistingTitle: navigation.openExistingTitle, onReceipt, clearReceipt
@@ -160,7 +162,7 @@ export function createWorkflowApp() {
     onPanelChange: navigation.settingsPanelChanged,
     onScopeChange: scope => { navigation.settingsScopeChanged(scope); void shell.refreshReadiness(); },
     onEmailTestOperations: async organizationId => {
-      if (navigation.switchView('operations')) await operations.openEmailScope(organizationId);
+      if (await navigation.switchView('operations')) await operations.openEmailScope(organizationId);
     },
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner),
     onConfigurationCommitted: (owner, scope) => {
@@ -205,6 +207,6 @@ export function createWorkflowApp() {
   let started = false, disposed = false;
   return {
     async start() { if (started || disposed) return; started = true; settings.bind(); navigation.start(); await session.start(); },
-    dispose() { if (disposed) return; disposed = true; session.dispose(); shell.dispose(); navigation.dispose(); for (const feature of features) feature.dispose?.(); }
+    dispose() { if (disposed) return; disposed = true; session.dispose(); shell.dispose(); navigation.dispose(); for (const feature of features) feature.dispose?.(); disposeConfirmations(); }
   };
 }

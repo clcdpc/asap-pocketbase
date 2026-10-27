@@ -1,3 +1,4 @@
+const { rejectNativeDialogs } = require('./confirmation.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -158,7 +159,7 @@ async function main() {
       const { context, traffic } = await createContext(browser, size, args.baseOrigin, args.superIdentity);
       const page = await context.newPage();
       const errors = [];
-      page.on('pageerror', error => errors.push(error.message));
+      page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
       try {
         await openAndAssert(
           page, args, 'title', viewport, args.sharedLegacyId, args.sharedTitleId,
@@ -192,7 +193,7 @@ async function main() {
       args.staffIdentity);
     const page = await context.newPage();
     const errors = [];
-    page.on('pageerror', error => errors.push(error.message));
+    page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
     try {
       for (const [type, ids, stage] of [
         ['title', [args.missingTitleId, args.deletedTitleId, args.outOfScopeTitleId], { name: 'status', value: 'submitted' }],

@@ -17,7 +17,7 @@ exports.fixture = async journey => {
       HTMLElement: dom.window.HTMLElement, URLSearchParams: dom.window.URLSearchParams });
     dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
-    dom.window.confirm = () => true;
+    require('./confirmation.cjs').answerConfirmations(dom.window, () => true);
     const load = name => import(pathToFileURL(path.join(temporary, `staff/js/${name}.js`)).href);
     await journey({ dom, load, get: selector => dom.window.document.querySelector(selector) });
   } finally {
