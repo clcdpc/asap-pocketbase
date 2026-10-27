@@ -2,6 +2,7 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Review-Environment.ps1')
 
 function Test-Command {
     param([Parameter(Mandatory)][string]$Name)
@@ -15,27 +16,12 @@ try {
     if ($PSVersionTable.PSVersion.Major -lt 7) {
         throw "PowerShell 7 or later is required. Current version: $($PSVersionTable.PSVersion)."
     }
-    if (-not $IsWindows) {
-        throw 'ASAP review currently requires Windows because bootstrap installs a trusted localhost certificate in the CurrentUser certificate store.'
-    }
-
     Test-Command git
     Test-Command docker
 
-    & docker version *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Docker is installed but the Docker daemon is not reachable. Start Docker Desktop and try again.'
-    }
-
-    & docker compose version *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Docker Compose v2 is required.'
-    }
-
-    $dockerPlatform = (& docker info --format '{{.OSType}}/{{.Architecture}}').Trim()
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Unable to determine Docker engine platform.'
-    }
+    [void](Assert-LocalDocker)
+    Invoke-Docker @('compose', 'version')
+    $dockerPlatform = Invoke-Docker @('info', '--format', '{{.OSType}}/{{.Architecture}}') -Capture
 
     if ($dockerPlatform -notmatch '^linux/(amd64|x86_64)$') {
         throw "ASAP review requires Linux x64 containers for SQL Server 2022. Docker reports '$dockerPlatform'."

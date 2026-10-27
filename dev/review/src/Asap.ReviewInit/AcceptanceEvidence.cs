@@ -9,6 +9,23 @@ internal static class AcceptanceEvidence
     {
         try
         {
+            Console.WriteLine(JsonSerializer.Serialize(await ReadAsync(cancellationToken)));
+            return 0;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            Console.Error.WriteLine("Review evidence probe timed out or was cancelled.");
+            return 2;
+        }
+        catch (Exception)
+        {
+            Console.Error.WriteLine("Review evidence unavailable. Check the managed review environment.");
+            return 2;
+        }
+    }
+
+    public static async Task<object> ReadAsync(CancellationToken cancellationToken)
+    {
             using var config = JsonDocument.Parse(await File.ReadAllTextAsync(
                 "/review/config/application.json", cancellationToken));
             var root = config.RootElement;
@@ -106,24 +123,11 @@ internal static class AcceptanceEvidence
             {
                 throw new InvalidOperationException("Review Library classification is unavailable.");
             }
-            Console.WriteLine(JsonSerializer.Serialize(new
+            return new
             {
                 contract = 1, database = "AsapReview", login = "asap_review_runtime", sqlMajorVersion = 16, sqlEdition = "Developer",
                 environment = "Review", deterministicProviders = true, deliveryMode = "capture",
                 titles, copies, outbox, rejectionTemplates = templates
-            }));
-            return 0;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            Console.Error.WriteLine("Review evidence probe timed out or was cancelled.");
-            return 2;
-        }
-        catch (Exception)
-        {
-            // Driver/configuration exceptions may contain credentials. Emit only a fixed diagnostic.
-            Console.Error.WriteLine("Review evidence unavailable. Check the managed review environment.");
-            return 2;
-        }
+            };
     }
 }

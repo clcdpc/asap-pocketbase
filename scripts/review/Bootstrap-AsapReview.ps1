@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$BootstrapVersion = '0.2.0'
+$BootstrapVersion = '0.3.0'
 
 function Invoke-Native {
     param(
@@ -40,11 +40,7 @@ Set-StrictMode -Version Latest
 if (-not (Test-Path -LiteralPath `$launcher)) {
     throw "ASAP review launcher was not found: `$launcher. Run Bootstrap-AsapReview.ps1 again."
 }
-if (-not (Test-Path -LiteralPath `$config)) {
-    throw "ASAP review configuration was not found: `$config. Run Bootstrap-AsapReview.ps1 again."
-}
-
-& pwsh -NoProfile -File `$launcher -Config `$config @args
+& pwsh -NoProfile -File `$launcher @args
 exit `$LASTEXITCODE
 "@
 
@@ -113,15 +109,8 @@ if ($LASTEXITCODE -ne 0) {
     throw 'ASAP review prerequisites are not satisfied. Correct the reported prerequisite and rerun bootstrap.'
 }
 
-Write-Host 'Preparing the trusted localhost HTTPS certificate...'
-& pwsh -NoProfile -File $tlsInitializerPath -Workspace $Workspace -ReviewStatePath (Join-Path $repoRoot '.review/current.json')
-if ($LASTEXITCODE -ne 0) {
-    throw 'ASAP review localhost HTTPS certificate setup failed.'
-}
-
 if (-not (Test-Path -LiteralPath $configPath)) {
-    Copy-Item -LiteralPath $configTemplatePath -Destination $configPath
-    Write-Host "Created review configuration: $configPath"
+    Write-Host 'The review launcher will collect first-run Entra configuration automatically.'
 }
 else {
     Write-Host "Keeping existing review configuration: $configPath"
@@ -133,9 +122,7 @@ Write-Host ''
 Write-Host "ASAP review bootstrap complete. Tooling version: $toolingVersion"
 Write-Host ''
 Write-Host 'Next:'
-Write-Host "1. Edit: $configPath"
-Write-Host '2. Run a commit:'
-Write-Host "   pwsh `"$wrapperPath`" -Commit <commit-sha>"
+Write-Host "   pwsh `"$wrapperPath`" -Pr 410 -Suite pr410 -AllowReviewWrites"
 Write-Host ''
 Write-Host 'To refresh the review tooling later, rerun the canonical bootstrap:'
 Write-Host "   pwsh `"$gitBootstrapPath`" -RepositoryUrl `"$RepositoryUrl`" -ToolingRef `"$ToolingRef`""

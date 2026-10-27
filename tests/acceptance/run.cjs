@@ -32,6 +32,11 @@ function parse(argv) {
   return options;
 }
 function toolingIdentity(root) {
+  if (process.env.ASAP_ACCEPTANCE_CONTAINER === '1') {
+    const identity = JSON.parse(require('node:fs').readFileSync('/runner/tooling.json', 'utf8'));
+    must(/^[a-f0-9]{40}$/.test(identity.commit) && typeof identity.dirty === 'boolean', 'Acceptance image tooling identity is invalid.');
+    return identity;
+  }
   return {
     commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true }).trim(),
     dirty: !!execFileSync('git', ['status', '--porcelain', '--untracked-files=normal'], { cwd: root, encoding: 'utf8', windowsHide: true }).trim()
@@ -39,6 +44,7 @@ function toolingIdentity(root) {
 }
 async function acquireLease(state) {
   const filename = path.join(state.StatePath, 'acceptance.lock');
+  await fs.mkdir(state.StatePath, { recursive: true });
   let handle;
   try { handle = await fs.open(filename, 'wx'); }
   catch { throw new Blocked('Another acceptance run holds the review lease, or its state directory is unavailable. See acceptance troubleshooting.'); }
@@ -171,6 +177,7 @@ async function run(argv, dependencies = {}) {
     suite = Object.hasOwn(registry, options.suite) ? registry[options.suite] : null;
     must(suite, 'Unknown suite. Registered acceptance suites: ' + Object.keys(registry).join(', ') + '.');
     report.requiredCapabilities = suite.requires;
+    report.requiredScenarioIds = suite.scenarios.map(s => s.id);
     report.mode = options.checkOnly ? 'check-only' : options.readOnly ? 'read-only' : 'mutating';
     if (suite.mutations && !options.readOnly && !options.checkOnly) {
       must(options.allowWrites, 'Mutating suites require explicit -AllowReviewWrites. Use -ReadOnly for nonmutating checks.');
@@ -178,9 +185,11 @@ async function run(argv, dependencies = {}) {
     let pinned;
     const verify = async () => {
       const current = await (dependencies.verifyEnvironment || verifyEnvironment)(root, options.expectedCommit);
+      must(current.state.ToolingSha === identity.commit, 'Acceptance tooling SHA differs from the running review tooling.');
       if (pinned) must(current.origin === pinned.origin &&
         JSON.stringify(current.identity) === JSON.stringify(pinned.identity), 'Review runtime changed during this acceptance run.');
       else pinned = current;
+      if (browser?.verifyReviewer) await browser.verifyReviewer();
       return current;
     };
     const environment = await verify();
@@ -188,13 +197,13 @@ async function run(argv, dependencies = {}) {
     report.environment = { status: 'PASS', project: environment.state.ProjectName,
       origin: environment.origin, applicationCommit: environment.state.Sha,
       toolingVersion: environment.state.ToolingVersion, ...environment.identity,
-      detail: 'Ready state correlated with live Docker images, loopback binding, health, deterministic runtime and isolated SQL.' };
+      detail: 'Fresh host evidence correlated with live Docker images, loopback bindings, trusted health, deterministic runtime and isolated SQL.' };
     if (options.checkOnly) {
       for (const scenario of suite.scenarios) report.scenarios.push(result(scenario, 'NOT RUN', 'Environment-only check; no browser scenarios executed.'));
     } else {
       releaseLease = await acquireLease(environment.state);
       browser = await (dependencies.authenticate || openReviewerBrowser)(environment.origin, options.authTimeout, options.signal);
-      report.authentication = { status: 'PASS', role: browser.role, library: browser.library };
+      report.authentication = { status: 'PASS', role: browser.role, library: browser.library, oidcCallback: browser.oidcCallback };
       if (browser.context.browser) report.browser = { name: 'Chromium', version: browser.context.browser()?.version(), platform: process.platform };
       await (dependencies.runScenarios || runScenarios)({ suite, options, environment, browser, report, directory, verify });
     }
@@ -233,6 +242,7 @@ async function run(argv, dependencies = {}) {
 if (require.main === module) {
   const cancellation = new AbortController();
   process.once('SIGINT', () => cancellation.abort());
+  process.once('SIGTERM', () => cancellation.abort());
   run(process.argv.slice(2), { signal: cancellation.signal }).then(outcome => { process.exitCode = outcome.code; })
     .catch(() => { console.error('Acceptance runner could not initialize artifacts or Git identity.'); process.exitCode = 2; });
 }

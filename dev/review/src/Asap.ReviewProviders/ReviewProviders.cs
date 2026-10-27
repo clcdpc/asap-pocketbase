@@ -15,7 +15,11 @@ public sealed class ReviewStartup : IHostingStartup
 {
     public void Configure(IWebHostBuilder builder)
     {
-        builder.ConfigureServices(services => services.AddHostedService<ReviewFixtures>());
+        builder.ConfigureServices(services =>
+        {
+            services.AddHostedService<ReviewFixtures>();
+            services.AddTransient<IStartupFilter, ReviewEvidenceEndpoint>();
+        });
     }
 }
 

@@ -7,6 +7,7 @@
     <AsapWebProject Condition="'$(AsapWebProject)' == ''">../../../../src/Asap.Web/Asap.Web.csproj</AsapWebProject>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../Asap.ReviewInit/AcceptanceEvidence.cs" Link="AcceptanceEvidence.cs" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="$(AsapWebProject)" />
   </ItemGroup>

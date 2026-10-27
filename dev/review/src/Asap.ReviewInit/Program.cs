@@ -31,6 +31,9 @@ internal static class ReviewInitializer
             var input = await LoadInputAsync(settings.InputConfigPath);
             ValidateInput(input);
 
+            using var tlsTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await ReviewTls.EnsureAsync(tlsTimeout.Token);
+
             Directory.CreateDirectory(Path.GetDirectoryName(settings.OutputConfigPath)!);
             Directory.CreateDirectory(settings.DataProtectionKeysPath);
             MakeReviewDirectoryWritable(settings.DataProtectionKeysPath);

@@ -37,8 +37,10 @@ RUN dotnet publish .review-harness/src/Asap.ReviewBootstrap/Asap.ReviewBootstrap
 FROM mcr.microsoft.com/dotnet/runtime:${DOTNET_RUNTIME_VERSION} AS db-init
 ARG REVIEW_COMMIT_SHA=unknown
 ARG REVIEW_TOOLING_VERSION=unknown
+ARG REVIEW_TOOLING_SHA=unknown
 LABEL org.opencontainers.image.revision="${REVIEW_COMMIT_SHA}" \
-      org.opencontainers.image.version="${REVIEW_TOOLING_VERSION}"
+      org.opencontainers.image.version="${REVIEW_TOOLING_VERSION}" \
+      org.asap.review.tooling-revision="${REVIEW_TOOLING_SHA}"
 WORKDIR /review
 COPY --from=harness-build /out/init /review/init
 COPY --from=app-build /out/web/Database/Asap.Database.dacpac /review/assets/Asap.Database.dacpac
@@ -48,8 +50,12 @@ ENTRYPOINT ["dotnet", "/review/init/Asap.ReviewInit.dll"]
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_RUNTIME_VERSION} AS web
 ARG REVIEW_COMMIT_SHA=unknown
 ARG REVIEW_TOOLING_VERSION=unknown
+ARG REVIEW_TOOLING_SHA=unknown
 LABEL org.opencontainers.image.revision="${REVIEW_COMMIT_SHA}" \
-      org.opencontainers.image.version="${REVIEW_TOOLING_VERSION}"
+      org.opencontainers.image.version="${REVIEW_TOOLING_VERSION}" \
+      org.asap.review.tooling-revision="${REVIEW_TOOLING_SHA}"
+RUN mkdir -p /review && printf '{"applicationCommit":"%s","toolingCommit":"%s","toolingVersion":"%s"}\n' \
+    "$REVIEW_COMMIT_SHA" "$REVIEW_TOOLING_SHA" "$REVIEW_TOOLING_VERSION" > /review/identity.json
 WORKDIR /app
 COPY --from=app-build /out/web .
 COPY --from=harness-build /out/bootstrap /review/bootstrap

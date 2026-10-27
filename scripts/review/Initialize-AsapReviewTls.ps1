@@ -7,6 +7,11 @@ param(
 
     [string]$ReviewStatePath,
 
+    # Compose owns TLS generation. Manual Windows review may opt into trusting
+    # its public certificate; acceptance never touches the Windows trust store.
+    [string]$PublicCertificatePath,
+    [switch]$Trust,
+
     [switch]$Force
 )
 
@@ -139,6 +144,31 @@ function Add-TrustedCertificate {
 function New-StrongPassword {
     $bytes = [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(24)
     return "$([Convert]::ToHexString($bytes))aA1!"
+}
+
+if ($PublicCertificatePath) {
+    $pem = Get-Content -LiteralPath $PublicCertificatePath -Raw
+    $der = [Convert]::FromBase64String(($pem -replace '-----BEGIN CERTIFICATE-----|-----END CERTIFICATE-----|\s', ''))
+    $publicCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($der)
+    try {
+        if ($Action -eq 'Remove') {
+            Remove-TrustedCertificate $publicCertificate.Thumbprint
+            return
+        }
+        if (Test-TrustedCertificate $publicCertificate.Thumbprint) { return }
+        if (-not $Trust) {
+            Write-Host "Manual review uses a disposable localhost HTTPS certificate. Public root: $($publicCertificate.Thumbprint)."
+            $answer = Read-Host 'Trust this review-only public root in Windows CurrentUser/Root? [y/N]'
+            if ($answer -notin @('y', 'yes')) {
+                Write-Warning 'Certificate trust was declined. Manual browser review will show a certificate warning; container acceptance needs no Windows trust.'
+                return
+            }
+        }
+        Add-TrustedCertificate $publicCertificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+        Write-Host "Trusted review-only public root: $($publicCertificate.Thumbprint)"
+        return
+    }
+    finally { $publicCertificate.Dispose() }
 }
 
 $metadata = Read-JsonFile $metadataPath

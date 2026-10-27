@@ -20,6 +20,7 @@ services:
       args:
         REVIEW_COMMIT_SHA: "${ASAP_REVIEW_SHA}"
         REVIEW_TOOLING_VERSION: "${ASAP_REVIEW_TOOLING_VERSION}"
+        REVIEW_TOOLING_SHA: "${ASAP_REVIEW_TOOLING_SHA}"
     environment:
       REVIEW_SQL_SERVER: "sql,1433"
       REVIEW_SA_PASSWORD: "${ASAP_REVIEW_SA_PASSWORD}"
@@ -38,6 +39,8 @@ services:
         read_only: true
       - runtime-config:/review/config
       - data-protection:/review/dpkeys
+      - tls-private:/review/tls
+      - tls-public:/review/tls-public
     depends_on:
       - sql
     networks:
@@ -53,13 +56,14 @@ services:
       args:
         REVIEW_COMMIT_SHA: "${ASAP_REVIEW_SHA}"
         REVIEW_TOOLING_VERSION: "${ASAP_REVIEW_TOOLING_VERSION}"
+        REVIEW_TOOLING_SHA: "${ASAP_REVIEW_TOOLING_SHA}"
     environment:
       ASPNETCORE_ENVIRONMENT: "Testing"
       ASPNETCORE_URLS: "https://+:8443"
       ASPNETCORE_Kestrel__Certificates__Default__Path: "/review/tls/localhost.pfx"
-      ASPNETCORE_Kestrel__Certificates__Default__Password: "${ASAP_REVIEW_TLS_PASSWORD}"
       Testing__UseDeterministicPatronProvider: "true"
       ASPNETCORE_HOSTINGSTARTUPASSEMBLIES: "Asap.ReviewProviders"
+      REVIEW_PROJECT_NAME: "${ASAP_REVIEW_PROJECT}"
     ports:
       - "127.0.0.1:${ASAP_REVIEW_PORT}:8443"
     volumes:
@@ -71,16 +75,68 @@ services:
       - type: bind
         source: "${ASAP_REVIEW_EMAIL}"
         target: /app/.artifacts/dev-email
+      - tls-private:/review/tls:ro
+      - tls-public:/review/tls-public:ro
       - type: bind
-        source: "${ASAP_REVIEW_TLS_CERTIFICATE}"
-        target: /review/tls/localhost.pfx
+        source: "${ASAP_REVIEW_EVIDENCE_TOKEN}"
+        target: /review/evidence/token
         read_only: true
+    healthcheck:
+      test: ["CMD", "dotnet", "/review/bootstrap/Asap.ReviewBootstrap.dll", "--health"]
+      interval: 3s
+      timeout: 8s
+      retries: 60
+      start_period: 10s
     depends_on:
       db-init:
         condition: service_completed_successfully
     networks:
       - review
     restart: unless-stopped
+
+  acceptance:
+    profiles: [acceptance]
+    image: "asap-review-acceptance:${ASAP_REVIEW_TOOLING_SHA}"
+    build:
+      context: "${ASAP_REVIEW_TOOLING_SOURCE}"
+      dockerfile: dev/review/docker/Acceptance.Dockerfile
+      args:
+        REVIEW_TOOLING_SHA: "${ASAP_REVIEW_TOOLING_SHA}"
+        REVIEW_TOOLING_DIRTY: "${ASAP_REVIEW_TOOLING_DIRTY:-false}"
+        REVIEW_TOOLING_VERSION: "${ASAP_REVIEW_TOOLING_VERSION}"
+    init: true
+    shm_size: 1gb
+    environment:
+      DISPLAY: ":99"
+      ASAP_ACCEPTANCE_CONTAINER: "1"
+      NODE_EXTRA_CA_CERTS: /review/tls-public/root.crt
+    ports:
+      - "127.0.0.1:${ASAP_REVIEW_VIEWER_PORT:-6080}:6080"
+    volumes:
+      - tls-public:/review/tls-public:ro
+      - type: bind
+        source: "${ASAP_REVIEW_CONTROL}"
+        target: /run/review/control
+        read_only: true
+      - type: bind
+        source: "${ASAP_REVIEW_VIEWER}"
+        target: /run/review/viewer
+        read_only: true
+      - type: bind
+        source: "${ASAP_REVIEW_EVIDENCE_TOKEN}"
+        target: /review/evidence/token
+        read_only: true
+      - type: bind
+        source: "${ASAP_REVIEW_ARTIFACTS}"
+        target: /artifacts
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - review
+    restart: "no"
 
 networks:
   review:
@@ -89,3 +145,5 @@ volumes:
   sql-data:
   runtime-config:
   data-protection:
+  tls-private:
+  tls-public:

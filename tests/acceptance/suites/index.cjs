@@ -1,2 +1,2 @@
 'use strict';
-module.exports = { pr410: require('./pr410.cjs') };
+module.exports = Object.fromEntries(require('./registry.json').map(name => [name, require('./' + name + '.cjs')]));

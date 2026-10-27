@@ -40,13 +40,14 @@ function functionalStatus(report) {
   const rows = report.scenarios.filter(s => s.category === 'functional');
   if (rows.some(s => s.status === 'FAIL')) return 'FAIL';
   if (rows.some(s => s.status === 'BLOCKED')) return 'BLOCKED';
+  if (report.requiredScenarioIds?.some(id => !rows.some(s => s.id === id))) return 'INCOMPLETE';
   if (!rows.length || rows.some(s => s.status !== 'PASS')) return 'INCOMPLETE';
   return 'PASS';
 }
 async function createReport(root, suite, expectedCommit, toolingCommit, toolingDirty) {
   const startedUtc = new Date().toISOString();
-  const directory = path.join(root, '.artifacts', 'acceptance',
-    startedUtc.replace(/[:.]/g, '-') + '-' + crypto.randomUUID());
+  const directory = process.env.ASAP_ACCEPTANCE_CONTAINER === '1' ? '/artifacts' :
+    path.join(root, '.artifacts', 'acceptance', startedUtc.replace(/[:.]/g, '-') + '-' + crypto.randomUUID());
   await fs.mkdir(directory, { recursive: true });
   return { directory, report: { schemaVersion: 1, suite, startedUtc,
     expectedApplicationCommit: expectedCommit, applicationCommit: null, toolingCommit, toolingDirty,

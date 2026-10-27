@@ -13,7 +13,7 @@ const repository = path.resolve(__dirname, '../..');
 const clone = value => JSON.parse(JSON.stringify(value));
 function state(root) {
   return { Sha: appSha, ShortSha: appSha.slice(0, 12), ProjectName: 'asap-review-' + appSha.slice(0,12),
-    Port: 8080, LifecycleState: 'Ready', StatePath: path.join(root, '.review', appSha.slice(0,12)), ToolingVersion: '0.2.0' };
+    Port: 8080, LifecycleState: 'Ready', StatePath: path.join(root, '.review', appSha.slice(0,12)), ToolingVersion: '0.3.0', ToolingSha: toolSha, ViewerPort: 6080 };
 }
 function containers(s) {
   return ['web', 'sql', 'db-init'].map((name, i) => {
@@ -21,9 +21,9 @@ function containers(s) {
     return {
       Id: String(i + 1).repeat(64), Image: 'sha256:' + String(i + 1).repeat(64),
       Path: name === 'web' ? '/review/web-entrypoint.sh' : '/other',
-      Config: { WorkingDir: '/app', Labels: { 'com.docker.compose.service': name,
+      Config: { WorkingDir: '/app', Hostname: name + '-hostname', Labels: { 'com.docker.compose.service': name,
         'com.docker.compose.project': project, 'org.opencontainers.image.revision': s.Sha,
-        'org.opencontainers.image.version': s.ToolingVersion }, Env: [
+        'org.opencontainers.image.version': s.ToolingVersion, 'org.asap.review.tooling-revision': toolSha }, Env: [
         'ASPNETCORE_ENVIRONMENT=Testing', 'Testing__UseDeterministicPatronProvider=true',
         'ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=Asap.ReviewProviders', 'UNRELATED_SECRET=secret-canary'
       ] },
@@ -35,6 +35,19 @@ function containers(s) {
         Name: project + '_' + (name === 'sql' ? 'sql-data' : 'runtime-config'), RW: name !== 'web' }]
     };
   });
+}
+function proof(s = state(repository)) {
+  const c = containers(s), browser = clone(c[0]);
+  browser.Config.Labels['com.docker.compose.service'] = 'acceptance';
+  browser.Config.Labels['org.opencontainers.image.revision'] = s.ToolingSha;
+  browser.NetworkSettings.Ports = { '6080/tcp': [{ HostIp: '127.0.0.1', HostPort: String(s.ViewerPort) }] };
+  browser.Mounts = [{ Type: 'bind', Destination: '/run/review/control', RW: false }];
+  return { schemaVersion: 1, observedUtc: new Date().toISOString(), dockerEndpoint: 'npipe:////./pipe/dockerDesktopLinuxEngine',
+    acceptanceRunning: true, state: { ...s, StatePath: '/tmp/asap-review' }, containers: [...c, browser] };
+}
+function runtime(s = state(repository)) {
+  return { identity: { applicationCommit: s.Sha, toolingCommit: s.ToolingSha, toolingVersion: s.ToolingVersion },
+    project: s.ProjectName, webHostname: 'web-hostname', evidence: evidence() };
 }
 function evidence() {
   return { contract: 1, database: 'AsapReview', login: 'asap_review_runtime', sqlMajorVersion: 16, sqlEdition: 'Developer',
@@ -132,21 +145,19 @@ test('runtime evidence must correlate container project/image/network/volumes/pr
     assert.throws(() => validateEvidence({ ...evidence(), ...change }), Blocked);
   }
 });
-test('full environment validation correlates live evidence and checks health; state alone is insufficient', async t => {
+test('full environment validation correlates fresh host evidence, live runtime and trusted health', async t => {
   const root = await temporary(t); await writeState(root);
   let checkedHealth = false;
-  const command = async (_file, arguments_) => {
-    if (arguments_[0] === 'context') return JSON.stringify('npipe:////./pipe/dockerDesktopLinuxEngine');
-    if (arguments_[0] === 'ps') return containers(state(root)).map(c => c.Id).join('\n');
-    if (arguments_[0] === 'inspect') return JSON.stringify(containers(state(root)));
-    if (arguments_[0] === 'exec') return JSON.stringify(evidence());
-    throw new Error('unexpected command');
-  };
-  const actual = await verifyEnvironment(root, appSha, { command, health: async () => { checkedHealth = true; } });
+  const dependencies = { readProof: async () => proof(state(root)), runtimeEvidence: async () => runtime(state(root)),
+    health: async () => { checkedHealth = true; } };
+  const actual = await verifyEnvironment(root, appSha, dependencies);
   assert.equal(actual.state.Sha, appSha); assert.equal(checkedHealth, true);
-  await assert.rejects(verifyEnvironment(root, appSha, { command: async (_file, args) =>
-    args[0] === 'context' ? JSON.stringify('unix:///var/run/docker.sock') : '' }), /containers/);
-  await assert.rejects(verifyEnvironment(root, appSha, { command, health: async () => { throw new Blocked('Health unavailable.'); } }), /Health/);
+  await assert.rejects(verifyEnvironment(root, appSha, { ...dependencies, readProof: async () => ({ ...proof(state(root)), containers: [] }) }), /containers/);
+  await assert.rejects(verifyEnvironment(root, appSha, { ...dependencies, health: async () => { throw new Blocked('Health unavailable.'); } }), /Health/);
+  await assert.rejects(verifyEnvironment(root, appSha, { ...dependencies, runtimeEvidence: async () => ({ ...runtime(state(root)), webHostname: 'replaced' }) }), /identity/);
+  let reads = 0;
+  await assert.rejects(verifyEnvironment(root, appSha, { ...dependencies, readProof: async () => ({ ...proof(state(root)),
+    observedUtc: new Date(Date.now() - (reads++ ? 60000 : 0)).toISOString() }) }), /stale/);
 });
 test('missing, ambiguous, consumed and invalid fixture identities block rather than reset', () => {
   assert.equal(requireFixture(evidence(), 'draft').id, '27');
@@ -239,7 +250,7 @@ test('mutation guard blocks cross-kind IDs, other scenario fixtures, external re
   }
 });
 test('existing CI/browser/lifecycle entry points stay unchanged; artifacts are Git ignored', async () => {
-  for (const file of ['package.json', 'tests/browser/run.cjs', '.github/workflows/dotnet.yml', 'scripts/review/Invoke-AsapReview.ps1']) {
+  for (const file of ['package.json', 'tests/browser/run.cjs', '.github/workflows/dotnet.yml']) {
     const baseline = execFileSync('git', ['show', '792b039de3010c832ad6aaa1d65ec09807e3410c:' + file], { cwd: repository, encoding: 'utf8' });
     assert.equal((await fs.readFile(path.join(repository, file), 'utf8')).replace(/\r\n/g, '\n'), baseline.replace(/\r\n/g, '\n'));
   }
@@ -251,14 +262,13 @@ test('CLI rejects incompatible modes, remote targets, unsafe inputs and incomple
     assert.throws(() => parse(input), Blocked);
   }
 });
-test('remote Docker contexts fail before inspecting containers or contacting application', async t => {
+test('remote Docker proof fails before contacting application', async t => {
   const root = await temporary(t); await writeState(root);
   for (const endpoint of ['ssh://review-host', 'tcp://192.0.2.1:2376', 'npipe:////remote/pipe/docker']) {
     let calls = 0;
-    await assert.rejects(verifyEnvironment(root, appSha, { command: async () => {
-      calls++; return JSON.stringify(endpoint);
-    } }), /Remote Docker/);
-    assert.equal(calls, 1);
+    await assert.rejects(verifyEnvironment(root, appSha, { readProof: async () => ({ ...proof(state(root)), dockerEndpoint: endpoint }),
+      runtimeEvidence: async () => { calls++; } }), /Remote Docker/);
+    assert.equal(calls, 0);
   }
 });
 test('read-only executor never dispatches a server write', async t => {
@@ -295,4 +305,25 @@ test('cancelled runs mark every unexecuted scenario BLOCKED without opening new 
   assert.equal(report.scenarios[0].status, 'BLOCKED');
   assert.equal(report.scenarios[0].executed, false);
   assert.equal(exitCode(report), 2);
+});
+test('loss of runtime evidence at the mutation boundary blocks dispatch and reports BLOCKED', async t => {
+  const root = await temporary(t), directory = path.join(root, 'revoked'); await fs.mkdir(directory);
+  const browser = fakeBrowser(), report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, scenarios: [] };
+  let checks = 0, dispatched = false;
+  await runScenarios({ suite: { scenarios: [{ id: 'revoked', writes: true, requirements: ['revocation'], run: async t => {
+    t.allowFixture(evidence().titles[0]);
+    await browser.context.handler({ request: () => ({ url: () => t.origin + '/api/asap/staff/title-requests/27/action', method: () => 'POST' }),
+      abort: async () => {}, continue: async () => { dispatched = true; } });
+  } }] }, options: { allowWrites: true }, environment: environment(root), browser, report, directory,
+  verify: async () => { if (checks++) throw new Blocked('Host proof revoked.'); return environment(root); } });
+  assert.equal(dispatched, false);
+  assert.equal(report.scenarios[0].status, 'BLOCKED');
+});
+test('partial results never report automated completion while required scenarios are absent', async t => {
+  const root = await temporary(t), directory = path.join(root, 'partial'); await fs.mkdir(directory);
+  const { writeReport } = require('./helpers/reporting.cjs');
+  const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, requiredScenarioIds: ['one', 'two'],
+    scenarios: [result({ id: 'one', requirements: ['first scenario'] }, 'PASS')] };
+  await writeReport(directory, report);
+  assert.equal(report.automatedFunctionalAcceptance, 'INCOMPLETE');
 });

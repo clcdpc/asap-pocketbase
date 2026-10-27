@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../dev/review/src/Asap.ReviewInit/ReviewTls.cs" Link="ReviewTls.cs" />
+  </ItemGroup>
+</Project>

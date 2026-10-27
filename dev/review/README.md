@@ -1,136 +1,155 @@
-# ASAP Docker Review Harness
+# ASAP Docker review
 
-Version **0.2.0**
+From PR #412's tooling checkout, run:
 
-Repository-managed files for the disposable ASAP review environment.
+```powershell
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites
+```
 
-## Layout
+Have **Docker Desktop with a local Linux x64 engine, Docker Compose v2,
+PowerShell 7 and Git** installed and running. The command fetches PR #410's
+actual HEAD, builds the review stack, initializes SQL/DACPAC/Hangfire and
+synthetic fixtures, creates HTTPS material, starts headed Chromium in Docker,
+opens its browser viewer, and writes a report under `.artifacts/acceptance/`.
+The application remains running after the suite finishes.
+Run the ordinary review command for the same PR to open it for subsequent
+manual inspection; that reuses the running app and offers Windows TLS trust.
 
-    dev/review/
-      README.md
-      VERSION
-      review.example.json
-      docker/
-        Dockerfile
-        Dockerfile.dockerignore
-        compose.yml
-        appsettings.Testing.json
-        web-entrypoint.sh
-      src/
-        Asap.ReviewInit/
-        Asap.ReviewBootstrap/
+There is no host Node, npm, Playwright, Chromium, .NET SDK or SQL installation
+step. No separate bootstrap, TLS command, Compose command, fixture seed, commit
+lookup, environment variable or configuration-file construction is required.
 
-    scripts/review/
-      Bootstrap-AsapReview.ps1
-      Initialize-AsapReviewTls.ps1
-      Invoke-AsapReview.ps1
-      Test-AsapReviewPrerequisites.ps1
-      Test-AsapReviewSmoke.ps1
+On first use the launcher asks for the Entra application/client ID, allowed
+tenant ID(s), initial review super-admin email and optional display name
+(default `ASAP Reviewer`). It saves the existing review JSON format outside
+Git at `~/ASAP-Review/review.local.json`. Valid existing configuration is reused;
+the established bootstrap workspace and legacy local-config location are also
+recognized. `-Config <external-file>` supports explicitly configured/unattended
+use and validates required values without prompting or overwriting that file.
 
-## Host requirements
+Your existing Entra application registration, including a production
+registration, can be reused. An authorized administrator must have registered
+this **Web redirect URI**, with ID tokens enabled:
 
-- Windows
-- Docker Desktop with Linux containers
-- PowerShell 7
-- Git
+```text
+https://localhost:8080/signin-oidc
+```
 
-No host .NET SDK, Node, SQL Server, SqlPackage, IIS, or ASP.NET development certificate is required.
+ASAP uses its existing ID-token-only flow. No client secret, signing credential,
+Graph permission, alternate OAuth flow or additional registration is introduced.
+The launcher never changes the registration. Complete normal Entra sign-in/MFA
+in the automatically opened viewer. The suite resumes when it verifies the real
+POST callback and the active review super-admin's library access.
 
-## Configuration
+The launcher prints the automated result, PASS/FAIL/BLOCKED/NOT RUN counts,
+verified application SHA, report location, remaining human-review obligations
+and environment status. Automation never establishes complete human acceptance.
 
-Bootstrap copies `review.example.json` to the reviewer's configuration outside the repository.
+## Commands and retained environments
 
-Required values include:
+```powershell
+# Ordinary application review (no acceptance image/profile)
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410
 
-- Entra client ID
-- allowed tenant ID(s)
-- initial reviewer/super-admin identity
-- seed mode
+# Read-only scenarios (server mutation scenarios are NOT RUN)
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410
 
-Register the default callback on the nonproduction Entra application:
+# Direct application commit; mutually exclusive with -Pr
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Commit <application-sha>
 
-    https://localhost:8080/signin-oidc
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Action Status
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Action Stop
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Action Clean
+```
 
-If `-Port` is used, register the matching HTTPS callback for that port.
+Lifecycle commands select the most recently recorded environment. Each retained
+environment also has its own `.review/**/state.json`; use
+`-Project <printed-project-name> -Action Status|Stop|Clean` to select an older one.
+Stop retains data. Clean explicitly removes that project's disposable volumes
+and local state; acceptance reports remain under `.artifacts/acceptance/`.
+Status and cleanup work after failed startup as well as successful startup.
 
-## HTTPS
+Each acceptance invocation creates a separate project and fresh database. A
+run-specific input copy selects Review fixtures even if the external manual
+configuration uses `Seed: None`; that external file is preserved. A
+previous acceptance environment is stopped automatically to release port 8080;
+its data, logs and reports are retained. No existing database is reset. Retained
+manual review is never automatically stopped or destroyed: if it owns port 8080,
+explicitly Stop it before acceptance. `-AllowReviewWrites` authorizes only the
+synthetic fixture actions. Repeated runs need no fixture cleanup.
 
-Bootstrap creates a self-signed localhost server certificate with SAN entries for `localhost`, `127.0.0.1`, and `::1`. It trusts the public certificate in `CurrentUser\Root` and stores the PFX beside the external review configuration under `.tls`.
+Ordinary review reuses a matching Ready environment or restarts matching stopped
+data. `-KeepData` remains accepted; retained data is always preserved until
+explicit Clean. A different application/tooling revision requires deliberate
+lifecycle selection/cleanup. `-Rebuild`, `-NoBrowser`, and a manually registered
+alternate `-Port` remain available. Acceptance uses port 8080 for the exact
+registered callback. `Invoke-AsapAcceptance.ps1` forwards its legacy options to
+this launcher and requires no host Node.
 
-The launcher mounts that PFX read-only into the web container and configures Kestrel to listen on HTTPS port 8443. Compose publishes that port only to `127.0.0.1` on the selected host port.
+## HTTPS and browser viewer
 
-This certificate is review-only and does not alter the deployed IIS/Data Protection certificate contract. If the certificate reaches its rotation window while a review environment is still recorded as `Starting`, `Ready`, or `Failed`, tooling keeps the currently served certificate trusted instead of replacing it underneath the running container. Stop or clean the environment before forcing or completing a required rotation.
+Harness **0.3.0** extends the same Compose file: `sql`, `db-init`, `web`, plus
+the optional one-off `acceptance` service. Review-only images are separate from
+published Web/migration artifacts. SQL has no published port. Web publishes
+`127.0.0.1:8080 -> 8443`. Acceptance does not start during ordinary review.
 
-## Runtime
+The initializer creates a root/server pair once per environment. It discards
+the root signing key, keeps the server PFX/password in `tls-private`, and puts
+only the public root in `tls-public`. Web mounts the private volume read-only;
+acceptance receives only the public volume and trusts it in Chromium's ephemeral
+NSS store and Node's extra CA store. Normal hostname/chain verification remains
+enabled. Expired/incomplete material fails closed rather than rotating during
+an active environment. No Windows trust is needed for acceptance.
 
-The launcher resolves the requested revision to a full SHA, enforces one managed review revision at a time, records recoverable lifecycle state, materializes the revision in a detached worktree, copies the current review harness into that worktree, builds the images, verifies revision and tooling-version labels, initializes SQL Server 2022 Developer, deploys the DACPAC and Hangfire schema, creates the review runtime SQL login and Data Protection material, optionally seeds review data, starts ASAP, and waits for `/health/ready` over HTTPS.
+For ordinary manual Windows browser review, the launcher invokes the existing
+TLS helper automatically and asks before trusting the public review root in
+CurrentUser/Root. `-TrustReviewCertificate` explicitly authorizes that trust;
+Clean removes the selected environment's public trust. The old standalone TLS
+helper remains available for older review workspaces.
 
-The runtime login is `asap_review_runtime`. Its database user is added to the DACPAC-owned `asap_runtime` role and receives the additional Hangfire permissions required by the application.
+The acceptance image pins Playwright/Chromium **1.62.1**, matching the lockfile.
+Xvfb, Fluxbox and noVNC provide the interactive display. Its dynamically selected
+viewer port binds only to IPv4 loopback. A random 256-bit per-run token protects
+the WebSocket; it is passed to the normal browser in the URL fragment, omitted
+from reports and console output, and never persisted as application auth state.
+Raw VNC listens only inside the container's loopback namespace. There is no
+published remote debugging endpoint. The one-off container is removed after
+completion/cancellation, including its ephemeral authentication profile.
 
-Only the HTTPS ASP.NET port is published to the host. SQL Server remains private to the Compose network.
+A tiny TCP forwarder inside that container maps both localhost address families
+at port 8080 to `web:8443`, preserving encrypted bytes, the Host header and the
+OIDC form POST. Chromium uses the existing localhost origin throughout.
 
-Default deterministic patron credentials:
+## Identity, isolation and troubleshooting
 
-    Barcode: any non-empty value, for example REVIEW1001
-    PIN:     1234
+Git fetches `refs/pull/<number>/head` from the existing origin, never the
+synthetic merge ref. The exact application SHA and separate tooling SHA/version
+are baked into images, recorded in state and correlated with running images.
+Working-tree tooling changes are explicitly reported.
 
-Use `"Seed": "Review"` for representative fake data or `"Seed": "None"` for an initialized database without review records.
+PowerShell verifies the local Docker endpoint, exact services/images, completed
+initializer, private database/config/TLS volumes, deterministic provider settings
+and loopback application/viewer publication. During acceptance it renews a
+read-only, sanitized proof file. No SQL password or arbitrary environment value
+is forwarded. The container also verifies live trusted health, protected fixed
+SQL/provider evidence, application/tooling/project/hostname identity, fixtures
+and reviewer authorization before scenarios and mutations. Missing, changed or
+stale evidence blocks writes. The runner has no Docker socket, application
+configuration, server private keys or SQL administration credentials.
 
-## Lifecycle recovery
+- Docker timeout: check the existing local Linux engine. This tooling does not
+  install/configure Docker Desktop or the operating system.
+- Entra failure: verify the exact Web callback above, ID tokens, tenant and
+  initial review email. No bypass or additional client credential is needed.
+- Port conflict: Stop the current manual environment, retaining its data.
+- Failed startup: use Status and the printed `.review` log/state directory;
+  explicit Clean removes only the selected disposable environment.
+- Consumed fixture: a new acceptance invocation automatically gets fresh data.
+- Browser startup/report failure: inspect `report.md` and safe diagnostics;
+  human review remains required. Do not share raw container/viewer logs.
 
-`current.json` is written before build/start with a lifecycle state and is updated to `Ready`, `Stopped`, or `Failed`. `Status` and `Clean` therefore remain usable when startup fails after containers or volumes have already been created.
-
-Starting a different SHA while another review revision is recorded is blocked until the current environment is cleaned. Restarting the same SHA remains compatible with `-KeepData`.
-
-## Smoke test
-
-With no active review environment:
-
-    pwsh ./scripts/review/Test-AsapReviewSmoke.ps1
-
-The smoke test validates image build, SQL/DACPAC/Hangfire initialization, HTTPS readiness, active-environment TLS rotation protection, the HTTPS OIDC callback generated by the Entra challenge, and cleanup. Interactive Entra authentication remains outside the automated smoke test.
-
-## Direct developer use
-
-Initialize TLS beside the config file, then launch:
-
-    pwsh ./scripts/review/Initialize-AsapReviewTls.ps1 `
-        -Workspace <config-directory> `
-        -ReviewStatePath ./.review/current.json
-
-    pwsh ./scripts/review/Invoke-AsapReview.ps1 `
-        -Commit <commit-sha> `
-        -Config <path-to-review.local.json>
-
-Other supported options include `-Action Status`, `-Action Stop`, `-Action Clean`, `-KeepData`, `-Rebuild`, `-NoBrowser`, and `-Port`.
-
-## Deliberate acceptance runs
-
-The optional [acceptance runner](../../tests/acceptance/README.md) adds headed
-Chromium journeys with real Entra sign-in. Node 24 and the existing pinned
-Playwright/axe development dependencies are needed only for these runs.
-The Docker review environment remains usable without Node/npm.
-
-Run the launcher from the tooling checkout, selecting the application commit
-independently. For the initial suite, PR #410 is
-`792b039de3010c832ad6aaa1d65ec09807e3410c`:
-
-    pwsh ./scripts/review/Invoke-AsapReview.ps1 -Commit 792b039de3010c832ad6aaa1d65ec09807e3410c -Config <external-review.json> -NoBrowser
-    pwsh ./scripts/review/Invoke-AsapAcceptance.ps1 -Suite pr410 -ExpectedCommit 792b039de3010c832ad6aaa1d65ec09807e3410c -AllowReviewWrites
-
-The runner records both the application SHA and tooling checkout SHA. It
-requires a Ready state correlated with the local Docker containers, image
-labels, loopback HTTPS, private SQL/config volumes, health and read-only runtime
-evidence. It refuses remote Docker contexts and arbitrary application URLs.
-
-Harness 0.2.0 adds independent synthetic acceptance fixtures to Review seeding,
-a review-only HostingStartup assembly configuring finite deterministic provider
-responses, and a fixed-query SQL evidence probe. These live only in review
-images; published Web/migration packages do not acquire Node, Playwright or the
-review assembly. Native hold dispatch is deliberately deferred for the purchase
-routing fixture, and email uses local file capture.
-
-Existing review databases are never reset by acceptance. Older harness images
-must be rebuilt with this tooling. If fixtures have been consumed, finish the
-current review and explicitly use the existing Clean/Start procedure described
-in the acceptance README. Review lifecycle entry points are unchanged.
+Detailed coverage, privacy, developer validation and adding suites are in
+[tests/acceptance/README.md](../../tests/acceptance/README.md). A review-only
+Compose smoke check is `pwsh ./scripts/review/Test-AsapReviewSmoke.ps1`; it uses
+synthetic Entra configuration, verifies the challenge and lifecycle, and does
+not claim interactive Entra acceptance.
