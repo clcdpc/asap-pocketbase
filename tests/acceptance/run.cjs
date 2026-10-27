@@ -83,6 +83,10 @@ async function runScenarios({ suite, options, environment, browser, report, dire
   };
   await browser.context.route('**/*', requestGuard);
   try {
+    // Closing the last headed tab exits Chromium. A context-owned blank tab
+    // keeps the authenticated browser alive between isolated scenario pages;
+    // context.close() removes it together with the ephemeral profile.
+    if (!options.signal?.aborted) await browser.context.newPage();
     await browser.page.close();
     for (const scenario of suite.scenarios) {
       if (options.signal?.aborted) {

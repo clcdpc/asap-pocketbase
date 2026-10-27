@@ -10,6 +10,7 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { randomUUID } = require('node:crypto');
 const { nativeZoom, checkpoint } = require('./helpers/accessibility.cjs');
+const { runScenarios } = require('./run.cjs');
 const repository = path.resolve(__dirname, '../..');
 
 test('review HostingStartup loads through additional deps without changing Web deps', async t => {
@@ -64,3 +65,42 @@ test('native Chromium 200% helper and accessibility screenshot plumbing run with
   await checkpoint(page, directory, 'native-zoom-plumbing-only');
   assert.equal(await page.evaluate(() => innerWidth), 640);
 });
+
+test('real headed Chromium survives closing the authentication tab and every scenario tab',
+  { skip: process.platform !== 'win32' && !process.env.DISPLAY }, async t => {
+    const { chromium } = require('playwright');
+    const server = http.createServer((_request, response) => {
+      response.setHeader('Content-Type', 'text/html');
+      response.end('<!doctype html><html lang="en"><title>Lifecycle plumbing only</title><body><main><h1>Synthetic lifecycle probe</h1></main></body></html>');
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'asap-headed-plumbing-'));
+    const directory = path.join(repository, '.artifacts', 'acceptance-infrastructure', randomUUID());
+    await fs.mkdir(directory, { recursive: true });
+    let context;
+    t.after(async () => {
+      await context?.close();
+      await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      server.closeAllConnections();
+      await new Promise(resolve => server.close(resolve));
+    });
+    context = await chromium.launchPersistentContext(profile, {
+      channel: 'chromium', headless: false, args: ['--start-minimized'], serviceWorkers: 'block'
+    });
+    const origin = 'http://127.0.0.1:' + server.address().port;
+    // This exercises the actual executor and headed browser lifecycle, with no
+    // Entra/SQL/app acceptance claim. Those integrations remain NOT RUN here.
+    const report = { suite: 'synthetic-headed-lifecycle-plumbing-only',
+      environment: { status: 'NOT RUN' }, authentication: { status: 'NOT RUN' }, scenarios: [] };
+    const environment = { origin };
+    await runScenarios({
+      suite: { scenarios: ['first', 'second'].map(id => ({ id, writes: false,
+        requirements: ['Runner headed-tab lifecycle plumbing only'], run: async ({ page }) => {
+          await page.goto(origin + '/staff/');
+          assert.equal(await page.getByRole('heading').innerText(), 'Synthetic lifecycle probe');
+        } })) }, options: { readOnly: true, allowWrites: false }, environment,
+      browser: { context, page: context.pages()[0] }, report, directory, verify: async () => environment
+    });
+    assert.deepEqual(report.scenarios.map(s => s.status), ['PASS', 'PASS']);
+    assert.equal(context.browser().isConnected(), true, 'Context survives the interval between scenario tabs');
+  });

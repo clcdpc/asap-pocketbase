@@ -165,7 +165,7 @@ npm test
 
 These check fail-closed safety/reporting, actual PowerShell helpers, real Git PR
 HEAD resolution, certificate idempotence/trust, IPv4/IPv6 HTTPS POST forwarding,
-HostingStartup loading and native zoom/accessibility plumbing. Synthetic
+HostingStartup loading, real headed tab lifecycle and native zoom/accessibility plumbing. Synthetic
 transport/browser plumbing is not real Entra or PR #410 acceptance. The full
 SQL/.NET guard and retained browser journeys keep their existing CI entry points.
 
