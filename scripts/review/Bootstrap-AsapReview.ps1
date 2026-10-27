@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$BootstrapVersion = '0.1.7'
+$BootstrapVersion = '0.2.0'
 
 function Invoke-Native {
     param(

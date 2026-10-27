@@ -59,6 +59,7 @@ services:
       ASPNETCORE_Kestrel__Certificates__Default__Path: "/review/tls/localhost.pfx"
       ASPNETCORE_Kestrel__Certificates__Default__Password: "${ASAP_REVIEW_TLS_PASSWORD}"
       Testing__UseDeterministicPatronProvider: "true"
+      ASPNETCORE_HOSTINGSTARTUPASSEMBLIES: "Asap.ReviewProviders"
     ports:
       - "127.0.0.1:${ASAP_REVIEW_PORT}:8443"
     volumes:

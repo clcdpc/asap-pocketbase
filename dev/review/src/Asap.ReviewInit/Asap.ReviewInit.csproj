@@ -8,7 +8,10 @@
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="AcceptanceFixtures.sql" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.6" />
     <PackageReference Include="Microsoft.SqlServer.DacFx" Version="170.4.83" />
+    <!-- Match the repository's existing pinned override of SqlClient's CMS dependency. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
   </ItemGroup>
 </Project>

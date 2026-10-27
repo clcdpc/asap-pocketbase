@@ -13,16 +13,20 @@ RUN dotnet publish src/Asap.Web/Asap.Web.csproj \
     --output /out/web \
     -p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_SDK_VERSION} AS harness-build
+FROM app-build AS harness-build
 WORKDIR /src
 COPY .review-harness/src/Asap.ReviewInit .review-harness/src/Asap.ReviewInit
 COPY .review-harness/src/Asap.ReviewBootstrap .review-harness/src/Asap.ReviewBootstrap
+COPY .review-harness/src/Asap.ReviewProviders .review-harness/src/Asap.ReviewProviders
 RUN dotnet restore .review-harness/src/Asap.ReviewInit/Asap.ReviewInit.csproj
 RUN dotnet publish .review-harness/src/Asap.ReviewInit/Asap.ReviewInit.csproj \
     --configuration Release \
     --no-restore \
     --output /out/init \
     -p:UseAppHost=false
+RUN dotnet publish .review-harness/src/Asap.ReviewProviders/Asap.ReviewProviders.csproj \
+    --configuration Release --output /out/providers \
+    -p:AsapWebProject=/src/src/Asap.Web/Asap.Web.csproj
 RUN dotnet restore .review-harness/src/Asap.ReviewBootstrap/Asap.ReviewBootstrap.csproj
 RUN dotnet publish .review-harness/src/Asap.ReviewBootstrap/Asap.ReviewBootstrap.csproj \
     --configuration Release \
@@ -49,6 +53,9 @@ LABEL org.opencontainers.image.revision="${REVIEW_COMMIT_SHA}" \
 WORKDIR /app
 COPY --from=app-build /out/web .
 COPY --from=harness-build /out/bootstrap /review/bootstrap
+COPY --from=harness-build /out/init /review/init
+COPY --from=harness-build /out/providers/Asap.ReviewProviders.dll /app/
+COPY --from=harness-build /out/providers/Asap.ReviewProviders.deps.json /review/providers/Asap.ReviewProviders.deps.json
 COPY .review-harness/docker/appsettings.Testing.json /app/appsettings.Testing.json
 COPY .review-harness/docker/web-entrypoint.sh /review/web-entrypoint.sh
 RUN sed -i 's/\r$//' /review/web-entrypoint.sh

@@ -6,6 +6,12 @@ using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Dac;
 
+if (args.SequenceEqual(["--acceptance-evidence"]))
+{
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+    return await AcceptanceEvidence.RunAsync(timeout.Token);
+}
+
 return await ReviewInitializer.RunAsync();
 
 internal static class ReviewInitializer
@@ -63,6 +69,15 @@ internal static class ReviewInitializer
             {
                 Console.WriteLine("Seeding deterministic review records...");
                 await SeedReviewDataAsync(adminDatabaseConnectionString);
+                using var fixtureTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await using var fixtureConnection = new SqlConnection(adminDatabaseConnectionString);
+                await fixtureConnection.OpenAsync(fixtureTimeout.Token);
+                await using var fixtureCommand = fixtureConnection.CreateCommand();
+                using var fixtureSource = typeof(ReviewInitializer).Assembly.GetManifestResourceStream(
+                    "Asap.ReviewInit.AcceptanceFixtures.sql")!;
+                using var fixtureReader = new StreamReader(fixtureSource);
+                fixtureCommand.CommandText = await fixtureReader.ReadToEndAsync(fixtureTimeout.Token);
+                await fixtureCommand.ExecuteNonQueryAsync(fixtureTimeout.Token);
             }
             else if (!string.Equals(input.Seed, "None", StringComparison.OrdinalIgnoreCase))
             {
@@ -301,9 +316,9 @@ internal static class ReviewInitializer
             IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = 2)
             BEGIN
                 INSERT INTO [asap].[Organization]
-                    ([Id], [DisplayName], [Abbreviation], [IsActive], [LastSyncedUtc])
+                    ([Id], [DisplayName], [Abbreviation], [IsActive], [LastSyncedUtc], [OrganizationCodeId], [ParentOrganizationId])
                 VALUES
-                    (2, N'Review Library', N'REVIEW', 1, SYSUTCDATETIME());
+                    (2, N'Review Library', N'REVIEW', 1, SYSUTCDATETIME(), 2, 1);
             END;
 
             DECLARE @book bigint =
@@ -525,6 +540,7 @@ internal static class ReviewInitializer
             },
             EmailSafety = new
             {
+                DeliveryMode = "capture",
                 AllowedRecipientDomains = new[] { emailDomain, "example.org" }
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray()
@@ -598,7 +614,7 @@ internal static class ReviewInitializer
     {
         if (!OperatingSystem.IsWindows())
         {
-            Directory.SetUnixFileMode(
+            File.SetUnixFileMode(
                 path,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
                 UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |

@@ -1,6 +1,6 @@
 # ASAP Docker Review Harness
 
-Version **0.1.7**
+Version **0.2.0**
 
 Repository-managed files for the disposable ASAP review environment.
 
@@ -103,3 +103,34 @@ Initialize TLS beside the config file, then launch:
         -Config <path-to-review.local.json>
 
 Other supported options include `-Action Status`, `-Action Stop`, `-Action Clean`, `-KeepData`, `-Rebuild`, `-NoBrowser`, and `-Port`.
+
+## Deliberate acceptance runs
+
+The optional [acceptance runner](../../tests/acceptance/README.md) adds headed
+Chromium journeys with real Entra sign-in. Node 24 and the existing pinned
+Playwright/axe development dependencies are needed only for these runs.
+The Docker review environment remains usable without Node/npm.
+
+Run the launcher from the tooling checkout, selecting the application commit
+independently. For the initial suite, PR #410 is
+`792b039de3010c832ad6aaa1d65ec09807e3410c`:
+
+    pwsh ./scripts/review/Invoke-AsapReview.ps1 -Commit 792b039de3010c832ad6aaa1d65ec09807e3410c -Config <external-review.json> -NoBrowser
+    pwsh ./scripts/review/Invoke-AsapAcceptance.ps1 -Suite pr410 -ExpectedCommit 792b039de3010c832ad6aaa1d65ec09807e3410c -AllowReviewWrites
+
+The runner records both the application SHA and tooling checkout SHA. It
+requires a Ready state correlated with the local Docker containers, image
+labels, loopback HTTPS, private SQL/config volumes, health and read-only runtime
+evidence. It refuses remote Docker contexts and arbitrary application URLs.
+
+Harness 0.2.0 adds independent synthetic acceptance fixtures to Review seeding,
+a review-only HostingStartup assembly configuring finite deterministic provider
+responses, and a fixed-query SQL evidence probe. These live only in review
+images; published Web/migration packages do not acquire Node, Playwright or the
+review assembly. Native hold dispatch is deliberately deferred for the purchase
+routing fixture, and email uses local file capture.
+
+Existing review databases are never reset by acceptance. Older harness images
+must be rebuilt with this tooling. If fixtures have been consumed, finish the
+current review and explicitly use the existing Clean/Start procedure described
+in the acceptance README. Review lifecycle entry points are unchanged.
