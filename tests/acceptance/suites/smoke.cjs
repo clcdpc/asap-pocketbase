@@ -17,7 +17,7 @@ function initialRequest(request, fixture) {
 
 const scenarios = [
   { id: 'smoke-authenticated-review', requirements: [
-    'smoke: real Entra super-admin, Review Library (2), SQL-backed fixture details and privacy-safe screenshot'
+    'smoke: authorized super-admin session, Review Library (2), SQL-backed fixture details and privacy-safe screenshot'
   ], writes: false, run: async t => {
     await t.page.goto(t.origin + '/staff/?scope=2');
     await t.page.locator('#workspace').waitFor({ state: 'visible' });
@@ -68,7 +68,7 @@ const scenarios = [
   } }
 ];
 
-module.exports = { id: 'smoke', requires: ['docker-review-0.3.0', 'sql-server-2022', 'entra-super-admin',
+module.exports = { id: 'smoke', requires: ['docker-review-0.3.0', 'sql-server-2022', 'authorized-super-admin',
   'review-library-2', 'deterministic-providers'], mutations: true, scenarios, human,
   uncovered: [['pr410-feature-acceptance', '#401; #407: full PR #410 acceptance',
     'Smoke validates the testing process only. Run the pr410 suite and complete its remaining human and feature acceptance requirements.']] };

@@ -1,14 +1,19 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-Start a Docker review, or run a containerized suite with interactive Entra.
+Start a Docker review, or run an unattended containerized acceptance suite.
 .EXAMPLE
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -AllowReviewWrites
+.EXAMPLE
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -Auth Entra -AllowReviewWrites
 .NOTES
 Requires Docker Desktop (Linux x64), Compose v2, Git and PowerShell 7.
-Configuration is reused or collected in ~/ASAP-Review/review.local.json.
-Acceptance uses fresh volumes, container TLS trust and an automatically opened
-browser viewer. No host Node, Chromium, .NET SDK or certificate trust is needed.
+Suites default to Local authentication with a synthetic SQL-backed reviewer;
+no Entra configuration or interaction is required. -ShowBrowser opens the viewer.
+Manual review defaults to Entra. -Auth Entra uses the external configuration in
+~/ASAP-Review/review.local.json and opens the viewer for real sign-in/MFA.
+Acceptance uses fresh volumes and container TLS trust. No host Node, Chromium,
+.NET SDK or certificate trust is needed. Local mode does not validate OIDC/MFA.
 Lifecycle commands target the last environment; -Project selects a retained one.
 #>
 [CmdletBinding()]
@@ -17,6 +22,8 @@ param(
     [ValidateRange(1, 2147483647)][int]$Pr,
     [string]$Commit,
     [string]$Suite,
+    [ValidateSet('Local', 'Entra')][string]$Auth,
+    [switch]$ShowBrowser,
     [switch]$AllowReviewWrites,
     [switch]$ReadOnly,
     [switch]$CheckOnly,
@@ -38,6 +45,7 @@ $statePath = Join-Path $reviewRoot 'current.json'
 $composeFile = Join-Path $repoRoot 'dev/review/docker/compose.yml'
 $toolingVersion = (Get-Content (Join-Path $repoRoot 'dev/review/VERSION') -Raw).Trim()
 . (Join-Path $PSScriptRoot 'Review-Environment.ps1')
+$Auth = Resolve-ReviewAuthentication $Auth $Suite
 
 function Assert-ManagedPath {
     param([string]$Path)
@@ -64,6 +72,7 @@ function Complete-State {
         if (-not $State.Contains($key)) { $State[$key] = $null }
     }
     if (-not $State.Kind) { $State.Kind = 'Manual' }
+    if (-not $State.Contains('Auth')) { $State.Auth = 'Entra' }
     if (-not $State.Contains('LifecycleState')) { $State.LifecycleState = 'Ready' }
     return $State
 }
@@ -87,8 +96,19 @@ function Assert-StateIdentity {
 function Remove-AcceptanceBrowser {
     param($State)
     Remove-Item -LiteralPath (Join-Path $State.StatePath 'control/proof.json') -Force -ErrorAction SilentlyContinue
+    Clear-ReviewAuthenticationCredential $State
     $ids = @(Invoke-Docker @('ps', '-aq', '--filter', "label=com.docker.compose.project=$($State.ProjectName)", '--filter', 'label=com.docker.compose.service=acceptance') -Capture) -split '\s+' | Where-Object { $_ }
     if ($ids) { Invoke-Docker (@('rm', '--force') + @($ids)) }
+}
+function Clear-ReviewAuthenticationCredential {
+    param($State, [string]$Action = 'Start')
+    if ($Action -eq 'Status') { return }
+    $credentialPath = Join-Path $State.StatePath 'auth-credential.txt'
+    if (Test-Path -LiteralPath $credentialPath) {
+        # Revoke the mounted file contents before unlinking the host path.
+        [System.IO.File]::WriteAllText($credentialPath, '')
+        Remove-Item -LiteralPath $credentialPath -Force
+    }
 }
 function Open-ManualReview {
     param($State, [string]$WebId)
@@ -109,6 +129,9 @@ function Set-ComposeEnvironment {
     foreach ($name in @('control', 'viewer', 'logs', 'email')) { New-Item -ItemType Directory -Path (Join-Path $directory $name) -Force | Out-Null }
     $tokenPath = Join-Path $directory 'evidence-token.txt'
     if (-not (Test-Path -LiteralPath $tokenPath)) { New-StrongPassword | Set-Content -LiteralPath $tokenPath -NoNewline }
+    $authPath = Join-Path $directory 'auth-credential.txt'
+    # Lifecycle Compose parsing needs a file, but only Start grants a fresh credential.
+    if (-not (Test-Path -LiteralPath $authPath)) { '' | Set-Content -LiteralPath $authPath -NoNewline }
     $secretPath = Join-Path $directory 'secrets.json'
     $saPassword = if (Test-Path -LiteralPath $secretPath) { (Get-Content -LiteralPath $secretPath -Raw | ConvertFrom-Json).SaPassword } else { 'lifecycle-placeholder-aA1!' }
     $values = @{
@@ -120,6 +143,7 @@ function Set-ComposeEnvironment {
         ASAP_REVIEW_PROJECT = $State.ProjectName; ASAP_REVIEW_LOGS = Join-Path $directory 'logs'
         ASAP_REVIEW_EMAIL = Join-Path $directory 'email'; ASAP_REVIEW_SA_PASSWORD = $saPassword
         ASAP_REVIEW_EVIDENCE_TOKEN = $tokenPath; ASAP_REVIEW_CONTROL = Join-Path $directory 'control'
+        ASAP_REVIEW_AUTH_CREDENTIAL = $authPath; ASAP_REVIEW_AUTH_MODE = $State.Auth
         ASAP_REVIEW_VIEWER = Join-Path $directory 'viewer'
         ASAP_REVIEW_VIEWER_PORT = if ($State.ViewerPort) { [string]$State.ViewerPort } else { '6080' }
         ASAP_REVIEW_ARTIFACTS = if ($State.ArtifactPath) { $State.ArtifactPath } else { $directory }
@@ -164,13 +188,14 @@ function Write-BlockedReport {
         schemaVersion = 1; suite = $Suite; expectedApplicationCommit = $ApplicationSha; applicationCommit = $null
         mode = if ($CheckOnly) { 'check-only' } elseif ($AllowReviewWrites) { 'mutating' } else { 'read-only' }
         toolingCommit = $ToolingSha; toolingDirty = $toolingDirty; startedUtc = [DateTimeOffset]::UtcNow.ToString('O')
-        environment = @{ status = 'BLOCKED'; detail = $Detail }; authentication = @{ status = 'NOT RUN' }
+        environment = @{ status = 'BLOCKED'; detail = $Detail }; authentication = @{ mode = $Auth.ToLowerInvariant(); status = 'NOT RUN' }
         automatedFunctionalAcceptance = 'BLOCKED'; overallAcceptance = 'INCOMPLETE'
         scenarios = @(@{ id = 'launcher'; requirements = @('Container environment startup and safety evidence'); category = 'functional'; status = 'BLOCKED'; executed = $false; detail = $Detail },
             @{ id = 'human-review'; requirements = @('#398: visual and screen-reader review'); category = 'human'; status = 'HUMAN REVIEW REQUIRED'; executed = $false; detail = 'Human observation remains required.' })
     }
     $result | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $Directory 'results.json') -Encoding utf8NoBOM
     @("# ASAP acceptance: $Suite", '', "Requested application: $ApplicationSha", "Tooling: $ToolingSha", '',
+        "Authentication ($($Auth.ToLowerInvariant())): NOT RUN",
         "Automated: BLOCKED — $Detail", 'Browser scenarios: NOT RUN', 'Human visual/screen-reader review: REQUIRED',
         'Overall acceptance: INCOMPLETE', '', 'No authentication, credentials or network trace were recorded.') |
         Set-Content -LiteralPath (Join-Path $Directory 'report.md') -Encoding utf8NoBOM
@@ -249,7 +274,11 @@ try {
     Invoke-Docker @('compose', 'version')
 
     $explicitConfig = [bool]$Config
-    if (-not $Config) {
+    if ($Auth -eq 'Local') {
+        $configuration = Get-ReviewConfiguration -Auth Local
+        $Config = $null
+    }
+    elseif (-not $Config) {
         $Config = Join-Path $HOME 'ASAP-Review/review.local.json'
         foreach ($candidate in @((Join-Path (Split-Path -Parent $repoRoot) 'review.local.json'), (Join-Path $repoRoot 'dev/review/review.local.json'))) {
             if (-not (Test-Path -LiteralPath $Config) -and (Test-Path -LiteralPath $candidate)) {
@@ -263,9 +292,12 @@ try {
             }
         }
     }
-    $Config = [System.IO.Path]::GetFullPath($Config)
-    $configuration = Get-ReviewConfiguration $Config -Explicit:$explicitConfig
-    Write-Host "Entra may reuse your existing registration. Required Web redirect URI: https://localhost:$Port/signin-oidc (ID tokens; no client secret)."
+    if ($Auth -eq 'Entra') {
+        $Config = [System.IO.Path]::GetFullPath($Config)
+        $configuration = Get-ReviewConfiguration $Config -Explicit:$explicitConfig
+        Write-Host "Entra may reuse your existing registration. Required Web redirect URI: https://localhost:$Port/signin-oidc (ID tokens; no client secret)."
+    }
+    Write-Host "Authentication: $Auth"
 
     $existing = Read-State
     if ($existing) {
@@ -280,7 +312,7 @@ try {
             $existing.LifecycleState = 'Stopped'; Write-State $existing
         }
         elseif (-not $Suite) {
-            if ($existing.Sha -ne $resolved -or $existing.ToolingSha -ne $toolingSha) {
+            if ($existing.Sha -ne $resolved -or $existing.ToolingSha -ne $toolingSha -or $existing.Auth -ne $Auth) {
                 throw 'A different review environment is recorded. Use Status/Stop/Clean; retained data is never implicitly reset.'
             }
             if ($existing.LifecycleState -eq 'Ready') {
@@ -305,7 +337,7 @@ try {
     }
     $state = @{ Sha = $resolved; ShortSha = $short; ProjectName = $projectName; Port = $Port; ConfigPath = $Config
         StatePath = $directory; LogPath = Join-Path $directory 'logs'; EmailPath = Join-Path $directory 'email'
-        ToolingVersion = $toolingVersion; ToolingSha = $toolingSha; ToolingDirty = $toolingDirty
+        ToolingVersion = $toolingVersion; ToolingSha = $toolingSha; ToolingDirty = $toolingDirty; Auth = $Auth
         LifecycleState = 'Starting'; LastError = $null; Kind = if ($Suite) { 'Acceptance' } else { 'Manual' }
         RunId = if ($Suite) { $runId } else { $null }; ViewerPort = $viewerPort; ArtifactPath = $artifactPath }
     Write-State $state
@@ -315,6 +347,7 @@ try {
     if ($Suite) { $runInput.Seed = 'Review' }
     $state.InputConfigPath = Join-Path $directory 'input.json'
     $runInput | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $state.InputConfigPath -Encoding utf8NoBOM
+    if ($Auth -eq 'Local') { $state.ConfigPath = $state.InputConfigPath }
     Write-State $state
     $secret = Join-Path $directory 'secrets.json'
     if (-not (Test-Path -LiteralPath $secret)) { @{ SaPassword = New-StrongPassword } | ConvertTo-Json | Set-Content -LiteralPath $secret -Encoding utf8NoBOM }
@@ -325,6 +358,10 @@ try {
     New-Item -ItemType Directory -Path $harness -Force | Out-Null
     foreach ($item in @('docker', 'src', 'VERSION')) { Copy-Item -LiteralPath (Join-Path $repoRoot "dev/review/$item") -Destination $harness -Recurse -Force }
     Set-ComposeEnvironment $state $worktreePath
+    if ($Auth -eq 'Local') {
+        [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant() |
+            Set-Content -LiteralPath (Join-Path $directory 'auth-credential.txt') -NoNewline -Encoding utf8NoBOM
+    }
     $compose = Get-ComposeArguments $state
     $build = $compose + @('build')
     if ($Rebuild) { $build += '--no-cache' }
@@ -346,7 +383,7 @@ try {
     if ($Suite) {
         $viewerToken = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
         "$($viewerToken): 127.0.0.1:5900" | Set-Content -LiteralPath (Join-Path $directory 'viewer/tokens') -Encoding utf8NoBOM
-        $runnerArguments = @('--suite', $Suite, '--expected-commit', $resolved, '--auth-timeout-seconds', [string]$AuthenticationTimeoutSeconds)
+        $runnerArguments = @('--suite', $Suite, '--expected-commit', $resolved, '--auth', $Auth.ToLowerInvariant(), '--auth-timeout-seconds', [string]$AuthenticationTimeoutSeconds)
         if ($AllowReviewWrites) { $runnerArguments += '--allow-review-writes' } else { $runnerArguments += '--read-only' }
         if ($CheckOnly) { $runnerArguments += '--check-only' }
         $acceptanceName = "$projectName-browser"
@@ -364,7 +401,7 @@ try {
                     if (-not $finished.State.Running) { $exitCode = $finished.State.ExitCode; break }
                     throw
                 }
-                if (-not $opened -and -not $CheckOnly) {
+                if (-not $opened -and -not $CheckOnly -and ($Auth -eq 'Entra' -or $ShowBrowser)) {
                     $ready = Invoke-Docker @('exec', $acceptanceName, 'sh', '-c', 'if test -f /tmp/viewer-ready; then echo ready; fi') -Capture
                     if ($ready -eq 'ready') {
                         $viewerUrl = "http://127.0.0.1:$viewerPort/vnc.html#autoconnect=true&resize=scale&path=websockify%3Ftoken%3D$viewerToken"
@@ -372,7 +409,8 @@ try {
                             try { Start-Process $viewerUrl }
                             catch { throw 'The browser viewer could not be opened. Check the default browser association and rerun.' }
                         }
-                        Write-Host 'Browser viewer ready. Complete normal Entra sign-in/MFA; the suite will continue automatically.'
+                        if ($Auth -eq 'Entra') { Write-Host 'Browser viewer ready. Complete normal Entra sign-in/MFA; the suite will continue automatically.' }
+                        else { Write-Host 'Browser viewer ready. Local authentication and scenarios continue automatically.' }
                         $opened = $true
                     }
                 }
@@ -382,6 +420,7 @@ try {
         finally {
             Remove-Item -LiteralPath (Join-Path $directory 'control/proof.json') -Force -ErrorAction SilentlyContinue
             Invoke-Docker @('rm', '--force', $acceptanceName)
+            Clear-ReviewAuthenticationCredential $state
             $acceptanceName = $null
         }
         $resultsPath = Join-Path $artifactPath 'results.json'
@@ -449,6 +488,9 @@ finally {
         $target = Assert-ManagedPath $worktreePath
         & git -C $repoRoot worktree remove --force $target
         if ($LASTEXITCODE -ne 0) { Write-Warning "Temporary application checkout retained: $target" }
+    }
+    if ($state -and $state.Kind -eq 'Acceptance') {
+        Clear-ReviewAuthenticationCredential $state -Action $Action
     }
     foreach ($variable in @(Get-ChildItem Env:ASAP_REVIEW_*)) { [Environment]::SetEnvironmentVariable($variable.Name, $null, 'Process') }
     if ($launcherLease) { $launcherLease.Dispose() }

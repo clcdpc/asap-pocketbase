@@ -45,8 +45,27 @@ function Test-ReviewGuid {
     return [guid]::TryParse([string]$Value, [ref]$parsed) -and $parsed -ne [guid]::Empty
 }
 
+function Resolve-ReviewAuthentication {
+    param([string]$Auth, [string]$Suite)
+    if ($Auth -eq 'Local') { return 'Local' }
+    if ($Auth -eq 'Entra') { return 'Entra' }
+    if ($Suite) { return 'Local' }
+    return 'Entra'
+}
+
+function New-LocalReviewConfiguration {
+    # Disposable placeholders, never read from or written to a reviewer's Entra file.
+    return @{ Seed = 'Review'; Entra = @{
+        ClientId = [guid]::NewGuid().ToString('D')
+        AllowedTenantIds = @([guid]::NewGuid().ToString('D'))
+        InitialSuperAdminEmail = 'reviewer@example.org'
+        InitialSuperAdminDisplayName = 'ASAP Reviewer'
+    } }
+}
+
 function Get-ReviewConfiguration {
-    param([string]$Path, [switch]$Explicit)
+    param([string]$Path, [switch]$Explicit, [ValidateSet('Local', 'Entra')][string]$Auth = 'Entra')
+    if ($Auth -eq 'Local') { return New-LocalReviewConfiguration }
     $inputConfig = @{}
     $existingFile = Test-Path -LiteralPath $Path
     if ($existingFile) {
@@ -164,8 +183,15 @@ function Assert-ReviewContainers {
             if ($mounts.Count -ne 1 -or $mounts[0].Type -ne 'volume' -or $mounts[0].Name -ne "$($State.ProjectName)_$($contract[2])" -or
                 $mounts[0].RW -ne $contract[3]) { throw 'Review database/config/certificate volume identity mismatch.' }
         }
+        $authMounts = @($container.Mounts | Where-Object Destination -eq '/review/auth/credential')
+        if ($name -in @('web', 'acceptance')) {
+            if ($authMounts.Count -ne 1 -or $authMounts[0].Type -ne 'bind' -or $authMounts[0].RW) {
+                throw 'Review authentication credential mount must be read-only and isolated.'
+            }
+        }
+        elseif ($authMounts.Count -gt 0) { throw 'Review authentication credential mount is outside web/acceptance.' }
         if ($name -eq 'acceptance') {
-            $allowed = @('/review/tls-public', '/run/review/control', '/run/review/viewer', '/review/evidence/token', '/artifacts', '/tmp')
+            $allowed = @('/review/tls-public', '/run/review/control', '/run/review/viewer', '/review/evidence/token', '/review/auth/credential', '/artifacts', '/tmp')
             if (@($container.Mounts | Where-Object { $_.Destination -notin $allowed -or
                 ($_.Destination -notin @('/artifacts', '/tmp') -and $_.RW) }).Count -gt 0) {
                 throw 'Acceptance has unexpected access to private configuration or host mounts.'
@@ -176,10 +202,11 @@ function Assert-ReviewContainers {
     $envMap = @{}
     foreach ($entry in $web.Config.Env) { $key, $value = $entry -split '=', 2; $envMap[$key] = $value }
     if ($envMap.ASPNETCORE_ENVIRONMENT -ne 'Testing' -or $envMap.Testing__UseDeterministicPatronProvider -ne 'true' -or
+        $envMap.REVIEW_AUTH_MODE -cne $State.Auth -or $State.Auth -notin @('Local', 'Entra') -or
         $envMap.ASPNETCORE_HOSTINGSTARTUPASSEMBLIES -ne 'Asap.ReviewProviders' -or $envMap.REVIEW_PROJECT_NAME -ne $State.ProjectName -or
         @($envMap.Keys | Where-Object { $_ -match '^(ConnectionStrings__|EmailSafety__|Asap__|Testing__Staff|Authentication__|DOTNET_ADDITIONAL_DEPS$)' }).Count -gt 0 -or
         $web.Path -ne '/review/web-entrypoint.sh' -or $web.Config.WorkingDir -ne '/app' -or $web.State.Health.Status -ne 'healthy') {
-        throw 'Healthy deterministic review runtime is required without configuration overrides.'
+        throw 'Healthy deterministic review runtime with matching authentication mode is required without configuration overrides.'
     }
 }
 
@@ -205,7 +232,7 @@ function Write-ReviewProof {
     # Retain only the fields used by the runner. SQL passwords, input config and
     # unrelated environment values never leave this host process.
     $safeContainers = foreach ($container in $containers) {
-        $safeEnv = @($container.Config.Env | Where-Object { $_ -match '^(ASPNETCORE_ENVIRONMENT|Testing__UseDeterministicPatronProvider|ASPNETCORE_HOSTINGSTARTUPASSEMBLIES|REVIEW_PROJECT_NAME)=' })
+        $safeEnv = @($container.Config.Env | Where-Object { $_ -match '^(ASPNETCORE_ENVIRONMENT|Testing__UseDeterministicPatronProvider|ASPNETCORE_HOSTINGSTARTUPASSEMBLIES|REVIEW_PROJECT_NAME|REVIEW_AUTH_MODE)=' })
         [ordered]@{
             Id = $container.Id; Image = $container.Image; Path = $container.Path
             Config = @{ Labels = $container.Config.Labels; WorkingDir = $container.Config.WorkingDir; Hostname = $container.Config.Hostname; Env = $safeEnv }
@@ -219,6 +246,7 @@ function Write-ReviewProof {
         Sha = $State.Sha; ShortSha = $State.ShortSha; ProjectName = $State.ProjectName; Port = $State.Port
         ToolingVersion = $State.ToolingVersion; ToolingSha = $State.ToolingSha; LifecycleState = $State.LifecycleState
         StatePath = '/tmp/asap-review'; Kind = $State.Kind; RunId = $State.RunId; ViewerPort = $State.ViewerPort
+        Auth = $State.Auth
     }
     if (([DateTimeOffset]::UtcNow - $observed).TotalSeconds -gt 10) { throw 'Docker isolation verification took too long; stale evidence cannot authorize mutations.' }
     $proof = @{ schemaVersion = 1; observedUtc = $observed.ToString('O'); dockerEndpoint = $endpoint

@@ -13,7 +13,7 @@ const repository = path.resolve(__dirname, '../..');
 const clone = value => JSON.parse(JSON.stringify(value));
 function state(root) {
   return { Sha: appSha, ShortSha: appSha.slice(0, 12), ProjectName: 'asap-review-' + appSha.slice(0,12),
-    Port: 8080, LifecycleState: 'Ready', StatePath: path.join(root, '.review', appSha.slice(0,12)), ToolingVersion: '0.3.0', ToolingSha: toolSha, ViewerPort: 6080 };
+    Port: 8080, LifecycleState: 'Ready', Auth: 'Local', StatePath: path.join(root, '.review', appSha.slice(0,12)), ToolingVersion: '0.3.0', ToolingSha: toolSha, ViewerPort: 6080 };
 }
 function containers(s) {
   return ['web', 'sql', 'db-init'].map((name, i) => {
@@ -25,14 +25,15 @@ function containers(s) {
         'com.docker.compose.project': project, 'org.opencontainers.image.revision': s.Sha,
         'org.opencontainers.image.version': s.ToolingVersion, 'org.asap.review.tooling-revision': toolSha }, Env: [
         'ASPNETCORE_ENVIRONMENT=Testing', 'Testing__UseDeterministicPatronProvider=true',
-        'ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=Asap.ReviewProviders', 'UNRELATED_SECRET=secret-canary'
+        'ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=Asap.ReviewProviders', 'REVIEW_AUTH_MODE=' + s.Auth, 'UNRELATED_SECRET=secret-canary'
       ] },
       State: { Running: name !== 'db-init', Status: name === 'db-init' ? 'exited' : 'running', ExitCode: 0 },
       HostConfig: { NetworkMode: project + '_review', Privileged: false, PortBindings: {} },
       NetworkSettings: { Networks: { [project + '_review']: {} }, Ports: name === 'web' ?
         { '8443/tcp': [{ HostIp: '127.0.0.1', HostPort: String(s.Port) }] } : { '1433/tcp': null } },
       Mounts: [{ Type: 'volume', Destination: name === 'sql' ? '/var/opt/mssql' : '/review/config',
-        Name: project + '_' + (name === 'sql' ? 'sql-data' : 'runtime-config'), RW: name !== 'web' }]
+        Name: project + '_' + (name === 'sql' ? 'sql-data' : 'runtime-config'), RW: name !== 'web' },
+        ...(name === 'web' ? [{ Type: 'bind', Destination: '/review/auth/credential', RW: false }] : [])]
     };
   });
 }
@@ -41,13 +42,14 @@ function proof(s = state(repository)) {
   browser.Config.Labels['com.docker.compose.service'] = 'acceptance';
   browser.Config.Labels['org.opencontainers.image.revision'] = s.ToolingSha;
   browser.NetworkSettings.Ports = { '6080/tcp': [{ HostIp: '127.0.0.1', HostPort: String(s.ViewerPort) }] };
-  browser.Mounts = [{ Type: 'bind', Destination: '/run/review/control', RW: false }];
+  browser.Mounts = [{ Type: 'bind', Destination: '/run/review/control', RW: false },
+    { Type: 'bind', Destination: '/review/auth/credential', RW: false }];
   return { schemaVersion: 1, observedUtc: new Date().toISOString(), dockerEndpoint: 'npipe:////./pipe/dockerDesktopLinuxEngine',
     acceptanceRunning: true, state: { ...s, StatePath: '/tmp/asap-review' }, containers: [...c, browser] };
 }
 function runtime(s = state(repository)) {
   return { identity: { applicationCommit: s.Sha, toolingCommit: s.ToolingSha, toolingVersion: s.ToolingVersion },
-    project: s.ProjectName, webHostname: 'web-hostname', evidence: evidence() };
+    project: s.ProjectName, webHostname: 'web-hostname', authenticationMode: s.Auth, evidence: evidence() };
 }
 function evidence() {
   return { contract: 1, database: 'AsapReview', login: 'asap_review_runtime', sqlMajorVersion: 16, sqlEdition: 'Developer',
@@ -71,6 +73,63 @@ function environment(root) {
   return { origin: 'https://localhost:8080', state: s, identity: validateContainers(s, containers(s)), evidence: evidence() };
 }
 const args = (...extra) => ['--suite', 'pr410', '--expected-commit', appSha, ...extra];
+
+test('acceptance defaults to local, respects explicit Entra and rejects unknown authentication', () => {
+  assert.equal(parse(args('--read-only')).auth, 'local');
+  assert.equal(parse(args('--read-only', '--auth', 'entra')).auth, 'entra');
+  assert.throws(() => parse(args('--auth', 'unknown')), /Authentication mode/);
+});
+
+test('reports distinguish local from verified Entra without leaking authentication state', async t => {
+  const root = await temporary(t);
+  for (const auth of ['local', 'entra']) {
+    const browser = { ...fakeBrowser(), mode: auth, oidcCallback: { method: 'POST', path: '/signin-oidc', status: 302 },
+      cookie: 'cookie-canary', credential: 'credential-canary' };
+    let selectedMode;
+    const outcome = await run(args('--read-only', '--auth', auth), dependencies(root, {
+      verifyEnvironment: async () => ({ ...environment(root), state: { ...state(root), Auth: auth === 'local' ? 'Local' : 'Entra' } }),
+      authenticate: async (_origin, _timeout, _signal, mode) => { selectedMode = mode; return browser; },
+      runScenarios: async () => {}
+    }));
+    assert.equal(selectedMode, auth);
+    assert.equal(outcome.report.authentication.mode, auth);
+    assert.equal(outcome.report.authentication.status, 'PASS');
+    assert.equal(Object.hasOwn(outcome.report.authentication, 'oidcCallback'), auth === 'entra');
+    const json = await fs.readFile(path.join(outcome.directory, 'results.json'), 'utf8');
+    const markdown = await fs.readFile(path.join(outcome.directory, 'report.md'), 'utf8');
+    assert.doesNotMatch(json + markdown, /cookie-canary|credential-canary/);
+    if (auth === 'local') {
+      assert.match(markdown, /Synthetic reviewer; OIDC\/MFA\/Entra configuration were not tested/);
+      assert.doesNotMatch(markdown, /Real Entra sign-in: \*\*PASS|callback: \*\*verified/);
+    } else assert.match(markdown, /Real Entra form POST callback: \*\*verified/);
+  }
+});
+
+test('authentication mode mismatch blocks before opening a browser and cannot fall back', async t => {
+  const root = await temporary(t);
+  const outcome = await run(args('--read-only', '--auth', 'entra'), dependencies(root, {
+    authenticate: async () => { throw new Error('Browser must not open for a mismatched runtime'); }
+  }));
+  assert.equal(outcome.code, 2);
+  assert.match(outcome.report.environment.detail, /authentication mode differs/);
+  assert.equal(outcome.report.authentication.mode, 'entra');
+  assert.equal(outcome.report.authentication.status, 'NOT RUN');
+});
+
+test('staff checks complete before the final runtime proof at scenario and mutation boundaries', async t => {
+  const root = await temporary(t), calls = [];
+  const browser = { ...fakeBrowser(), verifyReviewer: async () => { calls.push('staff'); } };
+  const outcome = await run(args('--read-only'), dependencies(root, {
+    verifyEnvironment: async () => { calls.push('proof'); return environment(root); },
+    authenticate: async () => browser,
+    runScenarios: async ({ verify }) => {
+      calls.length = 0;
+      await verify();
+      assert.deepEqual(calls, ['staff', 'proof']);
+    }
+  }));
+  assert.equal(outcome.code, 0);
+});
 function dependencies(root, extra = {}) {
   return { root, toolingIdentity: () => ({ commit: toolSha, dirty: false }),
     verifyEnvironment: async () => environment(root), ...extra };
@@ -344,7 +403,8 @@ test('smoke registers exactly two scenarios with explicit write metadata and pre
   const baseline = execFileSync('git', ['show', '6f928007edf53bb48aeaf9018357aacc2bdaf8dc:tests/acceptance/suites/pr410.cjs'],
     { cwd: repository, encoding: 'utf8' });
   const current = await fs.readFile(path.join(__dirname, 'suites/pr410.cjs'), 'utf8');
-  assert.equal(current.replace(/\r\n/g, '\n'), baseline.replace(/\r\n/g, '\n').replace('docker-review-0.2.0', 'docker-review-0.3.0'));
+  assert.equal(current.replace(/\r\n/g, '\n'), baseline.replace(/\r\n/g, '\n')
+    .replace('docker-review-0.2.0', 'docker-review-0.3.0').replace('entra-super-admin', 'authorized-super-admin'));
   assert.equal(registry.pr410.scenarios.length, 20);
 });
 

@@ -9,14 +9,18 @@ const { screenshot } = require('./helpers/accessibility.cjs');
 const { Blocked, safeError, assertionDetails, result, exitCode, createReport, writeReport } = require('./helpers/reporting.cjs');
 
 function parse(argv) {
-  const options = { suite: '', expectedCommit: '', allowWrites: false, readOnly: false, checkOnly: false, authTimeout: 300000 };
+  const options = { suite: '', expectedCommit: '', auth: 'local', allowWrites: false, readOnly: false, checkOnly: false, authTimeout: 300000 };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
-    if (['--suite', '--expected-commit', '--auth-timeout-seconds'].includes(flag)) {
+    if (['--suite', '--expected-commit', '--auth', '--auth-timeout-seconds'].includes(flag)) {
       if (!argv[i + 1] || argv[i + 1].startsWith('--')) throw new Blocked('Missing value for ' + flag + '.');
       const value = argv[++i];
       if (flag === '--suite') options.suite = value;
       if (flag === '--expected-commit') options.expectedCommit = value;
+      if (flag === '--auth') {
+        must(['local', 'entra'].includes(value), 'Authentication mode must be local or entra.');
+        options.auth = value;
+      }
       if (flag === '--auth-timeout-seconds') {
         must(/^\d+$/.test(value) && Number(value) >= 10 && Number(value) <= 1800, 'Authentication timeout must be 10–1800 seconds.');
         options.authTimeout = Number(value) * 1000;
@@ -176,6 +180,7 @@ async function run(argv, dependencies = {}) {
   const { directory, report } = await createReport(root, 'unselected', null, identity.commit, identity.dirty);
   try {
     options = parse(argv);
+    report.authentication.mode = options.auth;
     options.signal = dependencies.signal;
     report.suite = options.suite; report.expectedApplicationCommit = options.expectedCommit;
     suite = Object.hasOwn(registry, options.suite) ? registry[options.suite] : null;
@@ -188,12 +193,15 @@ async function run(argv, dependencies = {}) {
     }
     let pinned;
     const verify = async () => {
+      // A slow staff/queue check must not age the final isolation proof used
+      // to authorize a mutation. The application also rechecks SQL eligibility.
+      if (browser?.verifyReviewer) await browser.verifyReviewer();
       const current = await (dependencies.verifyEnvironment || verifyEnvironment)(root, options.expectedCommit);
       must(current.state.ToolingSha === identity.commit, 'Acceptance tooling SHA differs from the running review tooling.');
+      must(current.state.Auth?.toLowerCase() === options.auth, 'Requested authentication mode differs from the review runtime.');
       if (pinned) must(current.origin === pinned.origin &&
         JSON.stringify(current.identity) === JSON.stringify(pinned.identity), 'Review runtime changed during this acceptance run.');
       else pinned = current;
-      if (browser?.verifyReviewer) await browser.verifyReviewer();
       return current;
     };
     const environment = await verify();
@@ -206,14 +214,15 @@ async function run(argv, dependencies = {}) {
       for (const scenario of suite.scenarios) report.scenarios.push(result(scenario, 'NOT RUN', 'Environment-only check; no browser scenarios executed.'));
     } else {
       releaseLease = await acquireLease(environment.state);
-      browser = await (dependencies.authenticate || openReviewerBrowser)(environment.origin, options.authTimeout, options.signal);
-      report.authentication = { status: 'PASS', role: browser.role, library: browser.library, oidcCallback: browser.oidcCallback };
+      browser = await (dependencies.authenticate || openReviewerBrowser)(environment.origin, options.authTimeout, options.signal, options.auth);
+      report.authentication = { mode: options.auth, status: 'PASS', role: browser.role, library: browser.library,
+        ...(options.auth === 'entra' ? { oidcCallback: browser.oidcCallback } : {}) };
       if (browser.context.browser) report.browser = { name: 'Chromium', version: browser.context.browser()?.version(), platform: process.platform };
       await (dependencies.runScenarios || runScenarios)({ suite, options, environment, browser, report, directory, verify });
     }
   } catch (error) {
     if (report.environment.status !== 'PASS') report.environment = { status: 'BLOCKED', detail: safeError(error) };
-    else if (!browser) report.authentication = { status: 'BLOCKED', detail: safeError(error) };
+    else if (!browser) report.authentication = { mode: options.auth, status: 'BLOCKED', detail: safeError(error) };
     else report.scenarios.push(result({ id: 'browser-execution', requirements: ['runner: browser execution'] }, 'FAIL', safeError(error)));
     if (suite) {
       for (const scenario of suite.scenarios) {

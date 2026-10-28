@@ -45,6 +45,7 @@ internal sealed class ReviewEvidenceEndpoint : IStartupFilter
                     identity = identity.RootElement,
                     webHostname = Environment.MachineName,
                     project = Environment.GetEnvironmentVariable("REVIEW_PROJECT_NAME"),
+                    authenticationMode = Environment.GetEnvironmentVariable("REVIEW_AUTH_MODE"),
                     evidence
                 }, timeout.Token);
             }

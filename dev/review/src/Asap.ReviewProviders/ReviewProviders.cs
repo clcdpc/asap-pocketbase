@@ -4,6 +4,7 @@ using Asap.Web.Infrastructure.Testing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.AspNetCore.Authentication;
 
 [assembly: HostingStartup(typeof(Asap.ReviewProviders.ReviewStartup))]
 
@@ -19,6 +20,12 @@ public sealed class ReviewStartup : IHostingStartup
         {
             services.AddHostedService<ReviewFixtures>();
             services.AddTransient<IStartupFilter, ReviewEvidenceEndpoint>();
+            services.AddTransient<IStartupFilter, ReviewAuthenticationEndpoint>();
+            if (Environment.GetEnvironmentVariable("REVIEW_AUTH_MODE") == "Local")
+            {
+                services.PostConfigure<AuthenticationOptions>(options =>
+                    options.DefaultChallengeScheme = StaffAuthenticationRegistration.CookieScheme);
+            }
         });
     }
 }

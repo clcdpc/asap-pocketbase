@@ -67,7 +67,9 @@ async function writeReport(directory, report) {
     `Tooling: \`${line(report.toolingCommit)}\`${report.toolingDirty ? ' (working tree changes present)' : ''}`,
     `Started (UTC): ${report.startedUtc}`, '',
     `Environment/integration validation: **${report.environment.status}** — ${line(report.environment.detail)}`,
-    `Real Entra sign-in: **${report.authentication.status}**`,
+    `Authentication (${line(report.authentication.mode || 'unselected')}): **${report.authentication.status}**`,
+    report.authentication.mode === 'local' ? 'Synthetic reviewer; OIDC/MFA/Entra configuration were not tested.' :
+      `Real Entra form POST callback: **${report.authentication.oidcCallback ? 'verified' : 'NOT RUN'}**`,
     `Automated functional checks: **${report.automatedFunctionalAcceptance}**`,
     'Human visual review: **REQUIRED** (#398)',
     'Screen-reader review: **REQUIRED** (#398)',

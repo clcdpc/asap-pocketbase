@@ -8,6 +8,8 @@ param(
     [switch]$ReadOnly,
     [switch]$CheckOnly,
     [string]$Config,
+    [ValidateSet('Local', 'Entra')][string]$Auth,
+    [switch]$ShowBrowser,
     [switch]$NoBrowser,
     [ValidateRange(10, 1800)][int]$AuthenticationTimeoutSeconds = 300
 )

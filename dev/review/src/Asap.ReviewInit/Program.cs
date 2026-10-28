@@ -30,6 +30,13 @@ internal static class ReviewInitializer
             var settings = ReviewEnvironment.Load();
             var input = await LoadInputAsync(settings.InputConfigPath);
             ValidateInput(input);
+            if (Environment.GetEnvironmentVariable("REVIEW_AUTH_MODE") == "Local" &&
+                (settings.SqlServer != "sql,1433" || settings.DatabaseName != "AsapReview" || input.Seed != "Review" ||
+                 input.Entra.InitialSuperAdminEmail != "reviewer@example.org" ||
+                 input.Entra.InitialSuperAdminDisplayName != "ASAP Reviewer" || input.Entra.AllowedTenantIds.Count != 1))
+            {
+                throw new InvalidOperationException("Local authentication requires the disposable Review database, fixtures and predetermined reviewer.");
+            }
 
             using var tlsTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             await ReviewTls.EnsureAsync(tlsTimeout.Token);
@@ -81,6 +88,13 @@ internal static class ReviewInitializer
                 using var fixtureReader = new StreamReader(fixtureSource);
                 fixtureCommand.CommandText = await fixtureReader.ReadToEndAsync(fixtureTimeout.Token);
                 await fixtureCommand.ExecuteNonQueryAsync(fixtureTimeout.Token);
+                if (Environment.GetEnvironmentVariable("REVIEW_AUTH_MODE") == "Local")
+                {
+                    using var reviewerSource = typeof(ReviewInitializer).Assembly.GetManifestResourceStream("Asap.ReviewInit.LocalReviewer.sql")!;
+                    using var reviewerReader = new StreamReader(reviewerSource);
+                    fixtureCommand.CommandText = await reviewerReader.ReadToEndAsync(fixtureTimeout.Token);
+                    await fixtureCommand.ExecuteNonQueryAsync(fixtureTimeout.Token);
+                }
             }
             else if (!string.Equals(input.Seed, "None", StringComparison.OrdinalIgnoreCase))
             {

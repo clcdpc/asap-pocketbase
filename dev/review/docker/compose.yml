@@ -32,6 +32,7 @@ services:
       REVIEW_DACPAC_PATH: "/review/assets/Asap.Database.dacpac"
       REVIEW_HANGFIRE_SCRIPT: "/review/assets/Hangfire/1.8.25/install.sql"
       REVIEW_DATA_PROTECTION_PATH: "/review/dpkeys"
+      REVIEW_AUTH_MODE: "${ASAP_REVIEW_AUTH_MODE:-Entra}"
     volumes:
       - type: bind
         source: "${ASAP_REVIEW_CONFIG}"
@@ -64,6 +65,7 @@ services:
       Testing__UseDeterministicPatronProvider: "true"
       ASPNETCORE_HOSTINGSTARTUPASSEMBLIES: "Asap.ReviewProviders"
       REVIEW_PROJECT_NAME: "${ASAP_REVIEW_PROJECT}"
+      REVIEW_AUTH_MODE: "${ASAP_REVIEW_AUTH_MODE:-Entra}"
     ports:
       - "127.0.0.1:${ASAP_REVIEW_PORT}:8443"
     volumes:
@@ -80,6 +82,10 @@ services:
       - type: bind
         source: "${ASAP_REVIEW_EVIDENCE_TOKEN}"
         target: /review/evidence/token
+        read_only: true
+      - type: bind
+        source: "${ASAP_REVIEW_AUTH_CREDENTIAL}"
+        target: /review/auth/credential
         read_only: true
     healthcheck:
       test: ["CMD", "dotnet", "/review/bootstrap/Asap.ReviewBootstrap.dll", "--health"]
@@ -125,6 +131,10 @@ services:
       - type: bind
         source: "${ASAP_REVIEW_EVIDENCE_TOKEN}"
         target: /review/evidence/token
+        read_only: true
+      - type: bind
+        source: "${ASAP_REVIEW_AUTH_CREDENTIAL}"
+        target: /review/auth/credential
         read_only: true
       - type: bind
         source: "${ASAP_REVIEW_ARTIFACTS}"

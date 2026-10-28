@@ -26,6 +26,7 @@ function validateState(state, expectedCommit, root, container = false) {
   must(Number.isInteger(state.Port) && state.Port > 0 && state.Port <= 65535, 'Review HTTPS port is invalid.');
   must(state.ToolingVersion === '0.3.0', 'Review harness 0.3.0 is required; restart with this branch tooling.');
   must(shaPattern.test(state.ToolingSha || ''), 'Review tooling SHA is required.');
+  must(['Local', 'Entra'].includes(state.Auth), 'Review authentication mode is required.');
   must(typeof state.StatePath === 'string' && (container ? state.StatePath === '/tmp/asap-review' :
     path.resolve(state.StatePath) === path.join(root, '.review', ...(state.Kind === 'Acceptance' ? ['acceptance', state.RunId] : [short]))),
     'Review state directory is outside the managed review root.');
@@ -47,6 +48,10 @@ function validateContainers(state, containers) {
     must(c.HostConfig?.NetworkMode === state.ProjectName + '_review' && c.HostConfig?.Privileged === false, 'Unsafe review container isolation.');
     must(Object.keys(c.NetworkSettings?.Networks || {}).join() === state.ProjectName + '_review',
       'Unexpected review container network.');
+    const authMounts = (c.Mounts || []).filter(m => m.Destination === '/review/auth/credential');
+    const name = c.Config.Labels['com.docker.compose.service'];
+    must(['web', 'acceptance'].includes(name) ? authMounts.length === 1 && authMounts[0].Type === 'bind' && authMounts[0].RW === false :
+      authMounts.length === 0, 'Review authentication credential mount must be read-only and isolated.');
   }
   must(web.State?.Running === true && sql.State?.Running === true && init.State?.Status === 'exited' && init.State.ExitCode === 0,
     'Review runtime is stopped or initialization failed.');
@@ -63,7 +68,7 @@ function validateContainers(state, containers) {
     must(Object.keys(ports || {}).length === 1 && ports['6080/tcp']?.length === 1 &&
       ports['6080/tcp'][0].HostIp === '127.0.0.1' && ports['6080/tcp'][0].HostPort === String(state.ViewerPort),
       'Acceptance viewer must be published only on IPv4 loopback.');
-    const allowedMounts = ['/review/tls-public', '/run/review/control', '/run/review/viewer', '/review/evidence/token', '/artifacts', '/tmp'];
+    const allowedMounts = ['/review/tls-public', '/run/review/control', '/run/review/viewer', '/review/evidence/token', '/review/auth/credential', '/artifacts', '/tmp'];
     must((acceptance.Mounts || []).every(m => allowedMounts.includes(m.Destination) &&
       (['/artifacts', '/tmp'].includes(m.Destination) || m.RW === false)), 'Unsafe acceptance mounts.');
   }
@@ -76,7 +81,8 @@ function validateContainers(state, containers) {
     'Review SQL must not publish a host port.');
   const env = Object.fromEntries((web.Config.Env || []).map(v => { const split = v.indexOf('='); return [v.slice(0, split), v.slice(split + 1)]; }));
   must(env.ASPNETCORE_ENVIRONMENT === 'Testing' && env.Testing__UseDeterministicPatronProvider === 'true' &&
-    env.ASPNETCORE_HOSTINGSTARTUPASSEMBLIES === 'Asap.ReviewProviders', 'Deterministic review providers are required.');
+    env.ASPNETCORE_HOSTINGSTARTUPASSEMBLIES === 'Asap.ReviewProviders' && env.REVIEW_AUTH_MODE === state.Auth,
+    'Deterministic review providers and matching authentication mode are required.');
   must(!Object.keys(env).some(k => /^(ConnectionStrings__|EmailSafety__|Asap__|Testing__Staff|Authentication__|DOTNET_ADDITIONAL_DEPS$)/i.test(k)),
     'Unexpected runtime configuration override.');
   for (const [container, destination, suffix, readonly] of [
@@ -90,7 +96,7 @@ function validateContainers(state, containers) {
   }
   must(web.Path === '/review/web-entrypoint.sh' && web.Config.WorkingDir === '/app', 'Unexpected review web entry point.');
   return { webId: web.Id, sqlId: sql.Id, initId: init.Id, imageId: web.Image, webHostname: web.Config.Hostname,
-    toolingCommit: state.ToolingSha };
+    toolingCommit: state.ToolingSha, authenticationMode: state.Auth };
 }
 function validateEvidence(evidence) {
   must(evidence.contract === 1 && evidence.database === 'AsapReview' && evidence.login === 'asap_review_runtime' &&
@@ -125,7 +131,8 @@ async function verifyEnvironment(root, expectedCommit, dependencies = {}) {
   const current = await (dependencies.runtimeEvidence || runtimeEvidence)(origin);
   must(current.identity?.applicationCommit === expectedCommit && current.identity.toolingCommit === state.ToolingSha &&
     current.identity.toolingVersion === state.ToolingVersion && current.project === state.ProjectName &&
-    current.webHostname === identity.webHostname, 'Live application/tooling/project identity mismatch.');
+    current.webHostname === identity.webHostname && current.authenticationMode === state.Auth,
+    'Live application/tooling/project/authentication identity mismatch.');
   validateEvidence(current.evidence);
   await (dependencies.health || health)(origin);
   // The host can revoke evidence while a SQL/health read is in flight.

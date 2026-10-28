@@ -2,21 +2,26 @@
 
 ## Start with smoke
 
-Use the two-test smoke suite first when validating a newly configured review
-workstation:
+Run the two-test smoke suite unattended:
 
 ```powershell
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke
 pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -AllowReviewWrites
 ```
 
-`smoke-authenticated-review` checks the real Entra super-admin session, Review
+Suites default to **Local** authentication: no Entra registration/configuration,
+interactive sign-in, MFA, viewer or Windows GUI session is required. The runner
+automatically seeds ASAP Reviewer (`reviewer@example.org`), resolves its actual
+SQL StaffUser ID, validates its System super-admin/Review Library access, and
+establishes the application's normal staff cookie. Local mode does not test
+OIDC/MFA. `-ShowBrowser` optionally opens the viewer.
+
+`smoke-authenticated-review` checks the authorized super-admin session, Review
 Library (2) workspace and SQL-backed synthetic Suggestion details. In read-only
 mode, `smoke-synthetic-close` is NOT RUN. With explicit write authorization it
 confirms Close silently through the UI, verifies one action POST, persisted
 Closed status and a changed rowversion. Each invocation uses fresh fixtures.
-The launcher handles Docker, certificates, Playwright and the browser viewer;
-complete normal Entra/MFA in the viewer. Reports (`results.json`, `report.md`)
+The launcher handles Docker, certificates, Playwright and Chromium. Omit
+`-AllowReviewWrites` for read-only smoke. Reports (`results.json`, `report.md`)
 and privacy-safe screenshots are under `.artifacts/acceptance/<timestamp-run-id>/`.
 Two PASS results establish automated smoke success; overall human acceptance
 stays INCOMPLETE. This does not complete PR #410's feature acceptance.
@@ -31,10 +36,17 @@ Run from this tooling branch with Docker Desktop (local Linux x64 engine),
 Compose, PowerShell 7 and Git available. PowerShell manages the application,
 SQL/DACPAC/Hangfire, deterministic fixtures, HTTPS, runner image, Playwright,
 Chromium and browser viewer. No host Node/Playwright installation or setup
-commands are needed. The first run collects missing Entra client ID, tenant
-IDs, initial review email and optional display name into the external review
-configuration. See [review configuration](../../dev/review/README.md).
+commands are needed. Local mode creates synthetic configuration inside the
+disposable environment and never reads or modifies the reviewer's Entra file.
+See [review configuration](../../dev/review/README.md).
 
+Use `-Auth Entra` explicitly for real OIDC integration testing:
+
+```powershell
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -Auth Entra -AllowReviewWrites
+```
+
+Entra mode retains the external configuration and interactive first-run setup.
 Reuse your existing Entra registration with the authorized Web callback
 `https://localhost:8080/signin-oidc` and ID tokens enabled. No client secret or
 new registration is required. Complete real Entra/MFA in the automatically
@@ -42,6 +54,8 @@ opened browser viewer. A successful local form POST, active super-admin session
 and Review Library (2) access are required. The authenticated context is reused
 across scenarios; each scenario gets its own application tab. Auth state is
 ephemeral. `-AuthenticationTimeoutSeconds 900` allows a longer sign-in window.
+Ordinary manual review (no suite) defaults to Entra. Explicit `-Auth` overrides
+either default; Entra errors never trigger a Local fallback.
 
 Reports and screenshots are written automatically under
 `.artifacts/acceptance/<timestamp-run-id>/`. The command displays results and
@@ -98,6 +112,22 @@ automation never establishes complete human acceptance.
 
 ## Isolation and mutation protection
 
+The review-only HostingStartup implements `POST /_review/auth/session`. It is
+unavailable outside the explicit Testing/Local/deterministic review runtime or
+when `-Auth Entra` is used. A separate random 256-bit per-run credential is
+mounted read-only only in web and acceptance. The endpoint checks it in constant
+time, rejects caller identity inputs and validates isolated SQL/provider evidence
+before resolving the fixed synthetic reviewer through `StaffEligibilityService`.
+It issues the existing secure HttpOnly staff cookie, not another session system.
+Direct `X-ASAP-Test-*` identity headers are rejected in both Docker review modes;
+lower-level Testing authentication remains supported. No review assembly is
+included in production publish output.
+
+Only Playwright's trusted request context sends the bootstrap credential; normal
+browser/API requests use cookies and the existing antiforgery policy. The
+credential is never browser JavaScript state or a URL, and is revoked after the
+run. It cannot target another email, tenant, role or organization.
+
 Harness 0.3.0 adds an optional one-off service to the existing Compose project.
 PowerShell checks local Docker, services and actual immutable image labels,
 completed initialization, project networks/volumes, deterministic settings,
@@ -152,8 +182,11 @@ per run, with explicit issue/requirement mappings.
 | #398 accessibility | axe, images/errors/overflow, keyboard, desktop/390px/native 200% | NVDA/VoiceOver, live announcements, long text, forced colors and visual judgment require humans |
 
 The report retains PASS, FAIL, BLOCKED, NOT RUN and HUMAN REVIEW REQUIRED.
-It separates environment, real Entra, automated functional checks, human
+It separates environment, authentication mode/status, automated functional checks, human
 obligations, uncovered requirements and overall acceptance (always INCOMPLETE).
+Local PASS records `mode: local`, `role: super_admin`, `library: 2` and never
+claims OIDC verification. Entra PASS records `mode: entra` and the verified real
+form POST callback.
 
 ## Artifacts and privacy
 
@@ -161,7 +194,7 @@ Each run writes `results.json`, `report.md`, scenario screenshots and safe failu
 step/response diagnostics. Early Docker/startup failure gets a launcher BLOCKED
 report with browser checks NOT RUN. No raw Playwright/network trace, cookie,
 storage export, authentication screen, credential, request header or arbitrary
-response body is exported. During authentication only the local callback's
+response body is exported. During Entra authentication only the local callback's
 method/path/status is retained; no Entra URL or payload is recorded. Screenshots
 mask staff identity, audit actors and profile emails. Inspect before sharing.
 
@@ -182,7 +215,7 @@ dotnet build Asap.sln -c Release
 dotnet build dev/review/src/Asap.ReviewInit/Asap.ReviewInit.csproj -c Release
 dotnet build dev/review/src/Asap.ReviewProviders/Asap.ReviewProviders.csproj -c Release
 dotnet build dev/review/src/Asap.ReviewBootstrap/Asap.ReviewBootstrap.csproj -c Release
-node --test tests/acceptance/runner.test.cjs tests/acceptance/launcher.test.cjs tests/acceptance/transport.test.cjs tests/acceptance/infrastructure.test.cjs
+node --test tests/acceptance/authentication.test.cjs tests/acceptance/runner.test.cjs tests/acceptance/launcher.test.cjs tests/acceptance/transport.test.cjs tests/acceptance/infrastructure.test.cjs
 npm test
 ```
 

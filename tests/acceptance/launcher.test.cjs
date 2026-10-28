@@ -7,7 +7,7 @@ const { promisify } = require('node:util');
 const path = require('node:path');
 const execute = promisify(execFile);
 const root = path.resolve(__dirname, '../..');
-for (const name of ['configuration', 'revision', 'isolation', 'proof', 'lifecycle', 'compose']) {
+for (const name of ['authentication', 'configuration', 'revision', 'isolation', 'proof', 'lifecycle', 'compose']) {
   test('actual PowerShell launcher helpers: ' + name, async () => {
     const output = await execute('pwsh', ['-NoProfile', '-File', path.join(__dirname, 'launcher.test.ps1'), '-Case', name],
       { cwd: root, timeout: 30000, windowsHide: true });
