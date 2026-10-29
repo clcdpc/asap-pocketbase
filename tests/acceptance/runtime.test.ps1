@@ -25,7 +25,7 @@ exec /review/acceptance-entrypoint.sh "$@"
     }
     try {
         $null = Invoke-ReviewNative wslc @('run', '--detach', '--name', $name, '--shm-size', '1g',
-            '--env', "REVIEW_RUN_ID=$runId", '--mount', "type=bind,source=$directory,target=/artifacts",
+            '--mount', "type=bind,source=$directory,target=/artifacts",
             '--entrypoint', '/bin/bash', $Image, '-c', $setup.Replace("`r`n", "`n"), '--',
             '--suite', 'smoke', '--expected-commit', $ApplicationSha, '--read-only') -Capture
         $deadline = [DateTimeOffset]::UtcNow.AddMinutes(6)

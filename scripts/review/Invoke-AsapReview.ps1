@@ -100,7 +100,7 @@ try {
     # Mark intent before run so interruption during container creation still cleans up.
     $containerCreated = $true
     Invoke-ReviewNative wslc (@('run', '--detach', '--name', $containerName, '--shm-size', '1g',
-        '--env', "REVIEW_RUN_ID=$runId", '--mount', "type=bind,source=$artifactPath,target=/artifacts", $image) + $arguments)
+        '--mount', "type=bind,source=$artifactPath,target=/artifacts", $image) + $arguments)
     $deadline = [DateTimeOffset]::UtcNow.AddMinutes(30)
     do {
         $observed = (Invoke-ReviewNative wslc @('inspect', '--format', 'json', $containerName) -Capture).Output | ConvertFrom-Json

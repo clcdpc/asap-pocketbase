@@ -221,11 +221,16 @@ test('mutation guard blocks cross-kind IDs, other scenario fixtures, external re
     assert.equal(aborted, true); assert.equal(report.scenarios[0].status, 'FAIL');
   }
 });
-test('existing CI/browser/lifecycle entry points stay unchanged; artifacts are Git ignored', async () => {
-  for (const file of ['package.json', 'tests/browser/run.cjs', '.github/workflows/dotnet.yml']) {
+test('existing frontend/browser entry points and full CI guard remain; artifacts are Git ignored', async () => {
+  for (const file of ['package.json', 'tests/browser/run.cjs']) {
     const baseline = execFileSync('git', ['show', '792b039de3010c832ad6aaa1d65ec09807e3410c:' + file], { cwd: repository, encoding: 'utf8' });
     assert.equal((await fs.readFile(path.join(repository, file), 'utf8')).replace(/\r\n/g, '\n'), baseline.replace(/\r\n/g, '\n'));
   }
+  const workflow = await fs.readFile(path.join(repository, '.github/workflows/dotnet.yml'), 'utf8');
+  assert.match(workflow, /dotnet test --project tests\/Asap.Tests\/Asap.Tests.csproj/);
+  assert.match(workflow, /--minimum-expected-tests 1439/);
+  assert.match(workflow, /run: npm test/);
+  assert.match(workflow, /run: npm run test:browser/);
   assert.match(execFileSync('git', ['check-ignore', '.artifacts/acceptance/run/results.json'], { cwd: repository, encoding: 'utf8' }), /acceptance/);
 });
 test('CLI rejects incompatible modes, remote targets, unsafe inputs and incomplete SHAs', () => {

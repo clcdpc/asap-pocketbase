@@ -176,8 +176,7 @@ public sealed class ReviewAuthenticationTests
     private static Dictionary<string, string> RuntimeEnvironment() => new()
     {
         ["REVIEW_AUTH_MODE"] = "Local", ["Testing__UseDeterministicPatronProvider"] = "true",
-        ["ASPNETCORE_HOSTINGSTARTUPASSEMBLIES"] = "Asap.ReviewProviders",
-        ["REVIEW_PROJECT_NAME"] = "asap-acceptance-" + new string('a', 24)
+        ["ASPNETCORE_HOSTINGSTARTUPASSEMBLIES"] = "Asap.ReviewProviders"
     };
 
     private sealed class ReviewTestEnvironment : IHostEnvironment

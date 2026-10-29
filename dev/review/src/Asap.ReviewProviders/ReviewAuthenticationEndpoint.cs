@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.RegularExpressions;
 using Asap.Web.Features.Staff;
 using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Configuration;
@@ -121,8 +120,7 @@ internal sealed class ReviewAuthenticationEndpoint(IHostEnvironment environment)
         environment.IsEnvironment("Testing") &&
         readEnvironment("REVIEW_AUTH_MODE") == "Local" &&
         readEnvironment("Testing__UseDeterministicPatronProvider") == "true" &&
-        readEnvironment("ASPNETCORE_HOSTINGSTARTUPASSEMBLIES") == "Asap.ReviewProviders" &&
-        Regex.IsMatch(readEnvironment("REVIEW_PROJECT_NAME") ?? "", "^asap-acceptance-[a-f0-9]{24}$");
+        readEnvironment("ASPNETCORE_HOSTINGSTARTUPASSEMBLIES") == "Asap.ReviewProviders";
 
     internal static bool MatchesCredential(string expected, string? supplied) =>
         expected.Length == 64 && supplied?.Length == 64 &&

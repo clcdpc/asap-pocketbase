@@ -62,7 +62,6 @@ check_children() {
 mkdir -p /artifacts /review/logs
 node /review/runtime.cjs prepare "$@"
 source /review/runtime.env
-export REVIEW_PROJECT_NAME="asap-acceptance-${REVIEW_RUN_ID}"
 export REVIEW_SQL_SERVER=localhost,1433 REVIEW_DATABASE_NAME=AsapReview
 export REVIEW_SA_PASSWORD
 export REVIEW_DACPAC_PATH=/app/Database/Asap.Database.dacpac
