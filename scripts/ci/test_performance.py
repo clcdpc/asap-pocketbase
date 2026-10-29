@@ -184,8 +184,8 @@ class SyntheticProcTests(unittest.TestCase):
         row = metrics.interval(previous, current)
         self.assertEqual(row["memory"]["used_bytes"], 6144 * 1024)
         self.assertEqual(row["memory"]["swap_used_bytes"], 3072 * 1024)
-        self.assertEqual(row["memory"]["swap_in_bytes_per_second"], 2 * metrics.page_size)
-        self.assertEqual(row["memory"]["major_faults_per_second"], 5)
+        self.assertAlmostEqual(row["memory"]["swap_in_bytes_per_second"], 2 * metrics.page_size)
+        self.assertAlmostEqual(row["memory"]["major_faults_per_second"], 5)
         metadata = metrics.environment()
         exported = json.dumps({"row": row, "environment": metadata})
         for secret in (SECRET, self.root.as_posix(), str(self.root), "secret-volume"):
@@ -284,7 +284,8 @@ class LifecycleTests(unittest.TestCase):
                 self.assertIn("original stderr", result.stderr)
                 self.assertGreaterEqual(len(perf.read_samples(self.output / "samples.jsonl")), 2)
                 files = list(self.output.iterdir())
-                self.assertEqual({path.name for path in files}, {"environment.json", "samples.jsonl", "summary.md"})
+                self.assertEqual({path.name for path in files}, {"environment.json", "samples.jsonl", "summary.md",
+                    "sql-waits.jsonl", "sql-io.jsonl", "sql-activity.jsonl", "test-timings.md", "diagnostic-summary.md"})
                 for path in files:
                     text = path.read_text(encoding="utf-8")
                     self.assertNotIn(SECRET, text)
@@ -311,6 +312,7 @@ class LifecycleTests(unittest.TestCase):
 
     def test_summary_failure_does_not_mask_command_failure(self):
         class BrokenFinalization:
+            environment = {}
             def finish(self, *_):
                 raise OSError(SECRET)
         with mock.patch.object(perf, "Monitor", return_value=BrokenFinalization()), contextlib.redirect_stderr(io.StringIO()) as errors:
@@ -335,7 +337,7 @@ class LifecycleTests(unittest.TestCase):
     def test_monitor_thread_is_joined_on_command_failure(self):
         with mock.patch.dict(os.environ, self.env, clear=True), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(perf.run([sys.executable, "-c", "raise SystemExit(19)"], self.output, .05), 19)
-        self.assertFalse(any(thread.name == "ci-performance" for thread in threading.enumerate()))
+        self.assertFalse(any(thread.name in ("ci-performance", "ci-sql-diagnostics") for thread in threading.enumerate()))
 
     @unittest.skipUnless(LINUX, "POSIX signal and process-group semantics")
     def test_sigint_sigterm_forwarded_cleanup_and_partial_artifacts(self):

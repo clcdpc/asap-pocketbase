@@ -3,7 +3,7 @@
 if command -v python3 >/dev/null 2>&1; then
   collector="$(dirname -- "${BASH_SOURCE[0]}")/performance.py"
   # Check interpreter/import/syntax availability before handing it the workload.
-  if python3 -c 'import runpy,sys; runpy.run_path(sys.argv[1], run_name="ci_performance_preflight")' "$collector" >/dev/null 2>&1; then
+  if python3 -c 'import pathlib,runpy,sys; sys.path.insert(0,str(pathlib.Path(sys.argv[1]).resolve().parent)); runpy.run_path(sys.argv[1], run_name="ci_performance_preflight")' "$collector" >/dev/null 2>&1; then
     exec python3 "$collector" -- "$@"
   fi
 fi

@@ -20,6 +20,9 @@ import sys
 import threading
 import time
 
+from diagnostic_report import write_reports
+from sql_metrics import SqlCollector
+
 
 CPU_FIELDS = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal")
 DISK_FIELDS = ("reads", "reads_merged", "read_sectors", "read_ms", "writes",
@@ -403,22 +406,35 @@ def kill_group(process, signum):
         pass
 
 
-def optional_command(arguments, stop, timeout=4):
+def optional_command(arguments, stop, timeout=4, input_text=None, preserve_partial=False):
     """Bound and reap each optional CLI, including a hung Docker daemon/client."""
-    process, completed = None, False
+    process, completed, partial = None, False, None
     try:
         if stop.is_set():
             return None
-        process = subprocess.Popen(arguments, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        process = subprocess.Popen(arguments, stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, text=True, start_new_session=os.name == "posix")
         deadline = time.monotonic() + timeout
+        pending_input = input_text
         while not stop.is_set() and time.monotonic() < deadline:
             try:
-                output, _ = process.communicate(timeout=0.1)
+                output, _ = process.communicate(input=pending_input, timeout=0.1)
                 completed = True
-                return output.strip() if process.returncode == 0 else None
+                return output.strip() if process.returncode == 0 or preserve_partial else None
+            except subprocess.TimeoutExpired as error:
+                pending_input = None
+                if preserve_partial:
+                    partial = error.output
+        if preserve_partial:
+            # On Windows communicate's reader thread may not expose partial
+            # stdout until EOF; reap first so completed DMV sections survive.
+            kill_group(process, signal.SIGKILL if os.name == "posix" else signal.SIGTERM)
+            try:
+                output, _ = process.communicate(timeout=1)
+                completed = True
+                return output.strip()
             except subprocess.TimeoutExpired:
-                pass
+                return partial.decode("utf-8", errors="replace") if isinstance(partial, bytes) else partial
         return None
     except OSError:
         return None
@@ -604,7 +620,7 @@ def summary(rows, duration, exit_code, unavailable, interrupted=None):
 
 
 class Monitor:
-    def __init__(self, output, interval, docker_interval, cancelled):
+    def __init__(self, output, interval, docker_interval, cancelled, sql_interval=60):
         self.output, self.interval, self.docker_interval = Path(output), interval, docker_interval
         self.stop = threading.Event()
         self.cancelled = cancelled
@@ -617,11 +633,16 @@ class Monitor:
         self.previous = None
         self.last_host, self.last_sql = {}, {}
         self.stream = (self.output / "samples.jsonl").open("w", encoding="utf-8", buffering=1)
+        self.sql = None
         self.write_environment()
         self.take_host()
         self.write_summary(None, None, False)
         self.thread = threading.Thread(target=self.collect, name="ci-performance", daemon=True)
         self.thread.start()
+        try:
+            self.sql = SqlCollector(self.output, sql_interval, optional_command, cancelled, self.unavailable)
+        except Exception as error:
+            self.unavailable.add("SQL collector unavailable: " + type(error).__name__)
 
     def write_environment(self):
         self.environment["unavailable_metrics"] = sorted(self.unavailable)
@@ -674,7 +695,9 @@ class Monitor:
                     memory = at(self.last_host, "memory", "used_bytes")
                     pressure = at(self.last_host, "pressure", "io", "some", "stall_percent")
                     sql_memory = self.last_sql.get("memory_usage_bytes")
-                    print(f"[ci-performance] {time.monotonic() - self.started:.0f}s CPU={fmt(cpu)}% iowait={fmt(wait)}% steal={fmt(steal)}% memory={fmt(memory / 1024**2 if memory is not None else None)}MiB IO_PSI={fmt(pressure)}% SQL_CPU={fmt(self.last_sql.get('cpu_percent'))}% SQL_memory={fmt(sql_memory / 1024**2 if sql_memory is not None else None)}MiB", flush=True)
+                    activity = self.sql.latest_activity if self.sql else {}
+                    sections = str(7 - len(activity["missing_sections"])) + "/7" if "missing_sections" in activity else "unavailable"
+                    print(f"[ci-performance] {time.monotonic() - self.started:.0f}s CPU={fmt(cpu)}% iowait={fmt(wait)}% steal={fmt(steal)}% memory={fmt(memory / 1024**2 if memory is not None else None)}MiB IO_PSI={fmt(pressure)}% SQL_CPU={fmt(self.last_sql.get('cpu_percent'))}% SQL_memory={fmt(sql_memory / 1024**2 if sql_memory is not None else None)}MiB SQL_DMV={sections} SQL_sample={fmt(activity.get('collection_seconds'))}s", flush=True)
                     self.write_summary(None, None, False)
                     next_health = time.monotonic() + 60
                 self.stop.wait(min(0.5, max(0.01, next_host - time.monotonic())))
@@ -689,6 +712,10 @@ class Monitor:
         text = summary(read_samples(self.output / "samples.jsonl"), duration if duration is not None else time.monotonic() - self.started,
                        exit_code, self.unavailable, interrupted)
         (self.output / "summary.md").write_text(text, encoding="utf-8")
+        try:
+            write_reports(self.output)
+        except Exception as error:
+            self.unavailable.add("diagnostic report unavailable: " + type(error).__name__)
         if publish:
             # The artifact/step summary contains the full report; keep the log short.
             compact = [line for line in text.splitlines() if line.startswith(("Test duration:", "| Guest CPU", "| Guest memory", "Swap in/out:", "SQL container:"))]
@@ -701,15 +728,19 @@ class Monitor:
     def finish(self, exit_code, interrupted, duration):
         self.stop.set()
         self.cancelled.set()  # Interrupt an optional Docker call promptly.
+        if self.sql is not None:
+            self.sql.finish()
         self.thread.join(timeout=5)
         if self.thread.is_alive():
             warn("collector shutdown exceeded 5 s; partial evidence retained.")
             return
+        self.environment.update(command_duration_seconds=duration, command_exit_code=exit_code,
+                                command_finished_utc=utc_now(), interrupted_signal=interrupted)
         self.write_environment()
         self.write_summary(exit_code, interrupted, True, duration)
 
 
-def run(command, output, interval=15, docker_interval=60):
+def run(command, output, interval=15, docker_interval=60, sql_interval=60):
     child, monitor = None, None
     cancelled = threading.Event()
     received = []
@@ -724,7 +755,7 @@ def run(command, output, interval=15, docker_interval=60):
     code, duration, command_started = 1, 0, None
     try:
         try:
-            monitor = Monitor(output, interval, docker_interval, cancelled)
+            monitor = Monitor(output, interval, docker_interval, cancelled, sql_interval)
         except Exception as error:
             warn("collector unavailable (" + type(error).__name__ + "); command will still run.")
         if received:
@@ -733,6 +764,8 @@ def run(command, output, interval=15, docker_interval=60):
             try:
                 # Streams and stdin are inherited directly; no tee, buffering or shell reparsing.
                 command_started = time.monotonic()
+                if monitor is not None:
+                    monitor.environment["command_started_utc"] = utc_now()
                 child = subprocess.Popen(command, start_new_session=os.name == "posix")
             except OSError as error:
                 print("Command could not start (" + type(error).__name__ + ").", file=sys.stderr, flush=True)
@@ -768,14 +801,15 @@ def main():
     parser.add_argument("--output", default=".artifacts/ci-performance")
     parser.add_argument("--interval", type=float, default=15)
     parser.add_argument("--docker-interval", type=float, default=60)
+    parser.add_argument("--sql-interval", type=float, default=60)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("a command after -- is required")
-    if not math.isfinite(args.interval) or args.interval <= 0 or not math.isfinite(args.docker_interval) or args.docker_interval <= 0:
+    if any(not math.isfinite(value) or value <= 0 for value in (args.interval, args.docker_interval, args.sql_interval)):
         parser.error("sample intervals must be positive finite seconds")
-    return run(command, args.output, args.interval, args.docker_interval)
+    return run(command, args.output, args.interval, args.docker_interval, args.sql_interval)
 
 
 if __name__ == "__main__":

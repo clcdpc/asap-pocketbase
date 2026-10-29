@@ -26,6 +26,7 @@ public sealed partial class DatabaseBaselineTests
     [ClassInitialize]
     public static void Initialize(TestContext context)
     {
+        using var initializationTiming = FixtureTiming.Start(nameof(DatabaseBaselineTests), "shared_initialization");
         _masterConnectionString =
             Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
             "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True";
@@ -52,7 +53,12 @@ public sealed partial class DatabaseBaselineTests
         }
 
         context.WriteLine($"Deploying {_dacpacPath} to {_databaseName}");
-        new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+        using (var deploymentTiming = FixtureTiming.Start(nameof(DatabaseBaselineTests), "dacpac_deploy_including_database_creation"))
+        {
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+            deploymentTiming?.Complete();
+        }
+        initializationTiming?.Complete();
     }
 
     [ClassCleanup]
