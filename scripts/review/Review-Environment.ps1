@@ -49,13 +49,16 @@ function Resolve-ApplicationCommit {
     return $resolved
 }
 
-function Copy-ReviewTooling {
-    param([string]$Repository, [string]$Destination)
+function Get-ReviewToolingPaths {
     # Explicit inputs exclude local configuration, secrets, generated output and the repository itself.
-    $items = @('package.json', 'package-lock.json', 'scripts/review', 'dev/review/src', 'dev/review/Containerfile',
+    return @('package.json', 'package-lock.json', 'scripts/review', 'dev/review/src', 'dev/review/Containerfile',
         'dev/review/acceptance-entrypoint.sh', 'dev/review/runtime.cjs', 'dev/review/appsettings.Testing.json',
         'dev/review/VERSION', 'tests/acceptance', 'tests/browser/confirmation.cjs', 'tests/browser/native-zoom-extension')
-    foreach ($item in $items) {
+}
+
+function Copy-ReviewTooling {
+    param([string]$Repository, [string]$Destination)
+    foreach ($item in (Get-ReviewToolingPaths)) {
         $source = Join-Path $Repository $item
         foreach ($file in @(Get-Item -LiteralPath $source | ForEach-Object {
             if ($_.PSIsContainer) { Get-ChildItem -LiteralPath $_.FullName -Recurse -File } else { $_ }

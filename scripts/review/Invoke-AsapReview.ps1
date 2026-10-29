@@ -22,7 +22,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'Review-Environment.ps1')
 $repoRoot = (Invoke-ReviewNative git @('-C', $PSScriptRoot, 'rev-parse', '--show-toplevel') -Capture).Output
 $toolingSha = (Invoke-ReviewNative git @('-C', $repoRoot, 'rev-parse', 'HEAD') -Capture).Output
-$toolingDirty = [bool](Invoke-ReviewNative git @('-C', $repoRoot, 'status', '--porcelain', '--untracked-files=normal') -Capture).Output
+$toolingDirty = [bool](Invoke-ReviewNative git (@('-C', $repoRoot, 'status', '--porcelain', '--untracked-files=normal', '--') + (Get-ReviewToolingPaths)) -Capture).Output
 $runId = [guid]::NewGuid().ToString('N').Substring(0, 24)
 $artifactPath = Join-Path $repoRoot ".artifacts/acceptance/$([DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH-mm-ss'))-$runId"
 $buildRoot = Join-Path $repoRoot '.review/build'
