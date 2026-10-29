@@ -160,5 +160,6 @@ finally {
     }
     Write-Host "Report: $(Join-Path $artifactPath 'report.md')"
     Write-Host 'Human visual/screen-reader review remains REQUIRED; overall acceptance INCOMPLETE.'
+    # Ctrl+C unwinds through finally and skips statements after it.
+    exit $exitCode
 }
-exit $exitCode
