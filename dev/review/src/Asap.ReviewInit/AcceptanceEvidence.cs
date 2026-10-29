@@ -31,7 +31,7 @@ internal static class AcceptanceEvidence
             var root = config.RootElement;
             var connectionString = root.GetProperty("ConnectionStrings").GetProperty("AsapDatabase").GetString();
             var sql = new SqlConnectionStringBuilder(connectionString);
-            if (sql.DataSource != "sql,1433" || sql.InitialCatalog != "AsapReview" ||
+            if (sql.DataSource != "localhost,1433" || sql.InitialCatalog != "AsapReview" ||
                 sql.UserID != "asap_review_runtime" || sql.IntegratedSecurity ||
                 root.GetProperty("Environment").GetProperty("Name").GetString() != "Review" ||
                 !root.GetProperty("Environment").GetProperty("IsNonProduction").GetBoolean() ||
@@ -42,7 +42,7 @@ internal static class AcceptanceEvidence
                 Environment.GetEnvironmentVariable("ASPNETCORE_HOSTINGSTARTUPASSEMBLIES") != "Asap.ReviewProviders" ||
                 await File.ReadAllTextAsync("/tmp/asap-review-provider-ready", cancellationToken) != "pr410-v1")
             {
-                throw new InvalidOperationException("Review runtime isolation could not be verified.");
+                throw new InvalidOperationException("Review runtime configuration could not be verified.");
             }
 
             await using var connection = new SqlConnection(sql.ConnectionString);
@@ -71,7 +71,7 @@ internal static class AcceptanceEvidence
                      o.BusinessKey LIKE N'purchase-reminder:' + CONVERT(varchar(20), r.Id) + N':%' OR
                       o.BusinessKey LIKE N'staff-patron-action:%:' + CONVERT(varchar(20), r.Id) + N':%'));
                 SELECT CONVERT(varchar(20), Id) FROM asap.EmailTemplate
-                WHERE OrganizationId = 2 AND TemplateKey = N'acceptance-pr410-rejection' AND IsCustom = 1;
+                WHERE OrganizationId = 2 AND TemplateKey = N'rejection:acceptance-pr410-rejection' AND IsCustom = 1;
                 SELECT COUNT(*) FROM asap.Organization
                 WHERE Id = 2 AND IsActive = 1 AND OrganizationCodeId = 2;
                 """;

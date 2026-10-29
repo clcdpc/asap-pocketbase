@@ -9,25 +9,16 @@ const { screenshot } = require('./helpers/accessibility.cjs');
 const { Blocked, safeError, assertionDetails, result, exitCode, createReport, writeReport } = require('./helpers/reporting.cjs');
 
 function parse(argv) {
-  const options = { suite: '', expectedCommit: '', auth: 'local', allowWrites: false, readOnly: false, checkOnly: false, authTimeout: 300000 };
+  const options = { suite: '', expectedCommit: '', auth: 'local', allowWrites: false, readOnly: false };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
-    if (['--suite', '--expected-commit', '--auth', '--auth-timeout-seconds'].includes(flag)) {
+    if (['--suite', '--expected-commit'].includes(flag)) {
       if (!argv[i + 1] || argv[i + 1].startsWith('--')) throw new Blocked('Missing value for ' + flag + '.');
       const value = argv[++i];
       if (flag === '--suite') options.suite = value;
       if (flag === '--expected-commit') options.expectedCommit = value;
-      if (flag === '--auth') {
-        must(['local', 'entra'].includes(value), 'Authentication mode must be local or entra.');
-        options.auth = value;
-      }
-      if (flag === '--auth-timeout-seconds') {
-        must(/^\d+$/.test(value) && Number(value) >= 10 && Number(value) <= 1800, 'Authentication timeout must be 10–1800 seconds.');
-        options.authTimeout = Number(value) * 1000;
-      }
     } else if (flag === '--allow-review-writes') options.allowWrites = true;
     else if (flag === '--read-only') options.readOnly = true;
-    else if (flag === '--check-only') options.checkOnly = true;
     else throw new Blocked('Unknown acceptance option.');
   }
   must(options.suite && /^[a-z0-9-]+$/.test(options.suite), 'Select an acceptance suite, for example --suite pr410.');
@@ -46,18 +37,8 @@ function toolingIdentity(root) {
     dirty: !!execFileSync('git', ['status', '--porcelain', '--untracked-files=normal'], { cwd: root, encoding: 'utf8', windowsHide: true }).trim()
   };
 }
-async function acquireLease(state) {
-  const filename = path.join(state.StatePath, 'acceptance.lock');
-  await fs.mkdir(state.StatePath, { recursive: true });
-  let handle;
-  try { handle = await fs.open(filename, 'wx'); }
-  catch { throw new Blocked('Another acceptance run holds the review lease, or its state directory is unavailable. See acceptance troubleshooting.'); }
-  await handle.writeFile(JSON.stringify({ schemaVersion: 1, startedUtc: new Date().toISOString(), pid: process.pid }));
-  return async () => { await handle.close(); await fs.unlink(filename); };
-}
 async function runScenarios({ suite, options, environment, browser, report, directory, verify }) {
-  // Post-authentication only. Reject every external request; Entra traffic is
-  // neither observed nor retained. A session expiry is a blocker, never a new login trace.
+  // Reject external requests. A session expiry is a blocker, never a new login trace.
   const guards = { errors: [], expectUnload: false, unloadCount: 0 };
   let active = null;
   const requestGuard = async route => {
@@ -74,11 +55,11 @@ async function runScenarios({ suite, options, environment, browser, report, dire
         guards.errors.push('Unexpected mutation blocked');
         return route.abort('blockedbyclient');
       }
-      // Validate the live containers, database and providers again at the write boundary.
+      // Validate the local database, providers and authorized staff again at the write boundary.
       // The page request carries the application's own session and antiforgery header.
       try { await verify(); }
       catch {
-        guards.blocker = 'Runtime isolation lost before mutation';
+        guards.blocker = 'Review runtime unavailable before mutation';
         guards.errors.push(guards.blocker);
         return route.abort('blockedbyclient');
       }
@@ -175,7 +156,7 @@ async function runScenarios({ suite, options, environment, browser, report, dire
 async function run(argv, dependencies = {}) {
   const root = dependencies.root || path.resolve(__dirname, '../..');
   const identity = (dependencies.toolingIdentity || toolingIdentity)(root);
-  let options, suite, browser, releaseLease;
+  let options, suite, browser;
   // Allocate results before configuration validation so even early blockers get a report.
   const { directory, report } = await createReport(root, 'unselected', null, identity.commit, identity.dirty);
   try {
@@ -187,39 +168,32 @@ async function run(argv, dependencies = {}) {
     must(suite, 'Unknown suite. Registered acceptance suites: ' + Object.keys(registry).join(', ') + '.');
     report.requiredCapabilities = suite.requires;
     report.requiredScenarioIds = suite.scenarios.map(s => s.id);
-    report.mode = options.checkOnly ? 'check-only' : options.readOnly ? 'read-only' : 'mutating';
-    if (suite.mutations && !options.readOnly && !options.checkOnly) {
+    report.mode = options.readOnly ? 'read-only' : 'mutating';
+    if (suite.mutations && !options.readOnly) {
       must(options.allowWrites, 'Mutating suites require explicit -AllowReviewWrites. Use -ReadOnly for nonmutating checks.');
     }
     let pinned;
     const verify = async () => {
-      // A slow staff/queue check must not age the final isolation proof used
-      // to authorize a mutation. The application also rechecks SQL eligibility.
+      // The application also rechecks SQL eligibility at the mutation boundary.
       if (browser?.verifyReviewer) await browser.verifyReviewer();
       const current = await (dependencies.verifyEnvironment || verifyEnvironment)(root, options.expectedCommit);
-      must(current.state.ToolingSha === identity.commit, 'Acceptance tooling SHA differs from the running review tooling.');
-      must(current.state.Auth?.toLowerCase() === options.auth, 'Requested authentication mode differs from the review runtime.');
+      must(current.identity.toolingCommit === identity.commit, 'Acceptance tooling SHA differs from the running review tooling.');
+      must(current.authenticationMode?.toLowerCase() === options.auth, 'Requested authentication mode differs from the review runtime.');
       if (pinned) must(current.origin === pinned.origin &&
         JSON.stringify(current.identity) === JSON.stringify(pinned.identity), 'Review runtime changed during this acceptance run.');
       else pinned = current;
       return current;
     };
     const environment = await verify();
-    report.applicationCommit = environment.state.Sha;
-    report.environment = { status: 'PASS', project: environment.state.ProjectName,
-      origin: environment.origin, applicationCommit: environment.state.Sha,
-      toolingVersion: environment.state.ToolingVersion, ...environment.identity,
-      detail: 'Fresh host evidence correlated with live Docker images, loopback bindings, trusted health, deterministic runtime and isolated SQL.' };
-    if (options.checkOnly) {
-      for (const scenario of suite.scenarios) report.scenarios.push(result(scenario, 'NOT RUN', 'Environment-only check; no browser scenarios executed.'));
-    } else {
-      releaseLease = await acquireLease(environment.state);
-      browser = await (dependencies.authenticate || openReviewerBrowser)(environment.origin, options.authTimeout, options.signal, options.auth);
-      report.authentication = { mode: options.auth, status: 'PASS', role: browser.role, library: browser.library,
-        ...(options.auth === 'entra' ? { oidcCallback: browser.oidcCallback } : {}) };
-      if (browser.context.browser) report.browser = { name: 'Chromium', version: browser.context.browser()?.version(), platform: process.platform };
-      await (dependencies.runScenarios || runScenarios)({ suite, options, environment, browser, report, directory, verify });
-    }
+    report.applicationCommit = environment.identity.applicationCommit;
+    report.environment = { status: 'PASS', origin: environment.origin, applicationCommit: environment.identity.applicationCommit,
+      ...environment.identity,
+      detail: 'Built application/tooling revisions, Testing, local authentication, disposable SQL, fixtures and deterministic providers verified.' };
+
+    browser = await (dependencies.authenticate || openReviewerBrowser)(environment.origin, options.signal);
+    report.authentication = { mode: options.auth, status: 'PASS', role: browser.role, library: browser.library };
+    if (browser.context.browser) report.browser = { name: 'Chromium', version: browser.context.browser()?.version(), platform: process.platform };
+    await (dependencies.runScenarios || runScenarios)({ suite, options, environment, browser, report, directory, verify });
   } catch (error) {
     if (report.environment.status !== 'PASS') report.environment = { status: 'BLOCKED', detail: safeError(error) };
     else if (!browser) report.authentication = { mode: options.auth, status: 'BLOCKED', detail: safeError(error) };
@@ -240,9 +214,6 @@ async function run(argv, dependencies = {}) {
     try { await browser?.close(); }
     catch { report.scenarios.push(result({ id: 'browser-cleanup', requirements: ['runner: ephemeral authentication cleanup'] },
       'FAIL', 'Temporary browser profile cleanup failed. Remove the local temporary asap-acceptance directory before sharing this machine.')); }
-    try { await releaseLease?.(); }
-    catch { report.scenarios.push(result({ id: 'lease-cleanup', requirements: ['runner: exclusive lease'] },
-      'BLOCKED', 'Review lease cleanup failed. Check that no runner is active before removing acceptance.lock.')); }
     await writeReport(directory, report);
   }
   console.log('Application: ' + (report.applicationCommit || '(not validated)'));
@@ -259,4 +230,4 @@ if (require.main === module) {
   run(process.argv.slice(2), { signal: cancellation.signal }).then(outcome => { process.exitCode = outcome.code; })
     .catch(() => { console.error('Acceptance runner could not initialize artifacts or Git identity.'); process.exitCode = 2; });
 }
-module.exports = { parse, run, runScenarios, toolingIdentity, acquireLease };
+module.exports = { parse, run, runScenarios, toolingIdentity };

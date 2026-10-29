@@ -57,7 +57,7 @@ public sealed class ReviewAuthenticationTests
             c => c.Environment.Name = "Production", c => c.Environment.IsNonProduction = false,
             c => c.EmailSafety.DeliveryMode = "postmark",
             c => c.ConnectionStrings.AsapDatabase = "Server=localhost;Database=Asap;Integrated Security=true",
-            c => c.ConnectionStrings.HangfireDatabase = "Server=sql,1433;Database=Other",
+            c => c.ConnectionStrings.HangfireDatabase = "Server=localhost,1433;Database=Other",
             c => c.Authentication.Entra.InitialSuperAdmin.UserPrincipalName = "other@example.org",
             c => c.Authentication.Entra.InitialSuperAdmin.DisplayName = "Other",
             c => c.Authentication.Entra.ClientId = Guid.Empty.ToString(),
@@ -166,7 +166,7 @@ public sealed class ReviewAuthenticationTests
     {
         var configuration = TestConfigurationFactory.Create();
         configuration.Environment.Name = "Review";
-        configuration.ConnectionStrings.AsapDatabase = "Server=sql,1433;Database=AsapReview;User ID=asap_review_runtime";
+        configuration.ConnectionStrings.AsapDatabase = "Server=localhost,1433;Database=AsapReview;User ID=asap_review_runtime";
         configuration.ConnectionStrings.HangfireDatabase = configuration.ConnectionStrings.AsapDatabase;
         configuration.Authentication.Entra.InitialSuperAdmin.UserPrincipalName = "reviewer@example.org";
         configuration.Authentication.Entra.InitialSuperAdmin.DisplayName = "ASAP Reviewer";

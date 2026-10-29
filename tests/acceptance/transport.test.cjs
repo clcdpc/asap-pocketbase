@@ -7,7 +7,6 @@ const os = require('node:os');
 const https = require('node:https');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { forward } = require('../../dev/review/docker/localhost-forwarder.cjs');
 const { openReviewerBrowser, verifyStaffSession } = require('./helpers/authentication.cjs');
 const execute = promisify(execFile);
 let directory, tls;
@@ -41,34 +40,6 @@ test('real review TLS material validates localhost and rejects a mismatched host
   await assert.rejects(request(server.address().port, '127.0.0.1', { servername: 'unexpected.example.org' }), /Hostname\/IP does not match/);
   await assert.rejects(request(server.address().port, '127.0.0.1', { ca: undefined }), /certificate/);
 });
-test('localhost forwarder preserves HTTPS, Host and the complete form POST on IPv4 and IPv6', async t => {
-  const server = https.createServer(tls, (req, res) => {
-    let body = ''; req.on('data', c => { body += c; });
-    req.on('end', () => res.end(JSON.stringify({ method: req.method, path: req.url, host: req.headers.host, body })));
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const listeners = forward(0, { host: '127.0.0.1', port: server.address().port });
-  await Promise.all(listeners.map(listener => new Promise(resolve => listener.once('listening', resolve))));
-  t.after(async () => {
-    server.closeAllConnections();
-    await Promise.all([...listeners, server].map(s => new Promise(resolve => s.close(resolve))));
-  });
-  for (const listener of listeners) {
-    const response = await request(listener.address().port, listener.address().address);
-    assert.deepEqual(JSON.parse(response.body), { method: 'POST', path: '/signin-oidc', host: 'localhost:8080',
-      body: 'id_token=synthetic-transport-probe&state=synthetic' });
-  }
-});
-test('manual Windows trust helper reads public-only material and honors declined consent', { skip: process.platform !== 'win32' }, async () => {
-  const helper = path.resolve(__dirname, '../../scripts/review/Initialize-AsapReviewTls.ps1');
-  const script = path.join(directory, 'decline-trust.ps1');
-  const quote = value => "'" + value.replace(/'/g, "''") + "'";
-  await fs.writeFile(script, 'function Read-Host { return "n" }\n& ' + quote(helper) +
-    ' -Workspace ' + quote(directory) + ' -PublicCertificatePath ' + quote(path.join(directory, 'public/root.crt')) + '\n');
-  const output = await execute('pwsh', ['-NoProfile', '-File', script], { timeout: 15000, windowsHide: true });
-  assert.match(output.stdout, /trust was declined/);
-});
-
 test('trusted API bootstrap shares the browser cookie jar without exposing credentials to pages', async t => {
   // Browser transport plumbing only; real cookie issuance and SQL eligibility
   // are covered by the .NET integration journey, not this synthetic HTTP server.
@@ -109,7 +80,7 @@ test('trusted API bootstrap shares the browser cookie jar without exposing crede
     await new Promise(resolve => server.close(resolve));
   });
   const origin = 'https://localhost:' + server.address().port;
-  reviewer = await openReviewerBrowser(origin, 1000, undefined, 'local');
+  reviewer = await openReviewerBrowser(origin);
   const { context, page } = reviewer;
   assert.equal(reviewer.mode, 'local');
   assert.equal(reviewer.oidcCallback, undefined);

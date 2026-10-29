@@ -31,7 +31,7 @@ internal static class ReviewInitializer
             var input = await LoadInputAsync(settings.InputConfigPath);
             ValidateInput(input);
             if (Environment.GetEnvironmentVariable("REVIEW_AUTH_MODE") == "Local" &&
-                (settings.SqlServer != "sql,1433" || settings.DatabaseName != "AsapReview" || input.Seed != "Review" ||
+                (settings.SqlServer != "localhost,1433" || settings.DatabaseName != "AsapReview" || input.Seed != "Review" ||
                  input.Entra.InitialSuperAdminEmail != "reviewer@example.org" ||
                  input.Entra.InitialSuperAdminDisplayName != "ASAP Reviewer" || input.Entra.AllowedTenantIds.Count != 1))
             {

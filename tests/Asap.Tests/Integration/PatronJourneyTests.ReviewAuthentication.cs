@@ -19,7 +19,7 @@ public sealed partial class PatronJourneyTests
     public async Task LocalReviewSessionIssuesNormalCookieAndRechecksSqlEligibilityAndAntiforgery()
     {
         // Exercise the production cookie/SQL authorization stack and the exact
-        // session-issuance method used after the separate Docker runtime gates.
+        // session-issuance method used after the review runtime checks.
         using var startup = factory!.CreateClient();
         await startup.GetAsync("/api/asap/staff/session");
         using var unavailable = await startup.PostAsync("/_review/auth/session", null);

@@ -3,8 +3,8 @@ using System.Security.Cryptography.X509Certificates;
 
 internal static class ReviewTls
 {
-    // The signing key is discarded. Only the localhost server key is retained;
-    // the browser receives the public root through a separate read-only volume.
+    // The signing key is discarded. The localhost key and public root live only
+    // in this disposable container; Chromium trusts the public root in its NSS store.
     public static async Task EnsureAsync(CancellationToken cancellationToken,
         string directory = "/review/tls", string publicDirectory = "/review/tls-public")
     {
@@ -21,7 +21,7 @@ internal static class ReviewTls
             if (!existing.HasPrivateKey || existing.NotAfter.ToUniversalTime() <= DateTime.UtcNow ||
                 root.NotAfter.ToUniversalTime() <= DateTime.UtcNow)
             {
-                throw new InvalidOperationException("Review TLS material is expired or incomplete. Stop and explicitly clean this disposable environment.");
+                throw new InvalidOperationException("Review TLS material is expired or incomplete. Start a fresh acceptance run.");
             }
             return;
         }
@@ -50,6 +50,6 @@ internal static class ReviewTls
         await File.WriteAllBytesAsync(pfxPath, server.Export(X509ContentType.Pfx, password), cancellationToken);
         await File.WriteAllTextAsync(passwordPath, password, cancellationToken);
         await File.WriteAllTextAsync(rootPath, rootCertificate.ExportCertificatePem(), cancellationToken);
-        Console.WriteLine("Created disposable localhost HTTPS material (public trust and private key volumes are separate).");
+        Console.WriteLine("Created disposable localhost HTTPS material.");
     }
 }

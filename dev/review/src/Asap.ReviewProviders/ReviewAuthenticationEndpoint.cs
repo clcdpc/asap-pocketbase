@@ -26,7 +26,7 @@ internal sealed class ReviewAuthenticationEndpoint(IHostEnvironment environment)
     internal const string CredentialHeader = "X-ASAP-Review-Auth";
     private readonly string credentialPath = "/review/auth/credential";
 
-    // Tests use a temporary credential file; runtime DI uses the fixed mount.
+    // Tests use a temporary credential file; runtime DI uses the disposable file.
     internal ReviewAuthenticationEndpoint(IHostEnvironment environment, string credentialPath) : this(environment)
     {
         this.credentialPath = credentialPath;
@@ -37,7 +37,7 @@ internal sealed class ReviewAuthenticationEndpoint(IHostEnvironment environment)
         app.Use(async (context, following) =>
         {
             // Testing headers remain supported by lower-level application tests,
-            // but must never authenticate callers of the published review port.
+            // but must never authenticate callers of the review application.
             if (context.Request.Headers.Keys.Any(key => key.StartsWith("X-ASAP-Test-", StringComparison.OrdinalIgnoreCase)))
             {
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -99,7 +99,7 @@ internal sealed class ReviewAuthenticationEndpoint(IHostEnvironment environment)
                     context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                     return;
                 }
-                // Reuse the live fixed SQL/provider isolation proof, including
+                // Reuse the live fixed SQL/provider checks, including
                 // SQL Server 2022 Developer, runtime login and Review Library.
                 await AcceptanceEvidence.ReadAsync(timeout.Token);
                 await CreateSessionAsync(context, configuration, timeout.Token);
@@ -122,7 +122,7 @@ internal sealed class ReviewAuthenticationEndpoint(IHostEnvironment environment)
         readEnvironment("REVIEW_AUTH_MODE") == "Local" &&
         readEnvironment("Testing__UseDeterministicPatronProvider") == "true" &&
         readEnvironment("ASPNETCORE_HOSTINGSTARTUPASSEMBLIES") == "Asap.ReviewProviders" &&
-        Regex.IsMatch(readEnvironment("REVIEW_PROJECT_NAME") ?? "", "^asap-(acceptance-[a-f0-9]{24}|review-[a-f0-9]{12})$");
+        Regex.IsMatch(readEnvironment("REVIEW_PROJECT_NAME") ?? "", "^asap-acceptance-[a-f0-9]{24}$");
 
     internal static bool MatchesCredential(string expected, string? supplied) =>
         expected.Length == 64 && supplied?.Length == 64 &&
@@ -135,7 +135,7 @@ internal sealed class ReviewAuthenticationEndpoint(IHostEnvironment environment)
         var entra = configuration.Authentication.Entra;
         return configuration.Environment.Name == "Review" && configuration.Environment.IsNonProduction == true &&
             configuration.EmailSafety.DeliveryMode == "capture" &&
-            sql.DataSource == "sql,1433" && sql.InitialCatalog == "AsapReview" &&
+            sql.DataSource == "localhost,1433" && sql.InitialCatalog == "AsapReview" &&
             sql.UserID == "asap_review_runtime" && !sql.IntegratedSecurity &&
             configuration.ConnectionStrings.AsapDatabase == configuration.ConnectionStrings.HangfireDatabase &&
             Guid.TryParse(entra.ClientId, out var client) && client != Guid.Empty &&

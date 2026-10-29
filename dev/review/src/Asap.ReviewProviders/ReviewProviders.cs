@@ -1,6 +1,9 @@
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Testing;
+using Asap.Web.Infrastructure.Data;
+using Asap.Web.Infrastructure.Security;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -10,7 +13,7 @@ using Microsoft.AspNetCore.Authentication;
 
 namespace Asap.ReviewProviders;
 
-// Loaded only by the disposable Docker harness. This assembly is never published
+// Loaded only by the disposable acceptance harness. This assembly is never published
 // with ASAP. Unknown provider inputs retain the application's strict failure.
 public sealed class ReviewStartup : IHostingStartup
 {
@@ -31,9 +34,10 @@ public sealed class ReviewStartup : IHostingStartup
 }
 
 internal sealed class ReviewFixtures(
-    IHostEnvironment environment, DeterministicTestingPatronProvider provider) : IHostedService
+    IHostEnvironment environment, DeterministicTestingPatronProvider provider,
+    IDbContextFactory<AsapDbContext> contexts, IntegrationCredentialProtector protector) : IHostedService
 {
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!environment.IsEnvironment("Testing") ||
@@ -41,6 +45,19 @@ internal sealed class ReviewFixtures(
         {
             throw new InvalidOperationException("Review fixtures require the deterministic Testing runtime.");
         }
+        // Readiness validates configured Polaris credentials even with a deterministic
+        // provider. Populate synthetic values through the normal protection contract.
+        await using var database = await contexts.CreateDbContextAsync(cancellationToken);
+        var settings = await database.PolarisSettings.SingleAsync(item => item.OrganizationId == 1, cancellationToken);
+        settings.Host = "https://polaris.invalid";
+        settings.AccessId = "acceptance";
+        settings.ProtectedApiKey = protector.Protect("synthetic-api-key");
+        settings.StaffDomain = "acceptance";
+        settings.AdminUser = "synthetic";
+        settings.ProtectedAdminPassword = protector.Protect("synthetic-password");
+        settings.WorkstationId = 1;
+        settings.SystemPolarisUserId = 1;
+        await database.SaveChangesAsync(cancellationToken);
         provider.SetReferenceData(
             [new(1, "System", null, 0, null), new(2, "Review Library", "REVIEW", 2, 1)],
             [new(1, "Adult")]);
@@ -63,12 +80,11 @@ internal sealed class ReviewFixtures(
                 new(0, 0, 0, true, true));
         }
         // Purchase routing is the acceptance boundary. Keep its Pending hold
-        // result stable if a scheduled worker runs during a long MFA/review session.
+        // result stable if a scheduled worker runs during acceptance.
         // This declared pre-dispatch failure cannot place an external hold.
         provider.SetFailure(new(TestingPolarisOperation.PatronHolds, 2, "ACCEPTANCE41003"),
             new PolarisOperationalException("review_hold_deferred", "Hold dispatch is deferred in this purchase-routing fixture."));
-        File.WriteAllText("/tmp/asap-review-provider-ready", "pr410-v1");
-        return Task.CompletedTask;
+        await File.WriteAllTextAsync("/tmp/asap-review-provider-ready", "pr410-v1", cancellationToken);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

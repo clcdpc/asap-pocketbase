@@ -6,50 +6,19 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { Blocked, result, exitCode, safeError } = require('./helpers/reporting.cjs');
-const { readState, validateContainers, validateEvidence, requireFixture, verifyEnvironment } = require('./helpers/environment.cjs');
-const { parse, run, runScenarios, acquireLease } = require('./run.cjs');
+const { validateEvidence, requireFixture, verifyEnvironment } = require('./helpers/environment.cjs');
+const { parse, run, runScenarios } = require('./run.cjs');
 const appSha = 'a'.repeat(40), toolSha = 'b'.repeat(40);
 const repository = path.resolve(__dirname, '../..');
 const clone = value => JSON.parse(JSON.stringify(value));
-function state(root) {
-  return { Sha: appSha, ShortSha: appSha.slice(0, 12), ProjectName: 'asap-review-' + appSha.slice(0,12),
-    Port: 8080, LifecycleState: 'Ready', Auth: 'Local', StatePath: path.join(root, '.review', appSha.slice(0,12)), ToolingVersion: '0.3.0', ToolingSha: toolSha, ViewerPort: 6080 };
+function state() {
+  return { Sha: appSha, Auth: 'Local', ToolingVersion: '0.4.0', ToolingSha: toolSha };
 }
-function containers(s) {
-  return ['web', 'sql', 'db-init'].map((name, i) => {
-    const project = s.ProjectName;
-    return {
-      Id: String(i + 1).repeat(64), Image: 'sha256:' + String(i + 1).repeat(64),
-      Path: name === 'web' ? '/review/web-entrypoint.sh' : '/other',
-      Config: { WorkingDir: '/app', Hostname: name + '-hostname', Labels: { 'com.docker.compose.service': name,
-        'com.docker.compose.project': project, 'org.opencontainers.image.revision': s.Sha,
-        'org.opencontainers.image.version': s.ToolingVersion, 'org.asap.review.tooling-revision': toolSha }, Env: [
-        'ASPNETCORE_ENVIRONMENT=Testing', 'Testing__UseDeterministicPatronProvider=true',
-        'ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=Asap.ReviewProviders', 'REVIEW_AUTH_MODE=' + s.Auth, 'UNRELATED_SECRET=secret-canary'
-      ] },
-      State: { Running: name !== 'db-init', Status: name === 'db-init' ? 'exited' : 'running', ExitCode: 0 },
-      HostConfig: { NetworkMode: project + '_review', Privileged: false, PortBindings: {} },
-      NetworkSettings: { Networks: { [project + '_review']: {} }, Ports: name === 'web' ?
-        { '8443/tcp': [{ HostIp: '127.0.0.1', HostPort: String(s.Port) }] } : { '1433/tcp': null } },
-      Mounts: [{ Type: 'volume', Destination: name === 'sql' ? '/var/opt/mssql' : '/review/config',
-        Name: project + '_' + (name === 'sql' ? 'sql-data' : 'runtime-config'), RW: name !== 'web' },
-        ...(name === 'web' ? [{ Type: 'bind', Destination: '/review/auth/credential', RW: false }] : [])]
-    };
-  });
-}
-function proof(s = state(repository)) {
-  const c = containers(s), browser = clone(c[0]);
-  browser.Config.Labels['com.docker.compose.service'] = 'acceptance';
-  browser.Config.Labels['org.opencontainers.image.revision'] = s.ToolingSha;
-  browser.NetworkSettings.Ports = { '6080/tcp': [{ HostIp: '127.0.0.1', HostPort: String(s.ViewerPort) }] };
-  browser.Mounts = [{ Type: 'bind', Destination: '/run/review/control', RW: false },
-    { Type: 'bind', Destination: '/review/auth/credential', RW: false }];
-  return { schemaVersion: 1, observedUtc: new Date().toISOString(), dockerEndpoint: 'npipe:////./pipe/dockerDesktopLinuxEngine',
-    acceptanceRunning: true, state: { ...s, StatePath: '/tmp/asap-review' }, containers: [...c, browser] };
-}
-function runtime(s = state(repository)) {
+function runtime(s = state()) {
   return { identity: { applicationCommit: s.Sha, toolingCommit: s.ToolingSha, toolingVersion: s.ToolingVersion },
-    project: s.ProjectName, webHostname: 'web-hostname', authenticationMode: s.Auth, evidence: evidence() };
+    aspnetEnvironment: 'Testing', authenticationMode: s.Auth, evidence: { ...evidence(),
+      titles: [...evidence().titles, { key: 'acceptance-pr410-close-reopen' }],
+      copies: [{ key: 'acceptance-pr410-copy' }] } };
 }
 function evidence() {
   return { contract: 1, database: 'AsapReview', login: 'asap_review_runtime', sqlMajorVersion: 16, sqlEdition: 'Developer',
@@ -61,62 +30,48 @@ function evidence() {
 async function temporary(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'asap-runner-unit-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  await fs.mkdir(path.join(root, '.review'));
-  await fs.mkdir(state(root).StatePath);
   return root;
-}
-async function writeState(root, value = state(root)) {
-  await fs.writeFile(path.join(root, '.review/current.json'), JSON.stringify(value));
 }
 function environment(root) {
   const s = state(root);
-  return { origin: 'https://localhost:8080', state: s, identity: validateContainers(s, containers(s)), evidence: evidence() };
+  return { origin: 'https://localhost:8080', authenticationMode: 'Local', identity: runtime(s).identity, evidence: evidence() };
 }
 const args = (...extra) => ['--suite', 'pr410', '--expected-commit', appSha, ...extra];
 
-test('acceptance defaults to local, respects explicit Entra and rejects unknown authentication', () => {
+test('acceptance supports only local authentication and rejects retired options', () => {
   assert.equal(parse(args('--read-only')).auth, 'local');
-  assert.equal(parse(args('--read-only', '--auth', 'entra')).auth, 'entra');
-  assert.throws(() => parse(args('--auth', 'unknown')), /Authentication mode/);
+  for (const flag of ['--auth', '--auth-timeout-seconds']) {
+    assert.throws(() => parse(args(flag, 'entra')), /Unknown acceptance option/);
+  }
 });
 
-test('reports distinguish local from verified Entra without leaking authentication state', async t => {
+test('local reports record synthetic authentication without leaking browser state', async t => {
   const root = await temporary(t);
-  for (const auth of ['local', 'entra']) {
-    const browser = { ...fakeBrowser(), mode: auth, oidcCallback: { method: 'POST', path: '/signin-oidc', status: 302 },
-      cookie: 'cookie-canary', credential: 'credential-canary' };
-    let selectedMode;
-    const outcome = await run(args('--read-only', '--auth', auth), dependencies(root, {
-      verifyEnvironment: async () => ({ ...environment(root), state: { ...state(root), Auth: auth === 'local' ? 'Local' : 'Entra' } }),
-      authenticate: async (_origin, _timeout, _signal, mode) => { selectedMode = mode; return browser; },
-      runScenarios: async () => {}
-    }));
-    assert.equal(selectedMode, auth);
-    assert.equal(outcome.report.authentication.mode, auth);
-    assert.equal(outcome.report.authentication.status, 'PASS');
-    assert.equal(Object.hasOwn(outcome.report.authentication, 'oidcCallback'), auth === 'entra');
-    const json = await fs.readFile(path.join(outcome.directory, 'results.json'), 'utf8');
-    const markdown = await fs.readFile(path.join(outcome.directory, 'report.md'), 'utf8');
-    assert.doesNotMatch(json + markdown, /cookie-canary|credential-canary/);
-    if (auth === 'local') {
-      assert.match(markdown, /Synthetic reviewer; OIDC\/MFA\/Entra configuration were not tested/);
-      assert.doesNotMatch(markdown, /Real Entra sign-in: \*\*PASS|callback: \*\*verified/);
-    } else assert.match(markdown, /Real Entra form POST callback: \*\*verified/);
-  }
+  const browser = { ...fakeBrowser(), cookie: 'cookie-canary', credential: 'credential-canary' };
+  const outcome = await run(args('--read-only'), dependencies(root, {
+    authenticate: async () => browser, runScenarios: async () => {}
+  }));
+  assert.equal(outcome.report.authentication.mode, 'local');
+  assert.equal(outcome.report.authentication.status, 'PASS');
+  const json = await fs.readFile(path.join(outcome.directory, 'results.json'), 'utf8');
+  const markdown = await fs.readFile(path.join(outcome.directory, 'report.md'), 'utf8');
+  assert.doesNotMatch(json + markdown, /cookie-canary|credential-canary/);
+  assert.ok(markdown.includes('Synthetic reviewer; OIDC/MFA/Entra configuration were not tested'));
 });
 
 test('authentication mode mismatch blocks before opening a browser and cannot fall back', async t => {
   const root = await temporary(t);
-  const outcome = await run(args('--read-only', '--auth', 'entra'), dependencies(root, {
+  const outcome = await run(args('--read-only'), dependencies(root, {
+    verifyEnvironment: async () => ({ ...environment(root), authenticationMode: 'Entra' }),
     authenticate: async () => { throw new Error('Browser must not open for a mismatched runtime'); }
   }));
   assert.equal(outcome.code, 2);
   assert.match(outcome.report.environment.detail, /authentication mode differs/);
-  assert.equal(outcome.report.authentication.mode, 'entra');
+  assert.equal(outcome.report.authentication.mode, 'local');
   assert.equal(outcome.report.authentication.status, 'NOT RUN');
 });
 
-test('staff checks complete before the final runtime proof at scenario and mutation boundaries', async t => {
+test('staff checks complete before the runtime verification at scenario and mutation boundaries', async t => {
   const root = await temporary(t), calls = [];
   const browser = { ...fakeBrowser(), verifyReviewer: async () => { calls.push('staff'); } };
   const outcome = await run(args('--read-only'), dependencies(root, {
@@ -128,7 +83,7 @@ test('staff checks complete before the final runtime proof at scenario and mutat
       assert.deepEqual(calls, ['staff', 'proof']);
     }
   }));
-  assert.equal(outcome.code, 0);
+  assert.equal(outcome.report.authentication.status, 'PASS');
 });
 function dependencies(root, extra = {}) {
   return { root, toolingIdentity: () => ({ commit: toolSha, dirty: false }),
@@ -143,30 +98,6 @@ test('unknown and prototype suite names fail clearly and still write results', a
     assert.ok(await fs.stat(path.join(outcome.directory, 'results.json')));
   }
 });
-test('missing, malformed, legacy and nonobject review states fail closed', async t => {
-  const root = await temporary(t);
-  await assert.rejects(readState(root, appSha), Blocked);
-  for (const text of ['{broken', 'null', '[]', '{}', '{"Sha":"' + appSha + '"}']) {
-    await fs.writeFile(path.join(root, '.review/current.json'), text);
-    await assert.rejects(readState(root, appSha), Blocked);
-  }
-});
-test('Stopped, Failed and Starting review states cannot run', async t => {
-  const root = await temporary(t);
-  for (const LifecycleState of ['Stopped', 'Failed', 'Starting']) {
-    await writeState(root, { ...state(root), LifecycleState });
-    await assert.rejects(readState(root, appSha), /Ready/);
-  }
-});
-test('application SHA, managed paths, ports and tooling contracts are exact', async t => {
-  const root = await temporary(t); await writeState(root);
-  await assert.rejects(readState(root, toolSha), /SHA/);
-  await assert.rejects(readState(root, 'HEAD'), /full lowercase/);
-  for (const change of [{ StatePath: root }, { Port: '8080' }, { ShortSha: 'wrong' }, { ToolingVersion: '0.1.7' }]) {
-    await writeState(root, { ...state(root), ...change });
-    await assert.rejects(readState(root, appSha), Blocked);
-  }
-});
 test('missing explicit mutation authorization blocks before environment or browser calls', async t => {
   const root = await temporary(t);
   const outcome = await run(args(), dependencies(root, { verifyEnvironment: () => { throw new Error('must not be called'); } }));
@@ -174,50 +105,28 @@ test('missing explicit mutation authorization blocks before environment or brows
   assert.match(outcome.report.environment.detail, /AllowReviewWrites/);
   assert.ok(outcome.report.scenarios.filter(s => s.category === 'functional').every(s => s.status === 'BLOCKED'));
 });
-test('non-loopback, additional port bindings and published SQL fail closed', () => {
-  const s = state(repository);
-  for (const address of ['0.0.0.0', '192.0.2.1', '::']) {
-    const c = containers(s); c[0].NetworkSettings.Ports['8443/tcp'][0].HostIp = address;
-    assert.throws(() => validateContainers(s, c), /loopback/);
-  }
-  const c = containers(s); c[1].HostConfig.PortBindings = { '1433/tcp': [{ HostIp: '127.0.0.1', HostPort: '1433' }] };
-  assert.throws(() => validateContainers(s, c), /SQL/);
-});
-test('runtime evidence must correlate container project/image/network/volumes/providers', () => {
-  const s = state(repository);
-  assert.ok(validateContainers(s, containers(s)).webId);
+test('runtime validation checks exact revisions, Testing, local auth, SQL, providers and fixtures', async () => {
+  const actual = await verifyEnvironment(repository, appSha, { runtimeEvidence: async () => runtime(), health: async () => {} });
+  assert.equal(actual.identity.applicationCommit, appSha);
+  assert.equal(actual.identity.toolingCommit, toolSha);
   for (const mutate of [
-    c => { c[0].State.Running = false; },
-    c => { c[2].State.ExitCode = 1; },
-    c => { c[0].Config.Labels['org.opencontainers.image.revision'] = toolSha; },
-    c => { c[0].Config.Labels['com.docker.compose.project'] = 'production'; },
-    c => { c[0].NetworkSettings.Networks.remote = {}; },
-    c => { c[0].Mounts[0].Name = 'unidentified-db'; },
-    c => { c[0].Config.Env.push('ConnectionStrings__AsapDatabase=secret-canary'); },
-    c => { c[0].Config.Env = []; },
-    c => { c[0].HostConfig.Privileged = true; }
+    r => { r.identity.applicationCommit = toolSha; }, r => { r.identity.toolingCommit = 'HEAD'; },
+    r => { r.identity.toolingVersion = 'old'; }, r => { r.aspnetEnvironment = 'Production'; },
+    r => { r.authenticationMode = 'Entra'; }, r => { r.evidence.database = 'production'; },
+    r => { r.evidence.sqlMajorVersion = 17; }, r => { r.evidence.deliveryMode = 'postmark'; },
+    r => { r.evidence.deterministicProviders = false; }, r => { r.evidence.titles = []; },
+    r => { r.evidence.copies = []; }
   ]) {
-    const c = containers(s); mutate(c);
-    assert.throws(() => validateContainers(s, c), Blocked);
+    const current = runtime(); mutate(current);
+    await assert.rejects(verifyEnvironment(repository, appSha,
+      { runtimeEvidence: async () => current, health: async () => {} }), Blocked);
   }
-  for (const change of [{ database: 'production' }, { sqlMajorVersion: 17 }, { deliveryMode: 'postmark' }, { deterministicProviders: false }]) {
-    assert.throws(() => validateEvidence({ ...evidence(), ...change }), Blocked);
-  }
+  await assert.rejects(verifyEnvironment(repository, 'HEAD'), /full lowercase/);
+  await assert.rejects(verifyEnvironment(repository, appSha, { runtimeEvidence: async () => runtime(),
+    health: async () => { throw new Blocked('Health unavailable.'); } }), /Health unavailable/);
+  assert.throws(() => validateEvidence(null), Blocked);
 });
-test('full environment validation correlates fresh host evidence, live runtime and trusted health', async t => {
-  const root = await temporary(t); await writeState(root);
-  let checkedHealth = false;
-  const dependencies = { readProof: async () => proof(state(root)), runtimeEvidence: async () => runtime(state(root)),
-    health: async () => { checkedHealth = true; } };
-  const actual = await verifyEnvironment(root, appSha, dependencies);
-  assert.equal(actual.state.Sha, appSha); assert.equal(checkedHealth, true);
-  await assert.rejects(verifyEnvironment(root, appSha, { ...dependencies, readProof: async () => ({ ...proof(state(root)), containers: [] }) }), /containers/);
-  await assert.rejects(verifyEnvironment(root, appSha, { ...dependencies, health: async () => { throw new Blocked('Health unavailable.'); } }), /Health/);
-  await assert.rejects(verifyEnvironment(root, appSha, { ...dependencies, runtimeEvidence: async () => ({ ...runtime(state(root)), webHostname: 'replaced' }) }), /identity/);
-  let reads = 0;
-  await assert.rejects(verifyEnvironment(root, appSha, { ...dependencies, readProof: async () => ({ ...proof(state(root)),
-    observedUtc: new Date(Date.now() - (reads++ ? 60000 : 0)).toISOString() }) }), /stale/);
-});
+
 test('missing, ambiguous, consumed and invalid fixture identities block rather than reset', () => {
   assert.equal(requireFixture(evidence(), 'draft').id, '27');
   for (const alter of [
@@ -227,17 +136,21 @@ test('missing, ambiguous, consumed and invalid fixture identities block rather t
     e => { e.titles[0].identityBound = false; }
   ]) { const e = evidence(); alter(e); assert.throws(() => requireFixture(e, 'draft'), Blocked); }
 });
-test('independent application/tooling SHAs and check-only NOT RUN are recorded', async t => {
+test('independent application/tooling SHAs and read-only NOT RUN are recorded', async t => {
   const root = await temporary(t);
-  const a = await run(args('--check-only'), dependencies(root));
-  const b = await run(args('--check-only'), dependencies(root));
+  const deps = dependencies(root, { authenticate: async () => fakeBrowser(),
+    runScenarios: async ({ suite, report }) => {
+      report.scenarios = suite.scenarios.map(s => result(s, s.writes ? 'NOT RUN' : 'PASS'));
+    } });
+  const a = await run(args('--read-only'), deps);
+  const b = await run(args('--read-only'), deps);
   assert.equal(a.code, 0); assert.notEqual(a.directory, b.directory);
   assert.equal(a.report.applicationCommit, appSha);
   assert.equal(a.report.toolingCommit, toolSha);
-  assert.equal(a.report.authentication.status, 'NOT RUN');
+  assert.equal(a.report.authentication.status, 'PASS');
   assert.equal(a.report.automatedFunctionalAcceptance, 'INCOMPLETE');
-  assert.ok(a.report.scenarios.filter(s => s.category === 'functional').every(s => s.status === 'NOT RUN'));
-  const failed = await run(args('--check-only'), dependencies(root, {
+  assert.ok(a.report.scenarios.filter(s => s.category === 'functional').some(s => s.status === 'NOT RUN'));
+  const failed = await run(args('--read-only'), dependencies(root, {
     verifyEnvironment: async () => { throw new Blocked('Application SHA mismatch.'); }
   }));
   assert.equal(failed.report.applicationCommit, null, 'Requested SHA is never substituted for a verified runtime SHA');
@@ -321,15 +234,6 @@ test('CLI rejects incompatible modes, remote targets, unsafe inputs and incomple
     assert.throws(() => parse(input), Blocked);
   }
 });
-test('remote Docker proof fails before contacting application', async t => {
-  const root = await temporary(t); await writeState(root);
-  for (const endpoint of ['ssh://review-host', 'tcp://192.0.2.1:2376', 'npipe:////remote/pipe/docker']) {
-    let calls = 0;
-    await assert.rejects(verifyEnvironment(root, appSha, { readProof: async () => ({ ...proof(state(root)), dockerEndpoint: endpoint }),
-      runtimeEvidence: async () => { calls++; } }), /Remote Docker/);
-    assert.equal(calls, 0);
-  }
-});
 test('read-only executor never dispatches a server write', async t => {
   const root = await temporary(t), directory = path.join(root, 'read-only');
   await fs.mkdir(directory);
@@ -342,14 +246,6 @@ test('read-only executor never dispatches a server write', async t => {
   } }] }, options: { readOnly: true, allowWrites: false }, environment: environment(root), browser, report, directory,
     verify: async () => environment(root) });
   assert.equal(aborted, true); assert.equal(dispatched, false); assert.equal(report.scenarios[0].status, 'FAIL');
-});
-test('exclusive lease blocks concurrent acceptance without resetting fixtures', async t => {
-  const root = await temporary(t);
-  const release = await acquireLease(state(root));
-  await assert.rejects(acquireLease(state(root)), /lease/);
-  await release();
-  const releaseAgain = await acquireLease(state(root));
-  await releaseAgain();
 });
 test('cancelled runs mark every unexecuted scenario BLOCKED without opening new tabs', async t => {
   const root = await temporary(t), directory = path.join(root, 'cancelled');
@@ -374,7 +270,7 @@ test('loss of runtime evidence at the mutation boundary blocks dispatch and repo
     await browser.context.handler({ request: () => ({ url: () => t.origin + '/api/asap/staff/title-requests/27/action', method: () => 'POST' }),
       abort: async () => {}, continue: async () => { dispatched = true; } });
   } }] }, options: { allowWrites: true }, environment: environment(root), browser, report, directory,
-  verify: async () => { if (checks++) throw new Blocked('Host proof revoked.'); return environment(root); } });
+  verify: async () => { if (checks++) throw new Blocked('Review runtime unavailable.'); return environment(root); } });
   assert.equal(dispatched, false);
   assert.equal(report.scenarios[0].status, 'BLOCKED');
 });
@@ -385,6 +281,7 @@ test('partial results never report automated completion while required scenarios
     scenarios: [result({ id: 'one', requirements: ['first scenario'] }, 'PASS')] };
   await writeReport(directory, report);
   assert.equal(report.automatedFunctionalAcceptance, 'INCOMPLETE');
+  assert.equal(exitCode(report), 2);
 });
 
 test('smoke registers exactly two scenarios with explicit write metadata and preserves pr410', async () => {
@@ -396,7 +293,7 @@ test('smoke registers exactly two scenarios with explicit write metadata and pre
     ['smoke-authenticated-review', false], ['smoke-synthetic-close', true]
   ]);
   for (const suite of Object.values(registry)) {
-    assert.ok(suite.requires.includes('docker-review-0.3.0'));
+    assert.ok(suite.requires.includes('wslc-review-0.4.0'));
     assert.ok(suite.human.length > 0);
     assert.ok(suite.uncovered.length > 0);
   }
@@ -404,29 +301,11 @@ test('smoke registers exactly two scenarios with explicit write metadata and pre
     { cwd: repository, encoding: 'utf8' });
   const current = await fs.readFile(path.join(__dirname, 'suites/pr410.cjs'), 'utf8');
   assert.equal(current.replace(/\r\n/g, '\n'), baseline.replace(/\r\n/g, '\n')
-    .replace('docker-review-0.2.0', 'docker-review-0.3.0').replace('entra-super-admin', 'authorized-super-admin'));
+    .replace('docker-review-0.2.0', 'wslc-review-0.4.0').replace('entra-super-admin', 'authorized-super-admin'));
   assert.equal(registry.pr410.scenarios.length, 20);
 });
 
 const smokeArgs = (...extra) => ['--suite', 'smoke', '--expected-commit', appSha, ...extra];
-test('smoke check-only reports both scenario IDs, requirements and capabilities without claiming acceptance', async t => {
-  const root = await temporary(t);
-  const suite = require('./suites/smoke.cjs');
-  const outcome = await run(smokeArgs('--check-only'), dependencies(root));
-  const saved = JSON.parse(await fs.readFile(path.join(outcome.directory, 'results.json'), 'utf8'));
-  assert.equal(outcome.code, 0);
-  assert.equal(saved.suite, 'smoke');
-  assert.equal(saved.applicationCommit, appSha);
-  assert.equal(saved.toolingCommit, toolSha);
-  assert.deepEqual(saved.requiredCapabilities, suite.requires);
-  assert.deepEqual(saved.requiredScenarioIds, suite.scenarios.map(s => s.id));
-  assert.deepEqual(saved.scenarios.filter(s => s.category === 'functional'), suite.scenarios.map(s =>
-    result(s, 'NOT RUN', 'Environment-only check; no browser scenarios executed.')));
-  assert.equal(saved.automatedFunctionalAcceptance, 'INCOMPLETE');
-  assert.equal(saved.overallAcceptance, 'INCOMPLETE');
-  assert.ok(saved.scenarios.some(s => s.id === 'pr410-feature-acceptance' && s.status === 'NOT RUN'));
-});
-
 test('smoke requires explicit mutation permission before environment verification', async t => {
   const root = await temporary(t);
   const outcome = await run(smokeArgs(), dependencies(root, {

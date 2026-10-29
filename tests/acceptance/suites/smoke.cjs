@@ -68,7 +68,7 @@ const scenarios = [
   } }
 ];
 
-module.exports = { id: 'smoke', requires: ['docker-review-0.3.0', 'sql-server-2022', 'authorized-super-admin',
+module.exports = { id: 'smoke', requires: ['wslc-review-0.4.0', 'sql-server-2022', 'authorized-super-admin',
   'review-library-2', 'deterministic-providers'], mutations: true, scenarios, human,
   uncovered: [['pr410-feature-acceptance', '#401; #407: full PR #410 acceptance',
     'Smoke validates the testing process only. Run the pr410 suite and complete its remaining human and feature acceptance requirements.']] };

@@ -43,8 +43,7 @@ internal sealed class ReviewEvidenceEndpoint : IStartupFilter
                 await context.Response.WriteAsJsonAsync(new
                 {
                     identity = identity.RootElement,
-                    webHostname = Environment.MachineName,
-                    project = Environment.GetEnvironmentVariable("REVIEW_PROJECT_NAME"),
+                    aspnetEnvironment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
                     authenticationMode = Environment.GetEnvironmentVariable("REVIEW_AUTH_MODE"),
                     evidence
                 }, timeout.Token);

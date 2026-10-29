@@ -39,41 +39,7 @@ async function authenticateLocal(context, origin) {
   }
 }
 
-async function authenticateEntra(context, page, origin, timeoutMs, signal) {
-  let oidcCallback;
-  const callback = response => {
-    const url = new URL(response.url());
-    if (url.origin === origin && url.pathname === '/signin-oidc' && response.request().method() === 'POST') {
-      oidcCallback = { method: 'POST', path: '/signin-oidc', status: response.status() };
-    }
-  };
-  // Record only the local callback's method/path/status. Never capture Entra
-  // URLs, headers, bodies, screenshots, console, traces or storage during MFA.
-  page.on('response', callback);
-  console.log('Complete normal Entra sign-in (including MFA) in Chromium. Authentication is not recorded.');
-  try {
-    await page.goto(origin + '/staff/');
-    const deadline = Date.now() + timeoutMs;
-    let authenticated = false;
-    while (Date.now() < deadline && !page.isClosed() && !signal?.aborted) {
-      try {
-        if (new URL(page.url()).origin === origin) {
-          const response = await context.request.get(origin + '/api/asap/staff/session', { maxRedirects: 0 });
-          const session = response.ok() ? await response.json() : null;
-          if (session?.authenticated && session.accessAllowed) { authenticated = true; break; }
-        }
-      } catch { /* Login navigation can temporarily retire the page. */ }
-      await new Promise(resolve => setTimeout(resolve, 750));
-    }
-    if (!authenticated) throw new Blocked('Entra sign-in timed out, was cancelled or access was denied. Check the registration Web redirect URI https://localhost:8080/signin-oidc and enable ID tokens; no client secret is required.');
-    if (!oidcCallback || ![302, 303].includes(oidcCallback.status)) {
-      throw new Blocked('The real Entra form POST callback at https://localhost:8080/signin-oidc was not verified.');
-    }
-    return oidcCallback;
-  } finally { page.off('response', callback); }
-}
-
-async function openReviewerBrowser(origin, timeoutMs = 300000, signal, mode = 'local') {
+async function openReviewerBrowser(origin, signal) {
   const { chromium } = require('playwright');
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'asap-acceptance-'));
   let context;
@@ -89,27 +55,24 @@ async function openReviewerBrowser(origin, timeoutMs = 300000, signal, mode = 'l
       ]
     });
     context.setDefaultTimeout(15000);
+    if (signal?.aborted) throw new Blocked('Acceptance run was cancelled during browser startup.');
     signal?.addEventListener('abort', abort, { once: true });
     const page = context.pages()[0] || await context.newPage();
-    let oidcCallback;
-    if (mode === 'local') {
-      // Block external traffic and page mutations until the scenario guard
-      // takes over. The trusted API bootstrap bypasses browser routing, follows
-      // no redirects, and installs no identity headers on ordinary requests.
-      await context.route('**/*', route => new URL(route.request().url()).origin === origin &&
-        ['GET', 'HEAD', 'OPTIONS'].includes(route.request().method()) ? route.continue() : route.abort('blockedbyclient'));
-      await authenticateLocal(context, origin);
-      await page.goto(origin + '/staff/');
-    } else if (mode === 'entra') oidcCallback = await authenticateEntra(context, page, origin, timeoutMs, signal);
-    else throw new Blocked('Unknown authentication mode.');
+    // Block external traffic and page mutations until the scenario guard
+    // takes over. The trusted API bootstrap follows no redirects and installs
+    // no identity headers on ordinary requests.
+    await context.route('**/*', route => new URL(route.request().url()).origin === origin &&
+      ['GET', 'HEAD', 'OPTIONS'].includes(route.request().method()) ? route.continue() : route.abort('blockedbyclient'));
+    await authenticateLocal(context, origin);
+    await page.goto(origin + '/staff/');
     const session = await verifyStaffSession(context, origin);
-    if (mode === 'local' && session.staff.authenticationEmail !== 'REVIEWER@EXAMPLE.ORG') {
+    if (session.staff.authenticationEmail !== 'REVIEWER@EXAMPLE.ORG') {
       throw new Blocked('Local review authenticated an unexpected identity.');
     }
     await page.locator('#workspace').waitFor({ state: 'visible' });
     const verifyReviewer = () => verifyStaffSession(context, origin, session);
-    return { context, page, mode, role: 'super_admin', library: 2,
-      ...(mode === 'entra' ? { oidcCallback } : {}), verifyReviewer, close: async () => {
+    return { context, page, mode: 'local', role: 'super_admin', library: 2,
+      verifyReviewer, close: async () => {
       signal?.removeEventListener('abort', abort);
       try { await context.close(); }
       finally { await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
@@ -123,4 +86,4 @@ async function openReviewerBrowser(origin, timeoutMs = 300000, signal, mode = 'l
     throw new Blocked('Chromium/authentication unavailable. ' + safeError(error));
   }
 }
-module.exports = { openReviewerBrowser, authenticateLocal, authenticateEntra, verifyStaffSession };
+module.exports = { openReviewerBrowser, authenticateLocal, verifyStaffSession };

@@ -33,12 +33,14 @@ function result(scenario, status, detail = '') {
 function exitCode(report) {
   if (report.scenarios.some(s => s.status === 'FAIL') || report.environment.status === 'FAIL') return 1;
   if (report.environment.status !== 'PASS' || report.authentication.status === 'BLOCKED' ||
-      report.scenarios.some(s => s.status === 'BLOCKED')) return 2;
+      report.scenarios.some(s => s.status === 'BLOCKED') ||
+      report.requiredScenarioIds?.some(id => !report.scenarios.some(s => s.id === id))) return 2;
   return 0;
 }
 function functionalStatus(report) {
   const rows = report.scenarios.filter(s => s.category === 'functional');
   if (rows.some(s => s.status === 'FAIL')) return 'FAIL';
+  if (report.environment.status !== 'PASS' || report.authentication.status === 'BLOCKED') return 'BLOCKED';
   if (rows.some(s => s.status === 'BLOCKED')) return 'BLOCKED';
   if (report.requiredScenarioIds?.some(id => !rows.some(s => s.id === id))) return 'INCOMPLETE';
   if (!rows.length || rows.some(s => s.status !== 'PASS')) return 'INCOMPLETE';
@@ -68,8 +70,7 @@ async function writeReport(directory, report) {
     `Started (UTC): ${report.startedUtc}`, '',
     `Environment/integration validation: **${report.environment.status}** — ${line(report.environment.detail)}`,
     `Authentication (${line(report.authentication.mode || 'unselected')}): **${report.authentication.status}**`,
-    report.authentication.mode === 'local' ? 'Synthetic reviewer; OIDC/MFA/Entra configuration were not tested.' :
-      `Real Entra form POST callback: **${report.authentication.oidcCallback ? 'verified' : 'NOT RUN'}**`,
+    'Synthetic reviewer; OIDC/MFA/Entra configuration were not tested.',
     `Automated functional checks: **${report.automatedFunctionalAcceptance}**`,
     'Human visual review: **REQUIRED** (#398)',
     'Screen-reader review: **REQUIRED** (#398)',
