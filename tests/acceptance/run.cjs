@@ -41,6 +41,7 @@ async function runScenarios({ suite, options, environment, browser, report, dire
   // Reject external requests. A session expiry is a blocker, never a new login trace.
   const guards = { errors: [], expectUnload: false, unloadCount: 0 };
   let active = null;
+  const settingsResetPath = '/api/asap/staff/settings/reset';
   const requestGuard = async route => {
     const request = route.request(), url = new URL(request.url());
     if (options.signal?.aborted) return route.abort('blockedbyclient');
@@ -48,13 +49,27 @@ async function runScenarios({ suite, options, environment, browser, report, dire
       guards.errors.push('External request blocked after authentication');
       return route.abort('blockedbyclient');
     }
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
+    const settingsReset = url.pathname === settingsResetPath;
+    if (settingsReset || !['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
       const match = url.pathname.match(/^\/api\/asap\/staff\/(title-requests|additional-copies)\/([1-9][0-9]*)\/(action|close|reopen)$/);
-      if (!options.allowWrites || !active?.writes || request.method() !== 'POST' || !match ||
-          !active.allowedFixtures.has(match[1] + '/' + match[2])) {
+      let resetVersion;
+      if (settingsReset) {
+        try {
+          const body = request.postDataJSON();
+          if (body && Object.keys(body).length === 1) resetVersion = body.version;
+        } catch { /* A malformed body cannot authorize a reset. */ }
+      }
+      const allowed = settingsReset
+        ? url.search === '?organizationId=2' && active?.settingsReset &&
+          !active.settingsReset.submitted && resetVersion === active.settingsReset.version
+        : match && active?.allowedFixtures.has(match[1] + '/' + match[2]);
+      if (!options.allowWrites || options.readOnly || !active?.writes || request.method() !== 'POST' || !allowed) {
         guards.errors.push('Unexpected mutation blocked');
         return route.abort('blockedbyclient');
       }
+      // Reserve the sole submission before awaiting identity/runtime checks so
+      // simultaneous requests cannot both consume the same authorization.
+      if (settingsReset) active.settingsReset.submitted = true;
       // Validate the local database, providers and authorized staff again at the write boundary.
       // The page request carries the application's own session and antiforgery header.
       try { await verify(); }
@@ -63,6 +78,8 @@ async function runScenarios({ suite, options, environment, browser, report, dire
         guards.errors.push(guards.blocker);
         return route.abort('blockedbyclient');
       }
+      if (settingsReset) active.mutations.push({ path: settingsResetPath, method: 'POST',
+        organizationId: 2, version: resetVersion });
     }
     return route.continue();
   };
@@ -83,8 +100,8 @@ async function runScenarios({ suite, options, environment, browser, report, dire
         continue;
       }
       const page = await browser.context.newPage();
-      active = { ...scenario, allowedFixtures: new Set() };
       const mutations = [], events = [], failuresBefore = guards.errors.length;
+      active = { ...scenario, allowedFixtures: new Set(), mutations };
       guards.expectUnload = false; guards.unloadCount = 0;
       guards.blocker = null;
       page.on('pageerror', () => guards.errors.push('Browser page error'));
@@ -108,6 +125,10 @@ async function runScenarios({ suite, options, environment, browser, report, dire
           events.push({ event: 'application-response', utc: new Date().toISOString(),
             path: url.pathname, method: response.request().method(), status: response.status() });
         }
+        if (url.origin === environment.origin && [settingsResetPath, '/api/asap/staff/settings'].includes(url.pathname)) {
+          events.push({ event: 'settings-response', utc: new Date().toISOString(),
+            path: url.pathname, method: response.request().method(), status: response.status() });
+        }
         if (url.origin === environment.origin && response.request().method() === 'POST' &&
             /\/additional-copies\/\d+\/(close|reopen)$/.test(url.pathname)) mutations.push({ path: url.pathname });
       });
@@ -119,7 +140,15 @@ async function runScenarios({ suite, options, environment, browser, report, dire
         await verify();
         await scenario.run({ id: scenario.id, page, context: browser.context, origin: environment.origin,
           directory, verify, mutations, guards, allowFixture: fixture => active.allowedFixtures.add(
-            (fixture.key.endsWith('-copy') ? 'additional-copies/' : 'title-requests/') + fixture.id) });
+            (fixture.key.endsWith('-copy') ? 'additional-copies/' : 'title-requests/') + fixture.id),
+          allowSettingsReset: ({ organizationId, version }) => {
+            must(options.allowWrites && !options.readOnly && active.writes,
+              'Settings reset requires an explicitly mutating scenario and AllowReviewWrites.');
+            must(organizationId === 2 && typeof version === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(version),
+              'Settings reset authorization requires Review Library (2) and its authoritative version.');
+            must(!active.settingsReset, 'Settings reset may be authorized only once per scenario.');
+            active.settingsReset = { version, submitted: false };
+          } });
         must(!page.isClosed(), 'Reviewer browser was closed.');
         if (guards.errors.length !== failuresBefore) throw new Error('Browser guard failed');
         report.scenarios.push({ ...result(scenario, 'PASS'), startedUtc, finishedUtc: new Date().toISOString() });

@@ -9,7 +9,8 @@ const http = require('node:http');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { randomUUID } = require('node:crypto');
-const { nativeZoom, checkpoint } = require('./helpers/accessibility.cjs');
+const { nativeZoom, checkpoint, screenshot, confirmationKeyboard, confirmationGeometry, zoomEvidence } = require('./helpers/accessibility.cjs');
+const { confirm } = require('./helpers/assertions.cjs');
 const { runScenarios } = require('./run.cjs');
 const repository = path.resolve(__dirname, '../..');
 
@@ -38,9 +39,24 @@ test('review HostingStartup loads through additional deps without changing Web d
 
 test('native Chromium 200% helper and accessibility screenshot plumbing run with an ephemeral profile', async t => {
   const { chromium } = require('playwright');
-  const server = http.createServer((_request, response) => {
-    response.setHeader('Content-Type', 'text/html');
-    response.end('<!doctype html><html lang="en"><title>Runner plumbing fixture</title><body><main id="workspace"><h1>Runner plumbing fixture</h1><p>Synthetic content only. This is not application acceptance.</p></main></body></html>');
+  const server = http.createServer(async (request, response) => {
+    if (request.url === '/') {
+      response.setHeader('Content-Type', 'text/html');
+      response.end(`<!doctype html><html lang="en"><title>Runner plumbing fixture</title>
+        <link rel="stylesheet" href="/staff/styles.css"><body><main id="workspace">
+        <h1>Runner plumbing fixture</h1><p>Synthetic content only. This is not application acceptance.</p>
+        <button id="open">Open confirmation</button></main><script type="module">
+        import { confirmAction } from '/staff/js/confirmation.js';
+        document.querySelector('#open').onclick = async () => { window.fixtureAccepted = await confirmAction({
+          title: 'Revert request changes?', message: 'Discard the unsaved request changes?',
+          confirmLabel: 'Revert changes', cancelLabel: 'Keep editing', isCurrent: () => true }); };
+        </script></body></html>`);
+      return;
+    }
+    try {
+      response.setHeader('Content-Type', request.url.endsWith('.js') ? 'text/javascript' : 'text/css');
+      response.end(await fs.readFile(path.join(repository, 'src/Asap.Web/Frontend', request.url)));
+    } catch { response.statusCode = 404; response.end(); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'asap-acceptance-plumbing-'));
@@ -62,8 +78,46 @@ test('native Chromium 200% helper and accessibility screenshot plumbing run with
   const directory = path.join(repository, '.artifacts', 'acceptance-infrastructure', randomUUID());
   await fs.mkdir(directory, { recursive: true });
   await nativeZoom(context, page, 2);
-  await checkpoint(page, directory, 'native-zoom-plumbing-only');
+  const opener = page.locator('#open');
+  await opener.focus(); await page.keyboard.press('Enter');
+  const geometry = await confirmationKeyboard(page, 'Revert request changes?', 'Revert changes', 'Keep editing');
+  await checkpoint(page, directory, 'native-zoom-plumbing-only', { fullPage: false });
+  await zoomEvidence(context, page, directory, 'native-zoom-plumbing-only', geometry);
+  const fullPage = await screenshot(page, directory, 'native-zoom-fullpage-comparison');
+  const viewport = await fs.readFile(path.join(directory, 'native-zoom-plumbing-only.png'));
+  assert.equal(fullPage.readUInt32BE(16), 640, 'Pinned Playwright fullPage capture uses reduced CSS width');
+  assert.equal(viewport.readUInt32BE(16), 1280, 'Viewport capture retains the complete native zoomed surface');
   assert.equal(await page.evaluate(() => innerWidth), 640);
+  await page.keyboard.press('Escape');
+  await page.locator('#confirmation-dialog[open]').waitFor({ state: 'hidden' });
+  assert.equal(await opener.evaluate(n => n === document.activeElement), true, 'Escape returns focus');
+
+  await opener.press('Enter');
+  const dialog = page.locator('#confirmation-dialog[open]');
+  const message = dialog.locator('#confirmation-message');
+  await message.evaluate(n => { n.textContent = 'Long synthetic confirmation content that remains scrollable. '.repeat(80); });
+  const scrolling = await confirmationKeyboard(page, 'Revert request changes?', 'Revert changes', 'Keep editing');
+  assert.ok(scrolling.scrollHeight > scrolling.clientHeight, 'Legitimate internal vertical scrolling is exercised');
+  await message.evaluate(n => { n.textContent = 'Discard the unsaved request changes?'; });
+  // A clipped child can leave the document and dialog overflow checks green.
+  await dialog.locator('.dialog-body').evaluate(n => { n.style.overflow = 'hidden'; });
+  await message.evaluate(n => { n.style.whiteSpace = 'nowrap'; n.textContent = 'Horizontally clipped synthetic message '.repeat(8); });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await assert.rejects(confirmationGeometry(page), /visible without clipping/);
+  await message.evaluate(n => { n.style.whiteSpace = ''; n.textContent = 'Discard the unsaved request changes?'; });
+  await dialog.locator('.dialog-body').evaluate(n => { n.style.overflow = ''; });
+  await dialog.locator('.form-actions').evaluate(n => { n.style.height = '1px'; n.style.overflow = 'hidden'; });
+  await dialog.getByRole('button', { name: 'Keep editing', exact: true }).focus();
+  await assert.rejects(confirmationKeyboard(page, 'Revert request changes?', 'Revert changes', 'Keep editing'), /control is visible without clipping/);
+  await dialog.locator('.form-actions').evaluate(n => { n.style.height = ''; n.style.overflow = ''; });
+  const approval = dialog.getByRole('button', { name: 'Revert changes', exact: true });
+  await approval.evaluate(n => { n.style.height = '1px'; n.style.minHeight = '0'; n.style.paddingBlock = '0'; n.style.overflow = 'hidden'; });
+  await dialog.getByRole('button', { name: 'Keep editing', exact: true }).focus();
+  await assert.rejects(confirmationKeyboard(page, 'Revert request changes?', 'Revert changes', 'Keep editing'), /Approval control is visible without clipping/);
+  await approval.evaluate(n => { n.removeAttribute('style'); });
+  await dialog.locator('.form-actions').evaluate(n => { n.prepend(n.lastElementChild); });
+  await confirm(page, 'Revert changes');
+  await page.waitForFunction(() => window.fixtureAccepted === true);
 });
 
 test('real headed Chromium survives closing the authentication tab and every scenario tab',

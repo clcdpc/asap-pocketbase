@@ -4,16 +4,16 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { Blocked } = require('./reporting.cjs');
 
-async function screenshot(page, directory, name) {
+async function screenshot(page, directory, name, options = {}) {
   if (!await page.locator('#workspace').isVisible()) {
     throw new Blocked('Authenticated application workspace is unavailable; screenshot suppressed.');
   }
   // Real staff identity and saved configuration can coexist with synthetic requests.
-  await page.screenshot({ path: path.join(directory, name + '.png'), fullPage: true,
+  return page.screenshot({ path: path.join(directory, name + '.png'), fullPage: true, ...options,
     mask: [page.locator('.app-header, .request-activity, .detail-meta span:last-child'),
       page.locator('#notification-email, #weekly-email, input[type="password"], [data-email-test]')] });
 }
-async function checkpoint(page, directory, name) {
+async function checkpoint(page, directory, name, options = {}) {
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   await page.evaluate(axe);
   const result = await page.evaluate(async () => ({
@@ -21,10 +21,96 @@ async function checkpoint(page, directory, name) {
     overflow: document.documentElement.scrollWidth > innerWidth,
     images: [...document.images].filter(n => n.getClientRects().length).every(n => n.complete && n.naturalWidth > 0)
   }));
-  await screenshot(page, directory, name);
+  await screenshot(page, directory, name, options);
   assert.deepEqual(result.violations, [], 'No serious/critical axe findings');
   assert.equal(result.overflow, false, 'No horizontal page overflow');
   assert.equal(result.images, true, 'Visible images loaded');
+}
+async function partGeometry(locator, edge = null) {
+  return locator.evaluate((node, edge) => {
+    const rect = r => ({ left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height });
+    const viewport = { left: visualViewport.offsetLeft, top: visualViewport.offsetTop,
+      right: visualViewport.offsetLeft + visualViewport.width, bottom: visualViewport.offsetTop + visualViewport.height };
+    const range = document.createRange(); range.selectNodeContents(node);
+    const lines = () => [...range.getClientRects()].filter(r => r.width > 0 && r.height > 0);
+    const target = () => edge === 'end' ? lines().at(-1) : lines()[0];
+    const dialog = node.closest('dialog');
+    const header = dialog?.querySelector('.dialog-header');
+    // Reading long content may scroll, but only through user-scrollable areas.
+    // Center the first/last line below a sticky heading, without CSS changes.
+    if (edge) {
+      for (let parent = node; parent && dialog?.contains(parent); parent = parent.parentElement) {
+        if (!/^(auto|scroll)$/.test(getComputedStyle(parent).overflowY) || parent.scrollHeight <= parent.clientHeight) continue;
+        const r = parent.getBoundingClientRect(), line = target();
+        const stickyBottom = header && !header.contains(node) && getComputedStyle(header).position === 'sticky'
+          ? header.getBoundingClientRect().bottom : viewport.top;
+        const top = Math.max(viewport.top, r.top + parent.clientTop, stickyBottom);
+        const bottom = Math.min(viewport.bottom, r.top + parent.clientTop + parent.clientHeight);
+        if (line) parent.scrollTop += (line.top + line.bottom - top - bottom) / 2;
+      }
+    }
+    const bounds = rect(node.getBoundingClientRect()), clip = { ...viewport };
+    let rendered = true;
+    for (let parent = node; parent; parent = parent.parentElement) {
+      const s = getComputedStyle(parent), r = parent.getBoundingClientRect();
+      rendered &&= s.display !== 'none' && s.visibility === 'visible' && Number(s.opacity) > 0;
+      if (parent !== node || edge) {
+        if (s.overflowX !== 'visible') {
+          clip.left = Math.max(clip.left, r.left + parent.clientLeft);
+          clip.right = Math.min(clip.right, r.left + parent.clientLeft + parent.clientWidth);
+        }
+        if (s.overflowY !== 'visible') {
+          clip.top = Math.max(clip.top, r.top + parent.clientTop);
+          clip.bottom = Math.min(clip.bottom, r.top + parent.clientTop + parent.clientHeight);
+        }
+      }
+    }
+    const text = lines().map(rect), style = getComputedStyle(node);
+    const visible = r => r && r.width > 0 && r.height > 0 && r.left >= clip.left - 1 &&
+      r.right <= clip.right + 1 && r.top >= clip.top - 1 && r.bottom <= clip.bottom + 1;
+    const sample = edge ? rect(target() || node.getBoundingClientRect()) : bounds;
+    const hit = document.elementFromPoint((sample.left + sample.right) / 2, (sample.top + sample.bottom) / 2);
+    return { bounds, clip, rendered, text, reachable: visible(sample) && (hit === node || node.contains(hit)),
+      horizontalTextFits: text.length > 0 && text.every(r => r.left >= clip.left - 1 && r.right <= clip.right + 1),
+      controlTextFits: edge !== null || text.every(r => visible(r) && r.left >= bounds.left - 1 &&
+        r.right <= bounds.right + 1 && r.top >= bounds.top - 1 && r.bottom <= bounds.bottom + 1),
+      untruncated: style.textOverflow !== 'ellipsis' && ['none', '0'].includes(style.webkitLineClamp),
+      focused: node === document.activeElement,
+      focusIndicator: style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0 || style.boxShadow !== 'none' };
+  }, edge);
+}
+function assertPart(geometry, label, focused = false) {
+  assert.equal(geometry.rendered && geometry.untruncated && geometry.horizontalTextFits && geometry.controlTextFits && geometry.reachable, true,
+    label + ' is visible without clipping in the visual viewport and ancestor scrollports');
+  if (focused) {
+    assert.equal(geometry.focused, true, label + ' receives keyboard focus');
+    assert.equal(geometry.focusIndicator, true, label + ' has a visible focus indicator');
+  }
+}
+async function confirmationGeometry(page) {
+  const dialog = page.locator('#confirmation-dialog[open]');
+  const geometry = await dialog.evaluate(node => {
+    const r = node.getBoundingClientRect(), v = visualViewport;
+    return { dialog: { x: r.x, y: r.y, width: r.width, height: r.height },
+      viewport: { x: v.offsetLeft, y: v.offsetTop, width: v.width, height: v.height, scale: v.scale },
+      scrollWidth: node.scrollWidth, clientWidth: node.clientWidth,
+      scrollHeight: node.scrollHeight, clientHeight: node.clientHeight,
+      overflowX: getComputedStyle(node).overflowX, overflowY: getComputedStyle(node).overflowY };
+  });
+  const { dialog: r, viewport: v } = geometry;
+  assert.ok(r.width > 0 && r.height > 0 && r.x >= v.x - 1 && r.y >= v.y - 1 &&
+    r.x + r.width <= v.x + v.width + 1 && r.y + r.height <= v.y + v.height + 1,
+  'Complete confirmation dialog fits the actual visual viewport');
+  assert.ok(geometry.scrollWidth <= geometry.clientWidth + 1, 'Confirmation has no horizontal internal overflow');
+  for (const id of ['confirmation-title', 'confirmation-message']) {
+    geometry[id] = [];
+    for (const edge of ['start', 'end']) {
+      const part = await partGeometry(dialog.locator('#' + id), edge);
+      assertPart(part, id + ' ' + edge);
+      geometry[id].push(part);
+    }
+  }
+  return geometry;
 }
 async function confirmationKeyboard(page, title, approve, cancel = 'Cancel') {
   const dialog = page.locator('#confirmation-dialog[open]');
@@ -36,26 +122,49 @@ async function confirmationKeyboard(page, title, approve, cancel = 'Cancel') {
   const safe = dialog.getByRole('button', { name: cancel, exact: true });
   const action = dialog.getByRole('button', { name: approve, exact: true });
   assert.equal(await safe.evaluate(n => n === document.activeElement), true, 'Safe initial focus');
+  const geometry = await confirmationGeometry(page);
+  assert.equal(await safe.isEnabled(), true, 'Cancel is usable');
+  assert.equal(await action.isEnabled(), true, 'Approval is usable');
   await page.keyboard.press('Shift+Tab');
-  assert.equal(await action.evaluate(n => n === document.activeElement), true);
+  geometry.approval = await partGeometry(action);
+  assertPart(geometry.approval, 'Approval control', true);
   await page.keyboard.press('Tab');
-  assert.equal(await safe.evaluate(n => n === document.activeElement), true);
-  const focus = await safe.evaluate(n => {
-    const s = getComputedStyle(n), r = n.getBoundingClientRect();
-    return { visible: s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0 ||
-      s.boxShadow !== 'none', fits: r.width > 0 && r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight };
-  });
-  assert.equal(focus.visible, true, 'Visible focus indicator');
-  assert.equal(focus.fits, true, 'Safe confirmation control is not clipped');
+  geometry.cancel = await partGeometry(safe);
+  assertPart(geometry.cancel, 'Cancel control', true);
   await page.keyboard.press('Tab');
-  assert.equal(await action.evaluate(n => n === document.activeElement), true);
+  assertPart(await partGeometry(action), 'Approval control', true);
   await page.keyboard.press('Tab');
-  assert.equal(await safe.evaluate(n => n === document.activeElement), true);
-  const bounds = await action.boundingBox();
-  assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0 &&
-    bounds.x + bounds.width <= await page.evaluate(() => innerWidth) &&
-    bounds.y + bounds.height <= await page.evaluate(() => innerHeight), 'Approval control is not clipped');
-  return dialog;
+  assertPart(await partGeometry(safe), 'Cancel control', true);
+  return geometry;
+}
+async function zoomEvidence(context, page, directory, name, geometry) {
+  const cdp = await context.newCDPSession(page);
+  try {
+    const metrics = await cdp.send('Page.getLayoutMetrics');
+    const zoom = metrics.visualViewport.zoom;
+    assert.equal(zoom, 2, 'Evidence is captured at actual native 200 percent');
+    assert.ok(Math.abs(metrics.cssVisualViewport.clientWidth - geometry.viewport.width) < 1,
+      'CDP and DOM agree on the actual CSS visual viewport');
+    // Playwright fullPage/locator screenshots pass CSS geometry to CDP, whose
+    // capture clip uses device-independent pixels at native browser zoom.
+    // A viewport capture is reliable; scale only the targeted CDP clip.
+    const viewport = await screenshot(page, directory, name, { fullPage: false });
+    const r = geometry.dialog, v = geometry.viewport;
+    assert.deepEqual(await page.locator('#confirmation-dialog[open]').boundingBox(), r,
+      'Capture uses the measured confirmation geometry');
+    const x = Math.floor((r.x - v.x) * zoom), y = Math.floor((r.y - v.y) * zoom);
+    const clip = { x, y, width: Math.ceil((r.x - v.x + r.width) * zoom) - x,
+      height: Math.ceil((r.y - v.y + r.height) * zoom) - y };
+    const targeted = await screenshot(page, directory, name + '-dialog', { fullPage: false, clip });
+    const dimensions = buffer => ({ width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) });
+    const captures = { viewport: dimensions(viewport), dialog: dimensions(targeted), clip };
+    assert.ok(captures.viewport.width >= metrics.visualViewport.clientWidth &&
+      captures.viewport.height >= metrics.visualViewport.clientHeight, 'Viewport capture includes the full zoomed viewport');
+    assert.ok(Math.abs(captures.dialog.width - clip.width) <= 1 && Math.abs(captures.dialog.height - clip.height) <= 1,
+      'Targeted capture includes the complete zoomed confirmation bounds');
+    await fs.writeFile(path.join(directory, name + '-geometry.json'), JSON.stringify({ actualBrowserZoom: zoom,
+      devicePixelRatio: await page.evaluate(() => devicePixelRatio), geometry, metrics, captures }, null, 2));
+  } finally { await cdp.detach(); }
 }
 async function nativeZoom(context, page, factor) {
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
@@ -76,4 +185,4 @@ async function nativeZoom(context, page, factor) {
       getComputedStyle(document.body).zoom, visualViewport.scale]), ['1', '1', 1]);
   } finally { await cdp.detach(); }
 }
-module.exports = { screenshot, checkpoint, confirmationKeyboard, nativeZoom };
+module.exports = { screenshot, checkpoint, confirmationKeyboard, confirmationGeometry, nativeZoom, zoomEvidence };

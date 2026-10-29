@@ -1,8 +1,11 @@
 'use strict';
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const { createHash } = require('node:crypto');
 const { Blocked } = require('../helpers/reporting.cjs');
 const { requireFixture, must } = require('../helpers/environment.cjs');
-const { checkpoint, confirmationKeyboard, nativeZoom } = require('../helpers/accessibility.cjs');
+const { checkpoint, confirmationKeyboard, nativeZoom, zoomEvidence } = require('../helpers/accessibility.cjs');
 const { detail, json, openFixture, actionButton, choose, confirm, unchanged, submit } = require('../helpers/assertions.cjs');
 
 const titlePath = f => '/api/asap/staff/title-requests/' + f.id + '/action';
@@ -113,9 +116,10 @@ const scenarios = [
         if (mode === 'zoom') await nativeZoom(t.context, t.page, 2);
         await revert.focus();
         await t.page.keyboard.press('Enter');
-        await confirmationKeyboard(t.page, 'Revert request changes?', 'Revert changes', 'Keep editing');
+        const geometry = await confirmationKeyboard(t.page, 'Revert request changes?', 'Revert changes', 'Keep editing');
         assert.equal(await t.page.locator('#request-dialog[open]').count(), 1, 'Confirmation stacks above details');
-        await checkpoint(t.page, t.directory, t.id + '-' + mode);
+        await checkpoint(t.page, t.directory, t.id + '-' + mode, { fullPage: mode !== 'zoom' });
+        if (mode === 'zoom') await zoomEvidence(t.context, t.page, t.directory, t.id + '-' + mode, geometry);
         await t.page.keyboard.press('Escape');
         await confirmation(t.page).waitFor({ state: 'hidden' });
         assert.equal(await revert.evaluate(n => n === document.activeElement), true, 'Focus returns to opener');
@@ -289,8 +293,7 @@ const scenarios = [
       assert.equal(await input.inputValue(), 'Synthetic acceptance settings draft');
       await t.page.locator('#settings-discard').click();
       await confirmation(t.page).waitFor();
-      await confirmation(t.page).locator('.form-actions button').last().click();
-      await confirmation(t.page).waitFor({ state: 'hidden' });
+      await confirm(t.page, 'Discard changes');
       await t.page.waitForFunction(value => document.querySelector('#patron-success-title').value === value, original);
       const before = await json(t.context, t.origin, '/api/asap/staff/settings?orgId=2');
       assert.equal(before.orgId, '2', 'Authoritative Settings read uses Review Library scope');
@@ -307,6 +310,97 @@ const scenarios = [
       assert.equal(after.version, before.version, 'Reset Cancel preserves authoritative settings');
       assert.equal(t.mutations.length, 0);
       await checkpoint(t.page, t.directory, t.id);
+    } },
+  { id: 'settings-reset-approved', requirements: ['#401: approved dirty Settings reset, system inheritance, authoritative reload and custom rejection-template preservation'], writes: true,
+    run: async t => {
+      await t.page.goto(t.origin + '/staff/?stage=settings&settingsScope=2#settings-patron');
+      await t.page.waitForFunction(() => document.querySelector('#settings-version')?.value && !document.querySelector('#settings-form').inert);
+      await t.page.locator('#settings-nav-patron').click();
+      const settingsPath = '/api/asap/staff/settings?orgId=2';
+      const before = await json(t.context, t.origin, settingsPath);
+      assert.equal(before.orgId, '2');
+      assert.equal(before.stored.libraryOverride.patron.successTitle, 'Acceptance suggestion received', 'Seeded library PatronSettings override exists');
+      assert.equal(before.effective.successTitle, before.stored.libraryOverride.patron.successTitle);
+      const systemTitle = before.stored.configuredSystem.patron.successTitle;
+      assert.ok(systemTitle && systemTitle !== before.effective.successTitle, 'Reset must change the effective value');
+      assert.ok(before.stored.libraryOverride.email, 'Seeded EmailSettings is also an inherited scalar override');
+      const owned = before.stored.libraryOverride.templates.filter(item => item.sourceTemplateId === null);
+      assert.ok(owned.some(item => item.templateKey === 'rejection:acceptance-pr410-rejection' && item.isCustom && item.organizationId === '2'),
+        'Known library-owned rejection template exists before reset');
+      assert.equal(await t.page.locator('#settings-version').inputValue(), before.version);
+      const input = t.page.locator('#patron-success-title');
+      await input.fill('Synthetic unsaved draft discarded by approved reset');
+      await t.page.evaluate(() => {
+        window.acceptanceResetConfirmations = 0;
+        new MutationObserver(records => {
+          for (const record of records) {
+            if (record.target.id === 'confirmation-dialog' && record.oldValue === null) window.acceptanceResetConfirmations++;
+          }
+        }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'], attributeOldValue: true });
+      });
+      await t.page.locator('#settings-reset').click();
+      await confirmationKeyboard(t.page, 'Reset inherited overrides?', 'Reset inherited overrides');
+      assert.equal(await confirmation(t.page).count(), 1);
+      const warning = await confirmation(t.page).innerText();
+      assert.match(warning, /Discard unsaved settings changes and reset this library's inherited overrides to the current system values/);
+      assert.match(warning, /Library-owned custom fields, formats, rejection templates, auto-claim rules and their history are preserved/);
+      await checkpoint(t.page, t.directory, t.id + '-review');
+      t.allowSettingsReset({ organizationId: 2, version: before.version });
+      const isReset = r => new URL(r.url()).pathname === '/api/asap/staff/settings/reset' && r.request().method() === 'POST';
+      const isReload = r => new URL(r.url()).pathname === '/api/asap/staff/settings' &&
+        new URL(r.url()).search === '?orgId=2' && r.request().method() === 'GET';
+      let confirmed = false;
+      const reloads = [];
+      t.page.on('response', response => { if (isReset(response)) confirmed = response.status() === 200; });
+      t.page.on('request', request => {
+        if (new URL(request.url()).pathname === '/api/asap/staff/settings' && request.method() === 'GET') {
+          reloads.push({ query: new URL(request.url()).search, afterResetResponse: confirmed });
+        }
+      });
+      const resetResponse = t.page.waitForResponse(isReset);
+      const reloadResponse = t.page.waitForResponse(isReload);
+      await confirm(t.page, 'Reset inherited overrides');
+      const response = await resetResponse;
+      assert.equal(response.status(), 200);
+      const accepted = await response.json();
+      assert.equal(accepted.code, 'reset');
+      assert.equal(accepted.data.orgId, '2');
+      assert.notEqual(accepted.data.version, before.version, 'Reset changes the aggregate SQL-backed Settings version');
+      const reloadedResponse = await reloadResponse;
+      assert.equal(reloadedResponse.status(), 200);
+      const reloaded = await reloadedResponse.json();
+      await t.page.waitForFunction(version => document.querySelector('#settings-version').value === version &&
+        !document.querySelector('#settings-form').inert, accepted.data.version);
+      await t.page.locator('#settings-message.success').filter({ hasText: /^Inherited overrides reset\.$/ }).waitFor();
+      const after = await json(t.context, t.origin, settingsPath);
+      assert.deepEqual(reloaded, after, 'UI reload receives the current authoritative Settings document');
+      assert.deepEqual(reloads, [{ query: '?orgId=2', afterResetResponse: true }], 'One scoped reload follows server confirmation');
+      assert.equal(after.version, accepted.data.version);
+      assert.equal(after.stored.libraryOverride.patron, null, 'PatronSettings override row was removed');
+      assert.equal(after.stored.libraryOverride.email, null, 'EmailSettings scalar override row was removed');
+      assert.equal(after.hasOverrides, true, 'Settings still reports the preserved library-owned template');
+      assert.deepEqual(after.stored.configuredSystem, before.stored.configuredSystem, 'System values were not changed');
+      assert.equal(after.effective.successTitle, systemTitle, 'Effective SuccessTitle now inherits the system value');
+      assert.equal(await input.inputValue(), systemTitle, 'Unsaved draft was discarded and editor repopulated');
+      assert.equal(await input.isDisabled(), true, 'Inherited value is no longer an editable library override');
+      assert.equal(await t.page.locator('#settings-discard').isVisible(), false, 'No dirty draft remains');
+      assert.deepEqual(after.stored.libraryOverride.templates.filter(item => item.sourceTemplateId === null), owned,
+        'Owned template identities, content and SQL rowversions are unchanged');
+      await checkpoint(t.page, t.directory, t.id + '-complete');
+      assert.equal(await confirmation(t.page).count(), 0);
+      assert.equal(await t.page.evaluate(() => window.acceptanceResetConfirmations), 1, 'Exactly one confirmation opened');
+      assert.deepEqual(t.mutations, [{ path: '/api/asap/staff/settings/reset', method: 'POST', organizationId: 2, version: before.version }],
+        'Exactly one authorized reset and no other mutation');
+      // Export only the chosen synthetic state and template fingerprints, never
+      // the full Settings document (which includes saved configuration).
+      const state = data => ({ orgId: data.orgId, version: data.version, hasOverrides: data.hasOverrides,
+        patronSuccessTitleOverride: data.stored.libraryOverride.patron?.successTitle ?? null,
+        effectiveSuccessTitle: data.effective.successTitle, emailOverridePresent: data.stored.libraryOverride.email !== null,
+        ownedTemplates: data.stored.libraryOverride.templates.filter(item => item.sourceTemplateId === null).map(item => ({
+          id: item.id, templateKey: item.templateKey, organizationId: item.organizationId, version: item.version,
+          contentSha256: createHash('sha256').update(JSON.stringify(item)).digest('hex') })) });
+      await fs.writeFile(path.join(t.directory, t.id + '-state.json'), JSON.stringify({ before: state(before),
+        reset: accepted, reloads, after: state(after), mutations: t.mutations }, null, 2));
     } },
   { id: 'profile-uncertain-recovery', requirements: ['#401: Profile uncertain-save review, accurate warning, safe Cancel (injected pre-dispatch network failure)'], writes: false,
     run: async t => {
@@ -391,13 +485,32 @@ const scenarios = [
       await openFixture(t.page, t.origin, f);
       const before = await detail(t.context, t.origin, f);
       const button = await actionButton(t.page, 'Purchase');
-      if (await button.isEnabled()) {
-        const review = await choose(t.page, 'Purchase');
-        await reviewSubmit(review).click();
-      }
+      assert.equal(before.bibid, 941010);
+      assert.equal(before.bibidStaffVerified, false);
+      assert.equal(await button.count(), 1, 'Purchase action exists for the unverified fixture');
+      assert.equal(await button.isEnabled(), true, 'Policy permits opening Purchase review');
+      const review = await choose(t.page, 'Purchase');
+      await review.getByRole('heading', { name: 'Purchase suggestion', exact: true }).waitFor();
+      await t.page.evaluate(() => {
+        window.acceptanceUnverifiedSuccess = false;
+        const status = document.querySelector('#app-status');
+        new MutationObserver(records => {
+          const texts = records.flatMap(record => [record.oldValue, ...[...record.addedNodes].map(node => node.textContent)]);
+          if ([status.textContent, ...texts].some(text => text?.startsWith('Workflow action completed.'))) window.acceptanceUnverifiedSuccess = true;
+        }).observe(status, { childList: true, subtree: true, characterData: true, characterDataOldValue: true });
+      });
+      await review.getByRole('button', { name: 'Purchase', exact: true }).click();
+      await t.page.locator('#app-status').filter({ hasText:
+        'Search Polaris, select the matching BIB, and save it before moving to Pending hold.' }).waitFor();
+      assert.equal(await review.isVisible(), true, 'Blocked submission leaves the review open');
+      assert.equal(await confirmation(t.page).count(), 0);
       await unchanged(t.context, t.origin, f, before);
-      assert.equal(t.mutations.length, 0);
+      assert.deepEqual((await t.verify()).evidence.titles.find(item => item.id === f.id), f,
+        'Unverified BIB, status, rowversion and event count remain unchanged in SQL');
+      assert.equal(t.mutations.length, 0, 'The authoritative-BIB client gate prevents HTTP submission');
       assert.doesNotMatch(await t.page.locator('#app-status').innerText(), /Workflow action completed/);
+      await checkpoint(t.page, t.directory, t.id);
+      assert.equal(await t.page.evaluate(() => window.acceptanceUnverifiedSuccess), false, 'No purchase success was announced');
     } },
   { id: 'additional-copy-close-reopen', requirements: ['#401: additional-copy confirmation, safe Cancel and authoritative results'], writes: true,
     run: async t => {
@@ -412,7 +525,7 @@ const scenarios = [
         await confirmation(t.page).waitFor();
         const response = t.page.waitForResponse(r => new URL(r.url()).pathname.endsWith('/' + f.id + '/' + operation) &&
           r.request().method() === 'POST');
-        await confirmation(t.page).locator('.form-actions button').last().click();
+        await confirm(t.page, label);
         assert.equal((await response).status(), 200);
         await t.page.locator('#request-dialog .status-badge').filter({ hasText: status === 'closed' ? 'Closed' : 'Open' }).waitFor();
         assert.equal((await detail(t.context, t.origin, f)).status, status);
@@ -426,8 +539,8 @@ const human = [
   ['human-visual', '#398; #401: desktop/mobile/native zoom, long text, forced colors, visual consistency and clipping'],
 ];
 const uncovered = [
-  ['settings-admin-and-reset', '#401: activation, logo changes, saved Polaris diagnostic, roster refresh and inherited reset approval',
-    'Live suite covers Settings discard and combined dirty-reset review/Cancel. Existing deterministic Settings/SQL/browser tests cover these branches; reset approval/owned-history preservation and administration need dedicated fixtures or reviewer execution.'],
+  ['settings-admin-and-reset', '#401: activation, logo changes, saved Polaris diagnostic and roster refresh',
+    'Live suite covers Settings discard, dirty-reset review/Cancel and approved inherited reset with custom rejection-template preservation. Broader owned configuration/history remains covered by existing real-SQL tests; activation, logos, diagnostics and roster refresh still need dedicated acceptance or reviewer execution.'],
   ['editor-combined-save', '#401: combined automatic-hold/automatic-claim Save consequences',
     'Existing request-action/controller tests cover the combined warning; no live auto-claim-rule fixture is installed by this suite.'],
   ['hold-delete-email-retirement', '#401: hold/recovery, clear another claim, permanent delete, email-test retirement',

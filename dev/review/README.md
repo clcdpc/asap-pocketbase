@@ -33,7 +33,7 @@ certificate installation is needed.
 # Read-only smoke: authenticated review passes; synthetic closure is NOT RUN.
 pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke
 
-# Existing twenty-scenario feature suite.
+# Feature suite: 21 scenarios, including approved inherited Settings reset.
 pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites
 
 # Select an exact application revision instead of a PR.
@@ -57,6 +57,12 @@ may require `wslc remove --force <printed-container-name>`.
 
 The two smoke tests exercise authorized SQL-backed fixture review and, when
 explicitly authorized, a real UI closure with one POST and a changed rowversion.
+The feature suite retains all twenty original scenarios and adds an approved
+Review Library reset with authoritative before/after state and preserved custom
+rejection-template content/rowversion. Read-only feature runs execute eleven
+scenarios and skip all ten mutation scenarios. Native 200% confirmation evidence
+includes complete viewport and dialog captures plus DOM/CDP geometry; the pinned
+full-page capture's reduced CSS-width crop is covered by a plumbing regression.
 Automated success leaves human visual/screen-reader acceptance INCOMPLETE.
 See [suite coverage and developer checks](../../tests/acceptance/README.md).
 
