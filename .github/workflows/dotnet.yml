@@ -27,7 +27,7 @@ concurrency:
 jobs:
   build-test-package:
     name: Build, test and package
-    runs-on: ubuntu-latest
+    runs-on: clc-linux
     # The retained SQL/frontend/browser guard already takes about 44 minutes.
     timeout-minutes: 60
     outputs:
