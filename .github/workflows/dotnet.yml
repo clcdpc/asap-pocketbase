@@ -92,12 +92,27 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
+      - name: Check CI performance collector
+        continue-on-error: true
+        run: python3 -B -m unittest discover -s scripts/ci -p 'test_*.py' -v
+
       - name: Run .NET and real SQL tests (non-browser partition)
         run: >-
+          bash scripts/ci/run-with-performance.sh
           dotnet test --project tests/Asap.Tests/Asap.Tests.csproj
           --configuration Release --no-build --minimum-expected-tests 1439
           --filter
           'FullyQualifiedName!~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport&FullyQualifiedName!~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers&FullyQualifiedName!~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures&FullyQualifiedName!~PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses&FullyQualifiedName!~StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp&FullyQualifiedName!~SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp&FullyQualifiedName!~LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata&FullyQualifiedName!~ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery&FullyQualifiedName!~OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes&FullyQualifiedName!~EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance&FullyQualifiedName!~Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload&FullyQualifiedName!~StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry&FullyQualifiedName!~LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces&FullyQualifiedName!~SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference&FullyQualifiedName!~StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope&FullyQualifiedName!~NormalNavigationRefreshesPublishedEntryAndNestedModulesWithRealBrowserCaching'
+
+      - name: Upload .NET/SQL performance telemetry
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/ci-performance/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Run legacy/frontend unit tests
         run: npm test

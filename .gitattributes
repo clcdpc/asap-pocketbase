@@ -2,3 +2,4 @@
 src/Asap.Web/Frontend/vendor/** -text -whitespace
 scripts/hangfire/1.8.25/** -text -whitespace
 dev/review/*.sh text eol=lf
+scripts/ci/*.sh text eol=lf
