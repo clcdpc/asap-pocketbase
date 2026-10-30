@@ -40,8 +40,8 @@ environment identity and selection. The selection reads the existing workflow
 filter/minimum and browser-runner filter/minimum directly. Fresh `--list-tests`
 discovery must meet those minimums; its actual count is the expected evidence
 count. Frontend selection is the sorted complete set of root `*.test.js` files.
-There is no second hard-coded .NET test-count source; #411's pending count and
-filter changes invalidate evidence automatically. Its backend work is not included.
+There is no second hard-coded .NET test-count source; #411's count and filter
+changes invalidate evidence automatically. This branch adds no backend work.
 
 ## Environment versioning
 
@@ -150,7 +150,7 @@ For a false MISS, inspect `plan.json` and `current.json` in the verification art
 compare included source/selection/environment fingerprints with the original
 manifest, then check run/attempt completion, trusted PR association, runner identity,
 artifact/log availability, digest and expiration. Registry/SDK/runtime drift,
-an advanced PR head, unavailable synthetic merge objects, a changed workflow, an
+unavailable synthetic merge objects, a changed workflow, an
 epoch bump or the bounded history window can all produce intentional false misses.
 
 Web/DACPAC and self-contained win-x64 migration publishes **always** run for the

@@ -216,8 +216,9 @@ class Validator:
             require(len(source["parents"]) == 2 and source["parents"][1]["sha"] == run["head_sha"],
                     "Synthetic merge does not match the tested PR head")
             prs = list(self.api.pages(f"/commits/{run['head_sha']}/pulls", None))
-            trusted = [pr for pr in prs if pr["head"]["sha"] == run["head_sha"]
-                       and pr["head"]["repo"] and pr["head"]["repo"]["id"] == config["repository_id"]
+            # The commit-specific endpoint verifies historical association too: a PR
+            # may advance after execution without invalidating its old evidence.
+            trusted = [pr for pr in prs if pr["head"]["repo"] and pr["head"]["repo"]["id"] == config["repository_id"]
                        and pr["base"]["repo"]["id"] == config["repository_id"]
                        and pr["base"]["ref"] == "main"
                        and pr["author_association"] in ("OWNER", "MEMBER", "COLLABORATOR")]

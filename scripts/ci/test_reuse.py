@@ -420,6 +420,8 @@ class ProvenanceTests(unittest.TestCase):
                         "base": {"repo": fixture.run["repository"], "ref": "main"}, "author_association": "MEMBER"}]
         fixture.current["commit"] = "1" * 40  # The current merge commit differs; included content is identical.
         self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
+        fixture.prs[0]["head"]["sha"] = "3" * 40  # The trusted PR advanced after the original run.
+        self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
         fixture.source["parents"][1]["sha"] = "2" * 40
         self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
 
