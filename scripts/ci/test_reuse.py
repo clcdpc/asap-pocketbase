@@ -452,6 +452,23 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual({s: d["reuse"] for s, d in decisions.items()},
                          {"dotnet": True, "browser": False, "frontend": False})
 
+    def test_api_failure_after_a_partial_hit_restores_full_execution(self):
+        fixture = Fixture()
+        fixture.artifacts.pop("browser")
+        fixture.artifacts.pop("frontend")
+        original = fixture.pages
+
+        def pages(path, key, **kwargs):
+            if path.startswith("/actions/workflows/"):
+                def interrupted():
+                    yield fixture.run
+                    raise urllib.error.URLError("API unavailable after first candidate")
+                return interrupted()
+            return original(path, key, **kwargs)
+
+        with mock.patch.object(fixture, "pages", side_effect=pages):
+            self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
+
     def test_unknown_environment_only_disables_affected_suites(self):
         fixture = Fixture()
         fixture.current["suites"]["dotnet"]["unavailable"] = "SQL identity unavailable"

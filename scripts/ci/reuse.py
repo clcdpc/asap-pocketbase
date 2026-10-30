@@ -326,8 +326,7 @@ def lookup(api, config, current, forced=False):
                     decisions[suite]["reason"] = "Unverifiable evidence: " + failure_reason(error)
     except Exception as error:
         for suite in fp.SUITES:
-            if not decisions[suite]["reuse"]:
-                decisions[suite]["reason"] = "GitHub lookup unavailable: " + failure_reason(error)
+            decisions[suite] = {"reuse": False, "reason": "GitHub lookup unavailable: " + failure_reason(error)}
     return decisions
 
 
