@@ -60,7 +60,8 @@ const scenarios = [
       const f = await fixture(t, 'draft'); await openFixture(t.page, t.origin, f);
       const before = await detail(t.context, t.origin, f);
       for (const [mode, width, height, columns] of [
-        ['wide', 1280, 900, 6], ['medium', 740, 900, 3], ['narrow', 390, 844, 2], ['small', 320, 700, 1], ['short', 1280, 480, 6], ['zoom', 1280, 900, 3]
+        ['wide', 1280, 900, 6], ['medium', 740, 900, 3], ['narrow', 390, 844, 2], ['compact', 360, 800, 2],
+        ['small', 320, 700, 1], ['short', 1280, 480, 6], ['zoom', 1280, 900, 3]
       ]) {
         await t.page.setViewportSize({ width, height });
         if (mode === 'zoom') await nativeZoom(t.context, t.page, 2);
