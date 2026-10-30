@@ -233,6 +233,16 @@ Validation before hosted cold execution:
   exactly 1,444 unique passing outcomes. This establishes parser/provenance
   compatibility, not a cache HIT for the new schema.
 
+The first hosted attempt, [41008743691](https://github.com/clcdpc/asap-pocketbase/actions/runs/41008743691),
+passed all 1,530 non-browser tests and 63 frontend files, then hit the inherited
+90-minute timeout during browser execution. Its failed verification gate emitted
+no original evidence, and the cancelled workflow is ineligible for reuse. The
+budget is now 120 minutes based on its measured SQL (76m 52s) and frontend (5m 25s)
+times, with all test guards retained. Its logs also exposed MTP's ANSI-colored
+discovery output under `GITHUB_ACTIONS=true`; discovery now strips only those
+formatting codes before enforcing the same exact count check, covered by a new
+regression and real SDK discovery with the Actions environment enabled.
+
 The new-schema cold/repeated workflow and live HIT/invalidation/fallback receipts
 are recorded below and in [PR #414](https://github.com/clcdpc/asap-pocketbase/pull/414)
 after those runs complete.

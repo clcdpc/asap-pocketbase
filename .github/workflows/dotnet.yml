@@ -38,8 +38,8 @@ jobs:
       actions: read
       pull-requests: read
     runs-on: clc-linux
-    # The retained SQL/frontend/browser guard already takes about 44 minutes.
-    timeout-minutes: 90
+    # Observed cold execution: SQL 77 min, frontend 6 min, then browser/publish.
+    timeout-minutes: 120
     env:
       ASAP_FORCE_FULL_CI: ${{ inputs.force_full_ci || false }}
       ASAP_DEPLOY_TEST_IIS: ${{ inputs.deploy_test_iis || false }}

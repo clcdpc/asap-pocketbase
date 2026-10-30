@@ -91,6 +91,8 @@ def discover(selection, root=ROOT):
     output = command(["dotnet", "test", "--project", "tests/Asap.Tests/Asap.Tests.csproj",
                       "--configuration", "Release", "--no-build", "--no-restore", "--list-tests",
                       "--filter", selection["filter"]], root)
+    # MTP colors redirected discovery output when GITHUB_ACTIONS=true.
+    output = re.sub(r"\x1b\[[0-9;]*m", "", output)
     counts = re.findall(r"^Discovered (\d+) tests\.$", output, re.MULTILINE)
     if len(counts) != 1 or int(counts[0]) < selection["minimum"]:
         raise ValueError("Test discovery did not meet the retained minimum")

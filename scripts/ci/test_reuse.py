@@ -284,12 +284,18 @@ class DependencyTests(unittest.TestCase):
         self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
 
     def test_discovery_failure_or_below_minimum_is_not_a_match(self):
-        for output in ("Discovered 0 tests.", "Discovered 1 tests.", "unexpected output"):
+        for output in ("Discovered 0 tests.", "Discovered 1 tests.", "unexpected output",
+                       "Discovered 2 tests.\nDiscovered 2 tests.\n"):
             with self.subTest(output=output), mock.patch.object(fp, "command", return_value=output):
                 with self.assertRaises(ValueError):
                     fp.discover({"filter": "fixture", "minimum": 2})
         with mock.patch.object(fp, "command", return_value="Discovered 1525 tests.\n"):
             self.assertEqual(fp.discover({"filter": "fixture", "minimum": 1439}), 1525)
+
+    def test_github_actions_colored_native_discovery_summary(self):
+        output = "Running tests from fixture\n  Example\n\n\x1b[32mDiscovered 1530 tests.\n\x1b[m\n"
+        with mock.patch.object(fp, "command", return_value=output):
+            self.assertEqual(fp.discover({"filter": "fixture", "minimum": 1525}), 1530)
 
 
 class ProvenanceTests(unittest.TestCase):
