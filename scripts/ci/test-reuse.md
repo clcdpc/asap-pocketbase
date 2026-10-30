@@ -57,6 +57,12 @@ including MSTest/SQL build SDK packages. Major/roll-forward setup declarations
 alone are insufficient. No ephemeral runner machine name enters the identity.
 The npm lockfile and all dependency declarations remain source inputs.
 
+Resolve Chromium's native OS libraries before build/lookup, then include a digest
+of the actual installed dpkg package versions in every suite's environment.
+`install --with-deps` can otherwise silently upgrade native libraries *after*
+fingerprinting. Native package resolution remains necessary on a HIT; it installs
+no browser binary. Browser download and startup remain conditional on a MISS.
+
 For SQL-dependent suites, resolve the SQL Server 2022 registry manifest, verify
 its SHA-256 and select the Linux x64 digest when it is an image index. Start
 SQL with that exact `mcr.microsoft.com/mssql/server@sha256:...` reference. Include

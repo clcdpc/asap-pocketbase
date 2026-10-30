@@ -522,15 +522,18 @@ class ApiTests(unittest.TestCase):
 
 
 class EnvironmentTests(unittest.TestCase):
-    def environment(self, extra=None, sql_error=False, tool_version="version-1"):
+    def environment(self, extra=None, sql_error=False, tool_version="version-1", package_version="1"):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             reuse.write_json(root / "node_modules/playwright/package.json", {"version": "1.62.1"})
             reuse.write_json(root / "node_modules/playwright-core/browsers.json", {
                 "browsers": [{"name": "chromium", "revision": "1234", "browserVersion": "151.0"},
                              {"name": "chromium-headless-shell", "revision": "1234", "browserVersion": "151.0"}]})
+            def command(arguments, *_):
+                return "libc6=" + package_version if arguments[0] == "dpkg-query" else tool_version
             with mock.patch.dict(os.environ, {"RUNNER_OS": "Linux", "RUNNER_ARCH": "X64", **(extra or {})}, clear=True), \
-                 mock.patch.object(fp, "command", return_value=tool_version), \
+                 mock.patch.object(fp.platform, "system", return_value="Linux"), \
+                 mock.patch.object(fp, "command", side_effect=command), \
                  mock.patch.object(fp, "nuget_identity", return_value="nuget-content"), \
                  mock.patch.object(fp, "sql_image", side_effect=ValueError("unavailable") if sql_error else None,
                                    return_value="mcr.microsoft.com/mssql/server@sha256:" + "1" * 64):
@@ -544,8 +547,10 @@ class EnvironmentTests(unittest.TestCase):
         self.assertIn("playwright", first["browser"])
         self.assertNotIn("sql_image", first["frontend"])
         second, _, _ = self.environment(tool_version="version-2")
+        native_changed, _, _ = self.environment(package_version="2")
         for suite in fp.SUITES:
             self.assertNotEqual(fp.digest(first[suite]), fp.digest(second[suite]))
+            self.assertNotEqual(fp.digest(first[suite]), fp.digest(native_changed[suite]))
 
     def test_sql_identity_failure_disables_only_sql_dependent_reuse(self):
         _, problems, image = self.environment(sql_error=True)
@@ -744,6 +749,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("    permissions:\n      contents: read\n      actions: read\n      pull-requests: read\n", workflow)
         self.assertNotIn(": write\n", workflow)
         self.assertIn("force_full_ci:", workflow)
+        self.assertLess(workflow.index("run: npx playwright install-deps chromium"), workflow.index("name: Restore and build"))
+        self.assertLess(workflow.index("name: Restore and build"), workflow.index("name: Find reusable test executions"))
+        self.assertIn("run: npx playwright install chromium", workflow)
+        self.assertNotIn("install --with-deps", workflow)
         self.assertIn("name: Verify required test suites\n        id: verify\n        if: ${{ always() }}", workflow)
         for suite in fp.SUITES:
             self.assertIn(f"if: ${{{{ steps.reuse.outputs.{suite} != 'true' }}}}", workflow)

@@ -167,6 +167,11 @@ def environment(config, root=ROOT):
         "pwsh": command(["pwsh", "-NoLogo", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], root),
         "locale": {k: os.environ.get(k, "") for k in ("TZ", "LANG", "LC_ALL", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT")},
     }
+    if platform.system() == "Linux":
+        packages = command(["dpkg-query", "-W", "-f=${binary:Package}=${Version}\\n"], root).splitlines()
+        if not packages:
+            raise ValueError("Native runtime package identity unavailable")
+        common["native_packages"] = digest(sorted(packages))
     if Path("/etc/os-release").exists():
         common["distribution"] = {k: v.strip('"') for line in Path("/etc/os-release").read_text().splitlines()
                                   if "=" in line for k, v in [line.split("=", 1)] if k in ("ID", "VERSION_ID")}
