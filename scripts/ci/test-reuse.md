@@ -126,6 +126,11 @@ of untrusted workflow changes, runner-group restrictions and disposable host
 isolation. See [GitHub's self-hosted runner guidance](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/manage-access).
 The pre-existing unprotected integration branch and unverifiable approval settings are operational
 limitations, not evidence that approvals or host isolation are configured.
+An October 30 local `npm audit` also reports high-severity findings in the
+existing locked `source-map-js` 1.2.1 and `undici` 7.25.0 test dependencies.
+Both versions are unchanged from `main`; the new expression/YAML test tools do
+not update that dependency tree. Track those inherited findings separately
+from trigger and concurrency policy.
 The separate WSLC acceptance runner and its explicit mutation authorization are
 unchanged; it does not validate Actions scheduling or concurrency.
 
@@ -325,8 +330,18 @@ Live trigger receipts on October 30, 2026, in [PR #418](https://github.com/clcdp
   although the PR was ready. The gate stayed red. The hosted current-state
   policy fixes this observed race; regression cases cover both stale draft and
   stale ready snapshots, stale heads, closed PRs and unavailable metadata.
+- [Final cold validation](https://github.com/clcdpc/asap-pocketbase/actions/runs/41080519262)
+  passed with live policy resolution in 4s and full execution in **90m 25s**.
+  All 1,530 non-browser .NET/SQL cases, 17 browser cases, 64 frontend files
+  (including 21 workflow contracts) and 106 Python checks passed. SQL execution
+  took 69m 12s. The full gate passed; draft execution and IIS had no allocation.
+  All three suites recorded original executed evidence. Current-commit Web/DACPAC
+  and win-x64 migration publishes, manifest/ZIP checks and `-ValidateOnly` passed.
+  Independent downloads verified the GitHub archive digests, inner deployment
+  ZIP SHA-256 `7d5e16084d555bc18d8d8759ee0b8ee98e2d930189dc7859de5d84c5ab1a2a0e`
+  and manifest/checkout commit `c2efa8c96ca6441934c7348ab5e07c5ded27100c`.
 
-The PR records final full-suite/reuse results separately. No release tag,
+The PR records subsequent warm-reuse and manual-dispatch results separately. No release tag,
 deployment or second PR is needed to test these state transitions. Cross-PR
 isolation and release/forced-deployment policy have automated contract coverage;
 live deployment and a second independent PR were deliberately not exercised.
