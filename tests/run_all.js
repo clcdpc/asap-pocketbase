@@ -17,6 +17,7 @@ const files = fs.readdirSync(testDir)
   .sort();
 
 var failCount = 0;
+var passCount = 0;
 
 for (const file of files) {
   console.log("\n==> " + file);
@@ -24,10 +25,20 @@ for (const file of files) {
     cp.execFileSync(process.execPath, [path.join(testDir, file)], {
       stdio: "inherit"
     });
+    passCount++;
   } catch (err) {
     console.error("FAILED: " + file);
     failCount++;
   }
+}
+
+if (process.env.ASAP_CI_FRONTEND_RESULTS) {
+  const reportPath = path.resolve(process.env.ASAP_CI_FRONTEND_RESULTS);
+  fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+  fs.writeFileSync(reportPath, JSON.stringify({
+    filter: filterArg, files, executed: passCount + failCount,
+    passed: passCount, failed: failCount, skipped: 0
+  }) + '\n');
 }
 
 if (failCount > 0) {

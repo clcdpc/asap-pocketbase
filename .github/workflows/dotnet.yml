@@ -16,9 +16,15 @@ on:
         type: boolean
         required: false
         default: false
+      force_full_ci:
+        description: Ignore test evidence and execute every required suite
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
@@ -27,9 +33,16 @@ concurrency:
 jobs:
   build-test-package:
     name: Build, test and package
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     runs-on: clc-linux
-    # The retained SQL/frontend/browser guard already takes about 44 minutes.
-    timeout-minutes: 90
+    # Observed cold execution: SQL 77 min, frontend 6 min, then browser/publish.
+    timeout-minutes: 120
+    env:
+      ASAP_FORCE_FULL_CI: ${{ inputs.force_full_ci || false }}
+      ASAP_DEPLOY_TEST_IIS: ${{ inputs.deploy_test_iis || false }}
     outputs:
       artifact_name: ${{ steps.identity.outputs.artifact_name }}
       deployment_label: ${{ steps.identity.outputs.deployment_label }}
@@ -40,6 +53,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Verify exact test source
+        run: python3 -B scripts/ci/reuse.py checkout
+
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -49,7 +65,35 @@ jobs:
             **/*.sqlproj
             Directory.Packages.props
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      # Resolve native libraries before identity/build: --with-deps can upgrade
+      # packages independently of the VM epoch. This does not install a browser.
+      - name: Resolve CI native runtime dependencies
+        run: npx playwright install-deps chromium
+
+      - name: Restore and build
+        run: dotnet build Asap.sln --configuration Release
+
+      - name: Check test reuse safety
+        run: python3 -B -m unittest discover -s scripts/ci -p 'test_reuse*.py' -v
+
+      # Lookup runs after runner allocation/build, so a queued run sees completed predecessors.
+      - name: Find reusable test executions
+        id: reuse
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/reuse.py plan
+
       - name: Generate ephemeral SQL test credentials
+        if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -59,16 +103,20 @@ jobs:
           echo "ASAP_TEST_SQL_CONNECTION_STRING=Server=localhost,1433;Database=master;User ID=sa;Password=$sql_password;Encrypt=True;TrustServerCertificate=True" >> "$GITHUB_ENV"
 
       - name: Start SQL Server 2022
+        if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
         shell: bash
+        env:
+          SQL_IMAGE: ${{ steps.reuse.outputs.sql_image || 'mcr.microsoft.com/mssql/server:2022-latest' }}
         run: >-
           MSSQL_SA_PASSWORD="$ASAP_TEST_SQL_SA_PASSWORD"
           docker run --detach --name asap-sql
           --publish 1433:1433
           --env ACCEPT_EULA=Y
           --env MSSQL_SA_PASSWORD
-          mcr.microsoft.com/mssql/server:2022-latest
+          "$SQL_IMAGE"
 
       - name: Wait for SQL Server
+        if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
         shell: bash
         run: |
           for attempt in {1..30}; do
@@ -80,24 +128,17 @@ jobs:
           docker logs asap-sql
           exit 1
 
-      - name: Restore and build
-        run: dotnet build Asap.sln --configuration Release
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-
       - name: Install browser acceptance dependencies
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
+        if: ${{ steps.reuse.outputs.browser != 'true' }}
+        run: npx playwright install chromium
 
       - name: Check CI performance collector
         continue-on-error: true
         run: python3 -B -m unittest discover -s scripts/ci -p 'test_*.py' -v
 
       - name: Run .NET and real SQL tests (non-browser partition)
+        id: dotnet
+        if: ${{ steps.reuse.outputs.dotnet != 'true' }}
         env:
           ASAP_CI_FIXTURE_TIMINGS: ${{ github.workspace }}/.artifacts/ci-performance/fixture-timings.jsonl
         run: >-
@@ -125,10 +166,67 @@ jobs:
           retention-days: 7
 
       - name: Run legacy/frontend unit tests
+        id: frontend
+        if: ${{ steps.reuse.outputs.frontend != 'true' }}
+        env:
+          ASAP_CI_FRONTEND_RESULTS: ${{ github.workspace }}/.artifacts/test-reuse/frontend-results.json
         run: npm test
 
       - name: Run browser accessibility tests
+        id: browser
+        if: ${{ steps.reuse.outputs.browser != 'true' }}
+        env:
+          ASAP_CI_BROWSER_RESULTS: ${{ github.workspace }}/.artifacts/test-reuse/browser-results.trx
         run: npm run test:browser
+
+      - name: Verify required test suites
+        id: verify
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOTNET_OUTCOME: ${{ steps.dotnet.outcome }}
+          BROWSER_OUTCOME: ${{ steps.browser.outcome }}
+          FRONTEND_OUTCOME: ${{ steps.frontend.outcome }}
+        run: python3 -B scripts/ci/reuse.py verify
+
+      - name: Upload original dotnet execution evidence
+        if: ${{ steps.verify.outcome == 'success' && steps.dotnet.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-dotnet-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/test-reuse/evidence/dotnet/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload original browser execution evidence
+        if: ${{ steps.verify.outcome == 'success' && steps.browser.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/test-reuse/evidence/browser/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload original frontend execution evidence
+        if: ${{ steps.verify.outcome == 'success' && steps.frontend.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-frontend-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/test-reuse/evidence/frontend/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload test verification decisions
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/test-reuse/verification.json
+            .artifacts/test-reuse/plan.json
+            .artifacts/test-reuse/current.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload browser diagnostics on failure
         if: ${{ failure() }}

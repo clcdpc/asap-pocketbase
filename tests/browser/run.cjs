@@ -37,6 +37,13 @@ const child = spawn(
     '17',
     '--filter',
     browserTests,
+    ...(process.env.ASAP_CI_BROWSER_RESULTS ? [
+      '--report-trx',
+      '--report-trx-filename',
+      path.basename(process.env.ASAP_CI_BROWSER_RESULTS),
+      '--results-directory',
+      path.dirname(process.env.ASAP_CI_BROWSER_RESULTS),
+    ] : []),
   ],
   { cwd: repositoryRoot, stdio: 'inherit' },
 );
