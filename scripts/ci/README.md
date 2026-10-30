@@ -1,5 +1,12 @@
 # .NET/SQL CI performance telemetry
 
+Ready PR, push and manual CI suites can reuse verified original executions;
+draft PRs run fast build/unit/frontend checks. See
+[CI policy and test reuse](test-reuse.md) for the draft/ready matrix, required
+full gate, PR cancellation groups, fingerprints, trust boundaries and forced
+full CI. Performance collection below still wraps every fresh .NET/SQL
+execution; reused runs link to original test timing instead of inventing samples.
+
 The non-browser test step runs its existing command through
 `bash scripts/ci/run-with-performance.sh dotnet test ...`. The existing filter,
 minimum count (1439), configuration, no-build flag, streams, working directory

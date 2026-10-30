@@ -2,6 +2,7 @@ name: .NET baseline
 
 on:
   pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   push:
     branches:
       - main
@@ -16,20 +17,68 @@ on:
         type: boolean
         required: false
         default: false
+      force_full_ci:
+        description: Ignore test evidence and execute every required suite
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  validation-policy:
+    name: Resolve validation policy
+    permissions:
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.policy.outputs.mode }}
+    steps:
+      # Read current server state: synchronize/ready events can arrive out of order.
+      # No checkout or PR code runs before this trust and current-head check.
+      - uses: actions/github-script@v8
+        id: policy
+        with:
+          script: |
+            if (context.eventName !== 'pull_request') {
+              core.setOutput('mode', 'full');
+              return;
+            }
+            const eventPr = context.payload.pull_request;
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo, pull_number: eventPr.number
+            });
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            if (pr.state !== 'open' || pr.head.sha !== eventPr.head.sha ||
+                pr.head.repo?.full_name !== repository ||
+                !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(pr.author_association) ||
+                typeof pr.draft !== 'boolean') {
+              core.setFailed('PR is stale, closed, external or untrusted; full validation has not been established.');
+              return;
+            }
+            core.setOutput('mode', pr.draft ? 'draft' : 'full');
+
   build-test-package:
-    name: Build, test and package
+    name: Full CI execution
+    needs: validation-policy
+    if: ${{ needs.validation-policy.outputs.mode == 'full' }}
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     runs-on: clc-linux
-    # The retained SQL/frontend/browser guard already takes about 44 minutes.
-    timeout-minutes: 90
+    # Observed cold execution: SQL 77 min, frontend 6 min, then browser/publish.
+    timeout-minutes: 120
+    env:
+      ASAP_FORCE_FULL_CI: ${{ inputs.force_full_ci || false }}
+      ASAP_DEPLOY_TEST_IIS: ${{ inputs.deploy_test_iis || false }}
     outputs:
       artifact_name: ${{ steps.identity.outputs.artifact_name }}
       deployment_label: ${{ steps.identity.outputs.deployment_label }}
@@ -40,6 +89,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Verify exact test source
+        run: python3 -B scripts/ci/reuse.py checkout
+
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -49,7 +101,45 @@ jobs:
             **/*.sqlproj
             Directory.Packages.props
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Validate workflow configuration
+        run: bash scripts/ci/check-workflows.sh
+
+      # Resolve native libraries before identity/build: --with-deps can upgrade
+      # packages independently of the VM epoch. This does not install a browser.
+      - name: Resolve CI native runtime dependencies
+        run: npx playwright install-deps chromium
+
+      - name: Restore and build
+        run: dotnet build Asap.sln --configuration Release
+
+      - name: Check test reuse safety
+        run: python3 -B -m unittest discover -s scripts/ci -p 'test_reuse*.py' -v
+
+      # Lookup runs after runner allocation/build, so a queued run sees completed predecessors.
+      - name: Find reusable test executions
+        id: reuse
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/reuse.py plan
+
+      - name: Run legacy/frontend unit tests
+        id: frontend
+        if: ${{ steps.reuse.outputs.frontend != 'true' }}
+        env:
+          ASAP_CI_FRONTEND_RESULTS: ${{ github.workspace }}/.artifacts/test-reuse/frontend-results.json
+        run: npm test
+
       - name: Generate ephemeral SQL test credentials
+        if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -59,16 +149,20 @@ jobs:
           echo "ASAP_TEST_SQL_CONNECTION_STRING=Server=localhost,1433;Database=master;User ID=sa;Password=$sql_password;Encrypt=True;TrustServerCertificate=True" >> "$GITHUB_ENV"
 
       - name: Start SQL Server 2022
+        if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
         shell: bash
+        env:
+          SQL_IMAGE: ${{ steps.reuse.outputs.sql_image || 'mcr.microsoft.com/mssql/server:2022-latest' }}
         run: >-
           MSSQL_SA_PASSWORD="$ASAP_TEST_SQL_SA_PASSWORD"
           docker run --detach --name asap-sql
           --publish 1433:1433
           --env ACCEPT_EULA=Y
           --env MSSQL_SA_PASSWORD
-          mcr.microsoft.com/mssql/server:2022-latest
+          "$SQL_IMAGE"
 
       - name: Wait for SQL Server
+        if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
         shell: bash
         run: |
           for attempt in {1..30}; do
@@ -80,24 +174,17 @@ jobs:
           docker logs asap-sql
           exit 1
 
-      - name: Restore and build
-        run: dotnet build Asap.sln --configuration Release
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-
       - name: Install browser acceptance dependencies
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
+        if: ${{ steps.reuse.outputs.browser != 'true' }}
+        run: npx playwright install chromium
 
       - name: Check CI performance collector
         continue-on-error: true
         run: python3 -B -m unittest discover -s scripts/ci -p 'test_*.py' -v
 
       - name: Run .NET and real SQL tests (non-browser partition)
+        id: dotnet
+        if: ${{ steps.reuse.outputs.dotnet != 'true' }}
         env:
           ASAP_CI_FIXTURE_TIMINGS: ${{ github.workspace }}/.artifacts/ci-performance/fixture-timings.jsonl
         run: >-
@@ -124,11 +211,61 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Run legacy/frontend unit tests
-        run: npm test
-
       - name: Run browser accessibility tests
+        id: browser
+        if: ${{ steps.reuse.outputs.browser != 'true' }}
+        env:
+          ASAP_CI_BROWSER_RESULTS: ${{ github.workspace }}/.artifacts/test-reuse/browser-results.trx
         run: npm run test:browser
+
+      - name: Verify required test suites
+        id: verify
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOTNET_OUTCOME: ${{ steps.dotnet.outcome }}
+          BROWSER_OUTCOME: ${{ steps.browser.outcome }}
+          FRONTEND_OUTCOME: ${{ steps.frontend.outcome }}
+        run: python3 -B scripts/ci/reuse.py verify
+
+      - name: Upload original dotnet execution evidence
+        if: ${{ steps.verify.outcome == 'success' && steps.dotnet.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-dotnet-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/test-reuse/evidence/dotnet/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload original browser execution evidence
+        if: ${{ steps.verify.outcome == 'success' && steps.browser.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/test-reuse/evidence/browser/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload original frontend execution evidence
+        if: ${{ steps.verify.outcome == 'success' && steps.frontend.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-frontend-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/test-reuse/evidence/frontend/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload test verification decisions
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/test-reuse/verification.json
+            .artifacts/test-reuse/plan.json
+            .artifacts/test-reuse/current.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload browser diagnostics on failure
         if: ${{ failure() }}
@@ -305,9 +442,102 @@ jobs:
         shell: bash
         run: docker rm --force asap-sql >/dev/null 2>&1 || true
 
+  draft-validation:
+    name: Draft validation
+    needs: validation-policy
+    if: ${{ needs.validation-policy.outputs.mode == 'draft' }}
+    permissions:
+      contents: read
+    runs-on: clc-linux
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify exact test source
+        run: python3 -B scripts/ci/reuse.py checkout
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/*.sqlproj
+            Directory.Packages.props
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Validate workflow configuration
+        run: bash scripts/ci/check-workflows.sh
+
+      - name: Check CI contracts and test reuse safety
+        run: python3 -B -m unittest discover -s scripts/ci -p 'test_reuse*.py' -v
+
+      - name: Restore and build draft
+        run: dotnet build Asap.sln --configuration Release
+
+      # These namespaces/classes have no SQL fixture or browser startup.
+      - name: Run SQL-independent .NET unit and configuration contracts
+        run: >-
+          dotnet test --project tests/Asap.Tests/Asap.Tests.csproj
+          --configuration Release --no-build --minimum-expected-tests 100
+          --filter 'FullyQualifiedName~Asap.Tests.Unit.|FullyQualifiedName~Asap.Tests.PolicyContractTests.|FullyQualifiedName~Asap.Tests.AnalyticsContractTests.'
+
+      - name: Run legacy/frontend unit tests
+        run: npm test
+
+  validation:
+    # Draft success must not emit the required full-validation check name.
+    name: ${{ needs.validation-policy.outputs.mode == 'draft' && 'Draft CI result' || 'Build, test and package' }}
+    needs: [validation-policy, build-test-package, draft-validation]
+    if: ${{ always() }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # No checkout or PR code executes in this reporting-only hosted job.
+      - name: Require successful selected validation
+        shell: bash
+        env:
+          CI_POLICY_RESULT: ${{ needs.validation-policy.result }}
+          CI_VALIDATION_MODE: ${{ needs.validation-policy.outputs.mode }}
+          CI_FULL_RESULT: ${{ needs.build-test-package.result }}
+          CI_DRAFT_RESULT: ${{ needs.draft-validation.result }}
+        run: |
+          if [ "$CI_POLICY_RESULT" != 'success' ]; then
+            echo '::error::Current PR validation policy must resolve successfully.'
+            exit 1
+          fi
+          case "$CI_VALIDATION_MODE" in
+            draft)
+              if [ "$CI_DRAFT_RESULT" != 'success' ]; then
+                echo '::error::Draft validation must complete successfully.'
+                exit 1
+              fi
+              ;;
+            full)
+              if [ "$CI_FULL_RESULT" != 'success' ]; then
+                echo '::error::Full CI must complete successfully; skipped, failed or cancelled execution cannot satisfy this check.'
+                exit 1
+              fi
+              ;;
+            *)
+              echo '::error::Validation mode must be draft or full.'
+              exit 1
+              ;;
+          esac
+
   deploy-test-iis:
     name: Deploy exact artifact to test IIS
-    needs: build-test-package
+    needs: [build-test-package, validation]
     if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && ((github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis) || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}
     runs-on: [self-hosted, windows, x64, asap-test-iis]
     environment: asap-test-iis
