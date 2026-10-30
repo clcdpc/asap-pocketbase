@@ -469,6 +469,18 @@ class ProvenanceTests(unittest.TestCase):
         with mock.patch.object(fixture, "pages", side_effect=pages):
             self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
 
+    def test_artifact_download_outage_after_a_hit_restores_full_execution(self):
+        fixture = Fixture()
+        original = fixture.request
+
+        def request(path, **kwargs):
+            if path == "/actions/artifacts/11/zip":
+                raise urllib.error.URLError("Download unavailable after the SQL HIT")
+            return original(path, **kwargs)
+
+        with mock.patch.object(fixture, "request", side_effect=request):
+            self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
+
     def test_unknown_environment_only_disables_affected_suites(self):
         fixture = Fixture()
         fixture.current["suites"]["dotnet"]["unavailable"] = "SQL identity unavailable"

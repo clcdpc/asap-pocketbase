@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -322,6 +323,10 @@ def lookup(api, config, current, forced=False):
                 try:
                     source = validator.validate(run, matches[suite][0], suite)
                     decisions[suite] = {"reuse": True, "reason": "Verified successful original execution", "source": source}
+                except (urllib.error.URLError, TimeoutError, ConnectionError):
+                    # A transport outage can affect the gate's later revalidation too.
+                    # Restore execution globally instead of preserving a partial HIT.
+                    raise
                 except Exception as error:
                     decisions[suite]["reason"] = "Unverifiable evidence: " + failure_reason(error)
     except Exception as error:
