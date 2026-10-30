@@ -559,6 +559,32 @@ test('screenshots fail closed for unverified runtimes, external origins, authent
   assert.deepEqual(await fs.readdir(directory), [], 'No unverified pixels were exported');
 });
 
+test('native viewport capture retains runtime guards, actual zoom and dimensions without document clipping', async t => {
+  const directory = await temporary(t), page = capturePage(), calls = [];
+  const pixels = await page.screenshot({});
+  let zoom = 2, checks = 0, detached = 0;
+  page.screenshot = async () => { throw new Error('Native capture must not use a document clip'); };
+  page.context = () => ({ newCDPSession: async () => ({ send: async (method, options) => {
+    calls.push([method, options]);
+    return method === 'Page.getLayoutMetrics' ? { visualViewport: { zoom } } : { data: pixels.toString('base64') };
+  }, detach: async () => { detached++; } }) });
+  await assert.rejects(screenshot(page, directory, 'unverified', { nativeViewport: true }), /no verified synthetic/);
+  registerScreenshotPage(page, async () => { checks++; return environment(); });
+  await screenshot(page, directory, 'native', { nativeViewport: true });
+  assert.equal(checks, 1);
+  assert.deepEqual(calls, [['Page.getLayoutMetrics', undefined], ['Page.captureScreenshot', {
+    format: 'png', fromSurface: false, captureBeyondViewport: false
+  }]]);
+  assert.equal(detached, 1);
+  zoom = 1;
+  await assert.rejects(screenshot(page, directory, 'wrong-zoom', { nativeViewport: true }), /actual 200 percent/);
+  assert.equal(detached, 2);
+  zoom = 2; pixels.writeUInt32BE(640, 16);
+  await assert.rejects(screenshot(page, directory, 'wrong-size', { nativeViewport: true }), /Screenshot dimensions/);
+  await assert.rejects(screenshot(page, directory, 'invalid-crop', { nativeViewport: true, fullPage: true }), /cannot request/);
+  assert.deepEqual(await fs.readdir(directory), ['native.png']);
+});
+
 test('wrong screenshot dimensions fail the scenario and retain failure reporting without exporting misleading evidence', async t => {
   const directory = await temporary(t), page = capturePage();
   const capture = page.screenshot;

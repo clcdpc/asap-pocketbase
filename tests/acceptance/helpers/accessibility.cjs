@@ -28,9 +28,24 @@ async function screenshot(page, directory, name, options = {}) {
   must(verify, 'Screenshot has no verified synthetic acceptance environment.');
   const environment = await verify(); // Rechecks Testing, SQL, providers and the pinned synthetic reviewer.
   await captureTarget(page, environment.origin);
-  const { fullPage = false, clip } = options;
-  assert.ok(Object.keys(options).every(key => ['fullPage', 'clip'].includes(key)), 'Only viewport or explicit page/crop captures are supported');
-  const buffer = await page.screenshot({ type: 'png', fullPage, ...(clip ? { clip } : {}) });
+  const { fullPage = false, clip, nativeViewport = false } = options;
+  assert.ok(Object.keys(options).every(key => ['fullPage', 'clip', 'nativeViewport'].includes(key)), 'Only viewport or explicit page/crop captures are supported');
+  assert.ok(!nativeViewport || !fullPage && !clip, 'Native viewport capture cannot request a page or crop');
+  let buffer;
+  if (nativeViewport) {
+    const cdp = await page.context().newCDPSession(page);
+    try {
+      assert.equal((await cdp.send('Page.getLayoutMetrics')).visualViewport.zoom, 2, 'Native capture requires actual 200 percent zoom');
+      // Playwright's document clip uses the wrong scroll offset at native zoom
+      // on long Settings pages. Capture the visible view directly, without a clip.
+      const capture = await cdp.send('Page.captureScreenshot', {
+        format: 'png', fromSurface: false, captureBeyondViewport: false
+      });
+      buffer = Buffer.from(capture.data, 'base64');
+    } finally { await cdp.detach(); }
+  } else {
+    buffer = await page.screenshot({ type: 'png', fullPage, ...(clip ? { clip } : {}) });
+  }
   // Do not export pixels if navigation/session expiry raced the capture.
   await captureTarget(page, environment.origin);
   const dimensions = pngDimensions(buffer);

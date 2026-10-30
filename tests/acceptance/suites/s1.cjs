@@ -27,7 +27,8 @@ async function evidence(t, name, target) {
   try { geometry.metrics = await cdp.send('Page.getLayoutMetrics'); }
   finally { await cdp.detach(); }
   await fs.writeFile(path.join(t.directory, name + '-geometry.json'), JSON.stringify(geometry, null, 2));
-  await checkpoint(t.page, t.directory, name);
+  geometry.nativeViewportCapture = geometry.metrics.visualViewport.zoom === 2;
+  await checkpoint(t.page, t.directory, name, { nativeViewport: geometry.nativeViewportCapture });
   return geometry;
 }
 async function unchanged(t, scope, before) {
