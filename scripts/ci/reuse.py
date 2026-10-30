@@ -121,6 +121,8 @@ def successful(value):
 
 
 def passing_results(results, selection):
+    require(all(type(results.get(key)) is int for key in ("total", "executed", "passed", "failed", "skipped")),
+            "Test counters must be integers")
     expected = selection.get("expected")
     count = results.get("total")
     require(integer(count) and count >= selection["minimum"], "Required test count was not met")
@@ -257,6 +259,8 @@ class Validator:
                     "Unexpected evidence archive contents")
             manifest = json.loads(zipped.read("manifest.json"))
             results = json.loads(zipped.read("results.json"))
+        require(all(integer(manifest[key]) for key in ("schema", "repository_id", "run_id", "run_attempt", "lifetime_days")),
+                "Invalid manifest numeric identities")
         require(manifest["schema"] == config["schema"] and manifest["kind"] == "executed"
                 and manifest["outcome"] == "passed" and manifest["suite"] == suite,
                 "Wrong schema/suite or reused-only evidence")
@@ -279,7 +283,8 @@ class Validator:
                 and timestamp(manifest["expires_at"]) == executed + timedelta(days=config["lifetime_days"]),
                 "Execution evidence expired or has invalid timestamps")
         passing_results(results, current["selection"])
-        require(manifest["results_sha256"] == fp.digest(results) and manifest["counts"] == {
+        require(all(type(value) is int for value in manifest["counts"].values())
+                and manifest["results_sha256"] == fp.digest(results) and manifest["counts"] == {
             key: results[key] for key in ("total", "executed", "passed", "failed", "skipped")}, "Invalid test outcomes")
         steps = context["job"]["steps"]
         for name in (STEPS[suite], "Verify required test suites", f"Upload original {suite} execution evidence"):

@@ -342,7 +342,7 @@ class ProvenanceTests(unittest.TestCase):
                    "repository": "other/repository", "workflow": "other.yml", "job": "other job",
                    "fingerprint": "forged", "environment_fingerprint": "forged", "environment_inputs": {},
                    "source_fingerprint": "forged", "selection": {}, "counts": {}, "results_sha256": "forged"}
-        for key, value in changes.items():
+        for key, value in [*changes.items(), ("schema", True), ("run_attempt", True)]:
             fixture = Fixture()
             fixture.manifests["dotnet"][key] = value
             fixture.archive("dotnet")
@@ -391,7 +391,7 @@ class ProvenanceTests(unittest.TestCase):
                 self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
 
     def test_results_need_all_discovered_unique_passing_outcomes(self):
-        for key, value in (("total", 1), ("executed", 1), ("passed", 1), ("failed", 1), ("skipped", 1),
+        for key, value in (("total", 1), ("executed", 1), ("passed", 1), ("failed", 1), ("skipped", 1), ("failed", False),
                            ("identities", []), ("identities", [fp.digest("same")] * 2)):
             fixture = Fixture()
             fixture.reports["dotnet"][key] = value
