@@ -62,6 +62,8 @@ async function geometry(page, cards) {
       visualWidth: visualViewport.width, visualHeight: visualViewport.height, scale: visualViewport.scale },
       container: rect(root), wrapper: { clientWidth: wrapper.clientWidth, scrollWidth: wrapper.scrollWidth },
       table: rect(root.querySelector('table')), images: root.querySelectorAll('img, picture, svg').length,
+      headers: [...root.querySelectorAll('th .gridjs-th-content')].map(node => ({ clientWidth: node.clientWidth,
+        scrollWidth: node.scrollWidth, clientHeight: node.clientHeight, scrollHeight: node.scrollHeight })),
       rows: [...root.querySelectorAll('tbody tr')].filter(row => row.querySelector('.additional-copy-open')).map(row => {
         const action = row.querySelector('.additional-copy-open'), range = document.createRange(); range.selectNodeContents(action);
         const text = [...range.getClientRects()].map(r => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom }));
@@ -77,6 +79,8 @@ async function geometry(page, cards) {
   assert.ok(result.wrapper.scrollWidth <= result.wrapper.clientWidth + 1, 'Grid needs no horizontal scrolling');
   assert.ok(result.table.width <= result.container.width + 1, 'Table fits its actual container');
   assert.ok(result.rows.length > 0, 'Geometry measures actual tasks');
+  if (!cards) assert.ok(result.headers.every(h => h.scrollWidth <= h.clientWidth + 1 && h.scrollHeight <= h.clientHeight + 1),
+    'All six desktop headers remain readable without clipping');
   for (const row of result.rows) {
     assert.equal(row.cells.length, 6);
     assert.equal(row.display, cards ? 'grid' : 'table-row', 'Presentation follows the content-container width');
