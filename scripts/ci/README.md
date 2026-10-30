@@ -1,8 +1,10 @@
 # .NET/SQL CI performance telemetry
 
-Required CI suites can reuse verified original executions. See
-[test reuse](test-reuse.md) for fingerprints, trust boundaries, forced full CI
-and validation. Performance collection below still wraps every fresh .NET/SQL
+Ready PR, push and manual CI suites can reuse verified original executions;
+draft PRs run fast build/unit/frontend checks. See
+[CI policy and test reuse](test-reuse.md) for the draft/ready matrix, required
+full gate, PR cancellation groups, fingerprints, trust boundaries and forced
+full CI. Performance collection below still wraps every fresh .NET/SQL
 execution; reused runs link to original test timing instead of inventing samples.
 
 The non-browser test step runs its existing command through

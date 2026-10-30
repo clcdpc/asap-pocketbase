@@ -2,6 +2,7 @@ name: .NET baseline
 
 on:
   pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   push:
     branches:
       - main
@@ -27,12 +28,47 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  validation-policy:
+    name: Resolve validation policy
+    permissions:
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.policy.outputs.mode }}
+    steps:
+      # Read current server state: synchronize/ready events can arrive out of order.
+      # No checkout or PR code runs before this trust and current-head check.
+      - uses: actions/github-script@v8
+        id: policy
+        with:
+          script: |
+            if (context.eventName !== 'pull_request') {
+              core.setOutput('mode', 'full');
+              return;
+            }
+            const eventPr = context.payload.pull_request;
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo, pull_number: eventPr.number
+            });
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            if (pr.state !== 'open' || pr.head.sha !== eventPr.head.sha ||
+                pr.head.repo?.full_name !== repository ||
+                !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(pr.author_association) ||
+                typeof pr.draft !== 'boolean') {
+              core.setFailed('PR is stale, closed, external or untrusted; full validation has not been established.');
+              return;
+            }
+            core.setOutput('mode', pr.draft ? 'draft' : 'full');
+
   build-test-package:
-    name: Build, test and package
+    name: Full CI execution
+    needs: validation-policy
+    if: ${{ needs.validation-policy.outputs.mode == 'full' }}
     permissions:
       contents: read
       actions: read
@@ -73,6 +109,9 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Validate workflow configuration
+        run: bash scripts/ci/check-workflows.sh
+
       # Resolve native libraries before identity/build: --with-deps can upgrade
       # packages independently of the VM epoch. This does not install a browser.
       - name: Resolve CI native runtime dependencies
@@ -91,6 +130,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/ci/reuse.py plan
+
+      - name: Run legacy/frontend unit tests
+        id: frontend
+        if: ${{ steps.reuse.outputs.frontend != 'true' }}
+        env:
+          ASAP_CI_FRONTEND_RESULTS: ${{ github.workspace }}/.artifacts/test-reuse/frontend-results.json
+        run: npm test
 
       - name: Generate ephemeral SQL test credentials
         if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
@@ -164,13 +210,6 @@ jobs:
           path: .artifacts/ci-performance/
           if-no-files-found: ignore
           retention-days: 7
-
-      - name: Run legacy/frontend unit tests
-        id: frontend
-        if: ${{ steps.reuse.outputs.frontend != 'true' }}
-        env:
-          ASAP_CI_FRONTEND_RESULTS: ${{ github.workspace }}/.artifacts/test-reuse/frontend-results.json
-        run: npm test
 
       - name: Run browser accessibility tests
         id: browser
@@ -403,9 +442,102 @@ jobs:
         shell: bash
         run: docker rm --force asap-sql >/dev/null 2>&1 || true
 
+  draft-validation:
+    name: Draft validation
+    needs: validation-policy
+    if: ${{ needs.validation-policy.outputs.mode == 'draft' }}
+    permissions:
+      contents: read
+    runs-on: clc-linux
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify exact test source
+        run: python3 -B scripts/ci/reuse.py checkout
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/*.sqlproj
+            Directory.Packages.props
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Validate workflow configuration
+        run: bash scripts/ci/check-workflows.sh
+
+      - name: Check CI contracts and test reuse safety
+        run: python3 -B -m unittest discover -s scripts/ci -p 'test_reuse*.py' -v
+
+      - name: Restore and build draft
+        run: dotnet build Asap.sln --configuration Release
+
+      # These namespaces/classes have no SQL fixture or browser startup.
+      - name: Run SQL-independent .NET unit and configuration contracts
+        run: >-
+          dotnet test --project tests/Asap.Tests/Asap.Tests.csproj
+          --configuration Release --no-build --minimum-expected-tests 100
+          --filter 'FullyQualifiedName~Asap.Tests.Unit.|FullyQualifiedName~Asap.Tests.PolicyContractTests.|FullyQualifiedName~Asap.Tests.AnalyticsContractTests.'
+
+      - name: Run legacy/frontend unit tests
+        run: npm test
+
+  validation:
+    # Draft success must not emit the required full-validation check name.
+    name: ${{ needs.validation-policy.outputs.mode == 'draft' && 'Draft CI result' || 'Build, test and package' }}
+    needs: [validation-policy, build-test-package, draft-validation]
+    if: ${{ always() }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # No checkout or PR code executes in this reporting-only hosted job.
+      - name: Require successful selected validation
+        shell: bash
+        env:
+          CI_POLICY_RESULT: ${{ needs.validation-policy.result }}
+          CI_VALIDATION_MODE: ${{ needs.validation-policy.outputs.mode }}
+          CI_FULL_RESULT: ${{ needs.build-test-package.result }}
+          CI_DRAFT_RESULT: ${{ needs.draft-validation.result }}
+        run: |
+          if [ "$CI_POLICY_RESULT" != 'success' ]; then
+            echo '::error::Current PR validation policy must resolve successfully.'
+            exit 1
+          fi
+          case "$CI_VALIDATION_MODE" in
+            draft)
+              if [ "$CI_DRAFT_RESULT" != 'success' ]; then
+                echo '::error::Draft validation must complete successfully.'
+                exit 1
+              fi
+              ;;
+            full)
+              if [ "$CI_FULL_RESULT" != 'success' ]; then
+                echo '::error::Full CI must complete successfully; skipped, failed or cancelled execution cannot satisfy this check.'
+                exit 1
+              fi
+              ;;
+            *)
+              echo '::error::Validation mode must be draft or full.'
+              exit 1
+              ;;
+          esac
+
   deploy-test-iis:
     name: Deploy exact artifact to test IIS
-    needs: build-test-package
+    needs: [build-test-package, validation]
     if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && ((github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis) || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}
     runs-on: [self-hosted, windows, x64, asap-test-iis]
     environment: asap-test-iis
