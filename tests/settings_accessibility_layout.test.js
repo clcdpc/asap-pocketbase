@@ -68,6 +68,24 @@ const { JSDOM } = require('jsdom');
     assert.deepStrictEqual(controls(fieldset('staff-add-email')), ['staff-add-email', 'staff-add-role', 'staff-add-organization']);
     assert.deepStrictEqual(controls(fieldset('patron-page-title')).slice(0, 3), ['patron-page-title', 'patron-barcode-label', 'patron-pin-label']);
     assert.strictEqual(legend('auto-promote'), 'Suggestion and eligibility');
+    assert.strictEqual(legend('patron-code-picker'), 'Patron code eligibility');
+    assert.deepStrictEqual(controls(fieldset('patron-code-picker')), [
+      'patron-code-eligibility-enabled', 'patron-codes-use-system', 'patron-code-picker',
+      'patron-code-selection', 'patron-code-eligibility-message'
+    ]);
+    assert.strictEqual(document.querySelector('label[for="patron-code-picker"]').textContent, 'Allowed patron-code IDs');
+    assert.strictEqual(document.getElementById('patron-code-picker').getAttribute('role'), 'combobox');
+    assert.strictEqual(document.getElementById('patron-code-picker').getAttribute('aria-controls'), 'patron-code-options');
+    assert.strictEqual(document.getElementById('patron-code-options').getAttribute('role'), 'listbox');
+    assert.strictEqual(document.getElementById('common-creators-editor').closest('fieldset').querySelector('[id^="patron-code"]'), null);
+    for (const id of ['add-patron-code', 'patron-code-search', 'patron-codes-select-all', 'patron-codes-clear-all']) {
+      assert.strictEqual(document.getElementById(id), null, `${id} is retired`);
+    }
+    const providerHelp = document.getElementById('external-search-provider-help');
+    assert.match(providerHelp.textContent, /URL templates: use \{\{title\}\} for the request title/);
+    assert.match(providerHelp.textContent, /https:\/\/example.com\/search\?q=\{\{title\}\}/);
+    assert.ok(providerHelp.compareDocumentPosition(document.getElementById('external-search-provider-editor')) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+    assert.strictEqual(document.getElementById('external-search-provider-editor').contains(providerHelp), false);
     assert.strictEqual(legend('outstanding-timeout-enabled'), 'Timeouts');
     assert.deepStrictEqual(controls(fieldset('outstanding-timeout-enabled')), [
       'outstanding-timeout-enabled', 'outstanding-timeout-days',

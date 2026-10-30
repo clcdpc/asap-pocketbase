@@ -340,7 +340,7 @@ test('existing frontend/browser entry points and full CI guard remain; artifacts
   }
   const workflow = await fs.readFile(path.join(repository, '.github/workflows/dotnet.yml'), 'utf8');
   assert.match(workflow, /dotnet test --project tests\/Asap.Tests\/Asap.Tests.csproj/);
-  assert.match(workflow, /--minimum-expected-tests 1439/);
+  assert.match(workflow, /--minimum-expected-tests 1525/);
   assert.match(workflow, /run: npm test/);
   assert.match(workflow, /run: npm run test:browser/);
   assert.match(execFileSync('git', ['check-ignore', '.artifacts/acceptance/run/results.json'], { cwd: repository, encoding: 'utf8' }), /acceptance/);
@@ -403,9 +403,12 @@ test('partial results never report automated completion while required scenarios
 
 test('smoke registers exactly two scenarios with explicit write metadata and preserves pr410', async () => {
   const registry = require('./suites/index.cjs');
-  assert.deepEqual(Object.keys(registry), ['pr410', 'smoke']);
+  assert.deepEqual(Object.keys(registry), ['pr410', 'smoke', 's1']);
   assert.equal(registry.smoke.id, 'smoke');
   assert.equal(registry.smoke.mutations, true);
+  assert.equal(registry.s1.mutations, false);
+  assert.equal(registry.s1.scenarios.length, 6);
+  assert.ok(registry.s1.scenarios.every(scenario => scenario.writes === false));
   assert.deepEqual(registry.smoke.scenarios.map(s => [s.id, s.writes]), [
     ['smoke-authenticated-review', false], ['smoke-synthetic-close', true]
   ]);

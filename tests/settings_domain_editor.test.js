@@ -166,8 +166,7 @@ const axe = require('axe-core');
     assert.strictEqual(document.querySelectorAll('#publication-options-editor [data-domain-row]').length, 2);
 
     for (const [toggleId, editorId, addId] of [
-      ['common-creators-use-system', 'common-creators-editor', 'add-common-creator'],
-      ['patron-codes-use-system', 'patron-codes-editor', 'add-patron-code']
+      ['common-creators-use-system', 'common-creators-editor', 'add-common-creator']
     ]) {
       const toggle = document.getElementById(toggleId);
       assert.strictEqual(toggle.checked, true);
@@ -179,10 +178,15 @@ const axe = require('axe-core');
       assert.ok([...document.querySelectorAll(`#${editorId} [data-domain-editable]`)].some(control => !control.disabled));
     }
 
+    const codesToggle = document.getElementById('patron-codes-use-system');
+    assert.strictEqual(document.getElementById('patron-code-picker').disabled, true);
+    assert.ok([...document.querySelectorAll('#patron-codes-editor button')].every(button => button.disabled));
+    codesToggle.click();
+    assert.strictEqual(document.getElementById('patron-code-picker').disabled, false);
     assert.ok(changes.length >= 5);
 
     const codeEditor = document.getElementById('patron-codes-editor');
-    assert.strictEqual(codeEditor.querySelector('select').value, '2');
+    assert.strictEqual(codeEditor.querySelector('[data-code-id]').dataset.codeId, '2');
     const existingRules = document.querySelectorAll('#format-rules-editor [data-custom-rule-key]');
     assert.strictEqual(existingRules.length, 2);
     function ruleControlNames(row) {
@@ -248,6 +252,91 @@ const axe = require('axe-core');
     assert.throws(() => editors.collect(), /eligible staff user/,
       'An incomplete visible auto-claim row must block settings collection and the save request.');
     editors.dispose();
+
+    const codeData = JSON.parse(JSON.stringify(data));
+    codeData.stored.configuredSystem.allowedPatronCodeIds.values = [2, 77];
+    codeData.patronCodeChoices = [{ id: 2, description: 'Adult' }, { id: 3, description: 'Branch use' },
+      { id: 4, description: 'eCard' }, { id: 3, description: 'Repeated catalog choice' }];
+    let codeChanges = 0;
+    const codeEditors = module.createSettingsDomainEditors({ root, onChange: () => codeChanges++ });
+    codeEditors.populate(codeData, true);
+    const picker = root.querySelector('#patron-code-picker');
+    const selected = () => codeEditors.collect().values.codes;
+    const options = () => [...root.querySelectorAll('#patron-code-options [role="option"]')];
+    const search = value => { picker.value = value; picker.dispatchEvent(new window.Event('input', { bubbles: true })); };
+    const key = value => picker.dispatchEvent(new window.KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true }));
+    const count = () => root.querySelector('#patron-code-count').textContent;
+    assert.deepStrictEqual(selected(), ['2', '77']);
+    assert.match(root.querySelector('#patron-codes-editor').textContent, /Adult \(2\).*Unavailable code \(77\)/);
+    const baseline = codeEditors.snapshot();
+    search('branch');
+    assert.deepStrictEqual(options().map(option => option.textContent), ['Branch use (3)']);
+    key('ArrowDown');
+    assert.strictEqual(picker.getAttribute('aria-activedescendant'), options()[0].id);
+    key('Escape');
+    assert.strictEqual(picker.getAttribute('aria-expanded'), 'false');
+    search('4'); key('Tab');
+    assert.strictEqual(codeEditors.snapshot(), baseline);
+    assert.strictEqual(codeChanges, 0, 'Picker search, highlight and dismissal are transient.');
+    assert.strictEqual(codeEditors.collect().changed, false);
+    search('3');
+    const staleOption = options()[0];
+    key('ArrowUp'); key('Enter'); staleOption.click();
+    assert.deepStrictEqual(selected(), ['2', '77', '3']);
+    assert.strictEqual(codeChanges, 1, 'A stale option cannot add a duplicate.');
+    assert.strictEqual(picker.value, '');
+    search('');
+    assert.deepStrictEqual(options().map(option => option.textContent), ['eCard (4)']);
+    search('arbitrary 2147483648'); key('Enter');
+    assert.deepStrictEqual(selected(), ['2', '77', '3'], 'Arbitrary typed IDs never become selections.');
+    root.querySelector('[aria-label="Remove Unavailable code (77)"]').click();
+    assert.strictEqual(document.activeElement.getAttribute('aria-label'), 'Remove Branch use (3)');
+    root.querySelector('[aria-label="Remove Branch use (3)"]').click();
+    assert.strictEqual(count(), '1 patron code selected.');
+    root.querySelector('#patron-code-eligibility-enabled').checked = true;
+    root.querySelector('[aria-label="Remove Adult (2)"]').click();
+    assert.strictEqual(document.activeElement, picker);
+    assert.strictEqual(count(), '0 patron codes selected.');
+    assert.strictEqual(root.querySelector('#patron-code-warning').hidden, false);
+    assert.match(root.querySelector('#patron-code-warning').textContent, /allows all patron codes/);
+    search('eCard'); key('ArrowDown'); key('Enter');
+    assert.strictEqual(root.querySelector('#patron-code-eligibility-enabled').checked, true);
+    root.querySelector('#patron-code-eligibility-enabled').click();
+    assert.deepStrictEqual(selected(), ['4'], 'Changing the policy does not erase IDs.');
+
+    codeEditors.populate({ ...codeData, patronCodeChoices: [], patronCodeChoicesUnavailable: true }, true);
+    assert.deepStrictEqual(selected(), ['2', '77']);
+    assert.strictEqual(picker.disabled, true);
+    assert.match(root.querySelector('#patron-code-availability').textContent, /unavailable.*preserved/);
+    const failedBaseline = codeEditors.snapshot();
+    codeEditors.setCodeChoices(codeData.patronCodeChoices);
+    assert.strictEqual(codeEditors.snapshot(), failedBaseline, 'Catalog retry preserves the selected set and draft baseline.');
+    assert.strictEqual(picker.disabled, false);
+    assert.strictEqual(codeEditors.collect().changed, false);
+    assert.throws(() => codeEditors.setCodeChoices([{ id: 2147483648, description: 'Invalid' }]), /invalid choices/);
+    codeEditors.populate(codeData, false);
+    assert.strictEqual(picker.disabled, true);
+    assert.deepStrictEqual(selected(), ['2', '77']);
+    root.querySelector('#patron-codes-use-system').click();
+    while (root.querySelector('#patron-codes-editor button')) root.querySelector('#patron-codes-editor button').click();
+    assert.deepStrictEqual(selected(), []);
+    assert.strictEqual(codeEditors.collect().values.codesUseSystem, false, 'An explicit empty override remains an override.');
+    root.querySelector('#patron-codes-use-system').click();
+    assert.deepStrictEqual(selected(), ['2', '77']);
+    assert.strictEqual(codeEditors.collect().values.codesUseSystem, true);
+    root.querySelector('#patron-codes-use-system').click();
+    assert.deepStrictEqual(selected(), [], 'Toggling inheritance restores the library draft, including an empty one.');
+    codeEditors.populate({ ...codeData, orgId: '3', stored: { ...codeData.stored, libraryOverride: {
+      ...codeData.stored.libraryOverride, allowedPatronCodeIds: { exists: true, values: [4] }
+    } } }, false);
+    assert.deepStrictEqual(selected(), ['4'], 'A new scope replaces the old library draft.');
+    for (const values of [[0], [-1], [2147483648], ['bad'], [2, 2]]) {
+      codeEditors.populate({ ...codeData, stored: { ...codeData.stored, configuredSystem: {
+        ...codeData.stored.configuredSystem, allowedPatronCodeIds: { exists: true, values }
+      } } }, true);
+      assert.throws(() => codeEditors.collect(), /invalid or duplicate ID/);
+    }
+    codeEditors.dispose();
 
     for (const staffId of ['2147483648', '9007199254740993', '9223372036854775807']) {
       const bigintStaffData = JSON.parse(JSON.stringify(data));

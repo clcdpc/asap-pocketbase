@@ -27,6 +27,25 @@ Run the existing feature suite with:
 pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites
 ```
 
+The S1 Workflow Settings suite is entirely read-only:
+
+```powershell
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr <S1_PR_NUMBER> -Suite s1 -ReadOnly
+```
+
+Its six scenarios cover real SQL-backed selected IDs (including an unavailable
+saved ID), description/ID filtering, keyboard selection/removal, counts,
+inheritance and explicit empty browser drafts, a failed catalog GET with retry,
+provider draft edits/ordering/stable keys, zero/one/four rows, persistent template
+help, and System/library geometry at 1440px, 1000px, 390px and native 200% zoom.
+Screenshots and geometry JSON accompany axe/image/overflow checks. Catalog failure
+is an injected pre-dispatch GET failure; successful choices come from the real
+deterministic backend. Each scenario verifies stored Settings and their version
+are unchanged. No Settings write permission or runner guard is broadened.
+Persisted Save, Discard, explicit `[]`, inherited `null`, scope/version races and
+patron policy remain the retained SQL integration/browser tests' responsibility.
+Run `pr410 -AllowReviewWrites` against the S1 PR as the reset-confirmation regression.
+
 `-Commit <revision>` replaces PR selection; `-Rebuild` forces an image refresh.
 Reports record independent application and tooling SHAs, suite, mode, scenario
 status and actual container exit code. A build/startup blocker leaves the tested

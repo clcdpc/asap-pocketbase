@@ -3031,10 +3031,12 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       await page.locator('#patron-loader-markup').inputValue());
     await page.locator('#settings-nav-workflow').click();
     await page.locator('#patron-codes-use-system').uncheck();
-    await page.locator('#patron-code-search').fill('Adult');
-    await page.locator('#patron-codes-select-all').click();
-    assert.ok(await page.locator('#patron-codes-editor [data-domain-row]').count() > 0);
-    await page.locator('#patron-codes-clear-all').click();
+    while (await page.locator('#patron-codes-editor button').count()) await page.locator('#patron-codes-editor button').first().click();
+    await page.locator('#patron-code-picker').fill('Adult');
+    await page.locator('#patron-code-picker').press('ArrowDown');
+    await page.locator('#patron-code-picker').press('Enter');
+    assert.ok(await page.locator('#patron-codes-editor [data-code-id]').count() > 0);
+    while (await page.locator('#patron-codes-editor button').count()) await page.locator('#patron-codes-editor button').first().click();
     await page.locator('[data-setting-key="patronCodeEligibilityEnabled"] .settings-override-toggle').check();
     await page.locator('#patron-code-eligibility-enabled').check();
     await page.locator('#patron-code-warning').filter({ hasText: /allows all patron codes/ }).waitFor();

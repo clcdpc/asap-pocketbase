@@ -1081,19 +1081,21 @@ async function main() {
     report.systemParticipationRoundTrip = true;
 
     await page.locator('#settings-nav-workflow').click();
-    const systemCodeRows = page.locator('#patron-codes-editor [data-domain-row] select');
-    assert.deepEqual(await systemCodeRows.evaluateAll(selects => selects.map(select => select.value)), ['1', '2'],
+    const systemCodeRows = page.locator('#patron-codes-editor [data-code-id]');
+    assert.deepEqual(await systemCodeRows.evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2'],
       'The system patron-code snapshot must begin with numeric IDs 1 and 2.');
-    await page.locator('#add-patron-code').click();
-    await systemCodeRows.last().selectOption('3');
+    const codePicker = page.locator('#patron-code-picker');
+    await codePicker.fill('3');
+    await codePicker.press('ArrowDown');
+    await codePicker.press('Enter');
     const systemCodesPayload = await saveSettings();
     assert.deepEqual(systemCodesPayload.workflow.allowedPatronCodeIds, [1, 2, 3],
-      'Adding a system patron-code row must preserve existing numeric IDs and submit the new ID.');
+      'Adding a system patron-code chip must preserve existing numeric IDs and submit the new ID.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('system');
     await page.locator('#settings-nav-workflow').click();
-    const reloadedSystemCodes = page.locator('#patron-codes-editor [data-domain-row] select');
-    assert.deepEqual(await reloadedSystemCodes.evaluateAll(selects => selects.map(select => select.value)), ['1', '2', '3']);
+    const reloadedSystemCodes = page.locator('#patron-codes-editor [data-code-id]');
+    assert.deepEqual(await reloadedSystemCodes.evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2', '3']);
     report.systemPatronCodesRoundTrip = true;
 
     await page.locator('#settings-nav-start').click();
@@ -1112,8 +1114,8 @@ async function main() {
         `The unrelated save changed library ${id} participation.`);
     }
     await page.locator('#settings-nav-workflow').click();
-    assert.deepEqual(await page.locator('#patron-codes-editor [data-domain-row] select')
-      .evaluateAll(selects => selects.map(select => select.value)), ['1', '2', '3'],
+    assert.deepEqual(await page.locator('#patron-codes-editor [data-code-id]')
+      .evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2', '3'],
     'The unrelated system edit must preserve all saved numeric patron-code IDs.');
     report.unrelatedSystemSavePreservedParticipation = true;
     report.systemUnrelatedSavePreservedPatronCodes = true;
@@ -1164,11 +1166,12 @@ async function main() {
 
     const useSystemCodes = page.locator('#patron-codes-use-system');
     if (await useSystemCodes.isChecked()) await useSystemCodes.uncheck();
-    const libraryCodeRows = page.locator('#patron-codes-editor [data-domain-row] select');
-    assert.deepEqual(await libraryCodeRows.evaluateAll(selects => selects.map(select => select.value)), ['1', '2'],
+    const libraryCodeRows = page.locator('#patron-codes-editor [data-code-id]');
+    assert.deepEqual(await libraryCodeRows.evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2'],
       'The library override must begin with numeric IDs 1 and 2.');
-    await page.locator('#add-patron-code').click();
-    await libraryCodeRows.last().selectOption('3');
+    await codePicker.fill('3');
+    await codePicker.press('ArrowDown');
+    await codePicker.press('Enter');
 
     await page.locator('#settings-nav-patron').click();
     const autoClaimEditor = page.locator('#format-claim-rules-editor');
@@ -1252,8 +1255,8 @@ async function main() {
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
     assert.equal(await page.locator('#patron-codes-use-system').isChecked(), false);
-    assert.deepEqual(await page.locator('#patron-codes-editor [data-domain-row] select')
-      .evaluateAll(selects => selects.map(select => select.value)), ['1', '2', '3']);
+    assert.deepEqual(await page.locator('#patron-codes-editor [data-code-id]')
+      .evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2', '3']);
     await page.locator('#settings-nav-patron').click();
     const reloadedAutoClaimRules = await autoClaimEditor.locator('[data-domain-row]').evaluateAll(rows => rows.map(row => {
       const selects = row.querySelectorAll('select');
@@ -1297,8 +1300,8 @@ async function main() {
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
-    assert.deepEqual(await page.locator('#patron-codes-editor [data-domain-row] select')
-      .evaluateAll(selects => selects.map(select => select.value)), ['1', '2', '3'],
+    assert.deepEqual(await page.locator('#patron-codes-editor [data-code-id]')
+      .evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2', '3'],
     'The unrelated library edit must preserve its complete numeric patron-code override.');
     await page.locator('#settings-nav-patron').click();
     const preservedAutoClaimRules = await autoClaimEditor.locator('[data-domain-row]').evaluateAll(rows => rows.map(row => {
@@ -1317,16 +1320,16 @@ async function main() {
     report.libraryUnrelatedSavePreservedPatronCodes = true;
 
     await page.locator('#settings-nav-workflow').click();
-    await page.locator('#patron-codes-clear-all').click();
+    while (await page.locator('#patron-codes-editor button').count()) await page.locator('#patron-codes-editor button').first().click();
     const emptyLibraryCodesPayload = await saveSettings();
     assert.deepEqual(emptyLibraryCodesPayload.workflow.allowedPatronCodeIds, [],
-      'Clearing the library code rows must submit an intentional empty replacement set.');
+      'Removing the library code chips must submit an intentional empty replacement set.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
     assert.equal(await page.locator('#patron-codes-use-system').isChecked(), false,
       'An empty replacement set must remain a library override.');
-    assert.equal(await page.locator('#patron-codes-editor [data-domain-row] select').count(), 0,
+    assert.equal(await page.locator('#patron-codes-editor [data-code-id]').count(), 0,
       'An empty replacement set must round-trip as an empty editor.');
     report.libraryEmptyPatronCodeReplacementRoundTrip = true;
 
@@ -1338,8 +1341,8 @@ async function main() {
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
     assert.equal(await page.locator('#patron-codes-use-system').isChecked(), true);
-    assert.deepEqual(await page.locator('#patron-codes-editor [data-domain-row] select')
-      .evaluateAll(selects => selects.map(select => select.value)), ['1', '2', '3']);
+    assert.deepEqual(await page.locator('#patron-codes-editor [data-code-id]')
+      .evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2', '3']);
     report.libraryPatronCodeResetRoundTrip = true;
 
     await scan(page, axeSource, args.artifactRoot, report, 'desktop');

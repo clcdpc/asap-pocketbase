@@ -60,7 +60,7 @@ internal sealed class ReviewFixtures(
         await database.SaveChangesAsync(cancellationToken);
         provider.SetReferenceData(
             [new(1, "System", null, 0, null), new(2, "Review Library", "REVIEW", 2, 1)],
-            [new(1, "Adult")]);
+            [new(1, "Adult"), new(17, "Branch use card"), new(27, "Consortium eCard")]);
         for (var number = 41001; number <= 41011; number++)
         {
             cancellationToken.ThrowIfCancellationRequested();

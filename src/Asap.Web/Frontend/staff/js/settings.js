@@ -82,7 +82,7 @@ const POLARIS_FIELDS = [
   ['systemPolarisUserId', 'polaris-system-user-id']
 ];
 
-const SETTINGS_OPERATION_SLOTS = ['administration-settings', 'administration-staff-access', 'administration-polaris-test', 'administration-scope'];
+const SETTINGS_OPERATION_SLOTS = ['administration-settings', 'administration-staff-access', 'administration-polaris-test', 'administration-scope', 'administration-patron-codes'];
 
 const TEMPLATE_FIELDS = [
   ['suggestion_submitted', 'submit', 'email-submit-subject', 'email-submit-body'],
@@ -457,6 +457,7 @@ export function createSettingsController({
   const domainEditors = createSettingsDomainEditors({
     root,
     onChange: draftChanged,
+    onRetryCodes: retryPatronCodes,
     canRemoveTemplate: template => {
       const id = stringValue(template.id);
       const savedReference = state.savedRejectionTemplateId;
@@ -788,6 +789,7 @@ export function createSettingsController({
 
   function snapshotDrafts() {
     return JSON.stringify([...dom.form.querySelectorAll('input, select, textarea')]
+      .filter(control => !control.closest('[data-settings-ignore="true"]'))
       .map(control => [control.value, control.checked]));
   }
 
@@ -1346,6 +1348,25 @@ export function createSettingsController({
     return encodeURIComponent(state.scope || 'system');
   }
 
+  async function retryPatronCodes() {
+    if (disposed || state.loading || state.pendingMutation || state.awaitingReload) return;
+    const context = captureSettingsContext();
+    const owner = state.data;
+    const operation = reads.begin('administration-patron-codes');
+    try {
+      const response = await authorizedJson(`/api/asap/staff/polaris/patron-codes?orgId=${currentScopeForRequest()}`,
+        { signal: operation.signal });
+      if (!operation.isCurrent() || !isSettingsContextCurrent(context) || !state.visible ||
+          state.data !== owner || state.loading || state.pendingMutation || state.awaitingReload) return;
+      domainEditors.setCodeChoices(response?.data ?? response);
+    } catch (error) {
+      if (operation.isCurrent() && isSettingsContextCurrent(context) && state.data === owner &&
+          !isAbortError(error) && error.status !== 401) notify(error.message || 'Patron-code lookup unavailable. Retry the lookup.', 'error');
+    } finally {
+      reads.finish('administration-patron-codes', operation.token);
+    }
+  }
+
   async function load(options = {}) {
     if (disposed || !state.staff || state.staff.role === 'staff') return;
     if (state.pendingMutation && state.pendingMutation !== options.owner) return false;
@@ -1384,6 +1405,7 @@ export function createSettingsController({
       populateScopeOptions();
       const patronCodeChoices = patronCodesResponse?.data ?? patronCodesResponse;
       data.patronCodeChoices = Array.isArray(patronCodeChoices) ? patronCodeChoices : [];
+      data.patronCodeChoicesUnavailable = !Array.isArray(patronCodeChoices);
       const wasHidden = dom.form.hidden;
       const review = state.unconfirmedMutation || state.awaitingReloadMutation;
       const staffReview = review?.slot === 'administration-staff-mutation';
@@ -2169,7 +2191,9 @@ export function createSettingsController({
         acceptOrganizationCatalog(organizations);
         state.staffUsers = []; state.staffAudit = []; state.staffAccessLoaded = false; state.lastStaffCleanup = null;
         populateScopeOptions();
-        populate({ ...data, patronCodeChoices: codesResponse?.data ?? codesResponse ?? [] });
+        const choices = codesResponse?.data ?? codesResponse;
+        populate({ ...data, patronCodeChoices: Array.isArray(choices) ? choices : [],
+          patronCodeChoicesUnavailable: !Array.isArray(choices) });
         renderStaffUsers(); renderStaffAudit(); dom.form.hidden = false; dom.form.inert = state.awaitingReload; dom.refresh.disabled = false;
         onRefreshed(operation.context.owner, { kind: 'settings', scope });
       } };
