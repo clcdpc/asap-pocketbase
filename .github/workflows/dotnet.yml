@@ -32,14 +32,43 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  validation-policy:
+    name: Resolve validation policy
+    permissions:
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.policy.outputs.mode }}
+    steps:
+      # Read current server state: synchronize/ready events can arrive out of order.
+      # No checkout or PR code runs before this trust and current-head check.
+      - uses: actions/github-script@v8
+        id: policy
+        with:
+          script: |
+            if (context.eventName !== 'pull_request') {
+              core.setOutput('mode', 'full');
+              return;
+            }
+            const eventPr = context.payload.pull_request;
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo, pull_number: eventPr.number
+            });
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            if (pr.state !== 'open' || pr.head.sha !== eventPr.head.sha ||
+                pr.head.repo?.full_name !== repository ||
+                !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(pr.author_association) ||
+                typeof pr.draft !== 'boolean') {
+              core.setFailed('PR is stale, closed, external or untrusted; full validation has not been established.');
+              return;
+            }
+            core.setOutput('mode', pr.draft ? 'draft' : 'full');
+
   build-test-package:
     name: Full CI execution
-    # Never allocate a trusted runner to fork code or an untrusted PR author.
-    if: >-
-      ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-          (github.event_name != 'pull_request' ||
-            (github.event.pull_request.head.repo.full_name == github.repository &&
-             contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))) }}
+    needs: validation-policy
+    if: ${{ needs.validation-policy.outputs.mode == 'full' }}
     permissions:
       contents: read
       actions: read
@@ -415,10 +444,8 @@ jobs:
 
   draft-validation:
     name: Draft validation
-    if: >-
-      ${{ github.event_name == 'pull_request' && github.event.pull_request.draft &&
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) }}
+    needs: validation-policy
+    if: ${{ needs.validation-policy.outputs.mode == 'draft' }}
     permissions:
       contents: read
     runs-on: clc-linux
@@ -470,7 +497,7 @@ jobs:
   validation:
     # Preserve the required check name, but never let skipped full CI pass it.
     name: Build, test and package
-    needs: [build-test-package, draft-validation]
+    needs: [validation-policy, build-test-package, draft-validation]
     if: ${{ always() }}
     permissions: {}
     runs-on: ubuntu-latest
@@ -479,11 +506,15 @@ jobs:
       # No checkout or PR code executes in this reporting-only hosted job.
       - name: Require successful full validation
         env:
-          CI_EVENT_NAME: ${{ github.event_name }}
-          CI_PR_DRAFT: ${{ toJSON(github.event.pull_request.draft) }}
+          CI_POLICY_RESULT: ${{ needs.validation-policy.result }}
+          CI_VALIDATION_MODE: ${{ needs.validation-policy.outputs.mode }}
           CI_FULL_RESULT: ${{ needs.build-test-package.result }}
         run: |
-          if [ "$CI_EVENT_NAME" = 'pull_request' ] && [ "$CI_PR_DRAFT" != 'false' ]; then
+          if [ "$CI_POLICY_RESULT" != 'success' ]; then
+            echo '::error::Current PR validation policy must resolve successfully.'
+            exit 1
+          fi
+          if [ "$CI_VALIDATION_MODE" != 'full' ]; then
             echo '::notice::Draft validation is separate. Mark this PR ready for review to satisfy full validation.'
             exit 1
           fi

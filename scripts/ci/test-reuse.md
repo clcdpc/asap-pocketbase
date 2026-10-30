@@ -25,6 +25,15 @@ dependency exclusions and provenance/digest verification are unchanged.
 | `v*.*.*-test.*` tag push | Fresh full CI execution and full gate | Bypassed | Only with existing activation/environment gates |
 | Manual dispatch, including a draft branch | Full CI execution and full gate | Allowed unless forced or deployment requested | Only explicit `deploy_test_iis` plus existing gates |
 
+The small hosted **Resolve validation policy** job reads current PR metadata
+using only `pull-requests: read`, without a checkout. It verifies the PR is
+open, its current head matches this event, and its repository/author is trusted,
+then selects draft or full validation from the server's current draft flag.
+Non-PR events select full validation without a PR query. API failure, malformed
+metadata or a stale/untrusted PR fails the policy and the required full gate
+before allocating a code-executing runner. Rerun the latest revision after
+resolving the cause.
+
 Draft validation has a 15-minute job budget. It checks the exact event checkout,
 validates all workflow YAML/expressions with checksum-pinned actionlint 1.7.12,
 runs the SQL-independent reuse regressions, restores/builds the Release solution,
@@ -40,8 +49,9 @@ cold run early. SQL/browser setup is conditional only on the existing verified
 reuse decisions. Every full run still builds and publishes the current SHA.
 
 The reporting-only **Build, test and package** job runs with `always()` after
-both execution jobs. It succeeds only for a non-draft/full event with a successful
-**Full CI execution** result. Failure, cancellation, a skipped full job or an
+the policy and both execution jobs. It succeeds only for a successfully resolved
+full-validation policy with a successful **Full CI execution** result. Failure,
+cancellation, a skipped full job, an unsuccessful policy or an
 absent result cannot pass. On a draft it **intentionally fails**, even when
 **Draft validation** passes: the red full gate means full validation has not
 been established. The gate has no GitHub API permissions and runs on a GitHub-hosted
@@ -67,8 +77,11 @@ change repository settings or claim that protection is already enabled.
 ## PR transitions and concurrency
 
 The explicit PR activity types are `opened`, `reopened`, `synchronize`,
-`ready_for_review` and `converted_to_draft`. Validation depth uses the event's
-current draft flag, not whether the SHA previously received a green check.
+`ready_for_review` and `converted_to_draft`. Validation depth uses current PR
+metadata, not the event's potentially stale draft snapshot or whether the SHA
+previously received a green check. GitHub can deliver a draft synchronize event
+after a ready event; resolving live state prevents that later event from
+cancelling ready validation and replacing it with fast checks.
 Marking ready therefore starts full CI immediately; converting back to draft
 starts fast checks and cancels queued/running obsolete PR work.
 
@@ -91,8 +104,9 @@ deployment requests always execute fresh tests before any eligible activation.
 
 ## Public PR runner boundary
 
-Both code-executing jobs require a same-repository PR authored by an `OWNER`,
-`MEMBER` or `COLLABORATOR` before allocating `clc-linux`. Forks and untrusted
+Both code-executing jobs depend on the hosted policy accepting a same-repository
+PR authored by an `OWNER`, `MEMBER` or `COLLABORATOR` before allocating
+`clc-linux`. Forks and untrusted
 authors receive no trusted runner; the full gate fails rather than treating
 skipped execution as validation. This is an explicit restriction compared with
 the earlier workflow's reliance on repository-level approval and isolation.
@@ -188,9 +202,10 @@ never written to evidence.
 ## Original execution and trust
 
 The build job uses only `contents: read`, `actions: read` and `pull-requests: read`
-on its existing GitHub token. The PR read scope is restricted to that job and is
-required by GitHub's [commit-to-PR endpoint](https://docs.github.com/en/rest/commits/commits#list-pull-requests-associated-with-a-commit)
-for historical author/repository provenance.
+on its existing GitHub token. Its PR read scope is required by GitHub's
+[commit-to-PR endpoint](https://docs.github.com/en/rest/commits/commits#list-pull-requests-associated-with-a-commit)
+for historical author/repository provenance. The separate hosted policy uses
+only PR read permission to verify current state before any checkout.
 No PAT, new secret, write permission or `pull_request_target` is introduced. The
 lookup starts after runner allocation, restore/build and npm install, so queued
 jobs can see a predecessor that completed while they waited. Search is bounded
@@ -283,7 +298,8 @@ The existing always-run container cleanup remains.
 
 `node tests/ci_workflow_contract.test.js` parses YAML with unique-key checking,
 evaluates the workflow's actual routing/concurrency expressions with GitHub's
-`@actions/expressions` library, and executes the actual reporting-gate shell
+`@actions/expressions` library, executes the actual hosted policy script against
+a deterministic GitHub API boundary, and executes the actual reporting-gate shell
 against successful, failed, cancelled, skipped and missing dependency results.
 Its matrix covers state transitions at an unchanged SHA, per-PR isolation,
 independent manual/push/tag attempts, fork/author exclusion, draft setup limits
@@ -304,6 +320,11 @@ Live trigger receipts on October 30, 2026, in [PR #418](https://github.com/clcdp
   [Conversion back to draft](https://github.com/clcdpc/asap-pocketbase/actions/runs/41078346929)
   at that same head selected fast validation and cancelled the running full job
   before SQL startup. No original evidence was uploaded and the full gate failed.
+- Rapid push/ready transitions at head `8393195` exposed out-of-order events:
+  ready run `41078709618` was superseded by draft-snapshot run `41078709871`,
+  although the PR was ready. The gate stayed red. The hosted current-state
+  policy fixes this observed race; regression cases cover both stale draft and
+  stale ready snapshots, stale heads, closed PRs and unavailable metadata.
 
 The PR records final full-suite/reuse results separately. No release tag,
 deployment or second PR is needed to test these state transitions. Cross-PR
@@ -343,9 +364,9 @@ drift requires an epoch bump. Conservative misses are preferred to inferred hits
 | Attempt / failure | Enforced boundary |
 | --- | --- |
 | Draft checks substituted for full CI | Distinct jobs, explicit original-executor identity and an always-run required gate that fails for drafts/skipped/failed/cancelled full execution. |
-| Ready/draft transition without a commit | Explicit activity types and current draft flag; every transition creates the appropriate run, without treating draft success as full evidence. |
+| Ready/draft transition without a commit | Explicit activity types and live current-state policy; out-of-order snapshots cannot substitute draft success for full evidence. |
 | New PR revision leaves old SQL job running | Workflow-wide stable PR-number group and PR-only cancellation; unrelated PR, push, manual and tag groups stay independent. |
-| Fork reaches trusted runner after skipped security job | Trust predicate is on both execution jobs before allocation; hosted required gate rejects skipped full execution. |
+| Fork reaches trusted runner after skipped security job | Both execution jobs require a successful hosted trust/current-head policy before allocation; required gate rejects failed policy or skipped full execution. |
 | Passed tests, later failed/cancelled workflow | Only a completed successful latest workflow and exact successful attempt can supply evidence. |
 | Skipped test presented as PASS | Original successful test step, complete native outcomes and current always-run gate are all required. |
 | Contributor/fork forged manifest | Numeric repository/head IDs, trusted same-repository PR association, original checkout logs, Git tree and immutable artifact digest must agree. |

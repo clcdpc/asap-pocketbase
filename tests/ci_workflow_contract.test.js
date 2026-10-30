@@ -8,6 +8,7 @@ const root = path.resolve(__dirname, '..');
 const workflow = YAML.parse(fs.readFileSync(path.join(root, '.github/workflows/dotnet.yml'), 'utf8'), { uniqueKeys: true });
 const full = workflow.jobs['build-test-package'];
 const draft = workflow.jobs['draft-validation'];
+const policy = workflow.jobs['validation-policy'];
 const gate = workflow.jobs.validation;
 const deploy = workflow.jobs['deploy-test-iis'];
 const reuse = JSON.parse(fs.readFileSync(path.join(root, 'scripts/ci/test-reuse.json'), 'utf8'));
@@ -26,13 +27,32 @@ async function main() {
   function template(value, context) {
     return String(value).replace(/\$\{\{([\s\S]*?)\}\}/g, (match) => evaluate(match, context));
   }
+  async function routed(context, currentPr = structuredClone(context.github.event.pull_request)) {
+    const outputs = {};
+    let failed = false;
+    const [owner, repo] = context.github.repository.split('/');
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    // Run the actual hosted preflight script against a deterministic API boundary.
+    await new AsyncFunction('context', 'github', 'core', policy.steps[0].with.script)(
+      { eventName: context.github.event_name, payload: context.github.event, repo: { owner, repo } },
+      { rest: { pulls: { get: async (parameters) => {
+        assert.equal(context.github.event_name, 'pull_request', 'Non-PR runs must not query a PR');
+        assert.deepEqual(parameters, { owner, repo, pull_number: context.github.event.pull_request.number });
+        if (currentPr instanceof Error) { throw currentPr; }
+        return { data: currentPr };
+      } } } },
+      { setOutput: (key, value) => { outputs[key] = value; }, setFailed: () => { failed = true; } }
+    );
+    context.needs = { 'validation-policy': { result: failed ? 'failure' : 'success', outputs } };
+    return context;
+  }
   function pr(action, isDraft, number = 17) {
     return {
       github: {
         workflow: workflow.name, event_name: 'pull_request', repository: 'clcdpc/asap-pocketbase',
         sha: 'a'.repeat(40), ref: `refs/pull/${number}/merge`, run_id: 100, run_attempt: 1,
         event: { action, pull_request: {
-          number, draft: isDraft, author_association: 'COLLABORATOR',
+          number, state: 'open', draft: isDraft, author_association: 'COLLABORATOR',
           head: { sha: 'b'.repeat(40), repo: { full_name: 'clcdpc/asap-pocketbase' } }
         } }
       },
@@ -55,13 +75,13 @@ async function main() {
     return matches[0];
   }
   let checks = 0;
-  function check(name, run) {
-    run();
+  async function check(name, run) {
+    await run();
     checks++;
     console.log(`PASS ${name}`);
   }
 
-  check('explicit PR events and existing push/manual triggers', () => {
+  await check('explicit PR events and existing push/manual triggers', () => {
     assert.deepEqual(workflow.on.pull_request.types, ['opened', 'reopened', 'synchronize', 'ready_for_review', 'converted_to_draft']);
     assert.deepEqual(workflow.on.push.branches, ['main', 'codex/csharp-port', 'codex/slice-08-test-deployment']);
     assert.deepEqual(workflow.on.push.tags, ['v*.*.*-test.*']);
@@ -73,27 +93,31 @@ async function main() {
     ['opened', true], ['opened', false], ['synchronize', true], ['synchronize', false],
     ['ready_for_review', false], ['converted_to_draft', true], ['reopened', true], ['reopened', false]
   ]) {
-    check(`${action}, draft=${isDraft}: exactly the intended validation depth`, () => {
-      const context = pr(action, isDraft);
+    await check(`${action}, draft=${isDraft}: exactly the intended validation depth`, async () => {
+      const context = await routed(pr(action, isDraft));
       assert.equal(enabled(draft, context), isDraft);
       assert.equal(enabled(full, context), !isDraft);
       assert.equal(enabled(deploy, context), false);
     });
   }
-  check('same-commit draft/ready transitions select new validation and the same cancellation group', () => {
+  await check('same-commit draft/ready transitions select new validation and the same cancellation group', async () => {
     const states = [pr('opened', true), pr('ready_for_review', false), pr('converted_to_draft', true)];
+    await Promise.all(states.map((context) => routed(context)));
     assert.equal(new Set(states.map((c) => c.github.sha)).size, 1);
     assert.equal(new Set(states.map((c) => template(workflow.concurrency.group, c))).size, 1);
     assert.deepEqual(states.map((c) => enabled(full, c)), [false, true, false]);
   });
-  check('current draft state selects depth rather than the activity name alone', () => {
-    for (const action of workflow.on.pull_request.types) {
-      assert.equal(enabled(full, pr(action, false)), true);
-      assert.equal(enabled(full, pr(action, true)), false);
-      assert.equal(enabled(draft, pr(action, true)), true);
+  await check('out-of-order event snapshots select the current server draft state', async () => {
+    for (const [eventDraft, currentDraft] of [[true, false], [false, true]]) {
+      const context = pr('synchronize', eventDraft);
+      const current = structuredClone(context.github.event.pull_request);
+      current.draft = currentDraft;
+      await routed(context, current);
+      assert.equal(enabled(full, context), !currentDraft);
+      assert.equal(enabled(draft, context), currentDraft);
     }
   });
-  check('repeated draft and ready commits share the PR group; different PRs do not', () => {
+  await check('repeated draft and ready commits share the PR group; different PRs do not', () => {
     for (const isDraft of [true, false]) {
       const before = pr('synchronize', isDraft);
       const after = structuredClone(before);
@@ -106,7 +130,7 @@ async function main() {
     assert.notEqual(template(workflow.concurrency.group, pr('opened', true, 17)),
       template(workflow.concurrency.group, pr('opened', true, 18)));
   });
-  check('manual, push, tag and rerun attempts cannot cross-cancel, even at the same SHA', () => {
+  await check('manual, push, tag and rerun attempts cannot cross-cancel, even at the same SHA', async () => {
     const contexts = [
       nonPr('workflow_dispatch', 101), nonPr('workflow_dispatch', 102),
       nonPr('push', 103), nonPr('push', 104, 'refs/tags/v1.2.3-test.1')
@@ -117,13 +141,14 @@ async function main() {
     groups.push(template(workflow.concurrency.group, pr('opened', false)));
     assert.equal(new Set(groups).size, groups.length);
     for (const context of contexts) {
+      await routed(context);
       assert.equal(evaluate(workflow.concurrency['cancel-in-progress'], context), 'false');
       assert.equal(enabled(full, context), true);
       assert.equal(enabled(draft, context), false);
     }
   });
-  check('manual requests preserve full validation, force-full input and deployment controls', () => {
-    const context = nonPr('workflow_dispatch', 105, 'refs/heads/draft-branch', { force_full_ci: true, deploy_test_iis: true });
+  await check('manual requests preserve full validation, force-full input and deployment controls', async () => {
+    const context = await routed(nonPr('workflow_dispatch', 105, 'refs/heads/draft-branch', { force_full_ci: true, deploy_test_iis: true }));
     assert.equal(enabled(full, context), true);
     assert.equal(enabled(draft, context), false);
     assert.equal(template(full.env.ASAP_FORCE_FULL_CI, context), 'true');
@@ -134,10 +159,11 @@ async function main() {
     context.inputs.deploy_test_iis = false;
     assert.equal(enabled(deploy, context), false);
   });
-  check('main pushes validate; test tags retain gated deployment eligibility', () => {
+  await check('main pushes validate; test tags retain gated deployment eligibility', async () => {
     const push = nonPr('push', 106);
     const tag = nonPr('push', 107, 'refs/tags/v1.2.3-test.1');
     for (const context of [push, tag]) {
+      await routed(context);
       context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
       assert.equal(enabled(full, context), true);
     }
@@ -147,10 +173,11 @@ async function main() {
     assert.deepEqual(deploy['runs-on'], ['self-hosted', 'windows', 'x64', 'asap-test-iis']);
     assert.equal(deploy.environment, 'asap-test-iis');
   });
-  check('draft work is bounded and has no SQL, browser, publish or evidence setup', () => {
+  await check('draft work is bounded and has no SQL, browser, publish or evidence setup', () => {
     assert.equal(draft['runs-on'], 'clc-linux');
     assert.ok(draft['timeout-minutes'] <= 15);
     assert.deepEqual(draft.permissions, { contents: 'read' });
+    assert.equal(draft.needs, 'validation-policy');
     assert.equal(draft.services, undefined);
     for (const candidate of draft.steps) {
       assert.equal(candidate['continue-on-error'], undefined);
@@ -168,9 +195,10 @@ async function main() {
       assert.equal(step(job, 'Verify exact test source').run, 'python3 -B scripts/ci/reuse.py checkout');
     }
   });
-  check('full CI retains original evidence checks and current-commit packaging', () => {
+  await check('full CI retains original evidence checks and current-commit packaging', () => {
     assert.equal(reuse.job, full.name);
     assert.equal(full['runs-on'], 'clc-linux');
+    assert.equal(full.needs, 'validation-policy');
     assert.equal(full['continue-on-error'], undefined);
     assert.equal(step(full, 'Restore and build').run, 'dotnet build Asap.sln --configuration Release');
     const verify = step(full, 'Verify required test suites');
@@ -194,24 +222,24 @@ async function main() {
     assert.equal(step(full, 'Remove SQL Server test container').if, '${{ always() }}');
     assert.ok(!reuse.exclusions.some((rule) => rule.paths.includes('.github/workflows/dotnet.yml')));
   });
-  check('the stable full gate always inspects full execution and runs no PR code', () => {
+  await check('the stable full gate always inspects full execution and runs no PR code', () => {
     assert.equal(gate.name, 'Build, test and package');
     assert.equal(gate.if, '${{ always() }}');
     assert.deepEqual(gate.permissions, {});
-    assert.deepEqual(gate.needs, ['build-test-package', 'draft-validation']);
+    assert.deepEqual(gate.needs, ['validation-policy', 'build-test-package', 'draft-validation']);
     assert.equal(gate['runs-on'], 'ubuntu-latest');
     assert.ok(gate.steps.every((candidate) => !candidate.uses));
     assert.equal(gate['continue-on-error'], undefined);
   });
-  check('execute the actual required-gate shell against success/failure/cancellation/skip and draft transitions', () => {
+  await check('execute the actual required-gate shell against success/failure/cancellation/skip and draft transitions', async () => {
     const report = step(gate, 'Require successful full validation');
     const bash = process.platform === 'win32'
       ? path.resolve(cp.execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(), '../../../bin/bash.exe')
       : 'bash';
     for (const event of ['pull_request', 'push', 'workflow_dispatch']) {
       for (const result of ['success', 'failure', 'cancelled', 'skipped', '']) {
-        const context = event === 'pull_request' ? pr('ready_for_review', false) : nonPr(event, 108);
-        context.needs = { 'build-test-package': { result } };
+        const context = await routed(event === 'pull_request' ? pr('ready_for_review', false) : nonPr(event, 108));
+        context.needs['build-test-package'] = { result };
         const env = Object.fromEntries(Object.entries(report.env).map(([key, value]) => [key, template(value, context)]));
         const run = cp.spawnSync(bash, ['-c', report.run], { encoding: 'utf8', env: { ...process.env, ...env } });
         assert.ifError(run.error);
@@ -219,21 +247,31 @@ async function main() {
       }
     }
     for (const state of [true, null]) {
-      const context = pr('converted_to_draft', state);
-      context.needs = { 'build-test-package': { result: 'success' } };
+      const context = await routed(pr('converted_to_draft', state));
+      context.needs['build-test-package'] = { result: 'success' };
       const env = Object.fromEntries(Object.entries(report.env).map(([key, value]) => [key, template(value, context)]));
       const run = cp.spawnSync(bash, ['-c', report.run], { encoding: 'utf8', env: { ...process.env, ...env } });
       assert.ifError(run.error);
       assert.equal(run.status, 1, 'Even an earlier successful full result must not turn draft validation into a full pass');
     }
+    for (const result of ['failure', 'cancelled', 'skipped', '']) {
+      const context = await routed(pr('ready_for_review', false));
+      context.needs['validation-policy'].result = result;
+      context.needs['build-test-package'] = { result: 'success' };
+      const env = Object.fromEntries(Object.entries(report.env).map(([key, value]) => [key, template(value, context)]));
+      const run = cp.spawnSync(bash, ['-c', report.run], { encoding: 'utf8', env: { ...process.env, ...env } });
+      assert.ifError(run.error);
+      assert.equal(run.status, 1, 'A failed policy must not pass even if the full result claims success');
+    }
   });
-  check('forks and untrusted authors allocate no trusted execution runner', () => {
+  await check('forks and untrusted authors allocate no trusted execution runner', async () => {
     for (const isDraft of [true, false]) {
       const fork = pr('opened', isDraft);
       fork.github.event.pull_request.head.repo.full_name = 'outsider/asap-pocketbase';
       const external = pr('opened', isDraft);
       external.github.event.pull_request.author_association = 'CONTRIBUTOR';
       for (const context of [fork, external]) {
+        await routed(context);
         assert.equal(enabled(full, context), false);
         assert.equal(enabled(draft, context), false);
       }
@@ -242,6 +280,28 @@ async function main() {
     assert.deepEqual(full.permissions, { contents: 'read', actions: 'read', 'pull-requests': 'read' });
     assert.ok(!JSON.stringify(workflow).includes('secrets.'));
     assert.ok(!deploy.steps.some((candidate) => candidate.uses?.startsWith('actions/checkout')));
+  });
+  await check('closed, stale, malformed or unreadable current PR metadata fails policy', async () => {
+    for (const change of [
+      (current) => { current.state = 'closed'; },
+      (current) => { current.head.sha = 'e'.repeat(40); },
+      (current) => { current.draft = null; }
+    ]) {
+      const context = pr('ready_for_review', false);
+      const current = structuredClone(context.github.event.pull_request);
+      change(current);
+      await routed(context, current);
+      assert.equal(context.needs['validation-policy'].result, 'failure');
+      assert.equal(enabled(full, context), false);
+      assert.equal(enabled(draft, context), false);
+    }
+    await assert.rejects(routed(pr('opened', false), new Error('API unavailable')), /API unavailable/);
+    assert.equal(policy['runs-on'], 'ubuntu-latest');
+    assert.deepEqual(policy.permissions, { 'pull-requests': 'read' });
+    assert.equal(policy.steps.length, 1);
+    assert.equal(policy.steps[0].uses, 'actions/github-script@v8');
+    assert.equal(policy.outputs.mode, '${{ steps.policy.outputs.mode }}');
+    assert.ok(!policy.steps[0].with.script.includes('${{'), 'Never interpolate PR input into JavaScript source');
   });
   console.log(`${checks} CI workflow contract checks passed.`);
 }
