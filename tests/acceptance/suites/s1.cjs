@@ -36,6 +36,22 @@ async function unchanged(t, scope, before) {
   assert.deepEqual(after.stored, before.stored, 'Browser drafts preserve all stored Settings');
   assert.equal(t.mutations.length, 0);
 }
+async function providerKeyboard(page) {
+  const row = page.locator('.settings-provider-row').first();
+  await row.getByLabel('URL template', { exact: true }).focus();
+  await page.keyboard.press('Tab');
+  assert.equal(await row.getByLabel('Enabled', { exact: true }).evaluate(node => node === document.activeElement), true);
+  await page.keyboard.press('Space'); await page.keyboard.press('Space');
+  if (await row.locator('.settings-domain-override-toggle').count()) await page.keyboard.press('Tab');
+  for (const name of ['Move down', 'Delete']) {
+    await page.keyboard.press('Tab');
+    assert.equal(await row.getByRole('button', { name, exact: true }).evaluate(node => {
+      const style = getComputedStyle(node), r = node.getBoundingClientRect();
+      return node === document.activeElement && r.left >= 0 && r.right <= innerWidth &&
+        r.top >= 0 && r.bottom <= innerHeight && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
+    }), true, name + ' is keyboard reachable with visible focus');
+  }
+}
 
 const scenarios = [
   { id: 's1-picker-draft', requirements: ['#392: grouping, saved/unknown IDs, description/ID search, keyboard, counts, no transient dirty state or duplicate IDs'], writes: false,
@@ -165,8 +181,10 @@ const scenarios = [
           await override.check();
           assert.equal(await t.page.locator('.settings-provider-row input[type="url"]').first().isEnabled(), true);
           await evidence(t, t.id + '-' + width + '-override');
+          await providerKeyboard(t.page);
           await override.uncheck();
-        }
+        } else await providerKeyboard(t.page);
+        assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Keyboard review returns provider values to baseline');
       }
       await t.page.setViewportSize({ width: 1440, height: 1000 });
       await nativeZoom(t.context, t.page, 2);
@@ -180,6 +198,10 @@ const scenarios = [
         await t.page.locator('#external-search-provider-help').evaluate(node => node.scrollIntoView({ block: 'start' }));
         const geometry = await evidence(t, t.id + '-native-200-providers');
         assert.equal(geometry.metrics.visualViewport.zoom, 2);
+        const override = t.page.locator('.settings-provider-row .settings-domain-override-toggle').first();
+        if (scope === '2') await override.check();
+        await providerKeyboard(t.page);
+        if (scope === '2') await override.uncheck();
       } // Zoom is per-tab; the runner closes this page after the scenario.
       await unchanged(t, scope, before);
     } }))
