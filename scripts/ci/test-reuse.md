@@ -349,6 +349,68 @@ and preserved deployment dependencies. It runs in the complete `npm test` suite.
 These are executable policy and gate contracts, not a simulation of GitHub's
 event delivery or cancellation engine. Those require separate live run receipts.
 
+Corrected draft reporting was verified at head `9724fc2` in
+[run 41101592149](https://github.com/clcdpc/asap-pocketbase/actions/runs/41101592149):
+
+- The workflow concluded **success**. Actual check-run records show
+  **Draft validation: success** and **Draft CI result: success**. No check named
+  **Build, test and package** was emitted in this run's check suite.
+- **Full CI execution** and **Deploy exact artifact to test IIS** were both
+  **skipped**, with no runner allocated. The artifact list was empty.
+- The new-head run superseded
+  [old-head run 41101579368](https://github.com/clcdpc/asap-pocketbase/actions/runs/41101579368),
+  whose final conclusion is **cancelled**.
+- Logs confirm a successful Release build, 107 passing SQL-independent .NET
+  cases with zero failures/skips, 54 reuse regressions, 25 workflow contracts,
+  all 64 retained frontend files and workflow lint.
+- GitHub's [Actions/Webhooks incident](https://www.githubstatus.com/incidents/pwxsjgnvrk6b)
+  delayed status updates behind archived job logs. The conclusions above were
+  independently confirmed from the eventual run/check records.
+
+[Manual full run 41102402688](https://github.com/clcdpc/asap-pocketbase/actions/runs/41102402688)
+at the same head, while the PR remained draft, concluded **success**. Both
+**Full CI execution** and **Build, test and package** report **success**.
+`force_full_ci` and `deploy_test_iis` were false. All three suites were
+**EXECUTED**, with 1,530 non-browser .NET/SQL cases and 17 browser cases passing
+without failures/skips, all 64 frontend files and all 106 Python checks passing.
+Current-commit publishing and package checks passed; IIS was skipped without
+allocating its runner. The run produced the three original evidence artifacts.
+Reporting and workflow-contract inputs remain fingerprinted; no exclusion was
+added to reuse evidence from before this correction.
+
+The read-only live probe against that original execution passed all three cases:
+baseline dotnet/browser/frontend HITs, a browser-count change invalidating only
+browser, and corrupt archive bytes rejecting all reuse. It ran after the source
+run, original step results and artifact metadata were visible to the validator;
+delayed status records were not bypassed to obtain a HIT.
+
+[Ready run 41114091412](https://github.com/clcdpc/asap-pocketbase/actions/runs/41114091412)
+then passed at unchanged head `9724fc2`. It created a new successful
+**Build, test and package** check (`124265332442`), with successful full execution
+and no separate draft execution. Its downloaded verification artifact confirms
+all three suites were **REUSED** directly from original run `41102402688`.
+The current merge checkout `6fe5a8246013c36aa65b6f6d76652f44e9965e47` was freshly
+published and packaged. No original evidence was re-emitted, and IIS was skipped.
+
+The following ready -> draft -> ready cycle also passed without changing head
+`9724fc2`:
+
+- [Draft run 41114896943](https://github.com/clcdpc/asap-pocketbase/actions/runs/41114896943)
+  concluded **success**, with a new successful **Draft CI result** check
+  (`124269377139`), no **Build, test and package** check in its suite, no full/IIS
+  runner allocation and an empty artifact list.
+- [Ready run 41115923840](https://github.com/clcdpc/asap-pocketbase/actions/runs/41115923840)
+  concluded **success**, with successful full execution and a new successful
+  **Build, test and package** check (`124271738520`). All three suites were
+  independently verified/reused directly from original run `41102402688`.
+  Current packaging passed. No original evidence was re-emitted, and IIS was skipped.
+
+During the draft cycle, the actual PR check list retained the earlier genuine
+full success `124265332442` at that SHA. It belonged to the prior ready run,
+not the draft run. Returning ready emitted the distinct new full check above.
+This verifies check emission and validation; merge blocking remains untested
+because branch protection is not configured.
+
 Historical trigger receipts before the draft-reporting correction on October 30,
 2026, in [PR #418](https://github.com/clcdpc/asap-pocketbase/pull/418):
 
