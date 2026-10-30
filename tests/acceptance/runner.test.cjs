@@ -413,6 +413,7 @@ test('registered suites preserve smoke/pr410 and make all Q1 scenarios read-only
     assert.ok(suite.requires.includes('wslc-review-0.4.0'));
     assert.ok(suite.human.length > 0);
     assert.ok(Array.isArray(suite.uncovered));
+    assert.ok(suite.id === 'q1' || suite.uncovered.length > 0, 'Existing suites retain their uncovered-requirement records');
   }
   assert.equal(registry.q1.mutations, false);
   assert.equal(registry.q1.scenarios.length, 5);
