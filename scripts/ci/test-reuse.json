@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "repository": "clcdpc/asap-pocketbase",
+  "repository_id": 1221758626,
+  "workflow": ".github/workflows/dotnet.yml",
+  "job": "Full CI execution",
+  "runner_labels": ["clc-linux"],
+  "runner_group": "clc-runners",
+  "environment_epoch": "clc-linux-2026-10-29-v1",
+  "lifetime_days": 14,
+  "exclusions": [
+    {
+      "paths": ["scripts/ci/test-reuse.md"],
+      "suites": ["dotnet", "browser", "frontend"],
+      "reason": "Operator documentation and validation receipts only; no build, test, fingerprint or deployment command reads this document."
+    },
+    {
+      "paths": [
+        "tests/acceptance/run.cjs",
+        "tests/acceptance/helpers/reporting.cjs",
+        "tests/acceptance/helpers/accessibility.cjs"
+      ],
+      "suites": ["dotnet", "browser", "frontend"],
+      "reason": "Standalone acceptance launcher, reporting and screenshots: consumed by acceptance/run.cjs and dev/review/runtime.cjs, never by the three required suites. Keep review providers, LocalReviewer.sql and all other acceptance/review files included."
+    },
+    {
+      "paths": ["tests/browser/staff-presentation.cjs"],
+      "suites": ["dotnet", "frontend"],
+      "reason": "Only invoked by StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry, explicitly excluded from the non-browser partition. No retained frontend test imports this script. The browser suite includes it."
+    }
+  ]
+}

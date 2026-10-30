@@ -38,9 +38,9 @@ assert.ok(workflow.includes('- codex/slice-08-test-deployment'), 'candidate push
 assert.ok(workflow.includes('  workflow_dispatch:\n'), 'manual dispatch should be declared');
 assert.ok(
   workflow.includes(
-    'concurrency:\n  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}\n  cancel-in-progress: true\n\njobs:'
+    "concurrency:\n  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}\n  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n\njobs:"
   ),
-  'workflow concurrency should deduplicate PR, push, tag, and manual runs by source commit'
+  'workflow concurrency should cancel superseded PR runs and isolate non-PR executions'
 );
 assert.ok(!workflow.includes('\n    concurrency:'), 'build-test-package must not retain job-level concurrency');
 assert.ok(workflow.includes('Generate ephemeral SQL test credentials'), 'CI SQL credentials should be generated per run');
