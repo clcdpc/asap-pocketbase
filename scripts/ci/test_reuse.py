@@ -331,6 +331,15 @@ class ProvenanceTests(unittest.TestCase):
             with self.subTest(target=target, key=key):
                 self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
 
+    def test_draft_validation_and_reporting_gate_cannot_supply_full_suite_evidence(self):
+        for job_name in ("Draft validation", "Build, test and package"):
+            fixture = Fixture()
+            # Even a forged complete artifact and successful workflow cannot
+            # substitute a draft/reporting job for the original full executor.
+            fixture.job["name"] = job_name
+            with self.subTest(job_name=job_name):
+                self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
+
     def test_skipped_failed_or_missing_original_step_is_rejected(self):
         for name in (reuse.STEPS["dotnet"], "Verify required test suites", "Upload original dotnet execution evidence"):
             for conclusion in ("skipped", "failure", None):

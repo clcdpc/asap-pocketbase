@@ -1,10 +1,114 @@
 # Content-fingerprinted CI test reuse
 
-`.github/workflows/dotnet.yml` retains the required **Build, test and package**
-job on `clc-linux`, its full .NET/SQL partition and minimum-count guard, frontend
-tests, all designated browser journeys, performance telemetry, cleanup and
-test-IIS activation barriers. There are no workflow path filters or new schedules.
-Python 3.9+ and the standard library implement the optimization.
+`.github/workflows/dotnet.yml` keeps **Build, test and package** as the stable
+full-validation gate. Its **Full CI execution** dependency runs on `clc-linux`
+and retains the full .NET/SQL partition and minimum-count guard, frontend tests,
+all designated browser journeys, performance telemetry, cleanup and test-IIS
+activation barriers. Drafts use a separate **Draft validation** job. There are
+no workflow path filters or new schedules. Python 3.9+ and the standard library
+implement test reuse.
+
+The evidence configuration now names **Full CI execution**, not the reporting
+gate. This workflow/configuration change intentionally invalidates prior
+fingerprints; the first ready run needs fresh execution. The evidence schema,
+dependency exclusions and provenance/digest verification are unchanged.
+
+## Validation policy and required checks
+
+| Event/current state | Validation | Reuse | Automatic deployment |
+| --- | --- | --- | --- |
+| PR opened, reopened or synchronized, draft | Draft validation | No original full-suite evidence produced | Never |
+| PR opened, reopened or synchronized, ready | Full CI execution and full gate | Verified original evidence allowed | Never |
+| `ready_for_review`, unchanged SHA allowed | Full CI execution and full gate | Only full original evidence; draft success is ineligible | Never |
+| `converted_to_draft`, unchanged SHA allowed | Draft validation | No full-suite evidence | Never |
+| Push to `main` or the two retained configured branches | Full CI execution and full gate | Verified original evidence allowed | Never |
+| `v*.*.*-test.*` tag push | Fresh full CI execution and full gate | Bypassed | Only with existing activation/environment gates |
+| Manual dispatch, including a draft branch | Full CI execution and full gate | Allowed unless forced or deployment requested | Only explicit `deploy_test_iis` plus existing gates |
+
+Draft validation has a 15-minute job budget. It checks the exact event checkout,
+validates all workflow YAML/expressions with checksum-pinned actionlint 1.7.12,
+runs the SQL-independent reuse regressions, restores/builds the Release solution,
+runs the `Asap.Tests.Unit`, `PolicyContractTests` and `AnalyticsContractTests`
+selection (107 currently discovered cases, minimum guard 100), and runs the
+complete retained `npm test` suite. It starts no SQL container, installs no
+Chromium/native browser dependencies, runs no browser suite and publishes or
+uploads no deployment package. Runner queuing is outside that execution budget.
+
+Ready CI does not rerun a separate draft job. Its frontend checks run after
+reuse lookup and before SQL startup, so a frontend failure can stop an expensive
+cold run early. SQL/browser setup is conditional only on the existing verified
+reuse decisions. Every full run still builds and publishes the current SHA.
+
+The reporting-only **Build, test and package** job runs with `always()` after
+both execution jobs. It succeeds only for a non-draft/full event with a successful
+**Full CI execution** result. Failure, cancellation, a skipped full job or an
+absent result cannot pass. On a draft it **intentionally fails**, even when
+**Draft validation** passes: the red full gate means full validation has not
+been established. The gate runs on a GitHub-hosted runner without checking out
+or executing PR code. Deployment depends on both the full execution and this gate.
+
+This is necessary because GitHub accepts conditional job skips as successful
+required checks. See [required-check troubleshooting](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
+Require **Build, test and package**, from the **GitHub Actions** app, on `main`;
+do not substitute **Draft validation** or the conditional **Full CI execution**
+job. Keep any additional existing required checks. Enable **Require branches to
+be up to date before merging** when requiring validation of the current merge
+content. A ready transition creates a new run/check even without a new SHA;
+a successful dispatch is an operator check, not a replacement for PR checks.
+
+Read-only inspection on October 30, 2026 returned `protected: false` for `main`,
+no branch rules and no required checks on PR #414. The detailed protection,
+runner-administration and contributor-approval endpoints returned HTTP 403.
+**The workflow cannot enforce merge protection on an unprotected branch.** An
+administrator must configure the required check above; this task does not
+change repository settings or claim that protection is already enabled.
+
+## PR transitions and concurrency
+
+The explicit PR activity types are `opened`, `reopened`, `synchronize`,
+`ready_for_review` and `converted_to_draft`. Validation depth uses the event's
+current draft flag, not whether the SHA previously received a green check.
+Marking ready therefore starts full CI immediately; converting back to draft
+starts fast checks and cancels queued/running obsolete PR work.
+
+Workflow concurrency is `<workflow>-pr-<number>` for all revisions and states
+of one PR, with `cancel-in-progress` enabled only for PR events. Different PRs
+have independent groups. Push, tag and manual groups include the unique run ID
+and attempt, so even runs at an identical SHA cannot cancel one another or a
+release deployment. The previous SHA-based group failed to cancel successive
+PR commits and could cross-cancel manual/release validation of the same SHA.
+There is no global PR queue. GitHub does not guarantee concurrency ordering;
+rerun the latest revision, not a superseded historical run. See
+[GitHub concurrency behavior](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
+Use **Actions -> .NET baseline -> Run workflow**, select the draft branch and
+leave `deploy_test_iis` false to request full validation while keeping the PR
+draft. Select `force_full_ci: true` to execute every suite afresh. Otherwise
+trusted equivalent evidence can be reused. Merges into `main` still validate
+the integrated tree and produce current-commit packages; release tags and
+deployment requests always execute fresh tests before any eligible activation.
+
+## Public PR runner boundary
+
+Both code-executing jobs require a same-repository PR authored by an `OWNER`,
+`MEMBER` or `COLLABORATOR` before allocating `clc-linux`. Forks and untrusted
+authors receive no trusted runner; the full gate fails rather than treating
+skipped execution as validation. This is an explicit restriction compared with
+the earlier workflow's reliance on repository-level approval and isolation.
+External-contributor approval settings remain unchanged; their exact current
+configuration could not be read. Approval alone does not make fork code eligible
+for these trusted runners. Maintainers must review external changes before
+importing them to an authorized repository branch for validation.
+
+No `pull_request_target`, privileged token, new secret or write permission is
+introduced. Draft execution has only `contents: read`; full execution retains
+the read scopes needed for evidence provenance. Ephemeral runner isolation and
+review of workflow/harness changes remain necessary: a writer who can replace
+the workflow itself can replace its controls. The pre-existing lack of readable
+enforced merge protection and unverifiable approval settings are operational
+limitations, not evidence that approvals or host isolation are configured.
+The separate WSLC acceptance runner and its explicit mutation authorization are
+unchanged; it does not validate Actions scheduling or concurrency.
 
 ## Identity and dependencies
 
@@ -87,8 +191,9 @@ lookup starts after runner allocation, restore/build and npm install, so queued
 jobs can see a predecessor that completed while they waited. Search is bounded
 to three pages of ten successful workflow runs with bounded job/artifact pages,
 response sizes, timeouts and a lookup time budget. Older/out-of-bound evidence
-is simply a MISS. Concurrent jobs that both start before either succeeds may
-both execute; there is no distributed lock or new cancellation policy.
+is simply a MISS. Independent jobs that both start before either succeeds may
+both execute; there is no distributed evidence lock. Superseded PR runs use
+the cancellation policy above.
 
 Acceptance requires all of these checks, against GitHub's API rather than JSON
 claims alone:
@@ -171,6 +276,23 @@ The existing always-run container cleanup remains.
 
 ## Validation and limitations
 
+`node tests/ci_workflow_contract.test.js` parses YAML with unique-key checking,
+evaluates the workflow's actual routing/concurrency expressions with GitHub's
+`@actions/expressions` library, and executes the actual reporting-gate shell
+against successful, failed, cancelled, skipped and missing dependency results.
+Its matrix covers state transitions at an unchanged SHA, per-PR isolation,
+independent manual/push/tag attempts, fork/author exclusion, draft setup limits
+and preserved deployment dependencies. It runs in the complete `npm test` suite.
+These are executable policy and gate contracts, not a simulation of GitHub's
+event delivery or cancellation engine. Those require separate live run receipts.
+
+`bash scripts/ci/check-workflows.sh` validates all workflows on Linux x64 with
+checksum-pinned actionlint. `.github/actionlint.yml` declares the existing custom
+runner labels; it does not grant access to runners. ShellCheck and pyflakes
+integrations are explicitly disabled because those tools are not consistently
+installed on the controlled images. YAML, expression, context and dependency
+validation remain enabled.
+
 Run `python3 -B -m unittest discover -s scripts/ci -p 'test_reuse*.py' -v` for
 temporary-Git, mocked Actions, hostile archive, native-report and workflow guards.
 The existing full Python telemetry checks and retained frontend suite also remain.
@@ -185,17 +307,21 @@ run must separately demonstrate actual reuse, skipped SQL/browser setup and
 current-commit packaging.
 
 Trust assumptions remain GitHub's API/immutable artifact integrity, controlled
-ephemeral clc-linux images, package integrity, existing contributor approval and
+ephemeral clc-linux images, package integrity, contributor approval and
 maintainer review of workflow/harness changes. Repository code cannot prevent a
 write-authorized maintainer from replacing the workflow/gate itself; enforce that
-boundary through repository review/rules and runner isolation. This optimization
-does not grant permissions or change those controls. Undeclared native/environment
+boundary through repository review/rules and runner isolation. The PR runner
+guard above does not grant permissions or replace those controls. Undeclared native/environment
 drift requires an epoch bump. Conservative misses are preferred to inferred hits.
 
 ## Adversarial closure review
 
 | Attempt / failure | Enforced boundary |
 | --- | --- |
+| Draft checks substituted for full CI | Distinct jobs, explicit original-executor identity and an always-run required gate that fails for drafts/skipped/failed/cancelled full execution. |
+| Ready/draft transition without a commit | Explicit activity types and current draft flag; every transition creates the appropriate run, without treating draft success as full evidence. |
+| New PR revision leaves old SQL job running | Workflow-wide stable PR-number group and PR-only cancellation; unrelated PR, push, manual and tag groups stay independent. |
+| Fork reaches trusted runner after skipped security job | Trust predicate is on both execution jobs before allocation; hosted required gate rejects skipped full execution. |
 | Passed tests, later failed/cancelled workflow | Only a completed successful latest workflow and exact successful attempt can supply evidence. |
 | Skipped test presented as PASS | Original successful test step, complete native outcomes and current always-run gate are all required. |
 | Contributor/fork forged manifest | Numeric repository/head IDs, trusted same-repository PR association, original checkout logs, Git tree and immutable artifact digest must agree. |
@@ -205,7 +331,7 @@ drift requires an epoch bump. Conservative misses are preferred to inferred hits
 | Different filter/count | Match complete selection, retained minimum, fresh discovery and exact executed/passed count. |
 | Reuse chain | Only executed manifests with an actual original successful test step are eligible; reused suites emit decisions only. |
 | Old deployment payload | Current SHA build/publishes/manifest/ZIP/digest/ValidateOnly remain unconditional on reuse. |
-| Concurrent equivalent runs | Lookup after runner allocation; existing cancellation retained. Two concurrent cold jobs may both execute, but cannot accept in-progress evidence. |
+| Concurrent equivalent runs | Lookup after runner allocation; stable per-PR cancellation. Independent cold jobs may both execute, but cannot accept in-progress evidence. |
 | Workflow edit skipping tests | Workflow/harness changes invalidate fingerprints; skipped tests cannot pass the unchanged gate. Deliberate replacement of the gate itself remains subject to existing repository review/runner controls. |
 | Environment drift | Actual tool/package versions, immutable SQL digest, browser revisions and controlled image epoch; unidentified supported override paths disable affected reuse. |
 

@@ -7,7 +7,9 @@
     "test:browser": "node tests/browser/run.cjs"
   },
   "devDependencies": {
+    "@actions/expressions": "0.3.61",
     "axe-core": "4.10.3",
-    "playwright": "1.62.1"
+    "playwright": "1.62.1",
+    "yaml": "2.9.1"
   }
 }

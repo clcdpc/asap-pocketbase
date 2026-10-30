@@ -3,7 +3,7 @@
   "repository": "clcdpc/asap-pocketbase",
   "repository_id": 1221758626,
   "workflow": ".github/workflows/dotnet.yml",
-  "job": "Build, test and package",
+  "job": "Full CI execution",
   "runner_labels": ["clc-linux"],
   "runner_group": "clc-runners",
   "environment_epoch": "clc-linux-2026-10-29-v1",
