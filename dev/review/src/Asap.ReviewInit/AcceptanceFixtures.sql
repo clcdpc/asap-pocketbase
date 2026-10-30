@@ -80,7 +80,7 @@ SELECT CONCAT(N'acceptance-q1-', n.value), CASE WHEN n.value = 26 THEN 3 ELSE 2 
     CASE WHEN n.value = 2 THEN NULL WHEN n.value = 1 THEN
         N'Synthetic Author with a deliberately long name and several collaborators contributing to this forthcoming anthology'
         ELSE CONCAT(N'Synthetic author ', 27 - n.value) END,
-    CONCAT(N'Q1-IDENTIFIER-', n.value), CONCAT(N'Q1 publication ', n.value),
+    CONCAT(N'Q1-IDENTIFIER-', RIGHT(CONCAT(N'0', n.value), 2)), CONCAT(N'Q1 publication ', RIGHT(CONCAT(N'0', n.value), 2)),
     CASE WHEN n.value = 2 THEN NULL ELSE @book END, CASE WHEN n.value = 2 THEN NULL ELSE N'Book' END,
     CASE WHEN n.value = 25 THEN N'closed' ELSE N'open' END,
     CASE WHEN n.value = 1 THEN N'Q1 synthetic notes remain available in the existing details view.' ELSE NULL END,

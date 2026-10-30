@@ -816,7 +816,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
     });
     if (!state.additionalCopyGrid) {
       state.additionalCopyGrid = createQueueGrid({
-        columns: columns.map(column => ({ name: column.name, width: column.width,
+        columns: columns.map(column => ({ id: column.kind, name: column.name, width: column.width,
           attributes: { 'data-copy-column': column.kind },
           sort: column.value ? { compare: (a, b) => String(column.value(a.task)).localeCompare(String(column.value(b.task)),
             undefined, { numeric: column.kind === 'bib' }) } : false,
