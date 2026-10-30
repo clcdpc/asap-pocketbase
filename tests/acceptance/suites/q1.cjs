@@ -166,13 +166,20 @@ const scenarios = [
     for (const modifiers of [['Control'], ['Meta'], ['Shift'], ['Alt']]) {
       await row.locator('[data-copy-column="library"]').click({ modifiers });
     }
-    await row.evaluate(node => {
+    const selected = await row.evaluate(node => {
       const text = node.querySelector('.additional-copy-title'), range = document.createRange(); range.selectNodeContents(text);
-      getSelection().addRange(range); text.dispatchEvent(new MouseEvent('click', { bubbles: true })); getSelection().removeAllRanges();
+      // Chromium retains a collapsed range after ordinary clicks and ignores a
+      // second addRange. Establish a real selection before testing its guard.
+      getSelection().removeAllRanges(); getSelection().addRange(range);
+      const selected = !getSelection().isCollapsed;
+      text.dispatchEvent(new MouseEvent('click', { bubbles: true })); getSelection().removeAllRanges();
       for (const tag of ['button', 'input', 'select', 'textarea', 'summary']) {
         const child = document.createElement(tag); node.querySelector('td').append(child); child.click(); child.remove();
       }
+      return selected;
     });
+    assert.equal(selected, true, 'Text-selection exclusion uses an actual non-collapsed selection');
+    await t.page.waitForLoadState('networkidle');
     assert.equal(await t.page.locator('#request-dialog[open]').count(), 0);
     assert.equal(detailReads.length, 5, 'Excluded targets do not fetch details');
     assert.deepEqual(await taskDetail(t, item.id), before, 'Read-only activation preserves task data/history');
