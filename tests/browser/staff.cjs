@@ -1616,7 +1616,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     assert.equal(await copyRow.locator('.additional-copy-open').innerText(), 'Open details');
     await copyRow.locator('[data-copy-column="title"] .additional-copy-title').click();
     await page.locator('#request-dialog[open]').waitFor();
-    assert.equal(await page.locator('#request-dialog-kicker').innerText(), `Additional copy ${created.id}`);
+    assert.match(await page.locator('#request-dialog-kicker').textContent(), new RegExp(`Additional copy ${created.id}$`));
     await page.keyboard.press('Escape');
     await page.waitForFunction(id => document.activeElement?.dataset.copyId === id, created.id);
     await copyRow.locator('.additional-copy-open').press('Space');

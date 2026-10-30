@@ -57,6 +57,11 @@ Desktop screenshots are `q1-desktop-1440/1280/1024.png`; cards are
 `q1-narrow-container.png` and `q1-mobile-390.png`; zoom is `q1-native-200.png`.
 Matching `*-geometry.json` files record cells, buttons and scroll extents;
 `q1-native-200-browser.json` records actual CDP viewport/zoom metrics. Evidence
+at native zoom uses a verified CDP viewport capture, avoiding the pinned
+Playwright clip bug on scrolled pages. Runtime/identity verification, PNG
+dimension checks and all checkpoint guards still apply; a real-browser pixel
+regression checks the scrolled capture.
+Evidence
 remains beneath `$HOME/ASAP-Acceptance`. Human visual and screen-reader review
 remains tracked by #398.
 

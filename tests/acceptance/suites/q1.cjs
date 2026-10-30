@@ -46,7 +46,7 @@ async function close(page, id, fallback = false) {
 async function opened(page, item) {
   const dialog = page.locator('#request-dialog[open]');
   await dialog.getByRole('heading', { name: item.title, exact: true }).waitFor();
-  assert.equal(await dialog.locator('#request-dialog-kicker').innerText(), 'Additional copy ' + item.id);
+  assert.equal(await dialog.locator('#request-dialog-kicker').textContent(), item.libraryOrgName + ' · Additional copy ' + item.id);
   await dialog.locator('.action-bar').waitFor();
   assert.equal(await dialog.locator('#close-request').evaluate(n => n === document.activeElement), true);
 }
@@ -57,7 +57,8 @@ async function geometry(page, cards) {
       return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom };
     };
     const wrapper = root.querySelector('.gridjs-wrapper');
-    return { viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
+    return { viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio, scrollY,
+      visualWidth: visualViewport.width, visualHeight: visualViewport.height, scale: visualViewport.scale },
       container: rect(root), wrapper: { clientWidth: wrapper.clientWidth, scrollWidth: wrapper.scrollWidth },
       table: rect(root.querySelector('table')), images: root.querySelectorAll('img, picture, svg').length,
       rows: [...root.querySelectorAll('tbody tr')].filter(row => row.querySelector('.additional-copy-open')).map(row => {
@@ -86,16 +87,20 @@ async function geometry(page, cards) {
       Math.min(a.right, b.right) - Math.max(a.x, b.x) <= 1 || Math.min(a.bottom, b.bottom) - Math.max(a.y, b.y) <= 1)),
     'Cells do not overlap');
     if (cards) assert.ok(row.action.width >= row.bounds.width - 32, 'Card action fills the row');
-    else assert.ok(row.bounds.height < 180, 'Long text does not create extreme desktop row heights');
+    else {
+      assert.ok(row.bounds.height < 180, 'Long text does not create extreme desktop row heights');
+      assert.ok(row.cells[0].width > row.cells[1].width * 2, 'Title/Author receives priority over BIB/Format');
+    }
   }
   return result;
 }
-async function evidence(t, name, cards) {
+async function evidence(t, name, cards, capture = {}) {
+  const action = t.page.locator(grid + ' .additional-copy-open').first();
+  await action.locator('xpath=ancestor::tr').scrollIntoViewIfNeeded();
+  await action.scrollIntoViewIfNeeded();
   const result = await geometry(t.page, cards);
   await fs.writeFile(path.join(t.directory, name + '-geometry.json'), JSON.stringify(result, null, 2));
-  const action = t.page.locator(grid + ' .additional-copy-open').first();
-  await action.scrollIntoViewIfNeeded();
-  await checkpoint(t.page, t.directory, name, { visible: [action] });
+  await checkpoint(t.page, t.directory, name, { visible: [action], ...capture });
 }
 const scenarios = [
   { id: 'q1-desktop', writes: false, requirements: ['#404: six grouped columns at 1440, 1280 and 1024; long/missing values; readable actions; no covers or overflow'], run: async t => {
@@ -243,8 +248,8 @@ const scenarios = [
     await nativeZoom(t.context, t.page, 2);
     const cdp = await t.context.newCDPSession(t.page);
     try {
+      await evidence(t, t.id, true, { nativeViewport: true });
       await fs.writeFile(path.join(t.directory, t.id + '-browser.json'), JSON.stringify(await cdp.send('Page.getLayoutMetrics'), null, 2));
-      await evidence(t, t.id, true);
       await opener(t.page, item.id).press('Enter'); await opened(t.page, item); await close(t.page, item.id);
       assert.equal(t.mutations.length, 0);
     } finally { await cdp.detach(); } // The runner closes this page; zoom is scoped to its tab.

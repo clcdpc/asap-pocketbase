@@ -605,11 +605,11 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
   const openers = new WeakMap();
   let disposed = false, acceptingScope = false, targetGeneration = 0, renderGeneration = 0;
   const columns = [
-    { name: 'Title / Author', kind: 'title', width: 'calc((100% - 150px) * .32)', value: task => task.title || '' },
-    { name: 'BIB / Format', kind: 'bib', width: 'calc((100% - 150px) * .12)', value: task => task.bibid ?? '' },
-    { name: 'Library', kind: 'library', width: 'calc((100% - 150px) * .15)', value: task => task.libraryOrgName || '' },
-    { name: 'Staff', kind: 'staff', width: 'calc((100% - 150px) * .20)', value: task => task.claimedByDisplayName || 'Unclaimed' },
-    { name: 'Timing', kind: 'timing', width: 'calc((100% - 150px) * .21)', value: task => task.created || '' },
+    { name: 'Title / Author', kind: 'title', width: '32%', value: task => task.title || '' },
+    { name: 'BIB / Format', kind: 'bib', width: '12%', value: task => task.bibid ?? '' },
+    { name: 'Library', kind: 'library', width: '15%', value: task => task.libraryOrgName || '' },
+    { name: 'Staff', kind: 'staff', width: '20%', value: task => task.claimedByDisplayName || 'Unclaimed' },
+    { name: 'Timing', kind: 'timing', width: '21%', value: task => task.created || '' },
     { name: 'Action', kind: 'action', width: '150px' }
   ];
 

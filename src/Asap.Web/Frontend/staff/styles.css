@@ -137,6 +137,12 @@ table.gridjs-table { width: 100%; min-width: 920px; max-width: none; table-layou
 #request-grid table.gridjs-table { min-width: 0; }
 #additional-copy-grid { container: additional-copies / inline-size; }
 #additional-copy-grid table.gridjs-table { min-width: 0; }
+/* Grid.js parses column widths numerically; CSS owns the reserved action space. */
+#additional-copy-grid th[data-copy-column="title"] { width: calc((100% - 150px) * .32) !important; }
+#additional-copy-grid th[data-copy-column="bib"] { width: calc((100% - 150px) * .12) !important; }
+#additional-copy-grid th[data-copy-column="library"] { width: calc((100% - 150px) * .15) !important; }
+#additional-copy-grid th[data-copy-column="staff"] { width: calc((100% - 150px) * .20) !important; }
+#additional-copy-grid th[data-copy-column="timing"] { width: calc((100% - 150px) * .21) !important; }
 #additional-copy-grid td.gridjs-td, #additional-copy-grid th.gridjs-th { padding: 10px 8px; }
 #additional-copy-grid tbody tr:has(.additional-copy-open) { cursor: pointer; }
 #additional-copy-grid tbody tr:has(.additional-copy-open):hover td { background: #f1f7fa; }
