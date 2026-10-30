@@ -107,7 +107,7 @@ and rejects clipped message/action content even without page overflow.
 
 ## Reports and privacy
 
-Each unique `.artifacts/acceptance/<timestamp-run-id>/` contains `results.json`,
+Each unique `$HOME/ASAP-Acceptance/<timestamp-run-id>/` contains `results.json`,
 `report.md`, privacy-safe screenshots, sanitized failure traces and a diagnostics
 directory with SQL, initializer, web, display and Playwright logs. Early failures
 still export a BLOCKED report. SQL passwords, bootstrap credentials, cookies,
@@ -116,6 +116,34 @@ Screenshots mask identity, audit actors and profile emails. Inspect before shari
 `settings-reset-approved-state.json` contains the chosen synthetic before/after
 values, versions, reset response, reload order, mutation evidence and owned
 template fingerprints. It excludes the full Settings document and template bodies.
+
+The default root is the current user's profile directory, such as
+`C:\Users\<username>\ASAP-Acceptance`, regardless of which checkout or worktree
+launches acceptance. Override it with an absolute path if needed:
+
+```powershell
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites -ArtifactsRoot 'D:\ASAP Acceptance'
+```
+
+Paths containing spaces work; invalid or unwritable roots fail without a fallback.
+The launcher prints the resolved directory before environment startup and prints
+that directory, the full `report.md` path, automated result and scenario counts
+at completion. Reports, screenshots, state/geometry evidence, diagnostics and
+any build/container logs stay together. Default artifacts survive deletion of
+the originating worktree. Keep custom roots outside repositories/worktrees for
+the same persistence. Runs are retained until explicitly deleted; earlier
+worktree-local `.artifacts/acceptance/` evidence is not automatically migrated.
+The temporary `.review/build` image-build context remains disposable.
+
+Optionally open the newest default run directory in File Explorer:
+
+```powershell
+$root = Join-Path $HOME 'ASAP-Acceptance'
+$latest = Get-ChildItem -LiteralPath $root -Directory |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+if ($latest) { Invoke-Item $latest.FullName }
+```
 
 Exit 0 means selected automated checks succeeded, exit 1 means test assertion or
 execution failure, and exit 2 means an environment/authentication/startup blocker.

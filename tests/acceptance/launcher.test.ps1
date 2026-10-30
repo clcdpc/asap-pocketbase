@@ -1,5 +1,5 @@
 # Development checks for actual launcher helpers; no container runtime required.
-param([ValidateSet('revision', 'snapshot', 'native')][string]$Case)
+param([ValidateSet('revision', 'snapshot', 'native', 'artifacts')][string]$Case)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repository = (& git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
@@ -62,6 +62,42 @@ try {
             Reject { Remove-ReviewBuildContext $temporary $buildRoot } 'outside'
             Remove-ReviewBuildContext $build $buildRoot
             Assert (-not (Test-Path $build)) 'Build context cleanup failed.'
+        }
+        'artifacts' {
+            $root = Join-Path $temporary 'custom output [literal]'
+            $selected = Join-Path $root '../custom output [literal]'
+            $directory = New-ReviewArtifactDirectory -ArtifactsRoot $selected -RunId 'first'
+            Assert ([System.IO.Path]::GetDirectoryName($directory) -eq [System.IO.Path]::GetFullPath($root)) 'Custom root was not normalized literally.'
+            Assert (Test-Path -LiteralPath $directory -PathType Container) 'Artifact directory was not created.'
+            Assert (@(Get-ChildItem -LiteralPath $directory -Force).Count -eq 0) 'Write probe was left in the artifacts.'
+            'previous evidence' | Set-Content -LiteralPath (Join-Path $directory 'report.md')
+            'unrelated file' | Set-Content -LiteralPath (Join-Path $root 'keep.txt')
+            $next = New-ReviewArtifactDirectory -ArtifactsRoot $root -RunId 'second'
+            Assert ($directory -ne $next) 'Artifact runs collided.'
+            Assert ((Get-Content -LiteralPath (Join-Path $directory 'report.md') -Raw).Trim() -eq 'previous evidence') 'A previous run was modified.'
+            Assert ((Get-Content -LiteralPath (Join-Path $root 'keep.txt') -Raw).Trim() -eq 'unrelated file') 'An unrelated file was modified.'
+            foreach ($relative in @('', 'relative', '../relative')) {
+                Reject { New-ReviewArtifactDirectory -ArtifactsRoot $relative -RunId 'invalid' } 'absolute filesystem path'
+            }
+            $file = Join-Path $temporary 'file.txt'
+            'keep' | Set-Content -LiteralPath $file
+            Reject { New-ReviewArtifactDirectory -ArtifactsRoot $file -RunId 'file' } 'Cannot create or write acceptance artifacts'
+            if ($IsWindows) {
+                Reject { New-ReviewArtifactDirectory -ArtifactsRoot 'C:relative' -RunId 'drive-relative' } 'absolute filesystem path'
+                Reject { New-ReviewArtifactDirectory -ArtifactsRoot (Join-Path $temporary 'bad<path') -RunId 'invalid' } 'Cannot create or write acceptance artifacts'
+                $denied = [System.IO.Directory]::CreateDirectory((Join-Path $temporary 'denied')).FullName
+                $original = Get-Acl -LiteralPath $denied
+                $acl = Get-Acl -LiteralPath $denied
+                $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+                $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($identity,
+                    [System.Security.AccessControl.FileSystemRights]::Write, [System.Security.AccessControl.AccessControlType]::Deny)
+                $acl.AddAccessRule($rule)
+                try {
+                    Set-Acl -LiteralPath $denied -AclObject $acl
+                    Reject { New-ReviewArtifactDirectory -ArtifactsRoot $denied -RunId 'denied' } 'Cannot create or write acceptance artifacts'
+                }
+                finally { Set-Acl -LiteralPath $denied -AclObject $original }
+            }
         }
     }
     Write-Host "PASS: $Case"

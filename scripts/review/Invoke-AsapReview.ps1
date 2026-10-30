@@ -2,8 +2,13 @@
 <#
 .SYNOPSIS
 Run unattended acceptance in one disposable WSLC container.
+.PARAMETER ArtifactsRoot
+Optional absolute output root. Defaults to the current user's profile directory
+under ASAP-Acceptance. Each run is retained in its own timestamp/run-ID directory.
 .EXAMPLE
 pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -AllowReviewWrites
+.EXAMPLE
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites -ArtifactsRoot 'D:\ASAP Acceptance'
 .NOTES
 Requires PowerShell 7, Git and working WSLC (WSL 2.9.3+). All application,
 SQL, .NET, Node and browser dependencies run inside the acceptance container.
@@ -15,7 +20,8 @@ param(
     [string]$Suite = 'smoke',
     [switch]$AllowReviewWrites,
     [switch]$ReadOnly,
-    [switch]$Rebuild
+    [switch]$Rebuild,
+    [string]$ArtifactsRoot
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -24,7 +30,6 @@ $repoRoot = (Invoke-ReviewNative git @('-C', $PSScriptRoot, 'rev-parse', '--show
 $toolingSha = (Invoke-ReviewNative git @('-C', $repoRoot, 'rev-parse', 'HEAD') -Capture).Output
 $toolingDirty = [bool](Invoke-ReviewNative git (@('-C', $repoRoot, 'status', '--porcelain', '--untracked-files=normal', '--') + (Get-ReviewToolingPaths)) -Capture).Output
 $runId = [guid]::NewGuid().ToString('N').Substring(0, 24)
-$artifactPath = Join-Path $repoRoot ".artifacts/acceptance/$([DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH-mm-ss'))-$runId"
 $buildRoot = Join-Path $repoRoot '.review/build'
 $context = Join-Path $buildRoot $runId
 $containerName = "asap-acceptance-$runId"
@@ -33,7 +38,16 @@ $containerCreated = $false
 $completed = $false
 $launcherError = $null
 $exitCode = 2
-New-Item -ItemType Directory -Path $artifactPath -Force | Out-Null
+$artifactOptions = @{ RunId = $runId }
+if ($PSBoundParameters.ContainsKey('ArtifactsRoot')) { $artifactOptions.ArtifactsRoot = $ArtifactsRoot }
+try { $artifactPath = New-ReviewArtifactDirectory @artifactOptions }
+catch {
+    Write-Host "BLOCKED: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host 'Artifacts: unavailable; output directory could not be created or written.'
+    Write-Host 'Automated: BLOCKED; exit 2'
+    exit 2
+}
+Write-Host "Artifacts:   $artifactPath"
 
 function Write-LauncherBlocker {
     param([string]$Detail)
@@ -71,7 +85,6 @@ try {
     Write-LauncherBlocker 'Building or selecting the acceptance image; browser scenarios have not run.'
     Write-Host "Application: $resolved"
     Write-Host "Tooling:     $toolingSha$(if ($toolingDirty) { ' (working tree changes)' })"
-    Write-Host "Artifacts:   $artifactPath"
     $tooling = Join-Path $context 'tooling'
     Copy-ReviewTooling -Repository $repoRoot -Destination $tooling
     $digest = Get-ReviewToolingDigest $tooling
@@ -158,6 +171,7 @@ finally {
     foreach ($status in @('PASS', 'FAIL', 'BLOCKED', 'NOT RUN')) {
         Write-Host "$status`: $(@($summary.scenarios | Where-Object { $_.category -eq 'functional' -and $_.status -eq $status }).Count)"
     }
+    Write-Host "Artifacts: $artifactPath"
     Write-Host "Report: $(Join-Path $artifactPath 'report.md')"
     Write-Host 'Human visual/screen-reader review remains REQUIRED; overall acceptance INCOMPLETE.'
     # Ctrl+C unwinds through finally and skips statements after it.

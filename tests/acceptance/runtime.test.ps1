@@ -11,8 +11,7 @@ $repository = (& git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
 foreach ($case in @('assertion', 'initialization', 'termination', 'child-exit')) {
     $runId = [guid]::NewGuid().ToString('N').Substring(0, 24)
     $name = "asap-acceptance-$runId"
-    $directory = Join-Path $repository ".artifacts/acceptance/validation-$case-$runId"
-    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    $directory = New-ReviewArtifactDirectory -RunId $runId
     $setup = switch ($case) {
         'assertion' { @'
 cat >> /runner/tests/acceptance/suites/smoke.cjs <<'NODE'

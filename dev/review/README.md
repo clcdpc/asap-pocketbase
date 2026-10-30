@@ -38,6 +38,9 @@ pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWri
 
 # Select an exact application revision instead of a PR.
 pwsh ./scripts/review/Invoke-AsapReview.ps1 -Commit HEAD -Suite smoke -AllowReviewWrites
+
+# Optional absolute output root; paths containing spaces are supported.
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites -ArtifactsRoot 'D:\ASAP Acceptance'
 ```
 
 `-Pr` fetches the PR's exact HEAD from `origin`, independently of the current
@@ -45,11 +48,32 @@ tooling checkout. `-Commit` selects a Git commit; the two selectors are exclusiv
 The default suite is `smoke`. Omitting `-AllowReviewWrites` enables read-only
 mode; `-ReadOnly` makes it explicit. `-Rebuild` forces a fresh image build.
 
-Reports, privacy-safe screenshots, failure traces and sanitized SQL, initializer,
-web and Playwright logs appear in `.artifacts/acceptance/<timestamp-run-id>/`.
-The launcher prints the report path and removes the container after success,
-failure or interruption. A forced termination of the launcher process itself
+Reports, privacy-safe screenshots, state/geometry evidence, failure traces and
+sanitized logs appear together in `$HOME/ASAP-Acceptance/<timestamp-run-id>/`
+by default (for example, `C:\Users\<username>\ASAP-Acceptance\<timestamp-run-id>\`).
+The default uses the current user's profile, independently of the checkout or
+working directory. `-ArtifactsRoot <absolute-path>` selects a different parent;
+an invalid or unwritable destination blocks the run without falling back.
+The launcher prints the full run directory before startup, then the directory,
+`report.md` path, automated result and scenario counts at completion. It removes
+the container after success, failure or interruption. A forced termination of the launcher process itself
 may require `wslc remove --force <printed-container-name>`.
+
+Default artifacts survive worktree deletion. Historical runs remain until you
+explicitly delete them; earlier artifacts under `.artifacts/acceptance/` in
+existing worktrees are not migrated automatically. Keep any custom output root
+outside repositories and worktrees for the same persistence. The disposable
+image-build context remains under `.review/build` in the tooling checkout.
+
+Open the newest default run in File Explorer (optional):
+
+```powershell
+$root = Join-Path $HOME 'ASAP-Acceptance'
+$latest = Get-ChildItem -LiteralPath $root -Directory |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+if ($latest) { Invoke-Item $latest.FullName }
+```
 
 - Exit 0: selected automated checks succeeded; read-only mutations remain NOT RUN.
 - Exit 1: an assertion or browser execution failed.

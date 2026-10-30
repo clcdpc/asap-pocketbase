@@ -1,4 +1,29 @@
 # Internal helpers for the disposable WSLC acceptance command.
+function New-ReviewArtifactDirectory {
+    param(
+        [string]$ArtifactsRoot = [System.IO.Path]::Combine([Environment]::GetFolderPath('UserProfile'), 'ASAP-Acceptance'),
+        [Parameter(Mandatory)][string]$RunId
+    )
+    if ([string]::IsNullOrWhiteSpace($ArtifactsRoot) -or -not [System.IO.Path]::IsPathFullyQualified($ArtifactsRoot)) {
+        throw '-ArtifactsRoot must be an absolute filesystem path.'
+    }
+    $destination = $ArtifactsRoot
+    try {
+        $root = [System.IO.Path]::GetFullPath($ArtifactsRoot)
+        $destination = Join-Path $root "$([DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH-mm-ss'))-$RunId"
+        if (Test-Path -LiteralPath $destination) { throw 'The run directory already exists.' }
+        $null = [System.IO.Directory]::CreateDirectory($destination)
+        # Probe only this new run directory; never touch existing evidence or root files.
+        $probe = Join-Path $destination '.write-check'
+        $stream = [System.IO.File]::Open($probe, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
+        try { $stream.WriteByte(0) }
+        finally { $stream.Dispose() }
+        [System.IO.File]::Delete($probe)
+        return $destination
+    }
+    catch { throw "Cannot create or write acceptance artifacts at '$destination': $($_.Exception.Message)" }
+}
+
 function Invoke-ReviewNative {
     param([string]$File, [string[]]$Arguments, [switch]$Capture, [switch]$AllowFailure, [int]$TimeoutSeconds = 60)
     $start = [System.Diagnostics.ProcessStartInfo]::new((Get-Command $File -ErrorAction Stop).Source)
