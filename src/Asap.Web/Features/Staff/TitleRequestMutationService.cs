@@ -26,7 +26,10 @@ public sealed record TitleRequestMutationResult(
     string? NotificationReason = null,
     string? PatronNotificationStatus = null,
     string? PatronNotificationReason = null,
-    TitleRequestDuplicateConflict? Duplicate = null);
+    TitleRequestDuplicateConflict? Duplicate = null,
+    Guid? OperationId = null,
+    string? AdditionalCopyRequestId = null,
+    bool Replayed = false);
 
 public sealed record TitleRequestDuplicateConflict(
     [property: JsonNumberHandling(JsonNumberHandling.WriteAsString | JsonNumberHandling.AllowReadingFromString)] long Id,
@@ -35,7 +38,7 @@ public sealed record TitleRequestDuplicateConflict(
     int BibId,
     string MatchType);
 
-public sealed class TitleRequestMutationService(
+public sealed partial class TitleRequestMutationService(
     IDbContextFactory<AsapDbContext> contextFactory,
     IEmailSender emailSender,
     RecipientDomainPolicy recipientDomainPolicy,
@@ -308,15 +311,31 @@ public sealed class TitleRequestMutationService(
         }
         var proposedExactDate = input.ExactPublicationDate.Value;
 
+        var directQueue = input.OperationId.HasValue || input.Action == "additionalCopy";
+        if (directQueue)
+        {
+            if (!IsValidQueueCommand(input))
+            {
+                return new TitleRequestMutationResult("invalid_queue_action");
+            }
+            var replay = await ReplayQueueActionAsync(actor, requestId, input, cancellationToken);
+            if (replay is not null)
+            {
+                return replay;
+            }
+        }
+
         var bibPreflight = await PreflightExplicitBibAsync(
             actor,
             requestId,
             expectedVersion,
             input,
             cancellationToken);
-        if (bibPreflight is not null)
+        if (bibPreflight.Error is not null)
         {
-            return new TitleRequestMutationResult(bibPreflight);
+            var replay = directQueue
+                ? await ReplayQueueActionAsync(actor, requestId, input, cancellationToken) : null;
+            return replay ?? new TitleRequestMutationResult(bibPreflight.Error);
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -338,8 +357,11 @@ public sealed class TitleRequestMutationService(
         }
         if (!notificationRequest.RowVersion.SequenceEqual(expectedVersion))
         {
-            return new TitleRequestMutationResult("stale_version");
+            return (directQueue ? await ReplayQueueActionAsync(actor, requestId, input, cancellationToken) : null)
+                ?? new TitleRequestMutationResult("stale_version");
         }
+        var reminderRequested = input.EmailPurchaseReminder ??
+            (input.Action == "additionalCopy" && actionActor.AdditionalCopyReminderDefault);
         ActionClaimRuleSnapshot? claimRuleSnapshot = null;
         if (notificationRequest.ClaimedByStaffUserId == actor.Id &&
             notificationRequest.ClaimType == ClaimType.AutomaticFormatRule &&
@@ -374,7 +396,8 @@ public sealed class TitleRequestMutationService(
             ProjectBibAfterMutation(previewIdentifierChanged, previewBibChanged,
                 previewStaffSelectedBib, previewProposedBib));
         var notificationRequested = input.Action is "reject" or "alreadyOwn" ||
-            input.Action == "purchase" && notificationTargetStatus == RequestStatus.OutstandingPurchase;
+            input.Action == "purchase" && notificationTargetStatus == RequestStatus.OutstandingPurchase ||
+            input.Action == "additionalCopy" && reminderRequested;
         PatronSnapshot? currentPatron = null;
         if (input.Action is "reject" or "alreadyOwn" ||
             input.Action == "purchase" && notificationTargetStatus == RequestStatus.OutstandingPurchase)
@@ -427,6 +450,15 @@ public sealed class TitleRequestMutationService(
             return new TitleRequestMutationResult(locked.Code);
         }
         var request = locked.Request!;
+        if (directQueue && await ReadQueueReceiptAsync(context, actor, request.Id, input, cancellationToken) is { } accepted)
+        {
+            return accepted;
+        }
+        if (input.Action == "additionalCopy" && input.EmailPurchaseReminder is null &&
+            locked.Staff[actor.Id].AdditionalCopyReminderDefault != actionActor.AdditionalCopyReminderDefault)
+        {
+            return new TitleRequestMutationResult("actor_changed_since_preview");
+        }
         if (!request.RowVersion.SequenceEqual(expectedVersion) ||
             request.LibraryOrganizationId != notificationRequest.LibraryOrganizationId)
         {
@@ -449,6 +481,10 @@ public sealed class TitleRequestMutationService(
             cancellationToken);
         var placedProtection = successfulOperation || request.LegacyHoldProtected;
         var capabilities = TitleRequestWorkflowPolicy.Evaluate(request, incompleteOperation, placedProtection);
+        if (directQueue && (!capabilities.CanChangeWorkflowState || !capabilities.CanChangeBib || !capabilities.CanEditIdentifier))
+        {
+            return new TitleRequestMutationResult(capabilities.BlockingReason ?? "invalid_transition");
+        }
         if (input.Action == "reopen" && placedProtection)
         {
             return new TitleRequestMutationResult("hold_history_retained");
@@ -470,7 +506,7 @@ public sealed class TitleRequestMutationService(
         var bibAfterMutation = ProjectBibAfterMutation(identifierChanged, bibChanged,
             staffSelectedBib, proposedBib);
         var autoHoldSupplied = input.Autohold.IsSupplied;
-        var proposedAutoHold = autoHoldSupplied ? input.Autohold.Value : request.AutoHold;
+        var proposedAutoHold = input.Action == "additionalCopy" || (autoHoldSupplied ? input.Autohold.Value : request.AutoHold);
         var requestedTarget = TitleRequestWorkflowPolicy.ResolveStatus(input.Action, input.Status, request.Status, bibAfterMutation);
         var targetStatus = TitleRequestWorkflowPolicy.ResolveBibTargetStatus(input.Action, request.Status, requestedTarget,
             bibAfterMutation, proposedAutoHold, bibSupplied);
@@ -518,7 +554,7 @@ public sealed class TitleRequestMutationService(
             var otherOpenRequests = await context.TitleRequests.AsNoTracking().Where(item =>
                 item.LibraryOrganizationId == request.LibraryOrganizationId &&
                 ((request.PatronIdSnapshot.HasValue && item.PatronIdSnapshot == request.PatronIdSnapshot) ||
-                 item.PatronIdSnapshot == null && item.Barcode == request.Barcode) && item.BibId != null &&
+                 (!request.PatronIdSnapshot.HasValue || item.PatronIdSnapshot == null) && item.Barcode == request.Barcode) && item.BibId != null &&
                 item.Id != request.Id && item.Status != RequestStatus.Closed)
                 .OrderBy(item => item.Id)
                 .Select(item => new { item.Id, item.Title, item.Status, item.BibId })
@@ -614,9 +650,14 @@ public sealed class TitleRequestMutationService(
         {
             request.ExactPublicationDate = proposedExactDate;
         }
-        if (autoHoldSupplied)
+        if (autoHoldSupplied || input.Action == "additionalCopy")
         {
             request.AutoHold = proposedAutoHold;
+        }
+        if (directQueue && bibPreflight.Bib is { } verifiedBib)
+        {
+            request.Title = Clean(verifiedBib.Title) ?? request.Title;
+            await ReconcileQueueIdentifierAsync(context, request, verifiedBib, cancellationToken);
         }
         if (!string.IsNullOrWhiteSpace(input.Format))
         {
@@ -774,7 +815,36 @@ public sealed class TitleRequestMutationService(
         string? patronNotificationStatus = null;
         string? patronNotificationReason = null;
         long? patronNotificationOutboxId = null;
-        if (input.EmailPurchaseReminder && input.Action == "purchase" && targetStatus == RequestStatus.OutstandingPurchase)
+        AdditionalCopyRequest? additionalCopy = null;
+        if (input.Action == "additionalCopy")
+        {
+            if (await context.AdditionalCopyRequests.AnyAsync(item =>
+                    item.SourceTitleRequestId == request.Id && item.Status == "open", cancellationToken))
+            {
+                return new TitleRequestMutationResult("additional_copy_exists");
+            }
+            additionalCopy = await AddQueuedCopyAsync(context, request, locked.Staff[actor.Id], cancellationToken);
+            AddEvent(context, request, actor, "additional_copy_created",
+                $"Additional-copy task {additionalCopy.Id} created for BIB {request.BibId}; automatic hold placement enabled and request queued.",
+                new { input.OperationId, additionalCopyRequestId = additionalCopy.Id.ToString(CultureInfo.InvariantCulture),
+                    bibId = request.BibId, previousAutoHold = previousAutohold, autoHold = true });
+            notificationStatus = "not_requested";
+            if (reminderRequested)
+            {
+                var outbox = await AddStaffNotificationAsync(context, locked.Staff[actor.Id], request,
+                    $"additional-copy-reminder:{additionalCopy.Id}", "ASAP additional-copy reminder",
+                    $"Additional-copy task {additionalCopy.Id} for {request.Title} (BIB {request.BibId}) was created.",
+                    transportConfigured, cancellationToken);
+                notificationStatus = outbox?.Status == "pending" ? "queued" : "suppressed";
+                notificationReason = outbox?.SuppressionReason ?? "recipient_missing";
+                if (outbox?.Status == "pending")
+                {
+                    notificationReason = null;
+                    outboxIds.Add(outbox.Id);
+                }
+            }
+        }
+        if (reminderRequested && input.Action == "purchase" && targetStatus == RequestStatus.OutstandingPurchase)
         {
             var outbox = await AddStaffNotificationAsync(
                 context,
@@ -794,7 +864,7 @@ public sealed class TitleRequestMutationService(
         }
         else if (input.Action == "purchase")
         {
-            notificationStatus = input.EmailPurchaseReminder ? "not_applicable" : "not_requested";
+            notificationStatus = reminderRequested ? "not_applicable" : "not_requested";
         }
         if (rejectionTemplate is not null)
         {
@@ -830,6 +900,15 @@ public sealed class TitleRequestMutationService(
             }
         }
 
+        var committedResult = new TitleRequestMutationResult("updated", request.Id, outboxIds,
+            targetStatus, notificationStatus, notificationReason, patronNotificationStatus, patronNotificationReason,
+            OperationId: input.OperationId, AdditionalCopyRequestId: additionalCopy?.Id.ToString(CultureInfo.InvariantCulture));
+        if (directQueue)
+        {
+            AddEvent(context, request, actor, QueueReceiptEvent,
+                $"Selected Polaris BIB {request.BibId}; workflow action {input.Action} committed.",
+                new QueueReceipt(input.OperationId!.Value, QueueFingerprint(input), committedResult));
+        }
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         foreach (var outboxId in outboxIds)
@@ -862,12 +941,11 @@ public sealed class TitleRequestMutationService(
                 }
             }
         }
-        return new TitleRequestMutationResult("updated", request.Id, outboxIds,
-            targetStatus, notificationStatus, notificationReason,
-            patronNotificationStatus, patronNotificationReason);
+        return committedResult with { NotificationStatus = notificationStatus, NotificationReason = notificationReason,
+            PatronNotificationStatus = patronNotificationStatus, PatronNotificationReason = patronNotificationReason };
     }
 
-    private async Task<string?> PreflightExplicitBibAsync(
+    private async Task<(string? Error, BibValidationResult? Bib)> PreflightExplicitBibAsync(
         CurrentStaff actor,
         long requestId,
         byte[] expectedVersion,
@@ -881,18 +959,18 @@ public sealed class TitleRequestMutationService(
         if (input.StaffSelectedBibIdSupplied &&
             (!bibSupplied || selectedBibId is null || selectedBibId <= 0))
         {
-            return "invalid_bib";
+            return ("invalid_bib", null);
         }
-        var mayEnterPendingHold = input.Action is "alreadyOwn" or "catalogFound" or "purchase" ||
+        var mayEnterPendingHold = input.Action is "alreadyOwn" or "catalogFound" or "additionalCopy" or "purchase" ||
                                   input.Status == RequestStatus.PendingHold;
         if (!bibSupplied && !mayEnterPendingHold)
         {
-            return null;
+            return (null, null);
         }
         var proposedBib = bibSupplied ? input.Bibid : null;
         if (proposedBib is not null && proposedBib <= 0)
         {
-            return "invalid_bib";
+            return ("invalid_bib", null);
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -900,18 +978,18 @@ public sealed class TitleRequestMutationService(
             .SingleOrDefaultAsync(item => item.Id == requestId, cancellationToken);
         if (request is null || !TitleRequestViewService.CanAccess(actor, request.LibraryOrganizationId))
         {
-            return "not_found";
+            return ("not_found", null);
         }
         var currentActor = await context.StaffUsers.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == actor.Id, cancellationToken);
         if (currentActor is null || !IsSameCurrentActor(actor, currentActor) ||
             !IsEligibleForLibrary(currentActor, request.LibraryOrganizationId))
         {
-            return "staff_scope_forbidden";
+            return ("staff_scope_forbidden", null);
         }
         if (!request.RowVersion.SequenceEqual(expectedVersion))
         {
-            return "stale_version";
+            return ("stale_version", null);
         }
 
         if (!bibSupplied)
@@ -921,11 +999,11 @@ public sealed class TitleRequestMutationService(
         if (selectedBibId is not null &&
             selectedBibId != proposedBib)
         {
-            return "invalid_bib";
+            return ("invalid_bib", null);
         }
         if (proposedBib is not null && proposedBib <= 0)
         {
-            return "invalid_bib";
+            return ("invalid_bib", null);
         }
 
         if (!await context.Organizations.AsNoTracking()
@@ -933,7 +1011,7 @@ public sealed class TitleRequestMutationService(
                                   item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive,
                     cancellationToken))
         {
-            return "organization_inactive";
+            return ("organization_inactive", null);
         }
 
         var identifierSupplied = input.Identifier.IsSupplied;
@@ -950,14 +1028,14 @@ public sealed class TitleRequestMutationService(
         var staffSelectedBib = selectedBibId is not null;
         if (!bibChanged && !identifierChanged && !enteringPendingHold && !staffSelectedBib)
         {
-            return null;
+            return (null, null);
         }
 
         var incompleteOperation = await context.HoldPlacementOperations.AsNoTracking()
             .AnyAsync(item => item.TitleRequestId == request.Id && item.CompletedUtc == null, cancellationToken);
         if (incompleteOperation)
         {
-            return "hold_operation_incomplete";
+            return ("hold_operation_incomplete", null);
         }
         var successfulOperation = await context.HoldPlacementOperations.AsNoTracking()
             .AnyAsync(item => item.TitleRequestId == request.Id && item.State == HoldOperationState.Succeeded, cancellationToken);
@@ -967,42 +1045,58 @@ public sealed class TitleRequestMutationService(
             successfulOperation || request.LegacyHoldProtected);
         if (identifierChanged && !capability.CanEditIdentifier || bibChanged && !capability.CanChangeBib)
         {
-            return capability.BlockingReason ?? "identifier_locked_by_stage";
+            return (capability.BlockingReason ?? "identifier_locked_by_stage", null);
         }
         if (targetStatus is null)
         {
-            return "invalid_transition";
+            return ("invalid_transition", null);
         }
         if (targetStatus == RequestStatus.PendingHold && enteringPendingHold && bibAfterMutation is null)
         {
-            return "bib_required";
+            return ("bib_required", null);
         }
         if (targetStatus is RequestStatus.HoldPlaced or RequestStatus.Closed)
         {
-            return "identifier_locked_by_stage";
+            return ("identifier_locked_by_stage", null);
         }
         if (proposedBib is null)
         {
-            return null;
+            return (null, null);
         }
         if (!bibChanged && !enteringPendingHold && !staffSelectedBib)
         {
-            return null;
+            return (null, null);
         }
 
+        var failureCode = "bib_validation_unavailable";
         try
         {
             var result = await staffPolarisProvider.ValidateBibAsync(proposedBib.Value, request.LibraryOrganizationId, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            return result.IsValid ? null : "bib_not_found";
+            if (!result.IsValid)
+            {
+                return ("bib_not_found", null);
+            }
+            if (input.OperationId.HasValue)
+            {
+                failureCode = "holdings_unavailable";
+                var holdings = await staffPolarisProvider.GetBibHoldingsAsync(
+                    proposedBib.Value, request.LibraryOrganizationId, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (PolarisQueuePolicy.HoldingsFailure(holdings, input.Action == "additionalCopy") is { } holdingsFailure)
+                {
+                    return (holdingsFailure, null);
+                }
+            }
+            return (null, result);
         }
         catch (PolarisOperationalException)
         {
-            return "bib_validation_unavailable";
+            return (failureCode, null);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return "bib_validation_unavailable";
+            return (failureCode, null);
         }
         catch (Exception) when (cancellationToken.IsCancellationRequested)
         {

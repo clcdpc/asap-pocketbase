@@ -11,14 +11,15 @@ using Microsoft.Extensions.Options;
 
 namespace Asap.Web.Features.Staff;
 
-public static class TitleRequestEndpoints
+public static partial class TitleRequestEndpoints
 {
     private static readonly HashSet<string> SupportedResearchTokens =
         ["title", "identifier", "bibid", "patron-id", "patronId"];
 
     public sealed record BibLookupInput(string? RequestId, int? LibraryOrgId,
         [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] int? BibId,
-        string? Mode, string? Query, string? Title, string? Author);
+        string? Mode, string? Query, string? Title, string? Author,
+        bool IncludePatronHolds = true);
 
     public static IEndpointRouteBuilder MapTitleRequestEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -269,6 +270,7 @@ public static class TitleRequestEndpoints
         TitleRequestViewService views,
         StaffEligibilityService eligibility,
         IStaffPolarisProvider polaris,
+        IDbContextFactory<AsapDbContext> contextFactory,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
@@ -315,31 +317,51 @@ public static class TitleRequestEndpoints
             if (!exact)
             {
                 var search = await polaris.SearchBibsAsync(mode!, query, title, author, scope.OrganizationId, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 return Results.Json(new { status = search.Results.Count == 0 ? "not_found" : "found",
-                    search.TotalMatches, results = search.Results.Take(10) });
+                    mode, libraryOrgId = scope.OrganizationId,
+                    requestId = scope.Request?.Id, version = scope.Request?.Version,
+                    search.TotalMatches, search.TotalMatchesKind, results = search.Results.Take(10) });
             }
             var bibId = input.BibId!.Value;
             var bib = await polaris.ValidateBibAsync(bibId, scope.OrganizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!bib.IsValid)
             {
                 return Results.NotFound(new { code = "bib_not_found", message = "The Polaris BIB was not found." });
             }
             StaffBibHoldingsSummary? holdings = null;
             var holdingsUnavailable = false;
+            string? holdingsErrorCode = null;
             try
             {
                 holdings = await polaris.GetBibHoldingsAsync(bibId, scope.OrganizationId, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (PolarisQueuePolicy.HoldingsFailure(holdings, false) == "holdings_unavailable")
+                {
+                    holdings = null;
+                    holdingsUnavailable = true;
+                    holdingsErrorCode = "holdings_unavailable";
+                }
             }
-            catch (PolarisOperationalException)
+            catch (PolarisOperationalException exception)
             {
                 holdingsUnavailable = true;
+                holdingsErrorCode = exception.InnerException is OperationCanceledException or TimeoutException
+                    ? "holdings_timeout" : "holdings_unavailable";
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                holdingsUnavailable = true;
+                holdingsErrorCode = "holdings_timeout";
             }
             bool? patronHasHold = null;
-            if (scope.Request is { Barcode.Length: > 0 } request)
+            if (input.IncludePatronHolds && scope.Request is { Barcode.Length: > 0 } request)
             {
                 try
                 {
                     var holds = await polaris.GetPatronHoldsAsync(request.Barcode, scope.OrganizationId, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     patronHasHold = holds.Any(hold => hold.BibId == bibId &&
                         !HoldPlacementService.IsTerminal(hold.StatusId));
                 }
@@ -348,10 +370,20 @@ public static class TitleRequestEndpoints
                     loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
                         .LogWarning(exception, "Patron hold context was unavailable during BIB lookup");
                 }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // Optional patron enrichment must not discard authoritative BIB/holdings evidence.
+                }
             }
+            var queueActions = await CatalogQueueActionsAsync(Current(context), scope.Request, bibId, holdings,
+                contextFactory, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             return Results.Json(new { bibId, bib.Title, bib.Author,
                 bib.Publication, bib.Format, bib.Identifier, bib.Publisher,
-                holdingsSummary = holdings, holdingsUnavailable, patronHasHold });
+                bib.MaterialTypeId, bib.MaterialTypeSearchCode, bib.FormatIconUrl,
+                libraryOrgId = scope.OrganizationId, requestId = scope.Request?.Id, version = scope.Request?.Version,
+                holdingsSummary = holdings, holdingsUnavailable, holdingsErrorCode,
+                holdingsStatus = HoldingsStatus(holdings), patronHasHold, queueActions });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -606,9 +638,14 @@ public static class TitleRequestEndpoints
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return Results.Json(new { code = "request_outcome_unconfirmed",
-                message = "The request outcome could not be confirmed. Reload before trying again." },
-                statusCode: StatusCodes.Status503ServiceUnavailable);
+            return QueueOutcomeUnconfirmed(id, input.OperationId);
+        }
+        catch (Exception exception) when (input.OperationId.HasValue &&
+            exception is DbUpdateException or System.Data.Common.DbException)
+        {
+            loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
+                .LogWarning(exception, "Catalog queue outcome was unconfirmed for request {RequestId}", id);
+            return QueueOutcomeUnconfirmed(id, input.OperationId);
         }
         if (result.Code != "updated")
         {
@@ -634,11 +671,15 @@ public static class TitleRequestEndpoints
         return Results.Json(row with
             {
                 Committed = true,
-                FinalStatus = result.FinalStatus,
+                FinalStatus = result.OperationId.HasValue ? row.Status : result.FinalStatus,
                 NotificationStatus = result.NotificationStatus,
                 NotificationReason = result.NotificationReason,
                 PatronNotificationStatus = result.PatronNotificationStatus,
-                PatronNotificationReason = result.PatronNotificationReason
+                PatronNotificationReason = result.PatronNotificationReason,
+                OperationId = result.OperationId,
+                AdditionalCopyRequestId = result.AdditionalCopyRequestId,
+                Replayed = result.Replayed,
+                QueueCommittedStatus = result.OperationId.HasValue ? result.FinalStatus : null
             });
         }
         return Results.Json(new
@@ -650,6 +691,8 @@ public static class TitleRequestEndpoints
             notificationReason = result.NotificationReason,
             patronNotificationStatus = result.PatronNotificationStatus,
             patronNotificationReason = result.PatronNotificationReason,
+            result.OperationId, result.AdditionalCopyRequestId, result.Replayed,
+            queueCommittedStatus = result.OperationId.HasValue ? result.FinalStatus : null,
             refreshUnavailable = row is null
         });
     }
@@ -929,9 +972,25 @@ public static class TitleRequestEndpoints
             message = "Notification configuration is temporarily unavailable. The request was not changed."
         }, statusCode: StatusCodes.Status503ServiceUnavailable),
         "staff_session_invalid" => Results.Json(new { code = result.Code }, statusCode: StatusCodes.Status401Unauthorized),
-        "bib_validation_unavailable" => Results.Json(
+        "bib_validation_unavailable" or "holdings_unavailable" => Results.Json(
             new { code = result.Code, message = "Catalog validation is temporarily unavailable." },
             statusCode: StatusCodes.Status503ServiceUnavailable),
+        "operation_conflict" or "additional_copy_exists" or "bib_not_owned" or "bib_not_holdable" => Results.Conflict(new
+        {
+            code = result.Code,
+            message = result.Code switch
+            {
+                "operation_conflict" => "This operation ID was already used with different action details. Recover the original action before starting another.",
+                "additional_copy_exists" => "An open additional-copy task already exists for this request.",
+                "bib_not_owned" => "Additional-copy queueing requires confirmed consortium ownership.",
+                _ => "Polaris reports that this BIB is not holdable. The request was not changed."
+            }
+        }),
+        "invalid_queue_action" => Results.BadRequest(new
+        {
+            code = result.Code,
+            message = "Supply a title-request identity, operation ID, current version, and matching selected BIB without editor changes."
+        }),
         "bib_unverified" => Results.Conflict(new
         {
             code = result.Code,

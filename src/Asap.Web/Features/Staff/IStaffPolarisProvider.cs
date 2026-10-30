@@ -52,12 +52,25 @@ public interface IStaffPolarisProvider
 
 public sealed record BibValidationResult(
     bool IsValid, string? Title = null, string? Author = null, string? Publication = null,
-    string? Format = null, string? Identifier = null, string? Publisher = null);
+    string? Format = null, string? Identifier = null, string? Publisher = null)
+{
+    public int? MaterialTypeId { get; init; }
+    public string? MaterialTypeSearchCode { get; init; }
+    public string? FormatIconUrl { get; init; }
+}
 
 public sealed record StaffBibSearchRow(
-    int BibId, string? Title, string? Author, string? Publication, string? Format, string? Identifier);
+    int BibId, string? Title, string? Author, string? Publication, string? Format, string? Identifier)
+{
+    public int? MaterialTypeId { get; init; }
+    public string? MaterialTypeSearchCode { get; init; }
+    public string? FormatIconUrl { get; init; }
+}
 
-public sealed record StaffBibSearchResult(IReadOnlyList<StaffBibSearchRow> Results, int TotalMatches);
+public sealed record StaffBibSearchResult(IReadOnlyList<StaffBibSearchRow> Results, int TotalMatches)
+{
+    public string TotalMatchesKind { get; init; } = "provider";
+}
 
 public sealed record StaffBibHoldingsSummary(
     int MyLibraryCount, int OtherLibraryCount, int ConsortiumCount, bool IsHoldable, bool HasHoldableAtMyLibrary);

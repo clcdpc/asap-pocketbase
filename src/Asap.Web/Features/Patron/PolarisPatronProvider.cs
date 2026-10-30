@@ -595,14 +595,22 @@ public sealed partial class PolarisPatronProvider(
                 .Where(row => string.Equals(row.Label, "Publication Date", StringComparison.OrdinalIgnoreCase))
                 .Select(row => Clean(row.Value))
                 .FirstOrDefault(value => value is not null);
+            var material = (await PresentStaffMaterialsAsync(client,
+                [new StaffBibSearchRow(bibId, null, null, null, Clean(data.Format), null)
+                { MaterialTypeId = ParseMaterialTypeId(data.Format) }], organizationId, cancellationToken)).Single();
             return new BibValidationResult(
                 true,
                 Clean(data.Title),
                 Clean(data.Author?.FirstOrDefault()),
                 publication,
-                Clean(data.Format),
+                material.Format,
                 Clean(data.ISBN) ?? Clean(data.ISSN) ?? Clean(data.UPC?.FirstOrDefault()),
-                Clean(data.Publisher?.FirstOrDefault()));
+                Clean(data.Publisher?.FirstOrDefault()))
+            {
+                MaterialTypeId = material.MaterialTypeId,
+                MaterialTypeSearchCode = material.MaterialTypeSearchCode,
+                FormatIconUrl = material.FormatIconUrl
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

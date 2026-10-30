@@ -115,6 +115,10 @@ public sealed record TitleRequestDto(
     public RequestWorkflowContext? WorkflowContext { get; init; }
     public PickupOperationSummary? PickupOperation { get; init; }
     public StaffResearchContext? Research { get; init; }
+    public Guid? OperationId { get; init; }
+    public string? AdditionalCopyRequestId { get; init; }
+    public bool Replayed { get; init; }
+    public string? QueueCommittedStatus { get; init; }
 }
 
 public sealed record TitleRequestScopeResult(
