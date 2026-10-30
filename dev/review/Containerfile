@@ -1,0 +1,68 @@
+# syntax=docker/dockerfile:1
+# Acceptance tooling and the selected application's Git archive are separate inputs.
+FROM mcr.microsoft.com/dotnet/sdk:10.0.403-noble AS build
+WORKDIR /src
+# Use this image's pinned SDK; do not copy the checkout's host SDK selection.
+COPY app/Directory.Build.props app/Directory.Packages.props ./
+COPY app/src ./src
+COPY app/database ./database
+COPY app/scripts/hangfire ./scripts/hangfire
+RUN dotnet publish src/Asap.Web/Asap.Web.csproj -c Release -o /out/web -p:UseAppHost=false
+COPY tooling/dev/review/src ./dev/review/src
+RUN dotnet publish dev/review/src/Asap.ReviewInit/Asap.ReviewInit.csproj -c Release -o /out/init -p:UseAppHost=false \
+    && dotnet publish dev/review/src/Asap.ReviewBootstrap/Asap.ReviewBootstrap.csproj -c Release -o /out/bootstrap -p:UseAppHost=false \
+    && dotnet publish dev/review/src/Asap.ReviewProviders/Asap.ReviewProviders.csproj -c Release -o /out/providers
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.13-noble AS dotnet-runtime
+FROM node:24-bookworm-slim AS node-runtime
+
+FROM mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04 AS acceptance
+USER root
+COPY --from=dotnet-runtime /usr/share/dotnet /usr/share/dotnet
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates libicu70 libssl3 libnss3-tools tzdata xvfb util-linux \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /runner
+ENV DOTNET_ROOT=/usr/share/dotnet \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    ASAP_ACCEPTANCE_CONTAINER=1 \
+    ASPNETCORE_ENVIRONMENT=Testing \
+    ASPNETCORE_URLS=https://localhost:8080 \
+    ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=Asap.ReviewProviders \
+    Testing__UseDeterministicPatronProvider=true \
+    REVIEW_AUTH_MODE=Local \
+    DISPLAY=:99
+# Stable dependency/browser layers are independent of application and tooling edits.
+COPY tooling/package.json tooling/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund \
+    && npx playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
+COPY --from=build /out/web /app
+COPY --from=build /out/init /review/init
+COPY --from=build /out/bootstrap /review/bootstrap
+COPY --from=build /out/providers/Asap.ReviewProviders.dll /app/
+COPY --from=build /out/providers/Asap.ReviewProviders.deps.json /review/providers/
+COPY tooling/dev/review/appsettings.Testing.json /app/appsettings.Testing.json
+COPY tooling/tests/acceptance /runner/tests/acceptance
+COPY tooling/tests/browser /runner/tests/browser
+COPY tooling/dev/review/acceptance-entrypoint.sh tooling/dev/review/runtime.cjs /review/
+ARG REVIEW_COMMIT_SHA
+ARG REVIEW_TOOLING_SHA
+ARG REVIEW_TOOLING_DIRTY=false
+ARG REVIEW_TOOLING_VERSION
+RUN printf '{"applicationCommit":"%s","toolingCommit":"%s","toolingVersion":"%s"}\n' \
+        "$REVIEW_COMMIT_SHA" "$REVIEW_TOOLING_SHA" "$REVIEW_TOOLING_VERSION" > /review/identity.json \
+    && printf '{"commit":"%s","dirty":%s}\n' "$REVIEW_TOOLING_SHA" "$REVIEW_TOOLING_DIRTY" > /runner/tooling.json \
+    && sed -i 's/\r$//' /review/acceptance-entrypoint.sh \
+    && chmod 755 /review/acceptance-entrypoint.sh \
+    && dotnet --list-runtimes && node --version \
+    && test -f /app/Database/Asap.Database.dacpac \
+    && test -x /opt/mssql-tools18/bin/sqlcmd
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/review/acceptance-entrypoint.sh"]

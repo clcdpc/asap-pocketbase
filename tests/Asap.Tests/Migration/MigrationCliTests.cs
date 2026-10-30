@@ -6886,6 +6886,7 @@ public sealed partial class MigrationCliTests
 
     private static void DeployDacpac(string masterConnectionString, string databaseName)
     {
+        using var timing = FixtureTiming.Start(nameof(MigrationCliTests), "dacpac_deploy_including_database_creation");
         using var dacpac = DacPackage.Load(FindDacpac());
         new DacServices(masterConnectionString).Deploy(
             dacpac,
@@ -6897,6 +6898,7 @@ public sealed partial class MigrationCliTests
                 CreateNewDatabase = true,
                 DropObjectsNotInSource = true
             });
+        timing?.Complete();
     }
 
     private static async Task DropDatabaseAsync(string masterConnectionString, string databaseName)

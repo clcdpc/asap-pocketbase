@@ -1,4 +1,5 @@
 # Pinned third-party bytes retain their upstream formatting and checksums.
 src/Asap.Web/Frontend/vendor/** -text -whitespace
 scripts/hangfire/1.8.25/** -text -whitespace
-dev/review/docker/*.sh text eol=lf
+dev/review/*.sh text eol=lf
+scripts/ci/*.sh text eol=lf

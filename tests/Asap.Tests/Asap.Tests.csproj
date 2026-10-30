@@ -9,7 +9,9 @@
     <PackageReference Include="Microsoft.SqlServer.DacFx" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="..\..\dev\review\src\Asap.ReviewInit\LocalReviewer.sql" Link="LocalReviewer.sql" />
     <ProjectReference Include="..\..\src\Asap.Web\Asap.Web.csproj" />
+    <ProjectReference Include="..\..\dev\review\src\Asap.ReviewProviders\Asap.ReviewProviders.csproj" />
     <ProjectReference Include="..\..\src\Asap.Migration\Asap.Migration.csproj" />
     <ProjectReference Include="..\..\database\Asap.Database\Asap.Database.sqlproj"
                       ReferenceOutputAssembly="false" />
