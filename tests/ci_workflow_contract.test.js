@@ -197,6 +197,7 @@ async function main() {
   check('the stable full gate always inspects full execution and runs no PR code', () => {
     assert.equal(gate.name, 'Build, test and package');
     assert.equal(gate.if, '${{ always() }}');
+    assert.deepEqual(gate.permissions, {});
     assert.deepEqual(gate.needs, ['build-test-package', 'draft-validation']);
     assert.equal(gate['runs-on'], 'ubuntu-latest');
     assert.ok(gate.steps.every((candidate) => !candidate.uses));

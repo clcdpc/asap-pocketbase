@@ -44,8 +44,9 @@ both execution jobs. It succeeds only for a non-draft/full event with a successf
 **Full CI execution** result. Failure, cancellation, a skipped full job or an
 absent result cannot pass. On a draft it **intentionally fails**, even when
 **Draft validation** passes: the red full gate means full validation has not
-been established. The gate runs on a GitHub-hosted runner without checking out
-or executing PR code. Deployment depends on both the full execution and this gate.
+been established. The gate has no GitHub API permissions and runs on a GitHub-hosted
+runner without checking out or executing PR code. Deployment depends on both the
+full execution and this gate.
 
 This is necessary because GitHub accepts conditional job skips as successful
 required checks. See [required-check troubleshooting](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
@@ -104,8 +105,12 @@ No `pull_request_target`, privileged token, new secret or write permission is
 introduced. Draft execution has only `contents: read`; full execution retains
 the read scopes needed for evidence provenance. Ephemeral runner isolation and
 review of workflow/harness changes remain necessary: a writer who can replace
-the workflow itself can replace its controls. The pre-existing lack of readable
-enforced merge protection and unverifiable approval settings are operational
+the workflow itself can replace its controls. More generally, `pull_request`
+loads PR-authored workflow code: a fork can propose removing these predicates.
+The predicates are not an independent sandbox or a replacement for approvals
+of untrusted workflow changes, runner-group restrictions and disposable host
+isolation. See [GitHub's self-hosted runner guidance](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/manage-access).
+The pre-existing unprotected integration branch and unverifiable approval settings are operational
 limitations, not evidence that approvals or host isolation are configured.
 The separate WSLC acceptance runner and its explicit mutation authorization are
 unchanged; it does not validate Actions scheduling or concurrency.
@@ -285,6 +290,25 @@ independent manual/push/tag attempts, fork/author exclusion, draft setup limits
 and preserved deployment dependencies. It runs in the complete `npm test` suite.
 These are executable policy and gate contracts, not a simulation of GitHub's
 event delivery or cancellation engine. Those require separate live run receipts.
+
+Live trigger receipts on October 30, 2026, in [PR #418](https://github.com/clcdpc/asap-pocketbase/pull/418):
+
+- [Opened draft](https://github.com/clcdpc/asap-pocketbase/actions/runs/41075824409)
+  was automatically cancelled after a new commit, including its running clc-linux job.
+- [Draft synchronize](https://github.com/clcdpc/asap-pocketbase/actions/runs/41075985310)
+  passed fast validation in 7m 28s: 107 .NET cases, 54 reuse checks and all 64
+  frontend files. Full CI and IIS had no runner allocation, no artifacts were
+  uploaded, and the separate full gate intentionally failed.
+- [Ready transition](https://github.com/clcdpc/asap-pocketbase/actions/runs/41077529037)
+  selected full CI without changing head `25975c1be940bc29e2b7e80f10be6e8df399b341`.
+  [Conversion back to draft](https://github.com/clcdpc/asap-pocketbase/actions/runs/41078346929)
+  at that same head selected fast validation and cancelled the running full job
+  before SQL startup. No original evidence was uploaded and the full gate failed.
+
+The PR records final full-suite/reuse results separately. No release tag,
+deployment or second PR is needed to test these state transitions. Cross-PR
+isolation and release/forced-deployment policy have automated contract coverage;
+live deployment and a second independent PR were deliberately not exercised.
 
 `bash scripts/ci/check-workflows.sh` validates all workflows on Linux x64 with
 checksum-pinned actionlint. `.github/actionlint.yml` declares the existing custom

@@ -472,8 +472,7 @@ jobs:
     name: Build, test and package
     needs: [build-test-package, draft-validation]
     if: ${{ always() }}
-    permissions:
-      contents: read
+    permissions: {}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
