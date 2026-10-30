@@ -165,7 +165,9 @@ const scenarios = [
     assert.equal(await bib.getAttribute('rel'), 'noopener noreferrer');
     // Prevent only navigation at the ancestor after the application's handlers
     // run; never contact the external catalog or bypass the row delegation.
-    await row.evaluate(node => node.addEventListener('click', event => { if (event.target.closest('a')) event.preventDefault(); }));
+    await bib.evaluate(() => document.addEventListener('click', event => {
+      if (event.target.closest('#additional-copy-grid td[data-copy-column="bib"] a')) event.preventDefault();
+    }, { once: true }));
     await bib.click();
     for (const modifiers of [['Control'], ['Meta'], ['Shift'], ['Alt']]) {
       await row.locator('[data-copy-column="library"]').click({ modifiers });

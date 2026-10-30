@@ -79,7 +79,8 @@ const { fixture } = require('./helpers/staff-controller.cjs');
       const bib = cell('bib').querySelector('a');
       assert.equal(bib.href, 'https://catalog.example.org/bib/63');
       assert.equal(bib.target, '_blank'); assert.equal(bib.rel, 'noopener noreferrer');
-      bib.addEventListener('click', event => event.preventDefault());
+      // Suppress external navigation after the queue's delegated handler runs.
+      document.addEventListener('click', event => event.preventDefault(), { once: true });
       count = opened.length; click(bib); assert.equal(opened.length, count);
       for (const options of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }, { button: 2 }]) {
         click(cell('title'), options);
