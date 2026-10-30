@@ -20,7 +20,8 @@ async function addCode(page, term) {
   await picker(page).press('ArrowDown');
   await picker(page).press('Enter');
 }
-async function evidence(t, name) {
+async function evidence(t, name, target) {
+  if (target) await t.page.locator(target).evaluate(node => node.scrollIntoView({ block: 'start' }));
   const geometry = { providers: await providerGeometry(t.page), chips: await chipGeometry(t.page) };
   const cdp = await t.context.newCDPSession(t.page);
   try { geometry.metrics = await cdp.send('Page.getLayoutMetrics'); }
@@ -48,7 +49,7 @@ const scenarios = [
       assert.equal(await t.page.locator('#add-patron-code, #patron-codes-select-all, #patron-codes-clear-all, #patron-code-search').count(), 0);
       assert.equal(await t.page.locator('#settings-save').isDisabled(), true);
       await picker(t.page).fill('branch');
-      assert.deepEqual(await t.page.getByRole('option').allTextContents(), ['Branch use card (17)']);
+      assert.deepEqual(await t.page.locator('#patron-code-options').getByRole('option').allTextContents(), ['Branch use card (17)']);
       await picker(t.page).press('ArrowDown');
       assert.equal(await picker(t.page).getAttribute('aria-activedescendant'), 'patron-code-option-17');
       await evidence(t, t.id + '-popup');
@@ -61,7 +62,7 @@ const scenarios = [
       assert.equal(await picker(t.page).inputValue(), '');
       assert.equal(await t.page.locator('#settings-save').isEnabled(), true);
       await picker(t.page).fill('17');
-      assert.equal(await t.page.getByRole('option').count(), 0, 'Selected IDs disappear from choices');
+      assert.equal(await t.page.locator('#patron-code-options').getByRole('option').count(), 0, 'Selected IDs disappear from choices');
       await picker(t.page).press('Enter');
       await addCode(t.page, '27');
       assert.equal(await t.page.locator('#patron-code-count').innerText(), '4 patron codes selected.');
@@ -82,7 +83,7 @@ const scenarios = [
       assert.equal(await picker(t.page).isDisabled(), true);
       assert.equal(await t.page.locator('#patron-codes-editor button:enabled').count(), 0);
       assert.deepEqual(await selected(t.page), ['1', '77']);
-      await evidence(t, t.id + '-inherited');
+      await evidence(t, t.id + '-inherited', '#patron-code-eligibility');
       await inherit.uncheck();
       while (await t.page.locator('#patron-codes-editor button').count()) await t.page.locator('#patron-codes-editor button').first().click();
       assert.equal(await t.page.locator('#patron-code-count').innerText(), '0 patron codes selected.');
@@ -124,7 +125,7 @@ const scenarios = [
       const rows = t.page.locator('#external-search-provider-editor .settings-provider-row');
       assert.equal(await rows.count(), 4);
       const identities = await rows.evaluateAll(nodes => nodes.map(n => [n.dataset.providerId, n.dataset.providerKey]));
-      await evidence(t, t.id + '-four');
+      await evidence(t, t.id + '-four', '#external-search-provider-help');
       const longUrl = 'https://example.com/search?q={{title}}&context=' + 'long-value-'.repeat(50);
       await rows.first().getByLabel('Label', { exact: true }).fill('Draft provider');
       await rows.first().getByLabel('URL template', { exact: true }).fill(longUrl);
@@ -133,14 +134,14 @@ const scenarios = [
       assert.deepEqual(await rows.nth(1).evaluate(n => [n.dataset.providerId, n.dataset.providerKey]), identities[0]);
       assert.equal(await rows.nth(1).getByLabel('URL template', { exact: true }).inputValue(), longUrl);
       while (await rows.count() > 1) await rows.last().getByRole('button', { name: 'Delete', exact: true }).click();
-      await evidence(t, t.id + '-one');
+      await evidence(t, t.id + '-one', '#external-search-provider-help');
       await rows.first().getByRole('button', { name: 'Delete', exact: true }).click();
       const help = t.page.locator('#external-search-provider-help');
       await help.scrollIntoViewIfNeeded();
       assert.match(await help.innerText(), /URL templates: use \{\{title\}\}/);
       assert.match(await help.innerText(), /https:\/\/example.com\/search\?q=\{\{title\}\}/);
       assert.equal(await help.isVisible(), true);
-      await evidence(t, t.id + '-empty');
+      await evidence(t, t.id + '-empty', '#external-search-provider-help');
       await t.page.locator('#add-provider').click();
       assert.equal(await rows.count(), 1);
       assert.equal(await rows.first().getByLabel('Enabled', { exact: true }).isChecked(), false);
@@ -155,7 +156,7 @@ const scenarios = [
       const before = await json(t.context, t.origin, '/api/asap/staff/settings?orgId=' + scope);
       for (const width of [1440, 1000, 390]) {
         await t.page.setViewportSize({ width, height: 1000 });
-        await t.page.locator('#external-search-provider-help').scrollIntoViewIfNeeded();
+        await t.page.locator('#external-search-provider-help').evaluate(node => node.scrollIntoView({ block: 'start' }));
         const geometry = await evidence(t, t.id + '-' + width);
         assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Layout creates no draft');
         if (width === 1440) assert.ok(geometry.providers.paneWidth >= (scope === 'system' ? 720 : 820), 'Wide pane exercises single-row layout');
@@ -170,13 +171,13 @@ const scenarios = [
       await t.page.setViewportSize({ width: 1440, height: 1000 });
       await nativeZoom(t.context, t.page, 2);
       {
-        await t.page.locator('#patron-code-eligibility').scrollIntoViewIfNeeded();
+        await t.page.locator('#patron-code-eligibility').evaluate(node => node.scrollIntoView({ block: 'start' }));
         if (scope === '2') await t.page.locator('#patron-codes-use-system').uncheck();
         await picker(t.page).fill('branch'); await picker(t.page).press('ArrowDown');
         await evidence(t, t.id + '-native-200-picker');
         await picker(t.page).press('Escape');
         assert.equal(await picker(t.page).evaluate(n => n === document.activeElement), true);
-        await t.page.locator('#external-search-provider-help').scrollIntoViewIfNeeded();
+        await t.page.locator('#external-search-provider-help').evaluate(node => node.scrollIntoView({ block: 'start' }));
         const geometry = await evidence(t, t.id + '-native-200-providers');
         assert.equal(geometry.metrics.visualViewport.zoom, 2);
       } // Zoom is per-tab; the runner closes this page after the scenario.

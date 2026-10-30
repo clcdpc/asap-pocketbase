@@ -561,6 +561,7 @@ export function createSettingsController({
     cancelPolarisTest();
     reads.begin('administration-settings').abort();
     reads.begin('administration-staff-access').abort();
+    reads.begin('administration-patron-codes').abort();
     state.pendingMutation = operation;
     dom.form.inert = true;
     dom.form.setAttribute('aria-busy', 'true');
@@ -1370,6 +1371,7 @@ export function createSettingsController({
   async function load(options = {}) {
     if (disposed || !state.staff || state.staff.role === 'staff') return;
     if (state.pendingMutation && state.pendingMutation !== options.owner) return false;
+    reads.begin('administration-patron-codes').abort();
     const context = captureSettingsContext();
     state.loading = true;
     emailTest.invalidate();
@@ -2441,6 +2443,7 @@ export function createSettingsController({
     copyGeneration += 1;
     reads.begin('administration-settings').abort();
     reads.begin('administration-staff-access').abort();
+    reads.begin('administration-patron-codes').abort();
     return true;
   }
 
