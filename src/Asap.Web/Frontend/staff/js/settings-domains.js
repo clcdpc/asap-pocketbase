@@ -851,6 +851,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   function renderCodes(values) {
     state.selectedCodes = [...values];
     if (!dom.codes || !dom.codeSelection) return;
+    const focusedChip = dom.codes.contains(document.activeElement)
+      ? document.activeElement.closest('[data-code-id]')?.dataset.codeId : null;
     // The form's existing draft tracking observes this value, never picker text or focus.
     dom.codeSelection.value = JSON.stringify([...values].sort((left, right) => Number(left) - Number(right)));
     dom.codes.replaceChildren();
@@ -881,6 +883,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       : inherited ? 'Using system IDs. Turn off Use system IDs to edit the library selection.' : '';
     closeCodePicker();
     updateCodeWarning();
+    if (focusedChip) {
+      const button = [...dom.codes.children].find(chip => chip.dataset.codeId === focusedChip)?.querySelector('button');
+      if (button && !button.disabled) button.focus();
+    }
   }
 
   function renderPublication(values) {
@@ -1632,7 +1638,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       if (!disposed && state.data === owner) {
         state.codeLookupPending = false;
         renderCodes(readSelectedCodes());
-        if (restoreFocus && dom.codeRetry.hidden) (codesInherited() ? dom.codesUseSystem : dom.codeSearch).focus();
+        if (restoreFocus && dom.codeRetry.hidden &&
+            [dom.codeRetry, document.body].includes(document.activeElement)) {
+          (codesInherited() ? dom.codesUseSystem : dom.codeSearch).focus();
+        }
       }
     }
   });
