@@ -235,12 +235,14 @@ async function nativeZoom(context, page, factor) {
   const actual = await worker.evaluate(async ({ url, factor }) => {
     const tab = (await chrome.tabs.query({})).find(t => t.url === url);
     if (!tab) throw new Error('Application tab missing');
+    const previous = await chrome.tabs.getZoom(tab.id);
     await chrome.tabs.setZoomSettings(tab.id, { mode: 'automatic', scope: 'per-tab' });
     await chrome.tabs.setZoom(tab.id, factor);
-    return chrome.tabs.getZoom(tab.id);
+    return { previous, current: await chrome.tabs.getZoom(tab.id) };
   }, { url: page.url(), factor });
-  assert.equal(actual, factor);
-  await page.waitForFunction(({ ratio, factor }) => Math.abs(devicePixelRatio / ratio - factor) < 0.01, { ratio, factor });
+  assert.equal(actual.current, factor);
+  await page.waitForFunction(({ ratio, factor, previous }) => Math.abs(devicePixelRatio / ratio - factor / previous) < 0.01,
+    { ratio, factor, previous: actual.previous });
   const cdp = await context.newCDPSession(page);
   try {
     assert.equal((await cdp.send('Page.getLayoutMetrics')).visualViewport.zoom, factor);

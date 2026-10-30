@@ -86,9 +86,9 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await row.locator('td').nth(2).click();
   await page.locator('#request-dialog[open]').waitFor();
   assert.equal(await page.locator('#request-dialog').getByLabel('Title', { exact: true }).inputValue(), before.title);
-  await page.locator('#request-dialog .request-more summary').press('Enter');
+  assert.equal(await page.locator('#request-dialog .request-more').count(), 0);
   await decideConfirmation(page, () => page.locator('#request-dialog').getByRole('button', { name: 'Close silently', exact: true }).press('Enter'), dialog => dialog.dismiss());
-  assert.equal(await page.locator('#request-dialog .request-more summary').evaluate(node => node === document.activeElement), true);
+  assert.equal(await page.locator('#request-dialog').getByRole('button', { name: 'Close silently', exact: true }).evaluate(node => node === document.activeElement), true);
   await closeDetail();
   await row.locator('.request-title-link').focus(); await page.keyboard.press('Enter');
   await page.locator('#request-dialog[open] .edit-form').waitFor();

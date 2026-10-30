@@ -347,8 +347,10 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     }
     const events = document.querySelectorAll('.request-activity li');
     assert.equal(events.length, 2);
-    assert.equal(events[0].dataset.eventId, '9007199254740997');
-    assert.match(events[0].textContent, /Actor not recorded/);
+    assert.equal(events[0].dataset.eventId, '9007199254740998');
+    assert.match(events[0].textContent, /Named <img src=x onerror=alert\(1\)>/);
+    assert.equal(events[1].dataset.eventId, '9007199254740997');
+    assert.match(events[1].textContent, /Actor not recorded/);
     assert.equal(document.querySelector('.request-activity svg'), null);
     assert.equal(document.querySelector('.request-activity img'), null);
     assert.equal(document.querySelector('.edit-form textarea').value, 'Editable note');

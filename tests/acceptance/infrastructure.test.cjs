@@ -128,6 +128,10 @@ test('native Chromium 200% helper and accessibility screenshot plumbing run with
   await dialog.locator('.form-actions').evaluate(n => { n.prepend(n.lastElementChild); });
   await confirm(page, 'Revert changes');
   await page.waitForFunction(() => window.fixtureAccepted === true);
+  await nativeZoom(context, page, 1);
+  assert.equal(await page.evaluate(() => innerWidth), 1280, 'Native zoom can return to 100% for subsequent D1 checkpoints');
+  await nativeZoom(context, page, 2);
+  assert.equal(await page.evaluate(() => innerWidth), 640, 'Repeated native zoom remains actual browser zoom');
 });
 
 test('real screenshot plumbing frames unmasked synthetic content, primary and More actions, Settings warnings and mobile evidence', async t => {

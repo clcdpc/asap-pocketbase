@@ -8,7 +8,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
   const { request, actor, root, scope: interactionScope, isCurrent, isPending } = context;
   const reads = createLatestLoad();
   const dialogForms = new WeakMap();
-  let actionChoice = null, more = null;
+  let actionChoice = null;
   const isCurrentDialogRequest = () => isCurrent();
   const allowRequestMutation = (snapshot, declaration) => isCurrent() && context.admit(declaration);
   const confirmCurrent = (snapshot, label, message, draft = null, tone = 'normal') =>
@@ -57,10 +57,6 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     if (choice.returnFocus?.isConnected) choice.returnFocus.focus();
   }
 
-  function actionOpener(control) {
-    return control.closest('.request-more')?.querySelector('summary') || control;
-  }
-
   function showForm(form) {
     const panel = root.querySelector('.request-workflow-panel');
     if (panel) panel.prepend(form);
@@ -71,6 +67,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     const bar = element('div', { className: 'action-bar', 'aria-label': 'Request actions' });
     const workflowBlocked = request.capabilities?.canChangeWorkflowState !== true;
     const allowedActions = new Set(request.capabilities?.allowedActions || []);
+    let assign = null;
     if (request.status !== 'closed') {
       if (request.claimedByStaffUserId === actor?.id) {
         bar.append(commandButton('Unclaim', 'user-times', () => mutateSimple(request, 'unclaim')));
@@ -84,21 +81,23 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
           }
         }));
       }
-      bar.append(commandButton('Assign', 'users', event => showAssignment(request, actionOpener(event.currentTarget))));
+      assign = commandButton('Assign', 'users', event => showAssignment(request, event.currentTarget));
+      if (request.status !== 'suggestion') bar.append(assign);
     }
     if (request.status === 'suggestion') {
       bar.append(
-        commandButton('Purchase', 'shopping-cart', event => showActionChoice(request, 'purchase', actionOpener(event.currentTarget)), 'primary-button', !allowedActions.has('purchase')),
+        commandButton('Purchase', 'shopping-cart', event => showActionChoice(request, 'purchase', event.currentTarget), 'primary-button', !allowedActions.has('purchase')),
+        assign,
         commandButton('Already own', 'book', () => runAction(request, 'alreadyOwn'), 'secondary-button', !allowedActions.has('alreadyOwn')),
-        commandButton('Reject', 'ban', event => showActionChoice(request, 'reject', actionOpener(event.currentTarget)), 'danger-button', !allowedActions.has('reject')),
-        commandButton('Close silently', 'archive', () => runAction(request, 'silentClose'), 'secondary-button', !allowedActions.has('silentClose'))
+        commandButton('Close silently', 'archive', () => runAction(request, 'silentClose'), 'secondary-button', !allowedActions.has('silentClose')),
+        commandButton('Reject', 'ban', event => showActionChoice(request, 'reject', event.currentTarget), 'danger-button', !allowedActions.has('reject'))
       );
     } else if (request.status === 'outstanding_purchase') {
       bar.append(commandButton(request.autohold ? 'Ready for hold' : 'Close without hold', 'arrow-right', () => runAction(request, 'catalogFound'),
         'primary-button', !allowedActions.has('catalogFound')));
     } else if (request.status === 'pending_hold') {
-      bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, actionOpener(event.currentTarget)), 'secondary-button', !request.bibid));
-      bar.append(commandButton('Pickup', 'map-marker', event => showPickup(request, actionOpener(event.currentTarget)), 'secondary-button',
+      bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
+      bar.append(commandButton('Pickup', 'map-marker', event => showPickup(request, event.currentTarget), 'secondary-button',
         workflowBlocked && request.capabilities?.blockingReason !== 'pickup_reconciliation_required'));
       if (request.capabilities?.canPlaceHold === true) {
         bar.append(commandButton('Place hold', 'bookmark', async () => {
@@ -112,7 +111,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         bar.append(commandButton('Close duplicate', 'clone', () => runAction(request, 'closeDuplicate'), 'secondary-button', !allowedActions.has('closeDuplicate')));
       }
     } else if (request.status === 'hold_placed') {
-      bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, actionOpener(event.currentTarget)), 'secondary-button', !request.bibid));
+      bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
       bar.append(commandButton('Close request', 'check', () => runAction(request, 'close'), 'primary-button', !allowedActions.has('close')));
     } else if (request.status === 'closed') {
       if (allowedActions.has('reopen')) {
@@ -128,29 +127,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       }
     }
     if (request.capabilities && request.capabilities.canRetryIdentifierCheck) {
-      bar.append(commandButton('Retry identifier check', 'refresh', () => mutateSimple(request, 'retry-identifier-check')));
-    }
-    const primary = new Set(['Claim', 'Unclaim', 'Purchase', 'Ready for hold', 'Close without hold', 'Place hold', 'Close request', 'Reopen']);
-    const secondary = [...bar.children].filter(button => !primary.has(button.textContent.trim()));
-    if (secondary.length) {
-      more = element('details', { className: 'request-more' }, [
-        element('summary', {}, [icon('ellipsis-h'), 'More']),
-        element('div', { className: 'request-more-items', role: 'group', 'aria-label': 'More request actions' }, secondary)
-      ]);
-      more.addEventListener('click', event => {
-        if (!event.target.closest('button')) return;
-        const restoreFocus = more.contains(document.activeElement);
-        more.open = false;
-        if (restoreFocus) more.querySelector('summary').focus();
-      });
-      more.addEventListener('toggle', () => {
-        if (!more.open || !isCurrent()) return;
-        const items = more.querySelector('.request-more-items'), rect = more.getBoundingClientRect();
-        const frame = root.closest('dialog').getBoundingClientRect();
-        items.style.left = `${Math.max(frame.left + 8, Math.min(rect.left, frame.right - items.offsetWidth - 8)) - rect.left}px`;
-        items.style.right = 'auto';
-      });
-      bar.append(more);
+      bar.insertBefore(commandButton('Retry identifier check', 'refresh', () => mutateSimple(request, 'retry-identifier-check')), bar.querySelector('.danger-button'));
     }
     return bar;
   }
@@ -561,7 +538,6 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       else announce('That action is no longer available. Review the current request.', 'warning');
     },
     escape() {
-      if (more?.open) { more.open = false; more.querySelector('summary').focus(); return true; }
       if (!actionChoice || isPending()) return false;
       dismissActionChoice(); return true;
     },

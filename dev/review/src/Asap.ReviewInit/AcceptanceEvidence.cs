@@ -56,8 +56,9 @@ internal static class AcceptanceEvidence
                     r.BibIdStaffVerified, CONVERT(varchar(18), r.RowVersion, 1),
                     (SELECT COUNT(*) FROM asap.TitleRequestEvent e WHERE e.TitleRequestId = r.Id),
                     r.Notes, r.CloseReason,
-                    CONVERT(bit, CASE WHEN r.PatronIdSnapshot BETWEEN 41001 AND 41011 AND
-                        r.Barcode = CONCAT(N'ACCEPTANCE', r.PatronIdSnapshot) THEN 1 ELSE 0 END)
+                    CONVERT(bit, CASE WHEN (r.PatronIdSnapshot BETWEEN 41001 AND 41011 OR r.PatronIdSnapshot IN (41013, 41014, 41015)) AND
+                        r.Barcode = CONCAT(N'ACCEPTANCE', r.PatronIdSnapshot) THEN 1 ELSE 0 END),
+                    r.LegacyHoldProtected
                 FROM asap.TitleRequest r WHERE r.LegacyId LIKE N'acceptance-pr410-%';
                 SELECT c.LegacyId, CONVERT(varchar(20), c.Id), c.Status,
                     CONVERT(varchar(18), c.RowVersion, 1),
@@ -93,7 +94,7 @@ internal static class AcceptanceEvidence
                     verified = reader.GetBoolean(5), version = reader.GetString(6), events = reader.GetInt32(7),
                     pristineNotes = !reader.IsDBNull(8) && reader.GetString(8) == "Acceptance fixture draft baseline",
                     closeReason = reader.IsDBNull(9) ? null : reader.GetString(9),
-                    identityBound = reader.GetBoolean(10)
+                    identityBound = reader.GetBoolean(10), legacyHoldProtected = reader.GetBoolean(11)
                 });
             }
             var copies = new List<object>();

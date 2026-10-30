@@ -340,7 +340,7 @@ test('existing frontend/browser entry points and full CI guard remain; artifacts
   }
   const workflow = await fs.readFile(path.join(repository, '.github/workflows/dotnet.yml'), 'utf8');
   assert.match(workflow, /dotnet test --project tests\/Asap.Tests\/Asap.Tests.csproj/);
-  assert.match(workflow, /--minimum-expected-tests 1439/);
+  assert.match(workflow, /--minimum-expected-tests 1525/);
   assert.match(workflow, /run: npm test/);
   assert.match(workflow, /run: npm run test:browser/);
   assert.match(execFileSync('git', ['check-ignore', '.artifacts/acceptance/run/results.json'], { cwd: repository, encoding: 'utf8' }), /acceptance/);
@@ -403,7 +403,7 @@ test('partial results never report automated completion while required scenarios
 
 test('smoke registers exactly two scenarios with explicit write metadata and preserves pr410', async () => {
   const registry = require('./suites/index.cjs');
-  assert.deepEqual(Object.keys(registry), ['pr410', 'smoke']);
+  assert.deepEqual(Object.keys(registry), ['d1', 'pr410', 'smoke']);
   assert.equal(registry.smoke.id, 'smoke');
   assert.equal(registry.smoke.mutations, true);
   assert.deepEqual(registry.smoke.scenarios.map(s => [s.id, s.writes]), [
@@ -422,6 +422,33 @@ test('smoke registers exactly two scenarios with explicit write metadata and pre
   assert.deepEqual(registry.pr410.scenarios.filter(s => s.id !== 'settings-reset-approved').map(s => [s.id, s.writes]), previous);
   assert.equal(registry.pr410.scenarios.find(s => s.id === 'settings-reset-approved').writes, true);
   assert.equal(registry.pr410.scenarios.length, 21);
+});
+
+test('D1 registers read-only coverage independently of its explicitly authorized close/reopen scenario', () => {
+  const suite = require('./suites/d1.cjs');
+  assert.equal(suite.id, 'd1');
+  assert.equal(suite.mutations, true);
+  assert.deepEqual(suite.scenarios.map(s => [s.id, s.writes]), [
+    ['d1-toolbar-layout', false], ['d1-action-focus', false], ['d1-research-patron', false],
+    ['d1-closed-locks', false], ['d1-activity', false], ['d1-close-reopen-refresh', true]
+  ]);
+});
+
+test('D1 admits only pristine synthetic closed/protected/history fixture states', () => {
+  for (const [key, status, events, protectedHold, closeReason] of [
+    ['d1-closed', 'closed', 0, false, 'rejected'], ['d1-protected', 'closed', 0, true, 'hold_completed'],
+    ['d1-history', 'suggestion', 3, false, null]
+  ]) {
+    const row = { id: '9007199254740993', key: 'acceptance-pr410-' + key, status, events,
+      legacyHoldProtected: protectedHold, closeReason, pristineNotes: true, identityBound: true };
+    assert.equal(requireFixture({ titles: [row] }, key), row);
+    for (const change of [{ identityBound: false }, { pristineNotes: false }, { events: events + 1 },
+      { legacyHoldProtected: !protectedHold }, { status: 'pending_hold' }, { closeReason: 'changed' }]) {
+      assert.throws(() => requireFixture({ titles: [{ ...row, ...change }] }, key), /consumed or has changed/);
+    }
+    assert.throws(() => requireFixture({ titles: [row, row] }, key), /ambiguous/);
+    assert.throws(() => requireFixture({ titles: [{ ...row, id: 'not-an-id' }] }, key), /authoritative request identity/);
+  }
 });
 
 const smokeArgs = (...extra) => ['--suite', 'smoke', '--expected-commit', appSha, ...extra];

@@ -58,7 +58,10 @@ function requireFixture(evidence, key, expected = {}) {
   must(matches.length === 1, 'Fixture ' + key + ' is missing or ambiguous; use a fresh review database.');
   const f = matches[0];
   must(/^[1-9][0-9]*$/.test(f.id), 'Fixture has no authoritative request identity.');
-  const pristine = key === 'copy' ? f.pristine && f.status === 'open' :
+  const d1 = { 'd1-closed': ['closed', 0, false, 'rejected'],
+    'd1-protected': ['closed', 0, true, 'hold_completed'], 'd1-history': ['suggestion', 3, false, null] }[key];
+  const pristine = key === 'copy' ? f.pristine && f.status === 'open' : d1
+    ? f.status === d1[0] && f.events === d1[1] && f.legacyHoldProtected === d1[2] && f.closeReason === d1[3] && f.pristineNotes && f.identityBound === true :
     f.events === 0 && f.pristineNotes && f.identityBound === true && f.status === 'suggestion';
   must(pristine && Object.entries(expected).every(([k,v]) => f[k] === v),
     'Fixture ' + key + ' is consumed or has changed; this scenario requires fresh review data.');
