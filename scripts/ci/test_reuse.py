@@ -555,7 +555,7 @@ class EnvironmentTests(unittest.TestCase):
     def test_unidentified_runtime_extensions_disable_affected_reuse_without_exporting_values(self):
         for variable, suites in (("ASAP_TEST_CHROMIUM_EXECUTABLE_PATH", {"browser"}),
                                  ("PLAYWRIGHT_BROWSERS_PATH", {"browser"}), ("NODE_OPTIONS", set(fp.SUITES)),
-                                 ("DOTNET_STARTUP_HOOKS", {"dotnet", "browser"})):
+                                 ("DOTNET_STARTUP_HOOKS", set(fp.SUITES))):
             environment, problems, _ = self.environment({variable: "sensitive-runtime-override"})
             with self.subTest(variable=variable):
                 self.assertEqual(set(problems), suites)

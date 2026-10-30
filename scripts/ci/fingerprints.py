@@ -199,7 +199,8 @@ def environment(config, root=ROOT):
     if os.environ.get("NODE_OPTIONS"):
         problems.update({s: "Ambient Node options are not fingerprinted" for s in SUITES})
     if any(os.environ.get(k) for k in ("DOTNET_STARTUP_HOOKS", "DOTNET_ADDITIONAL_DEPS", "DOTNET_SHARED_STORE")):
-        problems.update({s: "Ambient .NET extensions are not fingerprinted" for s in ("dotnet", "browser")})
+        # Frontend contracts also launch PowerShell, which runs on .NET.
+        problems.update({s: "Ambient .NET extensions are not fingerprinted" for s in SUITES})
     if common["runner_os"] != "Linux" or common["runner_arch"] != "X64":
         problems.update({suite: "Unrecognized runner environment" for suite in SUITES})
     return result, problems, image
