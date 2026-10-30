@@ -2,18 +2,56 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { Blocked } = require('./reporting.cjs');
+const { must } = require('./environment.cjs');
+
+// Only the scenario executor binds pages, using its pinned runtime/staff verifier.
+// A workspace-shaped page or an arbitrary URL is never sufficient authorization.
+const screenshotVerifiers = new WeakMap();
+function registerScreenshotPage(page, verify) {
+  screenshotVerifiers.set(page, verify);
+  return () => screenshotVerifiers.delete(page);
+}
+function pngDimensions(buffer) {
+  assert.ok(buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), 'Screenshot is a PNG');
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+async function captureTarget(page, origin) {
+  const url = new URL(page.url());
+  must(origin === 'https://localhost:8080' && url.origin === origin && url.pathname.startsWith('/staff/'),
+    'Screenshot requires the verified local acceptance application.');
+  must(await page.locator('#workspace').isVisible(),
+    'Authenticated application workspace is unavailable; screenshot suppressed.');
+}
 
 async function screenshot(page, directory, name, options = {}) {
-  if (!await page.locator('#workspace').isVisible()) {
-    throw new Blocked('Authenticated application workspace is unavailable; screenshot suppressed.');
+  const verify = screenshotVerifiers.get(page);
+  must(verify, 'Screenshot has no verified synthetic acceptance environment.');
+  const environment = await verify(); // Rechecks Testing, SQL, providers and the pinned synthetic reviewer.
+  await captureTarget(page, environment.origin);
+  const { fullPage = false, clip } = options;
+  assert.ok(Object.keys(options).every(key => ['fullPage', 'clip'].includes(key)), 'Only viewport or explicit page/crop captures are supported');
+  const buffer = await page.screenshot({ type: 'png', fullPage, ...(clip ? { clip } : {}) });
+  // Do not export pixels if navigation/session expiry raced the capture.
+  await captureTarget(page, environment.origin);
+  const dimensions = pngDimensions(buffer);
+  if (!fullPage) {
+    const expected = clip || page.viewportSize();
+    assert.ok(expected, 'Acceptance capture has a configured viewport');
+    assert.deepEqual(dimensions, { width: Math.round(expected.width), height: Math.round(expected.height) },
+      'Screenshot dimensions match the requested viewport or corrected crop');
   }
-  // Real staff identity and saved configuration can coexist with synthetic requests.
-  return page.screenshot({ path: path.join(directory, name + '.png'), fullPage: true, ...options,
-    mask: [page.locator('.app-header, .request-activity, .detail-meta span:last-child'),
-      page.locator('#notification-email, #weekly-email, input[type="password"], [data-email-test]')] });
+  await fs.writeFile(path.join(directory, name + '.png'), buffer);
+  return buffer;
 }
 async function checkpoint(page, directory, name, options = {}) {
+  const { visible = [], ...captureOptions } = options;
+  assert.equal(await page.locator('#request-dialog .request-more[open]').count(), 0, 'No unrelated More menu obscures screenshot evidence');
+  const dialog = page.locator('#confirmation-dialog[open]');
+  if (await dialog.count()) {
+    await confirmationGeometry(page);
+    await visibleEvidence(dialog.locator('.form-actions button'));
+  }
+  for (const locator of visible) await visibleEvidence(locator);
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   await page.evaluate(axe);
   const result = await page.evaluate(async () => ({
@@ -21,10 +59,35 @@ async function checkpoint(page, directory, name, options = {}) {
     overflow: document.documentElement.scrollWidth > innerWidth,
     images: [...document.images].filter(n => n.getClientRects().length).every(n => n.complete && n.naturalWidth > 0)
   }));
-  await screenshot(page, directory, name, options);
+  await screenshot(page, directory, name, captureOptions);
   assert.deepEqual(result.violations, [], 'No serious/critical axe findings');
   assert.equal(result.overflow, false, 'No horizontal page overflow');
   assert.equal(result.images, true, 'Visible images loaded');
+}
+async function visibleEvidence(locator) {
+  for (const element of await locator.all()) {
+    await element.waitFor({ state: 'visible' });
+    const fits = await element.evaluate(node => {
+      const r = node.getBoundingClientRect(), v = visualViewport;
+      let left = v.offsetLeft, top = v.offsetTop, right = left + v.width, bottom = top + v.height;
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const p = parent.getBoundingClientRect(), style = getComputedStyle(parent);
+        if (style.overflowX !== 'visible') {
+          left = Math.max(left, p.left + parent.clientLeft);
+          right = Math.min(right, p.left + parent.clientLeft + parent.clientWidth);
+        }
+        if (style.overflowY !== 'visible') {
+          top = Math.max(top, p.top + parent.clientTop);
+          bottom = Math.min(bottom, p.top + parent.clientTop + parent.clientHeight);
+        }
+      }
+      const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+      return r.width > 0 && r.height > 0 && r.left >= left - 1 && r.right <= right + 1 &&
+        r.top >= top - 1 && r.bottom <= bottom + 1 && (hit === node || node.contains(hit));
+    });
+    assert.equal(fits, true, 'Required screenshot evidence is in the viewport without clipping or obstruction');
+  }
+  assert.ok(await locator.count() > 0, 'Required screenshot evidence exists');
 }
 async function partGeometry(locator, edge = null) {
   return locator.evaluate((node, edge) => {
@@ -185,4 +248,4 @@ async function nativeZoom(context, page, factor) {
       getComputedStyle(document.body).zoom, visualViewport.scale]), ['1', '1', 1]);
   } finally { await cdp.detach(); }
 }
-module.exports = { screenshot, checkpoint, confirmationKeyboard, confirmationGeometry, nativeZoom, zoomEvidence };
+module.exports = { screenshot, checkpoint, registerScreenshotPage, visibleEvidence, confirmationKeyboard, confirmationGeometry, nativeZoom, zoomEvidence };

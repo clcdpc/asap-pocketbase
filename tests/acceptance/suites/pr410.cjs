@@ -11,6 +11,15 @@ const { detail, json, openFixture, actionButton, choose, confirm, unchanged, sub
 const titlePath = f => '/api/asap/staff/title-requests/' + f.id + '/action';
 const confirmation = page => page.locator('#confirmation-dialog[open]');
 const reviewSubmit = review => review.locator('button[type=submit]');
+async function reviewCheckpoint(t, review, name = t.id + '-review') {
+  await review.scrollIntoViewIfNeeded();
+  await checkpoint(t.page, t.directory, name, { visible: [review.locator('h3, p, label, button')] });
+}
+async function outcomeCheckpoint(t, name = t.id + '-complete') {
+  const title = t.page.locator('#request-dialog-title');
+  await title.scrollIntoViewIfNeeded();
+  await checkpoint(t.page, t.directory, name, { visible: [title, t.page.locator('#request-dialog .status-badge')] });
+}
 async function fresh(t, key, expected) {
   const environment = await t.verify();
   const fixture = requireFixture(environment.evidence, key, expected);
@@ -59,7 +68,7 @@ async function purchase(t, key, expected, reminder, duplicate = false) {
     assert.equal(await checkbox.count(), 0);
     assert.match(await review.innerText(), /reminder does not apply/);
   }
-  await checkpoint(t.page, t.directory, t.id + '-review');
+  await reviewCheckpoint(t, review);
   await review.getByRole('button', { name: 'Cancel', exact: true }).click();
   await unchanged(t.context, t.origin, f, before);
   assert.equal(t.mutations.length, 0, 'Review/cancel performs no mutation');
@@ -97,7 +106,7 @@ async function purchase(t, key, expected, reminder, duplicate = false) {
   }
   assert.equal(await t.page.evaluate(() => window.acceptancePurchaseNotices.length), 1,
     'One normalized success presentation; identical queue-refresh reannouncements share the same presentation');
-  await checkpoint(t.page, t.directory, t.id + '-complete');
+  await outcomeCheckpoint(t);
 }
 
 const scenarios = [
@@ -105,7 +114,8 @@ const scenarios = [
     run: async t => {
       await t.page.goto(t.origin + '/staff/?scope=2');
       await t.page.locator('#workspace').waitFor({ state: 'visible' });
-      await checkpoint(t.page, t.directory, t.id);
+      await t.page.waitForFunction(() => !document.querySelector('#queue-summary').textContent.startsWith('Loading'));
+      await checkpoint(t.page, t.directory, t.id, { visible: [t.page.locator('#queue-title'), t.page.locator('#staff-identity')] });
     } },
   { id: 'confirmation-desktop-mobile-zoom', requirements: ['#401: stacked dialog, keyboard, Escape, focus, responsive/native 200%'], writes: false,
     run: async t => {
@@ -118,7 +128,7 @@ const scenarios = [
         await t.page.keyboard.press('Enter');
         const geometry = await confirmationKeyboard(t.page, 'Revert request changes?', 'Revert changes', 'Keep editing');
         assert.equal(await t.page.locator('#request-dialog[open]').count(), 1, 'Confirmation stacks above details');
-        await checkpoint(t.page, t.directory, t.id + '-' + mode, { fullPage: mode !== 'zoom' });
+        await checkpoint(t.page, t.directory, t.id + '-' + mode);
         if (mode === 'zoom') await zoomEvidence(t.context, t.page, t.directory, t.id + '-' + mode, geometry);
         await t.page.keyboard.press('Escape');
         await confirmation(t.page).waitFor({ state: 'hidden' });
@@ -156,7 +166,7 @@ const scenarios = [
       assert.equal(t.mutations.length, 0);
       review = await choose(t.page, 'Reject');
       await review.getByLabel('Rejection template', { exact: true }).selectOption(evidence.rejectionTemplates[0]);
-      await checkpoint(t.page, t.directory, t.id + '-review');
+      await reviewCheckpoint(t, review);
       const outcome = await submit(t.page, review.getByRole('button', { name: 'Reject and close', exact: true }), f, 200);
       assert.equal(outcome.committed, true);
       assert.equal(outcome.notificationStatus, 'queued');
@@ -169,7 +179,8 @@ const scenarios = [
       assert.ok(['pending', 'sending', 'sent'].includes(rows[0].status));
       assert.ok(rows[0].deliveryMode === null || rows[0].deliveryMode === 'file');
       assert.match(current.activity.map(e => e.message).join(' '), /Acceptance rejection/);
-      await checkpoint(t.page, t.directory, t.id + '-complete');
+      await t.page.locator('#request-dialog .status-badge').filter({ hasText: /^Closed$/ }).waitFor();
+      await outcomeCheckpoint(t);
     } },
   { id: 'dirty-editor-navigation', requirements: ['#401: detail close, status/view switch, Cancel retains draft/route, discard intended draft', '#407: dirty editor blocks purchase'], writes: false,
     run: async t => {
@@ -247,6 +258,7 @@ const scenarios = [
       await discard(t, () => t.page.locator('[data-view=settings]').click(), false);
       assert.equal(t.page.url(), route);
       assert.equal(await preference.isChecked(), !initial);
+      await checkpoint(t.page, t.directory, t.id + '-draft', { visible: [form, preference] });
       await t.page.evaluate(() => history.back());
       await confirmation(t.page).waitFor(); await confirm(t.page, 'Keep editing');
       await t.page.waitForURL(route);
@@ -258,7 +270,7 @@ const scenarios = [
       await form.waitFor({ state: 'visible' });
       assert.equal(await preference.isChecked(), initial);
       assert.equal(t.mutations.length, 0);
-      await checkpoint(t.page, t.directory, t.id);
+      await checkpoint(t.page, t.directory, t.id, { visible: [t.page.locator('#profile-title'), form, preference] });
     } },
   { id: 'competing-navigation-consent', requirements: ['#401: newer navigation invalidates prior approval and preserves the current Profile draft'], writes: false,
     run: async t => {
@@ -289,6 +301,7 @@ const scenarios = [
       await input.fill('Synthetic acceptance settings draft');
       await t.page.locator('#settings-discard').click();
       await confirmation(t.page).waitFor();
+      await checkpoint(t.page, t.directory, t.id + '-discard-review');
       await confirm(t.page, 'Cancel');
       assert.equal(await input.inputValue(), 'Synthetic acceptance settings draft');
       await t.page.locator('#settings-discard').click();
@@ -309,7 +322,10 @@ const scenarios = [
       assert.equal(after.orgId, '2');
       assert.equal(after.version, before.version, 'Reset Cancel preserves authoritative settings');
       assert.equal(t.mutations.length, 0);
-      await checkpoint(t.page, t.directory, t.id);
+      // Center the field above the sticky save bar; Playwright considers a
+      // control behind that bar to be inside the viewport already.
+      await input.evaluate(node => node.scrollIntoView({ block: 'center', inline: 'nearest' }));
+      await checkpoint(t.page, t.directory, t.id, { visible: [input.locator('..')] });
     } },
   { id: 'settings-reset-approved', requirements: ['#401: approved dirty Settings reset, system inheritance, authoritative reload and custom rejection-template preservation'], writes: true,
     run: async t => {
@@ -386,7 +402,11 @@ const scenarios = [
       assert.equal(await t.page.locator('#settings-discard').isVisible(), false, 'No dirty draft remains');
       assert.deepEqual(after.stored.libraryOverride.templates.filter(item => item.sourceTemplateId === null), owned,
         'Owned template identities, content and SQL rowversions are unchanged');
-      await checkpoint(t.page, t.directory, t.id + '-complete');
+      const success = t.page.locator('#settings-message.success');
+      await success.scrollIntoViewIfNeeded();
+      await checkpoint(t.page, t.directory, t.id + '-complete', { visible: [success, t.page.locator('#settings-title')] });
+      await input.evaluate(node => node.scrollIntoView({ block: 'center', inline: 'nearest' }));
+      await checkpoint(t.page, t.directory, t.id + '-complete-setting', { visible: [input.locator('..')] });
       assert.equal(await confirmation(t.page).count(), 0);
       assert.equal(await t.page.evaluate(() => window.acceptanceResetConfirmations), 1, 'Exactly one confirmation opened');
       assert.deepEqual(t.mutations, [{ path: '/api/asap/staff/settings/reset', method: 'POST', organizationId: 2, version: before.version }],
@@ -509,7 +529,7 @@ const scenarios = [
         'Unverified BIB, status, rowversion and event count remain unchanged in SQL');
       assert.equal(t.mutations.length, 0, 'The authoritative-BIB client gate prevents HTTP submission');
       assert.doesNotMatch(await t.page.locator('#app-status').innerText(), /Workflow action completed/);
-      await checkpoint(t.page, t.directory, t.id);
+      await reviewCheckpoint(t, review, t.id);
       assert.equal(await t.page.evaluate(() => window.acceptanceUnverifiedSuccess), false, 'No purchase success was announced');
     } },
   { id: 'additional-copy-close-reopen', requirements: ['#401: additional-copy confirmation, safe Cancel and authoritative results'], writes: true,

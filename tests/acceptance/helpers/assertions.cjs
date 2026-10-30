@@ -21,14 +21,24 @@ async function reveal(page) {
   if (await more.count() && !await more.evaluate(n => n.open)) await more.locator('summary').click();
 }
 async function actionButton(page, name) {
-  await reveal(page);
-  return page.locator('#request-dialog').getByRole('button', { name, exact: true });
+  const bar = page.locator('#request-dialog .action-bar');
+  // Hidden-role names include aria-hidden icon glyphs in Chromium. Locate the
+  // rendered label in the DOM first, then use the normal accessible role/name
+  // after revealing only the menu that actually owns this action.
+  const label = new RegExp('^\\s*' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$');
+  const target = bar.locator('button').filter({ hasText: label });
+  await target.waitFor({ state: 'attached' });
+  if (await target.evaluate(node => Boolean(node.closest('.request-more')))) await reveal(page);
+  const button = bar.getByRole('button', { name, exact: true });
+  await button.waitFor({ state: 'visible' });
+  return button;
 }
 async function choose(page, name) {
   await (await actionButton(page, name)).click();
   const review = page.locator('#request-dialog .action-choice');
   await review.waitFor();
   await review.locator('button[type=submit]:not([disabled])').waitFor();
+  assert.equal(await page.locator('#request-dialog .request-more[open]').count(), 0, 'Action selection lets the application dismiss More');
   return review;
 }
 async function confirm(page, label) {

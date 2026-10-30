@@ -8,6 +8,7 @@ const { execFileSync } = require('node:child_process');
 const { Blocked, result, exitCode, safeError } = require('./helpers/reporting.cjs');
 const { validateEvidence, requireFixture, verifyEnvironment } = require('./helpers/environment.cjs');
 const { parse, run, runScenarios } = require('./run.cjs');
+const { screenshot, registerScreenshotPage } = require('./helpers/accessibility.cjs');
 const appSha = 'a'.repeat(40), toolSha = 'b'.repeat(40);
 const repository = path.resolve(__dirname, '../..');
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -489,4 +490,108 @@ test('shared reports index screenshot locations while preserving automated PASS 
   assert.equal(saved.overallAcceptance, 'INCOMPLETE');
   const markdown = await fs.readFile(path.join(directory, 'report.md'), 'utf8');
   for (const filename of filenames) assert.ok(markdown.includes('[' + filename + '](' + filename + ')'));
+});
+
+function capturePage() {
+  const page = { address: 'https://localhost:8080/staff/?scope=2', visible: true, captures: [], size: { width: 1280, height: 900 },
+    url: () => page.address, viewportSize: () => page.size,
+    locator: () => ({ isVisible: async () => page.visible }),
+    screenshot: async options => {
+      page.captures.push(options);
+      const buffer = Buffer.alloc(24);
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(buffer);
+      buffer.writeUInt32BE(page.size.width, 16); buffer.writeUInt32BE(page.size.height, 20);
+      return buffer;
+    } };
+  return page;
+}
+
+test('synthetic screenshots default to the actual unmasked viewport and retain explicit page and corrected crop options', async t => {
+  const directory = await temporary(t), page = capturePage();
+  let checks = 0;
+  registerScreenshotPage(page, async () => { checks++; return environment(); });
+  const viewport = await screenshot(page, directory, 'purchase-reminder-on-review');
+  assert.deepEqual(page.captures[0], { type: 'png', fullPage: false });
+  assert.deepEqual(await fs.readFile(path.join(directory, 'purchase-reminder-on-review.png')), viewport);
+  await screenshot(page, directory, 'explicit-page', { fullPage: true });
+  assert.deepEqual(page.captures[1], { type: 'png', fullPage: true });
+  page.size = { width: 1040, height: 320 };
+  const clip = { x: 120, y: 80, width: 1040, height: 320 };
+  await screenshot(page, directory, 'confirmation-desktop-mobile-zoom-zoom-dialog', { clip });
+  assert.deepEqual(page.captures[2], { type: 'png', fullPage: false, clip });
+  assert.equal(checks, 3, 'Every capture revalidates the runtime and reviewer');
+  await assert.rejects(screenshot(page, directory, 'unsupported', { mask: [] }), /Only viewport/);
+  assert.equal(page.captures.length, 3, 'No masking override is accepted');
+});
+
+test('screenshots fail closed for unverified runtimes, external origins, authentication pages and capture races', async t => {
+  const directory = await temporary(t), page = capturePage();
+  await assert.rejects(screenshot(page, directory, 'unbound'), Blocked);
+  for (const mutate of [
+    r => { r.aspnetEnvironment = 'Production'; }, r => { r.evidence.database = 'production'; },
+    r => { r.authenticationMode = 'Entra'; }, r => { r.evidence.deterministicProviders = false; },
+    r => { r.evidence.deliveryMode = 'postmark'; }
+  ]) {
+    const current = runtime(); mutate(current);
+    registerScreenshotPage(page, () => verifyEnvironment(repository, appSha,
+      { runtimeEvidence: async () => current, health: async () => {} }));
+    await assert.rejects(screenshot(page, directory, 'invalid-runtime'), Blocked);
+  }
+  registerScreenshotPage(page, async () => { throw new Blocked('Synthetic reviewer changed.'); });
+  await assert.rejects(screenshot(page, directory, 'invalid-reviewer'), /reviewer changed/);
+  registerScreenshotPage(page, async () => ({ ...environment(), origin: 'https://example.org' }));
+  await assert.rejects(screenshot(page, directory, 'wrong-environment-origin'), Blocked);
+  registerScreenshotPage(page, async () => environment());
+  for (const address of ['https://example.org/staff/', 'http://localhost:8080/staff/', 'https://localhost:8080/_review/auth/session']) {
+    page.address = address;
+    await assert.rejects(screenshot(page, directory, 'wrong-page'), Blocked);
+  }
+  page.address = 'https://localhost:8080/staff/'; page.visible = false;
+  await assert.rejects(screenshot(page, directory, 'signed-out'), Blocked);
+  assert.equal(page.captures.length, 0);
+  page.visible = true;
+  const capture = page.screenshot;
+  page.screenshot = async options => { const pixels = await capture(options); page.address = 'https://example.org/'; return pixels; };
+  await assert.rejects(screenshot(page, directory, 'navigation-race'), Blocked);
+  assert.deepEqual(await fs.readdir(directory), [], 'No unverified pixels were exported');
+});
+
+test('wrong screenshot dimensions fail the scenario and retain failure reporting without exporting misleading evidence', async t => {
+  const directory = await temporary(t), page = capturePage();
+  const capture = page.screenshot;
+  page.screenshot = async options => { const pixels = await capture(options); pixels.writeUInt32BE(640, 16); return pixels; };
+  const browser = fakeBrowser(page);
+  let scenarioPage;
+  const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, scenarios: [] };
+  await runScenarios({ suite: { scenarios: [{ id: 'clipped-evidence', requirements: ['Complete viewport evidence'],
+    run: async ({ page }) => { scenarioPage = page; await screenshot(page, directory, 'clipped-evidence'); } }] },
+    options: { readOnly: true }, environment: environment(), browser, report, directory, verify: async () => environment() });
+  assert.equal(report.scenarios[0].status, 'FAIL');
+  assert.equal(exitCode(report), 1);
+  assert.match(report.scenarios[0].assertion.label, /Screenshot dimensions/);
+  assert.ok(await fs.stat(path.join(directory, 'clipped-evidence-failure-trace.json')));
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(directory, 'results.json'), 'utf8')).screenshots, []);
+  await assert.rejects(screenshot(scenarioPage, directory, 'revoked'), /no verified synthetic/);
+});
+
+test('capture uses the runner verifier and blocks export when the pinned reviewer changes', async t => {
+  const root = await temporary(t), calls = [], browser = fakeBrowser();
+  let revoked = false;
+  browser.verifyReviewer = async () => { calls.push('staff'); if (revoked) throw new Blocked('Synthetic reviewer changed.'); };
+  const outcome = await run(args('--read-only'), dependencies(root, {
+    authenticate: async () => browser,
+    verifyEnvironment: async () => { calls.push('proof'); return environment(); },
+    runScenarios: async ({ verify, directory }) => {
+      const page = capturePage(); registerScreenshotPage(page, verify);
+      calls.length = 0;
+      await screenshot(page, directory, 'verified');
+      assert.deepEqual(calls, ['staff', 'proof']);
+      calls.length = 0; revoked = true;
+      await assert.rejects(screenshot(page, directory, 'revoked'), /reviewer changed/);
+      assert.deepEqual(calls, ['staff']);
+      assert.equal(page.captures.length, 1);
+      assert.deepEqual((await fs.readdir(directory)).filter(name => name.endsWith('.png')), ['verified.png']);
+    }
+  }));
+  assert.equal(outcome.report.authentication.status, 'PASS');
 });

@@ -48,7 +48,7 @@ tooling checkout. `-Commit` selects a Git commit; the two selectors are exclusiv
 The default suite is `smoke`. Omitting `-AllowReviewWrites` enables read-only
 mode; `-ReadOnly` makes it explicit. `-Rebuild` forces a fresh image build.
 
-Reports, privacy-safe screenshots, state/geometry evidence, failure traces and
+Reports, unmasked synthetic screenshots, state/geometry evidence, failure traces and
 sanitized logs appear together in `$HOME/ASAP-Acceptance/<timestamp-run-id>/`
 by default (for example, `C:\Users\<username>\ASAP-Acceptance\<timestamp-run-id>\`).
 The default uses the current user's profile, independently of the checkout or

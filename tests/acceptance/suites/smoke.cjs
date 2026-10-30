@@ -17,7 +17,7 @@ function initialRequest(request, fixture) {
 
 const scenarios = [
   { id: 'smoke-authenticated-review', requirements: [
-    'smoke: authorized super-admin session, Review Library (2), SQL-backed fixture details and privacy-safe screenshot'
+    'smoke: authorized super-admin session, Review Library (2), SQL-backed fixture details and unmasked synthetic screenshot'
   ], writes: false, run: async t => {
     await t.page.goto(t.origin + '/staff/?scope=2');
     await t.page.locator('#workspace').waitFor({ state: 'visible' });
@@ -32,7 +32,8 @@ const scenarios = [
     await t.page.locator('#request-dialog').getByRole('heading', { name: request.title, exact: true }).waitFor();
     await t.page.locator('#request-dialog .status-badge').filter({ hasText: /^Suggestion$/ }).waitFor();
     assert.equal(t.mutations.length, 0, 'Authenticated review performs no mutation');
-    await checkpoint(t.page, t.directory, t.id);
+    await checkpoint(t.page, t.directory, t.id, { visible: [t.page.locator('#request-dialog-title'),
+      t.page.locator('#request-dialog .status-badge')] });
   } },
   { id: 'smoke-synthetic-close', requirements: [
     'smoke: authorized UI closure, one action POST, persisted Closed and changed rowversion'
@@ -64,7 +65,8 @@ const scenarios = [
     assert.equal(t.mutations[0].path, '/api/asap/staff/title-requests/' + fixture.id + '/action');
     assert.equal(t.mutations[0].action, 'silentClose');
     assert.equal(t.mutations[0].version, before.version, 'Closure uses the initial rowversion');
-    await checkpoint(t.page, t.directory, t.id);
+    await checkpoint(t.page, t.directory, t.id, { visible: [t.page.locator('#request-dialog-title'),
+      t.page.locator('#request-dialog .status-badge')] });
   } }
 ];
 

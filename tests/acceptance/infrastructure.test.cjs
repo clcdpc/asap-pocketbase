@@ -9,8 +9,8 @@ const http = require('node:http');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { randomUUID } = require('node:crypto');
-const { nativeZoom, checkpoint, screenshot, confirmationKeyboard, confirmationGeometry, zoomEvidence } = require('./helpers/accessibility.cjs');
-const { confirm } = require('./helpers/assertions.cjs');
+const { nativeZoom, checkpoint, screenshot, registerScreenshotPage, visibleEvidence, confirmationKeyboard, confirmationGeometry, zoomEvidence } = require('./helpers/accessibility.cjs');
+const { confirm, actionButton, choose } = require('./helpers/assertions.cjs');
 const { runScenarios } = require('./run.cjs');
 const repository = path.resolve(__dirname, '../..');
 
@@ -74,7 +74,15 @@ test('native Chromium 200% helper and accessibility screenshot plumbing run with
   });
   context.setDefaultTimeout(15000);
   const page = context.pages()[0];
-  await page.goto('http://127.0.0.1:' + server.address().port);
+  // Runtime/staff proof is mocked only in this plumbing fixture. Browser pixels,
+  // native zoom, geometry and the application's confirmation implementation are real.
+  await context.route('https://localhost:8080/**', async route => {
+    const pathname = new URL(route.request().url()).pathname;
+    const response = await context.request.get('http://127.0.0.1:' + server.address().port + (pathname === '/staff/' ? '/' : pathname));
+    await route.fulfill({ response });
+  });
+  registerScreenshotPage(page, async () => ({ origin: 'https://localhost:8080' }));
+  await page.goto('https://localhost:8080/staff/');
   const directory = path.join(repository, '.artifacts', 'acceptance-infrastructure', randomUUID());
   await fs.mkdir(directory, { recursive: true });
   await nativeZoom(context, page, 2);
@@ -83,7 +91,9 @@ test('native Chromium 200% helper and accessibility screenshot plumbing run with
   const geometry = await confirmationKeyboard(page, 'Revert request changes?', 'Revert changes', 'Keep editing');
   await checkpoint(page, directory, 'native-zoom-plumbing-only', { fullPage: false });
   await zoomEvidence(context, page, directory, 'native-zoom-plumbing-only', geometry);
-  const fullPage = await screenshot(page, directory, 'native-zoom-fullpage-comparison');
+  // Keep a raw, unexported comparison to reproduce the pinned Playwright bug.
+  // Dedicated acceptance captures always use a complete viewport at native zoom.
+  const fullPage = await page.screenshot({ fullPage: true });
   const viewport = await fs.readFile(path.join(directory, 'native-zoom-plumbing-only.png'));
   assert.equal(fullPage.readUInt32BE(16), 640, 'Pinned Playwright fullPage capture uses reduced CSS width');
   assert.equal(viewport.readUInt32BE(16), 1280, 'Viewport capture retains the complete native zoomed surface');
@@ -118,6 +128,104 @@ test('native Chromium 200% helper and accessibility screenshot plumbing run with
   await dialog.locator('.form-actions').evaluate(n => { n.prepend(n.lastElementChild); });
   await confirm(page, 'Revert changes');
   await page.waitForFunction(() => window.fixtureAccepted === true);
+});
+
+test('real screenshot plumbing frames unmasked synthetic content, primary and More actions, Settings warnings and mobile evidence', async t => {
+  const { chromium } = require('playwright');
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'asap-evidence-plumbing-'));
+  const context = await chromium.launchPersistentContext(profile, {
+    channel: 'chromium', headless: true, viewport: { width: 1280, height: 900 }, serviceWorkers: 'block'
+  });
+  t.after(async () => {
+    await context.close();
+    await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+  const directory = path.join(repository, '.artifacts', 'acceptance-infrastructure', randomUUID());
+  await fs.mkdir(directory, { recursive: true });
+  await context.route('https://localhost:8080/**', async route => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname !== '/staff/') {
+      await route.fulfill({ contentType: pathname.endsWith('.js') ? 'text/javascript' : 'text/css',
+        body: await fs.readFile(path.join(repository, 'src/Asap.Web/Frontend', pathname)) });
+      return;
+    }
+    await route.fulfill({ contentType: 'text/html', body: `<!doctype html><html lang="en"><title>Evidence plumbing only</title>
+      <link rel="stylesheet" href="/staff/styles.css"><style>.fa::before { content: '\\f07a'; }</style><body><main id="workspace">
+      <header class="app-header" style="background:rgb(0,100,0)"><h1>Synthetic reviewer and Review Library</h1></header>
+      <button id="reset">Reset inherited overrides</button>
+      <div style="height:1600px">Synthetic long Settings content</div><label>Success title<input value="Suggestion Submitted"></label>
+      <div style="height:600px">Remaining synthetic settings</div></main>
+      <footer style="position:fixed;bottom:0;left:0;right:0;height:70px;background:white">Sticky save controls</footer>
+      <dialog id="request-dialog" aria-labelledby="request-title"><h2 id="request-title">Unmasked synthetic request</h2><div class="action-bar">
+      <button id="purchase"><i class="fa" aria-hidden="true"></i> Purchase</button><button><i class="fa" aria-hidden="true"></i> Claim</button><details class="request-more"><summary>More</summary>
+      <div><button id="reject"><i class="fa" aria-hidden="true"></i> Reject</button><button><i class="fa" aria-hidden="true"></i> Close silently</button></div></details></div><div id="panel"></div></dialog>
+      <script type="module">
+      import { confirmAction } from '/staff/js/confirmation.js';
+      document.querySelector('#reset').onclick = () => confirmAction({ title: 'Reset inherited overrides?',
+        message: "Discard unsaved settings changes and reset this library's inherited overrides to the current system values? Library-owned custom fields, formats, rejection templates, auto-claim rules and their history are preserved.",
+        confirmLabel: 'Reset inherited overrides', isCurrent: () => true });
+      for (const action of ['purchase', 'reject']) document.getElementById(action).onclick = () => {
+        const form = document.createElement('form'); form.className = 'action-choice';
+        const title = document.createElement('h3'); title.textContent = action === 'purchase' ? 'Purchase suggestion' : 'Reject suggestion';
+        const submit = document.createElement('button'); submit.type = 'submit'; submit.textContent = 'Submit';
+        form.append(title, submit); document.querySelector('#panel').replaceChildren(form);
+      };
+      document.querySelector('.request-more').addEventListener('click', event => {
+        if (event.target.closest('button')) event.currentTarget.open = false;
+      });
+      </script></body></html>` });
+  });
+  const page = context.pages()[0];
+  registerScreenshotPage(page, async () => ({ origin: 'https://localhost:8080' }));
+  await page.goto('https://localhost:8080/staff/');
+  const header = page.locator('.app-header');
+  const pixels = await screenshot(page, directory, 'synthetic-ui');
+  const rect = await header.boundingBox();
+  const color = await page.evaluate(async ({ data, x, y }) => {
+    const image = new Image(); image.src = 'data:image/png;base64,' + data; await image.decode();
+    const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
+    const drawing = canvas.getContext('2d'); drawing.drawImage(image, 0, 0);
+    return [...drawing.getImageData(x, y, 1, 1).data];
+  }, { data: pixels.toString('base64'), x: Math.ceil(rect.x + 4), y: Math.ceil(rect.y + 4) });
+  assert.deepEqual(color, [0, 100, 0, 255], 'Screenshot retains the actual rendered header instead of privacy overlays');
+  const fullPage = await screenshot(page, directory, 'explicit-long-page', { fullPage: true });
+  assert.ok(fullPage.readUInt32BE(20) > 1600, 'Explicit long page evidence remains available');
+  await page.locator('#request-dialog').evaluate(node => node.showModal());
+  const more = page.locator('.request-more');
+  for (const name of ['Purchase', 'Claim']) {
+    assert.equal(await (await actionButton(page, name)).isVisible(), true);
+    assert.equal(await more.evaluate(node => node.open), false, 'Primary action lookup leaves More closed');
+  }
+  let review = await choose(page, 'Purchase');
+  await checkpoint(page, directory, 'purchase-review', { visible: [review.locator('h3, button')] });
+  await actionButton(page, 'Close silently');
+  assert.equal(await more.evaluate(node => node.open), true, 'A hidden action is revealed');
+  await assert.rejects(checkpoint(page, directory, 'interfering-menu'), /No unrelated More menu/);
+  review = await choose(page, 'Reject');
+  assert.equal(await more.evaluate(node => node.open), false, 'The normal click handler dismisses More');
+  await checkpoint(page, directory, 'reject-review', { visible: [review.locator('h3, button')] });
+  await page.locator('#request-dialog').evaluate(node => node.close());
+  await page.locator('#reset').click();
+  await confirmationKeyboard(page, 'Reset inherited overrides?', 'Reset inherited overrides');
+  await checkpoint(page, directory, 'settings-reset-review');
+  for (const name of ['settings-reset-review', 'purchase-review', 'reject-review']) {
+    const image = await fs.readFile(path.join(directory, name + '.png'));
+    assert.deepEqual([image.readUInt32BE(16), image.readUInt32BE(20)], [1280, 900]);
+  }
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#reset').click();
+  await confirmationKeyboard(page, 'Reset inherited overrides?', 'Reset inherited overrides');
+  await checkpoint(page, directory, 'settings-mobile-review');
+  const mobile = await fs.readFile(path.join(directory, 'settings-mobile-review.png'));
+  assert.deepEqual([mobile.readUInt32BE(16), mobile.readUInt32BE(20)], [390, 844]);
+  await assert.rejects(visibleEvidence(page.locator('input')), /without clipping or obstruction/);
+  await page.keyboard.press('Escape');
+  await page.locator('input').evaluate(node => node.scrollIntoView({ block: 'end' }));
+  await assert.rejects(visibleEvidence(page.locator('input')), /without clipping or obstruction/);
+  await page.locator('input').evaluate(node => node.scrollIntoView({ block: 'center' }));
+  await checkpoint(page, directory, 'settings-mobile-value', { visible: [page.locator('input')] });
+  await assert.rejects(visibleEvidence(page.locator('#absent')), /evidence exists/);
 });
 
 test('real headed Chromium survives closing the authentication tab and every scenario tab',

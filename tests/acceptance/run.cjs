@@ -5,7 +5,7 @@ const { execFileSync } = require('node:child_process');
 const registry = require('./suites/index.cjs');
 const { verifyEnvironment, must } = require('./helpers/environment.cjs');
 const { openReviewerBrowser } = require('./helpers/authentication.cjs');
-const { screenshot } = require('./helpers/accessibility.cjs');
+const { screenshot, registerScreenshotPage } = require('./helpers/accessibility.cjs');
 const { Blocked, safeError, assertionDetails, result, exitCode, createReport, writeReport } = require('./helpers/reporting.cjs');
 
 function parse(argv) {
@@ -100,6 +100,7 @@ async function runScenarios({ suite, options, environment, browser, report, dire
         continue;
       }
       const page = await browser.context.newPage();
+      const revokeScreenshots = registerScreenshotPage(page, verify);
       const mutations = [], events = [], failuresBefore = guards.errors.length;
       active = { ...scenario, allowedFixtures: new Set(), mutations };
       guards.expectUnload = false; guards.unloadCount = 0;
@@ -175,6 +176,7 @@ async function runScenarios({ suite, options, environment, browser, report, dire
           await screenshot(page, directory, scenario.id + '-failure').catch(() => {});
         }
       } finally {
+        revokeScreenshots();
         active = null;
         await page.close({ runBeforeUnload: false }).catch(() => {});
         await writeReport(directory, report); // Preserve partial results on later browser failure.
