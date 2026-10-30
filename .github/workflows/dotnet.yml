@@ -495,8 +495,8 @@ jobs:
         run: npm test
 
   validation:
-    # Preserve the required check name, but never let skipped full CI pass it.
-    name: Build, test and package
+    # Draft success must not emit the required full-validation check name.
+    name: ${{ needs.validation-policy.outputs.mode == 'draft' && 'Draft CI result' || 'Build, test and package' }}
     needs: [validation-policy, build-test-package, draft-validation]
     if: ${{ always() }}
     permissions: {}
@@ -504,24 +504,36 @@ jobs:
     timeout-minutes: 5
     steps:
       # No checkout or PR code executes in this reporting-only hosted job.
-      - name: Require successful full validation
+      - name: Require successful selected validation
+        shell: bash
         env:
           CI_POLICY_RESULT: ${{ needs.validation-policy.result }}
           CI_VALIDATION_MODE: ${{ needs.validation-policy.outputs.mode }}
           CI_FULL_RESULT: ${{ needs.build-test-package.result }}
+          CI_DRAFT_RESULT: ${{ needs.draft-validation.result }}
         run: |
           if [ "$CI_POLICY_RESULT" != 'success' ]; then
             echo '::error::Current PR validation policy must resolve successfully.'
             exit 1
           fi
-          if [ "$CI_VALIDATION_MODE" != 'full' ]; then
-            echo '::notice::Draft validation is separate. Mark this PR ready for review to satisfy full validation.'
-            exit 1
-          fi
-          if [ "$CI_FULL_RESULT" != 'success' ]; then
-            echo '::error::Full CI must complete successfully; skipped, failed or cancelled execution cannot satisfy this check.'
-            exit 1
-          fi
+          case "$CI_VALIDATION_MODE" in
+            draft)
+              if [ "$CI_DRAFT_RESULT" != 'success' ]; then
+                echo '::error::Draft validation must complete successfully.'
+                exit 1
+              fi
+              ;;
+            full)
+              if [ "$CI_FULL_RESULT" != 'success' ]; then
+                echo '::error::Full CI must complete successfully; skipped, failed or cancelled execution cannot satisfy this check.'
+                exit 1
+              fi
+              ;;
+            *)
+              echo '::error::Validation mode must be draft or full.'
+              exit 1
+              ;;
+          esac
 
   deploy-test-iis:
     name: Deploy exact artifact to test IIS

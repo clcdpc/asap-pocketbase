@@ -74,6 +74,17 @@ async function main() {
     assert.equal(matches.length, 1, name);
     return matches[0];
   }
+  const bash = process.platform === 'win32'
+    ? path.resolve(cp.execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(), '../../../bin/bash.exe')
+    : 'bash';
+  function report(context) {
+    const selected = step(gate, 'Require successful selected validation');
+    const env = Object.fromEntries(Object.entries(selected.env).map(([key, value]) => [key, template(value, context)]));
+    const run = cp.spawnSync(bash, ['-c', selected.run], { encoding: 'utf8', env: { ...process.env, ...env } });
+    assert.ifError(run.error);
+    assert.ok([0, 1].includes(run.status), `Reporting shell failed unexpectedly: ${run.stderr}`);
+    return run.status;
+  }
   let checks = 0;
   async function check(name, run) {
     await run();
@@ -101,11 +112,21 @@ async function main() {
     });
   }
   await check('same-commit draft/ready transitions select new validation and the same cancellation group', async () => {
-    const states = [pr('opened', true), pr('ready_for_review', false), pr('converted_to_draft', true)];
+    const states = [pr('opened', true), pr('ready_for_review', false), pr('converted_to_draft', true), pr('ready_for_review', false)];
     await Promise.all(states.map((context) => routed(context)));
     assert.equal(new Set(states.map((c) => c.github.sha)).size, 1);
     assert.equal(new Set(states.map((c) => template(workflow.concurrency.group, c))).size, 1);
-    assert.deepEqual(states.map((c) => enabled(full, c)), [false, true, false]);
+    assert.deepEqual(states.map((c) => enabled(full, c)), [false, true, false, true]);
+    assert.deepEqual(states.map((c) => evaluate(gate.name, c)),
+      ['Draft CI result', 'Build, test and package', 'Draft CI result', 'Build, test and package']);
+    for (const context of states) {
+      context.needs['build-test-package'] = { result: enabled(full, context) ? 'success' : 'skipped' };
+      context.needs['draft-validation'] = { result: enabled(draft, context) ? 'success' : 'skipped' };
+      assert.equal(report(context), 0);
+    }
+    states.at(-1).needs['build-test-package'].result = 'skipped';
+    states.at(-1).needs['draft-validation'].result = 'success';
+    assert.equal(report(states.at(-1)), 1, 'Returning to ready requires full execution in that run, even after draft success');
   });
   await check('out-of-order event snapshots select the current server draft state', async () => {
     for (const [eventDraft, currentDraft] of [[true, false], [false, true]]) {
@@ -115,6 +136,7 @@ async function main() {
       await routed(context, current);
       assert.equal(enabled(full, context), !currentDraft);
       assert.equal(enabled(draft, context), currentDraft);
+      assert.equal(evaluate(gate.name, context), currentDraft ? 'Draft CI result' : 'Build, test and package');
     }
   });
   await check('repeated draft and ready commits share the PR group; different PRs do not', () => {
@@ -153,6 +175,10 @@ async function main() {
     assert.equal(enabled(draft, context), false);
     assert.equal(template(full.env.ASAP_FORCE_FULL_CI, context), 'true');
     assert.equal(template(full.env.ASAP_DEPLOY_TEST_IIS, context), 'true');
+    assert.equal(evaluate(gate.name, context), 'Build, test and package');
+    context.needs['build-test-package'] = { result: 'success' };
+    context.needs['draft-validation'] = { result: 'skipped' };
+    assert.equal(report(context), 0);
     assert.equal(enabled(deploy, context), false);
     context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
     assert.equal(enabled(deploy, context), true);
@@ -170,6 +196,9 @@ async function main() {
     assert.equal(enabled(deploy, push), false);
     assert.equal(enabled(deploy, tag), true);
     assert.deepEqual(deploy.needs, ['build-test-package', 'validation']);
+    // With no status function, GitHub also requires success() for both needs.
+    assert.doesNotMatch(deploy.if, /\b(always|cancelled|failure|success)\s*\(/);
+    assert.equal(deploy['continue-on-error'], undefined);
     assert.deepEqual(deploy['runs-on'], ['self-hosted', 'windows', 'x64', 'asap-test-iis']);
     assert.equal(deploy.environment, 'asap-test-iis');
   });
@@ -222,46 +251,66 @@ async function main() {
     assert.equal(step(full, 'Remove SQL Server test container').if, '${{ always() }}');
     assert.ok(!reuse.exclusions.some((rule) => rule.paths.includes('.github/workflows/dotnet.yml')));
   });
-  await check('the stable full gate always inspects full execution and runs no PR code', () => {
-    assert.equal(gate.name, 'Build, test and package');
+  await check('the reporter always inspects selected execution and runs no PR code', () => {
     assert.equal(gate.if, '${{ always() }}');
     assert.deepEqual(gate.permissions, {});
     assert.deepEqual(gate.needs, ['validation-policy', 'build-test-package', 'draft-validation']);
     assert.equal(gate['runs-on'], 'ubuntu-latest');
     assert.ok(gate.steps.every((candidate) => !candidate.uses));
     assert.equal(gate['continue-on-error'], undefined);
+    assert.equal(gate.steps.length, 1);
+    const selected = step(gate, 'Require successful selected validation');
+    assert.equal(selected.if, undefined);
+    assert.equal(selected['continue-on-error'], undefined);
+    assert.equal(selected.shell, 'bash');
   });
-  await check('execute the actual required-gate shell against success/failure/cancellation/skip and draft transitions', async () => {
-    const report = step(gate, 'Require successful full validation');
-    const bash = process.platform === 'win32'
-      ? path.resolve(cp.execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(), '../../../bin/bash.exe')
-      : 'bash';
+  await check('successful draft reporting is green under a distinct non-required check name', async () => {
+    const context = await routed(pr('converted_to_draft', true));
+    context.needs['draft-validation'] = { result: 'success' };
+    context.needs['build-test-package'] = { result: 'skipped' };
+    assert.equal(report(context), 0);
+    assert.equal(evaluate(gate.name, context), 'Draft CI result');
+    assert.notEqual(evaluate(gate.name, context), 'Build, test and package');
+    assert.equal(enabled(full, context), false);
+  });
+  await check('failed, cancelled, skipped, missing or unexpected draft results fail despite a successful full result', async () => {
+    for (const result of ['failure', 'cancelled', 'skipped', '', undefined, 'unexpected']) {
+      const context = await routed(pr('converted_to_draft', true));
+      context.needs['draft-validation'] = { result };
+      context.needs['build-test-package'] = { result: 'success' };
+      assert.equal(evaluate(gate.name, context), 'Draft CI result');
+      assert.equal(report(context), 1, `draft/${result}`);
+    }
+  });
+  await check('the actual full-required gate requires successful full execution for PR, push and manual events', async () => {
     for (const event of ['pull_request', 'push', 'workflow_dispatch']) {
-      for (const result of ['success', 'failure', 'cancelled', 'skipped', '']) {
+      for (const result of ['success', 'failure', 'cancelled', 'skipped', '', undefined, 'unexpected']) {
         const context = await routed(event === 'pull_request' ? pr('ready_for_review', false) : nonPr(event, 108));
         context.needs['build-test-package'] = { result };
-        const env = Object.fromEntries(Object.entries(report.env).map(([key, value]) => [key, template(value, context)]));
-        const run = cp.spawnSync(bash, ['-c', report.run], { encoding: 'utf8', env: { ...process.env, ...env } });
-        assert.ifError(run.error);
-        assert.equal(run.status, result === 'success' ? 0 : 1, `${event}/${result}: ${run.stderr}`);
+        context.needs['draft-validation'] = { result: 'success' };
+        assert.equal(evaluate(gate.name, context), 'Build, test and package');
+        assert.equal(report(context), result === 'success' ? 0 : 1, `${event}/${result}`);
       }
     }
-    for (const state of [true, null]) {
-      const context = await routed(pr('converted_to_draft', state));
-      context.needs['build-test-package'] = { result: 'success' };
-      const env = Object.fromEntries(Object.entries(report.env).map(([key, value]) => [key, template(value, context)]));
-      const run = cp.spawnSync(bash, ['-c', report.run], { encoding: 'utf8', env: { ...process.env, ...env } });
-      assert.ifError(run.error);
-      assert.equal(run.status, 1, 'Even an earlier successful full result must not turn draft validation into a full pass');
+  });
+  await check('unsuccessful policy resolution fails closed in either mode despite both executors claiming success', async () => {
+    for (const isDraft of [true, false]) {
+      for (const result of ['failure', 'cancelled', 'skipped', '', undefined, 'unexpected']) {
+        const context = await routed(pr('synchronize', isDraft));
+        context.needs['validation-policy'].result = result;
+        context.needs['build-test-package'] = { result: 'success' };
+        context.needs['draft-validation'] = { result: 'success' };
+        assert.equal(report(context), 1, `policy/${isDraft}/${result}`);
+      }
     }
-    for (const result of ['failure', 'cancelled', 'skipped', '']) {
+  });
+  await check('missing or malformed validation mode fails closed despite both executors claiming success', async () => {
+    for (const mode of [undefined, '', 'unknown', 'DRAFT', 'FULL', ' full', 'full ', 'draft\nfull', 'true']) {
       const context = await routed(pr('ready_for_review', false));
-      context.needs['validation-policy'].result = result;
+      context.needs['validation-policy'].outputs = mode === undefined ? {} : { mode };
       context.needs['build-test-package'] = { result: 'success' };
-      const env = Object.fromEntries(Object.entries(report.env).map(([key, value]) => [key, template(value, context)]));
-      const run = cp.spawnSync(bash, ['-c', report.run], { encoding: 'utf8', env: { ...process.env, ...env } });
-      assert.ifError(run.error);
-      assert.equal(run.status, 1, 'A failed policy must not pass even if the full result claims success');
+      context.needs['draft-validation'] = { result: 'success' };
+      assert.equal(report(context), 1, `mode/${mode}`);
     }
   });
   await check('forks and untrusted authors allocate no trusted execution runner', async () => {

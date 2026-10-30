@@ -48,31 +48,54 @@ reuse lookup and before SQL startup, so a frontend failure can stop an expensive
 cold run early. SQL/browser setup is conditional only on the existing verified
 reuse decisions. Every full run still builds and publishes the current SHA.
 
-The reporting-only **Build, test and package** job runs with `always()` after
-the policy and both execution jobs. It succeeds only for a successfully resolved
-full-validation policy with a successful **Full CI execution** result. Failure,
-cancellation, a skipped full job, an unsuccessful policy or an
-absent result cannot pass. On a draft it **intentionally fails**, even when
-**Draft validation** passes: the red full gate means full validation has not
-been established. The gate has no GitHub API permissions and runs on a GitHub-hosted
-runner without checking out or executing PR code. Deployment depends on both the
-full execution and this gate.
+The reporting-only `validation` job runs with `always()` after the policy and
+both execution jobs. Its check name follows the resolved policy:
+
+| Resolved mode | Reporting check | Required successful executor |
+| --- | --- | --- |
+| `draft` | **Draft CI result** | **Draft validation** |
+| `full` | **Build, test and package** | **Full CI execution** |
+| Missing | **Build, test and package**, failing | None can satisfy an invalid mode |
+
+Successful draft validation therefore makes the workflow green without emitting
+the mandatory full-check name. Failed draft checks still fail the workflow.
+Both modes require successful policy resolution and their own executor's exact
+`success` result. Failed, cancelled, skipped, missing or unexpected executor
+results fail the gate; an earlier full success cannot rescue failed draft checks,
+and draft success cannot rescue missing full execution. The gate has no GitHub
+API permissions and runs on a GitHub-hosted runner without checking out or
+executing PR code. Deployment still depends on both full execution and this gate.
+
+GitHub permits `needs` expressions in
+[`jobs.<job_id>.name`](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability).
+The mode selects the display/check name, while the Bash gate independently
+validates the policy and result. Unrecognized mode values never pass, including
+incorrect casing that Actions' case-insensitive name expression might match.
 
 This is necessary because GitHub accepts conditional job skips as successful
 required checks. See [required-check troubleshooting](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 Require **Build, test and package**, from the **GitHub Actions** app, on `main`;
-do not substitute **Draft validation** or the conditional **Full CI execution**
+do not substitute **Draft CI result**, **Draft validation** or the conditional **Full CI execution**
 job. Keep any additional existing required checks. Enable **Require branches to
 be up to date before merging** when requiring validation of the current merge
-content. A ready transition creates a new run/check even without a new SHA;
-a successful dispatch is an operator check, not a replacement for PR checks.
+content. A draft-only commit may leave the required full check absent/pending
+until ready; its green draft check must not be configured as an alternative.
+A successful dispatch is an operator check, not a replacement for PR checks.
 
 Read-only inspection on October 30, 2026 returned `protected: false` for `main`,
-no branch rules and no required checks on PR #414. The detailed protection,
+no branch rules, and required-check enforcement off with an empty check list.
+The detailed protection,
 runner-administration and contributor-approval endpoints returned HTTP 403.
 **The workflow cannot enforce merge protection on an unprotected branch.** An
 administrator must configure the required check above; this task does not
-change repository settings or claim that protection is already enabled.
+change repository settings or claim that protection is already enabled. In
+**Settings -> Branches**, add protection for `main`, enable **Require status
+checks to pass before merging**, select exactly **Build, test and package** from
+**GitHub Actions**, and enable **Require branches to be up to date before
+merging**. Preserve other required checks/reviews and apply the rule to all
+actors intended to be restricted, including administrators/bypass roles as
+appropriate. An equivalent active ruleset can enforce the same requirements.
+Actual merge blocking cannot be demonstrated until an administrator enables it.
 
 ## PR transitions and concurrency
 
@@ -84,6 +107,20 @@ after a ready event; resolving live state prevents that later event from
 cancelling ready validation and replacing it with fast checks.
 Marking ready therefore starts full CI immediately; converting back to draft
 starts fast checks and cancels queued/running obsolete PR work.
+
+At an unchanged SHA, a ready -> draft -> ready sequence emits the full check,
+then the distinct draft check, then a new full check. The last full gate requires
+the **Full CI execution** result from its own run, including independently
+verified original evidence when reuse is valid. It never reads a previous
+reporter's success. A draft check does not revoke an earlier full success
+attached to the same head or merge commit: GitHub's requirements are scoped to
+commits, not draft/ready cycles. Until the new ready check is registered, an
+earlier full success may remain visible. Required-check settings alone do not
+prove freshness for every transition. Inspect the latest ready run/check and
+current merge SHA; changed source/workflow inputs must pass fresh validation or
+the existing verified fingerprint/provenance checks. A different commit cannot
+inherit the old check. No privileged status invalidation or repository-setting
+mutation is introduced.
 
 Workflow concurrency is `<workflow>-pr-<number>` for all revisions and states
 of one PR, with `cancel-in-progress` enabled only for PR events. Different PRs
@@ -312,7 +349,8 @@ and preserved deployment dependencies. It runs in the complete `npm test` suite.
 These are executable policy and gate contracts, not a simulation of GitHub's
 event delivery or cancellation engine. Those require separate live run receipts.
 
-Live trigger receipts on October 30, 2026, in [PR #418](https://github.com/clcdpc/asap-pocketbase/pull/418):
+Historical trigger receipts before the draft-reporting correction on October 30,
+2026, in [PR #418](https://github.com/clcdpc/asap-pocketbase/pull/418):
 
 - [Opened draft](https://github.com/clcdpc/asap-pocketbase/actions/runs/41075824409)
   was automatically cancelled after a new commit, including its running clc-linux job.
@@ -378,7 +416,7 @@ drift requires an epoch bump. Conservative misses are preferred to inferred hits
 
 | Attempt / failure | Enforced boundary |
 | --- | --- |
-| Draft checks substituted for full CI | Distinct jobs, explicit original-executor identity and an always-run required gate that fails for drafts/skipped/failed/cancelled full execution. |
+| Draft checks substituted for full CI | A distinct draft check name, explicit original-executor identity and an always-run full gate that rejects skipped/failed/cancelled/missing full execution. |
 | Ready/draft transition without a commit | Explicit activity types and live current-state policy; out-of-order snapshots cannot substitute draft success for full evidence. |
 | New PR revision leaves old SQL job running | Workflow-wide stable PR-number group and PR-only cancellation; unrelated PR, push, manual and tag groups stay independent. |
 | Fork reaches trusted runner after skipped security job | Both execution jobs require a successful hosted trust/current-head policy before allocation; required gate rejects failed policy or skipped full execution. |
