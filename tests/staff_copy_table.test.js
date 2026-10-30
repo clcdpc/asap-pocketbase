@@ -70,6 +70,7 @@ const { fixture } = require('./helpers/staff-controller.cjs');
       assert.match(cell('timing').textContent, /Task timeout: 14 days/);
       assert.doesNotMatch(first().textContent, /Private note contents/);
       assert.equal(button().textContent, 'Open details');
+      assert.ok(button().getAttribute('aria-label').includes(button().textContent), 'Accessible name contains the visible action label');
       click(cell('title').querySelector('.additional-copy-title'));
       assert.equal(opened.at(-1)[0], '9007199254741047');
       assert.equal(opened.at(-1)[1], button(), 'Row activation uses the existing focus-return control');

@@ -814,7 +814,7 @@ async function runStaleAssignmentCandidates(browser, args, report) {
         pageUrl: `${args.baseOrigin}/staff/?stage=additional_copies&request=${args.staleCopyAId}`,
         apiPath: id => `/api/asap/staff/additional-copies/${id}`,
         assignPath: id => `/api/asap/staff/additional-copies/${id}/assign`,
-        openLabel: id => `Open additional-copy task ${id}`,
+        openLabel: id => `Open additional-copy task ${id}: Open details`,
         pickerLabel: 'Assign additional-copy task',
         kicker: id => `Additional copy ${id}`
       }
@@ -971,7 +971,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     const scenario = (type, id) => type === 'additional_copy'
       ? {
           apiPath: `/api/asap/staff/additional-copies/${id}`,
-          openLabel: `Open additional-copy task ${id}`,
+          openLabel: `Open additional-copy task ${id}: Open details`,
           kicker: `Additional copy ${id}`,
           picker: 'Assign additional-copy task',
           listPath: '/api/asap/staff/additional-copies',
@@ -2012,7 +2012,7 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     await page.keyboard.press('Escape');
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await page.waitForFunction(id =>
-      document.activeElement?.getAttribute('aria-label') === `Open additional-copy task ${id}`,
+      document.activeElement?.dataset.copyId === id,
     args.mobileCopyId);
     releaseUnclaimList();
     await page.waitForFunction(() => !document.getElementById('refresh-additional-copies').disabled);
@@ -3678,7 +3678,7 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.getByRole('link', { name: `Open request ${title.id}:`, exact: false }).waitFor();
     await page.locator('[data-view="additional-copies"]').click();
     await page.locator('#additional-copy-claim-filter').selectOption('all');
-    await page.getByRole('button', { name: `Open additional-copy task ${copy.id}`, exact: true }).waitFor();
+    await page.getByRole('button', { name: `Open additional-copy task ${copy.id}: Open details`, exact: true }).waitFor();
     await page.locator('[data-view="operations"]').click();
     await page.locator('#operations-scope').selectOption('2');
     await page.locator('[data-view="settings"]').click();

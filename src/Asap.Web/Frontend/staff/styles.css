@@ -135,10 +135,10 @@ textarea { min-height: 108px; resize: vertical; }
 .gridjs-wrapper { width: 100%; overflow-x: auto; border-radius: 0; box-shadow: none; border-color: var(--line); }
 table.gridjs-table { width: 100%; min-width: 920px; max-width: none; table-layout: fixed; }
 #request-grid table.gridjs-table { min-width: 0; }
-#additional-copy-grid { container: additional-copies / inline-size; }
+#additional-copy-grid .gridjs-container { container: additional-copies / inline-size; }
 #additional-copy-grid table.gridjs-table { min-width: 0; }
 /* Grid.js parses column widths numerically; CSS owns the reserved action space. */
-/* Container lengths resolve before fixed table layout, unlike percentage calc widths. */
+/* Use the inner content width so Grid.js padding cannot create a scrollbar. */
 #additional-copy-grid th[data-copy-column="title"] { width: calc((100cqw - 150px) * .32) !important; }
 #additional-copy-grid th[data-copy-column="bib"] { width: calc((100cqw - 150px) * .12) !important; }
 #additional-copy-grid th[data-copy-column="library"] { width: calc((100cqw - 150px) * .15) !important; }

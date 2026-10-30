@@ -773,7 +773,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
         ]) : text(dateTime(task.created)), secondary(`Task timeout: ${timeout}`)];
     } else {
       return h('button', { type: 'button', className: 'grid-open additional-copy-open',
-        'data-copy-id': String(task.id), 'aria-label': `Open additional-copy task ${task.id}`,
+        'data-copy-id': String(task.id), 'aria-label': `Open additional-copy task ${task.id}: Open details`,
         ref: node => { if (node) openers.set(node, model); },
         onClick: event => openCopy(event.currentTarget)
       }, 'Open details');

@@ -113,6 +113,7 @@ const scenarios = [
     assert.deepEqual(await t.page.locator(grid + ' th .gridjs-th-content').allTextContents(), headers);
     assert.equal(await t.page.locator(grid + ' th button').count(), 5, 'Only the five primary columns sort');
     assert.equal(await row.locator('.additional-copy-title').textContent(), long.title);
+    assert.ok((await opener(t.page, long.id).getAttribute('aria-label')).includes('Open details'), 'Accessible name includes the visible action label');
     assert.equal(await row.locator('.additional-copy-title').getAttribute('title'), long.title);
     assert.ok((await row.locator('[data-copy-column="title"]').textContent()).includes(long.author));
     assert.equal(await row.locator('.additional-copy-notes').innerText(), 'Notes');
