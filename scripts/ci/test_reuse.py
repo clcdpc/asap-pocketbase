@@ -741,6 +741,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("paths-ignore:", workflow)
         self.assertNotIn("actions: write", workflow)
         self.assertIn("actions: read", workflow)
+        self.assertIn("    permissions:\n      contents: read\n      actions: read\n      pull-requests: read\n", workflow)
+        self.assertNotIn(": write\n", workflow)
         self.assertIn("force_full_ci:", workflow)
         self.assertIn("name: Verify required test suites\n        id: verify\n        if: ${{ always() }}", workflow)
         for suite in fp.SUITES:

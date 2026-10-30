@@ -72,7 +72,10 @@ never written to evidence.
 
 ## Original execution and trust
 
-The job uses only `contents: read` and `actions: read` on its existing GitHub token.
+The build job uses only `contents: read`, `actions: read` and `pull-requests: read`
+on its existing GitHub token. The PR read scope is restricted to that job and is
+required by GitHub's [commit-to-PR endpoint](https://docs.github.com/en/rest/commits/commits#list-pull-requests-associated-with-a-commit)
+for historical author/repository provenance.
 No PAT, new secret, write permission or `pull_request_target` is introduced. The
 lookup starts after runner allocation, restore/build and npm install, so queued
 jobs can see a predecessor that completed while they waited. Search is bounded
@@ -183,4 +186,47 @@ boundary through repository review/rules and runner isolation. This optimization
 does not grant permissions or change those controls. Undeclared native/environment
 drift requires an epoch bump. Conservative misses are preferred to inferred hits.
 
-Live validation receipts are recorded here after completion and in the PR.
+## Adversarial closure review
+
+| Attempt / failure | Enforced boundary |
+| --- | --- |
+| Passed tests, later failed/cancelled workflow | Only a completed successful latest workflow and exact successful attempt can supply evidence. |
+| Skipped test presented as PASS | Original successful test step, complete native outcomes and current always-run gate are all required. |
+| Contributor/fork forged manifest | Numeric repository/head IDs, trusted same-repository PR association, original checkout logs, Git tree and immutable artifact digest must agree. |
+| Omitted dependency | Tracked-file inclusion by default; only the audited exact-path exclusions above. Shared review providers and SQL fixtures stay included. |
+| Same PR head, changed integration base | Fingerprint actual checked-out merge tree, independently recover its checkout and verify its head parent. |
+| API/ZIP outage suppressing tests | Lookup exceptions restore normal execution, including after a partial HIT; late evidence loss fails the final gate. |
+| Different filter/count | Match complete selection, retained minimum, fresh discovery and exact executed/passed count. |
+| Reuse chain | Only executed manifests with an actual original successful test step are eligible; reused suites emit decisions only. |
+| Old deployment payload | Current SHA build/publishes/manifest/ZIP/digest/ValidateOnly remain unconditional on reuse. |
+| Concurrent equivalent runs | Lookup after runner allocation; existing cancellation retained. Two concurrent cold jobs may both execute, but cannot accept in-progress evidence. |
+| Workflow edit skipping tests | Workflow/harness changes invalidate fingerprints; skipped tests cannot pass the unchanged gate. Deliberate replacement of the gate itself remains subject to existing repository review/runner controls. |
+| Environment drift | Actual tool/package versions, immutable SQL digest, browser revisions and controlled image epoch; unidentified supported override paths disable affected reuse. |
+
+Live metadata review found and corrected a conservative false miss after a trusted
+PR advanced: GitHub's commit-specific PR association verifies the historical head,
+so the PR's *current* head need not still equal the executed head. Original merge
+parent, checkout, repository and author checks remain required. Another regression
+proves that an API failure after one accepted candidate restores execution for all
+suites. The retained Linux SQL bootstrap regression was updated for conditional
+steps/image variables while preserving its password-argument assertions.
+
+Validation before hosted cold execution:
+
+- Release build: zero warnings/errors; two actual MTP/native-report cases passed.
+- All 63 retained frontend files passed, including deployment/preflight contracts.
+- All 52 reuse checks passed on Windows and Linux. The complete 104 Python checks
+  passed on Windows with 11 existing Linux-only skips. The earlier full local Linux
+  container run passed 102/103; the unchanged optional-command descendant timing
+  fixture had no PID file after its 0.4-second timeout. Its source is unchanged from main.
+- Read-only real API validation recovered checkout
+  `92ef3e3b20b8e163eebd8f57874e1cc3612d64f4` and tree
+  `753bdbaad26a93fccad091e5222719e1c66c788a` from
+  [successful run 40988487235](https://github.com/clcdpc/asap-pocketbase/actions/runs/40988487235).
+  Artifact `12950811465` passed its API SHA-256 check; its native TRX contains
+  exactly 1,444 unique passing outcomes. This establishes parser/provenance
+  compatibility, not a cache HIT for the new schema.
+
+The new-schema cold/repeated workflow and live HIT/invalidation/fallback receipts
+are recorded below and in [PR #414](https://github.com/clcdpc/asap-pocketbase/pull/414)
+after those runs complete.
