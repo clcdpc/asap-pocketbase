@@ -1,5 +1,6 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { element } from './ui.js';
+import { confirmAction } from './confirmation.js';
 
 const reasons = {
   recipient_missing_or_invalid: 'Set your primary notification email in Staff Access before sending a test.',
@@ -252,8 +253,13 @@ export function createEmailTestController({ root, context, request = authorizedJ
     const value = context();
     if (!disposed && value.active && key === currentKey(value) && reconcileStored(value)) return;
     if (disposed || !value.active || blockedMessage(value) || loading || submitting || observing || retiring || !canRetire()) return;
-    if (!window.confirm(`Retire unrecorded request ${record.operationId}? Repeated checks found no server record, but a delayed request may still commit and a message may still arrive. Retirement does not cancel it. The reference will be retained for operator review. No new email is requested by this action.`)) return;
     const owner = { generation, value: { ...value } };
+    const observed = record, evidence = absence, checks = absence?.checks;
+    const isCurrent = () => current(owner) && record === observed && absence === evidence && absence?.checks === checks &&
+      !blockedMessage(context()) && !loading && !submitting && !observing && !retiring && canRetire() && ownsStored(observed);
+    if (!await confirmAction({ title: 'Retire unrecorded test request?',
+      message: `Retire unrecorded request ${observed.operationId}? Repeated checks found no server record, but a delayed request may still commit and a message may still arrive. Retirement does not cancel it. The reference will be retained for operator review. No new email is requested by this action.`,
+      confirmLabel: 'Retire request', tone: 'danger', isCurrent }) || !isCurrent() || reconcileStored(value)) return;
     retiring = true; render();
     try { await observe(owner, true, true); }
     finally {

@@ -40,7 +40,7 @@ async function until(predicate, message) {
     global.Node = dom.window.Node;
     global.HTMLElement = dom.window.HTMLElement;
     global.DOMParser = dom.window.DOMParser;
-    dom.window.confirm = () => true;
+    require('./helpers/confirmation.cjs').answerConfirmations(dom.window, () => true);
     dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
     dom.window.gridjs = require(path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js'));
@@ -353,8 +353,11 @@ async function until(predicate, message) {
     await until(() => requests.some(item =>
       new URL(item.url, 'http://localhost').pathname.endsWith('/title-requests/9007199254740993')),
       'exact bigint duplicate action must open the existing request');
+    await until(() => document.getElementById('request-dialog').open && !document.getElementById('staff-suggestion-dialog').open,
+      'duplicate detail owns the view before starting another suggestion');
 
     document.getElementById('new-suggestion').click();
+    await until(() => document.querySelector('#staff-suggestion-body select[aria-label="Servicing library"]'), 'next suggestion owns its lookup stage');
     const sessionScope = document.querySelector('#staff-suggestion-body select[aria-label="Servicing library"]');
     sessionScope.value = '2';
     sessionScope.dispatchEvent(new dom.window.Event('change'));
@@ -391,7 +394,7 @@ async function until(predicate, message) {
     global.Node = dom.window.Node;
     global.HTMLElement = dom.window.HTMLElement;
     global.DOMParser = dom.window.DOMParser;
-    dom.window.confirm = () => true;
+    require('./helpers/confirmation.cjs').answerConfirmations(dom.window, () => true);
     dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
     dom.window.gridjs = require(path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js'));

@@ -1,4 +1,5 @@
 'use strict';
+const { decideConfirmation } = require('./confirmation.cjs');
 const assert = require('node:assert/strict');
 
 module.exports = async function verifyRequestTable({ page, context, baseURL, library, scan }) {
@@ -86,8 +87,7 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await page.locator('#request-dialog[open]').waitFor();
   assert.equal(await page.locator('#request-dialog').getByLabel('Title', { exact: true }).inputValue(), before.title);
   await page.locator('#request-dialog .request-more summary').press('Enter');
-  page.once('dialog', dialog => dialog.dismiss());
-  await page.locator('#request-dialog').getByRole('button', { name: 'Close silently', exact: true }).press('Enter');
+  await decideConfirmation(page, () => page.locator('#request-dialog').getByRole('button', { name: 'Close silently', exact: true }).press('Enter'), dialog => dialog.dismiss());
   assert.equal(await page.locator('#request-dialog .request-more summary').evaluate(node => node === document.activeElement), true);
   await closeDetail();
   await row.locator('.request-title-link').focus(); await page.keyboard.press('Enter');
@@ -117,7 +117,6 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
     assert.equal(await dialog.getByLabel('Title', { exact: true }).inputValue(), `Table browser record ${index}`);
     const reminder = dialog.getByLabel('Send purchase reminder', { exact: true });
     if (await reminder.count()) await reminder.uncheck();
-    page.once('dialog', dialog => dialog.accept());
     const committed = page.waitForResponse(response => response.url().endsWith(`/title-requests/${requestId}/action`));
     await dialog.locator('.action-choice button[type="submit"]').click();
     const response = await committed; assert.equal(response.status(), 200, await response.text());

@@ -1,105 +1,122 @@
-# ASAP Docker Review Harness
+# ASAP acceptance with WSLC
 
-Version **0.1.7**
+```powershell
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -AllowReviewWrites
+```
 
-Repository-managed files for the disposable ASAP review environment.
+Run from PR #412's tooling checkout. The command builds or reuses one acceptance
+image, starts one disposable container, initializes a fresh SQL Server 2022
+database, authenticates a synthetic staff user locally, and runs Chromium and
+Playwright automatically. No configuration file or browser interaction is needed.
 
-## Layout
+## Prerequisites
 
-    dev/review/
-      README.md
-      VERSION
-      review.example.json
-      docker/
-        Dockerfile
-        Dockerfile.dockerignore
-        compose.yml
-        appsettings.Testing.json
-        web-entrypoint.sh
-      src/
-        Asap.ReviewInit/
-        Asap.ReviewBootstrap/
+Install PowerShell 7 and Git, and have a working Microsoft WSLC installation.
+[Microsoft's prerequisites](https://learn.microsoft.com/windows/wsl/tutorials/wsl-containers)
+require WSL 2.9.3 or newer. Verify once:
 
-    scripts/review/
-      Bootstrap-AsapReview.ps1
-      Initialize-AsapReviewTls.ps1
-      Invoke-AsapReview.ps1
-      Test-AsapReviewPrerequisites.ps1
-      Test-AsapReviewSmoke.ps1
+```powershell
+wsl --version
+wslc version
+wslc run --rm hello-world
+```
 
-## Host requirements
+Use an x64 Windows machine with WSL 2 virtualization already operational. Allow
+at least 6 GB of memory and two CPUs for WSLC; 8 GB and four CPUs are recommended
+for image builds. The first build needs internet access for Microsoft images,
+NuGet, npm and Chromium. No host .NET SDK, Node, npm, SQL Server, Playwright or
+certificate installation is needed.
 
-- Windows
-- Docker Desktop with Linux containers
-- PowerShell 7
-- Git
+## Running suites
 
-No host .NET SDK, Node, SQL Server, SqlPackage, IIS, or ASP.NET development certificate is required.
+```powershell
+# Read-only smoke: authenticated review passes; synthetic closure is NOT RUN.
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke
 
-## Configuration
+# Feature suite: 21 scenarios, including approved inherited Settings reset.
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites
 
-Bootstrap copies `review.example.json` to the reviewer's configuration outside the repository.
+# Select an exact application revision instead of a PR.
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Commit HEAD -Suite smoke -AllowReviewWrites
 
-Required values include:
+# Optional absolute output root; paths containing spaces are supported.
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites -ArtifactsRoot 'D:\ASAP Acceptance'
+```
 
-- Entra client ID
-- allowed tenant ID(s)
-- initial reviewer/super-admin identity
-- seed mode
+`-Pr` fetches the PR's exact HEAD from `origin`, independently of the current
+tooling checkout. `-Commit` selects a Git commit; the two selectors are exclusive.
+The default suite is `smoke`. Omitting `-AllowReviewWrites` enables read-only
+mode; `-ReadOnly` makes it explicit. `-Rebuild` forces a fresh image build.
 
-Register the default callback on the nonproduction Entra application:
+Reports, unmasked synthetic screenshots, state/geometry evidence, failure traces and
+sanitized logs appear together in `$HOME/ASAP-Acceptance/<timestamp-run-id>/`
+by default (for example, `C:\Users\<username>\ASAP-Acceptance\<timestamp-run-id>\`).
+The default uses the current user's profile, independently of the checkout or
+working directory. `-ArtifactsRoot <absolute-path>` selects a different parent;
+an invalid or unwritable destination blocks the run without falling back.
+The launcher prints the full run directory before startup, then the directory,
+`report.md` path, automated result and scenario counts at completion. It removes
+the container after success, failure or interruption. A forced termination of the launcher process itself
+may require `wslc remove --force <printed-container-name>`.
 
-    https://localhost:8080/signin-oidc
+Default artifacts survive worktree deletion. Historical runs remain until you
+explicitly delete them; earlier artifacts under `.artifacts/acceptance/` in
+existing worktrees are not migrated automatically. Keep any custom output root
+outside repositories and worktrees for the same persistence. The disposable
+image-build context remains under `.review/build` in the tooling checkout.
 
-If `-Port` is used, register the matching HTTPS callback for that port.
+Open the newest default run in File Explorer (optional):
 
-## HTTPS
+```powershell
+$root = Join-Path $HOME 'ASAP-Acceptance'
+$latest = Get-ChildItem -LiteralPath $root -Directory |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+if ($latest) { Invoke-Item $latest.FullName }
+```
 
-Bootstrap creates a self-signed localhost server certificate with SAN entries for `localhost`, `127.0.0.1`, and `::1`. It trusts the public certificate in `CurrentUser\Root` and stores the PFX beside the external review configuration under `.tls`.
+- Exit 0: selected automated checks succeeded; read-only mutations remain NOT RUN.
+- Exit 1: an assertion or browser execution failed.
+- Exit 2: environment, startup, configuration, authentication or cleanup blocker.
 
-The launcher mounts that PFX read-only into the web container and configures Kestrel to listen on HTTPS port 8443. Compose publishes that port only to `127.0.0.1` on the selected host port.
+The two smoke tests exercise authorized SQL-backed fixture review and, when
+explicitly authorized, a real UI closure with one POST and a changed rowversion.
+The feature suite retains all twenty original scenarios and adds an approved
+Review Library reset with authoritative before/after state and preserved custom
+rejection-template content/rowversion. Read-only feature runs execute eleven
+scenarios and skip all ten mutation scenarios. Native 200% confirmation evidence
+includes complete viewport and dialog captures plus DOM/CDP geometry; the pinned
+full-page capture's reduced CSS-width crop is covered by a plumbing regression.
+Automated success leaves human visual/screen-reader acceptance INCOMPLETE.
+See [suite coverage and developer checks](../../tests/acceptance/README.md).
 
-This certificate is review-only and does not alter the deployed IIS/Data Protection certificate contract. If the certificate reaches its rotation window while a review environment is still recorded as `Starting`, `Ready`, or `Failed`, tooling keeps the currently served certificate trusted instead of replacing it underneath the running container. Stop or clean the environment before forcing or completing a required rotation.
+## Container
 
-## Runtime
+`Containerfile` publishes the selected application's Web/DACPAC/Hangfire assets
+and the current review initializer/providers/bootstrap in an SDK build stage.
+The final SQL Server 2022 CU27 Ubuntu 22.04 image contains ASP.NET Core 10.0.13,
+Node 24, the locked npm dependencies and matching Playwright/Chromium binaries.
+It contains no SDK, real configuration, credentials or initialized database.
+Dependency/browser layers remain reusable when application or tooling changes.
+Image tags include application SHA, tooling SHA and a tooling content digest;
+working changes cannot silently reuse an older image.
 
-The launcher resolves the requested revision to a full SHA, enforces one managed review revision at a time, records recoverable lifecycle state, materializes the revision in a detached worktree, copies the current review harness into that worktree, builds the images, verifies revision and tooling-version labels, initializes SQL Server 2022 Developer, deploys the DACPAC and Hangfire schema, creates the review runtime SQL login and Data Protection material, optionally seeds review data, starts ASAP, and waits for `/health/ready` over HTTPS.
+The Bash entrypoint generates local secrets and configuration, starts SQL on
+localhost, waits for an authenticated connection, runs the existing initializer,
+imports Data Protection material, starts ASAP at `https://localhost:8080`, waits
+for real readiness, starts Xvfb, and runs the selected suite with headed Chromium.
+Child failures and signals produce blockers; shutdown terminates child process
+groups and exports diagnostics. SQL data, certificates, cookies and configuration
+disappear with the container. Only the artifact directory is mounted from Windows;
+no ports are published.
 
-The runtime login is `asap_review_runtime`. Its database user is added to the DACPAC-owned `asap_runtime` role and receives the additional Hangfire permissions required by the application.
+Local authentication seeds `reviewer@example.org`, an active System super-admin
+with access to Review Library (2), and uses the existing normal secure staff
+cookie. Synthetic Entra GUIDs satisfy configuration contracts without contacting
+Microsoft. Deterministic Polaris providers and local email capture are required.
+Readiness receives protected synthetic Polaris settings. Authorization,
+antiforgery, business rules and rowversion checks remain the application's own.
+The production Entra implementation is unchanged.
 
-Only the HTTPS ASP.NET port is published to the host. SQL Server remains private to the Compose network.
-
-Default deterministic patron credentials:
-
-    Barcode: any non-empty value, for example REVIEW1001
-    PIN:     1234
-
-Use `"Seed": "Review"` for representative fake data or `"Seed": "None"` for an initialized database without review records.
-
-## Lifecycle recovery
-
-`current.json` is written before build/start with a lifecycle state and is updated to `Ready`, `Stopped`, or `Failed`. `Status` and `Clean` therefore remain usable when startup fails after containers or volumes have already been created.
-
-Starting a different SHA while another review revision is recorded is blocked until the current environment is cleaned. Restarting the same SHA remains compatible with `-KeepData`.
-
-## Smoke test
-
-With no active review environment:
-
-    pwsh ./scripts/review/Test-AsapReviewSmoke.ps1
-
-The smoke test validates image build, SQL/DACPAC/Hangfire initialization, HTTPS readiness, active-environment TLS rotation protection, the HTTPS OIDC callback generated by the Entra challenge, and cleanup. Interactive Entra authentication remains outside the automated smoke test.
-
-## Direct developer use
-
-Initialize TLS beside the config file, then launch:
-
-    pwsh ./scripts/review/Initialize-AsapReviewTls.ps1 `
-        -Workspace <config-directory> `
-        -ReviewStatePath ./.review/current.json
-
-    pwsh ./scripts/review/Invoke-AsapReview.ps1 `
-        -Commit <commit-sha> `
-        -Config <path-to-review.local.json>
-
-Other supported options include `-Action Status`, `-Action Stop`, `-Action Clean`, `-KeepData`, `-Rebuild`, `-NoBrowser`, and `-Port`.
+This image is acceptance tooling only. Deployment topology and operational
+readiness remain the separate test deployment pipeline's responsibility.

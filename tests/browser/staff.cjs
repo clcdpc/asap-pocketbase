@@ -1,4 +1,5 @@
 'use strict';
+const { decideConfirmation, answerNextConfirmation, waitForConfirmation, rejectNativeDialogs } = require('./confirmation.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -282,7 +283,7 @@ async function runAnonymous(browser, args, axeSource, report) {
     const { context, traffic } = await createContext(browser, viewport, args.baseOrigin, null);
     const page = await context.newPage();
     const errors = [];
-    page.on('pageerror', error => errors.push(error.message));
+    page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
     try {
       await page.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
       await page.locator('#signed-out').waitFor({ state: 'visible' });
@@ -312,7 +313,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
   const errors = [];
   const bibLookupBodies = [];
   const observedSessions = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   page.on('response', response => {
     if (new URL(response.url()).pathname !== '/api/asap/staff/session') return;
     response.json().then(value => observedSessions.push({ status: response.status(),
@@ -361,7 +362,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     const storedBibPage = await context.newPage();
     const storedBibErrors = [];
     let storedBibPurchasePosts = 0;
-    storedBibPage.on('pageerror', error => storedBibErrors.push(error.message));
+    storedBibPage.on('pageerror', error => storedBibErrors.push(error.message)); rejectNativeDialogs(storedBibPage, storedBibErrors);
     storedBibPage.on('request', request => {
       if (request.method() === 'POST' && request.url().endsWith(`/title-requests/${args.primaryRequestId}/action`)) {
         storedBibPurchasePosts += 1;
@@ -418,10 +419,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.getByRole('button', { name: 'Claim', exact: true }).click();
     await page.getByRole('button', { name: 'Unclaim' }).waitFor();
     await page.getByRole('button', { name: 'Purchase', exact: true }).click();
-    page.once('dialog', dialog => {
-      assert.match(dialog.message(), /Outstanding purchase/);
-      return dialog.accept();
-    });
+    assert.match(await page.locator('.action-choice').textContent(), /Outstanding purchase/);
     await page.locator('.action-choice button[type="submit"]').click();
     await page.locator('#request-dialog').getByText('Outstanding purchase', { exact: true }).waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'edited-claimed-actioned');
@@ -599,14 +597,12 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(await page.getByLabel('Publication timing', { exact: true }).inputValue(), 'Library backlist');
     assert.equal(await page.getByLabel('Format', { exact: true }).inputValue(), 'book');
     await page.getByLabel('Automatically place hold').uncheck();
-    page.once('dialog', dialog => {
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Save changes' }).click(), dialog => {
       assert.match(dialog.message(), /close without placing a hold/);
       return dialog.dismiss();
     });
-    await page.getByRole('button', { name: 'Save changes' }).click();
     assert.equal(await page.getByRole('button', { name: 'Save changes' }).isEnabled(), true);
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Save changes' }).click();
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Save changes' }).click(), dialog => dialog.accept());
     await page.getByText('Request changes saved.').waitFor();
     const reconciledResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/title-requests/${args.primaryRequestId}`
@@ -647,7 +643,7 @@ async function runAnalytics(browser, args, axeSource, report) {
   );
   const superPage = await superContextState.context.newPage();
   const superErrors = [];
-  superPage.on('pageerror', error => superErrors.push(error.message));
+  superPage.on('pageerror', error => superErrors.push(error.message)); rejectNativeDialogs(superPage, superErrors);
   try {
     await superPage.goto(`${args.baseOrigin}/staff/?stage=analytics`, { waitUntil: 'networkidle' });
     await superPage.locator('#analytics-container .analytics-shell').waitFor();
@@ -727,7 +723,7 @@ async function runAnalytics(browser, args, axeSource, report) {
   );
   const staffPage = await staffContextState.context.newPage();
   const staffErrors = [];
-  staffPage.on('pageerror', error => staffErrors.push(error.message));
+  staffPage.on('pageerror', error => staffErrors.push(error.message)); rejectNativeDialogs(staffPage, staffErrors);
   try {
     await staffPage.goto(`${args.baseOrigin}/staff/?stage=analytics`, { waitUntil: 'networkidle' });
     await staffPage.locator('#analytics-container .analytics-shell').waitFor();
@@ -773,7 +769,7 @@ async function runStaleAssignmentCandidates(browser, args, report) {
   const page = await context.newPage();
   const errors = [];
   const assignmentPosts = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   page.on('request', request => {
     const url = new URL(request.url());
     if (request.method() === 'POST' && url.pathname.endsWith('/assign')) assignmentPosts.push(url.pathname);
@@ -889,7 +885,7 @@ async function runOrdinaryTitleAssignment(browser, args, report) {
     const { context, traffic } = await createContext(browser, viewport, args.baseOrigin, args.staffIdentity);
     const page = await context.newPage();
     const errors = [];
-    page.on('pageerror', error => errors.push(error.message));
+    page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
     try {
       await page.goto(`${args.baseOrigin}/staff/?request=${args.staleTitleAId}`, { waitUntil: 'networkidle' });
       await page.locator('#request-dialog[open]').waitFor();
@@ -949,7 +945,7 @@ async function runStaleMutationCompletions(browser, args, report) {
   );
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   try {
     const candidateResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/assignment-candidates?libraryOrgId=2`
@@ -1105,8 +1101,7 @@ async function runStaleMutationCompletions(browser, args, report) {
       'POST',
       `/api/asap/staff/additional-copies/${args.staleCopyAId}/close`
     );
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Close task' }).click();
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Close task' }).click(), dialog => dialog.accept());
     assert.equal((await delayedMutation.accepted).status, 200);
     heldB = await holdCurrentB('additional_copy', args.staleCopyBId, delayedMutation);
     await releaseMutationWithBPending(delayedMutation, heldB);
@@ -1121,8 +1116,7 @@ async function runStaleMutationCompletions(browser, args, report) {
       'DELETE',
       `/api/asap/staff/additional-copies/${args.staleCopyAId}`
     );
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Permanently delete task' }).click();
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Permanently delete task' }).click(), dialog => dialog.accept());
     assert.equal((await delayedMutation.accepted).status, 200);
     heldB = await holdCurrentB('additional_copy', args.staleCopyBId, delayedMutation);
     await releaseMutationWithBPending(delayedMutation, heldB);
@@ -1169,11 +1163,10 @@ async function runStaleMutationCompletions(browser, args, report) {
     await revealRequestActions(page);
     const titleClear = page.getByRole('button', { name: 'Clear claim' });
     await titleClear.waitFor();
-    page.once('dialog', dialog => {
+    await decideConfirmation(page, () => titleClear.click(), dialog => {
       assert.match(dialog.message(), /become unclaimed/);
       return dialog.accept();
     });
-    await titleClear.click();
     await page.locator('#request-dialog .detail-meta').filter({ hasText: 'Unclaimed' }).waitFor();
     await page.getByRole('tab', { name: 'Activity', exact: true }).click();
     await page.locator('#request-dialog .request-activity').filter({
@@ -1467,14 +1460,13 @@ async function runStaleOperationErrorCompletion(browser, args, report) {
   const page = await context.newPage();
   const errors = [];
   let responses = null;
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   try {
     await page.goto(`${args.baseOrigin}/staff/?request=${args.resolutionRequestId}`, { waitUntil: 'networkidle' });
     await page.getByText('Hold placement recovery', { exact: true }).waitFor();
     await fillOperatorResolution(page, true);
     responses = await delayRecoveryErrorResponses(page);
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Resolve operation' }).click();
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Resolve operation' }).click(), dialog => dialog.accept());
     await responses.firstRequested;
 
     await page.keyboard.press('Escape');
@@ -1489,8 +1481,7 @@ async function runStaleOperationErrorCompletion(browser, args, report) {
     await page.locator('#app-status').filter({ hasText: 'The hold recovery outcome could not be confirmed.' }).waitFor();
     await page.getByText('Hold placement recovery', { exact: true }).waitFor();
     await fillOperatorResolution(page, true);
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Resolve operation' }).click();
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Resolve operation' }).click(), dialog => dialog.accept());
     await responses.secondCompleted;
     await page.locator('#app-status').filter({ hasText: 'The hold recovery outcome could not be confirmed.' }).waitFor();
     const current = {
@@ -1532,7 +1523,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
   );
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   try {
     await page.goto(`${args.baseOrigin}/staff/?request=${args.copySourceRequestId}`, { waitUntil: 'networkidle' });
     await page.locator('#request-dialog[open]').waitFor();
@@ -1613,21 +1604,18 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
       await page.getByRole('link', { name: 'Open source title request' }).getAttribute('href'),
       `/staff/?request=${args.copySourceRequestId}`
     );
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Close task' }).click();
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Close task' }).click(), dialog => dialog.accept());
     await page.getByRole('button', { name: 'Reopen task' }).waitFor();
-    page.once('dialog', dialog => {
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Reopen task' }).click(), dialog => {
       assert.match(dialog.message(), /return to open work/);
       return dialog.dismiss();
     });
-    await page.getByRole('button', { name: 'Reopen task' }).click();
     assert.equal(await page.getByRole('button', { name: 'Reopen task' }).isVisible(), true);
     assert.equal(await page.getByRole('button', { name: 'Reopen task' }).evaluate(node => document.activeElement === node), true);
-    page.once('dialog', dialog => {
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Reopen task' }).click(), dialog => {
       assert.match(dialog.message(), /return to open work/);
       return dialog.accept();
     });
-    await page.getByRole('button', { name: 'Reopen task' }).click();
     await page.getByRole('button', { name: 'Unclaim' }).waitFor();
     const retainedResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${created.id}`
@@ -1718,14 +1706,12 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await revealRequestActions(page);
     const clearClaim = page.getByRole('button', { name: 'Clear claim' });
     await clearClaim.waitFor();
-    page.once('dialog', dialog => {
+    await decideConfirmation(page, () => clearClaim.click(), dialog => {
       assert.match(dialog.message(), /remain open and unclaimed/);
       return dialog.dismiss();
     });
-    await clearClaim.click();
     assert.equal(await clearClaim.evaluate(node => document.activeElement === node), true);
-    page.once('dialog', dialog => dialog.accept());
-    await clearClaim.click();
+    await decideConfirmation(page, () => clearClaim.click(), dialog => dialog.accept());
     await page.locator('#request-dialog .detail-meta').filter({ hasText: 'Unclaimed' }).waitFor();
     const clearedTaskResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${created.id}`);
@@ -1734,10 +1720,8 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     const repeatedClear = await mutate(context, args.baseOrigin,
       `/api/asap/staff/additional-copies/${created.id}/clear-claim`, { version: assignedClaim.version });
     assert.equal(repeatedClear.status(), 409, await repeatedClear.text());
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Close task' }).click();
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Permanently delete task' }).click();
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Close task' }).click(), dialog => dialog.accept());
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Permanently delete task' }).click(), dialog => dialog.accept());
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await page.locator('#app-status').filter({ hasText: 'Additional-copy task deleted.' }).waitFor();
 
@@ -1776,7 +1760,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
       await route.fulfill({ response, json: { ...committed, finalStatus: 'closed' } });
     };
     await page.route(reopenPath, advancedReopenDetail);
-    page.once('dialog', dialog => dialog.accept());
+    answerNextConfirmation(page, dialog => dialog.accept());
     const [reopenResponse] = await Promise.all([
       page.waitForResponse(candidate =>
         candidate.request().method() === 'POST' &&
@@ -1816,7 +1800,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     assert.equal(unclaimAfterSessionTest.status(), 200, await unclaimAfterSessionTest.text());
 
     const laterPage = await context.newPage();
-    laterPage.on('pageerror', error => errors.push(error.message));
+    laterPage.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(laterPage, errors);
     await laterPage.goto(`${args.baseOrigin}/staff/?stage=additional_copies`, { waitUntil: 'networkidle' });
     await laterPage.getByRole('button', { name: `Open additional-copy task ${args.invalidClosedCopyId}` }).click();
     await laterPage.getByRole('button', { name: 'Claim', exact: true }).click();
@@ -1861,7 +1845,7 @@ async function runScopedBlocked(browser, args, axeSource, report) {
   );
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   try {
     await page.goto(`${args.baseOrigin}/staff/?request=${args.blockedRequestId}`, { waitUntil: 'networkidle' });
     await page.locator('#request-dialog[open]').waitFor();
@@ -2024,7 +2008,7 @@ async function runOperatorResolution(browser, args, axeSource, report) {
     const { context, traffic } = await createContext(browser, viewport, args.baseOrigin, args.superIdentity);
     const page = await context.newPage();
     const errors = [];
-    page.on('pageerror', error => errors.push(error.message));
+    page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
     try {
       await page.goto(`${args.baseOrigin}/staff/?request=${args.resolutionRequestId}`, { waitUntil: 'networkidle' });
       await page.locator('#request-dialog[open]').waitFor();
@@ -2089,7 +2073,7 @@ async function runOperatorResolution(browser, args, axeSource, report) {
   );
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   try {
     await page.goto(`${args.baseOrigin}/staff/?request=${args.resolutionRequestId}`, { waitUntil: 'networkidle' });
     await page.getByText(/Operation \d+; attempt 2; epoch 3; frozen patron \*+2904; frozen BIB 92904\./).waitFor();
@@ -2105,8 +2089,7 @@ async function runOperatorResolution(browser, args, axeSource, report) {
       body: JSON.stringify({ code: 'hold_resolution_dependency_unavailable',
         message: 'Hold resolution could not start because a dependency is unavailable. The operation was not changed.' }) });
     await page.route(uncertainResolutionPath, readinessUnavailable);
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Resolve operation' }).click();
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Resolve operation' }).click(), dialog => dialog.accept());
     await page.locator('#app-status').filter({ hasText: /The operation was not changed/ }).waitFor();
     assert.doesNotMatch(await page.locator('#app-status').textContent(), /outcome could not be confirmed/);
     await page.unroute(uncertainResolutionPath, readinessUnavailable);
@@ -2115,8 +2098,7 @@ async function runOperatorResolution(browser, args, axeSource, report) {
       body: JSON.stringify({ committed: true,
         operationId: new URL(route.request().url()).pathname.match(/hold-operations\/(\d+)\/resolve$/)[1] }) });
     await page.route(uncertainResolutionPath, emptyResolutionReply);
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Resolve operation' }).click();
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Resolve operation' }).click(), dialog => dialog.accept());
     await page.locator('#app-status').filter({ hasText: /hold recovery outcome could not be confirmed/i }).waitFor();
     await page.unroute(uncertainResolutionPath, emptyResolutionReply);
     await fillOperatorResolution(page, true);
@@ -2124,13 +2106,12 @@ async function runOperatorResolution(browser, args, axeSource, report) {
       body: JSON.stringify({ code: 'hold_provider_error',
         message: 'The hold provider outcome could not be confirmed. Review the operation before retrying.' }) });
     await page.route(uncertainResolutionPath, providerUncertain);
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Resolve operation' }).click();
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Resolve operation' }).click(), dialog => dialog.accept());
     await page.locator('#app-status').filter({ hasText: /hold recovery outcome could not be confirmed/i }).waitFor();
     await page.getByText(/Operation \d+; attempt 2; epoch 3; frozen patron \*+2904; frozen BIB 92904\./).waitFor();
     await page.unroute(uncertainResolutionPath, providerUncertain);
     await fillOperatorResolution(page, true);
-    page.once('dialog', dialog => dialog.accept());
+    answerNextConfirmation(page, dialog => dialog.accept());
     const [response] = await Promise.all([
       page.waitForResponse(candidate =>
         candidate.request().method() === 'POST' &&
@@ -2175,7 +2156,7 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
   );
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   try {
     await page.goto(args.baseOrigin + '/staff/', { waitUntil: 'networkidle' });
     const detailPath = args.baseOrigin + '/api/asap/staff/title-requests/' + args.staleTitleAId;
@@ -2205,16 +2186,14 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
     assert.match(await page.locator('#request-dialog .request-metadata').textContent(),
       /Close reason:\s*Rejected/);
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'single-closed-title-delete');
-    page.once('dialog', dialog => {
+    await revealRequestActions(page);
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Permanently delete request' }).click(), dialog => {
       assert.match(dialog.message(), /cannot be undone/);
       return dialog.dismiss();
     });
-    await revealRequestActions(page);
-    await page.getByRole('button', { name: 'Permanently delete request' }).click();
     assert.equal(singleDeletes, 0);
-    page.once('dialog', dialog => dialog.accept());
     await revealRequestActions(page);
-    await page.getByRole('button', { name: 'Permanently delete request' }).click();
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Permanently delete request' }).click(), dialog => dialog.accept());
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     assert.equal(singleDeletes, 1);
     await page.unroute(detailRoutePattern, detailRoute);
@@ -2421,7 +2400,7 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
   );
   const scopedPage = await scopedState.context.newPage();
   const scopedErrors = [];
-  scopedPage.on('pageerror', error => scopedErrors.push(error.message));
+  scopedPage.on('pageerror', error => scopedErrors.push(error.message)); rejectNativeDialogs(scopedPage, scopedErrors);
   try {
     await scopedPage.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
     await scopedPage.locator('#workspace').waitFor({ state: 'visible' });
@@ -2478,7 +2457,7 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
       // The browser is expected to abort this response after the scope changes.
     }
   };
-  racePage.on('pageerror', error => raceErrors.push(error.message));
+  racePage.on('pageerror', error => raceErrors.push(error.message)); rejectNativeDialogs(racePage, raceErrors);
   await racePage.route('**/api/asap/staff/suggestion-configuration?*', delayedConfiguration);
   try {
     await racePage.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
@@ -2516,7 +2495,7 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
   const desktopPage = await desktopState.context.newPage();
   const desktopErrors = [];
   let suggestionPosts = 0;
-  desktopPage.on('pageerror', error => desktopErrors.push(error.message));
+  desktopPage.on('pageerror', error => desktopErrors.push(error.message)); rejectNativeDialogs(desktopPage, desktopErrors);
   desktopPage.on('request', request => {
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/suggestions') {
       suggestionPosts += 1;
@@ -2626,7 +2605,7 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
   );
   const mobilePage = await mobileState.context.newPage();
   const mobileErrors = [];
-  mobilePage.on('pageerror', error => mobileErrors.push(error.message));
+  mobilePage.on('pageerror', error => mobileErrors.push(error.message)); rejectNativeDialogs(mobilePage, mobileErrors);
   try {
     await mobilePage.goto(`${args.baseOrigin}/staff/?scope=all`, { waitUntil: 'networkidle' });
     await mobilePage.locator('#workspace').waitFor({ state: 'visible' });
@@ -2643,9 +2622,9 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     await mobilePage.getByRole('button', { name: /Alex Example/ }).click();
     await mobilePage.getByLabel('Material format', { exact: true }).waitFor();
     await scan(mobilePage, axeSource, args.artifactRoot, report, 'mobile', 'staff-suggestion-editor');
-    mobilePage.once('dialog', dialog => dialog.accept());
     await mobilePage.keyboard.press('Escape');
     await mobilePage.locator('#staff-suggestion-dialog').waitFor({ state: 'hidden' });
+    assert.equal(await mobilePage.locator('#confirmation-dialog[open]').count(), 0, 'a clean suggestion editor needs no discard decision');
     assert.deepEqual(mobileErrors, [], `Mobile staff suggestion flow raised an error: ${mobileErrors.join('; ')}`);
     assert.equal(mobileState.traffic.externalRequests, 0, 'Mobile staff suggestion flow requested an external asset');
   } finally {
@@ -2676,9 +2655,9 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     args.baseOrigin, args.superIdentity);
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   async function decideDiscard(action, discard = false, message = /Discard unsaved request/) {
-    const confirmation = page.waitForEvent('dialog');
+    const confirmation = waitForConfirmation(page);
     const acting = action();
     const dialog = await confirmation;
     assert.match(dialog.message(), message);
@@ -2821,7 +2800,7 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
 async function runOwnershipTransfers(browser, args, axeSource, report) {
   const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const page = await context.newPage(), errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   const protectedUnload = () => page.evaluate(() => {
     const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented;
   });
@@ -2843,8 +2822,7 @@ async function runOwnershipTransfers(browser, args, axeSource, report) {
       const detailPath = `**/api/asap/staff/title-requests/${args.primaryRequestId}*`;
       await page.route(detailPath, route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'Transfer target unavailable' }) }));
       await page.locator('#recent-work summary').click();
-      page.once('dialog', dialog => dialog.accept());
-      await page.locator('#recent-request-list button').first().click();
+      await decideConfirmation(page, () => page.locator('#recent-request-list button').first().click(), dialog => dialog.accept());
       await page.locator('#app-status').filter({ hasText: 'Transfer target unavailable' }).waitFor();
       assert.equal(await field.inputValue(), draft); assert.equal(page.url(), sourceUrl);
       assert.equal(await page.locator(`#${source}-view`).isVisible(), true);
@@ -2853,14 +2831,14 @@ async function runOwnershipTransfers(browser, args, axeSource, report) {
       await page.unroute(detailPath);
       const signOutPath = '**/api/asap/staff/sign-out';
       await page.route(signOutPath, route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ message: 'Sign Out response lost' }) }));
-      page.once('dialog', dialog => dialog.accept()); await page.locator('#sign-out').click();
+      await decideConfirmation(page, () => page.locator('#sign-out').click(), dialog => dialog.accept());
       await page.locator('#app-status').filter({ hasText: 'Your staff session is still active' }).waitFor();
       assert.equal(await field.inputValue(), draft); assert.equal(page.url(), sourceUrl);
       assert.equal(await page.locator(`#${source}-view`).isVisible(), true); assert.equal(await protectedUnload(), true);
       await scan(page, axeSource, args.artifactRoot, report, 'desktop', `${source}-unconfirmed-sign-out-retains-draft`);
       await page.unroute(signOutPath);
       await page.locator('#recent-work summary').click();
-      page.once('dialog', dialog => dialog.accept()); await page.locator('#recent-request-list button').first().click();
+      await decideConfirmation(page, () => page.locator('#recent-request-list button').first().click(), dialog => dialog.accept());
       await page.locator('#request-dialog[open]').waitFor();
       assert.equal(new URL(page.url()).searchParams.get('request'), args.primaryRequestId);
       assert.equal(await page.locator(`#${source}-view`).isVisible(), false); assert.equal(await protectedUnload(), false);
@@ -2874,7 +2852,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   try {
     await page.goto(`${args.baseOrigin}/staff/?request=${args.primaryRequestId}`, { waitUntil: 'networkidle' });
     await page.locator('#request-dialog[open]').waitFor();
@@ -3090,8 +3068,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       });
     };
     await page.route('**/api/asap/staff/settings/logo?orgId=2', delayedLogo);
-    page.once('dialog', dialog => dialog.accept());
-    await page.locator('#save-branding-logo').click();
+    await decideConfirmation(page, () => page.locator('#save-branding-logo').click(), dialog => dialog.accept());
     await logoRequestSeen;
     assert.equal(await page.locator('#settings-form').evaluate(form => form.inert), true);
     const brandingAltDuringSave = await page.locator('#branding-alt').inputValue();
@@ -3124,16 +3101,13 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await page.locator('#branding-status').filter({ hasText: /image preview is still unsaved/ }).waitFor();
     assert.equal(await page.locator('#settings-form').evaluate(form => form.inert), false);
     await page.unroute('**/api/asap/staff/settings/logo?orgId=2', delayedLogo);
-    page.once('dialog', dialog => dialog.dismiss());
-    await page.locator('#clear-branding-logo').click();
+    await decideConfirmation(page, () => page.locator('#clear-branding-logo').click(), dialog => dialog.dismiss());
     assert.match(await page.locator('#branding-logo').inputValue(), /preview\.gif$/,
       'Declining clear must retain the unsaved image selection');
-    page.once('dialog', dialog => dialog.dismiss());
-    await page.locator('#settings-switch-system').click();
+    await decideConfirmation(page, () => page.locator('#settings-switch-system').click(), dialog => dialog.dismiss());
     assert.equal(await page.locator('#settings-scope').inputValue(), '2');
     assert.match(await page.locator('#branding-preview-source').textContent(), /Unsaved image preview/);
-    page.once('dialog', dialog => dialog.accept());
-    await page.locator('#settings-switch-system').click();
+    await decideConfirmation(page, () => page.locator('#settings-switch-system').click(), dialog => dialog.accept());
     await page.waitForFunction(() => !document.getElementById('settings-form').hidden &&
       document.getElementById('settings-scope').value === 'system');
     assert.equal(await page.locator('#branding-logo').inputValue(), '');
@@ -3186,8 +3160,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     assert.equal(await page.locator('#email-submit-subject').inputValue(), `{{name}}${originalSubject}`);
     assert.equal(await page.locator('#settings-save-title').textContent(), 'Unsaved changes');
     assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'sticky');
-    page.once('dialog', dialog => dialog.accept());
-    await page.locator('#settings-discard').click();
+    await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
     await page.waitForFunction(expected => document.getElementById('email-submit-subject').value === expected,
       originalSubject);
     assert.equal(await page.locator('.settings-save-bar.attention').count(), 0);
@@ -3236,13 +3209,12 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     assert.equal(await page.evaluate(() => document.activeElement?.closest('#settings-nav') === null), true,
       'Tab must leave the Settings tablist after arrow navigation');
     await page.locator('#suggestion-limit').fill('17');
-    page.once('dialog', dialog => dialog.dismiss());
-    await page.evaluate(() => {
+    await decideConfirmation(page, () => page.evaluate(() => {
       const url = new URL(window.location.href);
       url.searchParams.set('settingsScope', '2');
       window.history.pushState(null, '', url);
       window.dispatchEvent(new PopStateEvent('popstate'));
-    });
+    }), dialog => dialog.dismiss());
     await page.waitForFunction(() => new URL(window.location.href).searchParams.get('settingsScope') === 'system');
     assert.equal(await page.locator('#suggestion-limit').inputValue(), '17',
       'A rejected Settings scope deep link must retain unsaved values');
@@ -3262,8 +3234,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
         }
       })
     }));
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Requests' }).click();
+    await decideConfirmation(page, () => page.getByRole('button', { name: 'Requests' }).click(), dialog => dialog.accept());
     await page.locator('#workspace').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#recent-request-list button').count(), 0,
       'A replacement account must not inherit the previous account’s recents');
@@ -3295,7 +3266,7 @@ async function runProfileSessionReplacementCase(browser, args, detectBeforeRespo
     browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   try {
     await page.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
     const sessionResponse = await context.request.get(`${args.baseOrigin}/api/asap/staff/session`);
@@ -3365,7 +3336,7 @@ async function runSettingsUnconfirmedSessionCase(browser, args) {
     browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   try {
     await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=2#settings-patron`,
       { waitUntil: 'networkidle' });
@@ -3413,7 +3384,7 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
   const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const external = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const page = await context.newPage(), errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   const original = (await session(context, args.baseOrigin)).staff;
   async function reviseStaff(displayName, notificationEmail) {
     const current = await session(external.context, args.baseOrigin);
@@ -3482,9 +3453,8 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
       }, { id, copy });
       await page.locator('#request-dialog[open]').waitFor();
       const remove = async () => {
-        page.once('dialog', dialog => dialog.accept());
         await revealRequestActions(page);
-        await page.getByRole('button', { name: copy ? 'Permanently delete task' : 'Permanently delete request', exact: true }).click();
+        await decideConfirmation(page, () => page.getByRole('button', { name: copy ? 'Permanently delete task' : 'Permanently delete request', exact: true }).click(), dialog => dialog.accept());
       };
       await remove(); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
       assert.equal(versions.length, 1, `${kind} uses the Staff Access revision on its first deliberate delete`);
@@ -3538,7 +3508,7 @@ async function runSettingsLayout(browser, args, axeSource, report) {
     const { context, traffic } = await createContext(browser, viewport, args.baseOrigin, args.superIdentity);
     const page = await context.newPage();
     const errors = [];
-    page.on('pageerror', error => errors.push(error.message));
+    page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
     try {
       for (const section of sections) {
         await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=system#settings-${section.name}`,
@@ -3666,7 +3636,7 @@ async function runSettingsLayout(browser, args, axeSource, report) {
 async function runOperationalCatalogCommits(browser, args, axeSource, report) {
   const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const page = await context.newPage(), errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   try {
     const titleResponse = await context.request.get(`${args.baseOrigin}/api/asap/staff/title-requests?scope=2`);
     assert.equal(titleResponse.status(), 200);
@@ -3690,8 +3660,8 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     const organizations = await context.request.get(`${args.baseOrigin}/api/asap/staff/organizations`);
     const library = (await organizations.json()).data.find(item => item.id === 2);
     assert.equal(library.isActive, true);
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: `Deactivate ${library.name}`, exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector('#staff-refresh').disabled);
+    await decideConfirmation(page, () => page.getByRole('button', { name: `Deactivate ${library.name}`, exact: true }).click(), dialog => dialog.accept());
     await page.locator('#settings-message').filter({ hasText: `${library.name} deactivated.` }).waitFor();
     await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy'));
     assert.equal(await page.locator('#request-grid .grid-open').count(), 0);
@@ -3722,8 +3692,8 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.unroute('**/api/asap/staff/additional-copies?*', failQueue);
     await page.locator('[data-view="settings"]').click();
     await page.getByRole('tab', { name: 'Staff access', exact: true }).click();
-    page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: `Activate ${library.name}`, exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector('#staff-refresh').disabled);
+    await decideConfirmation(page, () => page.getByRole('button', { name: `Activate ${library.name}`, exact: true }).click(), dialog => dialog.accept());
     await page.locator('#settings-message').filter({ hasText: `${library.name} activated.` }).waitFor();
     await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy'));
     await page.locator('[data-view="queue"]').click();
@@ -3740,7 +3710,7 @@ async function runRejectionNotificationAndReopen(browser, args, axeSource, repor
   const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const page = await context.newPage();
   const pageErrors = [];
-  page.on('pageerror', error => pageErrors.push(error.message));
+  page.on('pageerror', error => pageErrors.push(error.message)); rejectNativeDialogs(page, pageErrors);
   const pathname = `/api/asap/staff/title-requests/${args.staleTitleBId}/action`;
   const detailURL = `${args.baseOrigin}/api/asap/staff/title-requests/${args.staleTitleBId}`;
   try {
@@ -3756,7 +3726,7 @@ async function runRejectionNotificationAndReopen(browser, args, axeSource, repor
     async function action(button, status) {
       const responsePromise = page.waitForResponse(response => response.request().method() === 'POST' &&
         new URL(response.url()).pathname === pathname);
-      page.once('dialog', dialog => dialog.accept());
+      if (await button.textContent() !== 'Reject and close') answerNextConfirmation(page, dialog => dialog.accept());
       await button.click();
       const response = await responsePromise;
       const body = await response.json();

@@ -7,6 +7,7 @@ import { unconfirmedResponseError } from './mutation-outcome.js';
 import { createEmailTemplatePlaceholders } from './email-template-placeholders.js';
 import { createPatronTextPlaceholders } from './patron-text-placeholders.js';
 import { createEmailTestController } from './email-test.js';
+import { confirmAction, controlSnapshot } from './confirmation.js';
 import { byDisplayLabel } from './display-order.js';
 
 const WORKFLOW_FIELDS = [
@@ -494,6 +495,17 @@ export function createSettingsController({
     return !disposed && context && context.generation === contextGeneration && context.scope === String(state.scope) && context.staff === actorKey(state.staff);
   }
 
+  async function confirmSettings(title, message, confirmLabel, tone = 'normal') {
+    const context = captureSettingsContext(), data = state.data, version = state.data?.version;
+    const scope = drafts, stamp = drafts.stamp(), panel = state.activePanel;
+    const snapshot = controlSnapshot(root), awaitingReload = state.awaitingReload;
+    const isCurrent = () => isSettingsContextCurrent(context) && state.visible && root.isConnected &&
+      !state.pendingMutation && !state.loading && state.activePanel === panel && state.data === data &&
+      state.data?.version === version && state.awaitingReload === awaitingReload && drafts === scope &&
+      drafts.stamp() === stamp && snapshot === controlSnapshot(root);
+    return await confirmAction({ title, message, confirmLabel, tone, isCurrent }) && isCurrent();
+  }
+
   function beginSettingsOperation(slot) {
     const operation = reads.begin(slot);
     const context = captureSettingsContext();
@@ -804,7 +816,7 @@ export function createSettingsController({
     emailTest.sync();
   }
 
-  function draftChanged() { drafts.touch(); updateDirtyState(); }
+  function draftChanged(event) { drafts.touch(event?.target); updateDirtyState(); }
 
   function rawSection(section) {
     const library = state.data?.stored?.libraryOverride;
@@ -1561,7 +1573,8 @@ export function createSettingsController({
   }
 
   async function deactivateStaffUser(id, version, displayName) {
-    if (!window.confirm(`Deactivate ${displayName}?`)) return;
+    if (!await confirmSettings(`Deactivate ${displayName}?`,
+      `${displayName} will lose staff access. Existing claim cleanup follows the saved staff-access rules.`, 'Deactivate staff', 'danger')) return;
     await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       body: { version: stringValue(version) }
@@ -1871,8 +1884,9 @@ export function createSettingsController({
 
   async function resetSettings() {
     if (isSystem() || !state.data || state.awaitingReload || state.pendingMutation) return;
-    if (isDirty() && !window.confirm('Discard unsaved changes before resetting inherited overrides?')) return;
-    if (!window.confirm('Reset this library\'s inherited overrides to the current system values?')) return;
+    if (!await confirmSettings('Reset inherited overrides?',
+      `${isDirty() ? 'Discard unsaved settings changes and reset' : 'Reset'} this library's inherited overrides to the current system values? Library-owned custom fields, formats, rejection templates, auto-claim rules and their history are preserved.`,
+      'Reset inherited overrides', 'danger')) return;
     const mutation = beginSettingsMutation('administration-settings-reset', settingsDraft);
     if (!mutation) return;
     let committed = false;
@@ -1924,7 +1938,8 @@ export function createSettingsController({
     const file = dom.logo.files?.[0];
     const hasOtherDraft = !sameSnapshot(withoutLogo(state.baselineSnapshot), withoutLogo(snapshotForm(dom.form)));
     if ((hasOtherDraft || clear && file) &&
-        !window.confirm('Discard unsaved settings changes or image selection before updating the saved logo?')) return;
+        !await confirmSettings('Update saved logo?', 'Discard unsaved settings changes or image selection before updating the saved logo?',
+          clear ? 'Clear logo' : 'Save logo', 'danger')) return;
     if (!clear && !file) {
       notify('Choose an image before saving the logo.', 'error');
       return;
@@ -1995,7 +2010,9 @@ export function createSettingsController({
 
   async function testPolaris() {
     if (disposed || !state.staff || !state.visible || !root.isConnected || state.pendingMutation || state.awaitingReload || polarisTest) return;
-    if (isDirty() && !window.confirm('Test the saved Polaris configuration and discard current unsaved edits?')) return;
+    if (isDirty() && !await confirmSettings('Test saved Polaris configuration?',
+      'Test the saved Polaris configuration and discard current unsaved edits?', 'Discard edits and test', 'danger')) return;
+    if (polarisTest) return;
     const operation = beginSettingsOperation('administration-polaris-test');
     polarisTest = operation;
     dom.testPolaris.disabled = true;
@@ -2063,7 +2080,9 @@ export function createSettingsController({
   }
 
   async function setOrganizationActive(organization, active) {
-    if (!window.confirm(`${active ? 'Activate' : 'Deactivate'} ${organization.name}?`)) return;
+    if (!await confirmSettings(`${active ? 'Activate' : 'Deactivate'} ${organization.name}?`,
+      `${active ? 'Enable' : 'Disable'} participation for ${organization.name}? The server will apply its current participation and session rules.`,
+      active ? 'Activate library' : 'Deactivate library', active ? 'normal' : 'danger')) return;
     const mutation = beginSettingsMutation('administration-settings-participation', null);
     if (!mutation) return;
     try {
@@ -2112,10 +2131,10 @@ export function createSettingsController({
       return;
     }
     dom.scope.value = state.scope;
-    const departure = prepareDeparture();
+    const departure = await prepareDeparture();
     if (!departure) return false;
     const target = await prepareScope(next);
-    if (!target?.isCurrent() || !departure.commit()) return false;
+    if (!target?.isCurrent() || !await departure.revalidate() || !target.isCurrent() || !departure.commit()) return false;
     target.accept(); onScopeChange?.(next);
     if (state.activePanel === 'staff') await loadStaffAccess({ silent: true });
     return true;
@@ -2315,7 +2334,7 @@ export function createSettingsController({
         notify('Wait for the settings change to finish before reloading.', 'warning');
         return;
       }
-      if (isDirty() && !window.confirm('Discard unsaved settings changes and reload?')) return;
+      if (isDirty() && !await confirmSettings('Reload settings?', 'Discard unsaved settings changes and reload?', 'Discard changes and reload', 'danger')) return;
       await load();
     });
     listen(dom.discard, 'click', async () => {
@@ -2323,7 +2342,7 @@ export function createSettingsController({
         notify('Wait for the settings change to finish before discarding changes.', 'warning');
         return;
       }
-      if (!window.confirm('Discard unsaved settings changes?')) return;
+      if (!await confirmSettings('Discard settings changes?', 'Discard unsaved settings changes?', 'Discard changes', 'danger')) return;
       await load({ silent: true });
     });
     listen(dom.reset, 'click', resetSettings);
@@ -2331,9 +2350,9 @@ export function createSettingsController({
     listen(dom.syncOrganizations, 'click', syncOrganizations);
     listen(dom.staffRole, 'change', populateStaffCreateControls);
     listen(dom.staffCreate, 'click', createStaffUser);
-    const refreshStaff = () => {
+    const refreshStaff = async () => {
       if (state.pendingMutation) return;
-      if (hasStaffDraft() && !window.confirm('Discard unsaved staff edits and refresh the roster?')) return;
+      if (hasStaffDraft() && !await confirmSettings('Refresh staff roster?', 'Discard unsaved staff edits and refresh the roster?', 'Discard edits and refresh', 'danger')) return;
       return loadStaffAccess({ discard: true });
     };
     listen(dom.staffRefresh, 'click', refreshStaff);
@@ -2423,7 +2442,7 @@ export function createSettingsController({
     hasPendingMutation: () => Boolean(state.pendingMutation),
     hasUnconfirmedOutcome: () => state.outcomeUncertain,
     inspectDeparture: () => ({ owner: drafts, dirty: isDirty(), blocked: disposed || Boolean(state.pendingMutation || state.outcomeUncertain),
-      stamp: drafts.stamp(),
+      stamp: JSON.stringify([drafts.revision(), controlSnapshot(root)]),
       message: state.outcomeUncertain
         ? 'Reload current settings to verify the uncertain change before navigating away.'
         : 'Wait for the settings change to finish before navigating away.',

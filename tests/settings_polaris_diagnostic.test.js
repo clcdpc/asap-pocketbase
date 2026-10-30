@@ -99,10 +99,10 @@ async function diagnosticFixture(journey) {
   await diagnosticFixture(async ({ get, dom, controller, setDiagnostic, calls, reads }) => {
     const note = get('#patron-login-note'); note.value = 'Unsaved';
     note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-    window.confirm = () => false;
+    require('./helpers/confirmation.cjs').answerConfirmations(window, () => false);
     get('#btn-test-polaris').click(); await flush();
     assert.equal(calls(), 0); assert.equal(reads(), 1); assert.equal(note.value, 'Unsaved');
-    window.confirm = () => true;
+    require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
     let complete, signal;
     setDiagnostic(init => { signal = init.signal; return new Promise(resolve => { complete = resolve; }); });
     get('#btn-test-polaris').click();

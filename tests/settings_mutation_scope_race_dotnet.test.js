@@ -105,7 +105,7 @@ async function flush() {
       global.FormData = dom.window.FormData;
       global.Node = dom.window.Node;
       global.Event = dom.window.Event;
-      window.confirm = () => true;
+      require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
 
       const announcements = [];
       let saveStarted;
@@ -159,7 +159,7 @@ async function flush() {
       };
 
       const controller = settingsModule.createSettingsController({
-        prepareDeparture: () => ({ commit: () => true }),
+        prepareDeparture: async () => ({ revalidate: async () => true, commit: () => true }),
         root: document.getElementById('settings-view'),
         tab: document.getElementById('settings-view-tab'),
         announce: (message, kind) => announcements.push({ message, kind }),
@@ -257,7 +257,7 @@ async function flush() {
       global.FormData = dom.window.FormData;
       global.Node = dom.window.Node;
       global.Event = dom.window.Event;
-      window.confirm = () => true;
+      require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
       let mutationRequests = 0;
       let failReload = false;
       global.fetch = async url => {
@@ -294,7 +294,7 @@ async function flush() {
         throw new Error('Unexpected request: ' + requestUrl);
       };
       const controller = settingsModule.createSettingsController({
-        prepareDeparture: () => ({ commit: () => true }),
+        prepareDeparture: async () => ({ revalidate: async () => true, commit: () => true }),
         root: document.getElementById('settings-view'),
         tab: document.getElementById('settings-view-tab'),
         announce: () => {},
@@ -401,7 +401,7 @@ async function flush() {
       global.FormData = dom.window.FormData;
       global.Node = dom.window.Node;
       global.Event = dom.window.Event;
-      window.confirm = () => true;
+      require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
       let releaseFailedScope;
       let allowThree = false;
       global.fetch = async url => {
@@ -429,7 +429,7 @@ async function flush() {
         throw new Error('Unexpected request: ' + requestUrl);
       };
       const controller = settingsModule.createSettingsController({
-        prepareDeparture: () => ({ commit: () => true }),
+        prepareDeparture: async () => ({ revalidate: async () => true, commit: () => true }),
         root: document.getElementById('settings-view'),
         tab: document.getElementById('settings-view-tab'),
         announce: () => {},

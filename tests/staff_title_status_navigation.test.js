@@ -74,9 +74,9 @@ async function until(predicate, message) {
       }
       const beforeRecent = calls.length;
       data[0] = { ...data[0], status: 'pending_hold' };
-      const alignment = await navigation.alignTitle(data[0], { fromRecent: true }, session.preferences(), navigation.prepareDeparture());
+      const alignment = await navigation.alignTitle(data[0], { fromRecent: true }, session.preferences(), await navigation.prepareDeparture());
       assert.equal(calls.length, beforeRecent + 1, 'A fresh detail with a changed status must reload the accepted queue projection.');
-      assert.ok(alignment.commit() !== false);
+      assert.ok(await alignment.commit() !== false);
       await until(() => get('#request-grid .request-title-link')?.dataset.requestId === data[0].id,
         'Closing the aligned detail can return to its authoritatively updated row.');
       hold = true;
@@ -85,7 +85,7 @@ async function until(predicate, message) {
       get('#request-grid .request-title-link').click();
       assert.equal(opened.at(-1), data[0].id, 'Accepted rows can still open fresh details while a required collection reload is pending.');
       const prior = calls.at(-1);
-      navigation.changeQueueContext('queue', { status: 'closed' });
+      await navigation.changeQueueContext('queue', { status: 'closed' });
       const replacement = calls.at(-1);
       assert.notEqual(replacement, prior, 'Canceling a required reload must start a replacement read.');
       assert.equal(prior.signal.aborted, true);
@@ -102,7 +102,7 @@ async function until(predicate, message) {
       await until(() => title.isReady(navigation.context()), 'An invalidated projection is fetched.');
       assert.equal(calls.length, invalidated + 1);
       const scoped = calls.length;
-      navigation.changeQueueContext('queue', { scope: '3' });
+      await navigation.changeQueueContext('queue', { scope: '3' });
       await until(() => title.isReady(navigation.context()), 'A new scope gets its own accepted response.');
       assert.equal(calls.length, scoped + 1); assert.match(calls.at(-1).url, /scope=3$/);
       await copy.refresh();

@@ -1,5 +1,6 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
+import { confirmAction, cancelConfirmations } from './confirmation.js';
 
 const titleStages = ['suggestion', 'outstanding_purchase', 'pending_hold', 'hold_placed', 'closed'];
 
@@ -18,47 +19,59 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       .map(feature => ({ feature, inspection: feature.inspectDeparture() }));
   }
 
-  function gather(inspections, prior = null) {
-    if (disposed || router.busy()) return null;
+  function sameInspections(previous, current, includeDrafts = true) {
+    return current.length === previous.length && current.every(({ feature, inspection }, index) => {
+      const prior = previous[index];
+      return feature.key === prior.feature.key && feature.inspectDeparture === prior.feature.inspectDeparture &&
+        inspection.owner === prior.inspection.owner && (!includeDrafts ||
+          inspection.dirty === prior.inspection.dirty && inspection.stamp === prior.inspection.stamp &&
+          inspection.blocked === prior.inspection.blocked);
+    });
+  }
+
+  async function gather(inspections, options, isCurrent, prior = null) {
+    if (!isCurrent() || router.busy()) return null;
     for (const { feature, inspection } of inspections) {
       if (inspection.blocked) {
         (feature.reportBlocked || (message => announce(message, 'warning')))(inspection.message);
         return null;
       }
     }
-    for (const { feature, inspection } of inspections) {
-      if (inspection.dirty && (!prior?.has(feature.key) || prior.get(feature.key) !== inspection.stamp) &&
-          !window.confirm(inspection.confirmMessage)) return null;
-    }
+    const warnings = inspections.filter(({ feature, inspection }) => inspection.dirty &&
+      (!prior?.has(feature.key) || prior.get(feature.key) !== inspection.stamp));
+    const unchanged = () => isCurrent() && !router.busy() && sameInspections(inspections, inspect(options));
+    if (warnings.length && !await confirmAction({ title: 'Discard unsaved changes?',
+      message: [...new Set(warnings.map(({ inspection }) => inspection.confirmMessage))].join('\n\n'),
+      confirmLabel: 'Discard changes', cancelLabel: 'Keep editing', tone: 'danger', isCurrent: unchanged })) return null;
+    if (!unchanged()) return null;
     return new Map(inspections.filter(({ inspection }) => inspection.dirty)
       .map(({ feature, inspection }) => [feature.key, inspection.stamp]));
   }
 
   // Consent is evidence about these owners and drafts, never an early discard.
   // The opaque handle is single-use; even commit re-inspects pending commands.
-  function prepareDeparture(options = {}) {
+  async function prepareDeparture(options = {}) {
     options = { ...options };
     const source = context, ticket = generation, actor = sessionIdentity.actor(), revision = ++departureRevision;
     const inspections = inspect(options);
-    let permission = gather(inspections), committed = false;
-    if (!permission) return null;
+    let committed = false;
     const isCurrent = () => !disposed && !committed && revision === departureRevision && generation === ticket && context === source && sessionIdentity.actor() === actor;
-    function revalidate() {
+    let permission = await gather(inspections, options, isCurrent), accepted = inspections;
+    if (!permission || !isCurrent()) return null;
+    async function revalidate() {
       if (!isCurrent()) return false;
       const current = inspect(options);
-      if (current.length !== inspections.length || current.some(({ feature, inspection }, index) => {
-        const previous = inspections[index];
-        return feature.key !== previous.feature.key || feature.inspectDeparture !== previous.feature.inspectDeparture ||
-          inspection.owner !== previous.inspection.owner;
-      })) return false;
-      const consent = gather(current, permission);
+      if (!sameInspections(inspections, current, false)) return false;
+      const consent = await gather(current, options, isCurrent, permission);
       if (!consent || !isCurrent()) return false;
-      permission = consent;
+      permission = consent; accepted = current;
       return true;
     }
     return Object.freeze({ isCurrent, revalidate,
       commit() {
-        if (!revalidate()) return false;
+        // No await or UI here: discard and target activation share one commit.
+        if (!isCurrent() || router.busy() || !sameInspections(accepted, inspect(options)) ||
+            accepted.some(({ inspection }) => inspection.blocked)) return false;
         committed = true;
         for (const { feature } of inspections) feature.discardDeparture?.();
         return true;
@@ -66,10 +79,14 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     });
   }
 
-  function allow(options = {}) { return prepareDeparture(options)?.commit() === true; }
+  async function allow(options = {}) {
+    const departure = await prepareDeparture(options);
+    return Boolean(departure && await departure.revalidate() && departure.commit());
+  }
 
   function invalidate() {
     generation += 1;
+    cancelConfirmations();
     reads.begin('route').abort();
     reads.begin('operational-catalog').abort();
     onInvalidate();
@@ -151,7 +168,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     router.remember();
   }
 
-  function switchView(name, updateUrl = true) {
+  async function switchView(name, updateUrl = true) {
     if (!sessionIdentity.actor() || !views[name] ||
         ['settings', 'operations'].includes(name) && !['admin', 'super_admin'].includes(sessionIdentity.actor().role)) return false;
     const previous = context.activeView;
@@ -159,17 +176,16 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       const closed = views[name].closeOverlay?.();
       if (closed !== undefined && closed !== null) return closed;
     }
-    const departure = updateUrl && previous !== name ? prepareDeparture() : null;
+    const departure = updateUrl && previous !== name ? await prepareDeparture() : null;
     if (updateUrl && previous !== name && !departure) return false;
     if (departure && name === 'settings' && !views.settings.isReady()) {
-      void enterSettings(previous, departure); return true;
+      return enterSettings(previous, departure);
     }
     if (updateUrl && catalogStale && ['queue', 'additional-copies'].includes(name) && sessionIdentity.actor().role === 'super_admin') {
-      void enterReviewedQueue(name, previous, sessionIdentity.preferences(), departure || prepareDeparture());
-      return true;
+      return enterReviewedQueue(name, previous, sessionIdentity.preferences(), departure || await prepareDeparture());
     }
     if (departure) {
-      if (!departure.commit()) return false;
+      if (!await departure.revalidate() || !departure.commit()) return false;
       closeTransient(); invalidate();
     }
     activate(name);
@@ -181,26 +197,28 @@ export function createNavigationController({ router, sessionIdentity, detailHost
   async function enterReviewedQueue(name, previous, owner, departure) {
     if (!departure) return;
     const scope = await resolveOperationalScope(owner);
-    if (!scope || !sessionIdentity.isCurrent(owner) || !departure.commit()) return;
+    if (!scope || !sessionIdentity.isCurrent(owner) || !await departure.revalidate() || !departure.commit()) return false;
     closeTransient(); invalidate();
     queueScopeAccepted(scope);
     activate(name);
     if (previous !== name) writeStage(name);
     await views[name]?.refreshOnEntry?.({ context, previous });
+    return true;
   }
 
   async function enterSettings(previous, departure) {
     const target = await views.settings.prepare(views.settings.currentScope());
-    if (!target?.isCurrent() || !departure.commit()) return;
+    if (!target?.isCurrent() || !await departure.revalidate() || !target.isCurrent() || !departure.commit()) return false;
     closeTransient(); invalidate(); target.accept(); activate('settings');
     if (previous !== 'settings') writeStage('settings');
+    return true;
   }
 
-  function changeQueueContext(name, changes) {
+  async function changeQueueContext(name, changes) {
     if (!sessionIdentity.actor() || !['queue', 'additional-copies'].includes(name)) return false;
     const same = Object.entries(changes).every(([key, value]) => context[key] === value);
-    if (same) return true;
-    if (!allow()) return false;
+    if (same) { departureRevision++; return true; }
+    if (!await allow()) return false;
     closeTransient(); invalidate(); align(changes);
     writeStage(name);
     if (name !== 'queue' || Object.hasOwn(changes, 'scope') || !views.queue.isReady(context)) {
@@ -259,9 +277,10 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     const nextSettingsScope = requested.settingsScope || (owner.role === 'super_admin' ? 'system' : String(owner.organizationId));
     const options = { settings: context.activeView === 'settings' &&
       (requested.stage !== 'settings' || nextSettingsScope !== views.settings.currentScope()) };
-    const departure = prepareDeparture(options);
-    if (!departure) { router.reject(); return false; }
     const load = reads.begin('route');
+    const departure = await prepareDeparture(options);
+    if (!load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
+    if (!departure) { router.reject(); return false; }
     try {
       const target = await validate(requested, load.signal, owner);
       if (!load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
@@ -281,7 +300,9 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       }
       // The visible source stays mounted during validation. Newly created drafts
       // or commands must obtain fresh permission before any source is discarded.
-      if (!departure.commit()) { router.reject(); return false; }
+      const ready = await departure.revalidate();
+      if (!load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
+      if (!ready || !departure.commit()) { router.reject(); return false; }
       closeTransient();
       const ticket = invalidate();
       if (target.replacement) target.replacement.accept();
@@ -389,8 +410,8 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       : await views[name].prepare(target);
     if (!queue?.isCurrent() || !departure.isCurrent() || !sessionIdentity.isCurrent(owner)) return null;
     return { scope: queue.scope,
-      commit() {
-        if (!queue.isCurrent() || !departure.commit()) return false;
+      async commit() {
+        if (!queue.isCurrent() || !await departure.revalidate() || !queue.isCurrent() || !departure.commit()) return false;
         closeTransient(); const ticket = invalidate();
         align({ scope: queue.scope, status: target.status, additionalCopyStatus: target.additionalCopyStatus });
         catalogStale = false;
@@ -412,9 +433,9 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     router.closeDetail(copy ? 'additional_copies' : context.status, { scope: context.scope, copyStatus: context.additionalCopyStatus });
     if (!router.busy()) router.remember();
   }
-  function prepareSuggestion() {
+  async function prepareSuggestion() {
     if (!detailHost.isOpen()) return true;
-    if (!detailHost.requestClose({ navigation: true })) return false;
+    if (!await detailHost.requestClose({ navigation: true })) return false;
     writeStage('queue', true); return true;
   }
   async function openRecentTitle(intent) {
@@ -428,6 +449,6 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     settingsScopeChanged(scope) { invalidate(); router.pushSettingsScope(scope); router.remember(); },
     switchView, changeQueueContext, navigateFromUrl,
     start() { router.start(navigateFromUrl); },
-    dispose() { disposed = true; reads.begin('route').abort(); reads.begin('operational-catalog').abort(); router.dispose(); }
+    dispose() { disposed = true; cancelConfirmations(); reads.begin('route').abort(); reads.begin('operational-catalog').abort(); router.dispose(); }
   };
 }

@@ -388,11 +388,11 @@ const recoveryFixture = journey => fixture(async environment => {
     value = { ...value, organizationId: 2 }; controller.sync(); await settle();
     advance(60001); await controller.refresh();
     let confirmations = 0;
-    dom.window.confirm = () => { confirmations += 1; return false; };
+    require('./helpers/confirmation.cjs').answerConfirmations(dom.window, () => { confirmations += 1; return false; });
     root.querySelector('[data-email-test="retire"]').click(); await settle();
     assert.equal(confirmations, 1);
     assert.equal(root.querySelector('[data-email-test="send"]').disabled, true, 'canceling the warning preserves the pending intent');
-    dom.window.confirm = () => true;
+    require('./helpers/confirmation.cjs').answerConfirmations(dom.window, () => true);
     root.querySelector('[data-email-test="retire"]').click(); await settle();
     root.querySelector('[data-email-test="send"]').click(); await settle();
     const storageKey = 'asap.staff.email-test.late-ack.2', next = dom.window.sessionStorage.getItem(storageKey);

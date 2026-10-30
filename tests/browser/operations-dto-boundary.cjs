@@ -1,4 +1,5 @@
 'use strict';
+const { rejectNativeDialogs } = require('./confirmation.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -158,7 +159,7 @@ async function main() {
         return route.abort('blockedbyclient');
       });
       const page = await context.newPage();
-      page.on('pageerror', error => report.pageErrors.push(error.message));
+      page.on('pageerror', error => report.pageErrors.push(error.message)); rejectNativeDialogs(page, report.pageErrors);
       await page.goto(`${origin}/staff/?stage=operations`, { waitUntil: 'networkidle' });
       await page.locator('#operations-view').waitFor({ state: 'visible' });
       await refresh(page, () => page.locator('#operations-scope').selectOption(scope));

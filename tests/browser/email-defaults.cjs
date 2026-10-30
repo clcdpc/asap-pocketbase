@@ -1,4 +1,5 @@
 'use strict';
+const { rejectNativeDialogs } = require('./confirmation.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -26,7 +27,7 @@ async function main() {
     return route.abort('blockedbyclient');
   });
   const page = await context.newPage();
-  page.on('pageerror', error => report.pageErrors.push(error.message));
+  page.on('pageerror', error => report.pageErrors.push(error.message)); rejectNativeDialogs(page, report.pageErrors);
   const field = key => page.locator(`[data-template-key="${key}"]`);
   const snapshot = scope => page.evaluate(async scope => {
     const response = await fetch(`/api/asap/staff/settings?orgId=${scope}`);

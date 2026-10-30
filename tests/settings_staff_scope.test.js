@@ -102,7 +102,7 @@ async function flush() {
     global.FormData = dom.window.FormData;
     global.Node = dom.window.Node;
     global.Event = dom.window.Event;
-    window.confirm = () => true;
+    require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
 
     const settingsRequests = [];
     const organizations = [

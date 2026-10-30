@@ -97,6 +97,7 @@ async function until(predicate, message) {
     const workflow = await import(pathToFileURL(path.join(temporary, 'staff/js/workflow.js')).href);
     await workflow.createWorkflowApp().start();
     document.getElementById('new-suggestion').click();
+    await until(() => document.querySelector('#staff-suggestion-body select'), 'suggestion opens after its departure guard');
     const scope = document.querySelector('#staff-suggestion-body select[aria-label="Servicing library"]');
     scope.value = '2';
     scope.dispatchEvent(new dom.window.Event('change'));

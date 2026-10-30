@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AsapWebProject Condition="'$(AsapWebProject)' == ''">../../../../src/Asap.Web/Asap.Web.csproj</AsapWebProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Asap.Tests" />
+    <Compile Include="../Asap.ReviewInit/AcceptanceEvidence.cs" Link="AcceptanceEvidence.cs" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="$(AsapWebProject)" />
+  </ItemGroup>
+</Project>

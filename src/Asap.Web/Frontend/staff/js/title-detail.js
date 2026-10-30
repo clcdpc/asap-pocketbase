@@ -1,6 +1,7 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { createDraftScope } from './draft-scope.js';
+import { confirmAction, controlSnapshot } from './confirmation.js';
 import { createRequestEditor } from './request-editor.js';
 import { researchRecordValue } from './research.js';
 import { createRequestWorkflows } from './request-workflows.js';
@@ -91,7 +92,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     lease = mounted; actor = owner;
     returnFocus = opener || document.activeElement; drafts = createDraftScope();
     for (const name of ['input', 'change']) mounted.content.addEventListener(name, event => {
-      if (isPresentationCurrent(mounted, owner) && mounted.content.contains(event.target)) drafts.touch();
+      if (isPresentationCurrent(mounted, owner) && mounted.content.contains(event.target)) drafts.touch(event.target);
     });
     onOpened(request, options); renderRequest(request, configuration); mounted.show();
     announce(`Opened ${request.title}.`); rememberOpened(request.id);
@@ -101,7 +102,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
 
   async function open(id, opener = null, options = {}) {
     if (disposed || !sessionIdentity.actor()) return false;
-    const departure = beforeOpen(options);
+    const departure = await beforeOpen(options);
     if (!departure) return false;
     const owner = sessionIdentity.preferences(), priorTitle = current?.title || `Request ${id}`;
     announce('Loading request details...');
@@ -116,7 +117,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         alignment = await onAlign(target.request, { ...options, reloaded: true }, owner, departure);
       }
       if (!alignment || !target.isCurrent() || !departure.isCurrent()) return false;
-      const ticket = alignment.commit();
+      const ticket = await alignment.commit();
       return ticket !== false && present(target, opener, options, ticket);
     } catch (error) {
       if (departure.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
@@ -131,11 +132,13 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       return false;
     }
   }
-  function close(options = {}) {
+  async function close(options = {}) {
     if (hasPendingMutation() && !options.force && !options.preserveMutation) {
       announce('The workflow action is in progress. Wait for its authoritative result before closing.', 'warning'); host.focusClose(); return false;
     }
-    if (!options.force && !options.guarded && !options.preserveMutation && !beforeClose(options)) return false;
+    const mounted = lease;
+    if (!options.force && !options.guarded && !options.preserveMutation && !await beforeClose(options)) return false;
+    if (lease !== mounted) return false;
     if (!closeCopy({ navigation: true, force: options.force })) return false;
     const focusReturn = options.navigation ? null : getFocusReturn(current?.id, returnFocus);
     lease?.release({ ...options, focusReturn }); onClosed(options); return true;
@@ -382,7 +385,18 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       isCurrent: live, isPending: hasPendingMutation,
       showDetails: () => activateTab('details'),
       admit: declaration => live() && allowRequestMutation(snapshot, declaration),
-      confirm: (message, draft = null) => live() && allowRequestMutation(snapshot, { consumes: draft }) && window.confirm(message) && live(),
+      confirm: async (options, draft = null, discardOnly = false) => {
+        // Revert owns only this editor; unrelated inline drafts must survive it.
+        const allowed = () => live() && (discardOnly
+          ? !hasPendingMutation() && draft !== null && editor?.draft() === draft
+          : allowRequestMutation(snapshot, { consumes: draft }));
+        if (!allowed()) return false;
+        const stamp = scope.stamp(), generation = getNavigationGeneration(), selectedScope = getScope();
+        const values = controlSnapshot(mounted.content);
+        const isCurrent = () => live() && scope.stamp() === stamp && isNavigationCurrent(generation) &&
+          getScope() === selectedScope && controlSnapshot(mounted.content) === values && allowed();
+        return await confirmAction({ ...options, isCurrent }) && isCurrent();
+      },
       mutate: (path, body, message, draft = null) => live() ? mutateRequest(snapshot, path, body, message, draft) : Promise.resolve(),
       mutateOperation: (operation, action, body, draft = null) => live() ? mutateOperation(snapshot, operation, action, body, draft) : Promise.resolve(),
       delete: () => live() ? deleteTitleRequest(snapshot) : Promise.resolve(),
@@ -526,7 +540,8 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
 
   return { open, prepare, present, close, invalidate, invalidateConfiguration,
     isDirty: () => Boolean(lease?.isCurrent() && drafts.isDirty()), hasPendingMutation,
-    inspectDeparture: () => ({ owner: renderRevision || lease, dirty: Boolean(lease?.isCurrent() && drafts.isDirty()), stamp: drafts.stamp(), blocked: disposed || hasPendingMutation(),
+    inspectDeparture: () => ({ owner: renderRevision || lease, dirty: Boolean(lease?.isCurrent() && drafts.isDirty()),
+      stamp: JSON.stringify([drafts.revision(), lease ? controlSnapshot(lease.content) : null]), blocked: disposed || hasPendingMutation(),
       message: 'The workflow action is in progress. Wait for its authoritative result before navigating away.',
       confirmMessage: 'Discard unsaved request changes and navigate away?' }),
     setStaff() { configurations.clear(); },

@@ -50,6 +50,7 @@ public sealed partial class PatronJourneyTests
     [ClassInitialize]
     public static async Task Initialize(TestContext context)
     {
+        using var initializationTiming = FixtureTiming.Start(nameof(PatronJourneyTests), "shared_initialization");
         masterConnectionString =
             Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
             "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True";
@@ -66,8 +67,9 @@ public sealed partial class PatronJourneyTests
 
         var dacpacPath = TestArtifactPaths.FindDacpac();
         context.WriteLine($"Deploying {dacpacPath} to {databaseName}");
-        using (var package = DacPackage.Load(dacpacPath))
+        using (var deploymentTiming = FixtureTiming.Start(nameof(PatronJourneyTests), "dacpac_deploy_including_database_creation"))
         {
+            using var package = DacPackage.Load(dacpacPath);
             new DacServices(masterConnectionString).Deploy(
                 package,
                 databaseName,
@@ -78,10 +80,19 @@ public sealed partial class PatronJourneyTests
                     CreateNewDatabase = true,
                     DropObjectsNotInSource = true
                 });
+            deploymentTiming?.Complete();
         }
 
-        await InstallHangfireAsync();
-        await SeedLibraryAsync();
+        using (var schemaTiming = FixtureTiming.Start(nameof(PatronJourneyTests), "hangfire_schema_setup"))
+        {
+            await InstallHangfireAsync();
+            schemaTiming?.Complete();
+        }
+        using (var seedTiming = FixtureTiming.Start(nameof(PatronJourneyTests), "shared_fixture_seed"))
+        {
+            await SeedLibraryAsync();
+            seedTiming?.Complete();
+        }
 
         temporaryDirectory = Path.Combine(Path.GetTempPath(), $"asap-patron-journey-{Guid.NewGuid():N}");
         Directory.CreateDirectory(temporaryDirectory);
@@ -118,6 +129,7 @@ public sealed partial class PatronJourneyTests
         await File.WriteAllTextAsync(
             configurationPath,
             JsonSerializer.Serialize(configuration, new JsonSerializerOptions { WriteIndented = true }));
+        initializationTiming?.Complete();
     }
 
     [ClassCleanup]

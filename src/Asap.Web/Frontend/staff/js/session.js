@@ -39,8 +39,8 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
   }
   async function signOut() {
     if (disposed || signOutAttempt?.pending || !admission.admit({ consumes: null }).allowed) return;
-    const departure = navigation.prepareDeparture();
-    if (!departure) return;
+    const departure = await navigation.prepareDeparture();
+    if (!departure || !await departure.revalidate() || disposed || signOutAttempt?.pending || !departure.isCurrent()) return;
     const attempt = { owner: identity.preferences(), departure, pending: true, outcome: 'pending' }; signOutAttempt = attempt;
     try {
       await request('/api/asap/staff/sign-out', { method: 'POST', allowNoContent: true });

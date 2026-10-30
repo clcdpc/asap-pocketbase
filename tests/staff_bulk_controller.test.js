@@ -23,7 +23,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
           if (init.method === 'DELETE') { deletes.push({ path, init }); return new Promise((resolve, fail) => { complete = resolve; reject = fail; }); }
           return path.includes('additional-copies') ? { scope: '2', status: 'closed', items: [copy] } : { scope: '2', items: [title] };
         } };
-      const first = createBulkDeleteController(options); first.open(get('#bulk-delete-closed'));
+      const first = createBulkDeleteController(options); await first.open(get('#bulk-delete-closed'));
       get('#bulk-delete-scope').value = '2'; get('#bulk-delete-preview').click(); await flush(); await flush();
       assert.equal(get('#bulk-delete-items').children.length, 2);
       get('#bulk-delete-confirmation').value = 'DELETE';
@@ -37,7 +37,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       assert.match(receipts.at(-1)[0], /outcome unconfirmed.*not attempted/);
       first.dispose(); session.accept(actorB);
       const replacement = createBulkDeleteController({ ...options, sessionRequest: async () => ({ authenticated: true, accessAllowed: true, staff: actorB }) });
-      replacement.open(); first.dispose(); assert.equal(get('#bulk-delete-dialog').open, true);
+      await replacement.open(); first.dispose(); assert.equal(get('#bulk-delete-dialog').open, true);
       if (outcome === 'deleted') complete({ deleted: true });
       else if (outcome === 'status_200_unknown') {
         reject(Object.assign(new Error('HTTP 200 mutation result is unknown.'), { status: 200, outcomeUnknown: true }));

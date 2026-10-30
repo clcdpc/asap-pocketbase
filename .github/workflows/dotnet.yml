@@ -27,9 +27,9 @@ concurrency:
 jobs:
   build-test-package:
     name: Build, test and package
-    runs-on: ubuntu-latest
+    runs-on: clc-linux
     # The retained SQL/frontend/browser guard already takes about 44 minutes.
-    timeout-minutes: 60
+    timeout-minutes: 90
     outputs:
       artifact_name: ${{ steps.identity.outputs.artifact_name }}
       deployment_label: ${{ steps.identity.outputs.deployment_label }}
@@ -61,17 +61,18 @@ jobs:
       - name: Start SQL Server 2022
         shell: bash
         run: >-
+          MSSQL_SA_PASSWORD="$ASAP_TEST_SQL_SA_PASSWORD"
           docker run --detach --name asap-sql
           --publish 1433:1433
           --env ACCEPT_EULA=Y
-          --env "MSSQL_SA_PASSWORD=$ASAP_TEST_SQL_SA_PASSWORD"
+          --env MSSQL_SA_PASSWORD
           mcr.microsoft.com/mssql/server:2022-latest
 
       - name: Wait for SQL Server
         shell: bash
         run: |
           for attempt in {1..30}; do
-            if docker exec asap-sql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$ASAP_TEST_SQL_SA_PASSWORD" -C -Q 'SELECT 1' >/dev/null 2>&1; then
+            if printf '%s\n' "$ASAP_TEST_SQL_SA_PASSWORD" | docker exec --interactive asap-sql /bin/sh -c 'IFS= read -r SQLCMDPASSWORD || exit 1; export SQLCMDPASSWORD; exec /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -l 2 -t 3 -Q "SELECT 1"' >/dev/null 2>&1; then
               exit 0
             fi
             sleep 2
@@ -92,12 +93,36 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
+      - name: Check CI performance collector
+        continue-on-error: true
+        run: python3 -B -m unittest discover -s scripts/ci -p 'test_*.py' -v
+
       - name: Run .NET and real SQL tests (non-browser partition)
+        env:
+          ASAP_CI_FIXTURE_TIMINGS: ${{ github.workspace }}/.artifacts/ci-performance/fixture-timings.jsonl
         run: >-
+          bash scripts/ci/run-with-performance.sh
           dotnet test --project tests/Asap.Tests/Asap.Tests.csproj
           --configuration Release --no-build --minimum-expected-tests 1525
+          --report-trx --report-trx-filename test-results.trx
+          --results-directory .artifacts/ci-performance
           --filter
           'FullyQualifiedName!~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport&FullyQualifiedName!~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers&FullyQualifiedName!~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures&FullyQualifiedName!~PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses&FullyQualifiedName!~StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp&FullyQualifiedName!~SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp&FullyQualifiedName!~LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata&FullyQualifiedName!~ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery&FullyQualifiedName!~OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes&FullyQualifiedName!~EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance&FullyQualifiedName!~Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload&FullyQualifiedName!~StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry&FullyQualifiedName!~LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces&FullyQualifiedName!~SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference&FullyQualifiedName!~StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope&FullyQualifiedName!~NormalNavigationRefreshesPublishedEntryAndNestedModulesWithRealBrowserCaching'
+
+      - name: Summarize .NET/SQL diagnostic evidence
+        if: ${{ always() }}
+        continue-on-error: true
+        run: python3 -B scripts/ci/diagnostic_report.py
+
+      - name: Upload .NET/SQL performance telemetry
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/ci-performance/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Run legacy/frontend unit tests
         run: npm test

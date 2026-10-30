@@ -1,4 +1,5 @@
 'use strict';
+const { decideConfirmation, rejectNativeDialogs } = require('./confirmation.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -29,13 +30,12 @@ async function main() {
       report.externalRequests += 1; return route.abort('blockedbyclient');
     });
     const page = await context.newPage();
-    page.on('pageerror', error => report.pageErrors.push(error.message));
+    page.on('pageerror', error => report.pageErrors.push(error.message)); rejectNativeDialogs(page, report.pageErrors);
     page.on('request', request => {
       if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/email-operations/test') {
         report.posts.push({ url: request.url(), body: request.postDataJSON() });
       }
     });
-    page.on('dialog', dialog => dialog.accept());
     return page;
   }
   async function scan(page, name) {
@@ -67,7 +67,10 @@ async function main() {
     await page.goto(`${origin}/staff/?stage=settings&settingsScope=${scope}#settings-smtp`, { waitUntil: 'networkidle' });
     const setup = page.locator('#settings-email-test');
     await setup.waitFor({ state: 'visible' });
-    await setup.locator('[data-email-test="send"]:not([disabled])').waitFor();
+    await setup.locator('[data-email-test="send"]:not([disabled])').waitFor().catch(async error => {
+      await page.screenshot({ path: path.join(artifacts, 'email-test-unavailable.png'), fullPage: true });
+      throw new Error(`${error.message}\nSaved email context: ${await setup.textContent()}`);
+    });
     assert.match(await setup.textContent(), /Saved Email Test Library/);
     assert.match(await setup.textContent(), /Saved library sender/);
     assert.match(await setup.textContent(), /primary-test@example.org/);
@@ -78,7 +81,7 @@ async function main() {
     assert.match(await setup.locator('[data-email-test="result"]').textContent(), /Save or discard/);
     assert.match(await setup.locator('[data-email-test="context"]').textContent(), /Saved library sender/,
       'draft sender controls never replace the saved test context');
-    await page.locator('#settings-discard').click();
+    await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
     await setup.locator('[data-email-test="send"]:not([disabled])').waitFor();
     assert.equal(report.posts.length, 0, 'saved-context checks and discard never send');
     await setup.locator('[data-email-test="send"]').focus();
@@ -97,7 +100,7 @@ async function main() {
     await setup.locator('[data-email-test="refresh"]').click();
     await setup.locator('[data-email-test="retire"]').waitFor({ state: 'visible' });
     await setup.locator('[data-email-test="retire"]').focus();
-    await setup.locator('[data-email-test="retire"]').press('Enter');
+    await decideConfirmation(page, () => setup.locator('[data-email-test="retire"]').press('Enter'), dialog => dialog.accept());
     await setup.locator('[data-email-test="result"]').filter({ hasText: 'Retired the unrecorded client request' }).waitFor();
     assert.equal(report.posts.length, 1, 'explicit retirement makes only a final real status lookup');
     assert.equal(await setup.locator('[data-email-test="send"]').evaluate(node => node === document.activeElement), true,
