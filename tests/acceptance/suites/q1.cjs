@@ -39,6 +39,7 @@ async function start(t, scope = '2') {
 async function close(page, id, fallback = false) {
   await page.keyboard.press('Escape');
   await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+  await page.waitForURL(url => !url.searchParams.has('request'));
   await page.waitForFunction(({ id, fallback }) => fallback
     ? document.activeElement?.id === 'refresh-additional-copies'
     : document.activeElement?.dataset.copyId === id, { id, fallback });
@@ -218,7 +219,9 @@ const scenarios = [
     await rendered(t.page, items.slice(0, 25).map(item => item.id));
     const oldScope = await t.page.locator(grid + ' .additional-copy-open').first().elementHandle();
     await t.page.locator('#additional-copy-library-scope').selectOption('3');
-    const foreign = (await list(t, '3')).items;
+    const foreignResult = await list(t, '3');
+    assert.equal(foreignResult.scope, '3', 'Synthetic second library is an authorized library scope');
+    const foreign = foreignResult.items;
     await rendered(t.page, foreign.map(item => item.id));
     await oldScope.evaluate(node => node.click());
     assert.equal(await t.page.locator('#request-dialog[open]').count(), 0, 'Retired library projection cannot open');

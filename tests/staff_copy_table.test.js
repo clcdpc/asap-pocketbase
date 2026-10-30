@@ -96,15 +96,18 @@ const { fixture } = require('./helpers/staff-controller.cjs');
       }
       assert.equal(opened.length, count, 'Modified/prevented clicks, selection and interactive descendants cannot activate a row');
       for (const [index, field] of [[0, 'title'], [1, 'bibid'], [2, 'libraryOrgName'], [3, 'claimedByDisplayName'], [4, 'created']]) {
+        count = opened.length;
         get(`#additional-copy-grid th:nth-child(${index + 1}) button`).click();
         await until(() => rendered.config.store.getState().sort.columns.some(c => c.index === index), 'Primary sort accepted');
+        assert.equal(opened.length, count, 'Sort headers never activate a task');
         const values = rows().map(row => data.find(t => t.id === row.querySelector('button').dataset.copyId)[field] || 'Unclaimed');
         const expected = [...values].sort((a, b) => field === 'bibid' ? a - b : String(a).localeCompare(String(b)));
         assert.deepEqual(values, expected, `${field} sorts by its underlying primary field`);
         click(cell('library')); assert.equal(opened.at(-1)[0], button().dataset.copyId);
       }
-      get('#additional-copy-grid button[aria-label="Next"]').click();
+      count = opened.length; get('#additional-copy-grid button[aria-label="Next"]').click();
       await until(() => get('#additional-copy-grid .gridjs-currentPage')?.textContent === '2', 'Second page');
+      assert.equal(opened.length, count, 'Pagination never activates a task');
       click(cell('title')); assert.equal(opened.at(-1)[0], button().dataset.copyId);
       for (const query of ['Writer 51', 'ISBN-3', 'Publication 3', 'Task 03', 'A library', 'Current staff', '12']) {
         await filter(query); assert.ok(button(), `Underlying search supports ${query}`);
@@ -128,6 +131,7 @@ const { fixture } = require('./helpers/staff-controller.cjs');
       count = opened.length; click(oldButton); click(oldRow); assert.equal(opened.length, count);
       // Even reinserting a retired row in the live container cannot revive its captured projection.
       get('#additional-copy-grid tbody').append(oldRow); click(oldButton); click(oldRow.querySelector('td'));
+      assert.equal(click(oldRow.querySelector('a')), false, 'A reinserted stale BIB link cannot navigate');
       assert.equal(opened.length, count); oldRow.remove();
       const focusId = button().dataset.copyId;
       await filter('no matching task');

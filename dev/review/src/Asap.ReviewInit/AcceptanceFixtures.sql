@@ -62,7 +62,7 @@ UPDATE asap.SystemSettings SET LeapBibUrlPattern = N'https://catalog.example.org
 WHERE OrganizationId = 1 AND NULLIF(LTRIM(RTRIM(LeapBibUrlPattern)), N'') IS NULL;
 IF NOT EXISTS (SELECT 1 FROM asap.Organization WHERE Id = 3)
     INSERT INTO asap.Organization (Id, DisplayName, Abbreviation, IsActive, LastSyncedUtc, OrganizationCodeId, ParentOrganizationId)
-    VALUES (3, N'Q1 Synthetic Library with a deliberately long display name for wrapping', N'Q1', 1, @now, 3, 1);
+    VALUES (3, N'Q1 Synthetic Library with a deliberately long display name for wrapping', N'Q1', 1, @now, 2, 1);
 IF NOT EXISTS (SELECT 1 FROM asap.StaffUser WHERE NormalizedUserPrincipalName = N'Q1-CLAIMANT@EXAMPLE.ORG')
     INSERT INTO asap.StaffUser (UserPrincipalName, NormalizedUserPrincipalName, DisplayName, NotificationEmail, Role, OrganizationId, IsActive)
     VALUES (N'q1-claimant@example.org', N'Q1-CLAIMANT@EXAMPLE.ORG',
