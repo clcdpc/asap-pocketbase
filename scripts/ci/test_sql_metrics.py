@@ -173,8 +173,12 @@ class SqlLifecycleTests(unittest.TestCase):
         workflow = Path(__file__).resolve().parents[2] / ".github/workflows/dotnet.yml"
         text = workflow.read_text()
         def command(name, style):
-            match = re.search(r"      - name: " + re.escape(name) + r"\n        shell: bash\n        run: " + re.escape(style) + r"\n(.*?)(?=\n      - name:)", text, re.S)
-            body = textwrap.dedent(match[1]).strip()
+            match = re.search(r"      - name: " + re.escape(name)
+                + r"\n((?:        [^\n]*\n)*?)        run: " + re.escape(style)
+                + r"\n(.*?)(?=\n      - |\Z)", text, re.S)
+            self.assertIsNotNone(match, f"Missing SQL bootstrap step: {name}")
+            self.assertIn("        shell: bash\n", match[1])
+            body = textwrap.dedent(match[2]).strip()
             return " ".join(body.splitlines()) if style == ">-" else body
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -182,11 +186,12 @@ class SqlLifecycleTests(unittest.TestCase):
             docker = root / "docker"
             docker.write_text(f"#!{sys.executable}\nimport os,sys\nfrom pathlib import Path\n"
                 f"assert all({SECRET!r} not in arg for arg in sys.argv)\n"
-                f"if sys.argv[1]=='run': assert os.environ['MSSQL_SA_PASSWORD']=={SECRET!r}; assert 'MSSQL_SA_PASSWORD' in sys.argv\n"
+                f"if sys.argv[1]=='run': assert os.environ['MSSQL_SA_PASSWORD']=={SECRET!r}; assert 'MSSQL_SA_PASSWORD' in sys.argv; assert sys.argv[-1]==os.environ['SQL_IMAGE']\n"
                 f"elif sys.argv[1]=='exec': assert sys.stdin.read()=={SECRET!r}+'\\n'; assert '-P' not in sys.argv[-1]\n"
                 f"with Path({str(calls)!r}).open('a') as stream: stream.write(sys.argv[1]+'\\n')\n", encoding="utf-8")
             docker.chmod(0o755)
-            env = dict(os.environ, PATH=str(root), ASAP_TEST_SQL_SA_PASSWORD=SECRET)
+            env = dict(os.environ, PATH=str(root), ASAP_TEST_SQL_SA_PASSWORD=SECRET,
+                       SQL_IMAGE="mcr.microsoft.com/mssql/server@sha256:" + "1" * 64)
             for name, style in (("Start SQL Server 2022", ">-"), ("Wait for SQL Server", "|")):
                 result = subprocess.run(["/bin/bash", "-c", command(name, style)], env=env, capture_output=True, text=True, timeout=4)
                 self.assertEqual(result.returncode, 0, result.stderr)
