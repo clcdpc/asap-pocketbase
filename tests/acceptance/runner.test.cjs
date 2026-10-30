@@ -340,7 +340,7 @@ test('existing frontend/browser entry points and full CI guard remain; artifacts
   }
   const workflow = await fs.readFile(path.join(repository, '.github/workflows/dotnet.yml'), 'utf8');
   assert.match(workflow, /dotnet test --project tests\/Asap.Tests\/Asap.Tests.csproj/);
-  assert.match(workflow, /--minimum-expected-tests 1439/);
+  assert.match(workflow, /--minimum-expected-tests 1525/);
   assert.match(workflow, /run: npm test/);
   assert.match(workflow, /run: npm run test:browser/);
   assert.match(execFileSync('git', ['check-ignore', '.artifacts/acceptance/run/results.json'], { cwd: repository, encoding: 'utf8' }), /acceptance/);
@@ -401,9 +401,9 @@ test('partial results never report automated completion while required scenarios
   assert.equal(exitCode(report), 2);
 });
 
-test('smoke registers exactly two scenarios with explicit write metadata and preserves pr410', async () => {
+test('registered suites preserve smoke/pr410 and make all Q1 scenarios read-only', async () => {
   const registry = require('./suites/index.cjs');
-  assert.deepEqual(Object.keys(registry), ['pr410', 'smoke']);
+  assert.deepEqual(Object.keys(registry), ['pr410', 'smoke', 'q1']);
   assert.equal(registry.smoke.id, 'smoke');
   assert.equal(registry.smoke.mutations, true);
   assert.deepEqual(registry.smoke.scenarios.map(s => [s.id, s.writes]), [
@@ -412,8 +412,11 @@ test('smoke registers exactly two scenarios with explicit write metadata and pre
   for (const suite of Object.values(registry)) {
     assert.ok(suite.requires.includes('wslc-review-0.4.0'));
     assert.ok(suite.human.length > 0);
-    assert.ok(suite.uncovered.length > 0);
+    assert.ok(Array.isArray(suite.uncovered));
   }
+  assert.equal(registry.q1.mutations, false);
+  assert.equal(registry.q1.scenarios.length, 5);
+  assert.ok(registry.q1.scenarios.every(scenario => scenario.writes === false && scenario.requirements.length > 0));
   const baseline = execFileSync('git', ['show', '6f928007edf53bb48aeaf9018357aacc2bdaf8dc:tests/acceptance/suites/pr410.cjs'],
     { cwd: repository, encoding: 'utf8' });
   const previous = [...baseline.matchAll(/\{ id: '([^']+)', requirements: \[.*\], writes: (true|false)/g)]

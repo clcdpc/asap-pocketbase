@@ -135,7 +135,38 @@ textarea { min-height: 108px; resize: vertical; }
 .gridjs-wrapper { width: 100%; overflow-x: auto; border-radius: 0; box-shadow: none; border-color: var(--line); }
 table.gridjs-table { width: 100%; min-width: 920px; max-width: none; table-layout: fixed; }
 #request-grid table.gridjs-table { min-width: 0; }
-#additional-copy-grid table.gridjs-table { min-width: 1450px; }
+#additional-copy-grid { container: additional-copies / inline-size; }
+#additional-copy-grid table.gridjs-table { min-width: 0; }
+#additional-copy-grid td.gridjs-td, #additional-copy-grid th.gridjs-th { padding: 10px 8px; }
+#additional-copy-grid tbody tr:has(.additional-copy-open) { cursor: pointer; }
+#additional-copy-grid tbody tr:has(.additional-copy-open):hover td { background: #f1f7fa; }
+.additional-copy-cell { display: grid; gap: 4px; min-width: 0; }
+.additional-copy-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.additional-copy-title { color: var(--brand-dark); font-weight: 700; }
+.additional-copy-secondary { color: var(--muted); font-size: .84rem; }
+.additional-copy-notes { justify-self: start; }
+.additional-copy-card-label { display: none; }
+#additional-copy-grid time > span { display: block; }
+#additional-copy-grid .additional-copy-open { min-height: 44px; white-space: nowrap; justify-content: center; }
+@container additional-copies (max-width: 900px) {
+  #additional-copy-grid .gridjs-wrapper { overflow: visible; border: 0; }
+  #additional-copy-grid table.gridjs-table, #additional-copy-grid thead, #additional-copy-grid tbody { display: block; }
+  /* Retain the existing primary sort controls and table semantics in cards. */
+  #additional-copy-grid thead tr { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  #additional-copy-grid th.gridjs-th { width: auto !important; flex: 1 1 auto; border: 1px solid var(--line); border-radius: 4px; }
+  #additional-copy-grid th[data-copy-column="action"] { position: absolute; width: 1px !important; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
+  #additional-copy-grid tbody { display: grid; gap: 12px; }
+  #additional-copy-grid tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 4px; }
+  #additional-copy-grid td.gridjs-td { display: block; padding: 0; border: 0; background: transparent; }
+  #additional-copy-grid td[data-copy-column="title"], #additional-copy-grid td[data-copy-column="action"],
+  #additional-copy-grid .gridjs-message { grid-column: 1 / -1; }
+  .additional-copy-card-label { display: block; color: var(--muted); font-size: .78rem; font-weight: 700; }
+  #additional-copy-grid .additional-copy-open { width: 100%; }
+  #additional-copy-grid .gridjs-footer { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px 6px; }
+  #additional-copy-grid .gridjs-pagination { display: flex; flex-wrap: wrap; gap: 10px; min-width: 0; }
+  #additional-copy-grid .gridjs-pages { display: flex; flex-wrap: wrap; }
+  #additional-copy-grid .gridjs-pages button { min-width: 36px; min-height: 44px; padding: 6px; }
+}
 .bulk-delete-items { max-height: 220px; overflow: auto; overflow-wrap: anywhere; }
 #bulk-delete-results { overflow-wrap: anywhere; }
 th.gridjs-th { background: #eef3f5; color: #26333d; }

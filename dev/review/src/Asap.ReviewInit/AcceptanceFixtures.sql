@@ -55,4 +55,43 @@ IF NOT EXISTS (SELECT 1 FROM asap.EmailSettings WHERE OrganizationId = 2)
 IF NOT EXISTS (SELECT 1 FROM asap.PatronSettings WHERE OrganizationId = 2)
     INSERT INTO asap.PatronSettings (OrganizationId, SuccessTitle, UpdatedUtc)
     VALUES (2, N'Acceptance suggestion received', @now);
+
+-- Q1 presentation/navigation only: 24 extra open tasks plus the two existing
+-- copy seeds cross the 25-row page boundary. No acceptance scenario mutates them.
+UPDATE asap.SystemSettings SET LeapBibUrlPattern = N'https://catalog.example.org/bib/{{bibid}}'
+WHERE OrganizationId = 1 AND NULLIF(LTRIM(RTRIM(LeapBibUrlPattern)), N'') IS NULL;
+IF NOT EXISTS (SELECT 1 FROM asap.Organization WHERE Id = 3)
+    INSERT INTO asap.Organization (Id, DisplayName, Abbreviation, IsActive, LastSyncedUtc, OrganizationCodeId, ParentOrganizationId)
+    VALUES (3, N'Q1 Synthetic Library with a deliberately long display name for wrapping', N'Q1', 1, @now, 3, 1);
+IF NOT EXISTS (SELECT 1 FROM asap.StaffUser WHERE NormalizedUserPrincipalName = N'Q1-CLAIMANT@EXAMPLE.ORG')
+    INSERT INTO asap.StaffUser (UserPrincipalName, NormalizedUserPrincipalName, DisplayName, NotificationEmail, Role, OrganizationId, IsActive)
+    VALUES (N'q1-claimant@example.org', N'Q1-CLAIMANT@EXAMPLE.ORG',
+        N'Q1 Synthetic Claimant with a deliberately long staff display name', N'q1-claimant@example.org', N'staff', 2, 1);
+DECLARE @q1Claimant bigint = (SELECT Id FROM asap.StaffUser WHERE NormalizedUserPrincipalName = N'Q1-CLAIMANT@EXAMPLE.ORG');
+INSERT INTO asap.AdditionalCopyRequest
+    (LegacyId, LibraryOrganizationId, LibraryNameSnapshot, BibId, Title, Author, Identifier, Publication,
+     MaterialFormatId, FormatSnapshot, Status, Notes, CreatedByDisplayName, CreatedUtc, UpdatedUtc,
+     ClaimedByStaffUserId, ClaimedByDisplayName, ClaimedAtUtc, ClaimType, ClosedUtc)
+SELECT CONCAT(N'acceptance-q1-', n.value), CASE WHEN n.value = 26 THEN 3 ELSE 2 END,
+    CASE WHEN n.value = 26 THEN N'Q1 Synthetic Library with a deliberately long display name for wrapping' ELSE N'Review Library' END,
+    942000 + n.value,
+    CONCAT(N'Q1 copy ', RIGHT(CONCAT(N'0', n.value), 2), CASE WHEN n.value = 1 THEN
+        N' — The atlas of forthcoming stories and an exceptionally long working title for a compact additional copies row' ELSE N'' END),
+    CASE WHEN n.value = 2 THEN NULL WHEN n.value = 1 THEN
+        N'Synthetic Author with a deliberately long name and several collaborators contributing to this forthcoming anthology'
+        ELSE CONCAT(N'Synthetic author ', 27 - n.value) END,
+    CONCAT(N'Q1-IDENTIFIER-', n.value), CONCAT(N'Q1 publication ', n.value),
+    CASE WHEN n.value = 2 THEN NULL ELSE @book END, CASE WHEN n.value = 2 THEN NULL ELSE N'Book' END,
+    CASE WHEN n.value = 25 THEN N'closed' ELSE N'open' END,
+    CASE WHEN n.value = 1 THEN N'Q1 synthetic notes remain available in the existing details view.' ELSE NULL END,
+    CASE WHEN n.value = 2 THEN NULL ELSE N'Q1 Synthetic Creator with a deliberately long staff name' END,
+    DATEADD(minute, n.value, CONVERT(datetime2(7), '2026-10-02T13:14:00')),
+    DATEADD(minute, n.value, CONVERT(datetime2(7), '2026-10-02T13:14:00')),
+    CASE WHEN n.value = 1 THEN @q1Claimant ELSE NULL END,
+    CASE WHEN n.value = 1 THEN N'Q1 Synthetic Claimant with a deliberately long staff display name' ELSE NULL END,
+    CASE WHEN n.value = 1 THEN CONVERT(datetime2(7), '2026-10-02T13:15:00') ELSE NULL END,
+    CASE WHEN n.value = 1 THEN N'manual' ELSE NULL END,
+    CASE WHEN n.value = 25 THEN CONVERT(datetime2(7), '2026-10-03T13:14:00') ELSE NULL END
+FROM GENERATE_SERIES(1, 26) n
+WHERE NOT EXISTS (SELECT 1 FROM asap.AdditionalCopyRequest c WHERE c.LegacyId = CONCAT(N'acceptance-q1-', n.value));
 COMMIT;

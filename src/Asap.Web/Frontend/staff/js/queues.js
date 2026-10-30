@@ -602,7 +602,16 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
   const state = { additionalCopies: [], additionalCopyGrid: null, loadedContext: null, stale: true };
   const reads = createLatestLoad();
   const events = new window.AbortController();
-  let disposed = false, acceptingScope = false, targetGeneration = 0;
+  const openers = new WeakMap();
+  let disposed = false, acceptingScope = false, targetGeneration = 0, renderGeneration = 0;
+  const columns = [
+    { name: 'Title / Author', kind: 'title', width: 'calc((100% - 150px) * .32)', value: task => task.title || '' },
+    { name: 'BIB / Format', kind: 'bib', width: 'calc((100% - 150px) * .12)', value: task => task.bibid ?? '' },
+    { name: 'Library', kind: 'library', width: 'calc((100% - 150px) * .15)', value: task => task.libraryOrgName || '' },
+    { name: 'Staff', kind: 'staff', width: 'calc((100% - 150px) * .20)', value: task => task.claimedByDisplayName || 'Unclaimed' },
+    { name: 'Timing', kind: 'timing', width: 'calc((100% - 150px) * .21)', value: task => task.created || '' },
+    { name: 'Action', kind: 'action', width: '150px' }
+  ];
 
   function invalidate() { targetGeneration++; reads.begin('queue-target').abort(); reads.begin('queue').abort(); if (!disposed) dom.additionalCopyRefresh.disabled = false; }
 
@@ -720,8 +729,63 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
     });
   }
 
+  function liveCopyRow(model, control) {
+    const context = getContext();
+    return !disposed && !state.stale && sessionIdentity.isCurrent(model.owner) &&
+      model.generation === renderGeneration && state.additionalCopies.includes(model.task) &&
+      context.activeView === 'additional-copies' && context.scope === model.context.scope &&
+      context.additionalCopyStatus === model.context.status && model.task.status === context.additionalCopyStatus &&
+      control.isConnected && dom.additionalCopyGrid.contains(control);
+  }
+
+  function openCopy(opener) {
+    const model = openers.get(opener);
+    if (model && liveCopyRow(model, opener)) onOpen(String(model.task.id), opener);
+  }
+
+  function formatCopyCell(column, model) {
+    const h = window.gridjs.h, task = model.task;
+    const text = (value, className = '') => h('span', { className: `additional-copy-text ${className}`, title: value }, value);
+    const secondary = value => text(value, 'additional-copy-secondary');
+    let content;
+    if (column.kind === 'title') {
+      content = [text(task.title || 'Title not recorded', 'additional-copy-title'),
+        secondary(task.author || 'Author not recorded'),
+        task.notes?.trim() ? h('span', { className: 'tag additional-copy-notes' }, 'Notes') : null];
+    } else if (column.kind === 'bib') {
+      const url = researchRecordUrl(task.research, 'bib', task.bibid);
+      content = [url ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer',
+        onClick: event => { if (!liveCopyRow(model, event.currentTarget)) event.preventDefault(); }
+      }, String(task.bibid)) : text(String(task.bibid ?? 'Not recorded')),
+      secondary(task.formatLabel || task.format || 'Not recorded')];
+    } else if (column.kind === 'library') {
+      content = [text(task.libraryOrgName || 'Library not recorded')];
+    } else if (column.kind === 'staff') {
+      content = [text(task.claimedByDisplayName || 'Unclaimed', `claim-label${task.claimedByStaffUserId === model.owner?.id ? ' mine' : ''}`),
+        secondary(`Created by: ${task.createdByUsername || 'Not recorded'}`)];
+    } else if (column.kind === 'timing') {
+      const date = new Date(task.created);
+      const timeout = task.status !== 'open' ? '—' : task.timeoutContext
+        ? timeoutLabel(task.timeoutContext.enabled, task.timeoutContext.days) : 'Unavailable';
+      content = [task.created && !Number.isNaN(date.getTime())
+        ? h('time', { dateTime: task.created, title: dateTime(task.created) }, [
+          h('span', {}, date.toLocaleDateString()), h('span', {}, date.toLocaleTimeString())
+        ]) : text(dateTime(task.created)), secondary(`Task timeout: ${timeout}`)];
+    } else {
+      return h('button', { type: 'button', className: 'grid-open additional-copy-open',
+        'data-copy-id': String(task.id), 'aria-label': `Open additional-copy task ${task.id}`,
+        ref: node => { if (node) openers.set(node, model); },
+        onClick: event => openCopy(event.currentTarget)
+      }, 'Open details');
+    }
+    return h('div', { className: 'additional-copy-cell' }, [
+      h('span', { className: 'additional-copy-card-label', 'aria-hidden': 'true' }, column.name), ...content
+    ]);
+  }
+
   function renderAdditionalCopyGrid() {
     if (disposed) return;
+    const generation = ++renderGeneration;
     const owner = sessionIdentity.preferences();
     onRendered();
     const uncertainCreation = recovery.current();
@@ -744,62 +808,20 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
       : `${requests.length} ${getContext().additionalCopyStatus} task${requests.length === 1 ? '' : 's'}`;
     dom.additionalCopyEmpty.hidden = state.stale || requests.length !== 0;
     if (state.stale) return;
-    const rows = requests.map(request => [
-      request.title,
-      request.author || '—',
-      request.bibid,
-      request.libraryOrgName,
-      request.formatLabel || request.format || 'Not recorded',
-      request.createdByUsername || 'Not recorded',
-      request.claimedByDisplayName || 'Unclaimed',
-      request.status === 'open'
-        ? request.timeoutContext ? timeoutLabel(request.timeoutContext.enabled, request.timeoutContext.days) : 'Unavailable'
-        : '—',
-      request.notes?.trim() ? 'Present' : '—',
-      dateTime(request.created),
-      request.id
-    ]);
+    // Every cell carries the same immutable task identity and accepted context.
+    // Neither formatting nor activation depends on a column position or display text.
+    const rows = requests.map(task => {
+      const model = Object.freeze({ task, owner, context: state.loadedContext, generation });
+      return columns.map(() => model);
+    });
     if (!state.additionalCopyGrid) {
       state.additionalCopyGrid = createQueueGrid({
-        columns: [
-          { name: 'Title', width: '220px' },
-          { name: 'Author', width: '155px' },
-          { name: 'BIB ID', width: '140px', formatter: (cell, row) => {
-            const request = state.additionalCopies.find(item => item.id === row.cells[10].data);
-            const url = researchRecordUrl(request?.research, 'bib', request?.bibid);
-            return url ? window.gridjs.h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, String(cell)) : cell;
-          } },
-          { name: 'Library', width: '145px' },
-          { name: 'Format', width: '125px' },
-          { name: 'Created by', width: '145px' },
-          {
-            name: 'Claim',
-            width: '140px',
-            formatter: (cell, row) => {
-              const request = state.additionalCopies.find(item => item.id === row.cells[10].data);
-              const mine = request && request.claimedByStaffUserId === sessionIdentity.preferences()?.id;
-              return window.gridjs.h('span', { className: `claim-label${mine ? ' mine' : ''}` }, cell);
-            }
-          },
-          { name: 'Task timeout', width: '120px' },
-          { name: 'Notes', width: '85px' },
-          { name: 'Created', width: '155px' },
-          {
-            name: 'Open',
-            width: '74px',
-            sort: false,
-            formatter: id => window.gridjs.h('button', {
-              type: 'button',
-              className: 'grid-open additional-copy-open',
-              'aria-label': `Open additional-copy task ${id}`,
-              onClick: event => {
-                if (sessionIdentity.isCurrent(owner) && !disposed && getContext().activeView === 'additional-copies' && event.currentTarget.isConnected && dom.additionalCopyGrid.contains(event.currentTarget)) {
-                  onOpen(String(id), event.currentTarget);
-                }
-              }
-            }, [window.gridjs.h('i', { className: 'fa fa-chevron-right', 'aria-hidden': 'true' }), 'Open'])
-          }
-        ],
+        columns: columns.map(column => ({ name: column.name, width: column.width,
+          attributes: { 'data-copy-column': column.kind },
+          sort: column.value ? { compare: (a, b) => String(column.value(a.task)).localeCompare(String(column.value(b.task)),
+            undefined, { numeric: column.kind === 'bib' }) } : false,
+          formatter: model => formatCopyCell(column, model)
+        })),
         data: rows,
         // Keep sizing headers from replacing the live Sort processor during a render; every column has a width.
         autoWidth: false,
@@ -812,6 +834,17 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
     }
   }
 
+  root.addEventListener('click', event => {
+    if (event.defaultPrevented || event.button > 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey ||
+        event.target.closest('a, button, input, select, textarea, label, summary, [popover], [role="button"], [role="link"], [tabindex], [contenteditable]')) return;
+    const row = event.target.closest('tbody tr');
+    if (!row || !dom.additionalCopyGrid.contains(row)) return;
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed &&
+        (row.contains(selection.anchorNode) || row.contains(selection.focusNode))) return;
+    const opener = row.querySelector('.additional-copy-open');
+    if (opener) openCopy(opener);
+  }, { signal: events.signal });
   dom.additionalCopyRefresh.addEventListener('click', () => { void refresh(); }, { signal: events.signal });
   dom.additionalCopyScope.addEventListener('change', async () => {
     const scope = dom.additionalCopyScope.value;
@@ -832,7 +865,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
     isReady: context => !state.stale && state.loadedContext?.scope === context.scope && state.loadedContext?.status === context.additionalCopyStatus,
     find: id => state.additionalCopies.find(item => item.id === id),
     markStale,
-    focusReturn: (id, fallback) => focusPort({ grid: () => dom.additionalCopyGrid, label: `Open additional-copy task ${id}`, fallback, sessionIdentity, getContext, copy: true }),
+    focusReturn: id => focusPort({ grid: () => dom.additionalCopyGrid, label: `Open additional-copy task ${id}`, fallback: dom.additionalCopyRefresh, sessionIdentity, getContext, copy: true }),
     activate({ previous }) { if (disposed) return; if (previous !== 'additional-copies') resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); },
     deactivate: invalidate,
     refreshOnEntry() { if (state.stale || state.loadedContext?.scope !== getContext().scope || state.loadedContext?.status !== getContext().additionalCopyStatus) return refresh(); },
