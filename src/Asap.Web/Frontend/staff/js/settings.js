@@ -790,7 +790,7 @@ export function createSettingsController({
 
   function snapshotDrafts() {
     return JSON.stringify([...dom.form.querySelectorAll('input, select, textarea')]
-      .filter(control => !control.closest('[data-settings-ignore="true"]'))
+      .filter(control => control.id !== 'patron-code-picker')
       .map(control => [control.value, control.checked]));
   }
 

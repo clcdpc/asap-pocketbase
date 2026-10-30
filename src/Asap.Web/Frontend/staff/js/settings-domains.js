@@ -852,7 +852,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     state.selectedCodes = [...values];
     if (!dom.codes || !dom.codeSelection) return;
     // The form's existing draft tracking observes this value, never picker text or focus.
-    dom.codeSelection.value = JSON.stringify(values);
+    dom.codeSelection.value = JSON.stringify([...values].sort((left, right) => Number(left) - Number(right)));
     dom.codes.replaceChildren();
     const choices = codeChoices();
     const inherited = codesInherited();
@@ -864,7 +864,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         if (codesInherited() || !state.selectedCodes.includes(id)) return;
         renderCodes(state.selectedCodes.filter(value => value !== id));
         const buttons = [...dom.codes.querySelectorAll('button')];
-        (buttons[Math.min(index, buttons.length - 1)] || dom.codeSearch).focus();
+        const fallback = !dom.codeSearch.disabled ? dom.codeSearch
+          : !dom.codeRetry.disabled ? dom.codeRetry
+          : !dom.codesUseSystem.disabled ? dom.codesUseSystem : dom.codeEligibilityEnabled;
+        (buttons[Math.min(index, buttons.length - 1)] || fallback).focus();
         onChange();
       });
       dom.codes.append(element('li', { 'data-code-id': id }, [element('span', { text: label }), remove]));
@@ -1423,7 +1426,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     return JSON.stringify({
       publication: { useSystem: state.system || !dom.publicationUseSystem || dom.publicationUseSystem.checked, values: readPublication() },
       creators: { useSystem: state.system || !dom.creatorsUseSystem || dom.creatorsUseSystem.checked, values: readSetRows(dom.creators, 'creator') },
-      codes: { useSystem: state.system || !dom.codesUseSystem || dom.codesUseSystem.checked, values: readSelectedCodes() },
+      codes: { useSystem: state.system || !dom.codesUseSystem || dom.codesUseSystem.checked,
+        values: readSelectedCodes().sort((left, right) => Number(left) - Number(right)) },
       providers: readProviders(),
       formats: readFormats(),
       fields: readFields(),

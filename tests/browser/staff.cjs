@@ -3405,7 +3405,11 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
     await row.waitFor();
     await row.getByLabel(/^Display name/).fill('Authoritative browser actor');
     await row.getByLabel(/^Notification email/).fill('actor-revision@example.org');
+    const profileSaved = page.waitForResponse(response => response.request().method() === 'PATCH' &&
+      new URL(response.url()).pathname === `/api/asap/staff/users/${original.id}`);
     await row.getByRole('button', { name: 'Save profile', exact: true }).click();
+    const profileResponse = await profileSaved;
+    assert.equal(profileResponse.status(), 200, await profileResponse.text());
     await page.locator('#staff-access-status').filter({ hasText: /Staff profile saved/ }).waitFor();
     await page.waitForFunction(() => !document.getElementById('settings-form').inert);
     const revised = (await session(context, args.baseOrigin)).staff;
