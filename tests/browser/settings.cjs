@@ -1,4 +1,5 @@
 'use strict';
+const { decideConfirmation, rejectNativeDialogs } = require('./confirmation.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -490,7 +491,7 @@ async function runPatronTextRefinements(page, axeSource, args, report, saveSetti
   const config = await page.evaluate(async library => (await fetch(`/api/asap/config?libraryOrgId=${library}`)).json(), library);
   assert.equal(config.successMessage, expected);
   const patron = await page.context().newPage();
-  patron.on('pageerror', error => report.pageErrors.push(error.message));
+  patron.on('pageerror', error => report.pageErrors.push(error.message)); rejectNativeDialogs(patron, report.pageErrors);
   try {
     await patron.goto(`${args.baseOrigin}/patron/?libraryOrgId=${library}`, { waitUntil: 'networkidle' });
     const rendered = await patron.evaluate(async config => {
@@ -528,10 +529,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     return response.json();
   }, scope);
   const reload = async scope => {
-    const discardDraft = dialog => dialog.accept();
-    page.on('dialog', discardDraft);
-    try { await page.reload({ waitUntil: 'networkidle' }); }
-    finally { page.off('dialog', discardDraft); }
+    await page.reload({ waitUntil: 'networkidle' });
     await ready(scope);
   };
   const switchScope = async scope => {
@@ -726,12 +724,10 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     // The shortcut shares normal draft consent; cancellation leaves scope and
     // draft untouched, acceptance switches and discards only after consent.
     await inherited.locator('.template-subject').fill('Unsaved library draft');
-    page.once('dialog', dialog => dialog.dismiss());
-    await page.locator('#settings-switch-system').click();
+    await decideConfirmation(page, () => page.locator('#settings-switch-system').click(), dialog => dialog.dismiss());
     assert.equal(await page.locator('#settings-scope').inputValue(), library);
     assert.equal(await inherited.locator('.template-subject').inputValue(), 'Unsaved library draft');
-    page.once('dialog', dialog => dialog.accept());
-    await page.locator('#settings-switch-system').click();
+    await decideConfirmation(page, () => page.locator('#settings-switch-system').click(), dialog => dialog.accept());
     await page.waitForFunction(() => document.getElementById('settings-scope').value === 'system' &&
       !document.getElementById('settings-form').inert);
     await page.waitForLoadState('networkidle');
@@ -940,7 +936,7 @@ async function main() {
       return route.abort('blockedbyclient');
     });
     const page = await context.newPage();
-    page.on('pageerror', error => pageErrors.push(error.message));
+    page.on('pageerror', error => pageErrors.push(error.message)); rejectNativeDialogs(page, pageErrors);
     page.on('request', request => {
       if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/settings') {
         postedPayload = request.postDataJSON();

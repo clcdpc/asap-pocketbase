@@ -162,8 +162,11 @@ exports.verify = async ({ page, context, baseURL, library, scan }) => {
     await settled(page, expected('suggestion'));
     report.rapid = await finish(page);
     assert.equal(requests.length, beforeRapid);
-    assert.equal(report.rapid.events.filter(event => event.type === 'create').length, 5);
-    stable(report.rapid, expected('suggestion'), 'Rapid five-tab selection');
+    assert.equal(report.rapid.events.filter(event => event.type === 'create').length, 0,
+      'The final current-tab intent cancels earlier asynchronous departures.');
+    assert.equal(report.rapid.commits.length, 0);
+    assert.ok(report.rapid.frames.every(frame => frame.value.ready && !frame.value.loading &&
+      JSON.stringify(frame.value.rows) === JSON.stringify(expected('suggestion'))), 'Rapid selection preserves the final accepted table.');
 
     await grid.getByRole('button', { name: 'Next', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('#request-grid .gridjs-currentPage')?.textContent === '2');

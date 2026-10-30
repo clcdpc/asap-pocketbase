@@ -43,14 +43,14 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
     const confirmMessages = [];
-    dom.window.confirm = message => {
+    require('./helpers/confirmation.cjs').answerConfirmations(dom.window, message => {
       confirmMessages.push(message);
       return !(scenarioOptions.formatWarning || scenarioOptions.autoClaimOther ||
         scenarioOptions.autoHoldOffBib || scenarioOptions.autoHoldOffOutstandingPurchase ||
         scenarioOptions.autoHoldOnlyOutstandingPurchase ||
         scenarioOptions.legacyNoHoldOutstandingEdit || scenarioOptions.legacyNoHoldPendingEdit) ||
         confirmMessages.length > 1;
-    };
+    });
     dom.window.gridjs = require(path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js'));
     const staff = {
       id: '20', role: scenarioOptions.supersededFollowup || scenarioOptions.pickupOperator ? 'super_admin' : 'staff',
@@ -90,7 +90,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         : scenarioOptions.manualFormat ? 'manual' : null,
       publication: null, exactPublicationDate: '2026-01-02',
       notes: 'Editable note', autohold: Boolean(scenarioOptions.unverifiedPendingHold ||
-        scenarioOptions.verifiedPendingHold || scenarioOptions.autoHoldOnlyOutstandingPurchase),
+        scenarioOptions.verifiedPendingHold || scenarioOptions.autoHoldOnlyOutstandingPurchase || scenarioOptions.purchaseAutohold),
       customFields: { shelf: { value: 'Reference', type: 'text', label: 'Shelf' } },
       workflowTags: [], phaseEnteredAt: '2026-01-01T00:00:00Z',
       created: '2026-01-01T00:00:00Z', updated: '2026-01-01T00:00:00Z',
@@ -361,12 +361,21 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     if (scenarioOptions.autoClaimOther) {
       assert.match(document.querySelector('.pending-audit-preview').textContent, /claim transfer/);
       const notes = document.querySelector('.edit-form textarea');
+      if (scenarioOptions.autoHoldOnlyOutstandingPurchase) {
+        const hold = document.querySelector('.edit-form input[type="checkbox"]');
+        hold.checked = false; hold.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      }
       notes.value = 'Updated note';
       notes.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
       const form = document.querySelector('.edit-form');
       form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       assert.equal(payload, null, 'cancelled automatic-claim transfer must not mutate');
+      await until(() => confirmMessages.length > 0 && !document.querySelector('#confirmation-dialog')?.open, 'confirmation choice settled');
       assert.match(confirmMessages[0], /transfers the automatic format claim from the current claimant to your manual claim/);
+      if (scenarioOptions.autoHoldOnlyOutstandingPurchase) {
+        assert.match(confirmMessages[0], /request will close without placing a hold/);
+        assert.equal(confirmMessages.length, 1, 'related Save warnings share one decision');
+      }
       form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       await until(() => payload !== null, 'automatic claim edit submitted');
       assert.equal(payload.notes, 'Updated note');
@@ -411,6 +420,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       const form = document.querySelector('.edit-form');
       form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       assert.equal(payload, null, 'cancelled auto-hold-only change must not mutate');
+      await until(() => confirmMessages.length > 0 && !document.querySelector('#confirmation-dialog')?.open, 'confirmation choice settled');
       assert.match(confirmMessages[0], /request will close without placing a hold/);
       form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       await until(() => payload !== null, 'confirmed auto-hold-only change submitted');
@@ -425,6 +435,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       const form = document.querySelector('.edit-form');
       form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       assert.equal(payload, null, 'cancelled legacy no-hold close must not mutate');
+      await until(() => confirmMessages.length > 0 && !document.querySelector('#confirmation-dialog')?.open, 'confirmation choice settled');
       assert.match(confirmMessages[0], /request will close without placing a hold/);
       form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       await until(() => payload !== null, 'confirmed legacy no-hold edit submitted');
@@ -472,6 +483,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           .find(item => item.textContent.includes('Already own')).click();
         await until(() => payload !== null, 'unchanged verified BIB action submits');
         assert.equal(payload.action, 'alreadyOwn');
+        await until(() => confirmMessages.length > 0 && !document.querySelector('#confirmation-dialog')?.open, 'confirmation choice settled');
         assert.match(confirmMessages[0], /close it without a hold/);
         return;
       }
@@ -482,8 +494,10 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           const form = document.querySelector('.edit-form');
           form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
           assert.equal(payload, null, 'cancelled no-auto-hold consequence must not mutate');
+          await until(() => confirmMessages.length > 0 && !document.querySelector('#confirmation-dialog')?.open, 'confirmation choice settled');
           assert.match(confirmMessages[0], /close.*without placing a hold/);
           if (scenarioOptions.autoHoldOffOutstandingPurchase) {
+            await until(() => confirmMessages.length > 0 && !document.querySelector('#confirmation-dialog')?.open, 'confirmation choice settled');
             assert.match(confirmMessages[0], /request will close without placing a hold/);
           }
           form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
@@ -518,6 +532,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       if (scenarioOptions.formatWarning) {
         assert.equal(payload, null, 'cancelled format warning must not mutate');
+        await until(() => confirmMessages.length > 0 && !document.querySelector('#confirmation-dialog')?.open, 'confirmation choice settled');
         assert.match(confirmMessages[0], /new format rule may reassign or clear the automatic claim/);
         form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       } else {
@@ -638,18 +653,27 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     } else if (scenarioOptions.purchaseVerifiedBib) {
       assert.equal(choice.querySelector('input[type="checkbox"]'), null);
       assert.match(choice.textContent, /A purchase reminder does not apply/);
+      assert.match(choice.textContent, scenarioOptions.purchaseAutohold ? /Pending hold for automatic hold placement/ : /closes this request without placing a hold/);
     } else {
       const checkbox = choice.querySelector('input[type="checkbox"]');
       assert.equal(checkbox.checked, profileDefault);
       checkbox.checked = explicitChoice;
     }
+    if (scenarioOptions.cancelReview) {
+      [...choice.querySelectorAll('button')].find(control => control.textContent.trim() === 'Cancel').click();
+      assert.equal(choice.isConnected, false);
+      assert.equal(payload, null, 'Cancel sends no workflow mutation');
+      assert.deepEqual(confirmMessages, []);
+      return;
+    }
+    if (action === 'reject') assert.equal(choice.querySelector('button[type="submit"]').textContent, 'Reject and close');
+    choice.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     choice.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     await until(() => payload !== null, 'action submitted');
     if (action === 'reject') assert.equal(payload.rejectionTemplateId, templateId);
     else assert.equal(payload.emailPurchaseReminder, scenarioOptions.purchaseVerifiedBib ? false : explicitChoice);
-    if (scenarioOptions.purchaseVerifiedBib) {
-      assert.match(confirmMessages.at(-1), /Close this request without a hold/);
-    }
+    assert.deepEqual(confirmMessages, [], 'the retained review is the final confirmation');
+    assert.equal(mutationPayloads.length, 1, 'duplicate review submits send one command');
     if (scenarioOptions.staleMutation) {
       await until(() => releaseMutation, 'purchase mutation starts');
       document.querySelector('#close-request').click();
@@ -806,6 +830,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       if (scenarioOptions.closeDuringFollowup) {
         await until(() => releaseFollowupQueue, 'delayed follow-up queue load starts');
         document.querySelector('#close-request').click();
+        await until(() => !document.querySelector('#request-dialog').open, 'committed detail closes asynchronously');
         assert.equal(document.querySelector('#request-dialog').open, false,
           'the dialog may close after the committed detail renders, even while the queue refresh is in flight');
         releaseFollowupQueue(response(200, { scope: '2', organizations: [], items: [currentRequest] }));
@@ -874,6 +899,11 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('purchase', false, true, { serverAdvancedStatus: true });
   await scenario('purchase', false, true, { serverAdvancedStatus: true, refreshConcurrentStatus: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, purchaseAutohold: true });
+  await scenario('purchase', true, true, { cancelReview: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, cancelReview: true });
+  await scenario('reject', false, false, { cancelReview: true });
+  await scenario('purchase', false, false, { autoClaimOther: true, autoHoldOnlyOutstandingPurchase: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateDecline: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateNavigateAfterRefresh: true });

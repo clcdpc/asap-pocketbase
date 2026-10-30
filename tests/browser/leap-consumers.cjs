@@ -1,4 +1,5 @@
 'use strict';
+const { rejectNativeDialogs } = require('./confirmation.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -16,7 +17,7 @@ const [baseURL, artifacts, staffId, tenantId, email, requestId, legacyId, copyId
       report.externalRequests.push(route.request().url()); return route.abort();
     });
     const page = await context.newPage();
-    page.on('pageerror', error => report.errors.push(error.message));
+    page.on('pageerror', error => report.errors.push(error.message)); rejectNativeDialogs(page, report.errors);
     const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
     const scan = async state => {
       await page.evaluate(axe);

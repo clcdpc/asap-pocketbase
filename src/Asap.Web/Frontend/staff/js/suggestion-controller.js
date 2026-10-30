@@ -2,6 +2,7 @@ import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { byDisplayLabel } from './display-order.js';
 import { createDraftScope } from './draft-scope.js';
+import { controlSnapshot } from './confirmation.js';
 import { validRequestId } from './recent-requests.js';
 import { notificationOutcome, unconfirmedResponseError } from './mutation-outcome.js';
 import { applyPolarisResultToControls, researchRecordValue } from './research.js';
@@ -11,6 +12,7 @@ import { element, icon, labeledInput, selectWithHistorical, dateTime } from './u
 
 export function createSuggestionController({ root, trigger, sessionIdentity, polarisLookup, announce, getLibraries,
   beforeOpen, beforeClose, openCreatedTitle, openExistingTitle, onReceipt, clearReceipt,
+  getNavigationGeneration = () => 0,
   getScope = () => null, request: send = authorizedJson }) {
   const dom = { staffSuggestionDialog: root, staffSuggestionForm: root.querySelector('#staff-suggestion-form'),
     staffSuggestionStatus: root.querySelector('#staff-suggestion-status'), staffSuggestionBody: root.querySelector('#staff-suggestion-body'),
@@ -45,12 +47,14 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
   function cancelStaffSuggestionLookup() { reads.begin('staff-suggestion-lookup').abort(); }
   function cancelStaffSuggestionConfiguration() { reads.begin('staff-suggestion-configuration').abort(); }
   function invalidate() { cancelStaffSuggestionLookup(); cancelStaffSuggestionConfiguration(); if (lookupContext) polarisLookup.invalidate(lookupContext); }
-  function closeStaffSuggestion(options = {}) {
+  async function closeStaffSuggestion(options = {}) {
     if (disposed || !suggestion && !actor) return true;
     if (!options.force && (activeAttempt?.pending || suggestion?.outcomeUnconfirmed)) {
       setStaffSuggestionStatus('Creation is in progress or unconfirmed. Review its authoritative result before leaving.', 'error'); return false;
     }
-    if (!options.force && !options.guarded && !beforeClose()) return false;
+    const token = stageToken;
+    if (!options.force && !options.guarded && !await beforeClose()) return false;
+    if (stageToken !== token) return false;
     const owner = actor, target = returnFocus;
     if (typeof clearOpeningAnnouncement === 'function') clearOpeningAnnouncement();
     clearOpeningAnnouncement = null;
@@ -63,8 +67,11 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     }
     return true;
   }
-  function open(opener = null, { barcode = null, focusReturn = null } = {}) {
-    if (disposed || !sessionIdentity.actor() || !beforeOpen() || !closeStaffSuggestion({ focusButton: false })) return false;
+  async function open(opener = null, { barcode = null, focusReturn = null } = {}) {
+    const owner = sessionIdentity.preferences(), navigation = getNavigationGeneration();
+    if (disposed || !owner || !await beforeOpen() || !sessionIdentity.isCurrent(owner) ||
+        navigation !== getNavigationGeneration() || !await closeStaffSuggestion({ focusButton: false })) return false;
+    if (disposed || !sessionIdentity.isCurrent(owner) || navigation !== getNavigationGeneration()) return false;
     actor = sessionIdentity.preferences(); returnFocus = focusReturn || opener || document.activeElement;
     const queueScope = String(getScope() ?? '');
     const specificScope = Number(queueScope) > 1 && getLibraries().some(library => String(library.id) === queueScope)
@@ -452,8 +459,8 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     const changeButton = element('button', {
       type: 'button',
       className: 'secondary-button',
-      onclick: () => {
-        if (isCurrentGeneration(token) && beforeClose()) {
+      onclick: async () => {
+        if (isCurrentGeneration(token) && await beforeClose() && isCurrentGeneration(token)) {
           renderStaffSuggestionSearch({ query: patron.barcode, scopeId: String(result.libraryOrgId) });
         }
       }
@@ -592,15 +599,26 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
   }
 
   dom.staffSuggestionForm.addEventListener('submit', submitStaffSuggestion, { signal: events.signal });
-  for (const name of ['input', 'change']) dom.staffSuggestionForm.addEventListener(name, () => drafts.touch(), { signal: events.signal });
+  for (const name of ['input', 'change']) dom.staffSuggestionForm.addEventListener(name, event => drafts.touch(event.target), { signal: events.signal });
   trigger.addEventListener('click', event => open(event.currentTarget), { signal: events.signal });
   root.querySelector('#close-staff-suggestion').addEventListener('click', () => closeStaffSuggestion(), { signal: events.signal });
-  root.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); closeStaffSuggestion(); } }, { signal: events.signal });
-  root.addEventListener('cancel', event => { event.preventDefault(); closeStaffSuggestion(); }, { signal: events.signal });
+  let escapeHeld = false;
+  root.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    // A search input's native Escape can clear its draft. Consume the press,
+    // then ask on release so that press cannot cancel the new dialog as well.
+    event.preventDefault(); escapeHeld = true;
+  }, { signal: events.signal });
+  root.addEventListener('keyup', event => {
+    if (event.key !== 'Escape' || !escapeHeld) return;
+    event.preventDefault(); escapeHeld = false; void closeStaffSuggestion();
+  }, { signal: events.signal });
+  root.addEventListener('cancel', event => { event.preventDefault(); if (!escapeHeld) void closeStaffSuggestion(); }, { signal: events.signal });
   return { open, close: closeStaffSuggestion, invalidate,
     isOpen: () => root.open,
     isDirty: () => Boolean(root.open && drafts.isDirty()),
-    inspectDeparture: () => ({ owner: suggestion, dirty: Boolean(root.open && drafts.isDirty()), stamp: drafts.stamp(),
+    inspectDeparture: () => ({ owner: suggestion, dirty: Boolean(root.open && drafts.isDirty()),
+      stamp: JSON.stringify([drafts.revision(), controlSnapshot(root)]),
       blocked: disposed || Boolean(activeAttempt?.pending && sessionIdentity.isCurrent(activeAttempt.owner) || suggestion?.outcomeUnconfirmed),
       message: 'Creation is in progress or unconfirmed. Review its authoritative result before leaving.',
       confirmMessage: 'Discard the unsaved new suggestion and navigate away?' }),

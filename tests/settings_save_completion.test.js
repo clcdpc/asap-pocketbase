@@ -350,7 +350,7 @@ async function flush() {
         let settingsReads = 0;
         let mutationRequest;
         let committed = 0;
-        witnessDom.window.confirm = () => true;
+        require('./helpers/confirmation.cjs').answerConfirmations(witnessDom.window, () => true);
         global.fetch = async (url, options = {}) => {
           const requestUrl = String(url);
           if (requestUrl.endsWith('/api/asap/staff/session')) {

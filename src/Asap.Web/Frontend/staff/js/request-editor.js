@@ -5,7 +5,7 @@ import { customFieldValue, renderCustomFieldEditor, collectCustomFields } from '
 import { element, icon, commandButton, labeledInput, selectWithHistorical } from './ui.js';
 
 export function createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot = null, verified = null, request: send = authorizedJson }) {
-  const { request, actor, root, scope: interactionScope, isCurrent, isPending, admit, confirm, mutate } = context;
+  const { request, actor, root, scope: interactionScope, isCurrent, isPending, admit, confirm: confirmChanges, mutate } = context;
   const reads = createLatestLoad();
   let editControls = null, editorDirty = false, editorDraft = null, verifiedBib = verified, research = null, lookupContext = null;
   let formEvents = null;
@@ -167,9 +167,11 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     const pendingPreview = element('p', { className: 'pending-audit-preview wide', role: 'status' });
     const saveState = element('strong', { className: 'request-save-state', role: 'status', 'aria-live': 'polite' });
     const save = element('button', { type: 'submit', form: form.id, className: 'primary-button' }, [icon('save'), 'Save changes']);
-    const revert = commandButton('Revert changes', 'undo', () => {
+    const revert = commandButton('Revert changes', 'undo', async () => {
       if (!form.isConnected || !isCurrent() || isPending()) return;
-      if (editorDirty && !window.confirm('Discard unsaved request changes and revert this editor?')) return;
+      if (editorDirty && !await confirmChanges({ title: 'Revert request changes?',
+        message: 'Discard unsaved request changes and revert this editor?',
+        confirmLabel: 'Revert changes', cancelLabel: 'Keep editing', tone: 'danger' }, draft, true)) return;
       verifiedBib = null;
       if (lookupContext) polarisLookup.invalidate(lookupContext);
       interactionScope.release(draft);
@@ -253,8 +255,10 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       const noAutoHoldConsequence = request.status === 'outstanding_purchase' || request.status === 'pending_hold'
         ? 'Save with automatic hold off? This request will close without placing a hold.'
         : 'Save with automatic hold off? Advancing this request with a verified BIB will close it without placing a hold.';
-      if ((bibWillChange || bibSelected || turnsOffHoldForBib || closesExistingNoHold) && !autohold.checked &&
-          !confirm(noAutoHoldConsequence, draft)) return;
+      const warnings = [];
+      if ((bibWillChange || bibSelected || turnsOffHoldForBib || closesExistingNoHold) && !autohold.checked) {
+        warnings.push(noAutoHoldConsequence);
+      }
       if (request.claimType === 'automatic_format_rule') {
         const claimantId = request.claimedByStaffUserId == null ? null : String(request.claimedByStaffUserId);
         const transfersClaim = claimantId && claimantId !== String(actor?.id);
@@ -266,8 +270,10 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
           : format.value !== request.format
             ? 'The new format rule may reassign or clear the automatic claim.'
             : 'Your automatic claim will remain.';
-        if (!confirm(`${formatConsequence} ${claimConsequence}`, draft)) return;
+        warnings.push(`${formatConsequence} ${claimConsequence}`);
       }
+      if (warnings.length && !await confirmChanges({ title: 'Save request changes?', message: warnings.join('\n\n'),
+        confirmLabel: 'Save changes' }, draft)) return;
       if (!isCurrent() || !form.isConnected) return;
       saveState.textContent = 'Saving changes…';
       saveState.dataset.state = 'saving';

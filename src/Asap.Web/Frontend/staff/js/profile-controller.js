@@ -2,6 +2,7 @@ import { authorizedJson, isAbortError, loadStaffSession } from './http.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { createDraftScope } from './draft-scope.js';
+import { confirmAction } from './confirmation.js';
 
 export function createProfileController({ root, sessionIdentity, announce,
   onPreferences, onSessionLost, onAccessUnavailable, onReceipt, clearReceipt,
@@ -21,7 +22,7 @@ export function createProfileController({ root, sessionIdentity, announce,
   const reads = createLatestLoad();
   const drafts = createDraftScope();
   const draft = drafts.register({ root: dom.profile, isDirty: hasProfileDraft });
-  let disposed = false;
+  let disposed = false, viewGeneration = 0;
   const isPresentationCurrent = owner => !disposed && sessionIdentity.isCurrent(owner);
 
   async function readSession() {
@@ -79,7 +80,14 @@ export function createProfileController({ root, sessionIdentity, announce,
     if (disposed) return;
     const mutation = state.profileMutation;
     if (!mutation?.outcomeUnconfirmed || mutation.pending || !isPresentationCurrent(mutation.owner)) return;
-    if (hasProfileDraft() && !window.confirm('Discard the Profile draft and reload current saved preferences to review the uncertain save?')) return;
+    const generation = viewGeneration, stamp = drafts.stamp(), values = JSON.stringify(profileValues());
+    const isCurrent = () => isPresentationCurrent(mutation.owner) && generation === viewGeneration &&
+      state.profileMutation === mutation && !mutation.pending && drafts.stamp() === stamp &&
+      JSON.stringify(profileValues()) === values;
+    if (hasProfileDraft() && !await confirmAction({ title: 'Review uncertain Profile save?',
+      message: 'Discard the Profile draft and reload current saved preferences to review the uncertain save? The earlier save may have completed.',
+      confirmLabel: 'Reload Profile', cancelLabel: 'Keep draft', tone: 'danger', isCurrent })) return;
+    if (!isCurrent()) return;
     mutation.pending = true;
     updateProfileControls();
     try {
@@ -197,11 +205,11 @@ export function createProfileController({ root, sessionIdentity, announce,
   }
 
   dom.profile.addEventListener('submit', saveProfile, { signal: events.signal });
-  for (const name of ['input', 'change']) dom.profile.addEventListener(name, () => drafts.touch(), { signal: events.signal });
+  for (const name of ['input', 'change']) dom.profile.addEventListener(name, event => drafts.touch(event.target), { signal: events.signal });
   dom.profileRefresh.addEventListener('click', refreshUnconfirmedProfile, { signal: events.signal });
   return {
-    activate() { updateProfileControls(); },
-    deactivate() {},
+    activate() { viewGeneration++; updateProfileControls(); },
+    deactivate() { viewGeneration++; },
     setStaff: populateProfile,
     preferencesChanged(staff) { if (sessionIdentity.isCurrent(staff) && !state.profileMutation && !hasProfileDraft()) populateProfile(staff); },
     isDirty: hasProfileDraft,

@@ -22,7 +22,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
           if (path.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
           posted.push(init); return new Promise((resolve, fail) => { complete = resolve; reject = fail; });
         } };
-      const first = createSuggestionController(options); first.open();
+      const first = createSuggestionController(options); await first.open();
       const scope = root.querySelector('select'); scope.value = '2'; scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
       root.querySelector('input[type="search"]').value = 'Patron';
       const form = get('#staff-suggestion-form'); form.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
@@ -39,7 +39,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       assert.ok(complete, `creation dispatch: ${[...form.querySelectorAll(':invalid')].map(node => `${node.tagName}:${node.getAttribute('aria-label') || node.type}`).join(', ')}; ${get('#staff-suggestion-status').textContent}`); assert.equal(posted[0].signal, undefined);
       assert.equal(posted[0].body.libraryOrgId, 2); assert.equal(first.inspectDeparture().blocked, true);
       session.clear(); first.dispose(); session.accept(actorB);
-      const replacement = createSuggestionController(options); replacement.open();
+      const replacement = createSuggestionController(options); await replacement.open();
       first.dispose();
       assert.equal(root.open, true, 'repeated retired disposal cannot close a recreated dialog');
       if (outcome === 'committed') complete({ id: '9223372036854775807', libraryOrgId: 2, notificationStatus: 'queued' });
@@ -99,7 +99,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
         }
       });
 
-      controller.open();
+      await controller.open();
       const scope = root.querySelector('select');
       scope.value = '2';
       scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
@@ -146,7 +146,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       request: async path => path.endsWith('/patron-lookup')
         ? { status: 'verified', libraryOrgId: 2, patron: { patron: { barcode: '20000000000001', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101 } }
         : { libraryOrgId: 2, configuration: { availableFormats: ['book'] } } });
-    controller.open();
+    await controller.open();
     root.querySelector('select').value = '2'; root.querySelector('select').dispatchEvent(new dom.window.Event('change'));
     root.querySelector('input[type="search"]').value = 'Patron';
     get('#staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
@@ -177,7 +177,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     assert.equal(fields.querySelector('input[type="hidden"]').value, '9001', 'Cancel preserves verification.');
     button.click(); get('#polaris-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true })); await flush();
     get('#polaris-results button').click(); await flush();
-    controller.close({ force: true }); controller.open();
+    controller.close({ force: true }); await controller.open();
     finishVerification({ bibId: 9001, title: 'Late title' }); await flush();
     assert.equal(root.querySelector('.staff-suggestion-fields'), null, 'A late selection cannot replace a newer suggestion stage.');
     controller.dispose(); lookup.dispose();
@@ -204,7 +204,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
           return { id: '9223372036854775807', libraryOrgId: 2, notificationStatus };
         } });
       try {
-        controller.open();
+        await controller.open();
         const library = root.querySelector('select'); library.value = '2';
         library.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
         root.querySelector('input[type="search"]').value = 'Patron';
@@ -259,7 +259,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
           throw denied();
         } });
       try {
-        controller.open();
+        await controller.open();
         root.querySelector('input[type="search"]').value = outcome === 'barcode' ? 'excluded-card' : 'Candidate Name';
         const form = get('#staff-suggestion-form');
         form.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
@@ -299,6 +299,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
         assert.equal(root.open, true);
         if (outcome.startsWith('submit')) {
           [...root.querySelectorAll('button')].find(button => button.textContent === 'Change patron').click();
+          await flush();
           get('#staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
           await flush(); await flush();
           assert.equal(root.querySelector('button[type="submit"]').disabled, false, 'Fresh verification permits a new deliberate attempt.');

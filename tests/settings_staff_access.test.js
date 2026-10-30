@@ -103,7 +103,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
   global.FormData = dom.window.FormData;
   global.Node = dom.window.Node;
   global.Event = dom.window.Event;
-  window.confirm = () => true;
+  require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
   global.fetch = fetchHandler;
 
   const controller = settingsModule.createSettingsController({
@@ -286,11 +286,11 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     controller.setStaff({ ...superStaff, version: 'new-preference-revision' });
     assert.equal(initialEmail.isConnected, true, 'same actor preference revision retains the staff draft owner');
     const beforeRejectedRefresh = requests.length;
-    window.confirm = () => false;
+    require('./helpers/confirmation.cjs').answerConfirmations(window, () => false);
     document.getElementById('staff-refresh').click();
     await flush();
     assert.equal(requests.length, beforeRejectedRefresh, 'declined roster discard performs no read or mutation');
-    window.confirm = () => true;
+    require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
     initialEmail.value = originalEmail;
 
     document.getElementById('staff-add-email').value = 'created@example.org';

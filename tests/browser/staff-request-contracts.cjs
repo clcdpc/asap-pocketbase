@@ -1,4 +1,5 @@
 'use strict';
+const { decideConfirmation, rejectNativeDialogs } = require('./confirmation.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -48,7 +49,7 @@ async function openContext(browser, viewport, baseOrigin, identity) {
   });
   const page = await context.newPage();
   const pageErrors = [];
-  page.on('pageerror', error => pageErrors.push(error.message));
+  page.on('pageerror', error => pageErrors.push(error.message)); rejectNativeDialogs(page, pageErrors);
   return { context, page, traffic, pageErrors };
 }
 
@@ -116,10 +117,9 @@ async function runDesktop(browser, args, axeSource, report) {
     assert.equal(await page.locator('#polaris-author').inputValue(), '');
     await page.keyboard.press('Escape'); assert.equal(await titleInput.inputValue(), 'Draft across tabs');
     await detail.getByRole('tab', { name: 'Activity', exact: true }).click();
-    page.once('dialog', dialog => dialog.dismiss()); await page.keyboard.press('Escape');
+    await decideConfirmation(page, () => page.keyboard.press('Escape'), dialog => dialog.dismiss());
     assert.equal(await detail.evaluate(node => node.open), true);
-    page.once('dialog', dialog => dialog.accept());
-    await detail.getByRole('button', { name: 'Revert changes', exact: true }).click();
+    await decideConfirmation(page, () => detail.getByRole('button', { name: 'Revert changes', exact: true }).click(), dialog => dialog.accept());
     assert.equal(await titleInput.inputValue(), original.title);
     assert.equal(await detail.getByRole('tab', { name: 'Activity', exact: true }).getAttribute('aria-selected'), 'true');
     assert.equal(await detail.locator('.request-save-state').textContent(), 'All changes saved');

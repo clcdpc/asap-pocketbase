@@ -69,9 +69,10 @@ export function createBulkDeleteController({ root, titleTrigger, copyTrigger, se
     dom.preview.disabled = false; dom.scope.disabled = false; dom.confirmation.disabled = false;
   }
 
-  function open(returnFocus) {
+  async function open(returnFocus) {
     const owner = sessionIdentity.preferences();
-    if (disposed || runner?.submitting || !['admin', 'super_admin'].includes(owner?.role) || !beforeOpen()) return false;
+    if (disposed || runner?.submitting || !['admin', 'super_admin'].includes(owner?.role) || !await beforeOpen() ||
+        disposed || runner?.submitting || !sessionIdentity.isCurrent(owner)) return false;
     close({ navigation: true });
     ui = { owner, returnFocus, snapshot: null, submitting: false, ledger: [] };
     dom.scope.replaceChildren();
@@ -155,7 +156,10 @@ export function createBulkDeleteController({ root, titleTrigger, copyTrigger, se
     const batch = ui;
     if (!batch || !owns(batch) || !batch.snapshot?.items.length || batch.finished || batch.submitting || runner?.submitting ||
         dom.confirmation.value !== 'DELETE' || dom.scope.value !== batch.snapshot.scope ||
-        !admission.admit({ consumes: null }).allowed || !beforeExecute()) return;
+        !admission.admit({ consumes: null }).allowed) return;
+    const snapshot = batch.snapshot;
+    if (!await beforeExecute() || !owns(batch) || batch.snapshot !== snapshot || batch.submitting || runner?.submitting ||
+        dom.confirmation.value !== 'DELETE' || dom.scope.value !== snapshot.scope) return;
     const review = captureReview(batch.owner);
     batch.submitting = true; batch.interrupted = false; batch.ledger = []; runner = batch;
     dom.execute.disabled = true; dom.preview.disabled = true; dom.scope.disabled = true; dom.confirmation.disabled = true;

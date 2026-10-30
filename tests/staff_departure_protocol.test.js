@@ -13,12 +13,12 @@ const { fixture } = require('./helpers/staff-controller.cjs');
       let owner = {}, confirms = 0, discards = 0;
       const feature = { key: 'source', inspectDeparture: () => ({ dirty, stamp, blocked, owner, confirmMessage: 'Discard?' }),
         discardDeparture() { discards++; dirty = false; } };
-      dom.window.confirm = () => { confirms++; return true; };
+      require('./helpers/confirmation.cjs').answerConfirmations(dom.window, () => { confirms++; return true; });
       const navigation = createNavigationController({ sessionIdentity: identity, router: { busy: () => false, dispose() {} },
         getFeatures: () => [feature, { key: 'other', inspectDeparture: otherInspection, discardDeparture() { discards++; } }],
         views: {}, announce() {}, present() {}, closeTransient() {}, onInvalidate() {}, onContextChanged() {} });
       function otherInspection() { return { dirty: false, blocked: false }; }
-      const departure = navigation.prepareDeparture();
+      const departure = await navigation.prepareDeparture();
       assert.ok(departure);
       assert.equal(discards, 0, 'preparation never discards');
       assert.equal(confirms, dirty ? 1 : 0);
@@ -33,10 +33,10 @@ const { fixture } = require('./helpers/staff-controller.cjs');
         if (scenario === 'owner') owner = {};
         if (scenario === 'blocked') blocked = true;
         if (scenario === 'disposed') navigation.dispose();
-        if (scenario === 'superseded') navigation.prepareDeparture();
+        if (scenario === 'superseded') await navigation.prepareDeparture();
         if (scenario === 'preferences') identity.updatePreferences({ ...identity.preferences(), version: 'v2' }, identity.preferences());
         const rejected = ['actor', 'context', 'owner', 'blocked', 'disposed', 'superseded'].includes(scenario);
-        assert.equal(departure.revalidate(), !rejected);
+        assert.equal(await departure.revalidate(), !rejected);
         assert.equal(departure.commit(), !rejected);
         assert.equal(discards, rejected ? 0 : 2);
         assert.equal(departure.commit(), false, 'a second commit is harmless');

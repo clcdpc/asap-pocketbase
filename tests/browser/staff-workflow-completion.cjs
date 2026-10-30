@@ -1,4 +1,5 @@
 'use strict';
+const { decideConfirmation, rejectNativeDialogs } = require('./confirmation.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -21,7 +22,7 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     });
     const page = await context.newPage();
     await statusTransitions.instrument(page);
-    page.on('pageerror', error => report.errors.push(error.message));
+    page.on('pageerror', error => report.errors.push(error.message)); rejectNativeDialogs(page, report.errors);
     page.on('request', request => {
       if (request.url().endsWith('/patron-lookup') && request.method() === 'POST') report.lookups.push(request.postDataJSON());
     });
@@ -169,7 +170,7 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     // These quick-create checks require code 1, before the late-denial scenario changes policy.
     report.nativeZoom = await verifyStaffNativeZoom({ baseURL, artifacts, sourceId, library, barcode,
       headers: { 'X-ASAP-Test-Staff-Id': staffId, 'X-ASAP-Test-Tenant-Id': tenantId, 'X-ASAP-Test-Staff-Email': email } });
-    assert.equal(report.nativeZoom.length, 8);
+    assert.equal(report.nativeZoom.length, 10);
     for (const query of [`${barcode}-ineligible`, 'Excluded Patron']) {
       await page.getByRole('button', { name: 'New suggestion', exact: true }).click();
       await dialog.getByRole('searchbox').fill(query);
@@ -216,8 +217,7 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     assert.equal(await titleInput.evaluate(node => node.selectionStart === 0 && node.selectionEnd === node.value.length), true);
     await scan('code-rejection-retained-draft-desktop');
     await page.setViewportSize({ width: 390, height: 844 }); await scan('code-rejection-retained-draft-mobile');
-    page.once('dialog', confirmation => confirmation.accept());
-    await changePatron.click();
+    await decideConfirmation(page, () => changePatron.click(), confirmation => confirmation.accept());
     await dialog.getByRole('searchbox').fill(`${barcode}-ineligible`);
     await dialog.getByRole('button', { name: 'Look up patron', exact: true }).click();
     await dialog.getByRole('button', { name: 'Create suggestion', exact: true }).waitFor();

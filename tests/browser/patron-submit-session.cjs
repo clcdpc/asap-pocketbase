@@ -1,4 +1,5 @@
 'use strict';
+const { rejectNativeDialogs } = require('./confirmation.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -30,7 +31,7 @@ async function openPage(browser, baseOrigin) {
   });
   const page = await context.newPage();
   const pageErrors = [];
-  page.on('pageerror', error => pageErrors.push(error.message));
+  page.on('pageerror', error => pageErrors.push(error.message)); rejectNativeDialogs(page, pageErrors);
   await page.goto(`${baseOrigin}/patron/?libraryOrgId=2`, { waitUntil: 'networkidle' });
   await page.locator('#barcode').waitFor({ state: 'visible' });
   return { context, page, traffic, pageErrors };

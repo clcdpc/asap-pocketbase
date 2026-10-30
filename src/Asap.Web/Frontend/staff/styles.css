@@ -382,6 +382,10 @@ dialog { width: min(900px, calc(100vw - 28px)); max-height: calc(100vh - 28px); 
 dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .dialog-shell { min-height: 240px; background: #fff; }
 .compact-dialog-shell { min-height: 0; }
+#confirmation-dialog { width: min(520px, calc(100vw - 28px)); }
+#confirmation-message { margin-top: 0; white-space: pre-line; overflow-wrap: anywhere; }
+#confirmation-dialog .form-actions { flex-wrap: wrap; }
+#confirmation-dialog button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 #additional-copy-create-dialog { width: min(520px, calc(100vw - 28px)); }
 .dialog-status { min-height: 24px; margin: 0 0 12px; color: var(--muted); }
 .dialog-status.error { color: var(--danger); font-weight: 600; }

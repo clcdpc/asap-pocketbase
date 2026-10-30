@@ -31,7 +31,7 @@ async function flush() {
     global.Node = dom.window.Node;
     document.getElementById('settings-view').hidden = false;
     document.getElementById('workspace').hidden = false;
-    window.confirm = () => true;
+    require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
 
     let version = 1;
     let fromName = 'System';

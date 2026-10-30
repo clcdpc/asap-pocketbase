@@ -107,7 +107,7 @@ function editFields(container, dom, values) {
         currentPreferredPickupBranchId: 101 } } : { libraryOrgId: 2, configuration } };
     let controller = createSuggestionController(options);
     const verify = async () => {
-      controller.open();
+      await controller.open();
       const library = root.querySelector('select'); library.value = '2';
       library.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
       root.querySelector('input[type="search"]').value = 'Patron';
