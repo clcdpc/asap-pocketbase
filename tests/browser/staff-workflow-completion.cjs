@@ -170,7 +170,7 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     // These quick-create checks require code 1, before the late-denial scenario changes policy.
     report.nativeZoom = await verifyStaffNativeZoom({ baseURL, artifacts, sourceId, library, barcode,
       headers: { 'X-ASAP-Test-Staff-Id': staffId, 'X-ASAP-Test-Tenant-Id': tenantId, 'X-ASAP-Test-Staff-Email': email } });
-    assert.equal(report.nativeZoom.length, 10);
+    assert.equal(report.nativeZoom.length, 12);
     for (const query of [`${barcode}-ineligible`, 'Excluded Patron']) {
       await page.getByRole('button', { name: 'New suggestion', exact: true }).click();
       await dialog.getByRole('searchbox').fill(query);
