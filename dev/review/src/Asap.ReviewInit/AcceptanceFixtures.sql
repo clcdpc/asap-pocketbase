@@ -89,6 +89,11 @@ IF NOT EXISTS (SELECT 1 FROM asap.EmailSettings WHERE OrganizationId = 2)
 IF NOT EXISTS (SELECT 1 FROM asap.PatronSettings WHERE OrganizationId = 2)
     INSERT INTO asap.PatronSettings (OrganizationId, SuccessTitle, UpdatedUtc)
     VALUES (2, N'Acceptance suggestion received', @now);
+-- Read-only S1 browser drafts use real SQL selections, including an unavailable
+-- but valid saved ID, and the existing four system provider definitions.
+IF NOT EXISTS (SELECT 1 FROM asap.PatronCodeEligibilityMember WHERE OrganizationId = 1)
+    INSERT INTO asap.PatronCodeEligibilityMember (OrganizationId, PatronCodeId)
+    VALUES (1, 1), (1, 77);
 
 -- Q1 presentation/navigation only: 24 extra open tasks plus the two existing
 -- copy seeds cross the 25-row page boundary. No acceptance scenario mutates them.

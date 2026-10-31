@@ -123,6 +123,11 @@ jobs:
       - name: Check test reuse safety
         run: python3 -B -m unittest discover -s scripts/ci -p 'test_reuse*.py' -v
 
+      - name: Verify current CI safety contracts
+        run: |
+          node tests/ci_workflow_contract.test.js
+          node tests/test_iis_deployment_contract.test.js
+
       # Lookup runs after runner allocation/build, so a queued run sees completed predecessors.
       - name: Find reusable test executions
         id: reuse
@@ -538,7 +543,19 @@ jobs:
   deploy-test-iis:
     name: Deploy exact artifact to test IIS
     needs: [build-test-package, validation]
-    if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && ((github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis) || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}
+    # Override the implicit success() check: draft-validation is intentionally skipped in full CI.
+    # Only a successful full execution and reporting gate may authorize test-IIS deployment.
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.build-test-package.result == 'success' &&
+        needs.validation.result == 'success' &&
+        vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' &&
+        (
+          (github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis) ||
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+        )
+      }}
     runs-on: [self-hosted, windows, x64, asap-test-iis]
     environment: asap-test-iis
     timeout-minutes: 20

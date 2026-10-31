@@ -479,9 +479,34 @@
                   <p class="settings-callout wide">When enabled, an eligible patron from another library can use this portal. Their suggestion follows this portal library's settings and workflow, not their home library's. <a id="cross-library-public-url" href="#" hidden>Open this library's patron portal</a></p>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="allowPatronAutoholdOptOut"><input id="allow-patron-autohold-opt-out" type="checkbox"><span>Allow patron auto-hold opt out</span></label>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="autoPromote"><input id="auto-promote" type="checkbox"><span>Automatically promote approved purchases</span></label>
-                  <label class="settings-field wide check-field" data-setting-section="workflow" data-setting-key="patronCodeEligibilityEnabled"><input id="patron-code-eligibility-enabled" type="checkbox"><span>Require eligible patron code</span></label>
+                  <p class="settings-callout wide">The suggestion limit message supports <code>{{next_available_date}}</code>.</p>
+                </div>
+              </fieldset>
+              <fieldset id="patron-code-eligibility" class="settings-fieldset">
+                <legend>Patron code eligibility</legend>
+                <div class="settings-grid">
+                  <p class="wide field-help">Control which patron codes can submit suggestions, and what message appears when a patron is not eligible.</p>
+                  <label class="settings-field wide check-field" data-setting-section="workflow" data-setting-key="patronCodeEligibilityEnabled"><input id="patron-code-eligibility-enabled" type="checkbox" aria-describedby="patron-code-policy-help"><span>Require eligible patron code</span></label>
+                  <p id="patron-code-policy-help" class="wide field-help">When enabled with at least one allowed code, only patrons with an allowed code can submit suggestions.</p>
+                  <div class="settings-domain-block wide">
+                    <label for="patron-code-picker" class="settings-field">Allowed patron-code IDs</label>
+                    <label id="patron-codes-inherit-field" class="settings-inline-check"><input id="patron-codes-use-system" type="checkbox"><span>Use system IDs</span></label>
+                    <p id="patron-code-picker-help" class="field-help">Type a description or numeric ID, then select a code. Saved IDs unavailable in Polaris remain selected until you remove them.</p>
+                    <div class="patron-code-picker" data-settings-ignore="true">
+                      <input id="patron-code-picker" type="text" role="combobox" autocomplete="off" aria-autocomplete="list" aria-expanded="false" aria-controls="patron-code-options" aria-describedby="patron-code-picker-help patron-code-availability" placeholder="Search or select patron codes…">
+                      <div id="patron-code-options" role="listbox" aria-label="Available patron codes" hidden></div>
+                    </div>
+                    <div class="settings-inline-actions" data-settings-ignore="true">
+                      <p id="patron-code-availability" class="field-help" role="status"></p>
+                      <button id="patron-code-retry" class="secondary-button" type="button" hidden>Retry patron-code lookup</button>
+                    </div>
+                    <input id="patron-code-selection" type="hidden">
+                    <ul id="patron-codes-editor" class="patron-code-chips" aria-label="Selected patron codes"></ul>
+                    <p id="patron-code-count" class="field-help" role="status"></p>
+                    <p id="patron-code-warning" class="settings-callout" role="status" hidden></p>
+                  </div>
                   <label class="settings-field wide" data-setting-section="workflow" data-setting-key="patronCodeEligibilityMessage"><span>Patron-code eligibility message</span><textarea id="patron-code-eligibility-message" rows="3"></textarea></label>
-                  <p class="settings-callout wide">The suggestion limit message supports <code>{{next_available_date}}</code>. The patron-code eligibility message is displayed as written.</p>
+                  <p class="settings-callout wide">The patron-code eligibility message is displayed as written.</p>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset">
@@ -511,19 +536,12 @@
                     <label id="common-creators-inherit-field" class="settings-inline-check"><input id="common-creators-use-system" type="checkbox"><span>Use system list</span></label>
                     <div id="common-creators-editor" class="settings-row-editor" aria-live="polite"></div>
                   </div>
-                  <div class="settings-domain-block wide">
-                    <div class="settings-domain-heading"><strong>Allowed patron-code IDs</strong><button id="add-patron-code" class="secondary-button" type="button"><i class="fa fa-plus" aria-hidden="true"></i> Add ID</button></div>
-                    <label id="patron-codes-inherit-field" class="settings-inline-check"><input id="patron-codes-use-system" type="checkbox"><span>Use system IDs</span></label>
-                    <label class="settings-field" data-settings-ignore="true"><span>Search patron codes</span><input id="patron-code-search" type="search" autocomplete="off"></label>
-                    <div class="settings-inline-actions"><button id="patron-codes-select-all" class="secondary-button" type="button">Select all matches</button><button id="patron-codes-clear-all" class="secondary-button" type="button">Clear all</button></div>
-                    <p id="patron-code-warning" class="settings-callout" role="status" hidden></p>
-                    <div id="patron-codes-editor" class="settings-row-editor" aria-live="polite"></div>
-                  </div>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset">
                 <legend>External search providers</legend>
                 <div class="settings-domain-heading"><strong>Provider definitions</strong><button id="add-provider" class="secondary-button" type="button"><i class="fa fa-plus" aria-hidden="true"></i> Add provider</button></div>
+                <p id="external-search-provider-help" class="field-help">URL templates: use <code>{{title}}</code> for the request title.<br>Example: <code>https://example.com/search?q={{title}}</code></p>
                 <div id="external-search-provider-editor" class="settings-row-editor" aria-live="polite"></div>
               </fieldset>
             </section>

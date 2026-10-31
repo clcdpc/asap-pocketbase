@@ -402,13 +402,16 @@ test('partial results never report automated completion while required scenarios
   assert.equal(exitCode(report), 2);
 });
 
-test('registered suites retain D1, pr410, Q1 and smoke with their mutation boundaries', async () => {
+test('registered suites retain D1, pr410, Q1, S1 and smoke with their mutation boundaries', async () => {
   const registry = require('./suites/index.cjs');
-  const names = ['d1', 'pr410', 'q1', 'smoke'];
+  const names = ['d1', 'pr410', 'q1', 's1', 'smoke'];
   assert.deepEqual(require('./suites/registry.json'), names, 'Each suite is registered exactly once in deterministic order');
   assert.deepEqual(Object.keys(registry), names);
   assert.equal(registry.smoke.id, 'smoke');
   assert.equal(registry.smoke.mutations, true);
+  assert.equal(registry.s1.mutations, false);
+  assert.equal(registry.s1.scenarios.length, 6);
+  assert.ok(registry.s1.scenarios.every(scenario => scenario.writes === false));
   assert.deepEqual(registry.smoke.scenarios.map(s => [s.id, s.writes]), [
     ['smoke-authenticated-review', false], ['smoke-synthetic-close', true]
   ]);
@@ -589,6 +592,32 @@ test('screenshots fail closed for unverified runtimes, external origins, authent
   page.screenshot = async options => { const pixels = await capture(options); page.address = 'https://example.org/'; return pixels; };
   await assert.rejects(screenshot(page, directory, 'navigation-race'), Blocked);
   assert.deepEqual(await fs.readdir(directory), [], 'No unverified pixels were exported');
+});
+
+test('native viewport capture retains runtime guards, actual zoom and dimensions without document clipping', async t => {
+  const directory = await temporary(t), page = capturePage(), calls = [];
+  const pixels = await page.screenshot({});
+  let zoom = 2, checks = 0, detached = 0;
+  page.screenshot = async () => { throw new Error('Native capture must not use a document clip'); };
+  page.context = () => ({ newCDPSession: async () => ({ send: async (method, options) => {
+    calls.push([method, options]);
+    return method === 'Page.getLayoutMetrics' ? { visualViewport: { zoom } } : { data: pixels.toString('base64') };
+  }, detach: async () => { detached++; } }) });
+  await assert.rejects(screenshot(page, directory, 'unverified', { nativeViewport: true }), /no verified synthetic/);
+  registerScreenshotPage(page, async () => { checks++; return environment(); });
+  await screenshot(page, directory, 'native', { nativeViewport: true });
+  assert.equal(checks, 1);
+  assert.deepEqual(calls, [['Page.getLayoutMetrics', undefined], ['Page.captureScreenshot', {
+    format: 'png', captureBeyondViewport: false
+  }]]);
+  assert.equal(detached, 1);
+  zoom = 1;
+  await assert.rejects(screenshot(page, directory, 'wrong-zoom', { nativeViewport: true }), /actual 200 percent/);
+  assert.equal(detached, 2);
+  zoom = 2; pixels.writeUInt32BE(640, 16);
+  await assert.rejects(screenshot(page, directory, 'wrong-size', { nativeViewport: true }), /Screenshot dimensions/);
+  await assert.rejects(screenshot(page, directory, 'invalid-crop', { nativeViewport: true, fullPage: true }), /cannot be combined/);
+  assert.deepEqual(await fs.readdir(directory), ['native.png']);
 });
 
 test('wrong screenshot dimensions fail the scenario and retain failure reporting without exporting misleading evidence', async t => {

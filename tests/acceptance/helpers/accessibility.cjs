@@ -30,16 +30,20 @@ async function screenshot(page, directory, name, options = {}) {
   await captureTarget(page, environment.origin);
   const { fullPage = false, clip, nativeViewport = false } = options;
   assert.ok(Object.keys(options).every(key => ['fullPage', 'clip', 'nativeViewport'].includes(key)), 'Only viewport or explicit page/crop captures are supported');
+  assert.ok(!nativeViewport || !fullPage && !clip, 'Native viewport capture cannot be combined with a page or crop');
   let buffer;
   if (nativeViewport) {
-    assert.ok(!fullPage && !clip, 'Native viewport capture cannot be combined with a page/crop capture');
     const cdp = await page.context().newCDPSession(page);
     try {
-      assert.equal((await cdp.send('Page.getLayoutMetrics')).visualViewport.zoom, 2, 'Native viewport evidence requires actual 200 percent zoom');
-      // Pinned Playwright constructs a clip from legacy pageY at native zoom.
-      // On scrolled pages that captures blank pixels. Let CDP capture the actual
-      // viewport without a clip, retaining the verifier and export checks below.
-      buffer = Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, 'base64');
+      assert.equal((await cdp.send('Page.getLayoutMetrics')).visualViewport.zoom, 2, 'Native capture requires actual 200 percent zoom');
+      // Playwright's document clip uses the wrong scroll offset at native zoom
+      // on scrolled Settings and Additional copies pages. Capture the visible
+      // view directly, without a clip, retaining identity and dimension checks.
+      // Keep CDP's surface capture: fromSurface:false can return blank scrolled pixels.
+      const capture = await cdp.send('Page.captureScreenshot', {
+        format: 'png', captureBeyondViewport: false
+      });
+      buffer = Buffer.from(capture.data, 'base64');
     } finally { await cdp.detach(); }
   } else {
     buffer = await page.screenshot({ type: 'png', fullPage, ...(clip ? { clip } : {}) });

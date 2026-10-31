@@ -361,7 +361,6 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-option-row, .settings-format-row, .settings-provider-row {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
-.settings-provider-row { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; }
 .settings-domain-field { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: .78rem; font-weight: 800; }
 .settings-domain-field input, .settings-domain-field select, .settings-domain-field textarea { width: 100%; min-width: 0; color: var(--ink); font-weight: 400; }
 .settings-domain-field textarea { min-height: 86px; }
@@ -371,6 +370,32 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-icon-button { width: 40px; height: 40px; padding: 0; color: var(--brand-dark); background: #fff; border: 1px solid #9aa5ae; border-radius: 4px; cursor: pointer; }
 .settings-icon-button:hover { background: #e2edf1; }
 .settings-editor-row > .settings-row-actions { grid-column: 1 / -1; }
+#external-search-provider-help { margin: 12px 0; }
+#external-search-provider-editor { container-type: inline-size; }
+#external-search-provider-editor .settings-provider-row { grid-template-columns: minmax(0, 1fr); }
+#external-search-provider-editor .settings-provider-row > .settings-row-actions { grid-column: auto; justify-content: flex-start; }
+#external-search-provider-editor .settings-row-actions button { flex: 0 0 40px; }
+@container (min-width: 720px) {
+  #external-search-provider-editor .settings-provider-row { grid-template-columns: minmax(150px, 1fr) minmax(240px, 2fr) auto auto; }
+  #external-search-provider-editor .settings-provider-row:has(.settings-domain-override) { grid-template-columns: minmax(150px, 1fr) minmax(240px, 2fr) auto auto; }
+  #external-search-provider-editor .settings-provider-row:has(.settings-domain-override) > .settings-row-actions { grid-column: 1 / -1; }
+}
+@container (min-width: 820px) {
+  #external-search-provider-editor .settings-provider-row:has(.settings-domain-override) { grid-template-columns: minmax(150px, 1fr) minmax(240px, 2fr) auto auto auto; }
+  #external-search-provider-editor .settings-provider-row:has(.settings-domain-override) > .settings-row-actions { grid-column: auto; }
+}
+#patron-code-eligibility .field-help { margin: 0; }
+#patron-code-eligibility .settings-domain-block { display: grid; gap: 10px; }
+.patron-code-picker { position: relative; min-width: 0; }
+#patron-code-picker { width: 100%; }
+#patron-code-options { position: absolute; z-index: 4; top: 100%; left: 0; right: 0; max-height: 240px; overflow: auto; background: #fff; border: 1px solid var(--brand-dark); box-shadow: 0 4px 12px rgba(0,0,0,.16); }
+#patron-code-options [role="option"] { padding: 10px 12px; min-height: 40px; overflow-wrap: anywhere; cursor: pointer; }
+#patron-code-options [role="option"]:hover, #patron-code-options [aria-selected="true"] { background: var(--brand-dark); color: #fff; outline: 2px solid currentColor; outline-offset: -3px; }
+.patron-code-chips { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.patron-code-chips li { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding-left: 10px; background: var(--soft); border: 1px solid #9aa5ae; border-radius: 4px; }
+.patron-code-chips li span { min-width: 0; overflow-wrap: anywhere; }
+.patron-code-remove { flex: 0 0 40px; width: 40px; min-height: 40px; padding: 0; color: var(--brand-dark); background: transparent; border: 0; border-left: 1px solid #9aa5ae; cursor: pointer; font-size: 1.3rem; }
+.patron-code-remove:focus-visible, #patron-code-picker:focus-visible { outline: 3px solid var(--brand-dark); outline-offset: 2px; }
 .settings-custom-options, .settings-rule-fields, .settings-rule-custom-fields { grid-column: 1 / -1; min-width: 0; }
 .settings-custom-options { display: grid; gap: 7px; padding-top: 3px; }
 .settings-custom-options > strong, .settings-rule-custom-fields > strong { color: var(--ink); font-size: .84rem; }

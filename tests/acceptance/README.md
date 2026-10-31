@@ -4,7 +4,7 @@
 pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -AllowReviewWrites
 ```
 
-Run from PR #412's tooling checkout with PowerShell 7, Git and working Microsoft
+Run from a tooling checkout containing the selected suite, with PowerShell 7, Git and working Microsoft
 WSLC (WSL 2.9.3+). The command builds or reuses one disposable image, initializes
 a fresh SQL Server database, authenticates locally as a synthetic staff user,
 runs headed Chromium/Playwright on Xvfb, exports a report and removes the container.
@@ -27,13 +27,31 @@ Run the existing feature suite with:
 pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites
 ```
 
-From the D1 branch's tooling checkout, run request-detail acceptance against its
-PR number (replace `<D1_PR_NUMBER>`):
+The S1 Workflow Settings suite is entirely read-only:
 
 ```powershell
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr <D1_PR_NUMBER> -Suite d1 -ReadOnly
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr <D1_PR_NUMBER> -Suite d1 -AllowReviewWrites
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr <D1_PR_NUMBER> -Suite pr410 -AllowReviewWrites
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 415 -Suite s1
+```
+
+Its six scenarios cover real SQL-backed selected IDs (including an unavailable
+saved ID), description/ID filtering, keyboard selection/removal, counts,
+inheritance and explicit empty browser drafts, a failed catalog GET with retry,
+provider draft edits/ordering/stable keys, zero/one/four rows, persistent template
+help, and System/library geometry at 1440px, 1000px, 390px and native 200% zoom.
+Screenshots and geometry JSON accompany axe/image/overflow checks. Catalog failure
+is an injected pre-dispatch GET failure; successful choices come from the real
+deterministic backend. Each scenario verifies stored Settings and their version
+are unchanged. No Settings write permission or runner guard is broadened.
+Persisted Save, Discard, explicit `[]`, inherited `null`, scope/version races and
+patron policy remain the retained SQL integration/browser tests' responsibility.
+
+Use the updated PR #415 tooling checkout for all three integrated suites. The
+launcher discovers suites locally; `-Pr` selects the application revision only.
+Run complete D1 and Q1 regressions once each alongside S1:
+
+```powershell
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 415 -Suite d1 -AllowReviewWrites
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 415 -Suite q1
 ```
 
 The five read-only D1 scenarios check direct actions, cancellation/focus, the
@@ -63,12 +81,10 @@ Reports record independent application and tooling SHAs, suite, mode, scenario
 status and actual container exit code. A build/startup blocker leaves the tested
 application SHA empty until runtime verification succeeds.
 
-Run Q1 from its tooling checkout against the implementation PR:
-
-```powershell
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr <Q1_PR_NUMBER> -Suite q1 -ReadOnly
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr <Q1_PR_NUMBER> -Suite smoke -ReadOnly
-```
+Q1 and S1 are inherently read-only and need no extra flag. Do not repeat them in
+read-only mode. Use `smoke` for infrastructure diagnosis and the complete
+`pr410 -AllowReviewWrites` regression only when a specific Settings reset,
+mutation-guard, fixture or retained-scenario risk warrants it.
 
 The five read-only Q1 scenarios exercise Additional copies at 1440, 1280,
 1024 and 390 CSS-pixel widths, a 640px container inside a desktop window,
