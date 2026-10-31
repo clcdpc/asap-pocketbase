@@ -268,6 +268,11 @@ async function main() {
     assert.equal(full.needs, 'validation-policy');
     assert.equal(full['continue-on-error'], undefined);
     assert.equal(step(full, 'Restore and build').run, 'dotnet build Asap.sln --configuration Release');
+    const safety = step(full, 'Verify current CI safety contracts');
+    assert.equal(safety.if, undefined);
+    assert.match(safety.run, /node tests\/ci_workflow_contract\.test\.js/);
+    assert.match(safety.run, /node tests\/test_iis_deployment_contract\.test\.js/);
+    assert.ok(full.steps.indexOf(safety) < full.steps.indexOf(step(full, 'Find reusable test executions')));
     const verify = step(full, 'Verify required test suites');
     assert.equal(verify.if, '${{ always() }}');
     assert.equal(verify.run, 'python3 -B scripts/ci/reuse.py verify');

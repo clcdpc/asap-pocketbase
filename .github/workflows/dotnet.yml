@@ -123,6 +123,11 @@ jobs:
       - name: Check test reuse safety
         run: python3 -B -m unittest discover -s scripts/ci -p 'test_reuse*.py' -v
 
+      - name: Verify current CI safety contracts
+        run: |
+          node tests/ci_workflow_contract.test.js
+          node tests/test_iis_deployment_contract.test.js
+
       # Lookup runs after runner allocation/build, so a queued run sees completed predecessors.
       - name: Find reusable test executions
         id: reuse

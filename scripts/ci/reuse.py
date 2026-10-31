@@ -1,6 +1,7 @@
 """Fail-closed Actions test evidence lookup and the required suite verification gate."""
 
 import argparse
+import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
 import io
@@ -178,6 +179,7 @@ class Validator:
         self.api, self.config, self.current = api, config, current
         self.now = now or utcnow()
         self.contexts = {}
+        self.contracts = {}
         self.workflow = api.get("/actions/workflows/dotnet.yml")
         require(self.workflow["path"] == config["workflow"] and integer(self.workflow["id"]),
                 "Unexpected workflow identity")
@@ -237,6 +239,24 @@ class Validator:
         self.contexts[key] = context
         return context
 
+    def execution_contract(self, context):
+        entries = [e for e in context["entries"] if e[0] == self.config["workflow"]
+                   and e[1] == "100644" and e[2] == "blob"]
+        require(len(entries) == 1, "Original workflow is missing or ambiguous")
+        sha = entries[0][3]
+        require(re.fullmatch(r"[0-9a-f]{40}", sha), "Invalid workflow blob SHA")
+        if sha not in self.contracts:
+            blob = self.api.get(f"/git/blobs/{sha}")
+            require(blob.get("sha") == sha and blob.get("encoding") == "base64"
+                    and type(blob.get("size")) is int and 0 < blob["size"] <= 524288,
+                    "Invalid workflow Git blob")
+            raw = base64.b64decode("".join(blob["content"].split()), validate=True)
+            require(len(raw) == blob["size"] and
+                    hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest() == sha,
+                    "Original workflow blob failed Git identity check")
+            self.contracts[sha] = fp.full_ci_execution_contract(raw.decode("utf-8"))
+        return self.contracts[sha]
+
     def validate(self, run, artifact, suite):
         config, current = self.config, self.current["suites"][suite]
         require(not current["unavailable"], "Current environment identity is unavailable")
@@ -269,13 +289,26 @@ class Validator:
                 and manifest["run_id"] == run["id"] and manifest["run_attempt"] == run["run_attempt"]
                 and manifest["source_commit"] == context["commit"] and manifest["source_tree"] == context["tree"],
                 "Forged or incomplete manifest provenance")
-        require(manifest["fingerprint"] == current["fingerprint"]
-                and manifest["environment_fingerprint"] == current["environment"]
+        require(manifest["environment_fingerprint"] == current["environment"]
                 and fp.digest(manifest["environment_inputs"]) == current["environment"]
-                and manifest["selection"] == current["selection"]
-                and manifest["source_fingerprint"] == current["source"]
-                and fp.source_fingerprint(context["entries"], suite, config) == current["source"],
-                "Source, environment or selection fingerprint mismatch")
+                and manifest["selection"] == current["selection"],
+                "Environment or selection mismatch")
+        origin_contract = self.execution_contract(context)
+        source = fp.source_fingerprint(context["entries"], suite, config, origin_contract)
+        require(source == current["source"], "Test source or execution contract changed")
+        algorithm = manifest.get("source_algorithm", "legacy-v1")
+        if algorithm == fp.SOURCE_ALGORITHM:
+            require(manifest["source_fingerprint"] == source
+                    and manifest["fingerprint"] == current["fingerprint"],
+                    "Current source fingerprint mismatch")
+        elif algorithm == "legacy-v1":
+            legacy = fp.legacy_source_fingerprint(context["entries"], suite, config)
+            expected = fp.digest({"schema": manifest["schema"], "suite": suite, "source": legacy,
+                                  "environment": current["environment"], "selection": current["selection"]})
+            require(manifest["source_fingerprint"] == legacy and manifest["fingerprint"] == expected,
+                    "Original legacy source fingerprint mismatch")
+        else:
+            raise EvidenceError("Unknown source fingerprint algorithm")
         executed = timestamp(manifest["executed_at"])
         require(manifest["lifetime_days"] == config["lifetime_days"]
                 and self.now - timedelta(days=config["lifetime_days"]) <= executed <= self.now
@@ -341,10 +374,13 @@ def lookup(api, config, current, forced=False):
 
 
 def forced_full():
-    return (os.environ.get("ASAP_FORCE_FULL_CI") == "true"
-            or os.environ.get("ASAP_DEPLOY_TEST_IIS") == "true"
-            or os.environ.get("GITHUB_REF_TYPE") == "tag"
-            or os.environ.get("GITHUB_EVENT_NAME") == "release")
+    if os.environ.get("ASAP_FORCE_FULL_CI") == "true" or os.environ.get("GITHUB_EVENT_NAME") == "release":
+        return True
+    if os.environ.get("GITHUB_REF_TYPE") == "tag":
+        return not (os.environ.get("GITHUB_EVENT_NAME") == "push"
+                    and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+-test\.[0-9]+",
+                                     os.environ.get("GITHUB_REF_NAME", "")))
+    return False
 
 
 def api_client(config):
@@ -389,6 +425,7 @@ def record(config, current, suite, results, directory=DIRECTORY):
         "workflow": config["workflow"], "job": config["job"],
         "run_id": int(os.environ["GITHUB_RUN_ID"]), "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
         "source_commit": current["commit"], "source_tree": current["tree"],
+        "source_algorithm": fp.SOURCE_ALGORITHM,
         "source_fingerprint": identity["source"], "fingerprint": identity["fingerprint"],
         "environment_fingerprint": identity["environment"], "environment_inputs": identity["environment_inputs"],
         "selection": identity["selection"],
@@ -436,14 +473,17 @@ def verify(directory=DIRECTORY):
     try:
         commit, tree = fp.checkout(os.environ["GITHUB_SHA"])
         entries = fp.tracked_entries()
+        contract = fp.full_ci_execution_contract((fp.ROOT / config["workflow"]).read_text(encoding="utf-8"))
         if current:
-            require(current["commit"] == commit and current["tree"] == tree, "Current source identity changed")
+            require(current["commit"] == commit and current["tree"] == tree
+                    and current.get("full_ci_execution_contract") == contract,
+                    "Current source identity or executor contract changed")
             for suite in fp.SUITES:
                 identity = current["suites"][suite]
                 inputs = {key: identity[key] for key in ("schema", "suite", "source", "environment", "selection")}
                 require(identity["fingerprint"] == fp.digest(inputs)
                         and identity["schema"] == config["schema"] and identity["suite"] == suite
-                        and identity["source"] == fp.source_fingerprint(entries, suite, config)
+                        and identity["source"] == fp.source_fingerprint(entries, suite, config, contract)
                         and identity["environment"] == fp.digest(identity["environment_inputs"])
                         and {k: v for k, v in identity["selection"].items() if k != "expected"} == selected[suite],
                         "Current fingerprint inputs changed")
