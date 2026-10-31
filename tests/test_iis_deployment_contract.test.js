@@ -113,11 +113,11 @@ assert.match(
 );
 const deployWorkflow = YAML.parse(workflow, { uniqueKeys: true }).jobs['deploy-test-iis'];
 const deployCondition = deployWorkflow.if;
-assert.match(deployCondition, /!\\s*cancelled\\(\\)/,
+assert.match(deployCondition, /!\s*cancelled\(\)/,
   'the deployment gate must not inherit skipped draft-validation status');
-assert.match(deployCondition, /needs\\.build-test-package\\.result\\s*==\\s*'success'/,
+assert.match(deployCondition, /needs\.build-test-package\.result\s*==\s*'success'/,
   'deployment must require successful full CI execution');
-assert.match(deployCondition, /needs\\.validation\\.result\\s*==\\s*'success'/,
+assert.match(deployCondition, /needs\.validation\.result\s*==\s*'success'/,
   'deployment must require the successful reporting gate');
 assert.ok(deployCondition.includes("vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true'"),
   'deployment must retain the repository activation gate');
