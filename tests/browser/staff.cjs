@@ -101,6 +101,21 @@ async function scan(page, axeSource, artifactRoot, report, viewport, state) {
 
 async function assertReadableMobileQueue(page, selector = '#request-grid') {
   await page.locator(`${selector} tbody .grid-open`).first().waitFor();
+  if (selector === '#additional-copy-grid') {
+    const cards = await page.locator(selector).evaluate(root => {
+      const wrapper = root.querySelector('.gridjs-wrapper'), row = root.querySelector('tbody tr');
+      const action = row.querySelector('.additional-copy-open'), r = row.getBoundingClientRect(), b = action.getBoundingClientRect();
+      return { cells: row.cells.length, display: getComputedStyle(row).display,
+        overflow: wrapper.scrollWidth > wrapper.clientWidth + 1, right: r.right,
+        viewport: innerWidth, actionWidth: b.width, rowWidth: r.width, actionHeight: b.height,
+        nowrap: getComputedStyle(action).whiteSpace };
+    });
+    assert.equal(cards.cells, 6); assert.equal(cards.display, 'grid');
+    assert.equal(cards.overflow, false); assert.ok(cards.right <= cards.viewport + 1);
+    assert.ok(cards.actionWidth >= cards.rowWidth - 32); assert.ok(cards.actionHeight >= 44);
+    assert.equal(cards.nowrap, 'nowrap');
+    return;
+  }
   const geometry = await page.locator(selector).evaluate(root => {
     const wrapper = root.querySelector('.gridjs-wrapper');
     const table = root.querySelector('table.gridjs-table');
@@ -118,7 +133,7 @@ async function assertReadableMobileQueue(page, selector = '#request-grid') {
       nonPositiveCells: bounds.some(bounds => bounds.width <= 0)
     };
   });
-  assert.equal(geometry.cellCount, selector === '#request-grid' ? 8 : 11,
+  assert.equal(geometry.cellCount, 8,
     'Mobile queue should render all request columns');
   assert.equal(geometry.overlaps, false, 'Mobile queue cells must not overlap neighboring columns');
   assert.equal(geometry.nonPositiveCells, false, 'Mobile queue cells need stable positive widths');
@@ -799,7 +814,7 @@ async function runStaleAssignmentCandidates(browser, args, report) {
         pageUrl: `${args.baseOrigin}/staff/?stage=additional_copies&request=${args.staleCopyAId}`,
         apiPath: id => `/api/asap/staff/additional-copies/${id}`,
         assignPath: id => `/api/asap/staff/additional-copies/${id}/assign`,
-        openLabel: id => `Open additional-copy task ${id}`,
+        openLabel: id => `Open additional-copy task ${id}: Open details`,
         pickerLabel: 'Assign additional-copy task',
         kicker: id => `Additional copy ${id}`
       }
@@ -956,7 +971,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     const scenario = (type, id) => type === 'additional_copy'
       ? {
           apiPath: `/api/asap/staff/additional-copies/${id}`,
-          openLabel: `Open additional-copy task ${id}`,
+          openLabel: `Open additional-copy task ${id}: Open details`,
           kicker: `Additional copy ${id}`,
           picker: 'Assign additional-copy task',
           listPath: '/api/asap/staff/additional-copies',
@@ -1596,6 +1611,18 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await page.locator('#additional-copy-claim-filter').selectOption('mine');
     await page.locator('#additional-copy-search').fill('Browser additional copy source');
     await page.getByRole('button', { name: `Open additional-copy task ${created.id}` }).waitFor();
+    const copyRow = page.locator('#additional-copy-grid tbody tr').filter({ has: page.locator(`[data-copy-id="${created.id}"]`) });
+    assert.equal(await copyRow.locator('td').count(), 6);
+    assert.equal(await copyRow.locator('.additional-copy-open').innerText(), 'Open details');
+    await copyRow.locator('[data-copy-column="title"] .additional-copy-title').click();
+    await page.locator('#request-dialog[open]').waitFor();
+    assert.match(await page.locator('#request-dialog-kicker').textContent(), new RegExp(`Additional copy ${created.id}$`));
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(id => document.activeElement?.dataset.copyId === id, created.id);
+    await copyRow.locator('.additional-copy-open').press('Space');
+    await page.locator('#request-dialog[open]').waitFor();
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(id => document.activeElement?.dataset.copyId === id, created.id);
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'additional-copy-grid');
 
     await page.getByRole('button', { name: `Open additional-copy task ${created.id}` }).click();
@@ -1893,7 +1920,7 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     await assertReadableMobileQueue(page, '#additional-copy-grid');
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'additional-copy-scoped-grid');
     const openCopy = page.getByRole('button', { name: `Open additional-copy task ${args.mobileCopyId}` });
-    await openCopy.click();
+    await openCopy.locator('xpath=ancestor::tr').locator('[data-copy-column="library"]').click();
     await page.getByText('The source title request is no longer available.', { exact: true }).waitFor();
     const managementResponse = await context.request.get(`${args.baseOrigin}/api/asap/staff/users?orgId=2`);
     assert.equal(managementResponse.status(), 403, 'Ordinary staff must not gain Staff Access list permission');
@@ -1985,7 +2012,7 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     await page.keyboard.press('Escape');
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await page.waitForFunction(id =>
-      document.activeElement?.getAttribute('aria-label') === `Open additional-copy task ${id}`,
+      document.activeElement?.dataset.copyId === id,
     args.mobileCopyId);
     releaseUnclaimList();
     await page.waitForFunction(() => !document.getElementById('refresh-additional-copies').disabled);
@@ -3651,7 +3678,7 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.getByRole('link', { name: `Open request ${title.id}:`, exact: false }).waitFor();
     await page.locator('[data-view="additional-copies"]').click();
     await page.locator('#additional-copy-claim-filter').selectOption('all');
-    await page.getByRole('button', { name: `Open additional-copy task ${copy.id}`, exact: true }).waitFor();
+    await page.getByRole('button', { name: `Open additional-copy task ${copy.id}: Open details`, exact: true }).waitFor();
     await page.locator('[data-view="operations"]').click();
     await page.locator('#operations-scope').selectOption('2');
     await page.locator('[data-view="settings"]').click();

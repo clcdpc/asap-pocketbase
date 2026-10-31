@@ -28,9 +28,22 @@ async function screenshot(page, directory, name, options = {}) {
   must(verify, 'Screenshot has no verified synthetic acceptance environment.');
   const environment = await verify(); // Rechecks Testing, SQL, providers and the pinned synthetic reviewer.
   await captureTarget(page, environment.origin);
-  const { fullPage = false, clip } = options;
-  assert.ok(Object.keys(options).every(key => ['fullPage', 'clip'].includes(key)), 'Only viewport or explicit page/crop captures are supported');
-  const buffer = await page.screenshot({ type: 'png', fullPage, ...(clip ? { clip } : {}) });
+  const { fullPage = false, clip, nativeViewport = false } = options;
+  assert.ok(Object.keys(options).every(key => ['fullPage', 'clip', 'nativeViewport'].includes(key)), 'Only viewport or explicit page/crop captures are supported');
+  let buffer;
+  if (nativeViewport) {
+    assert.ok(!fullPage && !clip, 'Native viewport capture cannot be combined with a page/crop capture');
+    const cdp = await page.context().newCDPSession(page);
+    try {
+      assert.equal((await cdp.send('Page.getLayoutMetrics')).visualViewport.zoom, 2, 'Native viewport evidence requires actual 200 percent zoom');
+      // Pinned Playwright constructs a clip from legacy pageY at native zoom.
+      // On scrolled pages that captures blank pixels. Let CDP capture the actual
+      // viewport without a clip, retaining the verifier and export checks below.
+      buffer = Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, 'base64');
+    } finally { await cdp.detach(); }
+  } else {
+    buffer = await page.screenshot({ type: 'png', fullPage, ...(clip ? { clip } : {}) });
+  }
   // Do not export pixels if navigation/session expiry raced the capture.
   await captureTarget(page, environment.origin);
   const dimensions = pngDimensions(buffer);

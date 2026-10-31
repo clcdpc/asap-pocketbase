@@ -128,6 +128,26 @@ test('native Chromium 200% helper and accessibility screenshot plumbing run with
   await dialog.locator('.form-actions').evaluate(n => { n.prepend(n.lastElementChild); });
   await confirm(page, 'Revert changes');
   await page.waitForFunction(() => window.fixtureAccepted === true);
+  // A scrolled native-zoom page needs a real viewport capture. Pixel-check a
+  // synthetic marker so a blank capture cannot pass on PNG dimensions alone.
+  await page.evaluate(() => {
+    const spacer = document.createElement('div'); spacer.style.height = '1400px';
+    const marker = document.createElement('div'); marker.id = 'zoom-marker';
+    marker.style.cssText = 'height:100px;background:rgb(32,120,180)';
+    document.querySelector('#workspace').append(spacer, marker); marker.scrollIntoView({ block: 'center' });
+  });
+  assert.ok(await page.evaluate(() => scrollY > 0));
+  const marker = await page.locator('#zoom-marker').boundingBox();
+  const pixels = await screenshot(page, directory, 'scrolled-native-viewport', { nativeViewport: true });
+  const color = await page.evaluate(async ({ data, x, y }) => {
+    const image = new Image(); image.src = 'data:image/png;base64,' + data; await image.decode();
+    const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
+    const drawing = canvas.getContext('2d'); drawing.drawImage(image, 0, 0);
+    return [...drawing.getImageData(x, y, 1, 1).data];
+  }, { data: pixels.toString('base64'), x: Math.round((marker.x + 10) * 2), y: Math.round((marker.y + 10) * 2) });
+  assert.deepEqual(color, [32, 120, 180, 255], 'Scrolled native capture contains the visible synthetic marker');
+  await assert.rejects(screenshot(page, directory, 'invalid-native-crop', { nativeViewport: true, clip: { x: 0, y: 0, width: 10, height: 10 } }),
+    /cannot be combined/);
 });
 
 test('real screenshot plumbing frames unmasked synthetic content, primary and More actions, Settings warnings and mobile evidence', async t => {
