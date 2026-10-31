@@ -30,16 +30,18 @@ async function screenshot(page, directory, name, options = {}) {
   await captureTarget(page, environment.origin);
   const { fullPage = false, clip, nativeViewport = false } = options;
   assert.ok(Object.keys(options).every(key => ['fullPage', 'clip', 'nativeViewport'].includes(key)), 'Only viewport or explicit page/crop captures are supported');
-  assert.ok(!nativeViewport || !fullPage && !clip, 'Native viewport capture cannot request a page or crop');
+  assert.ok(!nativeViewport || !fullPage && !clip, 'Native viewport capture cannot be combined with a page or crop');
   let buffer;
   if (nativeViewport) {
     const cdp = await page.context().newCDPSession(page);
     try {
       assert.equal((await cdp.send('Page.getLayoutMetrics')).visualViewport.zoom, 2, 'Native capture requires actual 200 percent zoom');
       // Playwright's document clip uses the wrong scroll offset at native zoom
-      // on long Settings pages. Capture the visible view directly, without a clip.
+      // on scrolled Settings and Additional copies pages. Capture the visible
+      // view directly, without a clip, retaining identity and dimension checks.
+      // Keep CDP's surface capture: fromSurface:false can return blank scrolled pixels.
       const capture = await cdp.send('Page.captureScreenshot', {
-        format: 'png', fromSurface: false, captureBeyondViewport: false
+        format: 'png', captureBeyondViewport: false
       });
       buffer = Buffer.from(capture.data, 'base64');
     } finally { await cdp.detach(); }
@@ -250,12 +252,14 @@ async function nativeZoom(context, page, factor) {
   const actual = await worker.evaluate(async ({ url, factor }) => {
     const tab = (await chrome.tabs.query({})).find(t => t.url === url);
     if (!tab) throw new Error('Application tab missing');
+    const previous = await chrome.tabs.getZoom(tab.id);
     await chrome.tabs.setZoomSettings(tab.id, { mode: 'automatic', scope: 'per-tab' });
     await chrome.tabs.setZoom(tab.id, factor);
-    return chrome.tabs.getZoom(tab.id);
+    return { previous, current: await chrome.tabs.getZoom(tab.id) };
   }, { url: page.url(), factor });
-  assert.equal(actual, factor);
-  await page.waitForFunction(({ ratio, factor }) => Math.abs(devicePixelRatio / ratio - factor) < 0.01, { ratio, factor });
+  assert.equal(actual.current, factor);
+  await page.waitForFunction(({ ratio, factor, previous }) => Math.abs(devicePixelRatio / ratio - factor / previous) < 0.01,
+    { ratio, factor, previous: actual.previous });
   const cdp = await context.newCDPSession(page);
   try {
     assert.equal((await cdp.send('Page.getLayoutMetrics')).visualViewport.zoom, factor);

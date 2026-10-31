@@ -179,7 +179,7 @@ const scenarios = [
       assert.ok(['pending', 'sending', 'sent'].includes(rows[0].status));
       assert.ok(rows[0].deliveryMode === null || rows[0].deliveryMode === 'file');
       assert.match(current.activity.map(e => e.message).join(' '), /Acceptance rejection/);
-      await t.page.locator('#request-dialog .status-badge').filter({ hasText: /^Closed$/ }).waitFor();
+      await t.page.locator('#request-dialog-status').filter({ hasText: /^Closed · Rejected$/ }).waitFor();
       await outcomeCheckpoint(t);
     } },
   { id: 'dirty-editor-navigation', requirements: ['#401: detail close, status/view switch, Cancel retains draft/route, discard intended draft', '#407: dirty editor blocks purchase'], writes: false,

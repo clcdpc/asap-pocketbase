@@ -4,7 +4,7 @@
 pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -AllowReviewWrites
 ```
 
-Run from PR #412's tooling checkout with PowerShell 7, Git and working Microsoft
+Run from a tooling checkout containing the selected suite, with PowerShell 7, Git and working Microsoft
 WSLC (WSL 2.9.3+). The command builds or reuses one disposable image, initializes
 a fresh SQL Server database, authenticates locally as a synthetic staff user,
 runs headed Chromium/Playwright on Xvfb, exports a report and removes the container.
@@ -30,7 +30,7 @@ pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWri
 The S1 Workflow Settings suite is entirely read-only:
 
 ```powershell
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr <S1_PR_NUMBER> -Suite s1 -ReadOnly
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 415 -Suite s1
 ```
 
 Its six scenarios cover real SQL-backed selected IDs (including an unavailable
@@ -44,12 +44,73 @@ deterministic backend. Each scenario verifies stored Settings and their version
 are unchanged. No Settings write permission or runner guard is broadened.
 Persisted Save, Discard, explicit `[]`, inherited `null`, scope/version races and
 patron policy remain the retained SQL integration/browser tests' responsibility.
-Run `pr410 -AllowReviewWrites` against the S1 PR as the reset-confirmation regression.
+
+Use the updated PR #415 tooling checkout for all three integrated suites. The
+launcher discovers suites locally; `-Pr` selects the application revision only.
+Run complete D1 and Q1 regressions once each alongside S1:
+
+```powershell
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 415 -Suite d1 -AllowReviewWrites
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 415 -Suite q1
+```
+
+The five read-only D1 scenarios check direct actions, cancellation/focus, the
+combined research row and generated URLs, patron plus placement, Closed and
+retained-protection fields, and newest-first Activity with bigint ties. Toolbar
+evidence covers wide, medium, narrow, very narrow, short-height and native 200%
+views; Closed/locked-field screenshots include desktop, mobile and native 200%.
+Each checkpoint retains the existing runtime/reviewer proof, axe, image and
+overflow guards. Research destinations are inspected without external navigation.
+Geometry and synthetic screenshots stay beside the report under
+`$HOME/ASAP-Acceptance/<run>/`.
+
+`d1-close-reopen-refresh` is NOT RUN in read-only mode. With explicit write
+authorization it consumes only the existing `close-reopen` fixture and checks
+the accessible confirmations, authoritative status/field refresh and Activity
+after each mutation. The three extra fixtures are `d1-closed` (rejected with no
+hold), `d1-protected` (retained legacy hold protection), and `d1-history` (three
+fixed events, including timestamp ties and IDs above JavaScript's safe range).
+They never reset consumed data. Existing PR410 fixtures and scenario behavior
+remain independent. Role variants, incomplete operations, quick-create
+completion and LEAP configurations retain focused controller/SQL/browser
+coverage; the suite reports those limits. Human visual/screen-reader acceptance
+remains open under #398.
 
 `-Commit <revision>` replaces PR selection; `-Rebuild` forces an image refresh.
 Reports record independent application and tooling SHAs, suite, mode, scenario
 status and actual container exit code. A build/startup blocker leaves the tested
 application SHA empty until runtime verification succeeds.
+
+Q1 and S1 are inherently read-only and need no extra flag. Do not repeat them in
+read-only mode. Use `smoke` for infrastructure diagnosis and the complete
+`pr410 -AllowReviewWrites` regression only when a specific Settings reset,
+mutation-guard, fixture or retained-scenario risk warrants it.
+
+The five read-only Q1 scenarios exercise Additional copies at 1440, 1280,
+1024 and 390 CSS-pixel widths, a 640px container inside a desktop window,
+and native 200% zoom. They check six grouped columns, long/missing values,
+the five primary sorts, underlying-field searches, claims, paging, refresh,
+Open/Closed and library scope, safe row/button/BIB activation, keyboard focus
+and Escape. Each screenshot retains the existing runtime, axe, image, page-error,
+external-request and overflow guards. BIB links are inspected and clicked with
+navigation prevented; the catalog is never contacted.
+
+The review-only SQL seed adds 24 open tasks to the existing two (enough for a
+second page), one closed task, and one task in a second synthetic library.
+One synthetic claimant supplies claim/wrapping coverage. No Q1 scenario writes
+tasks or changes the signed-in actor. Session replacement and reinserted stale
+rows also have real Grid.js regression coverage in `staff_copy_table.test.js`.
+Desktop screenshots are `q1-desktop-1440/1280/1024.png`; cards are
+`q1-narrow-container.png` and `q1-mobile-390.png`; zoom is `q1-native-200.png`.
+Matching `*-geometry.json` files record cells, buttons and scroll extents;
+`q1-native-200-browser.json` records actual CDP viewport/zoom metrics. Evidence
+at native zoom uses a verified CDP viewport capture, avoiding the pinned
+Playwright clip bug on scrolled pages. Runtime/identity verification, PNG
+dimension checks and all checkpoint guards still apply; a real-browser pixel
+regression checks the scrolled capture.
+Evidence
+remains beneath `$HOME/ASAP-Acceptance`. Human visual and screen-reader review
+remains tracked by #398.
 
 ## Runtime checks and authorization
 

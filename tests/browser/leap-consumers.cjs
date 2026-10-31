@@ -46,14 +46,14 @@ const [baseURL, artifacts, staffId, tenantId, email, requestId, legacyId, copyId
     assert.equal(await page.locator('#request-dialog').evaluate(node => node.open), false, 'external links have independent keyboard targets');
     await titleRow.locator('a.grid-open').click();
     await page.locator('#request-dialog[open]').waitFor();
-    await checkAnchor(page.locator('#request-dialog .research-section a[href*="#bib/"]'), bib);
+    await checkAnchor(page.locator('#request-dialog .polaris-edit-tools a[href*="#bib/"]'), bib);
     await checkAnchor(page.locator('#request-dialog dd a[href*="#patron/"]').first(), patron);
     await scan('title-detail'); await page.keyboard.press('Escape');
     await page.locator('[data-status="suggestion"]').click();
     const legacyRow = page.locator('#request-grid tr').filter({ has: page.locator(`a[data-request-id="${legacyId}"]`) });
     await legacyRow.waitFor(); assert.equal(await legacyRow.locator('a[href*="#patron/"]').count(), 0);
     await page.locator('[data-view="additional-copies"]').click();
-    const copyRow = page.locator('#additional-copy-grid tr').filter({ has: page.locator(`button[aria-label="Open additional-copy task ${copyId}"]`) });
+    const copyRow = page.locator('#additional-copy-grid tr').filter({ has: page.locator(`button[data-copy-id="${copyId}"]`) });
     await checkAnchor(copyRow.locator('a[href*="#bib/"]'), bib);
     assert.equal(await copyRow.locator('a[href*="#patron/"]').count(), 0, 'copy tasks have no patron identity');
     await copyRow.locator('button.grid-open').click();

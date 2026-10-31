@@ -334,8 +334,9 @@ test('authorized title-request and additional-copy mutations retain fixture and 
   assert.equal(checks, 4);
 });
 test('existing frontend/browser entry points and full CI guard remain; artifacts are Git ignored', async () => {
+  // Merged CI modernization adds workflow-test dependencies and optional browser TRX output.
   for (const file of ['package.json', 'tests/browser/run.cjs']) {
-    const baseline = execFileSync('git', ['show', '792b039de3010c832ad6aaa1d65ec09807e3410c:' + file], { cwd: repository, encoding: 'utf8' });
+    const baseline = execFileSync('git', ['show', 'c55e83e68e4e0358f9426ad112f546743f71076e:' + file], { cwd: repository, encoding: 'utf8' });
     assert.equal((await fs.readFile(path.join(repository, file), 'utf8')).replace(/\r\n/g, '\n'), baseline.replace(/\r\n/g, '\n'));
   }
   const workflow = await fs.readFile(path.join(repository, '.github/workflows/dotnet.yml'), 'utf8');
@@ -401,9 +402,11 @@ test('partial results never report automated completion while required scenarios
   assert.equal(exitCode(report), 2);
 });
 
-test('smoke registers exactly two scenarios with explicit write metadata and preserves pr410', async () => {
+test('registered suites retain D1, pr410, Q1, S1 and smoke with their mutation boundaries', async () => {
   const registry = require('./suites/index.cjs');
-  assert.deepEqual(Object.keys(registry), ['pr410', 'smoke', 's1']);
+  const names = ['d1', 'pr410', 'q1', 's1', 'smoke'];
+  assert.deepEqual(require('./suites/registry.json'), names, 'Each suite is registered exactly once in deterministic order');
+  assert.deepEqual(Object.keys(registry), names);
   assert.equal(registry.smoke.id, 'smoke');
   assert.equal(registry.smoke.mutations, true);
   assert.equal(registry.s1.mutations, false);
@@ -415,8 +418,13 @@ test('smoke registers exactly two scenarios with explicit write metadata and pre
   for (const suite of Object.values(registry)) {
     assert.ok(suite.requires.includes('wslc-review-0.4.0'));
     assert.ok(suite.human.length > 0);
-    assert.ok(suite.uncovered.length > 0);
+    assert.ok(Array.isArray(suite.uncovered));
+    assert.ok(suite.id === 'q1' || suite.uncovered.length > 0, 'Existing suites retain their uncovered-requirement records');
   }
+  assert.equal(registry.q1.mutations, false);
+  assert.deepEqual(registry.q1.uncovered, []);
+  assert.equal(registry.q1.scenarios.length, 5);
+  assert.ok(registry.q1.scenarios.every(scenario => scenario.writes === false && scenario.requirements.length > 0));
   const baseline = execFileSync('git', ['show', '6f928007edf53bb48aeaf9018357aacc2bdaf8dc:tests/acceptance/suites/pr410.cjs'],
     { cwd: repository, encoding: 'utf8' });
   const previous = [...baseline.matchAll(/\{ id: '([^']+)', requirements: \[.*\], writes: (true|false)/g)]
@@ -425,6 +433,33 @@ test('smoke registers exactly two scenarios with explicit write metadata and pre
   assert.deepEqual(registry.pr410.scenarios.filter(s => s.id !== 'settings-reset-approved').map(s => [s.id, s.writes]), previous);
   assert.equal(registry.pr410.scenarios.find(s => s.id === 'settings-reset-approved').writes, true);
   assert.equal(registry.pr410.scenarios.length, 21);
+});
+
+test('D1 registers read-only coverage independently of its explicitly authorized close/reopen scenario', () => {
+  const suite = require('./suites/d1.cjs');
+  assert.equal(suite.id, 'd1');
+  assert.equal(suite.mutations, true);
+  assert.deepEqual(suite.scenarios.map(s => [s.id, s.writes]), [
+    ['d1-toolbar-layout', false], ['d1-action-focus', false], ['d1-research-patron', false],
+    ['d1-closed-locks', false], ['d1-activity', false], ['d1-close-reopen-refresh', true]
+  ]);
+});
+
+test('D1 admits only pristine synthetic closed/protected/history fixture states', () => {
+  for (const [key, status, events, protectedHold, closeReason] of [
+    ['d1-closed', 'closed', 0, false, 'rejected'], ['d1-protected', 'closed', 0, true, 'hold_completed'],
+    ['d1-history', 'suggestion', 3, false, null]
+  ]) {
+    const row = { id: '9007199254740993', key: 'acceptance-pr410-' + key, status, events,
+      legacyHoldProtected: protectedHold, closeReason, pristineNotes: true, identityBound: true };
+    assert.equal(requireFixture({ titles: [row] }, key), row);
+    for (const change of [{ identityBound: false }, { pristineNotes: false }, { events: events + 1 },
+      { legacyHoldProtected: !protectedHold }, { status: 'pending_hold' }, { closeReason: 'changed' }]) {
+      assert.throws(() => requireFixture({ titles: [{ ...row, ...change }] }, key), /consumed or has changed/);
+    }
+    assert.throws(() => requireFixture({ titles: [row, row] }, key), /ambiguous/);
+    assert.throws(() => requireFixture({ titles: [{ ...row, id: 'not-an-id' }] }, key), /authoritative request identity/);
+  }
 });
 
 const smokeArgs = (...extra) => ['--suite', 'smoke', '--expected-commit', appSha, ...extra];
@@ -573,7 +608,7 @@ test('native viewport capture retains runtime guards, actual zoom and dimensions
   await screenshot(page, directory, 'native', { nativeViewport: true });
   assert.equal(checks, 1);
   assert.deepEqual(calls, [['Page.getLayoutMetrics', undefined], ['Page.captureScreenshot', {
-    format: 'png', fromSurface: false, captureBeyondViewport: false
+    format: 'png', captureBeyondViewport: false
   }]]);
   assert.equal(detached, 1);
   zoom = 1;
@@ -581,7 +616,7 @@ test('native viewport capture retains runtime guards, actual zoom and dimensions
   assert.equal(detached, 2);
   zoom = 2; pixels.writeUInt32BE(640, 16);
   await assert.rejects(screenshot(page, directory, 'wrong-size', { nativeViewport: true }), /Screenshot dimensions/);
-  await assert.rejects(screenshot(page, directory, 'invalid-crop', { nativeViewport: true, fullPage: true }), /cannot request/);
+  await assert.rejects(screenshot(page, directory, 'invalid-crop', { nativeViewport: true, fullPage: true }), /cannot be combined/);
   assert.deepEqual(await fs.readdir(directory), ['native.png']);
 });
 
