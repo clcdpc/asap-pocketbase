@@ -20,7 +20,10 @@ async function main() {
   function evaluate(expression, context) {
     const source = expression.trim().match(/^\$\{\{([\s\S]*)\}\}$/)?.[1];
     assert.ok(source, `Expected a single Actions expression: ${expression}`);
-    const tokens = new Lexer(source).lex().tokens;
+    // The standalone evaluator does not know the runner's cancellation state.
+    // Substitute only that built-in status result; evaluate the remaining actual expression.
+    const evaluatedSource = source.replace(/\bcancelled\(\)/g, context.__cancelled === true ? 'true' : 'false');
+    const tokens = new Lexer(evaluatedSource).lex().tokens;
     const ast = new Parser(tokens, Object.keys(context), []).parse();
     return new Evaluator(ast, JSON.parse(JSON.stringify(context), data.reviver)).evaluate().coerceString();
   }
@@ -178,6 +181,7 @@ async function main() {
     assert.equal(evaluate(gate.name, context), 'Build, test and package');
     context.needs['build-test-package'] = { result: 'success' };
     context.needs['draft-validation'] = { result: 'skipped' };
+    context.needs.validation = { result: 'success' };
     assert.equal(report(context), 0);
     assert.equal(enabled(deploy, context), false);
     context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
@@ -191,16 +195,50 @@ async function main() {
     for (const context of [push, tag]) {
       await routed(context);
       context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
+      context.needs['build-test-package'] = { result: 'success' };
+      context.needs['draft-validation'] = { result: 'skipped' };
+      context.needs.validation = { result: 'success' };
       assert.equal(enabled(full, context), true);
     }
     assert.equal(enabled(deploy, push), false);
     assert.equal(enabled(deploy, tag), true);
     assert.deepEqual(deploy.needs, ['build-test-package', 'validation']);
-    // With no status function, GitHub also requires success() for both needs.
-    assert.doesNotMatch(deploy.if, /\b(always|cancelled|failure|success)\s*\(/);
+    // Explicit status check bypasses the implicit success() that treats a skipped
+    // draft-validation ancestor as a reason to skip an otherwise eligible deployment.
+    assert.match(deploy.if, /!\s*cancelled\(\)/);
+    assert.match(deploy.if, /needs\.build-test-package\.result\s*==\s*'success'/);
+    assert.match(deploy.if, /needs\.validation\.result\s*==\s*'success'/);
+    assert.doesNotMatch(deploy.if, /\balways\(\)/);
     assert.equal(deploy['continue-on-error'], undefined);
     assert.deepEqual(deploy['runs-on'], ['self-hosted', 'windows', 'x64', 'asap-test-iis']);
     assert.equal(deploy.environment, 'asap-test-iis');
+  });
+  await check('tag and requested manual deployment tolerate skipped draft but fail closed on bad prerequisites', async () => {
+    for (const context of [
+      nonPr('push', 110, 'refs/tags/v1.0.0-test.23'),
+      nonPr('workflow_dispatch', 111, 'refs/heads/codex/wave2-s1-workflow-settings', { deploy_test_iis: true })
+    ]) {
+      await routed(context);
+      context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
+      context.needs['build-test-package'] = { result: 'success' };
+      context.needs['draft-validation'] = { result: 'skipped' };
+      context.needs.validation = { result: 'success' };
+      assert.equal(report(context), 0, 'The reporting gate passes with the expected skipped draft branch');
+      assert.equal(enabled(deploy, context), true, 'Full CI can deploy despite the skipped draft ancestor');
+
+      for (const dependency of ['build-test-package', 'validation']) {
+        for (const result of ['failure', 'cancelled', 'skipped', 'unexpected', undefined]) {
+          context.needs[dependency].result = result;
+          assert.equal(enabled(deploy, context), false, `${dependency}/${result} must block deployment`);
+        }
+        context.needs[dependency].result = 'success';
+      }
+      context.__cancelled = true;
+      assert.equal(enabled(deploy, context), false, 'Cancelled workflow must never deploy');
+      context.__cancelled = false;
+      context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'false';
+      assert.equal(enabled(deploy, context), false, 'Repository activation gate remains mandatory');
+    }
   });
   await check('draft work is bounded and has no SQL, browser, publish or evidence setup', () => {
     assert.equal(draft['runs-on'], 'clc-linux');
