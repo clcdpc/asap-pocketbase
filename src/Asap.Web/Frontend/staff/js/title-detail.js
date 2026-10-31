@@ -250,7 +250,11 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         onUpdated(detail);
         renderRequest(detail, configurations.get(String(detail.libraryOrgId))?.value || {}, editor?.acceptedVerification(detail, body));
       }
-      else { disposeChildren(); current = Object.freeze({ id: snapshot.id, version: null }); attempt.mounted.content.replaceChildren(element('p', { text: 'The action committed. Reload this request to review current details.' })); }
+      else {
+        disposeChildren(); current = Object.freeze({ id: snapshot.id, version: null });
+        attempt.mounted.heading(snapshot.title, `${snapshot.libraryOrgName} · Request ${snapshot.id}`);
+        attempt.mounted.content.replaceChildren(element('p', { text: 'The action committed. Reload this request to review current details.' }));
+      }
       host.focusClose(); announce(message, notification.partial || patronNotification.partial ? 'warning' : 'success');
       releaseAttempt(attempt);
       const refreshed = await refreshQueue({ skipDeepLink: true, silent: true });
@@ -404,11 +408,14 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     });
     editor = createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot, verified, request: send });
     workflows = createRequestWorkflows({ context, editor, announce, request: send });
-    lease?.heading(request.title, `${request.libraryOrgName} · Request ${request.id}`);
+    const status = statusLabel(request.status);
+    lease?.heading(request.title, `${request.libraryOrgName} · Request ${request.id}`, {
+      label: request.status === 'closed' && request.closeReason ? `${status} · ${closeReasonLabel(request.closeReason)}` : status,
+      closed: request.status === 'closed'
+    });
     mounted.content.classList.add('title-detail-content');
     const body = document.createDocumentFragment();
     const meta = element('div', { className: 'detail-meta' }, [
-      element('span', { className: `status-badge${request.status === 'closed' ? ' closed' : ''}`, text: statusLabel(request.status) }),
       element('span', { text: `Submitted ${dateTime(request.created)}` }),
       element('span', { text: request.claimedByDisplayName ? `Claimed by ${request.claimedByDisplayName}` : 'Unclaimed' })
     ]);
@@ -416,8 +423,10 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     const detailsPanel = element('section', { className: 'request-details-panel' });
     detailsPanel.append(element('div', { className: 'request-workflow-panel' }));
     const patronContext = element('div', { className: 'patron-context' });
+    const patronName = [request.nameFirst, request.nameLast].filter(Boolean).join(' ');
+    const patronValue = element('span', { className: 'patron-name-actions' }, [researchRecordValue(patronName, request.research, 'patron')]);
     if (typeof request.barcode === 'string' && request.barcode.trim() && onNewSuggestion) {
-      patronContext.append(element('button', { type: 'button', className: 'grid-new-suggestion',
+      patronValue.append(element('button', { type: 'button', className: 'grid-new-suggestion',
         'aria-label': `New suggestion for patron ${request.barcode} from request ${request.id}`,
         onclick: event => {
           if (live() && !hasPendingMutation()) onNewSuggestion(request.barcode, event.currentTarget, request.id);
@@ -426,21 +435,29 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     }
 
     if (request.capabilities && request.capabilities.blockingReason) {
+      const reason = request.capabilities.blockingReason;
       detailsPanel.append(element('p', {
-        className: 'blocked-callout',
-        text: request.capabilities.blockingReason === 'pickup_reconciliation_required'
+        className: ['pickup_reconciliation_required', 'hold_operation_incomplete'].includes(reason) ? 'blocked-callout' : 'identifier-lock-help field-help',
+        text: reason === 'pickup_reconciliation_required'
           ? 'Pickup preference needs reconciliation. Review the live preference before continuing; an uncertain provider write will not be repeated.'
-          : request.capabilities.blockingReason === 'hold_operation_incomplete'
+          : reason === 'hold_operation_incomplete'
           ? 'Workflow-changing edits are blocked while hold placement needs recovery.'
-          : request.capabilities.blockingReason === 'hold_history_retained'
-          ? 'Reopen is unavailable because placed-hold history has no confirmed external reversal.'
-          : 'Identifier and BIB changes are locked by this request’s placement history.'
+          : reason === 'hold_history_retained'
+          ? "This request has a previous hold placement, so it can't be reopened or have its Identifier or BIB ID changed."
+          : request.status === 'closed'
+          ? "This request is closed, so its Identifier and BIB ID can't be changed. Reopen it first if that option is available."
+          : request.status === 'hold_placed'
+          ? 'This request has reached the hold stage. Its Identifier and BIB ID can no longer be changed.'
+          : reason === 'identifier_locked_by_stage' && ['suggestion', 'outstanding_purchase', 'pending_hold'].includes(request.status)
+          // The workflow policy only locks identifiers in a pre-placement
+          // stage when placed-hold protection remains, including legacy holds.
+          ? "A previous hold placement prevents changes to this request's Identifier and BIB ID."
+          : "Changes to this request's Identifier and BIB ID are locked by its current workflow protections."
       }));
     }
 
     const details = element('dl', { className: 'detail-grid' });
-    const patronName = [request.nameFirst, request.nameLast].filter(Boolean).join(' ');
-    addDetail(details, 'Patron', patronName).replaceChildren(researchRecordValue(patronName, request.research, 'patron'));
+    addDetail(details, 'Patron', patronName).replaceChildren(patronValue);
     addDetail(details, 'Barcode', request.barcode).replaceChildren(researchRecordValue(request.barcode, request.research, 'patron'));
     addDetail(details, 'Email', request.email);
     addDetail(details, 'Recorded ASAP pickup', request.preferredPickupBranchName || request.preferredPickupBranchId)
@@ -485,7 +502,6 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       }));
     }
     detailsPanel.append(editor.build());
-    detailsPanel.append(element('section', { className: 'research-section', hidden: true }));
     if (request.holdOperation) detailsPanel.append(workflows.buildHold());
     const tablist = element('div', { className: 'request-detail-tabs', role: 'tablist', 'aria-label': 'Request detail sections' });
     const middle = element('div', { className: 'request-middle' });
@@ -525,7 +541,23 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       return section;
     }
     const list = element('ol');
-    for (const item of activity) {
+    const eventId = value => (typeof value === 'string' && /^-?\d+$/.test(value) || Number.isSafeInteger(value)) ? BigInt(value) : null;
+    const ordered = activity.map((item, index) => ({ item, index,
+      timestamp: typeof item.created === 'string' && Number.isFinite(Date.parse(item.created)) ? Date.parse(item.created) : -Infinity,
+      // SQL timestamps retain seven fractional digits; Date.parse keeps only
+      // milliseconds. Compare the remaining ticks before treating times as tied.
+      ticks: (String(item.created).match(/\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/)?.[1] || '').padEnd(7, '0').slice(3, 7),
+      id: eventId(item.id) }));
+    ordered.sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp > b.timestamp ? -1 : 1;
+      if (a.timestamp !== -Infinity && a.ticks !== b.ticks) return a.ticks > b.ticks ? -1 : 1;
+      if (a.id !== null && b.id !== null && a.id !== b.id) return a.id > b.id ? -1 : 1;
+      // A total ordering avoids comparison cycles when valid and invalid IDs
+      // are interspersed; unknown IDs retain their original relative order.
+      if ((a.id === null) !== (b.id === null)) return a.id === null ? 1 : -1;
+      return a.index - b.index;
+    });
+    for (const { item } of ordered) {
       const type = text(item.eventType, 'Event').replaceAll('_', ' ');
       const actor = item.actorName || (item.actorType === 'system' ? 'System' : 'Actor not recorded');
       list.append(element('li', { 'data-event-id': String(item.id) }, [

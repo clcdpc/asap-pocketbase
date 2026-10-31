@@ -25,7 +25,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
 
   function updateResearchLinks() {
     if (!isCurrent()) return;
-    const container = root.querySelector('.research-section');
+    const container = root.querySelector('.request-research-links');
     if (!container || !request) return;
     renderResearchLinks(container, request, research, {
       title: editControls?.title.value,
@@ -82,6 +82,18 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       maxlength: '100',
       disabled: !request.capabilities.canChangeBib
     });
+    function identifierField(label, input) {
+      const field = labeledInput(label, input);
+      if (input.disabled) {
+        const hint = element('small', { id: `request-${request.id}-${label === 'Identifier' ? 'identifier' : 'bib'}-locked`,
+          className: 'field-lock', text: 'Locked' });
+        field.firstElementChild.id = `${hint.id}-label`;
+        input.setAttribute('aria-labelledby', field.firstElementChild.id);
+        field.append(hint);
+        input.setAttribute('aria-describedby', hint.id);
+      }
+      return field;
+    }
     editControls = { title, author, identifier, bib };
     const selectedContext = element('p', { className: 'polaris-selection-context wide', role: 'status' });
     const searchButton = commandButton('Search Polaris catalog', 'search', () => {
@@ -222,9 +234,10 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     form.append(
       labeledInput('Title', title),
       labeledInput('Author', author),
-      labeledInput('Identifier', identifier),
-      labeledInput('BIB ID', bib),
-      element('div', { className: 'wide polaris-edit-tools' }, [searchButton, selectedContext]),
+      identifierField('Identifier', identifier),
+      identifierField('BIB ID', bib),
+      element('div', { className: 'wide polaris-edit-tools' }, [searchButton,
+        element('div', { className: 'request-research-links', hidden: true }), selectedContext]),
       labeledInput('Publication timing', publication),
       labeledInput('Exact publication date', exactDate),
       labeledInput('Format', format),
@@ -300,6 +313,9 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
         saveState.dataset.state = 'error';
       }
     });
+    // Revert replaces this mount too; repopulate from the retained configuration
+    // and the new controls without waiting for another configuration request.
+    renderResearchLinks(form.querySelector('.request-research-links'), request, research);
     return form;
   }
 

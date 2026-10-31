@@ -27,6 +27,37 @@ Run the existing feature suite with:
 pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites
 ```
 
+From the D1 branch's tooling checkout, run request-detail acceptance against its
+PR number (replace `<D1_PR_NUMBER>`):
+
+```powershell
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr <D1_PR_NUMBER> -Suite d1 -ReadOnly
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr <D1_PR_NUMBER> -Suite d1 -AllowReviewWrites
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr <D1_PR_NUMBER> -Suite pr410 -AllowReviewWrites
+```
+
+The five read-only D1 scenarios check direct actions, cancellation/focus, the
+combined research row and generated URLs, patron plus placement, Closed and
+retained-protection fields, and newest-first Activity with bigint ties. Toolbar
+evidence covers wide, medium, narrow, very narrow, short-height and native 200%
+views; Closed/locked-field screenshots include desktop, mobile and native 200%.
+Each checkpoint retains the existing runtime/reviewer proof, axe, image and
+overflow guards. Research destinations are inspected without external navigation.
+Geometry and synthetic screenshots stay beside the report under
+`$HOME/ASAP-Acceptance/<run>/`.
+
+`d1-close-reopen-refresh` is NOT RUN in read-only mode. With explicit write
+authorization it consumes only the existing `close-reopen` fixture and checks
+the accessible confirmations, authoritative status/field refresh and Activity
+after each mutation. The three extra fixtures are `d1-closed` (rejected with no
+hold), `d1-protected` (retained legacy hold protection), and `d1-history` (three
+fixed events, including timestamp ties and IDs above JavaScript's safe range).
+They never reset consumed data. Existing PR410 fixtures and scenario behavior
+remain independent. Role variants, incomplete operations, quick-create
+completion and LEAP configurations retain focused controller/SQL/browser
+coverage; the suite reports those limits. Human visual/screen-reader acceptance
+remains open under #398.
+
 `-Commit <revision>` replaces PR selection; `-Rebuild` forces an image refresh.
 Reports record independent application and tooling SHAs, suite, mode, scenario
 status and actual container exit code. A build/startup blocker leaves the tested

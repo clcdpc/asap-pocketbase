@@ -119,7 +119,7 @@ export function renderResearchLinks(container, request, research, draft = {}) {
   container.replaceChildren();
   container.hidden = links.length === 0;
   if (links.length) {
-    container.append(node('h3', { text: 'Catalog and research links' }), node('div', { className: 'research-links' }, links));
+    container.append(node('div', { className: 'research-links' }, links));
   }
 }
 

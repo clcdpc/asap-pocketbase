@@ -8,10 +8,7 @@ const { URL } = require('node:url');
 
 async function revealRequestActions(page) {
   await page.locator('#request-dialog[open] .action-bar').waitFor();
-  const menu = page.locator('#request-dialog .request-more');
-  if (await menu.count() && await menu.locator('summary').isVisible() && !await menu.evaluate(node => node.open)) {
-    await menu.locator('summary').click();
-  }
+  assert.equal(await page.locator('#request-dialog .request-more').count(), 0);
 }
 
 function parseArguments(argv) {
@@ -1561,7 +1558,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'additional-copy-create-preview');
     await page.keyboard.press('Escape');
     await page.locator('#additional-copy-create-dialog').waitFor({ state: 'hidden' });
-    assert.equal(await page.locator('#request-dialog .request-more summary').evaluate(node => document.activeElement === node), true);
+    assert.equal(await createAction.evaluate(node => document.activeElement === node), true);
 
     await revealRequestActions(page);
     await createAction.click();

@@ -31,6 +31,40 @@ FROM (VALUES
 ) f(Scenario, Suffix, AutoHold, BibId, Verified)
 WHERE NOT EXISTS (SELECT 1 FROM asap.TitleRequest r WHERE r.LegacyId = N'acceptance-pr410-' + f.Scenario);
 
+-- D1 read-only states: ordinary closure, retained legacy protection, and a
+-- deterministic history with bigint ties. Existing PR410 fixtures stay pristine.
+INSERT INTO asap.TitleRequest
+    (LegacyId, LibraryOrganizationId, PatronOrganizationId, Barcode, Email,
+     NameFirst, NameLast, PreferredPickupBranchId, PreferredPickupBranchName,
+     LibraryNameSnapshot, Title, Author, AutoHold, MaterialFormatId, Status,
+     CloseReason, LegacyHoldProtected, Notes, CreatedUtc, UpdatedUtc, PatronIdSnapshot)
+SELECT N'acceptance-pr410-' + f.Scenario, 2, 2, N'ACCEPTANCE' + f.Suffix,
+    N'acceptance@example.org', N'Synthetic', N'Reviewer with a long patron name for wrapping', 101,
+    N'Main Library', N'Review Library', N'Acceptance ' + f.Scenario, N'Synthetic author',
+    1, @book, f.Status, f.CloseReason, f.Protected,
+    N'Acceptance fixture draft baseline', '2026-10-21T12:00:00', '2026-10-23T12:00:00', CONVERT(int, f.Suffix)
+FROM (VALUES
+    (N'd1-closed', N'41013', N'closed', N'rejected', 0),
+    (N'd1-protected', N'41014', N'closed', N'hold_completed', 1),
+    (N'd1-history', N'41015', N'suggestion', NULL, 0)
+) f(Scenario, Suffix, Status, CloseReason, Protected)
+WHERE NOT EXISTS (SELECT 1 FROM asap.TitleRequest r WHERE r.LegacyId = N'acceptance-pr410-' + f.Scenario);
+
+IF NOT EXISTS (SELECT 1 FROM asap.TitleRequestEvent e JOIN asap.TitleRequest r ON r.Id = e.TitleRequestId
+               WHERE r.LegacyId = N'acceptance-pr410-d1-history')
+BEGIN
+    SET IDENTITY_INSERT asap.TitleRequestEvent ON;
+    INSERT INTO asap.TitleRequestEvent (Id, TitleRequestId, EventType, ActorType, ActorName, Message, CreatedUtc)
+    SELECT f.Id, r.Id, f.EventType, N'system', N'Synthetic acceptance', f.Message, f.CreatedUtc
+    FROM asap.TitleRequest r CROSS JOIN (VALUES
+        (CONVERT(bigint, 9007199254740992), N'created', N'D1 created', CONVERT(datetime2(7), '2026-10-21T12:00:00')),
+        (CONVERT(bigint, 9007199254740993), N'edited', N'D1 earlier tied event', CONVERT(datetime2(7), '2026-10-23T12:00:00')),
+        (CONVERT(bigint, 9007199254740994), N'edited', N'D1 newest tied event', CONVERT(datetime2(7), '2026-10-23T12:00:00'))
+    ) f(Id, EventType, Message, CreatedUtc)
+    WHERE r.LegacyId = N'acceptance-pr410-d1-history';
+    SET IDENTITY_INSERT asap.TitleRequestEvent OFF;
+END;
+
 IF NOT EXISTS (SELECT 1 FROM asap.AdditionalCopyRequest WHERE LegacyId = N'acceptance-pr410-copy')
     INSERT INTO asap.AdditionalCopyRequest
         (LegacyId, LibraryOrganizationId, LibraryNameSnapshot, BibId, Title, Author,

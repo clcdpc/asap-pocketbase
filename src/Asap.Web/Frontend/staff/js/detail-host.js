@@ -4,6 +4,7 @@ export function createDetailHost({ root }) {
   const body = root.querySelector('#request-dialog-body');
   const title = root.querySelector('#request-dialog-title');
   const kicker = root.querySelector('#request-dialog-kicker');
+  const status = root.querySelector('#request-dialog-status');
   const close = root.querySelector('#close-request');
   const events = new window.AbortController();
   let mounted = null;
@@ -11,6 +12,12 @@ export function createDetailHost({ root }) {
   let disposed = false;
 
   function cancelFocusReturn() { cancelFocus?.(); cancelFocus = null; }
+
+  function clearHeading() {
+    title.textContent = 'Request'; kicker.textContent = '';
+    status.textContent = ''; status.hidden = true; status.classList.remove('closed');
+    root.removeAttribute('aria-describedby');
+  }
 
   function returnFocus(port) {
     if (!port) return;
@@ -44,6 +51,7 @@ export function createDetailHost({ root }) {
     owner.dispose?.(options);
     if (root.open) root.close();
     body.replaceChildren();
+    clearHeading();
     returnFocus(options.focusReturn);
     return true;
   }
@@ -63,13 +71,21 @@ export function createDetailHost({ root }) {
       if (disposed) throw new Error('The detail host is disposed.');
       cancelFocusReturn();
       if (mounted) release(mounted);
+      clearHeading();
       mounted = owner;
       const content = document.createElement('div');
       content.className = 'detail-content';
       body.replaceChildren(content);
       const isCurrent = () => !disposed && root.isConnected && mounted === owner;
       return Object.freeze({ content, isCurrent,
-        heading(value, subtitle) { if (isCurrent()) { title.textContent = value; kicker.textContent = subtitle; } },
+        heading(value, subtitle, state = null) {
+          if (!isCurrent()) return;
+          title.textContent = value; kicker.textContent = subtitle;
+          status.textContent = state?.label || ''; status.hidden = !state?.label;
+          status.classList.toggle('closed', state?.closed === true);
+          if (state?.label) root.setAttribute('aria-describedby', status.id);
+          else root.removeAttribute('aria-describedby');
+        },
         show() { if (isCurrent()) { if (!root.open) root.showModal(); close.focus(); } },
         release: options => release(owner, options)
       });

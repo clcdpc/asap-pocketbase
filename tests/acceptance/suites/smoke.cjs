@@ -54,7 +54,7 @@ const scenarios = [
     assert.equal(outcome.committed, true, 'Closure response confirms a commit');
     assert.equal(outcome.finalStatus, 'closed', 'Closure response confirms Closed');
     await dialog.waitFor({ state: 'hidden' });
-    await t.page.locator('#request-dialog .status-badge').filter({ hasText: /^Closed$/ }).waitFor();
+    await t.page.locator('#request-dialog-status').filter({ hasText: /^Closed · Closed silently$/ }).waitFor();
     const current = await detail(t.context, t.origin, fixture);
     assert.equal(current.id, fixture.id, 'Closed request identity');
     assert.equal(current.status, 'closed', 'Authoritative persisted Closed status');

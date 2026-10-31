@@ -128,6 +128,10 @@ test('native Chromium 200% helper and accessibility screenshot plumbing run with
   await dialog.locator('.form-actions').evaluate(n => { n.prepend(n.lastElementChild); });
   await confirm(page, 'Revert changes');
   await page.waitForFunction(() => window.fixtureAccepted === true);
+  await nativeZoom(context, page, 1);
+  assert.deepEqual(await page.evaluate(() => [innerWidth, innerHeight]), [1280, 900], 'Native zoom can return to 100% for subsequent D1 checkpoints');
+  await nativeZoom(context, page, 2);
+  assert.deepEqual(await page.evaluate(() => [innerWidth, innerHeight]), [640, 450], 'Repeated native zoom remains actual browser zoom');
   // A scrolled native-zoom page needs a real viewport capture. Pixel-check a
   // synthetic marker so a blank capture cannot pass on PNG dimensions alone.
   await page.evaluate(() => {

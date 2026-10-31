@@ -242,7 +242,7 @@ test('committed title status synchronizes detail queue and accepted URL', () => 
     request: { ...ui.readRequest(), version: 'v2', status: 'pending_hold' }, finalStatus: 'pending_hold' }));
   ui.allowDiscard();
   [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own').click();
-  await until(() => ui.get('.detail-meta .status-badge').textContent.toLowerCase() === 'pending hold', 'committed detail status');
+  await until(() => ui.get('#request-dialog-status').textContent === 'Pending hold', 'committed detail status');
   assert.equal(ui.params().get('stage'), 'pending_hold');
   assert.equal(ui.get('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
   assert.equal(ui.params().get('request'), id);
@@ -261,7 +261,7 @@ test('committed status during target validation retains the accepted detail entr
       request: { ...ui.readRequest(), version: 'v2', status: 'pending_hold' }, finalStatus: 'pending_hold' }));
     ui.allowDiscard();
     [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own').click();
-    await until(() => ui.get('.detail-meta .status-badge').textContent === 'Pending hold', 'committed source detail');
+    await until(() => ui.get('#request-dialog-status').textContent === 'Pending hold', 'committed source detail');
     validateScope(response(200, { code: 'ok', data: defaultOrganizations }));
     await until(() => ui.params().get('request') === id && ui.params().get('stage') === 'pending_hold', 'updated accepted source restored');
     assert.equal(ui.get('#request-dialog').open, true);
@@ -993,7 +993,7 @@ test('closing only the Additional Copy preview returns focus to its live parent 
     ui.get('#cancel-additional-copy').click(); await settle();
     assert.equal(ui.get('#request-dialog').open, true);
     assert.equal(ui.get('#additional-copy-create-dialog').open, false);
-    assert.equal(document.activeElement, ui.get('#request-dialog .request-more summary'));
+    assert.equal(document.activeElement, actionButton('Additional copy'));
   }, { status: 'pending_hold', staff: actorA }));
 
 test('Additional Copy submission blocks departure; unresolved creation safely closes on navigation and survives reload', async () => {
@@ -1264,7 +1264,7 @@ test('editor Save and assignment submission each preserve the competing dirty dr
 for (const finish of ['baseline', 'cancel', 'clean']) {
   test(`${finish} title assignment permits Claim`, () =>
     fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
-      const opener = ui.get('.request-more summary');
+      const opener = actionButton('Assign');
       const form = await openInlineDraft(ui, 'Assign', assignmentLabel);
       if (finish !== 'clean') ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
       if (finish === 'baseline') ui.edit(`select[aria-label="${assignmentLabel}"]`, '20');
@@ -1329,7 +1329,7 @@ test('dirty pickup submits its own branch choice with the observed preference an
 
 test('Cancel pickup discards only pickup and returns focus without another confirmation', () =>
   fixture(`?stage=pending_hold&scope=2&request=${id}`, async ui => {
-    const opener = ui.get('.request-more summary');
+    const opener = actionButton('Pickup');
     const form = await openInlineDraft(ui, 'Pickup', pickupLabel);
     ui.edit(`select[aria-label="${pickupLabel}"]`, '102');
     ui.edit('.edit-form input', 'Retained title');
@@ -2102,7 +2102,7 @@ test('Additional Copy reminder owns a guarded draft and explicit Cancel lifetime
     assert.equal(ui.get('#additional-copy-create-dialog').open, false);
     assert.equal(ui.get('#additional-copy-reminder').checked, false);
     assert.equal(protectedUnload(ui), false, 'Cancel releases only the reminder registration');
-    assert.equal(document.activeElement, ui.get('#request-dialog .request-more summary'));
+    assert.equal(document.activeElement, actionButton('Additional copy'));
     assert.equal(requestMutations(ui).length, 0);
   }, { status: 'pending_hold' }));
 
