@@ -334,8 +334,9 @@ test('authorized title-request and additional-copy mutations retain fixture and 
   assert.equal(checks, 4);
 });
 test('existing frontend/browser entry points and full CI guard remain; artifacts are Git ignored', async () => {
+  // Merged CI modernization adds workflow-test dependencies and optional browser TRX output.
   for (const file of ['package.json', 'tests/browser/run.cjs']) {
-    const baseline = execFileSync('git', ['show', '792b039de3010c832ad6aaa1d65ec09807e3410c:' + file], { cwd: repository, encoding: 'utf8' });
+    const baseline = execFileSync('git', ['show', 'c55e83e68e4e0358f9426ad112f546743f71076e:' + file], { cwd: repository, encoding: 'utf8' });
     assert.equal((await fs.readFile(path.join(repository, file), 'utf8')).replace(/\r\n/g, '\n'), baseline.replace(/\r\n/g, '\n'));
   }
   const workflow = await fs.readFile(path.join(repository, '.github/workflows/dotnet.yml'), 'utf8');
@@ -401,9 +402,11 @@ test('partial results never report automated completion while required scenarios
   assert.equal(exitCode(report), 2);
 });
 
-test('smoke registers exactly two scenarios with explicit write metadata and preserves pr410', async () => {
+test('registered suites retain D1, pr410, Q1 and smoke with their mutation boundaries', async () => {
   const registry = require('./suites/index.cjs');
-  assert.deepEqual(Object.keys(registry), ['d1', 'pr410', 'smoke']);
+  const names = ['d1', 'pr410', 'q1', 'smoke'];
+  assert.deepEqual(require('./suites/registry.json'), names, 'Each suite is registered exactly once in deterministic order');
+  assert.deepEqual(Object.keys(registry), names);
   assert.equal(registry.smoke.id, 'smoke');
   assert.equal(registry.smoke.mutations, true);
   assert.deepEqual(registry.smoke.scenarios.map(s => [s.id, s.writes]), [
@@ -412,8 +415,13 @@ test('smoke registers exactly two scenarios with explicit write metadata and pre
   for (const suite of Object.values(registry)) {
     assert.ok(suite.requires.includes('wslc-review-0.4.0'));
     assert.ok(suite.human.length > 0);
-    assert.ok(suite.uncovered.length > 0);
+    assert.ok(Array.isArray(suite.uncovered));
+    assert.ok(suite.id === 'q1' || suite.uncovered.length > 0, 'Existing suites retain their uncovered-requirement records');
   }
+  assert.equal(registry.q1.mutations, false);
+  assert.deepEqual(registry.q1.uncovered, []);
+  assert.equal(registry.q1.scenarios.length, 5);
+  assert.ok(registry.q1.scenarios.every(scenario => scenario.writes === false && scenario.requirements.length > 0));
   const baseline = execFileSync('git', ['show', '6f928007edf53bb48aeaf9018357aacc2bdaf8dc:tests/acceptance/suites/pr410.cjs'],
     { cwd: repository, encoding: 'utf8' });
   const previous = [...baseline.matchAll(/\{ id: '([^']+)', requirements: \[.*\], writes: (true|false)/g)]

@@ -63,6 +63,39 @@ Reports record independent application and tooling SHAs, suite, mode, scenario
 status and actual container exit code. A build/startup blocker leaves the tested
 application SHA empty until runtime verification succeeds.
 
+Run Q1 from its tooling checkout against the implementation PR:
+
+```powershell
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr <Q1_PR_NUMBER> -Suite q1 -ReadOnly
+pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr <Q1_PR_NUMBER> -Suite smoke -ReadOnly
+```
+
+The five read-only Q1 scenarios exercise Additional copies at 1440, 1280,
+1024 and 390 CSS-pixel widths, a 640px container inside a desktop window,
+and native 200% zoom. They check six grouped columns, long/missing values,
+the five primary sorts, underlying-field searches, claims, paging, refresh,
+Open/Closed and library scope, safe row/button/BIB activation, keyboard focus
+and Escape. Each screenshot retains the existing runtime, axe, image, page-error,
+external-request and overflow guards. BIB links are inspected and clicked with
+navigation prevented; the catalog is never contacted.
+
+The review-only SQL seed adds 24 open tasks to the existing two (enough for a
+second page), one closed task, and one task in a second synthetic library.
+One synthetic claimant supplies claim/wrapping coverage. No Q1 scenario writes
+tasks or changes the signed-in actor. Session replacement and reinserted stale
+rows also have real Grid.js regression coverage in `staff_copy_table.test.js`.
+Desktop screenshots are `q1-desktop-1440/1280/1024.png`; cards are
+`q1-narrow-container.png` and `q1-mobile-390.png`; zoom is `q1-native-200.png`.
+Matching `*-geometry.json` files record cells, buttons and scroll extents;
+`q1-native-200-browser.json` records actual CDP viewport/zoom metrics. Evidence
+at native zoom uses a verified CDP viewport capture, avoiding the pinned
+Playwright clip bug on scrolled pages. Runtime/identity verification, PNG
+dimension checks and all checkpoint guards still apply; a real-browser pixel
+regression checks the scrolled capture.
+Evidence
+remains beneath `$HOME/ASAP-Acceptance`. Human visual and screen-reader review
+remains tracked by #398.
+
 ## Runtime checks and authorization
 
 The review-only HostingStartup provides local cookie bootstrap and a fixed,

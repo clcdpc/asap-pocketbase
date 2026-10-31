@@ -32,7 +32,6 @@ async function runJourney(scenario, pipelineOverlap = false, registrationOverlap
   const replacesFocusedOpener = ['copy-replaced', 'replacement-user-focus'].includes(scenario);
   const apiPath = titleRequest ? '/title-requests' : '/additional-copies';
   const gridId = titleRequest ? 'request-grid' : 'additional-copy-grid';
-  const openerLabel = titleRequest ? 'Open request' : 'Open additional-copy task';
   const source = path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-dialog-focus-'));
   fs.cpSync(path.join(source, 'staff'), path.join(temporary, 'staff'), { recursive: true });
@@ -132,10 +131,10 @@ async function runJourney(scenario, pipelineOverlap = false, registrationOverlap
     app = workflow.createWorkflowApp();
     await app.start();
     const opener = (id = '91') => document.querySelector(titleRequest
-      ? `a[data-request-id="${id}"]` : `[aria-label="${openerLabel} ${id}"]`);
+      ? `a[data-request-id="${id}"]` : `button[data-copy-id="${id}"]`);
     const claimLabel = () => opener()?.closest('tr').querySelector('.claim-label');
     await until(() => opener() && opener('92') && opener('93'), 'The real Grid.js must render the initial tasks');
-    const actionColumn = titleRequest ? 'actions' : 'open';
+    const actionColumn = titleRequest ? 'actions' : 'action';
     const titleColumn = titleRequest ? 'bibliographicdetails' : 'title';
     const assertOpenNotSortable = () => {
       const header = document.querySelector(`#${gridId} th[data-column-id="${actionColumn}"]`);
@@ -241,8 +240,11 @@ async function runJourney(scenario, pipelineOverlap = false, registrationOverlap
       constructor(configuration) {
         dom.window.gridjs.Grid = OriginalGrid;
         assert.ok(Array.isArray(configuration.data), 'The workflow must supply an array to the held update');
-        assert.deepStrictEqual(configuration.data.map(row =>
-          [row[titleRequest ? 7 : 10], row[titleRequest ? 5 : 6]]),
+        assert.deepStrictEqual(configuration.data.map(row => {
+          if (titleRequest) return [row[7], row[5]];
+          const task = row.find(cell => cell?.task)?.task;
+          return [task?.id, task?.claimedByDisplayName || 'Unclaimed'];
+        }),
         [['91', 'Unclaimed'], ['92', 'Unclaimed']],
           'The held update must be the completed unclaim refresh, not an earlier filter or claim render');
         const rows = configuration.data;
