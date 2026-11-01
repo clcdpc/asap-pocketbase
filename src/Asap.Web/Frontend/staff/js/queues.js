@@ -2,6 +2,7 @@ import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { byDisplayLabel } from './display-order.js';
 import { researchRecordUrl } from './research.js';
+import { requestRowActions } from './request-row-actions.js';
 import { element, dateTime, statusLabel, closeReasonLabel, timeoutLabel } from './ui.js';
 
 function detachGridContainer(container) {
@@ -434,51 +435,22 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     if (column.kind === 'status') return h('div', {}, [h('span', { className: `status-badge${request.status === 'closed' ? ' closed' : ''}` }, cell),
       request.status === 'closed' ? h('small', {}, closeReasonLabel(request.closeReason)) : null]);
     if (column.kind !== 'actions') return cell;
-    const command = (label, action, name, className = 'secondary-button') => h('button', {
-      type: 'button', className, 'aria-label': `${label} request ${request.id}`,
-      onClick: event => {
-        if (!live(event)) return;
-        const popup = event.currentTarget.closest('[popover]');
-        const opener = popup ? popup.parentElement.querySelector('.request-row-more') : event.currentTarget;
-        popup?.hidePopover();
-        onOpen(request.id, opener, { action });
-      }
-    }, [glyph(name), label]);
     const allowed = new Set(request.capabilities?.allowedActions || []);
-    const options = [command('Open details', 'edit', 'pencil')];
-    if (allowed.has('alreadyOwn')) options.push(command('Already own', 'alreadyOwn', 'book'));
+    // Stable priority: reviewable Purchase/Reject, explicit details, then the
+    // existing secondary workflow commands. Presentation never grants a command.
+    const actions = [];
+    if (allowed.has('purchase')) actions.push({ key: 'purchase', label: 'Purchase', glyph: 'shopping-cart', tone: 'primary-button' });
+    if (allowed.has('reject')) actions.push({ key: 'reject', label: 'Reject', glyph: 'ban', tone: 'danger-button' });
+    actions.push({ key: 'edit', label: 'Open details', glyph: 'pencil' });
+    if (allowed.has('alreadyOwn')) actions.push({ key: 'alreadyOwn', label: 'Already own', glyph: 'book' });
     if (request.status !== 'closed') {
-      if (!request.claimedByStaffUserId) options.push(command('Claim', 'claim', 'user-plus'));
-      options.push(command('Assign', 'assign', 'users'));
+      if (!request.claimedByStaffUserId) actions.push({ key: 'claim', label: 'Claim', glyph: 'user-plus' });
+      actions.push({ key: 'assign', label: 'Assign', glyph: 'users' });
     }
-    if (allowed.has('silentClose')) options.push(command('Close silently', 'silentClose', 'archive'));
-    const popupId = `request-row-${request.id}-actions`;
-    const more = h('button', { type: 'button', className: 'request-row-more secondary-button', 'aria-label': `More actions for request ${request.id}`,
-      'aria-controls': popupId, 'aria-expanded': 'false', title: 'More actions',
-      onClick: event => {
-        if (!live(event)) return;
-        const popup = event.currentTarget.parentElement.querySelector('[popover]');
-        if (popup.matches(':popover-open')) { popup.hidePopover(); return; }
-        popup.showPopover();
-        const rect = event.currentTarget.getBoundingClientRect();
-        popup.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - popup.offsetWidth - 8))}px`;
-        popup.style.top = `${Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - popup.offsetHeight - 8))}px`;
-        popup.querySelector('button')?.focus();
-      }
-    }, glyph('ellipsis-h'));
-    return h('div', { className: 'request-row-actions' }, [
-      allowed.has('purchase') ? command('Purchase', 'purchase', 'shopping-cart', 'primary-button') : null,
-      allowed.has('reject') ? command('Reject', 'reject', 'ban', 'danger-button') : null,
-      more,
-      h('div', { id: popupId, popover: 'auto', className: 'request-table-menu', role: 'group', 'aria-label': `Actions for request ${request.id}`,
-        onToggle: event => event.currentTarget.parentElement.querySelector('.request-row-more')?.setAttribute('aria-expanded', String(event.newState === 'open')),
-        onKeyDown: event => {
-          if (event.key !== 'Escape') return;
-          event.preventDefault(); event.stopPropagation(); event.currentTarget.hidePopover();
-          event.currentTarget.parentElement.querySelector('.request-row-more')?.focus();
-        }
-      }, options)
-    ]);
+    if (allowed.has('silentClose')) actions.push({ key: 'silentClose', label: 'Close silently', glyph: 'archive' });
+    return h('div', { className: 'request-row-actions', ref: requestRowActions({
+      id: request.id, actions, live, onOpen, fallback: dom.refresh
+    }) });
   }
 
   function renderGrid({ preservePage = false } = {}) {

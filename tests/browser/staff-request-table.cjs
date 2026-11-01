@@ -1,6 +1,7 @@
 'use strict';
 const { decideConfirmation } = require('./confirmation.cjs');
 const assert = require('node:assert/strict');
+const { activateRowAction, actionGeometry, actionColumn } = require('./request-actions.cjs');
 
 module.exports = async function verifyRequestTable({ page, context, baseURL, library, scan }) {
   const grid = page.locator('#request-grid'), search = page.locator('#request-search');
@@ -74,6 +75,13 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
     assert.deepEqual(after, before, 'Catalog shortcuts must not modify the request or append activity.');
   } finally { release(); await context.unroute(lookupRoute); }
   const more = row.getByRole('button', { name: `More actions for request ${id}`, exact: true });
+  const original = await actionGeometry(row);
+  assert.ok(original.inline.length >= 1 && original.overflow.length >= 1);
+  await actionColumn(page, 70);
+  const expanded = await actionGeometry(row);
+  assert.equal(expanded.more, 0); assert.deepEqual(expanded.inline, original.keys);
+  await actionColumn(page, 12);
+  assert.ok((await actionGeometry(row)).overflow.length > 0);
   await more.focus(); await page.keyboard.press('Enter');
   await page.waitForFunction(id => document.querySelector(`#request-row-${id}-actions`).matches(':popover-open') &&
     document.querySelector(`[aria-controls="request-row-${id}-actions"]`).getAttribute('aria-expanded') === 'true', id);
@@ -83,6 +91,7 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await scan('table-more-keyboard');
   await page.keyboard.press('Escape');
   assert.equal(await more.evaluate(node => node === document.activeElement), true);
+  await actionColumn(page);
   await row.locator('td').nth(2).click();
   await page.locator('#request-dialog[open]').waitFor();
   assert.equal(await page.locator('#request-dialog').getByLabel('Title', { exact: true }).inputValue(), before.title);
@@ -111,7 +120,7 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
       })))}`, { cause: error });
     }
     const requestId = await row.locator('.request-title-link').getAttribute('data-request-id');
-    await row.getByRole('button', { name: `${action} request ${requestId}`, exact: true }).click();
+    await activateRowAction(row, action.toLowerCase());
     const dialog = page.locator('#request-dialog[open]');
     await dialog.locator('.action-choice button[type="submit"]:not([disabled])').waitFor();
     assert.equal(await dialog.getByLabel('Title', { exact: true }).inputValue(), `Table browser record ${index}`);
@@ -129,11 +138,18 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await search.fill('TABLE-BROWSER-02');
   await page.waitForFunction(() => document.querySelector('#request-grid .request-title-link')?.textContent === 'Table browser record 02');
   const claimId = await row.locator('.request-title-link').getAttribute('data-request-id');
-  await row.getByRole('button', { name: `More actions for request ${claimId}`, exact: true }).click();
-  await page.locator(`#request-row-${claimId}-actions`).getByRole('button', { name: `Claim request ${claimId}`, exact: true }).click();
+  await activateRowAction(row, 'claim');
   await page.locator('#request-dialog').getByRole('button', { name: 'Unclaim', exact: true }).waitFor();
   await page.locator('#request-dialog').getByRole('button', { name: 'Unclaim', exact: true }).click();
   await page.locator('#request-dialog').getByRole('button', { name: 'Claim', exact: true }).waitFor();
   await closeDetail();
+  await page.locator('#status-tabs [data-status="closed"]').click();
+  await search.fill('TABLE-BROWSER-01');
+  await page.waitForFunction(() => document.querySelector('#request-grid .request-title-link')?.textContent === 'Table browser record 01');
+  assert.deepEqual((await actionGeometry(row)).inline, ['edit']);
+  assert.equal(await row.locator('.request-row-more, [popover]').count(), 0, 'Closed Open details is direct');
+  await activateRowAction(row, 'edit', 'Space'); await page.locator('#request-dialog[open] .edit-form').waitFor(); await closeDetail();
+  await page.locator('#status-tabs [data-status="suggestion"]').click();
+  await page.locator('#refresh-queue:not([disabled])').waitFor();
   return actions;
 };

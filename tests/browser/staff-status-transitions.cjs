@@ -104,7 +104,8 @@ function stable(trace, expected, label) {
   assert.equal(trace.commits.length, 1, `${label}: exactly one connected frame replacement`);
   assert.equal(trace.commits[0].ready, true, `${label}: mount only a committed table`);
   assert.deepEqual(trace.commits[0].rows, expected, `${label}: replacement contains the selected status`);
-  assert.ok(trace.frames.every(frame => frame.value.ready && !frame.value.loading), `${label}: no painted empty/loading startup body`);
+  assert.ok(trace.frames.every(frame => frame.value.ready && !frame.value.loading),
+    `${label}: no painted empty/loading startup body: ${JSON.stringify(trace.frames)}`);
   const tables = [...new Set(trace.frames.map(frame => frame.value.table))];
   assert.equal(tables.length, 2, `${label}: one visible table transition, including the original table`);
   const firstTarget = trace.frames.findIndex(frame => frame.value.table === tables[1]);

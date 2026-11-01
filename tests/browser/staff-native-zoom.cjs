@@ -6,6 +6,7 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 const verifyMixedFieldLayout = require('./form-layout.cjs');
 const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
+const { actionGeometry } = require('./request-actions.cjs');
 
 // Chromium's tab API changes actual browser zoom. CSS zoom and pinch scaling
 // do not exercise the same viewport, native controls or top-layer geometry.
@@ -71,6 +72,9 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       await wrapper.focus(); await page.keyboard.press('ArrowRight');
       assert.equal(await wrapper.getAttribute('role'), 'region');
       const more = page.getByRole('button', { name: `More actions for request ${sourceId}`, exact: true });
+      const row = title.locator('xpath=ancestor::tr');
+      const geometry = await actionGeometry(row);
+      assert.ok(geometry.inline.length >= 1 && geometry.overflow.length >= 1, 'Zoom retains direct commands plus only the remainder');
       await more.focus(); await page.keyboard.press('Enter');
       await scan('table');
       await page.keyboard.press('Escape');

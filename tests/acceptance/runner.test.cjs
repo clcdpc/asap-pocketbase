@@ -431,9 +431,9 @@ test('complete functional results use 0/1/2 with blockers and required skips tak
   assert.equal(exitCode(report), 2, 'Duplicate required results cannot pass');
 });
 
-test('registered suites retain D1, pr410, Q1, S1 and smoke with their mutation boundaries', async () => {
+test('registered suites retain D1, I403, pr410, Q1, S1 and smoke with their mutation boundaries', async () => {
   const registry = require('./suites/index.cjs');
-  const names = ['d1', 'pr410', 'q1', 's1', 'smoke'];
+  const names = ['d1', 'i403', 'pr410', 'q1', 's1', 'smoke'];
   assert.deepEqual(require('./suites/registry.json'), names, 'Each suite is registered exactly once in deterministic order');
   assert.deepEqual(Object.keys(registry), names);
   assert.equal(registry.smoke.id, 'smoke');
@@ -451,6 +451,9 @@ test('registered suites retain D1, pr410, Q1, S1 and smoke with their mutation b
     assert.ok(suite.id === 'q1' || suite.uncovered.length > 0, 'Existing suites retain their uncovered-requirement records');
   }
   assert.equal(registry.q1.mutations, false);
+  assert.equal(registry.i403.mutations, true);
+  assert.equal(registry.i403.scenarios.length, 5);
+  assert.deepEqual(registry.i403.scenarios.filter(s => s.writes).map(s => s.id), ['i403-keyboard-and-guarded-dispatch']);
   assert.deepEqual(registry.q1.uncovered, []);
   assert.equal(registry.q1.scenarios.length, 5);
   assert.ok(registry.q1.scenarios.every(scenario => scenario.writes === false && scenario.requirements.length > 0));

@@ -31,6 +31,36 @@ Run the existing feature suite with:
 .\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite pr410
 ```
 
+Issue #403 adds `i403` for measured title-row action overflow. Run it with its
+relevant regressions, directly from PowerShell 7 in a tooling checkout containing
+the suite:
+
+```powershell
+.\scripts\review\Invoke-AsapReview.ps1 -Pr <PR_NUMBER> -Suite i403,d1,q1,pr410
+```
+
+Its five scenarios cover Closed's sole direct Open details, an empty result,
+two and seven eligible commands, real column/container resizing, promotion and
+demotion, changed font metrics, Enter/Space/Escape, menu/focus reconciliation,
+one guarded Purchase submission, sorting/paging/filtering/refresh/scope retirement,
+desktop/mobile/native 200% geometry, forced colors and the existing checkpoint
+guards. A claimed Pending hold and fifteen synthetic Suggestions supply minimal
+cardinality/pagination/scope fixtures; existing mutation fixtures remain independent.
+The Purchase scenario is NOT RUN with `-ReadOnly`, making acceptance incomplete.
+`i403-*-geometry.json` and matching PNGs stay in the suite's normal evidence
+directory; native captures use the existing verified CDP viewport path.
+Zero eligible commands and a sole non-details command additionally have focused
+component coverage: actual authorized title rows always retain Open details.
+Role/capability revocation, sign-out and retired handler cleanup remain covered
+by the retained table/controller tests. D1 and Q1 protect their all-direct toolbars.
+Human visual/screen-reader acceptance remains tracked by #398.
+
+For a focused local Chromium regression without SQL/WSLC:
+
+```powershell
+node --test tests/acceptance/direct-actions.test.cjs
+```
+
 The S1 Workflow Settings suite is entirely read-only:
 
 ```powershell
