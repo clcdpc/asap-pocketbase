@@ -2,7 +2,7 @@ import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { byDisplayLabel } from './display-order.js';
 import { researchRecordUrl } from './research.js';
-import { requestRowActions } from './request-row-actions.js';
+import { RequestRowActions } from './request-row-actions.js';
 import { element, dateTime, statusLabel, closeReasonLabel, timeoutLabel } from './ui.js';
 
 function detachGridContainer(container) {
@@ -448,9 +448,8 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       actions.push({ key: 'assign', label: 'Assign', glyph: 'users' });
     }
     if (allowed.has('silentClose')) actions.push({ key: 'silentClose', label: 'Close silently', glyph: 'archive' });
-    return h('div', { className: 'request-row-actions', ref: requestRowActions({
-      id: request.id, actions, live, onOpen, fallback: dom.refresh
-    }) });
+    return h(RequestRowActions, { key: request.id, request, owner,
+      id: request.id, actions, live, onOpen, fallback: dom.refresh });
   }
 
   function renderGrid({ preservePage = false } = {}) {

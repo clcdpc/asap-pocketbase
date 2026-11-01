@@ -1,5 +1,16 @@
 import { element, icon } from './ui.js';
 
+// Grid.js may format an unchanged cell again while Sort/Pagination effects
+// settle. Keep that cell's ref stable so those renders preserve its open menu
+// and keyboard focus. A different accepted record/actor gets a fresh lifetime.
+export function RequestRowActions({ request, owner, ...options }) {
+  const cell = window.gridjs.useRef(null);
+  if (cell.current?.request !== request || cell.current?.owner !== owner) {
+    cell.current = { request, owner, ref: requestRowActions(options) };
+  }
+  return window.gridjs.h('div', { className: 'request-row-actions', ref: cell.current.ref });
+}
+
 // This ref owns only a Grid.js cell's controls. Grid.js owns the empty host;
 // moving the same buttons between host and popover never duplicates handlers.
 export function requestRowActions({ id, actions, live, onOpen, fallback }) {

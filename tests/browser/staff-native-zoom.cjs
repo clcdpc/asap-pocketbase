@@ -76,9 +76,15 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       const geometry = await actionGeometry(row);
       assert.ok(geometry.inline.length >= 1 && geometry.overflow.length >= 1, 'Zoom retains direct commands plus only the remainder');
       await more.focus(); await page.keyboard.press('Enter');
-      await scan('table');
+      assert.equal(await more.getAttribute('aria-expanded'), 'true');
+      await page.evaluate(axe);
+      assert.deepEqual(await page.evaluate(async id => (await axe.run(document.getElementById(`request-row-${id}-actions`)))
+        .violations.filter(item => ['serious', 'critical'].includes(item.impact)), sourceId), []);
       await page.keyboard.press('Escape');
       assert.equal(await more.evaluate(node => node === document.activeElement), true);
+      // The global axe scan may scroll the table and correctly dismiss an
+      // anchored popup. Verify Escape before that independent full-page audit.
+      await scan('table');
       await title.focus(); await page.keyboard.press('Enter');
       const detail = page.locator('#request-dialog[open]');
       await detail.waitFor();

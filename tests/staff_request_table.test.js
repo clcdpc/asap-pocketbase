@@ -177,6 +177,13 @@ async function until(predicate, message) {
     await queue.refresh(); await until(() => get('#request-grid').textContent.includes('New authorized projection'), 'New scope renders after retirement.');
     const wrapper = get('#request-grid .gridjs-wrapper');
     assert.equal(wrapper.tabIndex, 0); assert.equal(wrapper.getAttribute('role'), 'region');
+    const stableCommand = first().querySelector('[data-request-action]'); stableCommand.focus();
+    get('#request-grid th:nth-child(2) button').click();
+    await until(() => first()?.querySelector('.request-title-link')?.textContent === 'New authorized projection', 'An unchanged single row settles its Grid.js sort effects');
+    assert.equal(stableCommand.isConnected, false, 'Grid.js retires the prior cell when its sort pipeline replaces rows');
+    assert.equal(document.activeElement, get('#refresh-queue'), 'Retired cell focus returns to its connected queue control');
+    const retiredOpens = opened.length; stableCommand.click();
+    assert.equal(opened.length, retiredOpens, 'Retired sort controls cannot dispatch');
     const previousActorButton = first().querySelector('[data-request-action]'), previousOpens = opened.length;
     const libraryStaff = { ...staff, role: 'staff', organizationId: 3 };
     session.accept(libraryStaff); previousActorButton.click();
