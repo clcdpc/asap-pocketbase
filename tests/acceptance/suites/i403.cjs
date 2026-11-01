@@ -58,10 +58,12 @@ const scenarios = [
     await queue(t, two.status, two.title);
     let row = rowFor(t.page, two.id);
     assert.deepEqual((await evidence(t, row, 'i403-two-fit')).inline, ['edit', 'assign']);
-    await t.page.locator('#request-grid').evaluate(node => { node.style.maxWidth = '640px'; }); await settleActions(t.page);
+    // Grid.js retains pixel column widths when only the outer grid narrows.
+    // Constrain the actual Actions container to exercise a real width change.
+    await row.locator('.request-row-actions').evaluate(node => { node.style.maxWidth = '120px'; }); await settleActions(t.page);
     const narrowTwo = await evidence(t, row, 'i403-two-container');
     assert.deepEqual(narrowTwo.inline, ['edit']); assert.deepEqual(narrowTwo.overflow, ['assign']);
-    await t.page.locator('#request-grid').evaluate(node => { node.style.maxWidth = ''; }); await settleActions(t.page);
+    await row.locator('.request-row-actions').evaluate(node => { node.style.maxWidth = ''; }); await settleActions(t.page);
     assert.equal((await actionGeometry(row)).more, 0);
     const source = await start(t); row = source.row;
     const initial = await evidence(t, row, 'i403-many-default');
@@ -106,8 +108,9 @@ const scenarios = [
   } },
   { id: 'i403-grid-replacement', writes: false, requirements: ['#403: sorting/paging/filtering/refresh/scope replacement retire stale controls and menus'], run: async t => {
     await queue(t, 'suggestion');
-    assert.ok(await t.page.locator('#request-grid .gridjs-pages button[aria-label="Next"]').isEnabled());
     const items = (await json(t.context, t.origin, '/api/asap/staff/title-requests?scope=2')).items.filter(item => item.status === 'suggestion');
+    assert.ok(items.length > 25, 'Synthetic Suggestions cross the real page boundary');
+    await t.page.locator('#request-grid .gridjs-pages button[aria-label="Next"]:not([disabled])').waitFor();
     const sortedTitle = items.map(item => item.title).sort((a, b) => a.localeCompare(b))[0];
     await t.page.locator('#request-grid th').nth(1).locator('button').click();
     await t.page.waitForFunction(title => document.querySelector('#request-grid .request-title-link')?.textContent === title, sortedTitle);
