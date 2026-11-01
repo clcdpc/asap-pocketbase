@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { checkpoint, nativeZoom } = require('../helpers/accessibility.cjs');
-const { providerGeometry, chipGeometry } = require('../helpers/workflow-settings.cjs');
+const { providerGeometry, chipGeometry, obscurePicker, pickerGeometry } = require('../helpers/workflow-settings.cjs');
 const { json } = require('../helpers/assertions.cjs');
 
 async function openSettings(t, scope = 'system') {
@@ -23,6 +23,8 @@ async function addCode(page, term) {
 async function evidence(t, name, target) {
   if (target) await t.page.locator(target).evaluate(node => node.scrollIntoView({ block: 'start' }));
   const geometry = { providers: await providerGeometry(t.page), chips: await chipGeometry(t.page) };
+  if (await picker(t.page).getAttribute('aria-expanded') === 'true' &&
+      await t.page.locator('.settings-save-bar.attention').count()) geometry.picker = await pickerGeometry(t.page);
   const cdp = await t.context.newCDPSession(t.page);
   try { geometry.metrics = await cdp.send('Page.getLayoutMetrics'); }
   finally { await cdp.detach(); }
@@ -52,6 +54,51 @@ async function providerKeyboard(page) {
         r.top >= 0 && r.bottom <= innerHeight && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
     }), true, name + ' is keyboard reachable with visible focus');
   }
+}
+
+async function pickerLayout(t, scope, name) {
+  const input = picker(t.page);
+  const message = t.page.locator('#patron-code-eligibility-message');
+  const originalMessage = await message.inputValue();
+  // Use ordinary local drafts, never a Settings POST, to activate the footer in
+  // both scopes. Native zoom alone did not make the old system scenario dirty.
+  if (scope === '2') await t.page.locator('#patron-codes-use-system').uncheck();
+  else await message.fill(originalMessage + ' Unsaved picker layout draft');
+  assert.equal(await t.page.locator('#settings-save').isEnabled(), true);
+  await obscurePicker(t.page);
+  await input.focus();
+  await pickerGeometry(t.page, { open: false });
+  await input.fill('branch');
+  await input.press('ArrowDown');
+  const opened = await pickerGeometry(t.page);
+  for (const key of ['ArrowDown', 'ArrowUp']) {
+    await input.press(key);
+    assert.equal((await pickerGeometry(t.page)).scrollY, opened.scrollY, key + ' scrolls only the list');
+  }
+  await evidence(t, name);
+  await input.press('Escape');
+  assert.equal((await pickerGeometry(t.page, { open: false })).scrollY, opened.scrollY, 'Escape preserves focus and page position');
+  await input.fill('no matching patron code');
+  await pickerGeometry(t.page, { open: false });
+  await input.fill('');
+  await input.press('ArrowUp');
+  await pickerGeometry(t.page);
+  await input.press('Tab');
+  assert.equal(await input.getAttribute('aria-expanded'), 'false');
+  assert.equal(await input.evaluate(node => node === document.activeElement), false, 'Tab leaves the combobox');
+  await t.page.keyboard.press('Shift+Tab');
+  await pickerGeometry(t.page, { open: false });
+  await input.fill('branch');
+  await input.press('ArrowDown');
+  const choosing = await pickerGeometry(t.page);
+  await input.press('Enter');
+  assert.ok((await selected(t.page)).includes('17'), 'Enter selects the highlighted code');
+  assert.equal(await input.inputValue(), '');
+  assert.equal((await pickerGeometry(t.page, { open: false })).scrollY, choosing.scrollY, 'Selection preserves focus and page position');
+  await t.page.getByRole('button', { name: 'Remove Branch use card (17)', exact: true }).click();
+  if (scope === '2') await t.page.locator('#patron-codes-use-system').check();
+  else await message.fill(originalMessage);
+  assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Layout drafts return to baseline');
 }
 
 const scenarios = [
@@ -167,7 +214,7 @@ const scenarios = [
       await unchanged(t, 'system', before);
     } },
   ...['system', '2'].map(scope => ({ id: 's1-layout-' + scope,
-    requirements: ['#392; #394: actual pane width, desktop/mobile/native 200%, inherited controls, keyboard focus and axe'], writes: false,
+    requirements: ['#392; #394: actual pane width, desktop/mobile/native 200%, dirty-footer input/list intersections, inherited controls, keyboard focus and axe'], writes: false,
     run: async t => {
       await openSettings(t, scope);
       const before = await json(t.context, t.origin, '/api/asap/staff/settings?orgId=' + scope);
@@ -186,16 +233,12 @@ const scenarios = [
           await override.uncheck();
         } else await providerKeyboard(t.page);
         assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Keyboard review returns provider values to baseline');
+        await pickerLayout(t, scope, t.id + '-' + width + '-picker');
       }
       await t.page.setViewportSize({ width: 1440, height: 1000 });
       await nativeZoom(t.context, t.page, 2);
       {
-        await t.page.locator('#patron-code-eligibility').evaluate(node => node.scrollIntoView({ block: 'start' }));
-        if (scope === '2') await t.page.locator('#patron-codes-use-system').uncheck();
-        await picker(t.page).fill('branch'); await picker(t.page).press('ArrowDown');
-        await evidence(t, t.id + '-native-200-picker');
-        await picker(t.page).press('Escape');
-        assert.equal(await picker(t.page).evaluate(n => n === document.activeElement), true);
+        await pickerLayout(t, scope, t.id + '-native-200-picker');
         await t.page.locator('#external-search-provider-help').evaluate(node => node.scrollIntoView({ block: 'start' }));
         const geometry = await evidence(t, t.id + '-native-200-providers');
         assert.equal(geometry.metrics.visualViewport.zoom, 2);

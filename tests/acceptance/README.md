@@ -45,6 +45,15 @@ are unchanged. No Settings write permission or runner guard is broadened.
 Persisted Save, Discard, explicit `[]`, inherited `null`, scope/version races and
 patron policy remain the retained SQL integration/browser tests' responsibility.
 
+The two responsive-layout scenarios explicitly place the picker halfway behind
+an active Unsaved changes footer before focusing it, in both scopes at 100% and
+native 200% zoom. Bounding rectangles and hit tests verify the complete input,
+dropdown, active option, footer status and controls; overflow-ancestor and text
+checks reject clipping. ArrowDown/ArrowUp, Enter, Escape, Tab/Shift+Tab and
+empty/no-match queries verify focus and scroll stability. The existing
+`s1-layout-{system,2}-native-200-picker.png` captures now show this dirty-footer
+condition, with the input/list/footer measurements in matching geometry JSON.
+
 Use the updated PR #415 tooling checkout for all three integrated suites. The
 launcher discovers suites locally; `-Pr` selects the application revision only.
 Run complete D1 and Q1 regressions once each alongside S1:
@@ -286,6 +295,7 @@ dotnet build dev/review/src/Asap.ReviewInit/Asap.ReviewInit.csproj -c Release
 dotnet build dev/review/src/Asap.ReviewProviders/Asap.ReviewProviders.csproj -c Release
 dotnet build dev/review/src/Asap.ReviewBootstrap/Asap.ReviewBootstrap.csproj -c Release
 node --test tests/acceptance/runner.test.cjs tests/acceptance/authentication.test.cjs tests/acceptance/launcher.test.cjs tests/acceptance/transport.test.cjs tests/acceptance/infrastructure.test.cjs
+node --test tests/acceptance/workflow-settings.test.cjs
 npm test
 ```
 
@@ -293,6 +303,10 @@ Plumbing tests check revision selection, tooling snapshots, reports, mutation
 guards, TLS trust, normal cookie transport, HostingStartup loading, native zoom
 and headed tab lifecycle. They do not replace live WSLC acceptance. Existing
 SQL/.NET and browser journeys retain their CI entry points.
+The focused Workflow browser regression uses the shipped DOM/CSS/editor with a
+deterministic catalog, checks 100%/150%/200%, mobile and short-height layouts,
+long labels, list scrolling, resize/scroll and footer-size changes. It also
+proves the intersection assertion rejects the original obscured layout.
 
 After building an image, run real failure/cleanup checks with its image tag and
 application SHA (both appear in the build log):

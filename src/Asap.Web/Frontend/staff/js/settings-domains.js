@@ -619,6 +619,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     codes: root.querySelector('#patron-codes-editor'),
     codeSearch: root.querySelector('#patron-code-picker'),
     codeOptions: root.querySelector('#patron-code-options'),
+    saveBar: root.querySelector('.settings-save-bar'),
     codeSelection: root.querySelector('#patron-code-selection'),
     codeCount: root.querySelector('#patron-code-count'),
     codeAvailability: root.querySelector('#patron-code-availability'),
@@ -808,6 +809,51 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     state.codeHighlight = -1;
   }
 
+  function scrollActiveCode() {
+    const active = document.getElementById(dom.codeSearch.getAttribute('aria-activedescendant'));
+    if (!active || dom.codeOptions.hidden) return;
+    // scrollIntoView also scrolls the page, where it cannot account for the
+    // sticky save bar. Keyboard navigation must scroll only the listbox.
+    const list = dom.codeOptions.getBoundingClientRect();
+    const option = active.getBoundingClientRect();
+    const top = list.top + dom.codeOptions.clientTop;
+    const bottom = top + dom.codeOptions.clientHeight;
+    if (option.top < top) dom.codeOptions.scrollTop += option.top - top;
+    else if (option.bottom > bottom) dom.codeOptions.scrollTop += option.bottom - bottom;
+  }
+
+  function positionCodePicker(reveal = false) {
+    if (disposed || document.activeElement !== dom.codeSearch || !dom.codeSearch.getClientRects().length) return;
+    const viewport = window.visualViewport;
+    // Allow room for the input's focus ring, independent of zoom or footer wrapping.
+    const gap = 6;
+    const top = (viewport?.offsetTop || 0) + gap;
+    let bottom = (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight) - gap;
+    if (dom.saveBar?.classList.contains('attention')) {
+      bottom = Math.min(bottom, dom.saveBar.getBoundingClientRect().top - gap);
+    }
+    let input = dom.codeSearch.getBoundingClientRect();
+    if (!reveal && (input.top < top - 1 || input.bottom > bottom + 1)) {
+      // Scrolling away dismisses the list instead of pulling the page back to
+      // the focused input. Opening/focusing explicitly reveals it again.
+      closeCodePicker();
+      return;
+    }
+    const scroll = input.top < top ? input.top - top : Math.max(0, input.bottom - bottom);
+    if (scroll) {
+      window.scrollBy({ top: scroll, behavior: 'instant' });
+      input = dom.codeSearch.getBoundingClientRect();
+    }
+    if (dom.codeOptions.hidden) return;
+    const above = Math.max(0, input.top - top - gap);
+    const below = Math.max(0, bottom - input.bottom - gap);
+    const upwards = above > below;
+    const space = upwards ? above : below;
+    dom.codeOptions.classList.toggle('opens-up', upwards);
+    dom.codeOptions.style.setProperty('--patron-code-space', `${space}px`);
+    scrollActiveCode();
+  }
+
   function highlightCode(index) {
     const options = [...dom.codeOptions.querySelectorAll('[role="option"]')];
     state.codeHighlight = options.length && index >= 0 ? index % options.length : -1;
@@ -817,7 +863,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     const active = options[state.codeHighlight];
     if (active) {
       dom.codeSearch.setAttribute('aria-activedescendant', active.id);
-      active.scrollIntoView?.({ block: 'nearest' });
+      scrollActiveCode();
     } else {
       dom.codeSearch.removeAttribute('aria-activedescendant');
     }
@@ -837,8 +883,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         renderCodes([...state.selectedCodes, choice.id]);
         dom.codeSearch.value = '';
         closeCodePicker();
-        dom.codeSearch.focus();
+        dom.codeSearch.focus({ preventScroll: true });
         onChange();
+        positionCodePicker(true);
       });
       dom.codeOptions.append(option);
     }
@@ -846,6 +893,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     dom.codeOptions.hidden = choices.length === 0;
     dom.codeSearch.setAttribute('aria-expanded', String(choices.length > 0));
     highlightCode(-1);
+    positionCodePicker(true);
   }
 
   function renderCodes(values) {
@@ -1607,6 +1655,22 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   bindAdd('creators', values => 'New creator');
   listen(dom.codeSearch, 'input', renderCodeOptions);
   listen(dom.codeSearch, 'click', renderCodeOptions);
+  listen(dom.codeSearch, 'focus', () => positionCodePicker(true));
+  listen(window, 'scroll', () => positionCodePicker());
+  listen(window, 'resize', () => positionCodePicker(true));
+  listen(window.visualViewport, 'resize', () => positionCodePicker(true));
+  listen(window.visualViewport, 'scroll', () => positionCodePicker());
+  // Dirty-state status and responsive footer wrapping can change the usable
+  // viewport while the combobox keeps focus (including immediately after selection).
+  const codeLayoutObserver = window.ResizeObserver ? new window.ResizeObserver(() => positionCodePicker(true)) : null;
+  codeLayoutObserver?.observe(dom.saveBar);
+  codeLayoutObserver?.observe(dom.codeSearch);
+  const codeFooterObserver = new window.MutationObserver(() => positionCodePicker(true));
+  codeFooterObserver.observe(dom.saveBar, { attributes: true, attributeFilter: ['class'], childList: true, subtree: true, characterData: true });
+  events.signal.addEventListener('abort', () => {
+    codeLayoutObserver?.disconnect();
+    codeFooterObserver.disconnect();
+  }, { once: true });
   listen(dom.codeSearch, 'keydown', event => {
     if (event.key === 'Escape') {
       if (!dom.codeOptions.hidden) event.stopPropagation();

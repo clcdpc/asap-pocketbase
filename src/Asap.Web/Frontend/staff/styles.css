@@ -388,7 +388,8 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 #patron-code-eligibility .settings-domain-block { display: grid; gap: 10px; }
 .patron-code-picker { position: relative; min-width: 0; }
 #patron-code-picker { width: 100%; }
-#patron-code-options { position: absolute; z-index: 4; top: 100%; left: 0; right: 0; max-height: 240px; overflow: auto; background: #fff; border: 1px solid var(--brand-dark); box-shadow: 0 4px 12px rgba(0,0,0,.16); }
+#patron-code-options { position: absolute; z-index: 4; top: calc(100% + 6px); left: 0; right: 0; max-height: min(240px, var(--patron-code-space, 240px)); overflow: auto; background: #fff; border: 1px solid var(--brand-dark); box-shadow: 0 4px 12px rgba(0,0,0,.16); }
+#patron-code-options.opens-up { top: auto; bottom: calc(100% + 6px); }
 #patron-code-options [role="option"] { padding: 10px 12px; min-height: 40px; overflow-wrap: anywhere; cursor: pointer; }
 #patron-code-options [role="option"]:hover, #patron-code-options [aria-selected="true"] { background: var(--brand-dark); color: #fff; outline: 2px solid currentColor; outline-offset: -3px; }
 .patron-code-chips { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; margin: 0; padding: 0; list-style: none; }
