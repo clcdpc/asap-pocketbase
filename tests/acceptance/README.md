@@ -1,13 +1,16 @@
 # ASAP automated acceptance
 
 ```powershell
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -AllowReviewWrites
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite s1,d1,q1
 ```
 
 Run from a tooling checkout containing the selected suite, with PowerShell 7, Git and working Microsoft
-WSLC (WSL 2.9.3+). The command builds or reuses one disposable image, initializes
-a fresh SQL Server database, authenticates locally as a synthetic staff user,
-runs headed Chromium/Playwright on Xvfb, exports a report and removes the container.
+WSLC (WSL 2.9.3+). The command resolves one immutable application commit and
+captures one tooling version/digest, then builds or reuses one image for all
+selected suites. It executes exactly the selected suites once each, sequentially
+in caller order, with a fresh disposable container, SQL database and synthetic
+fixtures for every suite. Each runs headed Chromium/Playwright on Xvfb, exports
+its own evidence and removes its container before the next suite starts.
 It needs no application configuration, Entra sign-in or human browser interaction.
 See [prerequisites and image design](../../dev/review/README.md).
 
@@ -16,21 +19,22 @@ Review Library (2), SQL-backed Suggestion details and an unmasked synthetic scre
 `smoke-synthetic-close` confirms Close silently through the real UI, verifies
 one action POST, persisted Closed status and a changed SQL rowversion.
 
-Omit `-AllowReviewWrites` for read-only smoke. The first scenario still runs;
-the closure is NOT RUN and cannot dispatch a mutation. Each invocation starts
-with fresh, equivalent fixtures. `-ReadOnly` is explicit read-only mode and
-conflicts with `-AllowReviewWrites`.
+The default runs complete functional checks, including allowed writes to
+disposable synthetic resources. `-ReadOnly` explicitly prevents scenario writes;
+in smoke, the first scenario runs and closure is NOT RUN, making acceptance
+incomplete (exit 2). The deprecated `-AllowReviewWrites` switch is accepted for
+compatibility, has no additional effect, and conflicts with `-ReadOnly`.
 
 Run the existing feature suite with:
 
 ```powershell
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite pr410
 ```
 
 The S1 Workflow Settings suite is entirely read-only:
 
 ```powershell
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 415 -Suite s1
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite s1
 ```
 
 Its six scenarios cover real SQL-backed selected IDs (including an unavailable
@@ -59,8 +63,9 @@ launcher discovers suites locally; `-Pr` selects the application revision only.
 Run complete D1 and Q1 regressions once each alongside S1:
 
 ```powershell
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 415 -Suite d1 -AllowReviewWrites
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 415 -Suite q1
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite s1,d1,q1
+# Equivalent explicit array; a single name remains supported.
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite @('s1', 'd1', 'q1')
 ```
 
 The five read-only D1 scenarios check direct actions, cancellation/focus, the
@@ -73,8 +78,8 @@ overflow guards. Research destinations are inspected without external navigation
 Geometry and synthetic screenshots stay beside the report under
 `$HOME/ASAP-Acceptance/<run>/`.
 
-`d1-close-reopen-refresh` is NOT RUN in read-only mode. With explicit write
-authorization it consumes only the existing `close-reopen` fixture and checks
+`d1-close-reopen-refresh` is NOT RUN in explicit read-only mode. By default
+it consumes only the existing `close-reopen` fixture and checks
 the accessible confirmations, authoritative status/field refresh and Activity
 after each mutation. The three extra fixtures are `d1-closed` (rejected with no
 hold), `d1-protected` (retained legacy hold protection), and `d1-history` (three
@@ -85,14 +90,15 @@ completion and LEAP configurations retain focused controller/SQL/browser
 coverage; the suite reports those limits. Human visual/screen-reader acceptance
 remains open under #398.
 
-`-Commit <revision>` replaces PR selection; `-Rebuild` forces an image refresh.
+`-Commit <revision>` replaces PR selection; omitting both selectors resolves
+`HEAD`. `-Rebuild` forces one shared image refresh, including for multiple suites.
 Reports record independent application and tooling SHAs, suite, mode, scenario
 status and actual container exit code. A build/startup blocker leaves the tested
 application SHA empty until runtime verification succeeds.
 
 Q1 and S1 are inherently read-only and need no extra flag. Do not repeat them in
 read-only mode. Use `smoke` for infrastructure diagnosis and the complete
-`pr410 -AllowReviewWrites` regression only when a specific Settings reset,
+`pr410` regression only when a specific Settings reset,
 mutation-guard, fixture or retained-scenario risk warrants it.
 
 The five read-only Q1 scenarios exercise Additional copies at 1440, 1280,
@@ -140,8 +146,8 @@ Microsoft request; production authentication is unchanged. The runtime creates
 protected synthetic Polaris settings for the normal readiness checks. No live
 Polaris or Postmark calls are authorized.
 
-Only the scenario's allowed request kind and fixture ID may mutate, with
-`-AllowReviewWrites`. Missing or consumed fixtures block the scenario.
+Only the scenario's allowed request kind and fixture ID may mutate in the
+verified disposable runtime. Missing or consumed fixtures block the scenario.
 The approved Settings reset scenario may separately authorize one
 `POST /api/asap/staff/settings/reset?organizationId=2`, bound to the exact
 Settings version it read. Other Settings writes and library scopes are blocked;
@@ -235,7 +241,8 @@ Checkpoint audit (all captures show the surrounding application viewport):
 
 ## Reports and privacy
 
-Each unique `$HOME/ASAP-Acceptance/<timestamp-run-id>/` contains `results.json`,
+Each suite's flat `$HOME/ASAP-Acceptance/pr-415_s1_2026-11-01_13-30-00/`
+(or `commit-454d8676e666_s1_2026-11-01_13-30-00/`) contains `results.json`,
 `report.md`, unmasked synthetic screenshots, sanitized failure traces and a diagnostics
 directory with SQL, initializer, web, display and Playwright logs. Early failures
 still export a BLOCKED report. SQL passwords, bootstrap credentials, cookies,
@@ -255,18 +262,34 @@ The default root is the current user's profile directory, such as
 launches acceptance. Override it with an absolute path if needed:
 
 ```powershell
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites -ArtifactsRoot 'D:\ASAP Acceptance'
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite pr410 -ArtifactsRoot 'D:\ASAP Acceptance'
 ```
 
 Paths containing spaces work; invalid or unwritable roots fail without a fallback.
-The launcher prints the resolved directory before environment startup and prints
-that directory, the full `report.md` path, automated result and scenario counts
+The launcher prints each resolved directory before its container starts and
+consolidates suite status, duration, artifact directory, counts and overall exit
 at completion. Reports, screenshots, state/geometry evidence, diagnostics and
 any build/container logs stay together. Default artifacts survive deletion of
 the originating worktree. Keep custom roots outside repositories/worktrees for
 the same persistence. Runs are retained until explicitly deleted; earlier
 worktree-local `.artifacts/acceptance/` evidence is not automatically migrated.
 The temporary `.review/build` image-build context remains disposable.
+
+Names use each suite's start in host-local date/24-hour time; UTC timestamps and
+host-local timestamps with UTC offsets remain inside results to disambiguate
+daylight-saving transitions. Atomic allocation claims a new directory without
+reusing existing evidence. Same-name collisions append `-02`, `-03`, etc. The
+random run ID remains in metadata and container names, never the run directory.
+Historical directories remain untouched. No PR or batch parent directory is added.
+
+Shared diagnostics (`invocation-<id>.log`, its aggregate `.json`, and a
+`build-<id>.log` when building) live directly under the artifact root. Build logs
+are copied into every suite that starts. A fatal shared build/prerequisite failure
+leaves requested suites NOT RUN, without fabricated execution reports; its shared
+logs explain the blocker. For a started suite, inspect `report.md`, `results.json`,
+`container.log`, `diagnostics/` and scenario failure traces beside the screenshots.
+Per-suite failures/blockers continue to later suites when cleanup succeeds.
+Unconfirmed container cleanup stops later starts and prints a recovery command.
 
 Optionally open the newest default run directory in File Explorer:
 
@@ -278,14 +301,32 @@ $latest = Get-ChildItem -LiteralPath $root -Directory |
 if ($latest) { Invoke-Item $latest.FullName }
 ```
 
-Exit 0 means selected automated checks succeeded, exit 1 means test assertion or
-execution failure, and exit 2 means an environment/authentication/startup blocker.
-Read-only skipped mutations remain NOT RUN. Reports distinguish PASS, FAIL,
-BLOCKED, NOT RUN and HUMAN REVIEW REQUIRED. Human visual and screen-reader
+Exit 0 requires every required scenario in every requested suite to pass. Exit 1
+means functional checks failed with no blocked/incomplete execution. Exit 2 means
+blocked or incomplete acceptance, including required read-only skips or suites
+that never started. The aggregate distinguishes PASS, FAIL, BLOCKED (could not
+complete) and NOT RUN (never started). Mixed FAIL/BLOCKED preserves both and exits
+2; scenario rows retain functional failures even when infrastructure also fails.
+Per-suite reports retain NOT RUN and HUMAN REVIEW REQUIRED. Human visual and screen-reader
 review remain required; overall acceptance stays INCOMPLETE. Automation does not
 establish deployment readiness, close issues, approve or merge PRs.
 
 ## Developer checks and new suites
+
+The native comma-array examples are for direct invocation in PowerShell 7,
+not arbitrary shell or `pwsh -File` argument boundaries. No CSV parsing is used.
+All selections are checked against the local `suites/registry.json` before any
+revision fetch or execution. Unknown/empty/unsafe/duplicate (case-insensitive)
+names fail with available names and a local-checkout update hint. Discover with
+`Get-Content ./tests/acceptance/suites/registry.json`. Application PRs never supply
+tooling automatically. Default omission still selects only `smoke`; select
+`-Suite smoke,s1,d1,q1` explicitly when infrastructure diagnosis is useful.
+
+Default writes preserve the same runtime, staff, fixture, endpoint, library and
+rowversion guards. Never use real/shared data, live providers or external services.
+Containers expose no ports and mount only their evidence directory, never the
+host repository or persistent SQL volumes. Application PR source runs only in
+the image/container. Cleanup retains evidence after failures and interruption.
 
 Repository developers may use their existing .NET/Node/Chromium installation:
 
@@ -299,7 +340,10 @@ node --test tests/acceptance/workflow-settings.test.cjs
 npm test
 ```
 
-Plumbing tests check revision selection, tooling snapshots, reports, mutation
+Plumbing tests check native multi-suite binding, complete selection validation,
+single shared resolution/build (including forced rebuild), sequential fresh
+containers, mixed outcomes, pipeline interruption, atomic timestamp collisions,
+local-offset metadata, default/read-only/legacy modes, revision selection, tooling snapshots, reports, mutation
 guards, TLS trust, normal cookie transport, HostingStartup loading, native zoom
 and headed tab lifecycle. They do not replace live WSLC acceptance. Existing
 SQL/.NET and browser journeys retain their CI entry points.

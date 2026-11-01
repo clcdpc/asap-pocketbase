@@ -99,12 +99,25 @@ test('unknown and prototype suite names fail clearly and still write results', a
     assert.ok(await fs.stat(path.join(outcome.directory, 'results.json')));
   }
 });
-test('missing explicit mutation authorization blocks before environment or browser calls', async t => {
+test('default and legacy write modes run complete suites after environment and authentication checks', async t => {
   const root = await temporary(t);
-  const outcome = await run(args(), dependencies(root, { verifyEnvironment: () => { throw new Error('must not be called'); } }));
-  assert.equal(outcome.code, 2);
-  assert.match(outcome.report.environment.detail, /AllowReviewWrites/);
-  assert.ok(outcome.report.scenarios.filter(s => s.category === 'functional').every(s => s.status === 'BLOCKED'));
+  for (const flags of [[], ['--allow-review-writes']]) {
+    const calls = [];
+    const outcome = await run(args(...flags), dependencies(root, {
+      verifyEnvironment: async () => { calls.push('environment'); return environment(root); },
+      authenticate: async () => { calls.push('authentication'); return fakeBrowser(); },
+      runScenarios: async ({ suite, options, report }) => {
+        calls.push('scenarios');
+        assert.equal(options.allowWrites, true);
+        assert.equal(options.readOnly, false);
+        report.scenarios = suite.scenarios.map(s => result(s, 'PASS'));
+      }
+    }));
+    assert.equal(outcome.code, 0);
+    assert.equal(outcome.report.mode, 'mutating');
+    assert.deepEqual(calls, ['environment', 'authentication', 'scenarios']);
+  }
+  assert.equal(parse(args('--read-only')).allowWrites, false);
 });
 test('runtime validation checks exact revisions, Testing, local auth, SQL, providers and fixtures', async () => {
   const actual = await verifyEnvironment(repository, appSha, { runtimeEvidence: async () => runtime(), health: async () => {} });
@@ -145,7 +158,7 @@ test('independent application/tooling SHAs and read-only NOT RUN are recorded', 
     } });
   const a = await run(args('--read-only'), deps);
   const b = await run(args('--read-only'), deps);
-  assert.equal(a.code, 0); assert.notEqual(a.directory, b.directory);
+  assert.equal(a.code, 2); assert.notEqual(a.directory, b.directory);
   assert.equal(a.report.applicationCommit, appSha);
   assert.equal(a.report.toolingCommit, toolSha);
   assert.equal(a.report.authentication.status, 'PASS');
@@ -171,7 +184,7 @@ test('reports distinguish PASS, FAIL, BLOCKED, NOT RUN, human review; failures a
   const scenarios = ['PASS', 'FAIL', 'BLOCKED', 'NOT RUN', 'HUMAN REVIEW REQUIRED'].map(status =>
     result({ id: status, requirements: ['runner'] }, status));
   const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, scenarios };
-  assert.equal(exitCode(report), 1);
+  assert.equal(exitCode(report), 2, 'Blocked/incomplete execution takes priority while FAIL rows remain present');
   assert.equal(scenarios[3].executed, false);
   assert.equal(scenarios[2].executed, false);
   report.scenarios = scenarios.filter(s => s.status !== 'FAIL');
@@ -197,7 +210,7 @@ test('actual scenario executor produces failure trace/results without network se
   await runScenarios({ suite, options: { readOnly: false, allowWrites: true }, environment: environment(root),
     browser, report, directory, verify: async () => environment(root) });
   assert.deepEqual(report.scenarios.map(s => s.status), ['PASS', 'FAIL', 'BLOCKED']);
-  assert.equal(exitCode(report), 1);
+  assert.equal(exitCode(report), 2);
   assert.ok(await fs.stat(path.join(directory, 'fails-failure-trace.json')));
   const trace = JSON.parse(await fs.readFile(path.join(directory, 'fails-failure-trace.json'), 'utf8'));
   assert.equal(trace.events.at(-1).assertion.expected, 2);
@@ -247,7 +260,7 @@ async function settingsGuard(t, { options = { allowWrites: true }, writes = true
 test('Settings reset guard denies unauthorized modes, endpoints, scopes and versions', async t => {
   const cases = [
     ['read-only mode', { options: { readOnly: true, allowWrites: false }, writes: false, authorize: false }],
-    ['no AllowReviewWrites', { options: { allowWrites: false }, authorize: false }],
+    ['internal writes disabled', { options: { allowWrites: false }, authorize: false }],
     ['no scenario authorization', { authorize: false }],
     ['wrong organization', { pathname: '/api/asap/staff/settings/reset?organizationId=3' }],
     ['wrong method', { method: 'DELETE' }],
@@ -402,6 +415,22 @@ test('partial results never report automated completion while required scenarios
   assert.equal(exitCode(report), 2);
 });
 
+test('complete functional results use 0/1/2 with blockers and required skips taking precedence', () => {
+  const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' },
+    requiredScenarioIds: ['one', 'two'], scenarios: [] };
+  for (const [statuses, code] of [
+    [['PASS', 'PASS'], 0], [['FAIL', 'PASS'], 1], [['PASS', 'FAIL'], 1],
+    [['FAIL', 'BLOCKED'], 2], [['PASS', 'NOT RUN'], 2], [['FAIL', 'NOT RUN'], 2]
+  ]) {
+    report.scenarios = report.requiredScenarioIds.map((id, index) => result({ id, requirements: ['required check'] }, statuses[index]));
+    report.scenarios.push(result({ id: 'human', category: 'human', requirements: ['human judgment'] }, 'HUMAN REVIEW REQUIRED'));
+    report.scenarios.push(result({ id: 'gap', category: 'coverage-gap', requirements: ['separate coverage'] }, 'NOT RUN'));
+    assert.equal(exitCode(report), code, statuses.join('/'));
+  }
+  report.scenarios = ['one', 'one', 'two'].map(id => result({ id, requirements: [] }, 'PASS'));
+  assert.equal(exitCode(report), 2, 'Duplicate required results cannot pass');
+});
+
 test('registered suites retain D1, pr410, Q1, S1 and smoke with their mutation boundaries', async () => {
   const registry = require('./suites/index.cjs');
   const names = ['d1', 'pr410', 'q1', 's1', 'smoke'];
@@ -463,14 +492,29 @@ test('D1 admits only pristine synthetic closed/protected/history fixture states'
 });
 
 const smokeArgs = (...extra) => ['--suite', 'smoke', '--expected-commit', appSha, ...extra];
-test('smoke requires explicit mutation permission before environment verification', async t => {
+test('default smoke verifies isolation before running both registered scenarios without a write flag', async t => {
+  const root = await temporary(t);
+  let verified = false;
+  const outcome = await run(smokeArgs(), dependencies(root, {
+    verifyEnvironment: async () => { verified = true; return environment(root); },
+    authenticate: async () => fakeBrowser(),
+    runScenarios: async ({ suite, options, report }) => {
+      assert.equal(verified, true); assert.equal(options.allowWrites, true);
+      report.scenarios = suite.scenarios.map(s => result(s, 'PASS'));
+    }
+  }));
+  assert.equal(outcome.code, 0);
+  assert.deepEqual(outcome.report.scenarios.filter(s => s.category === 'functional').map(s => s.status), ['PASS', 'PASS']);
+});
+
+test('browser cleanup failure blocks completion without erasing successful functional checks', async t => {
   const root = await temporary(t);
   const outcome = await run(smokeArgs(), dependencies(root, {
-    verifyEnvironment: () => { throw new Error('Unauthorized run must not verify or authenticate'); }
+    authenticate: async () => ({ ...fakeBrowser(), close: async () => { throw new Error('Profile removal failed'); } }),
+    runScenarios: async ({ suite, report }) => { report.scenarios = suite.scenarios.map(s => result(s, 'PASS')); }
   }));
   assert.equal(outcome.code, 2);
-  assert.match(outcome.report.environment.detail, /AllowReviewWrites/);
-  assert.deepEqual(outcome.report.scenarios.filter(s => s.category === 'functional').map(s => s.status), ['BLOCKED', 'BLOCKED']);
+  assert.deepEqual(outcome.report.scenarios.filter(s => s.category === 'functional').map(s => s.status), ['PASS', 'PASS', 'BLOCKED']);
 });
 
 test('read-only smoke reports a browser assertion as FAIL and never starts the mutating scenario', async t => {
@@ -492,7 +536,7 @@ test('read-only smoke reports a browser assertion as FAIL and never starts the m
   assert.equal(navigations, 1);
   assert.equal(verifications, 2, 'Only initial environment and read-only scenario verification');
   assert.equal(rows[1].executed, false);
-  assert.equal(outcome.code, 1);
+  assert.equal(outcome.code, 2, 'A skipped required mutation keeps acceptance incomplete even with another functional FAIL');
   assert.equal(outcome.report.automatedFunctionalAcceptance, 'FAIL');
   assert.ok(await fs.stat(path.join(outcome.directory, 'smoke-authenticated-review-failure-trace.json')));
 });
@@ -626,7 +670,8 @@ test('wrong screenshot dimensions fail the scenario and retain failure reporting
   page.screenshot = async options => { const pixels = await capture(options); pixels.writeUInt32BE(640, 16); return pixels; };
   const browser = fakeBrowser(page);
   let scenarioPage;
-  const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, scenarios: [] };
+  const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' },
+    requiredScenarioIds: ['clipped-evidence'], scenarios: [] };
   await runScenarios({ suite: { scenarios: [{ id: 'clipped-evidence', requirements: ['Complete viewport evidence'],
     run: async ({ page }) => { scenarioPage = page; await screenshot(page, directory, 'clipped-evidence'); } }] },
     options: { readOnly: true }, environment: environment(), browser, report, directory, verify: async () => environment() });

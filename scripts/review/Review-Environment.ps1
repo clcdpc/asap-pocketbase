@@ -1,31 +1,93 @@
 # Internal helpers for the disposable WSLC acceptance command.
-function New-ReviewArtifactDirectory {
+function Get-ReviewSuiteSelection {
+    param([string[]]$Suite, [string[]]$Registered)
+    $help = "Available suites: $($Registered -join ', '). Use a local tooling checkout containing the requested suites; it may need updating."
+    if (-not $Suite -or -not $Suite.Count) { throw "Select at least one suite. $help" }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($name in $Suite) {
+        if ([string]::IsNullOrWhiteSpace($name) -or $name -cnotmatch '^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$') {
+            throw "Empty or invalid suite identifier. $help"
+        }
+        $canonical = @($Registered | Where-Object { $_ -ieq $name })
+        if ($canonical.Count -ne 1) { throw "Unknown suite '$name'. $help" }
+        if (-not $seen.Add($name)) { throw "Duplicate suite '$name' (case-insensitive). $help" }
+        if ($canonical[0] -cnotmatch '^[a-z0-9][a-z0-9-]{0,63}$') { throw "Unsafe identifier in local suite registry. $help" }
+    }
+    # Emit only after validating the entire selection; preserve caller order with canonical identifiers.
+    foreach ($name in $Suite) { $Registered | Where-Object { $_ -ieq $name } }
+}
+
+function Get-ReviewReportExitCode {
+    param([hashtable]$Report)
+    if (-not $Report.ContainsKey('requiredScenarioIds')) { return 2 }
+    $functional = @($Report.scenarios | Where-Object category -eq 'functional')
+    $required = @($Report.requiredScenarioIds)
+    if ($Report.environment.status -ne 'PASS' -or $Report.authentication.status -ne 'PASS' -or
+        -not $required.Count -or -not $functional.Count -or @($required | Select-Object -Unique).Count -ne $required.Count -or
+        @($functional | Where-Object status -notin @('PASS', 'FAIL')).Count -or
+        @($required | Where-Object { $id = $_; @($functional | Where-Object id -eq $id).Count -ne 1 }).Count) { return 2 }
+    if (@($functional | Where-Object status -eq 'FAIL').Count) { return 1 }
+    return 0
+}
+
+function Get-ReviewArtifactRoot {
     param(
-        [string]$ArtifactsRoot = [System.IO.Path]::Combine([Environment]::GetFolderPath('UserProfile'), 'ASAP-Acceptance'),
-        [Parameter(Mandatory)][string]$RunId
+        [string]$ArtifactsRoot = [System.IO.Path]::Combine([Environment]::GetFolderPath('UserProfile'), 'ASAP-Acceptance')
     )
     if ([string]::IsNullOrWhiteSpace($ArtifactsRoot) -or -not [System.IO.Path]::IsPathFullyQualified($ArtifactsRoot)) {
         throw '-ArtifactsRoot must be an absolute filesystem path.'
     }
-    $destination = $ArtifactsRoot
     try {
         $root = [System.IO.Path]::GetFullPath($ArtifactsRoot)
-        $destination = Join-Path $root "$([DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH-mm-ss'))-$RunId"
-        if (Test-Path -LiteralPath $destination) { throw 'The run directory already exists.' }
-        $null = [System.IO.Directory]::CreateDirectory($destination)
-        # Probe only this new run directory; never touch existing evidence or root files.
-        $probe = Join-Path $destination '.write-check'
+        $null = [System.IO.Directory]::CreateDirectory($root)
+        return $root
+    }
+    catch { throw "Cannot create or write acceptance artifacts at '$ArtifactsRoot': $($_.Exception.Message)" }
+}
+
+function New-ReviewArtifactDirectory {
+    param(
+        [string]$ArtifactsRoot = [System.IO.Path]::Combine([Environment]::GetFolderPath('UserProfile'), 'ASAP-Acceptance'),
+        [int]$PullRequest,
+        [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string]$ApplicationCommit,
+        [Parameter(Mandatory)][ValidatePattern('^[a-z0-9][a-z0-9-]{0,63}$')][string]$Suite,
+        [DateTimeOffset]$Timestamp = [DateTimeOffset]::Now
+    )
+    $root = Get-ReviewArtifactRoot -ArtifactsRoot $ArtifactsRoot
+    $target = if ($PullRequest) { "pr-$PullRequest" } else { "commit-$($ApplicationCommit.Substring(0, 12))" }
+    $name = "${target}_${Suite}_$($Timestamp.ToLocalTime().ToString('yyyy-MM-dd_HH-mm-ss', [Globalization.CultureInfo]::InvariantCulture))"
+    $staging = Join-Path $root ('.allocate-' + [guid]::NewGuid().ToString('N'))
+    $destination = Join-Path $root $name
+    try {
+        $null = [System.IO.Directory]::CreateDirectory($staging)
+        $probe = Join-Path $staging '.write-check'
         $stream = [System.IO.File]::Open($probe, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
         try { $stream.WriteByte(0) }
         finally { $stream.Dispose() }
         [System.IO.File]::Delete($probe)
-        return $destination
+        for ($attempt = 1; ; $attempt++) {
+            $suffix = if ($attempt -eq 1) { '' } else { '-' + $attempt.ToString('D2') }
+            $destination = Join-Path $root ($name + $suffix)
+            try {
+                # Same-filesystem rename is atomic and refuses an existing file/directory.
+                # CreateDirectory alone would silently reuse another caller's evidence directory.
+                [System.IO.Directory]::Move($staging, $destination)
+                return $destination
+            }
+            catch [System.IO.IOException] {
+                if (-not ([System.IO.Directory]::Exists($destination) -or [System.IO.File]::Exists($destination))) { throw }
+            }
+        }
     }
     catch { throw "Cannot create or write acceptance artifacts at '$destination': $($_.Exception.Message)" }
+    finally {
+        # Delete only this owned empty staging directory; never remove retained evidence.
+        if ([System.IO.Directory]::Exists($staging)) { [System.IO.Directory]::Delete($staging) }
+    }
 }
 
 function Invoke-ReviewNative {
-    param([string]$File, [string[]]$Arguments, [switch]$Capture, [switch]$AllowFailure, [int]$TimeoutSeconds = 60)
+    param([string]$File, [string[]]$Arguments, [switch]$Capture, [switch]$AllowFailure, [int]$TimeoutSeconds = 60, [string]$LogPath)
     $start = [System.Diagnostics.ProcessStartInfo]::new((Get-Command $File -ErrorAction Stop).Source)
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
@@ -52,6 +114,11 @@ function Invoke-ReviewNative {
     }
     finally {
         if (-not $process.HasExited) { $process.Kill($true) }
+        $process.WaitForExit()
+        if ($LogPath) {
+            ($stdout.GetAwaiter().GetResult() + "`n" + $stderr.GetAwaiter().GetResult()) |
+                Set-Content -LiteralPath $LogPath -Encoding utf8NoBOM
+        }
         $process.Dispose()
     }
 }

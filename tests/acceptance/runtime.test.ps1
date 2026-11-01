@@ -11,7 +11,7 @@ $repository = (& git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
 foreach ($case in @('assertion', 'initialization', 'termination', 'child-exit')) {
     $runId = [guid]::NewGuid().ToString('N').Substring(0, 24)
     $name = "asap-acceptance-$runId"
-    $directory = New-ReviewArtifactDirectory -RunId $runId
+    $directory = New-ReviewArtifactDirectory -ApplicationCommit $ApplicationSha -Suite smoke
     $setup = switch ($case) {
         'assertion' { @'
 cat >> /runner/tests/acceptance/suites/smoke.cjs <<'NODE'
@@ -26,7 +26,7 @@ exec /review/acceptance-entrypoint.sh "$@"
         $null = Invoke-ReviewNative wslc @('run', '--detach', '--name', $name, '--shm-size', '1g',
             '--mount', "type=bind,source=$directory,target=/artifacts",
             '--entrypoint', '/bin/bash', $Image, '-c', $setup.Replace("`r`n", "`n"), '--',
-            '--suite', 'smoke', '--expected-commit', $ApplicationSha, '--read-only') -Capture
+            '--suite', 'smoke', '--expected-commit', $ApplicationSha) -Capture
         $deadline = [DateTimeOffset]::UtcNow.AddMinutes(6)
         $interrupted = $false
         do {

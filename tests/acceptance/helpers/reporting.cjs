@@ -31,18 +31,22 @@ function result(scenario, status, detail = '') {
     status, detail, executed: status === 'PASS' || status === 'FAIL' };
 }
 function exitCode(report) {
-  if (report.scenarios.some(s => s.status === 'FAIL') || report.environment.status === 'FAIL') return 1;
-  if (report.environment.status !== 'PASS' || report.authentication.status === 'BLOCKED' ||
-      report.scenarios.some(s => s.status === 'BLOCKED') ||
-      report.requiredScenarioIds?.some(id => !report.scenarios.some(s => s.id === id))) return 2;
+  const functional = report.scenarios.filter(s => s.category === 'functional');
+  if (report.environment.status !== 'PASS' || report.authentication.status !== 'PASS' ||
+      functional.some(s => !['PASS', 'FAIL'].includes(s.status)) || !functional.length ||
+      !report.requiredScenarioIds?.length ||
+      new Set(report.requiredScenarioIds).size !== report.requiredScenarioIds.length ||
+      report.requiredScenarioIds.some(id => functional.filter(s => s.id === id).length !== 1)) return 2;
+  if (functional.some(s => s.status === 'FAIL')) return 1;
   return 0;
 }
 function functionalStatus(report) {
   const rows = report.scenarios.filter(s => s.category === 'functional');
-  if (rows.some(s => s.status === 'FAIL')) return 'FAIL';
-  if (report.environment.status !== 'PASS' || report.authentication.status === 'BLOCKED') return 'BLOCKED';
+  if (report.environment.status !== 'PASS' || report.authentication.status !== 'PASS') return 'BLOCKED';
   if (rows.some(s => s.status === 'BLOCKED')) return 'BLOCKED';
-  if (report.requiredScenarioIds?.some(id => !rows.some(s => s.id === id))) return 'INCOMPLETE';
+  if (!report.requiredScenarioIds?.length || new Set(report.requiredScenarioIds).size !== report.requiredScenarioIds.length ||
+      report.requiredScenarioIds.some(id => rows.filter(s => s.id === id).length !== 1)) return 'INCOMPLETE';
+  if (rows.some(s => s.status === 'FAIL')) return 'FAIL';
   if (!rows.length || rows.some(s => s.status !== 'PASS')) return 'INCOMPLETE';
   return 'PASS';
 }
@@ -67,6 +71,7 @@ async function writeReport(directory, report) {
     `Application: \`${line(report.applicationCommit || 'not verified')}\``,
     `Requested application: \`${line(report.expectedApplicationCommit)}\``,
     `Tooling: \`${line(report.toolingCommit)}\`${report.toolingDirty ? ' (working tree changes present)' : ''}`,
+    `Mode: ${line(report.mode || 'not selected')}`,
     `Started (UTC): ${report.startedUtc}`, '',
     `Environment/integration validation: **${report.environment.status}** — ${line(report.environment.detail)}`,
     `Authentication (${line(report.authentication.mode || 'unselected')}): **${report.authentication.status}**`,
@@ -78,7 +83,7 @@ async function writeReport(directory, report) {
     '| Scenario | Issue / requirement | Result | Evidence / reason |',
     '| --- | --- | --- | --- |', ...rows, '',
     'Screenshots: ' + (report.screenshots.map(name => `[${name}](${name})`).join(', ') || 'none'), '',
-    'Exit 0 means the selected automated mode finished successfully; it never closes acceptance.',
+    'Exit 0 means every required automated scenario passed; skipped required scenarios return exit 2. Human acceptance remains open.',
     'Inspect artifacts before sharing. No issue comments, labels, approvals or closures were changed.', ''
   ].join('\n');
   await fs.writeFile(path.join(directory, 'results.json'), JSON.stringify(report, null, 2) + '\n');

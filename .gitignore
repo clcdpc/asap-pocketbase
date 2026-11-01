@@ -14,6 +14,7 @@ src/Asap.Web/wwwroot/
 src/Asap.Web/Development.local.json
 TestResults/
 .artifacts/
+ASAP-Acceptance/
 **/.artifacts/dev-email/
 
 # OS/editor artifacts.

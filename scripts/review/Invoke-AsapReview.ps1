@@ -1,23 +1,33 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-Run unattended acceptance in one disposable WSLC container.
+Run selected acceptance suites sequentially in fresh disposable WSLC containers.
+.PARAMETER Suite
+Suite names from the local tooling registry, in execution order. Defaults to smoke.
+Use native arrays when invoking directly from PowerShell 7; comma syntax is not
+portable across arbitrary shell or pwsh -File argument boundaries.
+.PARAMETER AllowReviewWrites
+Deprecated compatibility switch. Synthetic writes are permitted by default.
+.PARAMETER ReadOnly
+Prevent mutations. Required scenarios skipped by this restriction make acceptance incomplete (exit 2).
 .PARAMETER ArtifactsRoot
-Optional absolute output root. Defaults to the current user's profile directory
-under ASAP-Acceptance. Each run is retained in its own timestamp/run-ID directory.
+Absolute output root, defaulting to the user's profile under ASAP-Acceptance.
+Each suite retains a flat pr-N_suite_local-timestamp or commit-SHA_suite_local-timestamp directory.
 .EXAMPLE
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -AllowReviewWrites
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite s1,d1,q1
 .EXAMPLE
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites -ArtifactsRoot 'D:\ASAP Acceptance'
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite @('s1', 'd1', 'q1')
+.EXAMPLE
+.\scripts\review\Invoke-AsapReview.ps1 -Commit HEAD -Suite smoke -ReadOnly
 .NOTES
-Requires PowerShell 7, Git and working WSLC (WSL 2.9.3+). All application,
-SQL, .NET, Node and browser dependencies run inside the acceptance container.
+Requires PowerShell 7, Git and working WSLC (WSL 2.9.3+). Dependencies run in
+the acceptance image. Application code is archived, never executed on the host.
 #>
 [CmdletBinding()]
 param(
     [ValidateRange(1, 2147483647)][int]$Pr,
     [string]$Commit,
-    [string]$Suite = 'smoke',
+    [string[]]$Suite = @('smoke'),
     [switch]$AllowReviewWrites,
     [switch]$ReadOnly,
     [switch]$Rebuild,
@@ -26,153 +36,264 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'Review-Environment.ps1')
-$repoRoot = (Invoke-ReviewNative git @('-C', $PSScriptRoot, 'rev-parse', '--show-toplevel') -Capture).Output
-$toolingSha = (Invoke-ReviewNative git @('-C', $repoRoot, 'rev-parse', 'HEAD') -Capture).Output
-$toolingDirty = [bool](Invoke-ReviewNative git (@('-C', $repoRoot, 'status', '--porcelain', '--untracked-files=normal', '--') + (Get-ReviewToolingPaths)) -Capture).Output
-$runId = [guid]::NewGuid().ToString('N').Substring(0, 24)
-$buildRoot = Join-Path $repoRoot '.review/build'
-$context = Join-Path $buildRoot $runId
-$containerName = "asap-acceptance-$runId"
-$resolved = $null
-$containerCreated = $false
-$completed = $false
-$launcherError = $null
-$exitCode = 2
-$artifactOptions = @{ RunId = $runId }
-if ($PSBoundParameters.ContainsKey('ArtifactsRoot')) { $artifactOptions.ArtifactsRoot = $ArtifactsRoot }
-try { $artifactPath = New-ReviewArtifactDirectory @artifactOptions }
-catch {
-    Write-Host "BLOCKED: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host 'Artifacts: unavailable; output directory could not be created or written.'
-    Write-Host 'Automated: BLOCKED; exit 2'
-    exit 2
-}
-Write-Host "Artifacts:   $artifactPath"
 
-function Write-LauncherBlocker {
-    param([string]$Detail)
-    $reportFile = Join-Path $artifactPath 'results.json'
-    $report = if (Test-Path -LiteralPath $reportFile) { Get-Content -LiteralPath $reportFile -Raw | ConvertFrom-Json -AsHashtable } else {
-        @{ schemaVersion = 1; suite = $Suite; expectedApplicationCommit = $resolved; applicationCommit = $null
-            toolingCommit = $toolingSha; toolingDirty = $toolingDirty; startedUtc = [DateTimeOffset]::UtcNow.ToString('O')
-            mode = if ($AllowReviewWrites) { 'mutating' } else { 'read-only' }
-            authentication = @{ mode = 'local'; status = 'NOT RUN' }; scenarios = @() }
+function Save-ReviewSuiteReport {
+    param($Run, $Execution, [string]$Blocker)
+    $file = Join-Path $Run.ArtifactPath 'results.json'
+    $report = $null
+    if (Test-Path -LiteralPath $file) {
+        try {
+            $report = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json -AsHashtable
+            if ($report -isnot [System.Collections.IDictionary]) { throw 'Incomplete results document.' }
+        }
+        catch {
+            $report = $null
+            Copy-Item -LiteralPath $file -Destination (Join-Path $Run.ArtifactPath 'results-incomplete.json')
+        }
     }
-    $report.environment = @{ status = 'BLOCKED'; detail = $Detail }
-    $report.expectedApplicationCommit = $resolved
-    $report.automatedFunctionalAcceptance = 'BLOCKED'
+    if (-not $report) {
+        $report = @{ schemaVersion = 1; applicationCommit = $null; authentication = @{ mode = 'local'; status = 'NOT RUN' }; scenarios = @() }
+    }
+    if ($Blocker) {
+        $report.environment = @{ status = 'BLOCKED'; detail = $Blocker }
+        $report.automatedFunctionalAcceptance = 'BLOCKED'
+        $report.actualExitCode = 2
+        $report.scenarios = @($report.scenarios | Where-Object id -ne 'launcher') + @(
+            @{ id = 'launcher'; requirements = @('Acceptance startup and lifecycle'); category = 'functional';
+                status = 'BLOCKED'; executed = $false; detail = $Blocker })
+    }
+    $report.suite = $Run.Suite
+    $report.expectedApplicationCommit = $Execution.ApplicationCommit
+    if (-not $report.Contains('toolingCommit')) { $report.toolingCommit = $Execution.ToolingCommit }
+    $report.expectedToolingCommit = $Execution.ToolingCommit
+    $report.toolingDirty = $Execution.ToolingDirty
+    $report.toolingDigest = $Execution.ToolingDigest
+    $report.toolingVersion = $Execution.ToolingVersion
+    $report.acceptanceImage = $Execution.Image
+    $report.invocationId = $Execution.InvocationId
+    $report.runId = $Run.RunId
+    $report.containerName = $Run.ContainerName
+    $report.requestedPullRequest = $Pr
+    $report.mode = if ($ReadOnly) { 'read-only' } else { 'mutating' }
+    $report.startedUtc = $Run.Started.ToUniversalTime().ToString('O')
+    $report.startedLocal = $Run.Started.ToString('O')
+    $report.finishedUtc = [DateTimeOffset]::UtcNow.ToString('O')
+    $report.finishedLocal = [DateTimeOffset]::Now.ToString('O')
+    $report.durationSeconds = $Run.Duration.TotalSeconds
+    $report.launcherStatus = $Run.Status
     $report.overallAcceptance = 'INCOMPLETE'
-    $report.actualExitCode = 2
-    $report.scenarios = @($report.scenarios | Where-Object id -ne 'launcher') + @(
-        @{ id = 'launcher'; requirements = @('Acceptance startup and lifecycle'); category = 'functional'; status = 'BLOCKED'; executed = $false; detail = $Detail })
-    $report | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $reportFile -Encoding utf8NoBOM
-    @("# ASAP acceptance: $Suite", '', "Requested application: $resolved", "Tooling: $toolingSha", '',
-        "Automated: **BLOCKED** — $Detail", 'Human visual/screen-reader review: REQUIRED',
-        'Overall acceptance: INCOMPLETE', '', 'See results.json and diagnostics for any completed browser checks.') |
-        Set-Content -LiteralPath (Join-Path $artifactPath 'report.md') -Encoding utf8NoBOM
+    $report | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $file -Encoding utf8NoBOM
+    $markdown = Join-Path $Run.ArtifactPath 'report.md'
+    if (-not (Test-Path -LiteralPath $markdown)) {
+        "# ASAP acceptance: $($Run.Suite)" | Set-Content -LiteralPath $markdown -Encoding utf8NoBOM
+    }
+    @('', '## Launcher execution', '', "Requested application: $($Execution.ApplicationCommit)",
+        "Tooling: $($Execution.ToolingCommit); version $($Execution.ToolingVersion); digest $($Execution.ToolingDigest)",
+        "Mode: $($report.mode)", "Started (host local): $($report.startedLocal)", "Started (UTC): $($report.startedUtc)",
+        "Container: $($Run.ContainerName)", "Outcome: **$($Run.Status)**", $Blocker,
+        'Human visual/screen-reader review: REQUIRED; overall acceptance: INCOMPLETE.') |
+        Add-Content -LiteralPath $markdown -Encoding utf8NoBOM
 }
 
+function Invoke-ReviewSuite {
+    param($Run, $Execution)
+    $Run.Started = [DateTimeOffset]::Now
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $Run.RunId = [guid]::NewGuid().ToString('N').Substring(0, 24)
+    $Run.ContainerName = "asap-acceptance-$($Run.RunId)"
+    $Run.Status = 'BLOCKED'
+    $containerAttempted = $false
+    $completed = $false
+    $blocker = $null
+    try {
+        $Run.ArtifactPath = New-ReviewArtifactDirectory -ArtifactsRoot $Execution.ArtifactsRoot -PullRequest $Pr `
+            -ApplicationCommit $Execution.ApplicationCommit -Suite $Run.Suite -Timestamp $Run.Started
+        Write-Host "Artifacts: $($Run.ArtifactPath)"
+        Write-Host "Container: $($Run.ContainerName)"
+        Save-ReviewSuiteReport $Run $Execution 'Environment startup has not completed; browser scenarios have not run.'
+        if (Test-Path -LiteralPath $Execution.BuildLog) {
+            Copy-Item -LiteralPath $Execution.BuildLog -Destination (Join-Path $Run.ArtifactPath 'build.log')
+        }
+        $arguments = @('--suite', $Run.Suite, '--expected-commit', $Execution.ApplicationCommit)
+        if ($ReadOnly) { $arguments += '--read-only' }
+        # Only the evidence directory is mounted. No host repository, ports or persistent volumes.
+        # Record intent first so interruption during creation still attempts cleanup.
+        $containerAttempted = $true
+        Invoke-ReviewNative wslc (@('run', '--detach', '--name', $Run.ContainerName, '--shm-size', '1g',
+            '--mount', "type=bind,source=$($Run.ArtifactPath),target=/artifacts", $Execution.Image) + $arguments)
+        $deadline = [DateTimeOffset]::UtcNow.AddMinutes(30)
+        do {
+            $observed = (Invoke-ReviewNative wslc @('inspect', '--format', 'json', $Run.ContainerName) -Capture).Output | ConvertFrom-Json
+            $state = @($observed)[0].State
+            if (-not $state.Running) { break }
+            if ([DateTimeOffset]::UtcNow -ge $deadline) { throw 'Acceptance exceeded the 30 minute runtime limit.' }
+            Start-Sleep -Seconds 2
+        } while ($true)
+        $code = [int]$state.ExitCode
+        if ($code -notin @(0, 1, 2)) { throw "Acceptance container terminated unexpectedly (exit $code)." }
+        $report = Get-Content -LiteralPath (Join-Path $Run.ArtifactPath 'results.json') -Raw | ConvertFrom-Json -AsHashtable
+        if (-not $report.ContainsKey('actualExitCode') -or $report.actualExitCode -ne $code) {
+            throw 'Container exit and exported report disagree or diagnostics did not finish.'
+        }
+        if ($report.suite -ne $Run.Suite -or $report.expectedApplicationCommit -ne $Execution.ApplicationCommit -or
+            $report.toolingCommit -ne $Execution.ToolingCommit -or
+            ($code -ne 2 -and $report.applicationCommit -ne $Execution.ApplicationCommit)) {
+            throw 'Container report does not match the selected application, tooling or suite.'
+        }
+        if ((Get-ReviewReportExitCode $report) -ne $code) {
+            throw 'Container exit does not match its required automated checks; acceptance is incomplete.'
+        }
+        $Run.Status = switch ($code) { 0 { 'PASS' }; 1 { 'FAIL' }; 2 { 'BLOCKED' } }
+        $completed = $true
+    }
+    catch {
+        $blocker = $_.Exception.Message
+        Write-Host "BLOCKED ($($Run.Suite)): $blocker" -ForegroundColor Red
+    }
+    finally {
+        if ($containerAttempted) {
+            # Always attempt removal, even after failed stop/log collection or Ctrl+C.
+            try { $null = Invoke-ReviewNative wslc @('stop', '--time', '20', $Run.ContainerName) -Capture -AllowFailure }
+            catch { Write-Warning "Could not stop $($Run.ContainerName) gracefully; forcing removal." }
+            try {
+                $logs = Invoke-ReviewNative wslc @('logs', $Run.ContainerName) -Capture -AllowFailure
+                ($logs.Output + "`n" + $logs.ErrorText) | Set-Content -LiteralPath (Join-Path $Run.ArtifactPath 'container.log') -Encoding utf8NoBOM
+            }
+            catch { Write-Warning 'Container console log export failed; inspect the exported diagnostics.' }
+            try { $null = Invoke-ReviewNative wslc @('remove', '--force', $Run.ContainerName) -Capture }
+            catch {
+                # Creation can fail before a container exists. A successful empty listing
+                # confirms absence; a broken daemon or a remaining container cannot do so.
+                $absent = $false
+                try {
+                    $remaining = Invoke-ReviewNative wslc @('list', '--all', '--filter', "name=$($Run.ContainerName)", '--quiet') -Capture -AllowFailure
+                    $absent = $remaining.Code -eq 0 -and [string]::IsNullOrWhiteSpace($remaining.Output)
+                }
+                catch { $absent = $false }
+                if (-not $absent) {
+                    $Run.CleanupFailed = $true
+                    $blocker = "Container cleanup failed. Run: wslc remove --force $($Run.ContainerName)."
+                    Write-Warning $blocker
+                }
+            }
+        }
+        if (-not $completed -and -not $blocker) { $blocker = 'Acceptance launcher was interrupted.' }
+        if ($blocker) { $Run.Status = 'BLOCKED'; $Run.Detail = $blocker }
+        $clock.Stop()
+        $Run.Duration = $clock.Elapsed
+        if ($Run.ArtifactPath) {
+            # Stop/export finishes before modifying the report, so late container writes cannot erase this outcome.
+            try {
+                Save-ReviewSuiteReport $Run $Execution $blocker
+                Write-Host "Report: $(Join-Path $Run.ArtifactPath 'report.md')"
+            }
+            catch {
+                $Run.Status = 'BLOCKED'
+                $Run.Detail = "Could not finalize retained suite evidence: $($_.Exception.Message)"
+                Write-Warning $Run.Detail
+            }
+        }
+    }
+}
+
+$invocationId = [guid]::NewGuid().ToString('N')
+$runs = @()
+$context = $null
+$buildRoot = $null
+$sharedLog = $null
+$sharedError = $null
+$finished = $false
 try {
-    Write-LauncherBlocker 'Environment startup has not completed; browser scenarios have not run.'
+    $repoRoot = (Invoke-ReviewNative git @('-C', $PSScriptRoot, 'rev-parse', '--show-toplevel') -Capture).Output
+    $registered = @(Get-Content -LiteralPath (Join-Path $repoRoot 'tests/acceptance/suites/registry.json') -Raw | ConvertFrom-Json)
+    $selected = @(Get-ReviewSuiteSelection -Suite $Suite -Registered $registered)
+    $runs = @($selected | ForEach-Object {
+        [pscustomobject]@{ Suite = $_; Status = 'NOT RUN'; Duration = [TimeSpan]::Zero; ArtifactPath = $null;
+            Started = $null; RunId = $null; ContainerName = $null; CleanupFailed = $false; Detail = '' }
+    })
     if ($Pr -and $Commit) { throw '-Pr and -Commit are mutually exclusive revision selectors.' }
     if ($Commit.StartsWith('-')) { throw '-Commit must be a Git revision, without Git command options.' }
     if ($ReadOnly -and $AllowReviewWrites) { throw '-ReadOnly and -AllowReviewWrites are mutually exclusive.' }
-    $registered = @(Get-Content (Join-Path $repoRoot 'tests/acceptance/suites/registry.json') -Raw | ConvertFrom-Json)
-    if ($Suite -notin $registered) { throw "Unknown suite. Registered acceptance suites: $($registered -join ', ')." }
+    if ($AllowReviewWrites) { Write-Warning '-AllowReviewWrites is deprecated; disposable synthetic writes are permitted by default.' }
+    $rootOptions = @{}
+    if ($PSBoundParameters.ContainsKey('ArtifactsRoot')) { $rootOptions.ArtifactsRoot = $ArtifactsRoot }
+    $artifactRoot = Get-ReviewArtifactRoot @rootOptions
+    $sharedLog = Join-Path $artifactRoot "invocation-$invocationId.log"
+    $stream = [System.IO.File]::Open($sharedLog, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
+    $stream.Dispose()
+    Write-Host "Shared diagnostics: $sharedLog"
     if (-not (Get-Command wslc -ErrorAction SilentlyContinue)) { throw 'WSLC is unavailable. A working WSL 2.9.3+ installation is required.' }
     Invoke-ReviewNative wslc @('version')
     $resolved = Resolve-ApplicationCommit -Repository $repoRoot -PullRequest $Pr -Revision $Commit
-    Write-LauncherBlocker 'Building or selecting the acceptance image; browser scenarios have not run.'
-    Write-Host "Application: $resolved"
-    Write-Host "Tooling:     $toolingSha$(if ($toolingDirty) { ' (working tree changes)' })"
+    $toolingSha = (Invoke-ReviewNative git @('-C', $repoRoot, 'rev-parse', 'HEAD') -Capture).Output
+    $toolingDirty = [bool](Invoke-ReviewNative git (@('-C', $repoRoot, 'status', '--porcelain', '--untracked-files=normal', '--') + (Get-ReviewToolingPaths)) -Capture).Output
+    $buildRoot = Join-Path $repoRoot '.review/build'
+    $context = Join-Path $buildRoot $invocationId
     $tooling = Join-Path $context 'tooling'
     Copy-ReviewTooling -Repository $repoRoot -Destination $tooling
     $digest = Get-ReviewToolingDigest $tooling
+    $version = (Get-Content -LiteralPath (Join-Path $tooling 'dev/review/VERSION') -Raw).Trim()
     $image = "asap-acceptance:$resolved-$toolingSha-$($digest.Substring(0, 16))$(if ($toolingDirty) { '-dirty' })"
+    @("Application: $resolved", "Tooling: $toolingSha; dirty: $toolingDirty; version: $version; digest: $digest",
+        "Image: $image", "Suites: $($selected -join ', ')") | Add-Content -LiteralPath $sharedLog -Encoding utf8NoBOM
+    Write-Host "Application: $resolved"
+    Write-Host "Tooling: $toolingSha$(if ($toolingDirty) { ' (working tree changes)' }); digest $digest"
+    $buildLog = Join-Path $artifactRoot "build-$invocationId.log"
     $cached = Invoke-ReviewNative wslc @('image', 'inspect', $image) -Capture -AllowFailure
     if ($Rebuild -or $cached.Code -ne 0) {
         $archive = Join-Path $context 'application.zip'
         Invoke-ReviewNative git @('-C', $repoRoot, 'archive', '--format=zip', "--output=$archive", $resolved)
         Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $context 'app')
         Remove-Item -LiteralPath $archive
-        $version = (Get-Content (Join-Path $tooling 'dev/review/VERSION') -Raw).Trim()
         $build = @('build', '--file', (Join-Path $tooling 'dev/review/Containerfile'), '--tag', $image, '--progress', 'plain',
             '--build-arg', "REVIEW_COMMIT_SHA=$resolved", '--build-arg', "REVIEW_TOOLING_SHA=$toolingSha",
             '--build-arg', "REVIEW_TOOLING_DIRTY=$($toolingDirty.ToString().ToLowerInvariant())", '--build-arg', "REVIEW_TOOLING_VERSION=$version")
         if ($Rebuild) { $build += '--no-cache' }
-        Write-Host 'Building the acceptance image through WSLC...'
-        $built = Invoke-ReviewNative wslc ($build + $context) -Capture -AllowFailure -TimeoutSeconds 2400
-        ($built.Output + "`n" + $built.ErrorText) | Set-Content -LiteralPath (Join-Path $artifactPath 'build.log') -Encoding utf8NoBOM
-        if ($built.Code -ne 0) { throw 'WSLC image build failed. See build.log.' }
+        Write-Host "Building the shared acceptance image through WSLC... Diagnostics: $buildLog"
+        Add-Content -LiteralPath $sharedLog -Value "Build diagnostics: $buildLog"
+        $built = Invoke-ReviewNative wslc ($build + $context) -Capture -AllowFailure -TimeoutSeconds 2400 -LogPath $buildLog
+        if ($built.Code -ne 0) { throw "Shared WSLC image build failed. See $buildLog. No suites started." }
     }
-    else { Write-Host 'Reusing the acceptance image.' }
+    else { Write-Host 'Reusing the shared acceptance image.' }
     Remove-ReviewBuildContext $context $buildRoot
-    $arguments = @('--suite', $Suite, '--expected-commit', $resolved)
-    if ($AllowReviewWrites) { $arguments += '--allow-review-writes' } else { $arguments += '--read-only' }
-    # One artifact mount, no published ports, repository mounts or persistent volumes.
-    # Mark intent before run so interruption during container creation still cleans up.
-    $containerCreated = $true
-    Invoke-ReviewNative wslc (@('run', '--detach', '--name', $containerName, '--shm-size', '1g',
-        '--mount', "type=bind,source=$artifactPath,target=/artifacts", $image) + $arguments)
-    $deadline = [DateTimeOffset]::UtcNow.AddMinutes(30)
-    do {
-        $observed = (Invoke-ReviewNative wslc @('inspect', '--format', 'json', $containerName) -Capture).Output | ConvertFrom-Json
-        $state = @($observed)[0].State
-        if (-not $state.Running) { break }
-        if ([DateTimeOffset]::UtcNow -ge $deadline) { throw 'Acceptance exceeded the 30 minute runtime limit.' }
-        Start-Sleep -Seconds 2
-    } while ($true)
-    $exitCode = [int]$state.ExitCode
-    if ($exitCode -notin @(0, 1, 2)) { throw "Acceptance container terminated unexpectedly (exit $exitCode)." }
-    $results = Get-Content -LiteralPath (Join-Path $artifactPath 'results.json') -Raw | ConvertFrom-Json
-    if (-not $results.PSObject.Properties['actualExitCode'] -or $results.actualExitCode -ne $exitCode) {
-        throw 'Container exit and exported report disagree or diagnostics did not finish.'
+    $execution = @{ ApplicationCommit = $resolved; ToolingCommit = $toolingSha; ToolingDirty = $toolingDirty;
+        ToolingDigest = $digest; ToolingVersion = $version; Image = $image; InvocationId = $invocationId;
+        ArtifactsRoot = $artifactRoot; BuildLog = $buildLog }
+    foreach ($run in $runs) {
+        Invoke-ReviewSuite $run $execution
+        if ($run.CleanupFailed) { throw 'Container cleanup could not be confirmed; remaining suites will not start.' }
     }
-    if ($exitCode -eq 0 -and (-not $results.PSObject.Properties['requiredScenarioIds'] -or
-        @($results.requiredScenarioIds).Count -eq 0 -or
-        @($results.requiredScenarioIds | Where-Object { $id = $_; @($results.scenarios | Where-Object id -eq $id).Count -ne 1 }).Count -or
-        $results.environment.status -ne 'PASS' -or $results.authentication.status -ne 'PASS' -or
-        @($results.scenarios | Where-Object { $_.category -eq 'functional' -and $_.status -notin @('PASS', 'NOT RUN') }).Count)) {
-        throw 'Container exited successfully without successful automated checks.'
-    }
-    $completed = $true
+    $finished = $true
 }
 catch {
-    $exitCode = 2
-    $launcherError = $_.Exception.Message
-    Write-LauncherBlocker $launcherError
-    Write-Host "BLOCKED: $($_.Exception.Message)" -ForegroundColor Red
+    $sharedError = $_.Exception.Message
+    Write-Host "BLOCKED: $sharedError" -ForegroundColor Red
 }
 finally {
-    if ($containerCreated) {
-        # Always attempt removal, even if stopping or collecting logs fails.
-        try { $null = Invoke-ReviewNative wslc @('stop', '--time', '20', $containerName) -Capture -AllowFailure }
-        catch { Write-Warning "Could not stop $containerName gracefully; forcing removal." }
+    if ($context) {
+        try { Remove-ReviewBuildContext $context $buildRoot }
+        catch { $sharedError = "Build context cleanup failed: $($_.Exception.Message)"; Write-Warning $sharedError }
+    }
+    if (-not $finished -and -not $sharedError) { $sharedError = 'Acceptance invocation was interrupted.' }
+    foreach ($run in $runs | Where-Object Status -eq 'NOT RUN') { $run.Detail = $sharedError }
+    $counts = @{}
+    foreach ($status in @('PASS', 'FAIL', 'BLOCKED', 'NOT RUN')) { $counts[$status] = @($runs | Where-Object Status -eq $status).Count }
+    $exitCode = if ($sharedError -or $counts.BLOCKED -or $counts.'NOT RUN' -or -not $runs.Count) { 2 } elseif ($counts.FAIL) { 1 } else { 0 }
+    $overall = switch ($exitCode) { 0 { 'PASS' }; 1 { 'FAIL' }; 2 { 'BLOCKED' } }
+    if ($sharedLog) {
         try {
-            $logs = Invoke-ReviewNative wslc @('logs', $containerName) -Capture -AllowFailure
-            ($logs.Output + "`n" + $logs.ErrorText) | Set-Content -LiteralPath (Join-Path $artifactPath 'container.log') -Encoding utf8NoBOM
+            if ($sharedError) { Add-Content -LiteralPath $sharedLog -Value "BLOCKED: $sharedError" -Encoding utf8NoBOM }
+            @{ invocationId = $invocationId; overall = $overall; exitCode = $exitCode; counts = $counts; detail = $sharedError;
+                suites = @($runs | Select-Object Suite, Status, @{ Name = 'durationSeconds'; Expression = { $_.Duration.TotalSeconds } }, ArtifactPath, Detail) } |
+                ConvertTo-Json -Depth 10 | Set-Content -LiteralPath ([System.IO.Path]::ChangeExtension($sharedLog, '.json')) -Encoding utf8NoBOM
+            Write-Host "Shared diagnostics: $sharedLog"
         }
-        catch { Write-Warning 'Container console log export failed; inspect the exported diagnostics.' }
-        try { $null = Invoke-ReviewNative wslc @('remove', '--force', $containerName) -Capture }
-        catch {
-            $exitCode = 2
-            $launcherError = "Container cleanup failed. Remove $containerName through WSLC."
-            Write-LauncherBlocker $launcherError
-            Write-Warning "Container cleanup failed: $containerName"
-        }
+        catch { Write-Warning "Could not save invocation summary: $($_.Exception.Message)"; $exitCode = 2; $overall = 'BLOCKED' }
     }
-    Remove-ReviewBuildContext $context $buildRoot
-    if (-not $completed) {
-        $exitCode = 2
-        Write-LauncherBlocker $(if ($launcherError) { $launcherError } else { 'Acceptance launcher was interrupted.' })
-    }
-    $summary = Get-Content -LiteralPath (Join-Path $artifactPath 'results.json') -Raw | ConvertFrom-Json
-    Write-Host "Automated: $($summary.automatedFunctionalAcceptance); exit $exitCode"
-    foreach ($status in @('PASS', 'FAIL', 'BLOCKED', 'NOT RUN')) {
-        Write-Host "$status`: $(@($summary.scenarios | Where-Object { $_.category -eq 'functional' -and $_.status -eq $status }).Count)"
-    }
-    Write-Host "Artifacts: $artifactPath"
-    Write-Host "Report: $(Join-Path $artifactPath 'report.md')"
+    Write-Host ($runs | Select-Object Suite, Status, @{ Name = 'Duration'; Expression = { $_.Duration.ToString('hh\:mm\:ss') } } | Format-Table -AutoSize | Out-String)
+    Write-Host "Overall: $overall; exit $exitCode"
+    Write-Host "Passed: $($counts.PASS)`nFailed: $($counts.FAIL)`nBlocked: $($counts.BLOCKED)`nNot run: $($counts.'NOT RUN')"
+    foreach ($run in $runs) { Write-Host "$($run.Suite): $(if ($run.ArtifactPath) { $run.ArtifactPath } else { 'Artifacts: unavailable (suite did not start)' })" }
     Write-Host 'Human visual/screen-reader review remains REQUIRED; overall acceptance INCOMPLETE.'
     # Ctrl+C unwinds through finally and skips statements after it.
     exit $exitCode
