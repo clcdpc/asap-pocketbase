@@ -12,6 +12,10 @@ an exceptionally narrow area can wrap that command and More to retain full label
 A sole command can wrap and never creates a menu. The same DOM buttons move between
 the two areas, preserving their handler and avoiding hidden duplicates.
 
+The client-array Grid.js adapter retains accepted rows/status during deferred
+local Sort/Pagination recalculation, preserving the existing no-loading-flash
+contract even when action measurement increases rendering work.
+
 Grid.js ref retirement aborts listeners, cancels deferred layout, disconnects
 observers and closes/removes the popover. Resize and font notifications remeasure
 without replacing a stable partition. Resizing closes an open menu, restores focus

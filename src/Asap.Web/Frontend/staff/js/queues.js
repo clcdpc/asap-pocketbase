@@ -27,6 +27,15 @@ function createQueueGrid(options, container) {
       return selected ? { ...column, sort: { ...column.sort, direction: selected.direction } } : { ...column };
     });
     const grid = new window.gridjs.Grid({ ...configuration, columns });
+    const store = grid.config.store, dispatch = store.dispatch.bind(store);
+    store.dispatch = update => dispatch(state => {
+      const next = update(state);
+      // These grids process accepted local arrays, never a Grid.js server
+      // fetch. Deferred Sort/Pagination effects must retain the accepted view
+      // rather than paint a second loading indicator after the frame commits.
+      return state.data && next.data === state.data && next.status === 1
+        ? { ...next, status: state.status } : next;
+    });
     if (sort) {
       grid.config.store.dispatch(state => ({ ...state,
         sort: { ...sort, columns: sort.columns.map(column => ({ ...column })) } }));
