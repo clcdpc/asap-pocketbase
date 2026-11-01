@@ -66,6 +66,9 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
   await more.press('Space'); assert.equal(await more.getAttribute('aria-expanded'), 'true');
   await page.keyboard.press('Escape');
   assert.equal(await more.getAttribute('aria-expanded'), 'false'); assert.equal(await more.evaluate(n => n === document.activeElement), true);
+  await more.press('Enter'); await page.setViewportSize({ width: 1440, height: 860 }); await settleActions(page);
+  assert.equal(await more.getAttribute('aria-expanded'), 'false', 'Viewport-only resize dismisses a menu even when its column width is unchanged');
+  assert.equal(await more.evaluate(n => n === document.activeElement), true);
   await more.press('Enter');
   const focusedKey = await page.evaluate(() => document.activeElement.dataset.requestAction);
   await fixture.evaluate(node => { node.style.width = 'min(900px, 100%)'; }); await settleActions(page);

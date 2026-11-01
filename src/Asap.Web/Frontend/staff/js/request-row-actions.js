@@ -63,6 +63,11 @@ export function requestRowActions({ id, actions, live, onOpen, fallback }) {
     window.addEventListener('scroll', event => {
       if (!popup.contains(event.target)) close(popup.contains(document.activeElement));
     }, { capture: true, signal });
+    // A fixed-width column may not resize when the viewport gets shorter or
+    // narrower. Its top-layer menu still needs to leave the old coordinates.
+    window.addEventListener('resize', () => {
+      close(popup.contains(document.activeElement)); schedule();
+    }, { signal });
     function layout() {
       frame = null;
       if (disposed) return;
