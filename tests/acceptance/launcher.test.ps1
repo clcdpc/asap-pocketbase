@@ -1,5 +1,5 @@
 # Development checks for actual launcher helpers; no container runtime required.
-param([ValidateSet('revision', 'snapshot', 'native', 'artifacts')][string]$Case)
+param([ValidateSet('revision', 'snapshot', 'native', 'artifacts', 'selection')][string]$Case)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repository = (& git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
@@ -55,7 +55,37 @@ try {
             $outcome = Invoke-ReviewNative pwsh @('-NoProfile', '-Command', 'Write-Output canary; exit 1') -Capture -AllowFailure
             Assert ($outcome.Code -eq 1 -and $outcome.Output -eq 'canary') 'Native exit/output propagation failed.'
             Reject { Invoke-ReviewNative pwsh @('-NoProfile', '-Command', 'Write-Output secret-canary; exit 2') -Capture } 'failed \(exit 2\)'
-            Reject { Invoke-ReviewNative pwsh @('-NoProfile', '-Command', 'Start-Sleep -Seconds 10') -TimeoutSeconds 1 } 'timed out'
+            $log = Join-Path $temporary 'timeout.log'
+            Reject { Invoke-ReviewNative pwsh @('-NoProfile', '-Command', 'Write-Output before-timeout; Start-Sleep -Seconds 10') -TimeoutSeconds 2 -LogPath $log } 'timed out'
+            Assert ((Get-Content -LiteralPath $log -Raw) -match 'before-timeout') 'Timed-out build lost its diagnostics.'
+            $childFile = Join-Path $temporary 'native-child.pid'
+            $childCommand = "[System.IO.File]::WriteAllText('$($childFile.Replace("'", "''"))', [string]`$PID); Start-Sleep -Seconds 15"
+            $helper = (Join-Path $repository 'scripts/review/Review-Environment.ps1').Replace("'", "''")
+            $pipeline = [powershell]::Create()
+            $null = $pipeline.AddScript(". '$helper'; Invoke-ReviewNative pwsh @('-NoProfile', '-Command', '$($childCommand.Replace("'", "''"))') -TimeoutSeconds 20")
+            $pending = $pipeline.BeginInvoke()
+            try {
+                $deadline = [DateTimeOffset]::UtcNow.AddSeconds(5)
+                while (-not (Test-Path -LiteralPath $childFile)) {
+                    if ([DateTimeOffset]::UtcNow -ge $deadline) { throw 'Native cancellation fixture did not start.' }
+                    Start-Sleep -Milliseconds 25
+                }
+                $reviewChildProcessId = [int](Get-Content -LiteralPath $childFile -Raw)
+                $stopping = $pipeline.BeginStop($null, $null)
+                $timely = $stopping.AsyncWaitHandle.WaitOne(3000)
+                if (-not $timely) {
+                    # Only the PID written by this owned synthetic child; unblock a regressed wait safely.
+                    Stop-Process -Id $reviewChildProcessId -Force -ErrorAction SilentlyContinue
+                }
+                $pipeline.EndStop($stopping)
+                Assert $timely 'Native command ignored pipeline interruption.'
+                Assert (-not (Get-Process -Id $reviewChildProcessId -ErrorAction SilentlyContinue)) 'Interrupted native command left a child running.'
+            }
+            finally {
+                $pipeline.Stop()
+                try { $null = $pipeline.EndInvoke($pending) } catch { }
+                $pipeline.Dispose()
+            }
             $buildRoot = Join-Path $temporary 'build'
             $build = Join-Path $buildRoot 'run'
             New-Item -ItemType Directory -Path $build -Force | Out-Null
@@ -66,25 +96,36 @@ try {
         'artifacts' {
             $root = Join-Path $temporary 'custom output [literal]'
             $selected = Join-Path $root '../custom output [literal]'
-            $directory = New-ReviewArtifactDirectory -ArtifactsRoot $selected -RunId 'first'
+            $options = @{ ApplicationCommit = 'a' * 40; Suite = 's1'; Timestamp = [DateTimeOffset]::new(2026, 11, 1, 13, 30, 0, [TimeSpan]::Zero) }
+            $expectedStamp = $options.Timestamp.ToLocalTime().ToString('yyyy-MM-dd_HH-mm-ss')
+            $directory = New-ReviewArtifactDirectory -ArtifactsRoot $selected -PullRequest 415 @options
+            Assert ([System.IO.Path]::GetFileName($directory) -ceq "pr-415_s1_$expectedStamp") 'PR or host-local timestamp naming is wrong.'
             Assert ([System.IO.Path]::GetDirectoryName($directory) -eq [System.IO.Path]::GetFullPath($root)) 'Custom root was not normalized literally.'
             Assert (Test-Path -LiteralPath $directory -PathType Container) 'Artifact directory was not created.'
             Assert (@(Get-ChildItem -LiteralPath $directory -Force).Count -eq 0) 'Write probe was left in the artifacts.'
             'previous evidence' | Set-Content -LiteralPath (Join-Path $directory 'report.md')
             'unrelated file' | Set-Content -LiteralPath (Join-Path $root 'keep.txt')
-            $next = New-ReviewArtifactDirectory -ArtifactsRoot $root -RunId 'second'
+            $next = New-ReviewArtifactDirectory -ArtifactsRoot $root -PullRequest 415 @options
+            Assert ([System.IO.Path]::GetFileName($next) -ceq "pr-415_s1_$expectedStamp-02") 'Second collision suffix is wrong.'
+            $third = New-ReviewArtifactDirectory -ArtifactsRoot $root -PullRequest 415 @options
+            Assert ([System.IO.Path]::GetFileName($third) -ceq "pr-415_s1_$expectedStamp-03") 'Third collision suffix is wrong.'
+            $commit = New-ReviewArtifactDirectory -ArtifactsRoot $root @options
+            Assert ([System.IO.Path]::GetFileName($commit) -ceq "commit-aaaaaaaaaaaa_s1_$expectedStamp") 'Commit naming is wrong.'
             Assert ($directory -ne $next) 'Artifact runs collided.'
             Assert ((Get-Content -LiteralPath (Join-Path $directory 'report.md') -Raw).Trim() -eq 'previous evidence') 'A previous run was modified.'
             Assert ((Get-Content -LiteralPath (Join-Path $root 'keep.txt') -Raw).Trim() -eq 'unrelated file') 'An unrelated file was modified.'
             foreach ($relative in @('', 'relative', '../relative')) {
-                Reject { New-ReviewArtifactDirectory -ArtifactsRoot $relative -RunId 'invalid' } 'absolute filesystem path'
+                Reject { New-ReviewArtifactDirectory -ArtifactsRoot $relative @options } 'absolute filesystem path'
             }
             $file = Join-Path $temporary 'file.txt'
             'keep' | Set-Content -LiteralPath $file
-            Reject { New-ReviewArtifactDirectory -ArtifactsRoot $file -RunId 'file' } 'Cannot create or write acceptance artifacts'
+            Reject { New-ReviewArtifactDirectory -ArtifactsRoot $file @options } 'Cannot create or write acceptance artifacts'
+            foreach ($unsafe in @('../s1', 's1/smoke', 's1,smoke', 's1\\smoke', 's1:smoke', 's1 ', '..')) {
+                Reject { New-ReviewArtifactDirectory -ArtifactsRoot $root -Suite $unsafe -ApplicationCommit ('a' * 40) } 'pattern'
+            }
             if ($IsWindows) {
-                Reject { New-ReviewArtifactDirectory -ArtifactsRoot 'C:relative' -RunId 'drive-relative' } 'absolute filesystem path'
-                Reject { New-ReviewArtifactDirectory -ArtifactsRoot (Join-Path $temporary 'bad<path') -RunId 'invalid' } 'Cannot create or write acceptance artifacts'
+                Reject { New-ReviewArtifactDirectory -ArtifactsRoot 'C:relative' @options } 'absolute filesystem path'
+                Reject { New-ReviewArtifactDirectory -ArtifactsRoot (Join-Path $temporary 'bad<path') @options } 'Cannot create or write acceptance artifacts'
                 $denied = [System.IO.Directory]::CreateDirectory((Join-Path $temporary 'denied')).FullName
                 $original = Get-Acl -LiteralPath $denied
                 $acl = Get-Acl -LiteralPath $denied
@@ -94,9 +135,18 @@ try {
                 $acl.AddAccessRule($rule)
                 try {
                     Set-Acl -LiteralPath $denied -AclObject $acl
-                    Reject { New-ReviewArtifactDirectory -ArtifactsRoot $denied -RunId 'denied' } 'Cannot create or write acceptance artifacts'
+                    Reject { New-ReviewArtifactDirectory -ArtifactsRoot $denied @options } 'Cannot create or write acceptance artifacts'
                 }
                 finally { Set-Acl -LiteralPath $denied -AclObject $original }
+            }
+        }
+        'selection' {
+            $registered = @('d1', 'pr410', 'q1', 's1', 'smoke')
+            Assert ((@(Get-ReviewSuiteSelection -Suite s1,d1,q1 -Registered $registered) -join ',') -ceq 's1,d1,q1') 'Native comma-array binding or order failed.'
+            Assert ((@(Get-ReviewSuiteSelection -Suite @('s1', 'D1', 'q1') -Registered $registered) -join ',') -ceq 's1,d1,q1') 'Explicit array/canonicalization failed.'
+            Assert ((@(Get-ReviewSuiteSelection -Suite s1 -Registered $registered) -join ',') -ceq 's1') 'Single suite failed.'
+            foreach ($invalid in @(@(), @('s1', 'S1'), @('s1', ''), @('s1', 'missing'), @('s1,d1'), @('../s1'))) {
+                Reject { Get-ReviewSuiteSelection -Suite $invalid -Registered $registered } 'Available suites:.*local tooling checkout.*updating'
             }
         }
     }

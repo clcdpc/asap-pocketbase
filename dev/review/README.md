@@ -1,13 +1,16 @@
 # ASAP acceptance with WSLC
 
 ```powershell
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke -AllowReviewWrites
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite s1,d1,q1
 ```
 
-Run from PR #412's tooling checkout. The command builds or reuses one acceptance
-image, starts one disposable container, initializes a fresh SQL Server 2022
-database, authenticates a synthetic staff user locally, and runs Chromium and
-Playwright automatically. No configuration file or browser interaction is needed.
+Run directly from PowerShell 7 in a current local tooling checkout. The command
+resolves the application once, builds or reuses one acceptance image, then runs
+exactly the requested suites once each in caller order. Each suite starts its own
+disposable container and fresh SQL Server 2022 database, authenticates a synthetic
+staff user locally, and runs Chromium/Playwright automatically. Containers are
+removed between suites; SQL state is never shared. No configuration file or
+browser interaction is needed.
 
 ## Prerequisites
 
@@ -30,33 +33,78 @@ certificate installation is needed.
 ## Running suites
 
 ```powershell
-# Read-only smoke: authenticated review passes; synthetic closure is NOT RUN.
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite smoke
+# Full synthetic smoke, including a real UI closure.
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite smoke
+
+# Native array binding, directly in PowerShell 7 (both forms preserve order).
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite s1,d1,q1
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite @('s1', 'd1', 'q1')
 
 # Feature suite: 21 scenarios, including approved inherited Settings reset.
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite pr410
 
 # Select an exact application revision instead of a PR.
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Commit HEAD -Suite smoke -AllowReviewWrites
+.\scripts\review\Invoke-AsapReview.ps1 -Commit HEAD -Suite smoke
+
+# Explicit restriction: closure is NOT RUN; acceptance is incomplete (exit 2).
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite smoke -ReadOnly
 
 # Optional absolute output root; paths containing spaces are supported.
-pwsh ./scripts/review/Invoke-AsapReview.ps1 -Pr 410 -Suite pr410 -AllowReviewWrites -ArtifactsRoot 'D:\ASAP Acceptance'
+.\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite pr410 -ArtifactsRoot 'D:\ASAP Acceptance'
 ```
 
 `-Pr` fetches the PR's exact HEAD from `origin`, independently of the current
 tooling checkout. `-Commit` selects a Git commit; the two selectors are exclusive.
-The default suite is `smoke`. Omitting `-AllowReviewWrites` enables read-only
-mode; `-ReadOnly` makes it explicit. `-Rebuild` forces a fresh image build.
+Omitting both selectors tests resolved `HEAD`. The default suite is `smoke`;
+no smoke or extra repetitions are added to an explicit selection. Add `smoke`
+explicitly when useful, for example `-Suite smoke,s1,d1,q1`. `-Rebuild` forces
+one shared build with `--no-cache`, rather than one build per suite. Cached image
+identity still includes the application SHA, tooling SHA, dirty state and digest.
+
+All suites are validated against `tests/acceptance/suites/registry.json` in the
+local checkout before resolution or execution. Empty, unsafe, duplicate
+(case-insensitive) and unknown names are rejected with available suites and an
+update hint. The PR supplies application source only; the launcher never fetches
+PR tooling to satisfy a missing suite. Discover suites with:
+
+```powershell
+Get-Content ./tests/acceptance/suites/registry.json
+```
+
+The comma-array syntax above requires direct invocation in PowerShell 7. It is
+not a CSV argument and is not portable across arbitrary shell or `pwsh -File`
+boundaries. When launching PowerShell from another shell, put the native array
+inside a properly quoted `pwsh -Command` script.
+
+Complete functional checks, including allowed synthetic writes, run by default.
+`-ReadOnly` explicitly prevents all scenario mutations and records required
+skips as NOT RUN; such a partial suite returns exit 2. Entirely read-only suites
+can still pass under that restriction. `-AllowReviewWrites` remains a deprecated
+compatibility option with no extra permission and conflicts with `-ReadOnly`.
 
 Reports, unmasked synthetic screenshots, state/geometry evidence, failure traces and
-sanitized logs appear together in `$HOME/ASAP-Acceptance/<timestamp-run-id>/`
-by default (for example, `C:\Users\<username>\ASAP-Acceptance\<timestamp-run-id>\`).
+sanitized logs appear together in flat directories under `$HOME/ASAP-Acceptance/`
+by default, for example `pr-415_s1_2026-11-01_13-30-00` or
+`commit-454d8676e666_smoke_2026-11-01_13-30-00`. Each suite captures its start
+using the host's local date and 24-hour time. Atomic allocation never overwrites
+evidence: collisions get `-02`, `-03`, etc. Full SHAs, digest, internal random
+run/container identity, UTC timestamps and host-local timestamps with UTC offset
+are retained in `results.json`, including across daylight-saving transitions.
 The default uses the current user's profile, independently of the checkout or
 working directory. `-ArtifactsRoot <absolute-path>` selects a different parent;
 an invalid or unwritable destination blocks the run without falling back.
-The launcher prints the full run directory before startup, then the directory,
-`report.md` path, automated result and scenario counts at completion. It removes
-the container after success, failure or interruption. A forced termination of the launcher process itself
+The launcher prints each run directory before its container starts, then a
+consolidated suite/status/duration table, artifact paths, counts and overall
+result. `results.json`, `report.md`, screenshots and `diagnostics/` belong to
+that suite. `container.log` is collected even after early container failures.
+Shared `invocation-<id>.log`/`.json` and, when built, `build-<id>.log` files are
+directly under the artifact root, with no batch/PR subdirectories. Build logs
+are also copied into suites that start. A failed shared prerequisite/build
+marks all unstarted suites NOT RUN and prints its diagnostic path without
+inventing suite execution evidence. Ordinary suite failures/blockers continue
+to the next suite; an unconfirmed container cleanup stops later starts.
+The launcher removes the container after success, failure or interruption.
+A forced termination of the launcher process itself
 may require `wslc remove --force <printed-container-name>`.
 
 Default artifacts survive worktree deletion. Historical runs remain until you
@@ -75,12 +123,15 @@ $latest = Get-ChildItem -LiteralPath $root -Directory |
 if ($latest) { Invoke-Item $latest.FullName }
 ```
 
-- Exit 0: selected automated checks succeeded; read-only mutations remain NOT RUN.
-- Exit 1: an assertion or browser execution failed.
-- Exit 2: environment, startup, configuration, authentication or cleanup blocker.
+- Exit 0: every required check in every requested suite passed.
+- Exit 1: functional checks failed, with no blocked or incomplete suites.
+- Exit 2: blocked/incomplete execution, including skipped required checks or NOT RUN suites.
 
-The two smoke tests exercise authorized SQL-backed fixture review and, when
-explicitly authorized, a real UI closure with one POST and a changed rowversion.
+The table distinguishes PASS, FAIL, BLOCKED (started but incomplete) and NOT RUN
+(never started). Mixed FAIL/BLOCKED outcomes preserve both and return exit 2.
+
+The two smoke tests exercise authorized SQL-backed fixture review and a real UI
+closure with one POST and a changed rowversion in the disposable database.
 The feature suite retains all twenty original scenarios and adds an approved
 Review Library reset with authoritative before/after state and preserved custom
 rejection-template content/rowversion. Read-only feature runs execute eleven
@@ -109,6 +160,12 @@ Child failures and signals produce blockers; shutdown terminates child process
 groups and exports diagnostics. SQL data, certificates, cookies and configuration
 disappear with the container. Only the artifact directory is mounted from Windows;
 no ports are published.
+
+Default writes do not grant access to production/shared data. The same local
+runtime/SQL/reviewer verification and per-scenario fixture/endpoint/version
+allowlists apply before mutations. External requests, live providers and
+unapproved mutations remain blocked; no host repository or persistent data
+volume is mounted. Never point acceptance at a non-disposable environment.
 
 Local authentication seeds `reviewer@example.org`, an active System super-admin
 with access to Review Library (2), and uses the existing normal secure staff

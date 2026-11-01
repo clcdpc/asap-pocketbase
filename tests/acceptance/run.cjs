@@ -24,6 +24,9 @@ function parse(argv) {
   must(options.suite && /^[a-z0-9-]+$/.test(options.suite), 'Select an acceptance suite, for example --suite pr410.');
   must(/^[a-f0-9]{40}$/.test(options.expectedCommit), 'ExpectedCommit must be a full lowercase application SHA.');
   must(!options.readOnly || !options.allowWrites, 'ReadOnly and AllowReviewWrites are mutually exclusive.');
+  // The runtime and per-scenario guards still bind every write to disposable synthetic resources.
+  // The legacy flag remains accepted, but normal acceptance needs no additional opt-in.
+  options.allowWrites = !options.readOnly;
   return options;
 }
 function toolingIdentity(root) {
@@ -144,7 +147,7 @@ async function runScenarios({ suite, options, environment, browser, report, dire
             (fixture.key.endsWith('-copy') ? 'additional-copies/' : 'title-requests/') + fixture.id),
           allowSettingsReset: ({ organizationId, version }) => {
             must(options.allowWrites && !options.readOnly && active.writes,
-              'Settings reset requires an explicitly mutating scenario and AllowReviewWrites.');
+              'Settings reset requires a mutating scenario in the disposable write-enabled runtime.');
             must(organizationId === 2 && typeof version === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(version),
               'Settings reset authorization requires Review Library (2) and its authoritative version.');
             must(!active.settingsReset, 'Settings reset may be authorized only once per scenario.');
@@ -200,9 +203,6 @@ async function run(argv, dependencies = {}) {
     report.requiredCapabilities = suite.requires;
     report.requiredScenarioIds = suite.scenarios.map(s => s.id);
     report.mode = options.readOnly ? 'read-only' : 'mutating';
-    if (suite.mutations && !options.readOnly) {
-      must(options.allowWrites, 'Mutating suites require explicit -AllowReviewWrites. Use -ReadOnly for nonmutating checks.');
-    }
     let pinned;
     const verify = async () => {
       // The application also rechecks SQL eligibility at the mutation boundary.
@@ -244,7 +244,7 @@ async function run(argv, dependencies = {}) {
     }
     try { await browser?.close(); }
     catch { report.scenarios.push(result({ id: 'browser-cleanup', requirements: ['runner: ephemeral authentication cleanup'] },
-      'FAIL', 'Temporary browser profile cleanup failed. Remove the local temporary asap-acceptance directory before sharing this machine.')); }
+      'BLOCKED', 'Temporary browser profile cleanup failed. Remove the local temporary asap-acceptance directory before sharing this machine.')); }
     await writeReport(directory, report);
   }
   console.log('Application: ' + (report.applicationCommit || '(not validated)'));

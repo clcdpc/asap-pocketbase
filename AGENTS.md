@@ -131,6 +131,17 @@ Keep compact deterministic fixtures and focused migration regression/oracle
 checks. A test count must represent current discovered tests; removed files
 must not be counted as coverage.
 
+Acceptance tooling is owned by the local checkout, independently of the selected
+application PR. Validate all suites locally, pin one application SHA/tooling
+snapshot/image, and run only the requested suites sequentially with fresh
+containers and SQL state. Synthetic writes are enabled by default only behind
+the existing disposable-runtime and scenario guards; explicit `-ReadOnly` must
+prevent writes and required skips must never pass acceptance. Retain each suite's
+evidence outside the worktree in flat local-time directories, allocate names
+atomically, and clean up containers even after interruption. Keep generated
+acceptance artifacts out of Git. Automation does not complete human visual or
+screen-reader acceptance. See `tests/acceptance/README.md`.
+
 ## Deployment boundaries
 
 The test-IIS workflow builds the exact tested commit, publishes Web/DACPAC and
