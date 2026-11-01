@@ -58,7 +58,7 @@ empty/no-match queries verify focus and scroll stability. The existing
 `s1-layout-{system,2}-native-200-picker.png` captures now show this dirty-footer
 condition, with the input/list/footer measurements in matching geometry JSON.
 
-Use the updated PR #415 tooling checkout for all three integrated suites. The
+Use a current local tooling checkout containing all three integrated suites. The
 launcher discovers suites locally; `-Pr` selects the application revision only.
 Run complete D1 and Q1 regressions once each alongside S1:
 
