@@ -1046,6 +1046,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportUsesSourceStaffEmailAndReconcilesFreshSqlTargetWithoutIdentityMap()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-import-{Guid.NewGuid():N}");
@@ -1299,6 +1300,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportMapsFormatAndFoundRequestWithCanonicalTag()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-request-{Guid.NewGuid():N}");
@@ -2116,6 +2118,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportRejectsForeignRelationshipsAndIndependentlyDetectsTargetDrift()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-owner-oracle-{Guid.NewGuid():N}");
@@ -2432,6 +2435,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ImportMaterialFormatsProcessesSystemBeforeSameCodeLibraryOverrides()
     {
@@ -2695,6 +2699,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ImportFormatRuleDefaultsUseTheRawLegacyCodeBeforeTargetNormalization()
     {
@@ -2876,6 +2881,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ImportRejectsLibraryOnlyFormatsThatCanonicalizeToReservedSystemSeeds()
     {
@@ -2934,6 +2940,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ImportRejectsCrossScopeMaterialFormatAliasesThatChangeLegacyIdentity()
     {
@@ -3001,6 +3008,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ImportRejectsMaterialFormatAliasesThatCollapseWithinOneSourceOwner()
     {
@@ -3051,6 +3059,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task CommittedImportWithFailedReportPromotionRecoversReadOnlyAndIdempotently()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-report-recovery-{Guid.NewGuid():N}");
@@ -3677,6 +3686,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportReportsCommittedWhenPostCommitSqlVerificationFailsAndRecoversReadOnly()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-postcommit-sql-{Guid.NewGuid():N}");
@@ -3773,6 +3783,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportNormalizesLegacyIdentifierStatesAndRejectsAmbiguousStatesAtomically()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-isbn-{Guid.NewGuid():N}");
@@ -3920,6 +3931,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportRejectsInvalidPolarisIntegrationIdentityWithoutPartialSqlState()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-polaris-identity-{Guid.NewGuid():N}");
@@ -3974,6 +3986,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportRejectsMalformedBibIdentityAtEverySourceBoundaryWithoutPartialSqlState()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-native-bib-{Guid.NewGuid():N}");
@@ -4080,6 +4093,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportNormalizesOperationalClaimsAndRulesWhilePreservingDormantLibraryHistory()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-claims-{Guid.NewGuid():N}");
@@ -4216,6 +4230,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportReconcilesTheCompletePlacedHistoryEvidenceUnionAndBlocksConflicts()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-placement-{Guid.NewGuid():N}");
@@ -4443,6 +4458,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportBlocksMissingOrInvalidHistoricalEventTimesAndRollsBack()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-event-time-{Guid.NewGuid():N}");
@@ -4534,6 +4550,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportRejectsUnsafeEmbedOriginsAtomically()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-embed-{Guid.NewGuid():N}");
@@ -4619,6 +4636,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportRejectsCrossScopeTemplateReferencesBeforeTargetWrites()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-template-scope-{Guid.NewGuid():N}");
@@ -4886,6 +4904,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ImportRejectsWorkflowTagIdentitiesLostByTargetSqlCollationBeforeWrites()
     {
@@ -4960,6 +4979,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ImportUsesPinnedPublicationFallbacksAndSystemScopeAliases()
     {
@@ -5084,6 +5104,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ImportRejectsUnrepresentableSourceConfigurationValuesBeforeWrites()
     {
@@ -5240,6 +5261,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ImportRejectsCustomFieldIdentitiesLostByLegacyNormalizationBeforeWrites()
     {
@@ -5302,6 +5324,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     public async Task ImportUsesLegacyDuplicateLabelsOnlyWhenModernOverrideIsAbsent()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-legacy-settings-{Guid.NewGuid():N}");
@@ -5418,6 +5441,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ImportPreservesAdditionalCopyHistoryAndUsesCreatedWhenUpdatedIsMissing()
     {
@@ -5734,6 +5758,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ImportProjectsPolarisProviderDefaultsAndPreservesRepresentableConfiguration()
     {
@@ -5970,6 +5995,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ImportPromotesConfiguredBootstrapIdentityAndProtectsIntegrationCredentials()
     {

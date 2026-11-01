@@ -16,6 +16,7 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses()
     {
         factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
@@ -230,6 +231,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp()
     {
         factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));

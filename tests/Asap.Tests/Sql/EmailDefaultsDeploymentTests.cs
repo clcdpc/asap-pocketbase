@@ -98,6 +98,7 @@ public sealed class EmailDefaultsDeploymentTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalUpgrade)]
     public async Task UpgradeInsertsOnlyMissingDefaultsPreservesLineageAndRetiresOnlyLibraryTransportTokens()
     {
         await using var connection = new SqlConnection(target);

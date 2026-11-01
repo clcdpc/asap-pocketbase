@@ -101,6 +101,7 @@ public sealed partial class DatabaseBaselineTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalUpgrade)]
     public async Task NativeSchemaEightUpgradeAddsPickupJournalWithoutReplacingExistingSettings()
     {
         await using var connection = new SqlConnection(_databaseConnectionString);
@@ -128,6 +129,7 @@ public sealed partial class DatabaseBaselineTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalUpgrade)]
     public async Task NativeSchemaTenUpgradeAddsNullableOrganizationAuthorityWithoutLosingReferencesOrHistory()
     {
         const int organizationId = 98991;
@@ -308,6 +310,7 @@ public sealed partial class DatabaseBaselineTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalUpgrade)]
     [DataRow(false)]
     [DataRow(true)]
     public async Task NativePickupJournalUpgradeNormalizesSystemPreferenceWithoutLosingEvidence(bool completed)
@@ -446,6 +449,7 @@ public sealed partial class DatabaseBaselineTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalUpgrade)]
     public async Task NativeDacpacRefusesOlderTextColumnsWithoutMutatingTheirData()
     {
         await using var connection = new SqlConnection(_databaseConnectionString);
@@ -600,6 +604,7 @@ public sealed partial class DatabaseBaselineTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalUpgrade)]
     [DataRow(99, 42)]
     [DataRow(-1, 0)]
     public async Task NativeDacpacUpgradeRetiresGlobalContextWhilePreservingIntegrationIdentity(int workstationId, int userId)
@@ -688,6 +693,7 @@ public sealed partial class DatabaseBaselineTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalUpgrade)]
     public async Task SchemaSevenRejectsInPlaceDeploymentOverAnOlderApplicationDatabase()
     {
         await using (var connection = new SqlConnection(_databaseConnectionString))

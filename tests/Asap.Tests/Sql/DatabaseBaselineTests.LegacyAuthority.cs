@@ -6,6 +6,7 @@ namespace Asap.Tests.Sql;
 public sealed partial class DatabaseBaselineTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalUpgrade)]
     [DataRow(7)]
     [DataRow(8)]
     [DataRow(9)]

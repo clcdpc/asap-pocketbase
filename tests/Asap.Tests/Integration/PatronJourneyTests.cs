@@ -330,6 +330,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport()
     {
         factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
@@ -388,6 +389,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers()
     {
         factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));

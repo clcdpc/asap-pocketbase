@@ -127,6 +127,7 @@ public sealed class FrontendCacheTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task NormalNavigationRefreshesPublishedEntryAndNestedModulesWithRealBrowserCaching()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));

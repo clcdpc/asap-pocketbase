@@ -13,6 +13,7 @@ namespace Asap.Tests.Migration;
 public sealed partial class MigrationCliTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ReconcileAndRecoverRejectForgedBootstrapWhenSourceAlreadyHasUsableAdministrator()
     {
@@ -75,6 +76,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DataRow(false)]
     [DataRow(true)]
     [DoNotParallelize]
@@ -136,6 +138,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task ReconcileAndImmediateReportRecoveryRejectExcludedPickupAndAdministrativeAuditPopulations()
     {
@@ -198,6 +201,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DataRow("0", "0", "5,30,14,14,14", "5,30,14,14,14")]
     [DataRow("9", "0", "9,9,9,9,9", "5,30,14,14,14")]
     [DataRow("9", "NULL", "9,9,9,9,9", "null,null,null,null,null")]
@@ -273,6 +277,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DataRow(false)]
     [DataRow(true)]
     [DoNotParallelize]

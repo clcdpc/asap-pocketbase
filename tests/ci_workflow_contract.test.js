@@ -11,6 +11,7 @@ const draft = workflow.jobs['draft-validation'];
 const policy = workflow.jobs['validation-policy'];
 const gate = workflow.jobs.validation;
 const deploy = workflow.jobs['deploy-test-iis'];
+const benchmark = workflow.jobs['core-benchmark'];
 const reuse = JSON.parse(fs.readFileSync(path.join(root, 'scripts/ci/test-reuse.json'), 'utf8'));
 
 async function main() {
@@ -98,9 +99,10 @@ async function main() {
   await check('explicit PR events and existing push/manual triggers', () => {
     assert.deepEqual(workflow.on.pull_request.types, ['opened', 'reopened', 'synchronize', 'ready_for_review', 'converted_to_draft']);
     assert.deepEqual(workflow.on.push.branches, ['main', 'codex/csharp-port', 'codex/slice-08-test-deployment']);
-    assert.deepEqual(workflow.on.push.tags, ['v*.*.*-test.*']);
+    assert.deepEqual(workflow.on.push.tags, ['v*.*.*']);
     assert.equal(workflow.on.workflow_dispatch.inputs.force_full_ci.default, false);
     assert.equal(workflow.on.workflow_dispatch.inputs.deploy_test_iis.default, false);
+    assert.equal(workflow.on.workflow_dispatch.inputs.benchmark_core.default, false);
     assert.equal(workflow.on.pull_request_target, undefined);
   });
   for (const [action, isDraft] of [
@@ -202,6 +204,12 @@ async function main() {
     }
     assert.equal(enabled(deploy, push), false);
     assert.equal(enabled(deploy, tag), true);
+    const release = await routed(nonPr('push', 112, 'refs/tags/v1.2.3'));
+    release.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
+    release.needs['build-test-package'] = { result: 'success' };
+    release.needs.validation = { result: 'success' };
+    assert.equal(enabled(full, release), true);
+    assert.equal(enabled(deploy, release), false, 'Production release tags qualify tests without test-IIS activation');
     assert.deepEqual(deploy.needs, ['build-test-package', 'validation']);
     // Explicit status check bypasses the implicit success() that treats a skipped
     // draft-validation ancestor as a reason to skip an otherwise eligible deployment.
@@ -255,7 +263,7 @@ async function main() {
     assert.match(unit, /--minimum-expected-tests 100/);
     assert.match(unit, /--filter 'FullyQualifiedName~Asap\.Tests\.Unit\.\|FullyQualifiedName~Asap\.Tests\.PolicyContractTests\.\|FullyQualifiedName~Asap\.Tests\.AnalyticsContractTests\.'/);
     assert.equal(step(draft, 'Run legacy/frontend unit tests').run, 'npm test');
-    assert.match(step(draft, 'Check CI contracts and test reuse safety').run, /test_reuse\*\.py/);
+    assert.match(step(draft, 'Check CI contracts and test reuse safety').run, /test_\*\.py/);
     for (const job of [full, draft]) {
       assert.equal(step(job, 'Validate workflow configuration').run, 'bash scripts/ci/check-workflows.sh');
       assert.equal(job.steps[0].with.ref, '${{ github.sha }}');
@@ -270,8 +278,7 @@ async function main() {
     assert.equal(step(full, 'Restore and build').run, 'dotnet build Asap.sln --configuration Release');
     const safety = step(full, 'Verify current CI safety contracts');
     assert.equal(safety.if, undefined);
-    assert.match(safety.run, /node tests\/ci_workflow_contract\.test\.js/);
-    assert.match(safety.run, /node tests\/test_iis_deployment_contract\.test\.js/);
+    assert.equal(safety.run, 'node tests/run_all.js --ci-safety');
     assert.ok(full.steps.indexOf(safety) < full.steps.indexOf(step(full, 'Find reusable test executions')));
     const verify = step(full, 'Verify required test suites');
     assert.equal(verify.if, '${{ always() }}');
@@ -283,8 +290,14 @@ async function main() {
       assert.ok(step(full, `Upload original ${suite} execution evidence`).if.includes("steps.verify.outcome == 'success'"));
     }
     const tests = step(full, 'Run .NET and real SQL tests (non-browser partition)').run;
-    assert.match(tests, /--minimum-expected-tests 1525/);
-    assert.match(tests, /bash scripts\/ci\/run-with-performance\.sh/);
+    assert.equal(tests, 'bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run');
+    assert.equal(step(full, 'Resolve required test population').run, 'python3 -B scripts/ci/selection.py prepare');
+    assert.ok(full.steps.indexOf(step(full, 'Resolve required test population')) < full.steps.indexOf(step(full, 'Find reusable test executions')));
+    assert.equal(full.steps[0].with['fetch-depth'], 0, 'Selection must have complete Git ancestry');
+    assert.equal(step(full, 'Run legacy/frontend unit tests').run, 'npm test -- --ci-remaining');
+    assert.equal(step(full, 'Check test reuse safety').run, "python3 -B -m unittest discover -s scripts/ci -p 'test_*.py' -v");
+    assert.equal(full.steps.filter((candidate) => /unittest discover/.test(candidate.run || '')).length, 1);
+    assert.ok(full.steps.indexOf(step(full, 'Check test reuse safety')) < full.steps.indexOf(step(full, 'Find reusable test executions')));
     assert.equal(step(full, 'Run browser accessibility tests').run, 'npm run test:browser');
     assert.ok(full.steps.indexOf(step(full, 'Run legacy/frontend unit tests')) < full.steps.indexOf(step(full, 'Start SQL Server 2022')));
     for (const name of ['Verify publish artifacts', 'Determine exact artifact identity', 'Create exact test-IIS deployment ZIP',
@@ -293,6 +306,26 @@ async function main() {
     }
     assert.equal(step(full, 'Remove SQL Server test container').if, '${{ always() }}');
     assert.ok(!reuse.exclusions.some((rule) => rule.paths.includes('.github/workflows/dotnet.yml')));
+  });
+  await check('controlled benchmark cannot satisfy required validation, reuse evidence or deployment', async () => {
+    assert.deepEqual(benchmark.needs, ['validation-policy', 'build-test-package', 'validation']);
+    assert.deepEqual(benchmark.permissions, { contents: 'read' });
+    assert.ok(!gate.needs.includes('core-benchmark'));
+    assert.ok(!deploy.needs.includes('core-benchmark'));
+    for (const context of [pr('opened', false), nonPr('push', 120), nonPr('workflow_dispatch', 121)]) {
+      await routed(context);
+      context.needs['build-test-package'] = { result: 'success' };
+      assert.equal(enabled(benchmark, context), false);
+    }
+    const context = await routed(nonPr('workflow_dispatch', 122, 'refs/heads/task', { benchmark_core: true }));
+    context.needs['build-test-package'] = { result: 'success' };
+    context.needs.validation = { result: 'success' };
+    assert.equal(enabled(benchmark, context), true);
+    context.needs['build-test-package'].result = 'failure';
+    assert.equal(enabled(benchmark, context), false);
+    assert.ok(benchmark.steps.every((candidate) => !/reuse\.py (plan|verify)|dotnet publish|asap-test-evidence/.test(JSON.stringify(candidate))));
+    assert.equal(step(benchmark, 'Resolve controlled unrelated-change population').run, 'python3 -B scripts/ci/selection.py prepare-benchmark');
+    assert.equal(step(benchmark, 'Verify controlled core results').run, 'python3 -B scripts/ci/selection.py verify-benchmark');
   });
   await check('the reporter always inspects selected execution and runs no PR code', () => {
     assert.equal(gate.if, '${{ always() }}');

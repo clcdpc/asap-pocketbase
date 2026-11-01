@@ -7,6 +7,7 @@ namespace Asap.Tests.Migration;
 public sealed partial class MigrationCliTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DataRow(false, false)]
     [DataRow(true, false)]
     [DataRow(false, true)]
@@ -146,6 +147,7 @@ public sealed partial class MigrationCliTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task FourNewEmailSeedsRejectCaseOnlySourceIdentityCollisionsWithoutWrites()
     {

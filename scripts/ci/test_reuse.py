@@ -20,6 +20,7 @@ import zipfile
 import fingerprints as fp
 import probe_reuse
 import reuse as reuse
+import selection as test_selection
 
 
 def success(**fields):
@@ -29,7 +30,7 @@ def success(**fields):
 def results(selection):
     count = selection["expected"]
     return {"total": count, "executed": count, "passed": count, "failed": 0, "skipped": 0,
-            "identities": [fp.digest(name) for name in selection.get("files", [str(i) for i in range(count)])]}
+            "identities": selection.get("identities", [fp.digest(name) for name in selection.get("files", [str(i) for i in range(count)])])}
 
 
 class Fixture:
@@ -49,6 +50,8 @@ class Fixture:
             selection = {"filter": "actual " + suite + " selection", "minimum": 2, "expected": 2}
             if suite == "frontend":
                 selection["files"] = ["a.test.js", "b.test.js"]
+            else:
+                selection["identities"] = sorted(fp.digest(str(i)) for i in range(2))
             self.selections[suite] = selection
             environment = {"epoch": "image-v1", "runtime": "actual-version", "suite": suite}
             inputs = {"schema": self.config["schema"], "suite": suite,
@@ -242,13 +245,14 @@ class DependencyTests(unittest.TestCase):
                     after = [[path, "100644", "blob", "b" * 40]]
                     self.assertNotEqual(fp.source_fingerprint(before, suite, config), fp.source_fingerprint(after, suite, config))
 
-    def test_ci_policy_changes_do_not_invalidate_application_tests(self):
+    def test_ci_policy_and_selection_changes_invalidate_evidence(self):
         config = fp.configuration()
-        for path in fp.CONTROL_PATHS:
+        for path in (".github/workflows/dotnet.yml", "scripts/ci/selection.py", "scripts/ci/reviewed-test-categories.json",
+                     "scripts/ci/reuse.py", "scripts/ci/fingerprints.py", "tests/Asap.Tests/TestCategories.cs"):
             for suite in fp.SUITES:
                 with self.subTest(path=path, suite=suite):
-                    self.assertEqual(fp.source_fingerprint([[path, "100644", "blob", "a"]], suite, config),
-                                     fp.source_fingerprint([[path, "100644", "blob", "b"]], suite, config))
+                    self.assertNotEqual(fp.source_fingerprint([[path, "100644", "blob", "a"]], suite, config),
+                                        fp.source_fingerprint([[path, "100644", "blob", "b"]], suite, config))
         self.assertNotEqual(fp.source_fingerprint([], "dotnet", config),
                             fp.source_fingerprint([["scripts/ci/new-policy.py", "100644", "blob", "b"]], "dotnet", config))
 
@@ -259,10 +263,10 @@ class DependencyTests(unittest.TestCase):
             workflow.replace("ASAP_TEST_DEPLOYMENT_ENABLED == 'true'",
                              "ASAP_TEST_DEPLOYMENT_ENABLED == 'false'")))
         self.assertNotEqual(baseline, fp.full_ci_execution_contract(
-            workflow.replace("--minimum-expected-tests 1525", "--minimum-expected-tests 1526")))
+            workflow.replace("scripts/ci/selection.py run", "scripts/ci/selection.py prepare")))
         self.assertNotEqual(baseline, fp.full_ci_execution_contract(
             workflow.replace("npm run test:browser", "npm run test:other")))
-        self.assertEqual(baseline, fp.full_ci_execution_contract(workflow.replace(fp.CI_SAFETY_STEP, "")))
+        self.assertNotEqual(baseline, fp.full_ci_execution_contract(workflow.replace("node tests/run_all.js --ci-safety", "node other.js")))
 
     def test_exact_acceptance_screenshot_files_do_not_invalidate_sql(self):
         config = fp.configuration()
@@ -293,7 +297,7 @@ class DependencyTests(unittest.TestCase):
     def test_environment_count_filter_and_schema_changes_invalidate(self):
         fixture = Fixture()
         original = fixture.current["suites"]["dotnet"]
-        for key, value in (("schema", 2), ("environment", "new-runtime-or-epoch"),
+        for key, value in (("schema", 3), ("environment", "new-runtime-or-epoch"),
                            ("selection", {**original["selection"], "expected": 3}),
                            ("selection", {**original["selection"], "minimum": 3}),
                            ("selection", {**original["selection"], "filter": "new-filter"})):
@@ -301,51 +305,44 @@ class DependencyTests(unittest.TestCase):
             changed[key] = value
             self.assertNotEqual(fp.digest(changed), original["fingerprint"])
 
-    def test_selection_tracks_current_guards_and_partition(self):
-        selections = fp.selections()
-        self.assertGreaterEqual(selections["dotnet"]["minimum"], 1439)
-        self.assertEqual(selections["browser"]["minimum"], 17)
-        self.assertEqual(sorted(term.replace("FullyQualifiedName!~", "") for term in selections["dotnet"]["filter"].split("&")),
-                         sorted(term.replace("FullyQualifiedName~", "") for term in selections["browser"]["filter"].split("|")))
-        self.assertEqual(selections["frontend"]["minimum"], len(selections["frontend"]["files"]))
-
-    def test_pending_411_count_change_requires_new_evidence(self):
+    def test_selection_must_use_verified_authoritative_population(self):
         fixture = Fixture()
-        fixture.current["suites"]["dotnet"]["selection"]["minimum"] = 1525
-        fixture.current["suites"]["dotnet"]["selection"]["expected"] = 1525
+        with mock.patch.object(test_selection, "load", return_value={"suites": fixture.selections}) as load:
+            self.assertEqual(fp.selections(verify=True), fixture.selections)
+            load.assert_called_once_with(fp.ROOT, verify=True)
+
+    def test_discovery_count_changes_require_new_evidence(self):
+        fixture = Fixture()
+        fixture.current["suites"]["dotnet"]["selection"]["minimum"] = 3
+        fixture.current["suites"]["dotnet"]["selection"]["expected"] = 3
         self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
 
-    def test_discovery_failure_or_below_minimum_is_not_a_match(self):
-        for output in ("Discovered 0 tests.", "Discovered 1 tests.", "unexpected output",
-                       "Discovered 2 tests.\nDiscovered 2 tests.\n"):
-            with self.subTest(output=output), mock.patch.object(fp, "command", return_value=output):
-                with self.assertRaises(ValueError):
-                    fp.discover({"filter": "fixture", "minimum": 2})
-        with mock.patch.object(fp, "command", return_value="Discovered 1525 tests.\n"):
-            self.assertEqual(fp.discover({"filter": "fixture", "minimum": 1439}), 1525)
-
-    def test_github_actions_colored_native_discovery_summary(self):
-        output = "Running tests from fixture\n  Example\n\n\x1b[32mDiscovered 1530 tests.\n\x1b[m\n"
-        with mock.patch.object(fp, "command", return_value=output):
-            self.assertEqual(fp.discover({"filter": "fixture", "minimum": 1525}), 1530)
-
-
 class ProvenanceTests(unittest.TestCase):
-    def test_original_legacy_evidence_is_cryptographically_revalidated(self):
+    def test_different_category_selections_cannot_share_execution_evidence(self):
+        for current_categories, evidence_categories in ((["core"], ["core", "migration", "upgrade"]),
+                                                        (["core", "migration", "upgrade"], ["core"])):
+            fixture = Fixture()
+            fixture.current["suites"]["dotnet"]["selection"]["categories"] = current_categories
+            manifest = fixture.manifests["dotnet"]
+            manifest["selection"] = {**manifest["selection"], "categories": evidence_categories}
+            fixture.archive("dotnet")
+            self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+
+    def test_same_count_wrong_native_test_identity_is_not_execution_evidence(self):
+        fixture = Fixture()
+        fixture.reports["dotnet"]["identities"] = sorted([fp.digest("substituted"), fp.digest("1")])
+        fixture.manifests["dotnet"]["results_sha256"] = fp.digest(fixture.reports["dotnet"])
+        fixture.archive("dotnet")
+        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+
+    def test_legacy_schema_or_algorithm_cannot_authorize_new_selection(self):
         fixture = Fixture()
         for suite in fp.SUITES:
             manifest = fixture.manifests[suite]
             manifest.pop("source_algorithm")
-            legacy = fp.legacy_source_fingerprint(fixture.entries, suite, fixture.config)
-            manifest["source_fingerprint"] = legacy
-            manifest["fingerprint"] = fp.digest({
-                "schema": fixture.config["schema"], "suite": suite, "source": legacy,
-                "environment": fixture.current["suites"][suite]["environment"],
-                "selection": fixture.current["suites"][suite]["selection"]})
+            manifest["schema"] = 1
             fixture.archive(suite)
-        self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
-        fixture.current["suites"]["dotnet"]["source"] = "0" * 64
-        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+        self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
 
     def test_modified_origin_workflow_blob_is_rejected(self):
         fixture = Fixture()
@@ -582,14 +579,17 @@ class ApiTests(unittest.TestCase):
 
     def test_forced_release_deployment_and_manual_requests(self):
         for env in ({"ASAP_FORCE_FULL_CI": "true"}, {"GITHUB_EVENT_NAME": "release"},
-                    {"GITHUB_REF_TYPE": "tag", "GITHUB_EVENT_NAME": "push", "GITHUB_REF_NAME": "v1.0.0"}):
-            with mock.patch.dict(os.environ, env, clear=True):
-                self.assertTrue(reuse.forced_full())
-        for env in ({}, {"ASAP_DEPLOY_TEST_IIS": "true"},
+                    {"GITHUB_REF_TYPE": "tag", "GITHUB_EVENT_NAME": "push", "GITHUB_REF_NAME": "v1.0.0"},
                     {"GITHUB_REF_TYPE": "tag", "GITHUB_EVENT_NAME": "push", "GITHUB_REF_NAME": "v1.0.0-test.24"},
                     {"ASAP_DEPLOY_TEST_IIS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch"}):
             with mock.patch.dict(os.environ, env, clear=True):
-                self.assertFalse(reuse.forced_full())
+                self.assertTrue(reuse.forced_full())
+        for fresh in (True, False):
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                 mock.patch.object(test_selection, "load", return_value={"decision": {"fresh": fresh}}):
+                self.assertEqual(reuse.forced_full(), fresh)
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(test_selection, "load", side_effect=ValueError):
+            self.assertTrue(reuse.forced_full())
 
 
 class EnvironmentTests(unittest.TestCase):
@@ -676,7 +676,7 @@ class EnvironmentTests(unittest.TestCase):
 
 
 class GateTests(unittest.TestCase):
-    def run_gate(self, fixture, outcomes, decisions=None, mutate_plan=None):
+    def run_gate(self, fixture, outcomes, decisions=None, mutate_plan=None, forced=False):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         directory = Path(temporary.name)
@@ -688,12 +688,13 @@ class GateTests(unittest.TestCase):
             reuse.write_json(directory / "plan.json", plan)
         env = {"GITHUB_SHA": fixture.current["commit"], "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1",
                **{s.upper() + "_OUTCOME": value for s, value in outcomes.items() if value is not None}}
-        selections = {s: {k: v for k, v in selection.items() if k != "expected"} for s, selection in fixture.selections.items()}
+        selections = copy.deepcopy(fixture.selections)
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(reuse, "utcnow", return_value=fixture.now), \
              mock.patch.object(fp, "configuration", return_value=fixture.config), \
              mock.patch.object(fp, "checkout", return_value=(fixture.current["commit"], fixture.current["tree"])), \
              mock.patch.object(fp, "tracked_entries", return_value=fixture.entries), \
              mock.patch.object(fp, "selections", return_value=selections), \
+             mock.patch.object(reuse, "forced_full", return_value=forced), \
              mock.patch.object(reuse, "api_client", return_value=fixture), \
              mock.patch.object(reuse, "execution_results", side_effect=lambda s, *args: results(fixture.selections[s])), \
              mock.patch("sys.stdout", new_callable=io.StringIO):
@@ -718,6 +719,11 @@ class GateTests(unittest.TestCase):
         self.assertIn("/actions/artifacts/10", fixture.calls)
         rows = json.loads((directory / "verification.json").read_bytes())
         self.assertTrue(all(row["status"] == "REUSED" for row in rows.values()))
+
+    def test_force_full_gate_rejects_skipped_tests_even_with_matching_full_evidence(self):
+        fixture = Fixture()
+        with self.assertRaises(ValueError):
+            self.run_gate(fixture, {s: "skipped" for s in fp.SUITES}, fixture.lookup(), forced=True)
 
     def test_skipped_tests_without_valid_evidence_fail_required_gate(self):
         fixture = Fixture()
@@ -772,8 +778,8 @@ class NativeResultsTests(unittest.TestCase):
     def report(self, outcome="Passed", counts=None):
         counts = counts or 'total="2" executed="2" passed="2" failed="0" notExecuted="0"'
         return (f'<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results>'
-                f'<UnitTestResult executionId="one" outcome="{outcome}"/>'
-                '<UnitTestResult executionId="two" outcome="Passed"/></Results>'
+                f'<UnitTestResult executionId="one" testId="one" outcome="{outcome}"/>'
+                '<UnitTestResult executionId="two" testId="two" outcome="Passed"/></Results>'
                 f'<ResultSummary outcome="Completed"><Counters {counts}/></ResultSummary></TestRun>')
 
     def test_native_reports_need_complete_successful_counts_and_outcomes(self):
@@ -800,6 +806,22 @@ class NativeResultsTests(unittest.TestCase):
                 reuse.write_json(directory / "frontend-results.json", {**data, key: value})
                 with self.subTest(key=key), self.assertRaises(ValueError):
                     reuse.execution_results("frontend", selection, directory)
+
+    def test_native_omissions_duplicates_and_equal_count_substitution_fail(self):
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            selected = {"minimum": 2, "expected": 2, "identities": sorted(fp.digest(uid) for uid in ("one", "two"))}
+            path = directory / "browser-results.trx"
+            path.write_text(self.report())
+            reuse.execution_results("browser", selected, directory)
+            for report in (self.report().replace('testId="two"', 'testId="one"'),
+                           self.report().replace('testId="two"', 'testId="wrong"'),
+                           self.report().replace('executionId="two"', 'executionId="one"'),
+                           self.report().replace('testId="two"', ''),
+                           self.report().replace('testId="two" outcome="Passed"', 'testId="two" outcome="Failed"')):
+                path.write_text(report)
+                with self.subTest(report=report), self.assertRaises(reuse.EvidenceError):
+                    reuse.execution_results("browser", selected, directory)
 
 
 class WorkflowTests(unittest.TestCase):

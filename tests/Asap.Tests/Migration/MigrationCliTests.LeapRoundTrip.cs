@@ -6,6 +6,7 @@ namespace Asap.Tests.Migration;
 public sealed partial class MigrationCliTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DataRow("https://leap.example.org/#patron/{{patron-id}}/{{patron-id}}", "https://leap.example.org/#bib/{{bibid}}")]
     [DataRow("https://leap.example.org/#patron/{{patronId}}", "https://leap.example.org/#bib/{{bibId}}/{{bibId}}")]
     [DataRow("javascript:alert({{patronId}})", "file:///legacy/{{bibid}}")]

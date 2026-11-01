@@ -10,6 +10,7 @@ namespace Asap.Tests.Migration;
 public sealed partial class MigrationCliTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalMigration)]
     [DoNotParallelize]
     public async Task FrozenMetadataMustMatchSourceRowsAndPinnedOperationalRulesBeforeImport()
     {

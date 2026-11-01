@@ -6,6 +6,7 @@ namespace Asap.Tests.Sql;
 public sealed partial class DatabaseBaselineTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalUpgrade)]
     public async Task SchemaThirteenUpgradePreservesHistoricalEmailWithoutInventingLiveAttemptEvidence()
     {
         await using var connection = new SqlConnection(_databaseConnectionString);

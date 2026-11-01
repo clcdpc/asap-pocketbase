@@ -2,28 +2,32 @@
 
 `.github/workflows/dotnet.yml` keeps **Build, test and package** as the stable
 full-validation gate. Its **Full CI execution** dependency runs on `clc-linux`
-and retains the full .NET/SQL partition and minimum-count guard, frontend tests,
+and retains the required .NET/SQL population and discovery/count guard, frontend tests,
 all designated browser journeys, performance telemetry, cleanup and test-IIS
 activation barriers. Drafts use a separate **Draft validation** job. There are
 no workflow path filters or new schedules. Python 3.9+ and the standard library
-implement test reuse.
+implement test reuse. [Required test selection](test-selection.md) defines the
+core, historical migration, historical upgrade and browser populations, changed
+dependency rules, conservative fallbacks and controlled measurement path.
 
-The evidence configuration now names **Full CI execution**, not the reporting
-gate. This workflow/configuration change intentionally invalidates prior
-fingerprints; the first ready run needs fresh execution. The evidence schema,
-dependency exclusions and provenance/digest verification are unchanged.
+Evidence schema **2** records exact native test identities and effective category
+selection. Earlier evidence is intentionally ineligible. All selection and safety
+implementation remains fingerprinted. Dependency exclusions and the provenance,
+digest, environment and lifetime checks remain; full selection infrastructure
+changes require fresh execution.
 
 ## Validation policy and required checks
 
 | Event/current state | Validation | Reuse | Automatic deployment |
 | --- | --- | --- | --- |
 | PR opened, reopened or synchronized, draft | Draft validation | No original full-suite evidence produced | Never |
-| PR opened, reopened or synchronized, ready | Full CI execution and full gate | Verified original evidence allowed | Never |
-| `ready_for_review`, unchanged SHA allowed | Full CI execution and full gate | Only full original evidence; draft success is ineligible | Never |
+| PR opened, reopened or synchronized, ready | Core/browser/frontend plus relevant history, required gate | Only matching selected original evidence | Never |
+| `ready_for_review`, unchanged SHA allowed | Same change-aware required suites | Draft success is ineligible | Never |
 | `converted_to_draft`, unchanged SHA allowed | Draft validation | No full-suite evidence | Never |
-| Push to `main` or the two retained configured branches | Full CI execution and full gate | Verified original evidence allowed | Never |
-| `v*.*.*-test.*` tag push | Full validation gate and current-commit build/package | Verified original suite evidence may be reused | Only with existing activation/environment gates |
-| Manual dispatch, including a draft branch | Full CI execution and full gate | Allowed unless force-full requested | Only explicit `deploy_test_iis` plus existing gates |
+| Push to `main` | Same path policy over integrated `before..after` | Matching selected evidence allowed | Never |
+| Other two retained configured branch pushes | All categories, fresh | No | Never |
+| `v*.*.*` tag push | Every category, fresh, current-commit build/package | No | Only `-test.` tags with existing activation/environment gates |
+| Manual dispatch, including a draft branch | Every category and required gate | Allowed unless force-full or deployment requested | Only explicit `deploy_test_iis` plus existing gates |
 
 The small hosted **Resolve validation policy** job reads current PR metadata
 using only `pull-requests: read`, without a checkout. It verifies the PR is
@@ -36,7 +40,7 @@ resolving the cause.
 
 Draft validation has a 15-minute job budget. It checks the exact event checkout,
 validates all workflow YAML/expressions with checksum-pinned actionlint 1.7.12,
-runs the SQL-independent reuse regressions, restores/builds the Release solution,
+runs the SQL-independent Python regressions, restores/builds the Release solution,
 runs the `Asap.Tests.Unit`, `PolicyContractTests` and `AnalyticsContractTests`
 selection (107 currently discovered cases, minimum guard 100), and runs the
 complete retained `npm test` suite. It starts no SQL container, installs no
@@ -179,10 +183,9 @@ its actual synthetic merge, including the integration base, rather than its head
 branch alone. Commit SHA is provenance, never the test fingerprint.
 
 `fingerprints.py` expands that exact tree with `git ls-tree -r -z HEAD` and hashes
-sorted path/mode/type/blob identities per suite. CI-only policy files are
-excluded by exact path while the full test executor job is independently hashed
-as an execution contract. A single mandatory Node policy-check step is omitted
-from that contract because it runs fresh on every full CI execution.
+sorted path/mode/type/blob identities per suite. Selection, workflow and safety
+tooling are included, and the full test executor job is independently hashed as
+an execution contract. Every executor edit invalidates old evidence.
 Production code, schema, fixtures, commands, test selection and previously
 unknown files continue to invalidate evidence.
 
@@ -192,17 +195,15 @@ The deliberately small reviewed exclusions are:
 | --- | --- | --- |
 | `tests/acceptance/run.cjs`, `tests/acceptance/helpers/reporting.cjs`, `tests/acceptance/helpers/accessibility.cjs` | All three suites | Standalone acceptance launch/report/screenshot implementation; required suites do not load it. |
 | `tests/browser/staff-presentation.cjs` | .NET/SQL and frontend | Invoked only by the explicitly designated browser-partition method; browser fingerprint includes it. |
-| `scripts/ci/test-reuse.md` | All three suites | Operator prose/validation receipts; no execution contract reads it. |
+| `scripts/ci/test-reuse.md`, `scripts/ci/test-selection.md` | All three suites | Operator prose/validation receipts; no execution contract reads them. |
 
-The exact CI-control exceptions are the workflow, `fingerprints.py`,
-`reuse.py`, `test_reuse.py`, and the two Node CI/deployment contract files.
-Those contracts and the Python reuse regressions execute afresh on every run.
-New files are included unless explicitly reviewed.
+The Node safety contracts and all Python regressions execute once before lookup
+on every required execution. They remain fingerprint inputs. New files are
+included unless explicitly reviewed.
 
-Existing version-1 evidence can be reused only after verifying its original
-whole-tree fingerprint, immutable execution record and trusted runner identity;
-the original workflow Git blob is checked and its full test execution contract
-must match the current one. New evidence records `source_algorithm`.
+Version-1 evidence cannot satisfy schema-2 qualification. The original workflow
+Git blob is checked and its full test execution contract must match the current
+one. Evidence records the required current `source_algorithm`.
 Any malformed or incompatible evidence causes an ordinary test run.
 
 Do not extend these to whole directories. The test project actually references
@@ -213,12 +214,12 @@ included. Re-audit exclusions when adding consumers or changing test selection.
 A suite can conservatively invalidate for more changes than strictly necessary.
 
 Each fingerprint hashes schema version, suite, included source identity,
-environment identity and selection. The selection reads the existing workflow
-filter/minimum and browser-runner filter/minimum directly. Fresh `--list-tests`
-discovery must meet those minimums; its actual count is the expected evidence
-count. Frontend selection is the sorted complete set of root `*.test.js` files.
-There is no second hard-coded .NET test-count source; #411's count and filter
-changes invalidate evidence automatically. This branch adds no backend work.
+environment identity and selection. The selector verifies complete unfiltered
+native discovery against disjoint categories and the independent reviewed method
+inventory. Selected counts and exact UID hashes, plus the complete population
+identity, enter the fingerprint. The gate repeats discovery and compares native
+TRX test IDs as well as counters. Frontend selection is the sorted complete set
+of root `*.test.js` files. There is no fixed non-browser count threshold.
 
 ## Environment versioning
 
@@ -297,7 +298,7 @@ claims alone:
 7. Execution time within the originating job and the configured lifetime, with
    a matching expiration policy. Missing logs/artifacts/metadata are misses.
 
-Artifacts are named `asap-test-evidence-v1-<suite>-<run-id>-<attempt>` and retained
+Artifacts are named `asap-test-evidence-v2-<suite>-<run-id>-<attempt>` and retained
 14 days. They contain a manifest and sanitized per-test outcome identities/counts;
 no TRX console output, machine name, connection strings or credentials. Original
 TRX is associated with that run's existing performance/native test reporting.
@@ -315,9 +316,9 @@ with full CI. Workflow success is still required before uploaded evidence is reu
 ## Operating CI
 
 Manual **force_full_ci: true** bypasses lookup and executes all suites, recording
-new evidence. Formal release events and tags outside the precise test-release pattern
-require fresh verification. Test tags and explicit test-IIS deployments may reuse
-verified suite evidence while rebuilding the exact current deployment package. The existing activation variable, environment approval and
+new evidence. All release tags, explicit test-IIS qualification, high-risk
+selection/enforcement edits and conservative metadata fallbacks require fresh
+verification of every category. The existing activation variable, environment approval and
 deployment-job isolation remain unchanged. An ordinary dispatch defaults to no
 deployment and allows reuse. No scheduled expensive refresh is needed: the next
 eligible job after expiration executes naturally.
@@ -330,7 +331,9 @@ A typical job summary is:
 | Browser | EXECUTED | Current run |
 | Frontend | REUSED | Linked original successful run |
 
-Each row also gets the full fingerprint, HIT/MISS reason, original artifact
+An additional category table reports omitted history as **OMITTED BY POLICY**,
+never passed/reused. Omitted categories cannot issue evidence. Each suite row
+also gets the full fingerprint, HIT/MISS reason, original artifact
 ID/digest, evidence age and estimated minutes saved from the original Actions
 test-step wall time. This is avoided suite execution time, not a fabricated
 end-to-end speedup. Performance telemetry only measures actual fresh SQL execution.
@@ -361,6 +364,10 @@ independent manual/push/tag attempts, fork/author exclusion, draft setup limits
 and preserved deployment dependencies. It runs in the complete `npm test` suite.
 These are executable policy and gate contracts, not a simulation of GitHub's
 event delivery or cancellation engine. Those require separate live run receipts.
+
+The following October 30 receipts describe the earlier schema-1 implementation;
+they remain provenance/history, not qualification of the schema-2 selector.
+New selection receipts are in [required test selection](test-selection.md).
 
 Corrected draft reporting was verified at head `9724fc2` in
 [run 41101592149](https://github.com/clcdpc/asap-pocketbase/actions/runs/41101592149):

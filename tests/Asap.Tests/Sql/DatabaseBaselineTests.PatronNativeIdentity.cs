@@ -11,6 +11,7 @@ namespace Asap.Tests.Sql;
 public sealed partial class DatabaseBaselineTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.HistoricalUpgrade)]
     public async Task NativeSchemaElevenUpgradeLeavesUnknownPatronIdentitySnapshotsNull()
     {
         const int libraryId = 99881;

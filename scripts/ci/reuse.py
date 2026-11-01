@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 import fingerprints as fp
+import selection as test_selection
 
 
 DIRECTORY = fp.ROOT / ".artifacts/test-reuse"
@@ -35,7 +36,7 @@ class EvidenceError(ValueError):
 
 
 def failure_reason(error):
-    return str(error) if isinstance(error, EvidenceError) else type(error).__name__
+    return str(error) if isinstance(error, (EvidenceError, test_selection.SelectionError)) else type(error).__name__
 
 
 def utcnow():
@@ -136,6 +137,9 @@ def passing_results(results, selection):
     require(len(identities) == count and len(set(identities)) == count
             and all(isinstance(i, str) and re.fullmatch(r"[0-9a-f]{64}", i) for i in identities),
             "Missing or duplicate test outcomes")
+    if "identities" in selection:
+        require(sorted(identities) == selection["identities"],
+                "Executed test identities differ from the selected discovered population")
     if "files" in selection:
         require(identities == [fp.digest(name) for name in selection["files"]], "Frontend selection mismatch")
 
@@ -166,10 +170,12 @@ def execution_results(suite, selection, directory=DIRECTORY):
         outcomes = root.findall("t:Results/t:UnitTestResult", ns)
         require(len(outcomes) == counts["total"] and all(o.get("outcome") == "Passed" for o in outcomes),
                 "Native test outcomes do not match counters")
-        require(all(o.get("executionId") for o in outcomes), "Native test identities missing")
+        executions = [o.get("executionId") for o in outcomes]
+        require(all(executions) and len(set(executions)) == len(executions), "Native execution identities missing or duplicated")
+        require(all(o.get("testId") for o in outcomes), "Native test identities missing")
         results = {"total": counts["total"], "executed": counts["executed"], "passed": counts["passed"],
                    "failed": 0, "skipped": 0,
-                   "identities": [fp.digest(o.get("executionId")) for o in outcomes]}
+                   "identities": sorted(fp.digest(o.get("testId")) for o in outcomes)}
     passing_results(results, selection)
     return results
 
@@ -296,19 +302,9 @@ class Validator:
         origin_contract = self.execution_contract(context)
         source = fp.source_fingerprint(context["entries"], suite, config, origin_contract)
         require(source == current["source"], "Test source or execution contract changed")
-        algorithm = manifest.get("source_algorithm", "legacy-v1")
-        if algorithm == fp.SOURCE_ALGORITHM:
-            require(manifest["source_fingerprint"] == source
-                    and manifest["fingerprint"] == current["fingerprint"],
-                    "Current source fingerprint mismatch")
-        elif algorithm == "legacy-v1":
-            legacy = fp.legacy_source_fingerprint(context["entries"], suite, config)
-            expected = fp.digest({"schema": manifest["schema"], "suite": suite, "source": legacy,
-                                  "environment": current["environment"], "selection": current["selection"]})
-            require(manifest["source_fingerprint"] == legacy and manifest["fingerprint"] == expected,
-                    "Original legacy source fingerprint mismatch")
-        else:
-            raise EvidenceError("Unknown source fingerprint algorithm")
+        require(manifest.get("source_algorithm") == fp.SOURCE_ALGORITHM
+                and manifest["source_fingerprint"] == source
+                and manifest["fingerprint"] == current["fingerprint"], "Current source fingerprint mismatch")
         executed = timestamp(manifest["executed_at"])
         require(manifest["lifetime_days"] == config["lifetime_days"]
                 and self.now - timedelta(days=config["lifetime_days"]) <= executed <= self.now
@@ -374,13 +370,13 @@ def lookup(api, config, current, forced=False):
 
 
 def forced_full():
-    if os.environ.get("ASAP_FORCE_FULL_CI") == "true" or os.environ.get("GITHUB_EVENT_NAME") == "release":
+    if (os.environ.get("ASAP_FORCE_FULL_CI") == "true" or os.environ.get("ASAP_DEPLOY_TEST_IIS") == "true"
+            or os.environ.get("GITHUB_EVENT_NAME") == "release" or os.environ.get("GITHUB_REF_TYPE") == "tag"):
         return True
-    if os.environ.get("GITHUB_REF_TYPE") == "tag":
-        return not (os.environ.get("GITHUB_EVENT_NAME") == "push"
-                    and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+-test\.[0-9]+",
-                                     os.environ.get("GITHUB_REF_NAME", "")))
-    return False
+    try:
+        return test_selection.load()["decision"]["fresh"]
+    except Exception:
+        return True
 
 
 def api_client(config):
@@ -444,6 +440,14 @@ def summary(rows, current):
         source = row.get("source", {}).get("url")
         lines.append(f"| {LABELS[suite]} | {row['status']} | " + (f"[Original run]({source})" if source else "Current run") + " |")
     lines.append("")
+    selection = current["suites"]["dotnet"]["selection"] if current else {}
+    if "partition_counts" in selection:
+        lines.extend(["| .NET category | Discovered | Coverage |", "| --- | ---: | --- |"])
+        for category, count in selection["partition_counts"].items():
+            suite = "browser" if category == "browser" else "dotnet"
+            status = "OMITTED BY POLICY" if category in selection["omitted"] else rows[suite]["status"]
+            lines.append(f"| {category} | {count} | {status} |")
+        lines.extend(["", f"Selected non-browser population: {selection['expected']}; native test identities must match exactly.", ""])
     for suite in fp.SUITES:
         row = rows[suite]
         identity = current["suites"][suite]["fingerprint"] if current else "unavailable"
@@ -468,7 +472,7 @@ def verify(directory=DIRECTORY):
         planned = json.loads((directory / "plan.json").read_bytes())
     except (OSError, ValueError):
         planned = None
-    selected = fp.selections()
+    selected = fp.selections(verify=True)
     checkout_valid = False
     try:
         commit, tree = fp.checkout(os.environ["GITHUB_SHA"])
@@ -485,7 +489,7 @@ def verify(directory=DIRECTORY):
                         and identity["schema"] == config["schema"] and identity["suite"] == suite
                         and identity["source"] == fp.source_fingerprint(entries, suite, config, contract)
                         and identity["environment"] == fp.digest(identity["environment_inputs"])
-                        and {k: v for k, v in identity["selection"].items() if k != "expected"} == selected[suite],
+                        and identity["selection"] == selected[suite],
                         "Current fingerprint inputs changed")
         checkout_valid = True
     except Exception:
@@ -521,6 +525,12 @@ def verify(directory=DIRECTORY):
         except Exception as error:
             rows[suite]["reason"] = "Required verification failed: " + failure_reason(error)
             failures.append(suite)
+    selection = selected["dotnet"]
+    if "categories" in selection:
+        rows["dotnet"]["categories"] = {
+            category: "OMITTED_BY_POLICY" if category in selection["omitted"] else rows["dotnet"]["status"]
+            for category in test_selection.ALL
+        }
     report = summary(rows, current)
     print(report)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
@@ -547,5 +557,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print(f"::error::Required test verification failed ({type(error).__name__}).", file=sys.stderr)
+        print("::error::Required test verification failed: " + failure_reason(error), file=sys.stderr)
         sys.exit(1)

@@ -62,7 +62,8 @@ public sealed partial class PatronJourneyTests
                          null,
                          "https://leap.example.test/patron/{{id}}",
                          "https://leap.example.test/patron/{{patron-id}}/{{author}}",
-                         "javascript:open({{patronId}})"
+                         "javascript:open({{patronId}})",
+                         "\u0085javascript:alert({{patron-id}})"
                      })
             {
                 await SetResearchPatronPatternAsync(pattern);

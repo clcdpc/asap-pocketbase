@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "repository": "clcdpc/asap-pocketbase",
   "repository_id": 1221758626,
   "workflow": ".github/workflows/dotnet.yml",
@@ -10,7 +10,7 @@
   "lifetime_days": 14,
   "exclusions": [
     {
-      "paths": ["scripts/ci/test-reuse.md"],
+      "paths": ["scripts/ci/test-reuse.md", "scripts/ci/test-selection.md"],
       "suites": ["dotnet", "browser", "frontend"],
       "reason": "Operator documentation and validation receipts only; no build, test, fingerprint or deployment command reads this document."
     },

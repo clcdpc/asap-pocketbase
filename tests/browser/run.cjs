@@ -4,24 +4,11 @@ const { spawn } = require('node:child_process');
 const path = require('node:path');
 
 const repositoryRoot = path.resolve(__dirname, '..', '..');
-const browserTests = [
-  'FullyQualifiedName~NormalNavigationRefreshesPublishedEntryAndNestedModulesWithRealBrowserCaching',
-  'FullyQualifiedName~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport',
-  'FullyQualifiedName~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers',
-  'FullyQualifiedName~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures',
-  'FullyQualifiedName~PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses',
-  'FullyQualifiedName~StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp',
-  'FullyQualifiedName~SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp',
-  'FullyQualifiedName~LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata',
-  'FullyQualifiedName~ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery',
-  'FullyQualifiedName~OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes',
-  'FullyQualifiedName~EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance',
-  'FullyQualifiedName~Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload',
-  'FullyQualifiedName~StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry',
-  'FullyQualifiedName~LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces',
-  'FullyQualifiedName~SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference',
-  'FullyQualifiedName~StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope',
-].join('|');
+const fs = require('node:fs');
+const selected = process.env.ASAP_CI_TEST_SELECTION
+  ? JSON.parse(fs.readFileSync(process.env.ASAP_CI_TEST_SELECTION, 'utf8')).suites.browser
+  : { filter: 'TestCategory=Browser', expected: 17 };
+const browserTests = selected.filter;
 
 const child = spawn(
   process.platform === 'win32' ? 'dotnet.exe' : 'dotnet',
@@ -34,7 +21,7 @@ const child = spawn(
     '--no-build',
     '--no-restore',
     '--minimum-expected-tests',
-    '17',
+    String(selected.expected),
     '--filter',
     browserTests,
     ...(process.env.ASAP_CI_BROWSER_RESULTS ? [
