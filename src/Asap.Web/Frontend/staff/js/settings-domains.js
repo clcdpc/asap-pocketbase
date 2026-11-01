@@ -1148,6 +1148,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       listen(keyInput, 'change', event => {
         const nextKey = clean(event.target.value);
         if (!originalKey || !nextKey || nextKey === originalKey) return;
+        const previousKeys = new Set(readFields().map(item => item.key === nextKey ? originalKey : item.key));
+        if (!canRedrawRules(previousKeys)) return;
         const rules = readRules();
         if (rules.some(rule => Object.prototype.hasOwnProperty.call(rule.customFields, nextKey))) {
           state.validationError = 'Custom field keys must remain unique across saved rules.';
@@ -1254,7 +1256,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
           ? 'Retired field — saved rule retained' : !definition.enabled ? 'Disabled field — saved rule retained' : '';
         for (const [property, name] of [['mode', 'mode'], ['labelOverride', 'label override']]) {
           group.querySelector(`[data-custom-rule-property="${property}"]`)
-            .setAttribute('aria-label', `${label} ${name} for ${row.dataset.ruleCode}`);
+            ?.setAttribute('aria-label', `${label} ${name} for ${row.dataset.ruleCode}`);
         }
       }
       updateRuleSummary(row);
@@ -1594,6 +1596,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   }
 
   function reorder(name, index, offset) {
+    if (['fields', 'rules'].includes(name) && !canRedrawRules()) return;
     const rules = name === 'fields' ? readRules() : null;
     const values = readDomain(name);
     const next = index + offset;
@@ -1612,6 +1615,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   }
 
   function remove(name, index) {
+    if (['fields', 'rules'].includes(name) && !canRedrawRules()) return;
     const values = readDomain(name);
     const rules = name === 'fields' ? readRules() : null;
     const removedFieldKey = name === 'fields' ? values[index]?.key : null;
@@ -1662,8 +1666,19 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     else if (name === 'templates') renderTemplates(values);
   }
 
-  function validateRenderedRules() {
-    const fieldKeys = new Set(readFields().map(item => item.key));
+  function canRedrawRules(fieldKeys) {
+    try {
+      // Validate before reading/defaulting and rebuilding controls. A redraw
+      // cannot turn an incomplete draft into an apparently valid replacement.
+      validateRenderedRules(fieldKeys);
+      return true;
+    } catch (error) {
+      state.validationError = error instanceof Error ? error.message : 'The format-rule editor is incomplete. Reload settings before saving.';
+      return false;
+    }
+  }
+
+  function validateRenderedRules(fieldKeys = new Set(readFields().map(item => item.key))) {
     const expectedCodes = new Set(state.ruleRosterCodes);
     const renderedCodes = new Set();
     for (const row of dom.rules.querySelectorAll('[data-domain-row]')) {
@@ -1742,6 +1757,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
 
   function bindAdd(name, factory) {
     listen(addButtons[name], 'click', () => {
+      if (['fields', 'rules'].includes(name) && !canRedrawRules()) return;
       const rules = name === 'fields' ? readRules() : null;
       const values = readDomain(name);
       const added = factory(values);

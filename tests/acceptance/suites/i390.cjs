@@ -58,7 +58,7 @@ async function initialCards(page, before) {
 
 const scenarios = ['system', '2'].flatMap(scope => [
   { id: 'i390-draft-' + scope, writes: false,
-    requirements: ['#390: collapsed complete cards, configured names, SQL-backed counts, independent keyboard disclosure, draft summaries and no presentation mutations'],
+    requirements: ['#390: collapsed complete cards, configured names, SQL-backed counts, independent keyboard disclosure, draft summaries, fail-closed redraws and no presentation mutations'],
     run: async t => {
       const before = await openSettings(t, scope);
       await initialCards(t.page, before);
@@ -106,6 +106,21 @@ const scenarios = ['system', '2'].flatMap(scope => [
       await t.page.reload();
       await t.page.waitForFunction(() => document.querySelector('#settings-version').value && !document.querySelector('#settings-refresh').disabled);
       await initialCards(t.page, before);
+      if (scope === '2') {
+        const fieldCount = await t.page.locator('#additional-fields-editor [data-domain-row]').count();
+        await toggle(first).click();
+        await first.locator('[data-rule-property="messageBehavior"]').selectOption('message');
+        await first.locator('[data-rule-property="message"]').fill('Incomplete hidden rule witness');
+        await toggle(first).click();
+        const missing = first.locator('[data-custom-rule-key="i390_retired"] select');
+        await missing.evaluate(node => node.remove());
+        await t.page.locator('#add-custom-field').click();
+        assert.equal(await missing.count(), 0, 'Redraw cannot repair an incomplete hidden control with a default');
+        assert.equal(await t.page.locator('#additional-fields-editor [data-domain-row]').count(), fieldCount);
+        await t.page.locator('#settings-save').click();
+        await t.page.waitForFunction(() => document.querySelector('#settings-message').classList.contains('error'));
+        assert.match(await t.page.locator('#settings-message').innerText(), /incomplete/i);
+      }
       await unchanged(t, scope, before);
     } },
   { id: 'i390-layout-' + scope, writes: false,

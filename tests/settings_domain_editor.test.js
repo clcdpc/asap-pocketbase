@@ -369,6 +369,23 @@ const axe = require('axe-core');
       card('book').querySelector(selector).remove();
       assert.throws(() => accordion.collect(), /incomplete|missing a required control/, 'Hidden incomplete controls fail closed.');
     }
+    for (const mutate of [
+      () => root.querySelector('#add-custom-field').click(),
+      () => root.querySelector('#add-format-rule').click(),
+      () => card('book').querySelector('[aria-label="Move Book down"]').click(),
+      () => card('digital').querySelector('[aria-label="Delete Digital edition format rule"]').click(),
+      () => root.querySelector('#additional-fields-editor [aria-label="Move down"]').click(),
+      () => root.querySelector('#additional-fields-editor [aria-label="Delete"]').click(),
+      () => change(root.querySelector('#additional-fields-editor input'), 'renamed_retired')
+    ]) {
+      accordion.populate(accordionData, false);
+      const missing = '[data-custom-rule-key="retired_type"] [data-custom-rule-property="mode"]';
+      card('book').querySelector(missing).remove();
+      mutate();
+      assert.strictEqual(card('book').querySelector(missing), null, 'A redraw cannot repair a missing hidden control with a default.');
+      assert.throws(() => accordion.collect(), /incomplete|missing a required control/,
+        'A redraw must not silently replace the missing control\'s saved value.');
+    }
     accordion.dispose();
 
     const codeData = JSON.parse(JSON.stringify(data));

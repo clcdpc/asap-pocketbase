@@ -35,6 +35,8 @@ The `i390` Format rules suite reviews real synthetic SQL settings in System and
 Review Library scopes. It checks complete collapsed cards, configured names/codes,
 Required/Optional/Hidden summaries (including enabled and retained disabled custom
 rules), independent keyboard disclosures, Tab behavior and dirty-state restoration.
+The library draft also removes a hidden control deliberately, checks that Add field
+cannot repair it with a default, and verifies global Save fails before any POST.
 Geometry, axe and screenshots cover desktop, a 540px editor inside a wide window,
 390px mobile, forced colors/reduced motion, and verified native 200% zoom, expanded
 and collapsed. It uses the existing read-only runner guards; no Settings POST is
