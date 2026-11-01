@@ -45,6 +45,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       mode: ${{ steps.policy.outputs.mode }}
+      test_tag: ${{ steps.policy.outputs.test_tag }}
     steps:
       # Read current server state: synchronize/ready events can arrive out of order.
       # No checkout or PR code runs before this trust and current-head check.
@@ -52,6 +53,10 @@ jobs:
         id: policy
         with:
           script: |
+            // Preserve the previous case-sensitive v*.*.*-test.* deployment filter.
+            const testTag = context.eventName === 'push' &&
+              /^refs\/tags\/v[^/]*\.[^/]*\.[^/]*-test\.[^/]*$/.test(context.ref || '');
+            core.setOutput('test_tag', testTag ? 'true' : 'false');
             if (context.eventName !== 'pull_request') {
               core.setOutput('mode', 'full');
               return;
@@ -617,18 +622,19 @@ jobs:
 
   deploy-test-iis:
     name: Deploy exact artifact to test IIS
-    needs: [build-test-package, validation]
+    needs: [validation-policy, build-test-package, validation]
     # Override the implicit success() check: draft-validation is intentionally skipped in full CI.
     # Only a successful full execution and reporting gate may authorize test-IIS deployment.
     if: >-
       ${{
         !cancelled() &&
+        needs.validation-policy.result == 'success' &&
         needs.build-test-package.result == 'success' &&
         needs.validation.result == 'success' &&
         vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' &&
         (
           (github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis) ||
-          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-test.'))
+          (github.event_name == 'push' && needs.validation-policy.outputs.test_tag == 'true')
         )
       }}
     runs-on: [self-hosted, windows, x64, asap-test-iis]

@@ -104,7 +104,7 @@ assert.ok(deployCondition.includes("vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true'"
   'deployment must retain the repository activation gate');
 assert.ok(deployCondition.includes("(github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis)"),
   'manual deployment must require explicit opt-in');
-assert.ok(deployCondition.includes("(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-test.'))"),
+assert.ok(deployCondition.includes("(github.event_name == 'push' && needs.validation-policy.outputs.test_tag == 'true')"),
   'test-release tags must remain eligible for automatic deployment');
 assert.ok(
   workflow.slice(deploymentJobStart).includes('runs-on: [self-hosted, windows, x64, asap-test-iis]'),

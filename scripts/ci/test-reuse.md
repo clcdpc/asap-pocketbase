@@ -473,7 +473,7 @@ integrations are explicitly disabled because those tools are not consistently
 installed on the controlled images. YAML, expression, context and dependency
 validation remain enabled.
 
-Run `python3 -B -m unittest discover -s scripts/ci -p 'test_reuse*.py' -v` for
+Run `python3 -B -m unittest discover -s scripts/ci -p 'test_*.py' -v` for
 temporary-Git, mocked Actions, hostile archive, native-report and workflow guards.
 The existing full Python telemetry checks and retained frontend suite also remain.
 
@@ -508,7 +508,10 @@ drift requires an epoch bump. Conservative misses are preferred to inferred hits
 | Omitted dependency | Tracked-file inclusion by default; only the audited exact-path exclusions above. Shared review providers and SQL fixtures stay included. |
 | Same PR head, changed integration base | Fingerprint actual checked-out merge tree, independently recover its checkout and verify its head parent. |
 | API/ZIP outage suppressing tests | Lookup exceptions restore normal execution, including after a partial HIT; late evidence loss fails the final gate. |
-| Different filter/count | Match complete selection, retained minimum, fresh discovery and exact executed/passed count. |
+| Different filter/count/native identity | Match the complete selected union, fresh discovery, exact native UIDs and executed/passed counts. |
+| New unclassified test omitted or category changed accidentally | Unfiltered discovery, a disjoint complete partition union and the independent reviewed method inventory keep new tests core and detect drift. |
+| Reduced .NET execution substituted for full qualification | Match the category union/population and reject all reused steps for fresh full qualification. |
+| Benchmark timing attributed to changed sources | Check the exact clean tracked commit before execution and before recording benchmark-only results. |
 | Reuse chain | Only executed manifests with an actual original successful test step are eligible; reused suites emit decisions only. |
 | Old deployment payload | Current SHA build/publishes/manifest/ZIP/digest/ValidateOnly remain unconditional on reuse. |
 | Concurrent equivalent runs | Lookup after runner allocation; stable per-PR cancellation. Independent cold jobs may both execute, but cannot accept in-progress evidence. |

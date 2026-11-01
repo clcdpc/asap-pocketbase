@@ -262,6 +262,11 @@ def benchmark_population(root=ROOT):
     require(value.get("kind") == "benchmark" and value.get("schema") == 1
             and value["commit"] == git("rev-parse", "HEAD", root=root)
             and value["decision"] == benchmark_decision(), "Invalid controlled benchmark population")
+    import fingerprints
+    try:
+        fingerprints.checkout(value["commit"], root)
+    except ValueError as error:
+        raise SelectionError("Benchmark checkout must remain clean at its recorded commit") from error
     return value
 
 

@@ -38,7 +38,7 @@ async function main() {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     // Run the actual hosted preflight script against a deterministic API boundary.
     await new AsyncFunction('context', 'github', 'core', policy.steps[0].with.script)(
-      { eventName: context.github.event_name, payload: context.github.event, repo: { owner, repo } },
+      { eventName: context.github.event_name, payload: context.github.event, ref: context.github.ref, repo: { owner, repo } },
       { rest: { pulls: { get: async (parameters) => {
         assert.equal(context.github.event_name, 'pull_request', 'Non-PR runs must not query a PR');
         assert.deepEqual(parameters, { owner, repo, pull_number: context.github.event.pull_request.number });
@@ -210,7 +210,7 @@ async function main() {
     release.needs.validation = { result: 'success' };
     assert.equal(enabled(full, release), true);
     assert.equal(enabled(deploy, release), false, 'Production release tags qualify tests without test-IIS activation');
-    assert.deepEqual(deploy.needs, ['build-test-package', 'validation']);
+    assert.deepEqual(deploy.needs, ['validation-policy', 'build-test-package', 'validation']);
     // Explicit status check bypasses the implicit success() that treats a skipped
     // draft-validation ancestor as a reason to skip an otherwise eligible deployment.
     assert.match(deploy.if, /!\s*cancelled\(\)/);
@@ -234,7 +234,7 @@ async function main() {
       assert.equal(report(context), 0, 'The reporting gate passes with the expected skipped draft branch');
       assert.equal(enabled(deploy, context), true, 'Full CI can deploy despite the skipped draft ancestor');
 
-      for (const dependency of ['build-test-package', 'validation']) {
+      for (const dependency of ['validation-policy', 'build-test-package', 'validation']) {
         for (const result of ['failure', 'cancelled', 'skipped', 'unexpected', undefined]) {
           context.needs[dependency].result = result;
           assert.equal(enabled(deploy, context), false, `${dependency}/${result} must block deployment`);
@@ -268,6 +268,22 @@ async function main() {
       assert.equal(step(job, 'Validate workflow configuration').run, 'bash scripts/ci/check-workflows.sh');
       assert.equal(job.steps[0].with.ref, '${{ github.sha }}');
       assert.equal(step(job, 'Verify exact test source').run, 'python3 -B scripts/ci/reuse.py checkout');
+    }
+  });
+  await check('broader release qualification preserves the exact previous test-tag deployment eligibility', async () => {
+    for (const [ref, expected] of [
+      ['refs/tags/v1.2.3-test.1', true], ['refs/tags/v1.2.3-test.preview', true],
+      ['refs/tags/v1.2.3-prod-test.1', true], ['refs/tags/v1.2.3', false],
+      ['refs/tags/v1.2.3-TEST.1', false], ['refs/tags/v1.2.3-test', false],
+      ['refs/tags/v1.2.3-test.1/other', false], ['refs/tags/vgroup/1.2.3-test.1', false],
+      ['refs/heads/v1.2.3-test.1', false]
+    ]) {
+      const context = await routed(nonPr('push', 125, ref));
+      context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
+      context.needs['build-test-package'] = { result: 'success' };
+      context.needs.validation = { result: 'success' };
+      assert.equal(context.needs['validation-policy'].outputs.test_tag, String(expected), ref);
+      assert.equal(enabled(deploy, context), expected, ref);
     }
   });
   await check('full CI retains original evidence checks and current-commit packaging', () => {

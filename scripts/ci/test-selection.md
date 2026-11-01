@@ -108,6 +108,11 @@ ordinary release tags do not activate IIS. This task does not enable deployment,
 create a release tag or alter `test_cd_activation: pending_runner_setup`.
 There is no scheduled full run.
 
+The hosted preflight computes test-tag eligibility with a case-sensitive match
+of the former `v*.*.*-test.*` filter. This preserves its exact spelling and slash
+rules: Actions string [functions are case-insensitive](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#functions),
+so an expression substring check alone would broaden deployment eligibility.
+
 ## Population and result verification
 
 After build and mandatory safety checks, `selection.py prepare` invokes the built
@@ -147,7 +152,9 @@ before reuse; the former second, optional overlapping discovery is removed.
 environment and trust checks. Schema 2 intentionally rejects schema-1 evidence.
 Fingerprints include category selection, exact selected UID hashes/counts, the
 full discovered population/classification identity and all selection tooling.
-Different category selections cannot share evidence, even if their counts match.
+Different non-browser category selections cannot share .NET/SQL evidence, even
+if their counts match. Browser/frontend evidence remains compatible when its own
+exact required population and all other inputs match.
 A force-full, release, high-risk or conservative fallback run cannot reuse.
 Lookup failures still execute the selected required tests; a failed selection
 never becomes a reuse hit.
@@ -168,6 +175,8 @@ For a fresh all-category run, dispatch `.NET baseline` on the task branch with
 benchmark (not qualification)** job builds the same SHA in another job, exercises
 the selector with a controlled unrelated frontend path, and runs the cold core
 population against a new SQL container using the qualification job's SQL image.
+It requires a clean tracked checkout at the recorded commit before execution and
+again before recording results.
 It verifies native results and uploads `core-benchmark-<run>-<attempt>` with
 performance, selection and benchmark-only results. It emits no reusable evidence,
 publication/deployment artifact or required-validation result, and cannot replace

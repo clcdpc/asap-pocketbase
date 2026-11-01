@@ -1,19 +1,39 @@
 # Testing and CI Strategy
 
-## Current Scope Notice - 2026-09-16
+## Current validation policy - 2026-11-01
+
+Ready PRs and ordinary `main` pushes require core application/current-schema SQL
+coverage, all designated browser cases and all retained frontend files. Historical
+migration and schema-upgrade categories run for relevant dependencies and full
+qualification. Current native discovery contains 1,547 cases: 1,435 core, 80
+historical migration, 15 historical upgrade and 17 browser cases. The frontend
+suite contains 64 test files. Counts are observations, not permanent thresholds.
+
+[Required test selection](../../scripts/ci/test-selection.md) owns the dependency
+and event policy, independent complete discovery/partition checks, exact native
+result identities, conservative fallbacks and how to add unclassified tests.
+[Test reuse](../../scripts/ci/test-reuse.md) documents compatible evidence and the
+required reporting gate. Manual dispatch selects all categories;
+`force_full_ci: true`, release tags and test-IIS qualification execute all required tests afresh.
+Draft validation remains distinct. Current-commit publish/package validation and
+existing trust/activation boundaries remain mandatory. Full production readiness,
+live providers, host activation and the release/rehearsal matrix below remain
+deferred.
+
+## Historical scope notice - 2026-09-16
 
 The full release/rehearsal matrix in this document remains a future
-production-readiness contract. Current reduced Slice 8 runs the existing
+production-readiness contract. At that checkpoint, reduced Slice 8 ran the existing
 Release build, full .NET/real-SQL and frontend suites, publish/exclusion checks,
 exact test-IIS artifact/manifest validation and workflow isolation checks. It
 does not require a Windows runner or live provider/host evidence.
 
-Campaign 2 discovery on October 19, 2026 contains 1,407 .NET cases: 1,391 in
+Campaign 2 discovery on October 19, 2026 contained 1,407 .NET cases: 1,391 in
 the main/real-SQL partition and 16 designated browser cases from 15 methods
 (the Settings role test has two DataRows). All 1,365 baseline case identities
-remain present. The CI exclusions and `tests/browser/run.cjs` select disjoint,
-complete partitions and guard these current minimums. `npm test` discovers all
-57 retained frontend test files; browser states and assertions are not extra
+remained present. At that checkpoint, CI exclusions and `tests/browser/run.cjs`
+selected disjoint complete partitions and guarded those minimums. `npm test`
+discovered 57 retained frontend test files; browser states and assertions are not extra
 test cases. Record execution results against the tested commit separately.
 Controlled provider results, automated reflow/forced-colors scans and agent
 screenshot inspection do not establish live-provider or human accessibility

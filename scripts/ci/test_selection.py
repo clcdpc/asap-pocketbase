@@ -187,6 +187,17 @@ class GitDiffTests(unittest.TestCase):
             self.assertEqual(selected["categories"], policy.ALL)
             self.assertTrue(selected["fresh"])
 
+    def test_benchmark_rejects_changed_tracked_sources(self):
+        directory = self.root / ".artifacts/test-selection"
+        directory.mkdir(parents=True)
+        value = {"kind": "benchmark", "schema": 1, "commit": self.initial,
+                 "decision": policy.benchmark_decision()}
+        (directory / "selection.json").write_text(json.dumps(value))
+        self.assertEqual(policy.benchmark_population(self.root)["commit"], self.initial)
+        (self.root / "src/Asap.Web/Frontend/app.js").write_text("Changed after benchmark planning")
+        with self.assertRaises(policy.SelectionError):
+            policy.benchmark_population(self.root)
+
     def test_renamed_or_deleted_dependency_is_still_required(self):
         before = self.commit("src/Asap.Migration/Source.cs", "source")
         self.git("mv", "src/Asap.Migration/Source.cs", "src/Asap.Web/Frontend/retired.txt")
