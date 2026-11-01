@@ -54,8 +54,14 @@ async function actionGeometry(row) {
 async function actionColumn(page, percent = null) {
   await page.locator('#request-grid th').evaluateAll((headers, percent) => {
     headers.forEach((header, index) => {
-      if (percent === null) header.style.width = '';
-      else header.style.width = `${index === headers.length - 1 ? percent : (100 - percent) / (headers.length - 1)}%`;
+      if (percent === null) {
+        if (header.hasAttribute('data-i403-width')) {
+          header.style.width = header.getAttribute('data-i403-width'); header.removeAttribute('data-i403-width');
+        }
+      } else {
+        if (!header.hasAttribute('data-i403-width')) header.setAttribute('data-i403-width', header.style.width);
+        header.style.width = `${index === headers.length - 1 ? percent : (100 - percent) / (headers.length - 1)}%`;
+      }
     });
   }, percent);
   await settleActions(page);

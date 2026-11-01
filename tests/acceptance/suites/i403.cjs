@@ -120,7 +120,8 @@ const scenarios = [
     await t.page.waitForFunction(node => !node.isConnected, old);
     await old.evaluate(node => node.click()); assert.equal(await t.page.locator('#request-dialog[open]').count(), 0);
     await t.page.locator('#request-search').fill('I403 request 02');
-    await t.page.waitForFunction(() => document.querySelectorAll('#request-grid .request-title-link').length === 1);
+    await t.page.waitForFunction(() => document.querySelectorAll('#request-grid .request-title-link').length === 1 &&
+      document.querySelector('#request-grid .request-title-link')?.textContent === 'I403 request 02');
     const row = t.page.locator('#request-grid tbody tr'), retired = await row.locator('.request-row-more').elementHandle();
     await retired.click();
     await t.page.locator('#refresh-queue').click(); await t.page.waitForFunction(node => !node.isConnected, retired);
