@@ -17,7 +17,7 @@ Release discovery currently finds 1,547 cases:
 | `Browser` | 17 (16 methods) | Required | Required |
 
 These are observed counts, not fixed acceptance thresholds. Every run discovers
-the current population and derives its counts. All 64 root frontend test files
+the current population and derives its counts. All 67 root frontend test files
 remain required. No test method or assertion was removed.
 
 The migration category covers SQL import, reconciliation, report recovery,
@@ -141,7 +141,7 @@ partition. A reduced result cannot satisfy that gate. Frontend discovery verifie
 the complete sorted root test-file list and complete passing results.
 
 The two Node safety files execute once before lookup via `--ci-safety`. A cold
-`npm test -- --ci-remaining` executes the other files and verifies/combines the
+`npm test -- --ci-remaining` executes the other 65 files and verifies/combines the
 fresh safety receipt into the complete frontend report. Standalone `npm test`
 still executes all files. Mandatory Python discovery runs all `test_*.py` once
 before reuse; the former second, optional overlapping discovery is removed.

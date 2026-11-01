@@ -7,7 +7,7 @@ coverage, all designated browser cases and all retained frontend files. Historic
 migration and schema-upgrade categories run for relevant dependencies and full
 qualification. Current native discovery contains 1,547 cases: 1,435 core, 80
 historical migration, 15 historical upgrade and 17 browser cases. The frontend
-suite contains 64 test files. Counts are observations, not permanent thresholds.
+suite contains 67 test files. Counts are observations, not permanent thresholds.
 
 [Required test selection](../../scripts/ci/test-selection.md) owns the dependency
 and event policy, independent complete discovery/partition checks, exact native
