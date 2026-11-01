@@ -3055,10 +3055,12 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       await page.locator('#patron-loader-markup').inputValue());
     await page.locator('#settings-nav-workflow').click();
     await page.locator('#patron-codes-use-system').uncheck();
-    await page.locator('#patron-code-search').fill('Adult');
-    await page.locator('#patron-codes-select-all').click();
-    assert.ok(await page.locator('#patron-codes-editor [data-domain-row]').count() > 0);
-    await page.locator('#patron-codes-clear-all').click();
+    while (await page.locator('#patron-codes-editor button').count()) await page.locator('#patron-codes-editor button').first().click();
+    await page.locator('#patron-code-picker').fill('Adult');
+    await page.locator('#patron-code-picker').press('ArrowDown');
+    await page.locator('#patron-code-picker').press('Enter');
+    assert.ok(await page.locator('#patron-codes-editor [data-code-id]').count() > 0);
+    while (await page.locator('#patron-codes-editor button').count()) await page.locator('#patron-codes-editor button').first().click();
     await page.locator('[data-setting-key="patronCodeEligibilityEnabled"] .settings-override-toggle').check();
     await page.locator('#patron-code-eligibility-enabled').check();
     await page.locator('#patron-code-warning').filter({ hasText: /allows all patron codes/ }).waitFor();
@@ -3427,7 +3429,11 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
     await row.waitFor();
     await row.getByLabel(/^Display name/).fill('Authoritative browser actor');
     await row.getByLabel(/^Notification email/).fill('actor-revision@example.org');
+    const profileSaved = page.waitForResponse(response => response.request().method() === 'PATCH' &&
+      new URL(response.url()).pathname === `/api/asap/staff/users/${original.id}`);
     await row.getByRole('button', { name: 'Save profile', exact: true }).click();
+    const profileResponse = await profileSaved;
+    assert.equal(profileResponse.status(), 200, await profileResponse.text());
     await page.locator('#staff-access-status').filter({ hasText: /Staff profile saved/ }).waitFor();
     await page.waitForFunction(() => !document.getElementById('settings-form').inert);
     const revised = (await session(context, args.baseOrigin)).staff;

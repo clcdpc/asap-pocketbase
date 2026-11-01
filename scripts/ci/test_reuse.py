@@ -1,5 +1,6 @@
 """Adversarial reuse contracts: temporary Git trees, native reports, and mocked Actions API."""
 
+import base64
 import copy
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -35,9 +36,14 @@ class Fixture:
     def __init__(self):
         self.now = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
         self.config = fp.configuration()
+        self.workflow_bytes = (fp.ROOT / self.config["workflow"]).read_bytes()
+        self.workflow_sha = hashlib.sha1(b"blob " + str(len(self.workflow_bytes)).encode()
+                                         + b"\0" + self.workflow_bytes).hexdigest()
         self.entries = [["src/production.cs", "100644", "blob", "c" * 40],
-                        [self.config["workflow"], "100644", "blob", "d" * 40]]
-        self.current = {"commit": "a" * 40, "tree": "b" * 40, "suites": {}}
+                        [self.config["workflow"], "100644", "blob", self.workflow_sha]]
+        self.contract = fp.full_ci_execution_contract(self.workflow_bytes.decode("utf-8"))
+        self.current = {"commit": "a" * 40, "tree": "b" * 40,
+                        "full_ci_execution_contract": self.contract, "suites": {}}
         self.selections = {}
         for suite in fp.SUITES:
             selection = {"filter": "actual " + suite + " selection", "minimum": 2, "expected": 2}
@@ -46,7 +52,7 @@ class Fixture:
             self.selections[suite] = selection
             environment = {"epoch": "image-v1", "runtime": "actual-version", "suite": suite}
             inputs = {"schema": self.config["schema"], "suite": suite,
-                      "source": fp.source_fingerprint(self.entries, suite, self.config),
+                      "source": fp.source_fingerprint(self.entries, suite, self.config, self.contract),
                       "environment": fp.digest(environment), "selection": selection}
             self.current["suites"][suite] = {**inputs, "fingerprint": fp.digest(inputs),
                                               "environment_inputs": environment, "unavailable": None}
@@ -80,6 +86,7 @@ class Fixture:
                 "repository": self.config["repository"], "repository_id": self.config["repository_id"],
                 "workflow": self.config["workflow"], "job": self.config["job"], "run_id": 7, "run_attempt": 2,
                 "source_commit": self.current["commit"], "source_tree": self.current["tree"],
+                "source_algorithm": fp.SOURCE_ALGORITHM,
                 "source_fingerprint": identity["source"], "fingerprint": identity["fingerprint"],
                 "environment_fingerprint": identity["environment"], "environment_inputs": identity["environment_inputs"],
                 "selection": identity["selection"], "counts": {k: report[k] for k in ("total", "executed", "passed", "failed", "skipped")},
@@ -114,6 +121,9 @@ class Fixture:
             return copy.deepcopy(self.run)
         if path == f"/git/commits/{self.source['sha']}":
             return copy.deepcopy(self.source)
+        if path == f"/git/blobs/{self.workflow_sha}":
+            return {"sha": self.workflow_sha, "encoding": "base64", "size": len(self.workflow_bytes),
+                    "content": base64.b64encode(self.workflow_bytes).decode("ascii")}
         if path == f"/git/trees/{self.current['tree']}?recursive=1":
             return {"sha": self.current["tree"], "truncated": False,
                     "tree": [dict(zip(("path", "mode", "type", "sha"), e)) for e in self.entries]}
@@ -224,13 +234,35 @@ class DependencyTests(unittest.TestCase):
         for path in ("unknown-new-file", "src/Asap.Web/Frontend/staff/app.js", "src/Shared/SecurityContract.cs",
                      "database/Asap.Database/Scripts/PostDeployment.sql", "tests/Asap.Tests/Sql/DatabaseBaselineTests.cs",
                      "dev/review/src/Asap.ReviewInit/LocalReviewer.sql", "dev/review/src/Asap.ReviewProviders/ReviewProviders.cs",
-                     ".github/workflows/dotnet.yml", "scripts/ci/reuse.py", "global.json", "package-lock.json",
+                     "global.json", "package-lock.json",
                      "Directory.Packages.props", "docs/implementation/test-iis-activation.md"):
             for suite in fp.SUITES:
                 with self.subTest(path=path, suite=suite):
                     before = [[path, "100644", "blob", "a" * 40]]
                     after = [[path, "100644", "blob", "b" * 40]]
                     self.assertNotEqual(fp.source_fingerprint(before, suite, config), fp.source_fingerprint(after, suite, config))
+
+    def test_ci_policy_changes_do_not_invalidate_application_tests(self):
+        config = fp.configuration()
+        for path in fp.CONTROL_PATHS:
+            for suite in fp.SUITES:
+                with self.subTest(path=path, suite=suite):
+                    self.assertEqual(fp.source_fingerprint([[path, "100644", "blob", "a"]], suite, config),
+                                     fp.source_fingerprint([[path, "100644", "blob", "b"]], suite, config))
+        self.assertNotEqual(fp.source_fingerprint([], "dotnet", config),
+                            fp.source_fingerprint([["scripts/ci/new-policy.py", "100644", "blob", "b"]], "dotnet", config))
+
+    def test_full_executor_is_identical_across_deployment_only_edits(self):
+        workflow = (fp.ROOT / ".github/workflows/dotnet.yml").read_text(encoding="utf-8")
+        baseline = fp.full_ci_execution_contract(workflow)
+        self.assertEqual(baseline, fp.full_ci_execution_contract(
+            workflow.replace("ASAP_TEST_DEPLOYMENT_ENABLED == 'true'",
+                             "ASAP_TEST_DEPLOYMENT_ENABLED == 'false'")))
+        self.assertNotEqual(baseline, fp.full_ci_execution_contract(
+            workflow.replace("--minimum-expected-tests 1525", "--minimum-expected-tests 1526")))
+        self.assertNotEqual(baseline, fp.full_ci_execution_contract(
+            workflow.replace("npm run test:browser", "npm run test:other")))
+        self.assertEqual(baseline, fp.full_ci_execution_contract(workflow.replace(fp.CI_SAFETY_STEP, "")))
 
     def test_exact_acceptance_screenshot_files_do_not_invalidate_sql(self):
         config = fp.configuration()
@@ -299,6 +331,27 @@ class DependencyTests(unittest.TestCase):
 
 
 class ProvenanceTests(unittest.TestCase):
+    def test_original_legacy_evidence_is_cryptographically_revalidated(self):
+        fixture = Fixture()
+        for suite in fp.SUITES:
+            manifest = fixture.manifests[suite]
+            manifest.pop("source_algorithm")
+            legacy = fp.legacy_source_fingerprint(fixture.entries, suite, fixture.config)
+            manifest["source_fingerprint"] = legacy
+            manifest["fingerprint"] = fp.digest({
+                "schema": fixture.config["schema"], "suite": suite, "source": legacy,
+                "environment": fixture.current["suites"][suite]["environment"],
+                "selection": fixture.current["suites"][suite]["selection"]})
+            fixture.archive(suite)
+        self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
+        fixture.current["suites"]["dotnet"]["source"] = "0" * 64
+        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+
+    def test_modified_origin_workflow_blob_is_rejected(self):
+        fixture = Fixture()
+        fixture.workflow_bytes = b"forged content"
+        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+
     def test_identical_successful_original_run_hits_all_suites(self):
         fixture = Fixture()
         decisions = fixture.lookup()
@@ -528,12 +581,15 @@ class ApiTests(unittest.TestCase):
             reuse.SafeRedirect().redirect_request(request, None, 302, "", {}, "http://storage.example/artifact")
 
     def test_forced_release_deployment_and_manual_requests(self):
-        for key in ("ASAP_FORCE_FULL_CI", "ASAP_DEPLOY_TEST_IIS", "GITHUB_REF_TYPE", "GITHUB_EVENT_NAME"):
-            value = {"GITHUB_REF_TYPE": "tag", "GITHUB_EVENT_NAME": "release"}.get(key, "true")
-            with mock.patch.dict(os.environ, {key: value}, clear=True):
+        for env in ({"ASAP_FORCE_FULL_CI": "true"}, {"GITHUB_EVENT_NAME": "release"},
+                    {"GITHUB_REF_TYPE": "tag", "GITHUB_EVENT_NAME": "push", "GITHUB_REF_NAME": "v1.0.0"}):
+            with mock.patch.dict(os.environ, env, clear=True):
                 self.assertTrue(reuse.forced_full())
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertFalse(reuse.forced_full())
+        for env in ({}, {"ASAP_DEPLOY_TEST_IIS": "true"},
+                    {"GITHUB_REF_TYPE": "tag", "GITHUB_EVENT_NAME": "push", "GITHUB_REF_NAME": "v1.0.0-test.24"},
+                    {"ASAP_DEPLOY_TEST_IIS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch"}):
+            with mock.patch.dict(os.environ, env, clear=True):
+                self.assertFalse(reuse.forced_full())
 
 
 class EnvironmentTests(unittest.TestCase):

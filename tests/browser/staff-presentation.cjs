@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
 const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
 
 (async () => {
@@ -12,7 +13,7 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
   for (const persistent of [false, true]) {
     const browser = await chromium.launch({ headless: true, ...(persistent ? { ignoreDefaultArgs: ['--hide-scrollbars'] } : {}) });
     try {
-      for (const width of [1280, 390]) {
+      for (const width of [1440, 1280, 390]) {
         const context = await browser.newContext({ viewport: { width, height: 900 },
           extraHTTPHeaders: { 'X-ASAP-Test-Staff-Id': staffId, 'X-ASAP-Test-Tenant-Id': tenantId, 'X-ASAP-Test-Staff-Email': email } });
         await context.route('**/*', route => {
@@ -138,18 +139,17 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
             !document.getElementById('settings-refresh').disabled, scope);
           await page.locator('#settings-nav-workflow').click();
           await measureHeading('#add-common-creator');
-          await measureHeading('#add-patron-code');
+          assert.equal(await page.locator('#patron-code-eligibility legend').textContent(), 'Patron code eligibility');
+          await providerGeometry(page);
           if (await page.locator('#add-provider').isVisible()) await measureHeading('#add-provider');
           const inherit = page.locator('#common-creators-use-system');
           if (await inherit.isVisible() && await inherit.isChecked()) await inherit.uncheck();
           await page.locator('#add-common-creator').click();
           await page.locator('#common-creators-editor [data-domain-row]').last().locator('input').fill('Spacing regression creator');
-          const bulkGaps = await measureActions('.settings-inline-actions:has(#patron-codes-select-all)');
           const rowGaps = await measureActions('#common-creators-editor [data-domain-row]:last-child .settings-row-actions');
-          assert.equal(bulkGaps.length, 1);
           assert.equal(rowGaps.length, 2);
-          assert.ok([...bulkGaps, ...rowGaps].every(gap => gap >= 7),
-            `${scope}: adjacent Settings actions need visible separation: ${JSON.stringify({ bulkGaps, rowGaps })}`);
+          assert.ok(rowGaps.every(gap => gap >= 7),
+            `${scope}: adjacent Settings actions need visible separation: ${JSON.stringify(rowGaps)}`);
           await scan(`workflow-actions-${scope}`);
           await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
           await page.locator('#settings-discard').waitFor({ state: 'hidden' });

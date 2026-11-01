@@ -22,8 +22,8 @@ dependency exclusions and provenance/digest verification are unchanged.
 | `ready_for_review`, unchanged SHA allowed | Full CI execution and full gate | Only full original evidence; draft success is ineligible | Never |
 | `converted_to_draft`, unchanged SHA allowed | Draft validation | No full-suite evidence | Never |
 | Push to `main` or the two retained configured branches | Full CI execution and full gate | Verified original evidence allowed | Never |
-| `v*.*.*-test.*` tag push | Fresh full CI execution and full gate | Bypassed | Only with existing activation/environment gates |
-| Manual dispatch, including a draft branch | Full CI execution and full gate | Allowed unless forced or deployment requested | Only explicit `deploy_test_iis` plus existing gates |
+| `v*.*.*-test.*` tag push | Full validation gate and current-commit build/package | Verified original suite evidence may be reused | Only with existing activation/environment gates |
+| Manual dispatch, including a draft branch | Full CI execution and full gate | Allowed unless force-full requested | Only explicit `deploy_test_iis` plus existing gates |
 
 The small hosted **Resolve validation policy** job reads current PR metadata
 using only `pull-requests: read`, without a checkout. It verifies the PR is
@@ -179,11 +179,12 @@ its actual synthetic merge, including the integration base, rather than its head
 branch alone. Commit SHA is provenance, never the test fingerprint.
 
 `fingerprints.py` expands that exact tree with `git ls-tree -r -z HEAD` and hashes
-sorted path/mode/type/blob identities per suite. Every tracked file is included
-unless an **exact path** has a documented exclusion in `test-reuse.json`. New and
-unclassified files, documentation consumed by deployment-contract tests, all
-production code, schema, fixtures, workflow/harness code, manifests and locks
-therefore invalidate the affected suite by default.
+sorted path/mode/type/blob identities per suite. CI-only policy files are
+excluded by exact path while the full test executor job is independently hashed
+as an execution contract. A single mandatory Node policy-check step is omitted
+from that contract because it runs fresh on every full CI execution.
+Production code, schema, fixtures, commands, test selection and previously
+unknown files continue to invalidate evidence.
 
 The deliberately small reviewed exclusions are:
 
@@ -192,6 +193,17 @@ The deliberately small reviewed exclusions are:
 | `tests/acceptance/run.cjs`, `tests/acceptance/helpers/reporting.cjs`, `tests/acceptance/helpers/accessibility.cjs` | All three suites | Standalone acceptance launch/report/screenshot implementation; required suites do not load it. |
 | `tests/browser/staff-presentation.cjs` | .NET/SQL and frontend | Invoked only by the explicitly designated browser-partition method; browser fingerprint includes it. |
 | `scripts/ci/test-reuse.md` | All three suites | Operator prose/validation receipts; no execution contract reads it. |
+
+The exact CI-control exceptions are the workflow, `fingerprints.py`,
+`reuse.py`, `test_reuse.py`, and the two Node CI/deployment contract files.
+Those contracts and the Python reuse regressions execute afresh on every run.
+New files are included unless explicitly reviewed.
+
+Existing version-1 evidence can be reused only after verifying its original
+whole-tree fingerprint, immutable execution record and trusted runner identity;
+the original workflow Git blob is checked and its full test execution contract
+must match the current one. New evidence records `source_algorithm`.
+Any malformed or incompatible evidence causes an ordinary test run.
 
 Do not extend these to whole directories. The test project actually references
 `dev/review/src/Asap.ReviewProviders` and embeds
@@ -303,8 +315,9 @@ with full CI. Workflow success is still required before uploaded evidence is reu
 ## Operating CI
 
 Manual **force_full_ci: true** bypasses lookup and executes all suites, recording
-new evidence. Tags, release events and requested test-IIS deployment also require
-fresh verification. The existing activation variable, environment approval and
+new evidence. Formal release events and tags outside the precise test-release pattern
+require fresh verification. Test tags and explicit test-IIS deployments may reuse
+verified suite evidence while rebuilding the exact current deployment package. The existing activation variable, environment approval and
 deployment-job isolation remain unchanged. An ordinary dispatch defaults to no
 deployment and allows reuse. No scheduled expensive refresh is needed: the next
 eligible job after expiration executes naturally.

@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const verifyMixedFieldLayout = require('./form-layout.cjs');
+const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
 
 // Chromium's tab API changes actual browser zoom. CSS zoom and pinch scaling
 // do not exercise the same viewport, native controls or top-layer geometry.
@@ -113,6 +114,16 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       // at actual 200% as well, with the same DPR/CDP assertions below.
       await applyNativeZoom();
       await page.waitForFunction(() => document.querySelector('#settings-version').value && !document.querySelector('#settings-form').inert);
+      await page.locator('#settings-nav-workflow').click();
+      await providerGeometry(page);
+      const inherited = page.locator('#patron-codes-use-system');
+      if (await inherited.isVisible() && await inherited.isChecked()) await inherited.uncheck();
+      const picker = page.locator('#patron-code-picker');
+      await picker.fill('Adult');
+      await picker.press('ArrowDown');
+      await scan('workflow-picker');
+      await picker.press('Escape');
+      assert.equal(await picker.evaluate(node => node === document.activeElement), true);
       await page.locator('#settings-nav-patron').click();
       const message = page.locator('#patron-success-message');
       await message.fill('Before selected after');

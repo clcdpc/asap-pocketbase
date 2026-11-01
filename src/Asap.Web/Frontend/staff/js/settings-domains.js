@@ -582,7 +582,7 @@ function rawSnapshot(configuredSystem, libraryOverride, key, system) {
   return property(libraryOverride, key);
 }
 
-export function createSettingsDomainEditors({ root, onChange = () => {}, canRemoveTemplate = () => true }) {
+export function createSettingsDomainEditors({ root, onChange = () => {}, onRetryCodes = () => {}, canRemoveTemplate = () => true }) {
   const events = new window.AbortController();
   let disposed = false;
   function listen(target, name, handler) {
@@ -617,9 +617,13 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     creatorsUseSystem: root.querySelector('#common-creators-use-system'),
     creatorsInheritField: root.querySelector('#common-creators-inherit-field'),
     codes: root.querySelector('#patron-codes-editor'),
-    codeSearch: root.querySelector('#patron-code-search'),
-    codeSelectAll: root.querySelector('#patron-codes-select-all'),
-    codeClearAll: root.querySelector('#patron-codes-clear-all'),
+    codeSearch: root.querySelector('#patron-code-picker'),
+    codeOptions: root.querySelector('#patron-code-options'),
+    saveBar: root.querySelector('.settings-save-bar'),
+    codeSelection: root.querySelector('#patron-code-selection'),
+    codeCount: root.querySelector('#patron-code-count'),
+    codeAvailability: root.querySelector('#patron-code-availability'),
+    codeRetry: root.querySelector('#patron-code-retry'),
     codeWarning: root.querySelector('#patron-code-warning'),
     codeEligibilityEnabled: root.querySelector('#patron-code-eligibility-enabled'),
     codesUseSystem: root.querySelector('#patron-codes-use-system'),
@@ -634,7 +638,6 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   const addButtons = {
     publication: root.querySelector('#add-publication-option'),
     creators: root.querySelector('#add-common-creator'),
-    codes: root.querySelector('#add-patron-code'),
     providers: root.querySelector('#add-provider'),
     formats: root.querySelector('#add-material-format'),
     fields: root.querySelector('#add-custom-field'),
@@ -650,7 +653,11 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     baseline: null,
     originalTemplates: [],
     deletedFormats: [],
-    validationError: null
+    validationError: null,
+    selectedCodes: [],
+    codeOverrideDraft: null,
+    codeHighlight: -1,
+    codeLookupPending: false
   };
 
   function currentOrganizationId() {
@@ -685,7 +692,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     if (name === 'creators') {
       return values.map(item => clean(typeof item === 'string' ? item : property(item, 'value'))).filter(Boolean);
     }
-    return values.map(item => stringId(typeof item === 'string' || typeof item === 'number' ? item : property(item, 'id'))).filter(Boolean);
+    return values.map(item => {
+      const id = typeof item === 'string' || typeof item === 'number' ? item : property(item, 'id');
+      return normalizePatronCodeId(id) ?? stringId(id);
+    }).filter(Boolean);
   }
 
   function setOverrideUi(input, wrapper, overridden) {
@@ -713,23 +723,14 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   }
 
   function setEditorControls(type, container) {
-    const input = type === 'publication'
-      ? dom.publicationUseSystem
-      : type === 'creator' ? dom.creatorsUseSystem : dom.codesUseSystem;
-    const addButton = type === 'publication'
-      ? addButtons.publication
-      : type === 'creator' ? addButtons.creators : addButtons.codes;
+    const input = type === 'publication' ? dom.publicationUseSystem : dom.creatorsUseSystem;
+    const addButton = type === 'publication' ? addButtons.publication : addButtons.creators;
     updateSetDisabled(container, input, addButton);
-    if (type === 'code') {
-      const disabled = !state.system && Boolean(input?.checked);
-      dom.codeSelectAll.disabled = disabled;
-      dom.codeClearAll.disabled = disabled;
-    }
   }
 
   function updateCodeWarning() {
     if (disposed) return;
-    const empty = readSetRows(dom.codes, 'code').length === 0;
+    const empty = readSelectedCodes().length === 0;
     dom.codeWarning.hidden = !dom.codeEligibilityEnabled.checked || !empty;
     dom.codeWarning.textContent = empty && dom.codeEligibilityEnabled.checked
       ? 'No patron codes are selected. The current server policy allows all patron codes until at least one ID is selected.'
@@ -741,35 +742,17 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     container.replaceChildren();
     if (values.length === 0) {
       container.append(element('p', { className: 'settings-empty', text: 'No values configured.' }));
-      setEditorControls(type === 'code' ? 'code' : 'creator', container);
-      if (type === 'code') updateCodeWarning();
+      setEditorControls('creator', container);
       return;
     }
-    const allChoices = type === 'code'
-      ? byDisplayLabel(array(property(state.data, 'patronCodeChoices')).map((choice) => ({
-        value: stringId(property(choice, 'id')),
-        label: `${clean(property(choice, 'description')) || 'Patron code'} (${stringId(property(choice, 'id')) || '?'})`
-      })).filter(choice => choice.value), choice => choice.label, choice => choice.value)
-      : [];
-    const choices = allChoices.filter(choice => !dom.codeSearch.value.trim() ||
-      `${choice.label} ${choice.value}`.toLocaleLowerCase().includes(dom.codeSearch.value.trim().toLocaleLowerCase()));
     for (const [index, value] of values.entries()) {
-      const currentValue = type === 'creator' ? value : property(value, 'id') ?? value;
-      const currentId = stringId(currentValue);
-      const options = [...choices];
-      if (type === 'code' && currentId && !options.some(option => option.value === currentId)) {
-        options.unshift(allChoices.find(option => option.value === currentId) ||
-          { value: currentId, label: `Unavailable code (${currentId})` });
-      }
-      const input = type === 'code'
-        ? select([{ value: '', label: 'Select a Polaris patron code' }, ...options], currentId, { 'data-domain-editable': 'true' })
-        : element('input', {
+      const input = element('input', {
           type: 'text',
-          value: currentValue,
+          value,
           'data-domain-editable': 'true'
         });
       const row = element('div', { className: 'settings-editor-row', 'data-domain-row': 'true' }, [
-        field(type === 'creator' ? 'Creator' : 'Patron-code ID', input),
+        field('Creator', input),
         actions(index, values.length, (from, offset) => {
           const next = from + offset;
           if (next < 0 || next >= values.length) return;
@@ -786,13 +769,172 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
       ]);
       container.append(row);
     }
-    setEditorControls(type === 'code' ? 'code' : 'creator', container);
-    if (type === 'code') updateCodeWarning();
+    setEditorControls('creator', container);
   }
 
   function readSetRows(container, type) {
     return [...(container?.querySelectorAll('[data-domain-row]') || [])]
       .map(row => clean(row.querySelector('select, input')?.value));
+  }
+
+  function readSelectedCodes() {
+    return [...state.selectedCodes];
+  }
+
+  function codesInherited() {
+    return !state.system && Boolean(dom.codesUseSystem?.checked);
+  }
+
+  function codeChoices() {
+    const choices = new Map();
+    for (const choice of array(property(state.data, 'patronCodeChoices'))) {
+      const id = normalizePatronCodeId(property(choice, 'id'));
+      if (id && !choices.has(id)) {
+        choices.set(id, { id, label: `${clean(property(choice, 'description')) || 'Patron code'} (${id})` });
+      }
+    }
+    return byDisplayLabel([...choices.values()], choice => choice.label, choice => choice.id);
+  }
+
+  function availableCodes() {
+    const term = dom.codeSearch.value.trim().toLocaleLowerCase();
+    return codeChoices().filter(choice => !state.selectedCodes.includes(choice.id) &&
+      choice.label.toLocaleLowerCase().includes(term));
+  }
+
+  function closeCodePicker() {
+    dom.codeOptions.hidden = true;
+    dom.codeSearch.setAttribute('aria-expanded', 'false');
+    dom.codeSearch.removeAttribute('aria-activedescendant');
+    state.codeHighlight = -1;
+  }
+
+  function scrollActiveCode() {
+    const active = document.getElementById(dom.codeSearch.getAttribute('aria-activedescendant'));
+    if (!active || dom.codeOptions.hidden) return;
+    // scrollIntoView also scrolls the page, where it cannot account for the
+    // sticky save bar. Keyboard navigation must scroll only the listbox.
+    const list = dom.codeOptions.getBoundingClientRect();
+    const option = active.getBoundingClientRect();
+    const top = list.top + dom.codeOptions.clientTop;
+    const bottom = top + dom.codeOptions.clientHeight;
+    if (option.top < top) dom.codeOptions.scrollTop += option.top - top;
+    else if (option.bottom > bottom) dom.codeOptions.scrollTop += option.bottom - bottom;
+  }
+
+  function positionCodePicker(reveal = false) {
+    if (disposed || document.activeElement !== dom.codeSearch || !dom.codeSearch.getClientRects().length) return;
+    const viewport = window.visualViewport;
+    // Allow room for the input's focus ring, independent of zoom or footer wrapping.
+    const gap = 6;
+    const top = (viewport?.offsetTop || 0) + gap;
+    let bottom = (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight) - gap;
+    if (dom.saveBar?.classList.contains('attention')) {
+      bottom = Math.min(bottom, dom.saveBar.getBoundingClientRect().top - gap);
+    }
+    let input = dom.codeSearch.getBoundingClientRect();
+    if (!reveal && (input.top < top - 1 || input.bottom > bottom + 1)) {
+      // Scrolling away dismisses the list instead of pulling the page back to
+      // the focused input. Opening/focusing explicitly reveals it again.
+      closeCodePicker();
+      return;
+    }
+    const scroll = input.top < top ? input.top - top : Math.max(0, input.bottom - bottom);
+    if (scroll) {
+      window.scrollBy({ top: scroll, behavior: 'instant' });
+      input = dom.codeSearch.getBoundingClientRect();
+    }
+    if (dom.codeOptions.hidden) return;
+    const above = Math.max(0, input.top - top - gap);
+    const below = Math.max(0, bottom - input.bottom - gap);
+    const upwards = above > below;
+    const space = upwards ? above : below;
+    dom.codeOptions.classList.toggle('opens-up', upwards);
+    dom.codeOptions.style.setProperty('--patron-code-space', `${space}px`);
+    scrollActiveCode();
+  }
+
+  function highlightCode(index) {
+    const options = [...dom.codeOptions.querySelectorAll('[role="option"]')];
+    state.codeHighlight = options.length && index >= 0 ? index % options.length : -1;
+    for (const [position, option] of options.entries()) {
+      option.setAttribute('aria-selected', String(position === state.codeHighlight));
+    }
+    const active = options[state.codeHighlight];
+    if (active) {
+      dom.codeSearch.setAttribute('aria-activedescendant', active.id);
+      scrollActiveCode();
+    } else {
+      dom.codeSearch.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  function renderCodeOptions() {
+    if (dom.codeSearch.disabled) return;
+    dom.codeOptions.replaceChildren();
+    const choices = availableCodes();
+    for (const choice of choices) {
+      const option = element('div', { id: `patron-code-option-${choice.id}`, role: 'option',
+        'aria-selected': 'false', text: choice.label });
+      // Keep DOM focus on the combobox for mouse and touch selection.
+      listen(option, 'pointerdown', event => event.preventDefault());
+      listen(option, 'click', () => {
+        if (dom.codeSearch.disabled || !availableCodes().some(value => value.id === choice.id)) return;
+        renderCodes([...state.selectedCodes, choice.id]);
+        dom.codeSearch.value = '';
+        closeCodePicker();
+        dom.codeSearch.focus({ preventScroll: true });
+        onChange();
+        positionCodePicker(true);
+      });
+      dom.codeOptions.append(option);
+    }
+    dom.codeAvailability.textContent = choices.length ? `${choices.length} available patron codes.` : 'No matching patron codes.';
+    dom.codeOptions.hidden = choices.length === 0;
+    dom.codeSearch.setAttribute('aria-expanded', String(choices.length > 0));
+    highlightCode(-1);
+    positionCodePicker(true);
+  }
+
+  function renderCodes(values) {
+    state.selectedCodes = [...values];
+    if (!dom.codes || !dom.codeSelection) return;
+    const focusedChip = dom.codes.contains(document.activeElement)
+      ? document.activeElement.closest('[data-code-id]')?.dataset.codeId : null;
+    // The form's existing draft tracking observes this value, never picker text or focus.
+    dom.codeSelection.value = JSON.stringify([...values].sort((left, right) => Number(left) - Number(right)));
+    dom.codes.replaceChildren();
+    const choices = codeChoices();
+    const inherited = codesInherited();
+    for (const [index, id] of values.entries()) {
+      const label = choices.find(choice => choice.id === id)?.label || `Unavailable code (${id})`;
+      const remove = element('button', { type: 'button', className: 'patron-code-remove',
+        'aria-label': `Remove ${label}`, text: '×', disabled: inherited });
+      listen(remove, 'click', () => {
+        if (codesInherited() || !state.selectedCodes.includes(id)) return;
+        renderCodes(state.selectedCodes.filter(value => value !== id));
+        const buttons = [...dom.codes.querySelectorAll('button')];
+        const fallback = !dom.codeSearch.disabled ? dom.codeSearch
+          : !dom.codeRetry.disabled ? dom.codeRetry
+          : !dom.codesUseSystem.disabled ? dom.codesUseSystem : dom.codeEligibilityEnabled;
+        (buttons[Math.min(index, buttons.length - 1)] || fallback).focus();
+        onChange();
+      });
+      dom.codes.append(element('li', { 'data-code-id': id }, [element('span', { text: label }), remove]));
+    }
+    dom.codeCount.textContent = `${values.length} patron ${values.length === 1 ? 'code' : 'codes'} selected${inherited ? ' (using system IDs)' : ''}.`;
+    dom.codeSearch.disabled = inherited || state.codeLookupPending || Boolean(property(state.data, 'patronCodeChoicesUnavailable'));
+    dom.codeRetry.hidden = !property(state.data, 'patronCodeChoicesUnavailable');
+    dom.codeRetry.disabled = state.codeLookupPending;
+    dom.codeAvailability.textContent = state.codeLookupPending ? 'Loading patron codes…' : property(state.data, 'patronCodeChoicesUnavailable')
+      ? 'Patron-code lookup unavailable. Saved selections are preserved. Retry to add codes.'
+      : inherited ? 'Using system IDs. Turn off Use system IDs to edit the library selection.' : '';
+    closeCodePicker();
+    updateCodeWarning();
+    if (focusedChip) {
+      const button = [...dom.codes.children].find(chip => chip.dataset.codeId === focusedChip)?.querySelector('button');
+      if (button && !button.disabled) button.focus();
+    }
   }
 
   function renderPublication(values) {
@@ -846,11 +988,17 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
         actions(index, values.length, (from, offset) => reorder('providers', from, offset), from => remove('providers', from))
       ]);
       listen(override.input, 'change', () => {
-        updateRowDisabled(row, !state.system && !override.input.checked);
+        setProviderDisabled();
         onChange();
       });
       dom.providers.append(row);
-      updateRowDisabled(row, !state.system && !override.input.checked);
+      function setProviderDisabled() {
+        const inherited = !state.system && !override.input.checked;
+        updateRowDisabled(row, inherited);
+        row.querySelector('[aria-label="Move up"]').disabled = inherited || index === 0;
+        row.querySelector('[aria-label="Move down"]').disabled = inherited || index === values.length - 1;
+      }
+      setProviderDisabled();
     }
   }
 
@@ -1332,7 +1480,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     return JSON.stringify({
       publication: { useSystem: state.system || !dom.publicationUseSystem || dom.publicationUseSystem.checked, values: readPublication() },
       creators: { useSystem: state.system || !dom.creatorsUseSystem || dom.creatorsUseSystem.checked, values: readSetRows(dom.creators, 'creator') },
-      codes: { useSystem: state.system || !dom.codesUseSystem || dom.codesUseSystem.checked, values: readSetRows(dom.codes, 'code') },
+      codes: { useSystem: state.system || !dom.codesUseSystem || dom.codesUseSystem.checked,
+        values: readSelectedCodes().sort((left, right) => Number(left) - Number(right)) },
       providers: readProviders(),
       formats: readFormats(),
       fields: readFields(),
@@ -1377,7 +1526,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     return {
       publication: readPublication,
       creators: () => readSetRows(dom.creators, 'creator'),
-      codes: () => readSetRows(dom.codes, 'code'),
+      codes: readSelectedCodes,
       providers: readProviders,
       formats: readFormats,
       fields: readFields,
@@ -1390,7 +1539,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   function renderDomain(name, values) {
     if (name === 'publication') renderPublication(values);
     else if (name === 'creators') renderSetRows(dom.creators, values, 'creator');
-    else if (name === 'codes') renderSetRows(dom.codes, values, 'code');
+    else if (name === 'codes') renderCodes(values);
     else if (name === 'providers') renderProviders(values);
     else if (name === 'formats') renderFormats(values);
     else if (name === 'fields') renderFields(values);
@@ -1442,9 +1591,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
   }
 
   function validateCurrentFields() {
-    if (readSetRows(dom.creators, 'creator').some(value => !value) ||
-        readSetRows(dom.codes, 'code').some(value => !normalizePatronCodeId(value))) {
-      throw new Error('Remove or complete blank creator and patron-code rows before saving.');
+    if (readSetRows(dom.creators, 'creator').some(value => !value)) {
+      throw new Error('Remove or complete blank creator rows before saving.');
     }
     if (readPublication().some(option => !option.id || !option.label)) {
       throw new Error('Publication options require stable IDs and labels. Delete a row to remove it.');
@@ -1495,25 +1643,71 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
 
   bindSetToggle(dom.publicationUseSystem, 'publication', renderPublication);
   bindSetToggle(dom.creatorsUseSystem, 'creators', values => renderSetRows(dom.creators, values, 'creator'));
-  bindSetToggle(dom.codesUseSystem, 'codes', values => renderSetRows(dom.codes, values, 'code'));
-  bindAdd('publication', values => ({ id: `option_${values.length + 1}`, label: 'New option', enabled: true, sortOrder: (values.length + 1) * 10 }));
-  bindAdd('creators', values => 'New creator');
-  bindAdd('codes', values => stringId(property(array(property(state.data, 'patronCodeChoices'))[0], 'id')) || '');
-  listen(dom.codeSearch, 'input', () => renderSetRows(dom.codes, readSetRows(dom.codes, 'code'), 'code'));
-  listen(dom.codeSelectAll, 'click', () => {
-    const selected = readSetRows(dom.codes, 'code');
-    const term = dom.codeSearch.value.trim().toLocaleLowerCase();
-    for (const choice of array(property(state.data, 'patronCodeChoices'))) {
-      const id = stringId(property(choice, 'id'));
-      const label = `${clean(property(choice, 'description')) || ''} ${id || ''}`.toLocaleLowerCase();
-      if (id && (!term || label.includes(term)) && !selected.includes(id)) selected.push(id);
-    }
-    renderSetRows(dom.codes, selected, 'code');
+  listen(dom.codesUseSystem, 'change', () => {
+    if (state.system) return;
+    if (dom.codesUseSystem.checked) state.codeOverrideDraft = readSelectedCodes();
+    dom.codeSearch.value = '';
+    renderCodes(dom.codesUseSystem.checked ? setValues('codes', true)
+      : state.codeOverrideDraft ?? setValues('codes', false));
     onChange();
   });
-  listen(dom.codeClearAll, 'click', () => {
-    renderSetRows(dom.codes, [], 'code');
-    onChange();
+  bindAdd('publication', values => ({ id: `option_${values.length + 1}`, label: 'New option', enabled: true, sortOrder: (values.length + 1) * 10 }));
+  bindAdd('creators', values => 'New creator');
+  listen(dom.codeSearch, 'input', renderCodeOptions);
+  listen(dom.codeSearch, 'click', renderCodeOptions);
+  listen(dom.codeSearch, 'focus', () => positionCodePicker(true));
+  listen(window, 'scroll', () => positionCodePicker());
+  listen(window, 'resize', () => positionCodePicker(true));
+  listen(window.visualViewport, 'resize', () => positionCodePicker(true));
+  listen(window.visualViewport, 'scroll', () => positionCodePicker());
+  // Dirty-state status and responsive footer wrapping can change the usable
+  // viewport while the combobox keeps focus (including immediately after selection).
+  const codeLayoutObserver = window.ResizeObserver ? new window.ResizeObserver(() => positionCodePicker(true)) : null;
+  codeLayoutObserver?.observe(dom.saveBar);
+  codeLayoutObserver?.observe(dom.codeSearch);
+  const codeFooterObserver = new window.MutationObserver(() => positionCodePicker(true));
+  codeFooterObserver.observe(dom.saveBar, { attributes: true, attributeFilter: ['class'], childList: true, subtree: true, characterData: true });
+  events.signal.addEventListener('abort', () => {
+    codeLayoutObserver?.disconnect();
+    codeFooterObserver.disconnect();
+  }, { once: true });
+  listen(dom.codeSearch, 'keydown', event => {
+    if (event.key === 'Escape') {
+      if (!dom.codeOptions.hidden) event.stopPropagation();
+      closeCodePicker();
+    } else if (event.key === 'Tab') {
+      closeCodePicker();
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (dom.codeSearch.disabled) return;
+      event.preventDefault();
+      if (dom.codeOptions.hidden) renderCodeOptions();
+      const total = dom.codeOptions.querySelectorAll('[role="option"]').length;
+      highlightCode(event.key === 'ArrowDown' ? state.codeHighlight + 1
+        : state.codeHighlight <= 0 ? total - 1 : state.codeHighlight - 1);
+    } else if (event.key === 'Enter') {
+      // Enter in a picker must never submit the Settings form or arbitrary typed text.
+      event.preventDefault();
+      if (!dom.codeOptions.hidden) dom.codeOptions.querySelectorAll('[role="option"]')[state.codeHighlight]?.click();
+    }
+  });
+  listen(dom.codeSearch, 'blur', closeCodePicker);
+  listen(dom.codeRetry, 'click', async () => {
+    if (state.codeLookupPending) return;
+    const owner = state.data;
+    const restoreFocus = document.activeElement === dom.codeRetry;
+    state.codeLookupPending = true;
+    renderCodes(readSelectedCodes());
+    try { await onRetryCodes(); }
+    finally {
+      if (!disposed && state.data === owner) {
+        state.codeLookupPending = false;
+        renderCodes(readSelectedCodes());
+        if (restoreFocus && dom.codeRetry.hidden &&
+            [dom.codeRetry, document.body].includes(document.activeElement)) {
+          (codesInherited() ? dom.codesUseSystem : dom.codeSearch).focus();
+        }
+      }
+    }
   });
   listen(dom.codeEligibilityEnabled, 'change', updateCodeWarning);
   listen(dom.codes, 'change', updateCodeWarning);
@@ -1555,6 +1749,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     if (disposed) return;
     state.data = data || {};
     state.system = Boolean(system);
+    state.codeOverrideDraft = null;
+    state.codeLookupPending = false;
     state.validationError = null;
     try {
       validateEditorSnapshot(state.data, state.system);
@@ -1566,9 +1762,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     const library = libraryConfig(data);
     const publication = useSet('publicationOptions', state.system).map(normalizeOption);
     const creators = useSet('commonCreators', state.system).map(item => clean(typeof item === 'string' ? item : property(item, 'value'))).filter(Boolean);
-    const codes = useSet('allowedPatronCodeIds', state.system)
-      .map(item => stringId(typeof item === 'string' || typeof item === 'number' ? item : property(item, 'id')))
-      .filter(Boolean);
+    const codes = setValues('codes', state.system);
     const providerValues = state.system
       ? array(property(configured, 'providers'))
       : array(effective(data, 'externalSearchProviders')).map(item => ({ ...item, id: stringId(property(item, 'id')), overridden: bool(property(item, 'overridden')) }));
@@ -1620,7 +1814,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     }
     renderPublication(publication);
     renderSetRows(dom.creators, creators, 'creator');
-    renderSetRows(dom.codes, codes, 'code');
+    renderCodes(codes);
     renderProviders(providerValues);
     renderFormats(formats);
     renderFields(fields);
@@ -1638,6 +1832,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
       dom.publication,
       dom.creators,
       dom.codes,
+      dom.codeSelection,
+      dom.codeSearch,
       dom.providers,
       dom.formats,
       dom.fields,
@@ -1654,7 +1850,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     const values = {
       publication: readPublication(),
       creators: readSetRows(dom.creators, 'creator'),
-      codes: readSetRows(dom.codes, 'code'),
+      codes: readSelectedCodes(),
       providers: readProviders(),
       formats: readFormats(),
       fields: readFields(),
@@ -1715,6 +1911,16 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, canRemo
     collect,
     setBaseline: () => { state.baseline = readSnapshot(); },
     snapshot: () => readSnapshot(),
+    setCodeChoices(choices) {
+      if (disposed) return;
+      if (!Array.isArray(choices) || choices.some(choice => !isRecord(choice) ||
+          !normalizePatronCodeId(property(choice, 'id')) || typeof property(choice, 'description') !== 'string')) {
+        throw new Error('Patron-code lookup returned invalid choices. Retry the lookup.');
+      }
+      state.data.patronCodeChoices = choices;
+      state.data.patronCodeChoicesUnavailable = false;
+      renderCodes(readSelectedCodes());
+    },
     refreshCodeWarning: updateCodeWarning
   };
 }

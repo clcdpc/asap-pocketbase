@@ -2,6 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const childProcess = require('child_process');
+const YAML = require('yaml');
 
 const root = path.resolve(__dirname, '..');
 const workflow = fs.readFileSync(path.join(root, '.github/workflows/dotnet.yml'), 'utf8').replace(/\r\n/g, '\n');
@@ -110,12 +111,20 @@ assert.match(
   /  workflow_dispatch:\n    inputs:\n      deploy_test_iis:\n(?:        [^\n]+\n)*        default: false\n/,
   'manual workflow dispatch must default to no test-IIS deployment'
 );
-assert.ok(
-  workflow.slice(deploymentJobStart).includes(
-    "if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && ((github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis) || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}"
-  ),
-  'deployment must require the activation variable and manual opt-in or an eligible tag push'
-);
+const deployWorkflow = YAML.parse(workflow, { uniqueKeys: true }).jobs['deploy-test-iis'];
+const deployCondition = deployWorkflow.if;
+assert.match(deployCondition, /!\s*cancelled\(\)/,
+  'the deployment gate must not inherit skipped draft-validation status');
+assert.match(deployCondition, /needs\.build-test-package\.result\s*==\s*'success'/,
+  'deployment must require successful full CI execution');
+assert.match(deployCondition, /needs\.validation\.result\s*==\s*'success'/,
+  'deployment must require the successful reporting gate');
+assert.ok(deployCondition.includes("vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true'"),
+  'deployment must retain the repository activation gate');
+assert.ok(deployCondition.includes("(github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis)"),
+  'manual deployment must require explicit opt-in');
+assert.ok(deployCondition.includes("(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))"),
+  'test-release tags must remain eligible for automatic deployment');
 assert.ok(
   workflow.slice(deploymentJobStart).includes('runs-on: [self-hosted, windows, x64, asap-test-iis]'),
   'deployment must be isolated to the dedicated test-IIS runner labels'

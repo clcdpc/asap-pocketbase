@@ -15,6 +15,23 @@ ROOT = Path(__file__).resolve().parents[2]
 SUITES = ("dotnet", "browser", "frontend")
 SQL_TAG = "mcr.microsoft.com/mssql/server:2022-latest"
 CONFIG = ROOT / "scripts/ci/test-reuse.json"
+SOURCE_ALGORITHM = "full-ci-execution-v2"
+# CI-only controls are checked afresh by mandatory Python and Node contract tests.
+CONTROL_PATHS = frozenset({
+    ".github/workflows/dotnet.yml",
+    "scripts/ci/fingerprints.py",
+    "scripts/ci/reuse.py",
+    "scripts/ci/test_reuse.py",
+    "tests/ci_workflow_contract.test.js",
+    "tests/test_iis_deployment_contract.test.js",
+})
+CI_SAFETY_STEP = (
+    "      - name: Verify current CI safety contracts\n"
+    "        run: |\n"
+    "          node tests/ci_workflow_contract.test.js\n"
+    "          node tests/test_iis_deployment_contract.test.js\n"
+    "\n"
+)
 
 
 def canonical(value):
@@ -65,10 +82,41 @@ def tracked_entries(root=ROOT):
     return entries
 
 
-def source_fingerprint(entries, suite, config):
-    # Inclusion is the default. Unknown/new files, docs and shared review code stay included.
+def legacy_source_fingerprint(entries, suite, config):
+    """Exact v1 source hash used only to authenticate existing executed evidence."""
     excluded = {p for rule in config["exclusions"] if suite in rule["suites"] for p in rule["paths"]}
     return digest(sorted(entry for entry in entries if entry[0] not in excluded))
+
+
+def full_ci_execution_contract(workflow):
+    """Conservatively hash the test executor independently of deployment jobs.
+
+    The exact mandatory CI-policy step runs anew, so only that step is omitted.
+    Every other edit to the full test executor invalidates old test evidence.
+    """
+    starts = list(re.finditer(r"(?m)^  build-test-package:[ \t]*$", workflow))
+    if len(starts) != 1:
+        raise ValueError("Full CI executor definition is missing or ambiguous")
+    tail = workflow[starts[0].end():]
+    following = re.search(r"(?m)^  [a-zA-Z0-9_-]+:[ \t]*$", tail)
+    if following is None:
+        raise ValueError("Full CI executor job boundary is missing")
+    job = workflow[starts[0].start():starts[0].end() + following.start()]
+    if "      - name: Verify current CI safety contracts" in job:
+        if job.count(CI_SAFETY_STEP) != 1:
+            raise ValueError("Current CI safety contract step has changed unexpectedly")
+        job = job.replace(CI_SAFETY_STEP, "")
+    return digest(job)
+
+
+def source_fingerprint(entries, suite, config, execution_contract=None):
+    # Default include unknown/new code, fixtures, tests, and dependencies.
+    excluded = ({p for rule in config["exclusions"] if suite in rule["suites"] for p in rule["paths"]}
+                | CONTROL_PATHS)
+    files = sorted(entry for entry in entries if entry[0] not in excluded)
+    # Optional contract argument is for isolated pure-entry tests only.
+    return (digest({"files": files, "execution_contract": execution_contract})
+            if execution_contract is not None else digest(files))
 
 
 def selections(root=ROOT):
@@ -218,13 +266,15 @@ def calculate(expected, config, root=ROOT):
     entries = tracked_entries(root)
     selected = selections(root)
     environments, problems, image = environment(config, root)
+    contract = full_ci_execution_contract((root / config["workflow"]).read_text(encoding="utf-8"))
     suites = {}
     for suite in SUITES:
         selection = selected[suite]
         selection["expected"] = len(selection["files"]) if suite == "frontend" else discover(selection, root)
         inputs = {"schema": config["schema"], "suite": suite,
-                  "source": source_fingerprint(entries, suite, config),
+                  "source": source_fingerprint(entries, suite, config, contract),
                   "environment": digest(environments[suite]), "selection": selection}
         suites[suite] = {**inputs, "fingerprint": digest(inputs), "environment_inputs": environments[suite],
                          "unavailable": problems.get(suite)}
-    return {"commit": commit, "tree": tree, "sql_image": image, "suites": suites}
+    return {"commit": commit, "tree": tree, "sql_image": image,
+            "full_ci_execution_contract": contract, "suites": suites}
