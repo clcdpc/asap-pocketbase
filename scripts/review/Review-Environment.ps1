@@ -98,8 +98,11 @@ function Invoke-ReviewNative {
     try {
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            throw "$File $($Arguments[0]) timed out."
+        $waitClock = [System.Diagnostics.Stopwatch]::StartNew()
+        # Return to PowerShell regularly so Ctrl+C/Stop can unwind through finally
+        # during image builds or container creation, rather than waiting up to 40 minutes.
+        while (-not $process.WaitForExit(200)) {
+            if ($waitClock.Elapsed.TotalSeconds -ge $TimeoutSeconds) { throw "$File $($Arguments[0]) timed out." }
         }
         $output = $stdout.GetAwaiter().GetResult().Trim()
         $errorText = $stderr.GetAwaiter().GetResult().Trim()

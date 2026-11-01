@@ -58,6 +58,34 @@ try {
             $log = Join-Path $temporary 'timeout.log'
             Reject { Invoke-ReviewNative pwsh @('-NoProfile', '-Command', 'Write-Output before-timeout; Start-Sleep -Seconds 10') -TimeoutSeconds 2 -LogPath $log } 'timed out'
             Assert ((Get-Content -LiteralPath $log -Raw) -match 'before-timeout') 'Timed-out build lost its diagnostics.'
+            $childFile = Join-Path $temporary 'native-child.pid'
+            $childCommand = "[System.IO.File]::WriteAllText('$($childFile.Replace("'", "''"))', [string]`$PID); Start-Sleep -Seconds 15"
+            $helper = (Join-Path $repository 'scripts/review/Review-Environment.ps1').Replace("'", "''")
+            $pipeline = [powershell]::Create()
+            $null = $pipeline.AddScript(". '$helper'; Invoke-ReviewNative pwsh @('-NoProfile', '-Command', '$($childCommand.Replace("'", "''"))') -TimeoutSeconds 20")
+            $pending = $pipeline.BeginInvoke()
+            try {
+                $deadline = [DateTimeOffset]::UtcNow.AddSeconds(5)
+                while (-not (Test-Path -LiteralPath $childFile)) {
+                    if ([DateTimeOffset]::UtcNow -ge $deadline) { throw 'Native cancellation fixture did not start.' }
+                    Start-Sleep -Milliseconds 25
+                }
+                $reviewChildProcessId = [int](Get-Content -LiteralPath $childFile -Raw)
+                $stopping = $pipeline.BeginStop($null, $null)
+                $timely = $stopping.AsyncWaitHandle.WaitOne(3000)
+                if (-not $timely) {
+                    # Only the PID written by this owned synthetic child; unblock a regressed wait safely.
+                    Stop-Process -Id $reviewChildProcessId -Force -ErrorAction SilentlyContinue
+                }
+                $pipeline.EndStop($stopping)
+                Assert $timely 'Native command ignored pipeline interruption.'
+                Assert (-not (Get-Process -Id $reviewChildProcessId -ErrorAction SilentlyContinue)) 'Interrupted native command left a child running.'
+            }
+            finally {
+                $pipeline.Stop()
+                try { $null = $pipeline.EndInvoke($pending) } catch { }
+                $pipeline.Dispose()
+            }
             $buildRoot = Join-Path $temporary 'build'
             $build = Join-Path $buildRoot 'run'
             New-Item -ItemType Directory -Path $build -Force | Out-Null
