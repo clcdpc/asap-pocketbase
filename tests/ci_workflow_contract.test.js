@@ -323,6 +323,20 @@ async function main() {
     assert.equal(step(full, 'Remove SQL Server test container').if, '${{ always() }}');
     assert.ok(!reuse.exclusions.some((rule) => rule.paths.includes('.github/workflows/dotnet.yml')));
   });
+  await check('native core or designated browser execution installs the browser executable', () => {
+    const install = step(full, 'Install browser acceptance dependencies');
+    for (const dotnet of ['true', 'false']) {
+      for (const browser of ['true', 'false']) {
+        assert.equal(enabled(install, { steps: { reuse: { outputs: { dotnet, browser } } } }),
+          dotnet !== 'true' || browser !== 'true', `dotnet=${dotnet}, browser=${browser}`);
+      }
+    }
+  });
+  await check('cold core benchmark installs browser executables before active settings journeys', () => {
+    const install = step(benchmark, 'Install benchmark browser acceptance dependencies');
+    assert.equal(install.run, 'npx playwright install chromium');
+    assert.ok(benchmark.steps.indexOf(install) < benchmark.steps.indexOf(step(benchmark, 'Run cold core benchmark')));
+  });
   await check('controlled benchmark cannot satisfy required validation, reuse evidence or deployment', async () => {
     assert.deepEqual(benchmark.needs, ['validation-policy', 'build-test-package', 'validation']);
     assert.deepEqual(benchmark.permissions, { contents: 'read' });

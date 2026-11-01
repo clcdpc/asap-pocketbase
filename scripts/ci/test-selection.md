@@ -51,6 +51,11 @@ Current SQL coverage remains core, including every unclassified method of
   scopes. All active `PatronJourneyTests`, authorization/isolation tests and
   other runtime integration tests remain mandatory.
 
+The unclassified active settings journeys that launch Chromium remain core.
+CI installs the browser executable whenever either core or designated browser
+tests execute, including the controlled benchmark; reused browser evidence does
+not remove a core test's runtime dependency.
+
 Keep new tests **unclassified** by default. Do not place historical/browser
 categories on a class or assembly: a new method must stay core until reviewed.
 To deliberately classify a method, inspect its dependencies, add its category

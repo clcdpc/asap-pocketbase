@@ -851,8 +851,9 @@ class WorkflowTests(unittest.TestCase):
         for suite in fp.SUITES:
             self.assertIn(f"if: ${{{{ steps.reuse.outputs.{suite} != 'true' }}}}", workflow)
             self.assertIn(f"name: asap-test-evidence-v${{{{ steps.reuse.outputs.schema }}}}-{suite}-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}", workflow)
-        sql_condition = "if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}"
-        self.assertEqual(workflow.count(sql_condition), 3)
+        runtime_condition = "if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}"
+        # Credentials, SQL startup/readiness and Chromium serve either executing partition.
+        self.assertEqual(workflow.count(runtime_condition), 4)
         # Packaging is unconditional on reuse; only the existing test-IIS activation gate can deploy.
         publishing = workflow.split("      - name: Verify publish artifacts\n", 1)[1].split("  deploy-test-iis:", 1)[0]
         self.assertNotIn("steps.reuse.outputs", publishing)

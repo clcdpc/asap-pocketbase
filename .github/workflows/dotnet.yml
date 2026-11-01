@@ -198,7 +198,8 @@ jobs:
           exit 1
 
       - name: Install browser acceptance dependencies
-        if: ${{ steps.reuse.outputs.browser != 'true' }}
+        # Active settings journeys also launch Chromium within required core tests.
+        if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
         run: npx playwright install chromium
 
       - name: Run .NET and real SQL tests (non-browser partition)
@@ -481,6 +482,8 @@ jobs:
         run: npm ci
       - name: Resolve benchmark native runtime dependencies
         run: npx playwright install-deps chromium
+      - name: Install benchmark browser acceptance dependencies
+        run: npx playwright install chromium
       - name: Restore and build
         run: dotnet build Asap.sln --configuration Release
       - name: Resolve controlled unrelated-change population
