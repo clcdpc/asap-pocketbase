@@ -131,7 +131,15 @@ public sealed partial class PatronJourneyTests
                 pickup.ToString(CultureInfo.InvariantCulture), title);
             Assert.AreEqual(0, exitCode, $"{artifacts}{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
             using var report = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "browser-results.json")));
-            Assert.HasCount(12, report.RootElement.GetProperty("nativeZoom").EnumerateArray().ToArray());
+            var zoomStates = report.RootElement.GetProperty("nativeZoom").EnumerateArray().ToArray();
+            string[] expectedZoomStates = ["table", "detail", "confirmation", "new-suggestion", "workflow-picker",
+                "format-rules-collapsed", "format-rules-expanded", "patron-placeholder"];
+            foreach (var width in new[] { 1280, 1440 })
+            {
+                var names = zoomStates.Where(state => state.GetProperty("physicalWidth").GetInt32() == width)
+                    .Select(state => state.GetProperty("name").GetString()!).ToArray();
+                CollectionAssert.AreEqual(expectedZoomStates, names, $"Every required native-zoom state must run at {width}px.");
+            }
             Assert.HasCount(2, report.RootElement.GetProperty("listActions").EnumerateArray().ToArray());
             Assert.HasCount(10, report.RootElement.GetProperty("statusTransitions").GetProperty("transitions").EnumerateArray().ToArray());
             foreach (var action in report.RootElement.GetProperty("listActions").EnumerateArray())
