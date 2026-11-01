@@ -1,7 +1,7 @@
 'use strict';
 const { decideConfirmation } = require('./confirmation.cjs');
 const assert = require('node:assert/strict');
-const { activateRowAction, actionGeometry, actionColumn } = require('./request-actions.cjs');
+const { activateRowAction, actionGeometry, actionColumn } = require('../acceptance/helpers/request-actions.cjs');
 
 module.exports = async function verifyRequestTable({ page, context, baseURL, library, scan }) {
   const grid = page.locator('#request-grid'), search = page.locator('#request-search');

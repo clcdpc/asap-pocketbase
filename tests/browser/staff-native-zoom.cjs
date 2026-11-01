@@ -6,7 +6,7 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 const verifyMixedFieldLayout = require('./form-layout.cjs');
 const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
-const { actionGeometry } = require('./request-actions.cjs');
+const { actionGeometry } = require('../acceptance/helpers/request-actions.cjs');
 
 // Chromium's tab API changes actual browser zoom. CSS zoom and pinch scaling
 // do not exercise the same viewport, native controls or top-layer geometry.

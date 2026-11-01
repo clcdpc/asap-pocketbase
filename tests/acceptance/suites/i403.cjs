@@ -5,7 +5,7 @@ const path = require('node:path');
 const { requireFixture } = require('../helpers/environment.cjs');
 const { checkpoint, nativeZoom } = require('../helpers/accessibility.cjs');
 const { json, detail, unchanged, submit } = require('../helpers/assertions.cjs');
-const { settleActions, activateRowAction, actionGeometry, actionColumn } = require('../../browser/request-actions.cjs');
+const { settleActions, activateRowAction, actionGeometry, actionColumn } = require('../helpers/request-actions.cjs');
 const rowFor = (page, id) => page.locator(`#request-grid .request-title-link[data-request-id="${id}"]`).locator('xpath=ancestor::tr');
 async function start(t, key = 'draft') {
   const f = requireFixture((await t.verify()).evidence, key), before = await detail(t.context, t.origin, f);

@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { nativeZoom } = require('./helpers/accessibility.cjs');
-const { actionGeometry, settleActions, activateRowAction } = require('../browser/request-actions.cjs');
+const { actionGeometry, settleActions, activateRowAction } = require('./helpers/request-actions.cjs');
 const frontend = path.resolve(__dirname, '../../src/Asap.Web/Frontend');
 
 test('real rendered row actions fit, resize, dispatch, dismiss and retire at native zoom', async t => {
