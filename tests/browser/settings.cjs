@@ -55,8 +55,13 @@ async function scan(page, axeSource, artifactRoot, report, viewport) {
 async function runSystemFormatRuleEditor(page, report, waitForSettingsReady) {
   await page.locator('#settings-nav-patron').click();
   const rule = page.locator('#format-rules-editor [data-rule-code="book"]');
+  assert.equal(await rule.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'false');
+  assert.equal(await page.locator('#settings-save').isDisabled(), true);
+  await rule.locator('[data-rule-toggle]').press('Enter');
+  assert.equal(await page.locator('#settings-save').isDisabled(), true, 'Expansion alone leaves Settings clean.');
   await rule.locator('[data-rule-property="messageBehavior"]').selectOption('message');
   await rule.locator('[data-rule-property="message"]').fill('System format-rule integration witness');
+  await rule.locator('[data-rule-toggle]').click();
 
   const requestPromise = page.waitForRequest(request => request.method() === 'POST' &&
     new URL(request.url()).pathname === '/api/asap/staff/settings');
@@ -83,6 +88,7 @@ async function runSystemFormatRuleEditor(page, report, waitForSettingsReady) {
   await page.reload({ waitUntil: 'networkidle' });
   await waitForSettingsReady('system');
   await page.locator('#settings-nav-patron').click();
+  assert.equal(await rule.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'false');
   assert.equal(await page.locator('#format-rules-editor [data-rule-code="book"] [data-rule-property="messageBehavior"]')
     .inputValue(), 'message');
   assert.equal(await page.locator('#format-rules-editor [data-rule-code="book"] [data-rule-property="message"]')
@@ -105,6 +111,7 @@ async function runLibraryRuleCompletenessEditor(page, axeSource, args, report) {
   }
 
   const bookRule = page.locator('#format-rules-editor [data-rule-code="book"]');
+  await bookRule.locator('[data-rule-toggle]').click();
   await bookRule.locator('[data-rule-property="messageBehavior"]').selectOption('message');
   await bookRule.locator('[data-rule-property="message"]').fill('Library rule completeness integration witness');
   assert.equal(await page.locator('#settings-save').isEnabled(), true,
@@ -348,6 +355,7 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
 
   const beforeAuthorLabelClear = untouchedFormat;
   await page.locator('#settings-nav-patron').click();
+  await page.locator(`#format-rules-editor [data-rule-code="${codeB}"] [data-rule-toggle]`).click();
   await page.locator(`#format-rules-editor [data-rule-code="${codeB}"] [data-format-label="author"]`).fill('');
   await saveSettings();
   current = await read();
@@ -359,6 +367,7 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
 
   assert.deepEqual(rawOwned(current, sparseId), initialSparse,
     'Editing inherited field rules must preserve every untouched active owned nullable field and version.');
+  await page.locator(`#format-rules-editor [data-rule-code="${sparseCode}"] [data-rule-toggle]`).click();
   await page.locator(`#format-rules-editor [data-rule-code="${sparseCode}"] [data-format-label="author"]`)
     .fill('Changed sparse creator');
   await saveSettings();
@@ -680,6 +689,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
 
     await page.locator('#settings-nav-patron').click();
     const rule = page.locator('#format-rules-editor [data-rule-code="book"]');
+    await rule.locator('[data-rule-toggle]').click();
     const message = rule.locator('[data-rule-property="message"]');
     const behavior = rule.locator('[data-rule-property="messageBehavior"]');
     await behavior.selectOption('none');
@@ -699,6 +709,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await page.locator('#settings-nav-patron').click();
     assert.equal(await message.isVisible(), false);
     assert.equal(await message.inputValue(), 'Draft conditional text & é');
+    await rule.locator('[data-rule-toggle]').click();
     await behavior.selectOption('message');
     assert.equal(await message.isVisible(), true);
     await reload('system');
@@ -1226,8 +1237,10 @@ async function main() {
     assert.equal(await retiredRule.locator('[data-custom-rule-property="mode"]').inputValue(), 'optional');
     assert.equal(await retiredRule.locator('[data-custom-rule-property="labelOverride"]').inputValue(), 'Historical label');
     const addedRule = page.locator('#format-rules-editor [data-rule-code="book"] [data-custom-rule-key="browser_select"]');
+    await page.locator('#format-rules-editor [data-rule-code="book"] [data-rule-toggle]').click();
     await addedRule.locator('[data-custom-rule-property="mode"]').selectOption('required');
     await addedRule.locator('[data-custom-rule-property="labelOverride"]').fill('Browser choice');
+    await page.locator('#format-rules-editor [data-rule-code="book"] [data-rule-toggle]').click();
 
     const submitted = await saveSettings();
     postedPayload = submitted;

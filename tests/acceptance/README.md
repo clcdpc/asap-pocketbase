@@ -31,7 +31,29 @@ Run the existing feature suite with:
 .\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite pr410
 ```
 
-The S1 Workflow Settings suite is entirely read-only:
+The `i390` Format rules suite reviews real synthetic SQL settings in System and
+Review Library scopes. It checks complete collapsed cards, configured names/codes,
+Required/Optional/Hidden summaries (including enabled and retained disabled custom
+rules), independent keyboard disclosures, Tab behavior and dirty-state restoration.
+Geometry, axe and screenshots cover desktop, a 540px editor inside a wide window,
+390px mobile, forced colors/reduced motion, and verified native 200% zoom, expanded
+and collapsed. It uses the existing read-only runner guards; no Settings POST is
+authorized. Persisted Save/inheritance and hidden-DOM failure cases remain in the
+retained Settings SQL/browser journeys; `pr410` covers global Discard and Reset.
+
+Run the issue suite and selected regressions exactly once in order from PowerShell 7:
+
+```powershell
+.\scripts\review\Invoke-AsapReview.ps1 -Pr <PR_NUMBER> -Suite i390,s1,pr410
+```
+
+Each suite receives its own fresh database/container and evidence directory under
+`$HOME/ASAP-Acceptance/`. I390 captures are `i390-{draft,layout}-{system,2}-*.png`
+with matching `*-geometry.json`; native zoom evidence retains CDP metrics and uses
+the existing verified viewport capture. Generated evidence is never committed.
+Final human visual/screen-reader acceptance remains tracked by #398.
+
+The S1 Workflow Settings suite is entirely read-only and can also be run alone:
 
 ```powershell
 .\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite s1
@@ -337,6 +359,7 @@ dotnet build dev/review/src/Asap.ReviewProviders/Asap.ReviewProviders.csproj -c 
 dotnet build dev/review/src/Asap.ReviewBootstrap/Asap.ReviewBootstrap.csproj -c Release
 node --test tests/acceptance/runner.test.cjs tests/acceptance/authentication.test.cjs tests/acceptance/launcher.test.cjs tests/acceptance/transport.test.cjs tests/acceptance/infrastructure.test.cjs
 node --test tests/acceptance/workflow-settings.test.cjs
+node --test tests/acceptance/format-rules.test.cjs
 npm test
 ```
 

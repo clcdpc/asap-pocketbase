@@ -1,5 +1,7 @@
 import { byDisplayLabel } from './display-order.js';
 
+let nextRulePanelId = 0;
+
 function element(tag, attributes = {}, children = []) {
   const value = document.createElement(tag);
   for (const [name, attribute] of Object.entries(attributes)) {
@@ -600,12 +602,12 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     return button;
   }
 
-  function actions(index, total, move, remove) {
+  function actions(index, total, move, remove, context = '') {
     const buttons = [
-      command('chevron-up', 'Move up', () => move(index, -1), index === 0),
-      command('chevron-down', 'Move down', () => move(index, 1), index === total - 1)
+      command('chevron-up', context ? `Move ${context} up` : 'Move up', () => move(index, -1), index === 0),
+      command('chevron-down', context ? `Move ${context} down` : 'Move down', () => move(index, 1), index === total - 1)
     ];
-    if (remove) buttons.push(command('trash-o', 'Delete', () => remove(index)));
+    if (remove) buttons.push(command('trash-o', context ? `Delete ${context} format rule` : 'Delete', () => remove(index)));
     return element('div', { className: 'settings-row-actions' }, buttons);
   }
 
@@ -659,6 +661,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     codeHighlight: -1,
     codeLookupPending: false
   };
+  // Disclosure state never participates in the settings snapshot or payload.
+  const expandedRuleCodes = new Set();
+  const rulePanelIds = new Map();
 
   function currentOrganizationId() {
     const value = property(state.data, 'orgId');
@@ -1019,7 +1024,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     });
   }
 
-  function fieldPair(name, value) {
+  function fieldPair(name, value, format) {
     const group = element('div', { className: 'settings-format-field-group' });
     const readable = name.charAt(0).toUpperCase() + name.slice(1);
     const mode = select([
@@ -1029,16 +1034,17 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     ], value.mode, {
       'data-format-field': name,
       'data-domain-editable': 'true',
-      'aria-label': `${readable} mode`
+      'aria-label': `${readable} requirement for ${format}`
     });
     const label = element('input', {
       type: 'text',
       value: value.label || '',
       'data-format-label': name,
       'data-domain-editable': 'true',
-      'aria-label': `${readable} label`
+      'aria-label': `${readable} patron-facing label for ${format}`
     });
-    group.append(element('span', { className: 'settings-format-field-name', text: name }), mode, label);
+    group.append(element('strong', { className: 'settings-format-field-name', text: readable }),
+      field('Requirement', mode), field('Patron-facing label', label));
     return group;
   }
 
@@ -1138,7 +1144,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       ]);
       const optionsEditor = row.querySelector('[data-options-editor]');
       renderFieldOptions(optionsEditor, value.options, value.type === 'select');
-      const originalKey = value.key;
+      let originalKey = value.key;
       listen(keyInput, 'change', event => {
         const nextKey = clean(event.target.value);
         if (!originalKey || !nextKey || nextKey === originalKey) return;
@@ -1154,6 +1160,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
           }
         }
         state.models.rules = clone(rules);
+        originalKey = nextKey;
         renderRules(rules);
         onChange();
       });
@@ -1161,6 +1168,11 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         optionsEditor.hidden = event.target.value !== 'select';
         onChange();
       });
+      // Definition labels and enabled status affect the draft rule summary too.
+      for (const control of [row.querySelectorAll('input')[1], row.querySelector('input[type="checkbox"]')]) {
+        listen(control, 'input', () => refreshRuleDefinitions());
+        listen(control, 'change', () => refreshRuleDefinitions());
+      }
       dom.fields.append(row);
     }
   }
@@ -1216,48 +1228,130 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     }));
   }
 
+  function updateRuleSummary(row) {
+    const enabledKeys = new Set(readFields().filter(item => item.enabled).map(item => item.key));
+    const controls = [...row.querySelectorAll('[data-format-field]'),
+      ...[...row.querySelectorAll('[data-custom-rule-key]')]
+        .filter(group => enabledKeys.has(group.dataset.customRuleKey))
+        .map(group => group.querySelector('[data-custom-rule-property="mode"]'))];
+    const counts = { required: 0, optional: 0, hidden: 0 };
+    for (const control of controls) {
+      if (control && Object.hasOwn(counts, control.value)) counts[control.value] += 1;
+    }
+    const summary = row.querySelector('[data-rule-summary]');
+    const text = `${counts.required} required · ${counts.optional} optional · ${counts.hidden} hidden`;
+    if (summary.textContent !== text) summary.textContent = text;
+  }
+
+  function refreshRuleDefinitions() {
+    const fields = new Map(readFields().map(item => [item.key, item]));
+    for (const row of dom.rules?.querySelectorAll('[data-rule-code]') || []) {
+      for (const group of row.querySelectorAll('[data-custom-rule-key]')) {
+        const definition = fields.get(group.dataset.customRuleKey);
+        const label = definition?.label || `Retired field (${group.dataset.customRuleKey})`;
+        group.querySelector('.settings-custom-rule-name').textContent = label;
+        group.querySelector('.settings-custom-rule-status').textContent = !definition
+          ? 'Retired field — saved rule retained' : !definition.enabled ? 'Disabled field — saved rule retained' : '';
+        for (const [property, name] of [['mode', 'mode'], ['labelOverride', 'label override']]) {
+          group.querySelector(`[data-custom-rule-property="${property}"]`)
+            .setAttribute('aria-label', `${label} ${name} for ${row.dataset.ruleCode}`);
+        }
+      }
+      updateRuleSummary(row);
+    }
+  }
+
   function renderRules(values) {
     if (!dom.rules) return;
+    const focused = document.activeElement;
+    const focusedRow = dom.rules.contains(focused) ? focused.closest('[data-rule-code]') : null;
+    const focusedIndex = [...dom.rules.children].indexOf(focusedRow);
+    const focusedCode = focusedRow?.dataset.ruleCode;
+    const focusedName = focused?.getAttribute('aria-label');
+    const codes = new Set(values.map(value => value.code));
+    for (const code of expandedRuleCodes) {
+      if (!codes.has(code)) expandedRuleCodes.delete(code);
+    }
+    for (const code of rulePanelIds.keys()) {
+      if (!codes.has(code)) rulePanelIds.delete(code);
+    }
     dom.rules.replaceChildren();
     if (values.length === 0) dom.rules.append(element('p', { className: 'settings-empty', text: 'No format rules configured.' }));
     const customFields = readFields();
+    const formats = readFormats();
     for (const [index, value] of values.entries()) {
+      const formatLabel = formats.find(format => format.code === value.code)?.label || value.code;
+      const formatContext = `${formatLabel} (${value.code})`;
+      if (!rulePanelIds.has(value.code)) rulePanelIds.set(value.code, `format-rule-panel-${++nextRulePanelId}`);
+      const panelId = rulePanelIds.get(value.code);
+      const toggle = element('button', { type: 'button', className: 'settings-rule-toggle',
+        'aria-controls': panelId, 'aria-describedby': `${panelId}-summary`, 'data-rule-toggle': 'true' }, [
+        element('span', { className: 'settings-rule-chevron', 'aria-hidden': 'true', text: '›' }),
+        element('span', { className: 'settings-rule-identity' }, [
+          element('strong', { text: formatLabel }), element('span', { className: 'settings-rule-code', text: value.code })
+        ]),
+        element('span', { id: `${panelId}-summary`, className: 'settings-rule-summary', 'data-rule-summary': 'true',
+          role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' })
+      ]);
       const customFieldsByKey = new Map(customFields.map(item => [item.key, item]));
       const customFieldKeys = [...customFields.map(item => item.key)];
       for (const key of Object.keys(value.customFields || {})) {
         if (!customFieldsByKey.has(key)) customFieldKeys.push(key);
       }
-      const row = element('div', { className: 'settings-editor-row settings-rule-row', 'data-domain-row': 'true', 'data-rule-code': value.code }, [
-        element('div', { className: 'settings-rule-heading' }, [element('strong', { text: value.code }), actions(index, values.length, (from, offset) => reorder('rules', from, offset), from => remove('rules', from))]),
-        field('Message behavior', select([
-          { value: 'none', label: 'No message' },
-          { value: 'message', label: 'Use message' },
-          { value: 'ebookMessage', label: 'eBook message' },
-          { value: 'eaudiobookMessage', label: 'eAudiobook message' }
-        ], value.messageBehavior, { 'data-rule-property': 'messageBehavior', 'data-domain-editable': 'true' })),
-        field('Message', element('textarea', { rows: '3', 'data-rule-property': 'message', 'data-domain-editable': 'true' }, [value.message || ''])),
-        element('div', { className: 'settings-rule-fields' }, ['title', 'author', 'identifier', 'publication'].map(name => fieldPair(name, value[name]))),
-        element('div', { className: 'settings-rule-custom-fields' }, [
-          element('strong', { text: 'Custom field rules' }),
-          ...customFieldKeys.map(key => {
+      // Keep the entire panel mounted, including while hidden: collection and
+      // fail-closed completeness validation read these exact draft controls.
+      const panel = element('div', { id: panelId, className: 'settings-rule-details' }, [
+        element('fieldset', { className: 'settings-rule-section' }, [
+          element('legend', { text: 'Message behavior' }),
+          field('Message behavior', select([
+            { value: 'none', label: 'No message' },
+            { value: 'message', label: 'Use message' },
+            { value: 'ebookMessage', label: 'eBook message' },
+            { value: 'eaudiobookMessage', label: 'eAudiobook message' }
+          ], value.messageBehavior, { 'data-rule-property': 'messageBehavior', 'data-domain-editable': 'true', 'aria-label': `Message behavior for ${formatContext}` })),
+          field('Message', element('textarea', { rows: '3', 'data-rule-property': 'message', 'data-domain-editable': 'true', 'aria-label': `Message for ${formatContext}` }, [value.message || '']))
+        ]),
+        element('fieldset', { className: 'settings-rule-section' }, [element('legend', { text: 'Field requirements' }),
+          element('div', { className: 'settings-rule-fields' }, ['title', 'author', 'identifier', 'publication'].map(name => fieldPair(name, value[name], formatContext)))
+        ]),
+        element('fieldset', { className: 'settings-rule-section' }, [
+          element('legend', { text: 'Custom field rules' }),
+          element('div', { className: 'settings-rule-custom-fields' }, customFieldKeys.map(key => {
             const fieldValue = customFieldsByKey.get(key);
             const fieldLabel = fieldValue?.label || `Retired field (${key})`;
             const current = value.customFields[key] || { mode: 'hidden', labelOverride: null };
             return element('div', { className: 'settings-custom-rule-row', 'data-custom-rule-key': key }, [
-              element('span', { text: fieldLabel }),
-              select([
+              element('strong', { className: 'settings-custom-rule-name', text: fieldLabel }),
+              element('span', { className: 'settings-custom-rule-status' }),
+              field('Requirement', select([
                 { value: 'hidden', label: 'Hidden' },
                 { value: 'optional', label: 'Optional' },
                 { value: 'required', label: 'Required' }
               ], current.mode, { 'data-custom-rule-property': 'mode', 'data-domain-editable': 'true',
-                'aria-label': `${fieldLabel} mode for ${value.code}` }),
-              element('input', { type: 'text', value: current.labelOverride || '', placeholder: 'Label override',
+                'aria-label': `${fieldLabel} mode for ${value.code}` })),
+              field('Patron-facing label override', element('input', { type: 'text', value: current.labelOverride || '', placeholder: 'Label override',
                 'data-custom-rule-property': 'labelOverride', 'data-domain-editable': 'true',
-                'aria-label': `${fieldLabel} label override for ${value.code}` })
+                'aria-label': `${fieldLabel} label override for ${value.code}` }))
             ]);
-          })
+          }))
         ])
       ]);
+      const row = element('div', { className: 'settings-editor-row settings-rule-row', 'data-domain-row': 'true', 'data-rule-code': value.code }, [
+        element('div', { className: 'settings-rule-heading' }, [toggle,
+          actions(index, values.length, (from, offset) => reorder('rules', from, offset), from => remove('rules', from), formatLabel)]), panel
+      ]);
+      const updateExpansion = () => {
+        const expanded = expandedRuleCodes.has(value.code);
+        panel.hidden = !expanded;
+        toggle.setAttribute('aria-expanded', String(expanded));
+        toggle.setAttribute('aria-label', `${expanded ? 'Collapse' : 'Expand'} ${formatContext} format rules`);
+      };
+      updateExpansion();
+      listen(toggle, 'click', () => {
+        if (expandedRuleCodes.has(value.code)) expandedRuleCodes.delete(value.code);
+        else expandedRuleCodes.add(value.code);
+        updateExpansion();
+      });
       const behavior = row.querySelector('[data-rule-property="messageBehavior"]');
       const updateMessage = () => {
         const control = row.querySelector('[data-rule-property="message"]');
@@ -1268,6 +1362,14 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       updateMessage();
       listen(behavior, 'change', updateMessage);
       dom.rules.append(row);
+    }
+    refreshRuleDefinitions();
+    if (focusedRow) {
+      const rows = [...dom.rules.querySelectorAll('[data-rule-code]')];
+      const row = rows.find(item => item.dataset.ruleCode === focusedCode) || rows[Math.min(focusedIndex, rows.length - 1)];
+      const action = [...(row?.querySelectorAll('.settings-row-actions button') || [])]
+        .find(button => !button.disabled && button.getAttribute('aria-label') === focusedName);
+      (action || row?.querySelector('[data-rule-toggle]') || addButtons.rules)?.focus();
     }
   }
 
@@ -1500,8 +1602,12 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     if (name === 'formats' || name === 'providers') {
       values.forEach((value, order) => { value.sortOrder = (order + 1) * 10; });
     }
+    const focusedAction = document.activeElement?.getAttribute('aria-label');
     renderDomain(name, values);
-    if (name === 'fields') renderRules(rules);
+    if (name === 'fields') {
+      renderRules(rules);
+      focusFieldRow(next, focusedAction);
+    }
     onChange();
   }
 
@@ -1518,6 +1624,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       for (const rule of rules || []) delete rule.customFields[removedFieldKey];
       state.models.rules = clone(rules);
       renderRules(rules);
+      focusFieldRow(Math.min(index, values.length - 1));
     }
     onChange();
   }
@@ -1534,6 +1641,13 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       claims: readClaims,
       templates: readTemplates
     }[name]();
+  }
+
+  function focusFieldRow(index, actionName) {
+    const row = dom.fields.querySelectorAll('[data-domain-row]')[index];
+    const action = [...(row?.querySelectorAll('.settings-row-actions button') || [])]
+      .find(button => !button.disabled && button.getAttribute('aria-label') === actionName);
+    (action || row?.querySelector('input') || addButtons.fields)?.focus();
   }
 
   function renderDomain(name, values) {
@@ -1631,17 +1745,27 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       const rules = name === 'fields' ? readRules() : null;
       const values = readDomain(name);
       const added = factory(values);
+      if (!added) return;
       values.push(added);
       if (name === 'rules' && !state.ruleRosterCodes.includes(added.code)) {
         state.ruleRosterCodes = [...state.ruleRosterCodes, added.code];
       }
+      if (name === 'rules') expandedRuleCodes.add(added.code);
       renderDomain(name, values);
-      if (name === 'fields') renderRules(rules);
+      if (name === 'rules') dom.rules.lastElementChild?.querySelector('[data-rule-toggle]')?.focus();
+      if (name === 'fields') {
+        renderRules(rules);
+        focusFieldRow(values.length - 1);
+      }
       onChange();
     });
   }
 
   bindSetToggle(dom.publicationUseSystem, 'publication', renderPublication);
+  listen(dom.rules, 'change', event => {
+    const row = event.target.closest('[data-rule-code]');
+    if (row && event.target.matches('[data-format-field], [data-custom-rule-property="mode"]')) updateRuleSummary(row);
+  });
   bindSetToggle(dom.creatorsUseSystem, 'creators', values => renderSetRows(dom.creators, values, 'creator'));
   listen(dom.codesUseSystem, 'change', () => {
     if (state.system) return;
@@ -1722,7 +1846,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   bindAdd('formats', values => ({ id: null, code: `custom_${values.length + 1}`, ownerOrganizationId: currentOrganizationId(), label: 'New format', isEnabled: true, overridden: true }));
   bindAdd('fields', values => ({ id: null, key: `field_${values.length + 1}`, type: 'text', label: 'New field', enabled: true, options: [] }));
   bindAdd('rules', values => {
-    const format = readFormats()[0];
+    const format = readFormats().find(item => !values.some(rule => rule.code === item.code));
+    if (!format) return null;
     return normalizeRule({ code: format?.code || '' }, format || {});
   });
   bindAdd('claims', values => ({ materialFormatId: readFormats()[0]?.id || '', staffUserId: '' }));
@@ -1749,6 +1874,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     if (disposed) return;
     state.data = data || {};
     state.system = Boolean(system);
+    expandedRuleCodes.clear();
     state.codeOverrideDraft = null;
     state.codeLookupPending = false;
     state.validationError = null;

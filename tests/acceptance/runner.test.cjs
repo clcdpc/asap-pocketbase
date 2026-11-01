@@ -431,9 +431,10 @@ test('complete functional results use 0/1/2 with blockers and required skips tak
   assert.equal(exitCode(report), 2, 'Duplicate required results cannot pass');
 });
 
-test('registered suites retain D1, pr410, Q1, S1 and smoke with their mutation boundaries', async () => {
+test('registered suites match discovered modules and retain their mutation boundaries', async () => {
   const registry = require('./suites/index.cjs');
-  const names = ['d1', 'pr410', 'q1', 's1', 'smoke'];
+  const names = (await fs.readdir(path.join(__dirname, 'suites')))
+    .filter(name => name.endsWith('.cjs') && name !== 'index.cjs').map(name => name.slice(0, -4)).sort();
   assert.deepEqual(require('./suites/registry.json'), names, 'Each suite is registered exactly once in deterministic order');
   assert.deepEqual(Object.keys(registry), names);
   assert.equal(registry.smoke.id, 'smoke');
@@ -441,6 +442,11 @@ test('registered suites retain D1, pr410, Q1, S1 and smoke with their mutation b
   assert.equal(registry.s1.mutations, false);
   assert.equal(registry.s1.scenarios.length, 6);
   assert.ok(registry.s1.scenarios.every(scenario => scenario.writes === false));
+  assert.equal(registry.i390.id, 'i390');
+  assert.equal(registry.i390.mutations, false);
+  assert.ok(registry.i390.scenarios.every(scenario => scenario.writes === false && scenario.requirements.length > 0));
+  assert.deepEqual(new Set(registry.i390.scenarios.map(scenario => scenario.id)),
+    new Set(['i390-draft-system', 'i390-layout-system', 'i390-draft-2', 'i390-layout-2']));
   assert.deepEqual(registry.smoke.scenarios.map(s => [s.id, s.writes]), [
     ['smoke-authenticated-review', false], ['smoke-synthetic-close', true]
   ]);

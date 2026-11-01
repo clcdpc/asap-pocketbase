@@ -253,6 +253,124 @@ const axe = require('axe-core');
       'An incomplete visible auto-claim row must block settings collection and the save request.');
     editors.dispose();
 
+    const accordionData = JSON.parse(JSON.stringify(data));
+    const extraFormats = ['digital', 'unusual\"] #code'].map((code, index) => ({ ...systemFormats[0],
+      id: String(90 + index), code, label: index ? 'Long configured name '.repeat(8) : 'Digital edition', customFields: {} }));
+    const accordionFormats = [...systemFormats, ...extraFormats];
+    accordionData.stored.configuredSystem.formats = accordionFormats;
+    accordionData.stored.formats = accordionFormats;
+    accordionData.effective.formats = accordionFormats;
+    let accordionChanges = 0;
+    const accordion = module.createSettingsDomainEditors({ root, onChange: () => accordionChanges++ });
+    accordion.populate(accordionData, false);
+    const rows = () => [...root.querySelectorAll('#format-rules-editor [data-rule-code]')];
+    const card = code => rows().find(row => row.dataset.ruleCode === code);
+    const toggle = code => card(code).querySelector('[data-rule-toggle]');
+    const panel = code => document.getElementById(toggle(code).getAttribute('aria-controls'));
+    const summary = () => card('book').querySelector('[data-rule-summary]').textContent;
+    const change = (control, value) => {
+      control.value = value;
+      control.dispatchEvent(new window.Event('change', { bubbles: true }));
+    };
+    const accordionBaseline = accordion.snapshot();
+    for (const row of rows()) {
+      const button = row.querySelector('[data-rule-toggle]');
+      assert.strictEqual(button.tagName, 'BUTTON');
+      assert.strictEqual(button.type, 'button');
+      assert.strictEqual(button.getAttribute('aria-expanded'), 'false');
+      assert.strictEqual(panel(row.dataset.ruleCode).hidden, true);
+      assert.strictEqual(row.querySelectorAll('[data-format-field]').length, 4);
+      assert.strictEqual(row.querySelectorAll('[data-format-label]').length, 4);
+      assert.strictEqual(button.querySelector('button'), null);
+      assert.match(button.getAttribute('aria-controls'), /^format-rule-panel-\d+$/);
+    }
+    assert.match(toggle('digital').textContent, /Digital edition.*digital/);
+    assert.strictEqual(summary(), '2 required · 3 optional · 0 hidden', 'Disabled and retired rules never enter patron-visible counts.');
+    assert.match(card('book').textContent, /Disabled field — saved rule retained/);
+    toggle('book').click(); toggle('digital').click(); toggle('book').click();
+    assert.strictEqual(panel('book').hidden, true);
+    assert.strictEqual(panel('digital').hidden, false, 'Disclosures are independent.');
+    assert.strictEqual(accordion.snapshot(), accordionBaseline);
+    assert.strictEqual(accordion.collect().changed, false);
+    assert.strictEqual(accordionChanges, 0, 'Disclosures never notify dirty tracking.');
+    toggle('book').click();
+    const titleLabel = card('book').querySelector('[data-format-label="title"]');
+    titleLabel.value = 'Editable title draft';
+    titleLabel.focus(); titleLabel.setSelectionRange(2, 7);
+    change(card('book').querySelector('[data-format-field="title"]'), 'optional');
+    assert.strictEqual(summary(), '1 required · 4 optional · 0 hidden');
+    assert.strictEqual(card('book').querySelector('[data-format-label="title"]'), titleLabel, 'Summary updates never rebuild controls.');
+    assert.strictEqual(document.activeElement, titleLabel);
+    assert.strictEqual(titleLabel.selectionStart, 2);
+    assert.strictEqual(titleLabel.selectionEnd, 7);
+    change(card('book').querySelector('[data-format-field="author"]'), 'hidden');
+    assert.strictEqual(summary(), '1 required · 3 optional · 1 hidden');
+    change(card('book').querySelector('[data-custom-rule-key="pickup_location"] select'), 'hidden');
+    assert.strictEqual(summary(), '0 required · 3 optional · 2 hidden');
+    assert.deepStrictEqual([...card('book').querySelectorAll('[data-format-field]')].map(node => node.dataset.formatField),
+      ['title', 'author', 'identifier', 'publication']);
+    change(card('book').querySelector('[data-rule-property="messageBehavior"]'), 'eaudiobookMessage');
+    card('book').querySelector('[data-rule-property="message"]').value = 'Temporarily hidden message draft';
+    change(card('book').querySelector('[data-rule-property="messageBehavior"]'), 'none');
+    const bookMove = card('book').querySelector('[aria-label="Move Book down"]');
+    bookMove.focus(); bookMove.click();
+    assert.strictEqual(document.activeElement.getAttribute('aria-label'), 'Move Book down');
+    assert.deepStrictEqual(rows().map(row => row.dataset.ruleCode), ['digital', 'book', extraFormats[1].code]);
+    assert.strictEqual(panel('book').hidden, false);
+    assert.strictEqual(panel('digital').hidden, false);
+    assert.strictEqual(panel(extraFormats[1].code).hidden, true);
+    root.querySelector('#add-custom-field').click();
+    assert.strictEqual(document.activeElement.closest('[data-field-id]'), root.querySelector('#additional-fields-editor').lastElementChild);
+    assert.strictEqual(summary(), '0 required · 3 optional · 3 hidden');
+    let addedDefinition = root.querySelector('#additional-fields-editor').lastElementChild;
+    change(addedDefinition.querySelector('input'), 'first_key');
+    change(addedDefinition.querySelector('input'), 'second_key');
+    assert.ok(card('book').querySelector('[data-custom-rule-key="second_key"]'));
+    assert.strictEqual(card('book').querySelector('[data-custom-rule-key="first_key"]'), null);
+    change(card('book').querySelector('[data-custom-rule-key="second_key"] select'), 'required');
+    assert.strictEqual(summary(), '1 required · 3 optional · 2 hidden');
+    addedDefinition.querySelector('input[type="checkbox"]').click();
+    assert.strictEqual(summary(), '0 required · 3 optional · 2 hidden');
+    change(addedDefinition.querySelectorAll('input')[1], 'Renamed field label');
+    assert.match(card('book').textContent, /Renamed field label/);
+    addedDefinition.querySelector('input[type="checkbox"]').click();
+    const fieldMove = addedDefinition.querySelector('[aria-label="Move up"]');
+    fieldMove.focus(); fieldMove.click();
+    assert.strictEqual(document.activeElement.getAttribute('aria-label'), 'Move up');
+    addedDefinition = [...root.querySelectorAll('#additional-fields-editor [data-field-id]')]
+      .find(row => row.querySelector('input').value === 'second_key');
+    addedDefinition.querySelector('[aria-label="Delete"]').click();
+    assert.strictEqual(document.activeElement.isConnected, true);
+    assert.strictEqual(document.activeElement.tagName, 'INPUT');
+    assert.strictEqual(panel('book').hidden, false);
+    const preservedDraft = accordion.collect().values.rules.find(rule => rule.code === 'book');
+    assert.strictEqual(preservedDraft.title.label, 'Editable title draft');
+    assert.strictEqual(preservedDraft.author.mode, 'hidden');
+    assert.strictEqual(preservedDraft.message, 'Temporarily hidden message draft');
+    assert.deepStrictEqual(preservedDraft.customFields.retired_type, { mode: 'optional', labelOverride: 'Historical field label' });
+    const deleteDigital = card('digital').querySelector('[aria-label="Delete Digital edition format rule"]');
+    deleteDigital.focus(); deleteDigital.click();
+    assert.strictEqual(document.activeElement, toggle('book'));
+    root.querySelector('#add-format-rule').click();
+    assert.strictEqual(panel('digital').hidden, false, 'Adding a missing rule expands it.');
+    assert.strictEqual(document.activeElement, toggle('digital'));
+    assert.strictEqual(accordion.collect().values.rules.find(rule => rule.code === 'book').message, preservedDraft.message);
+    const fullRoster = rows().length;
+    root.querySelector('#add-format-rule').click();
+    assert.strictEqual(rows().length, fullRoster, 'Adding cannot duplicate a configured rule.');
+    toggle('book').click();
+    assert.strictEqual(accordion.collect().values.rules.find(rule => rule.code === 'book').title.label, 'Editable title draft');
+    accordion.populate(accordionData, false);
+    assert.ok(rows().every(row => panel(row.dataset.ruleCode).hidden), 'A new snapshot resets disclosure state.');
+    assert.strictEqual(accordion.collect().changed, false);
+    for (const selector of ['[data-format-label="author"]', '[data-format-field="publication"]',
+      '[data-rule-property="message"]', '[data-custom-rule-key="retired_type"] [data-custom-rule-property="mode"]']) {
+      accordion.populate(accordionData, false);
+      card('book').querySelector(selector).remove();
+      assert.throws(() => accordion.collect(), /incomplete|missing a required control/, 'Hidden incomplete controls fail closed.');
+    }
+    accordion.dispose();
+
     const codeData = JSON.parse(JSON.stringify(data));
     codeData.stored.configuredSystem.allowedPatronCodeIds.values = [2, 77];
     codeData.patronCodeChoices = [{ id: 2, description: 'Adult' }, { id: 3, description: 'Branch use' },

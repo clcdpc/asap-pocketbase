@@ -148,6 +148,32 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(modes.length, 24);
     assert.ok(labels.every(input => input.getAttribute('aria-label')));
     assert.ok(modes.every(select => select.getAttribute('aria-label')));
+    assert.strictEqual(new Set(modes.map(select => select.getAttribute('aria-label'))).size, modes.length,
+      'Requirement names distinguish every field and configured format.');
+    const cards = [...root.querySelectorAll('#format-rules-editor [data-rule-code]')];
+    for (const card of cards) {
+      const toggle = card.querySelector('[data-rule-toggle]');
+      const panel = document.getElementById(toggle.getAttribute('aria-controls'));
+      assert.ok(panel && panel.hidden && card.contains(panel));
+      assert.strictEqual(toggle.getAttribute('aria-expanded'), 'false');
+      assert.ok(panel.querySelectorAll('[data-domain-editable]').length >= 10);
+      assert.strictEqual(card.querySelectorAll('button button').length, 0);
+      assert.ok([...card.querySelectorAll('.settings-row-actions button')]
+        .every(button => !toggle.contains(button) && button.getAttribute('aria-label').includes('Format')));
+      toggle.click();
+      assert.strictEqual(panel.hidden, false);
+      assert.strictEqual(toggle.getAttribute('aria-expanded'), 'true');
+      assert.match(toggle.getAttribute('aria-label'), /^Collapse Format/);
+      assert.deepStrictEqual([...panel.querySelectorAll('legend')].map(node => node.textContent),
+        ['Message behavior', 'Field requirements', 'Custom field rules']);
+      for (const control of panel.querySelectorAll('input,select,textarea')) {
+        assert.ok(control.closest('label'), control.outerHTML);
+      }
+    }
+    assert.strictEqual(new Set(cards.map(card => card.querySelector('[data-rule-toggle]').getAttribute('aria-controls'))).size, cards.length);
+    assert.match(css, /#format-rules-editor\s*\{\s*container-type:\s*inline-size;/);
+    assert.match(css, /#format-rules-editor \[hidden\]\s*\{\s*display:\s*none;/);
+    assert.match(css, /@container \(min-width: 42rem\)[^]*?#format-rules-editor \.settings-rule-fields[^]*?repeat\(2, minmax\(0, 1fr\)\)/);
 
     dom.window.close();
     console.log('Settings header hooks, save-bar styles, field layout, and dynamic labels passed');
