@@ -347,16 +347,16 @@ test('authorized title-request and additional-copy mutations retain fixture and 
   assert.equal(checks, 4);
 });
 test('existing frontend/browser entry points and full CI guard remain; artifacts are Git ignored', async () => {
-  // Merged CI modernization adds workflow-test dependencies and optional browser TRX output.
-  for (const file of ['package.json', 'tests/browser/run.cjs']) {
-    const baseline = execFileSync('git', ['show', 'c55e83e68e4e0358f9426ad112f546743f71076e:' + file], { cwd: repository, encoding: 'utf8' });
+  // Main's current discovery-based guards supersede the retired fixed totals.
+  for (const file of ['package.json', 'tests/browser/run.cjs', 'scripts/ci/selection.py']) {
+    const baseline = execFileSync('git', ['show', '8c4493578440a77c5f6f40bd6ccb6d0aef64b9fc:' + file], { cwd: repository, encoding: 'utf8' });
     assert.equal((await fs.readFile(path.join(repository, file), 'utf8')).replace(/\r\n/g, '\n'), baseline.replace(/\r\n/g, '\n'));
   }
   const workflow = await fs.readFile(path.join(repository, '.github/workflows/dotnet.yml'), 'utf8');
-  assert.match(workflow, /dotnet test --project tests\/Asap.Tests\/Asap.Tests.csproj/);
-  assert.match(workflow, /--minimum-expected-tests 1525/);
+  assert.match(workflow, /run: python3 -B scripts\/ci\/selection.py prepare/);
+  assert.match(workflow, /run: bash scripts\/ci\/run-with-performance.sh python3 -B scripts\/ci\/selection.py run/);
   assert.match(workflow, /run: npm test/);
-  assert.match(workflow, /run: npm run test:browser/);
+  assert.match(workflow, /run: bash scripts\/ci\/run-with-performance.sh npm run test:browser/);
   assert.match(execFileSync('git', ['check-ignore', '.artifacts/acceptance/run/results.json'], { cwd: repository, encoding: 'utf8' }), /acceptance/);
 });
 test('CLI rejects incompatible modes, remote targets, unsafe inputs and incomplete SHAs', () => {
@@ -431,9 +431,10 @@ test('complete functional results use 0/1/2 with blockers and required skips tak
   assert.equal(exitCode(report), 2, 'Duplicate required results cannot pass');
 });
 
-test('registered suites retain D1, I403, pr410, Q1, S1 and smoke with their mutation boundaries', async () => {
+test('registered suites match discovered modules and retain their mutation boundaries', async () => {
   const registry = require('./suites/index.cjs');
-  const names = ['d1', 'i403', 'pr410', 'q1', 's1', 'smoke'];
+  const names = (await fs.readdir(path.join(__dirname, 'suites')))
+    .filter(name => name.endsWith('.cjs') && name !== 'index.cjs').map(name => name.slice(0, -4)).sort();
   assert.deepEqual(require('./suites/registry.json'), names, 'Each suite is registered exactly once in deterministic order');
   assert.deepEqual(Object.keys(registry), names);
   assert.equal(registry.smoke.id, 'smoke');
@@ -452,8 +453,12 @@ test('registered suites retain D1, I403, pr410, Q1, S1 and smoke with their muta
   }
   assert.equal(registry.q1.mutations, false);
   assert.equal(registry.i403.mutations, true);
-  assert.equal(registry.i403.scenarios.length, 5);
-  assert.deepEqual(registry.i403.scenarios.filter(s => s.writes).map(s => s.id), ['i403-keyboard-and-guarded-dispatch']);
+  assert.equal(registry.i403.id, 'i403');
+  assert.deepEqual(registry.i403.scenarios.map(s => [s.id, s.writes]), [
+    ['i403-closed-and-empty', false], ['i403-two-and-many-resize', false], ['i403-keyboard-and-guarded-dispatch', true],
+    ['i403-grid-replacement', false], ['i403-mobile-native-and-forced-colors', false]
+  ]);
+  assert.ok(registry.i403.scenarios.every(scenario => scenario.requirements.length > 0));
   assert.deepEqual(registry.q1.uncovered, []);
   assert.equal(registry.q1.scenarios.length, 5);
   assert.ok(registry.q1.scenarios.every(scenario => scenario.writes === false && scenario.requirements.length > 0));
