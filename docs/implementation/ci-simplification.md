@@ -81,10 +81,11 @@ changes. HTML, vendor manifests, build targets, backend/shared/schema/test/CI
 changes and unknown paths remain conservative. Build, publish, asset verification,
 package identity/digests and ValidateOnly always use the current commit.
 
-The frontend runner keeps the two security/workflow files first and serial,
-then uses a configurable bounded worker count (default 2, range 1–4) only for
-audited independent files. New files remain serial. Each file owns a process,
-uses safe argument arrays, and gets a deterministic result/timing receipt.
+The frontend runner executes files serially, with the two security/workflow
+files first. A two-worker trial reduced local wall time but caused timing-sensitive
+failures and a child-process timeout on the 2-vCPU CI runner. The worker option
+and audited concurrency list were removed. Each file owns a process, uses safe
+argument arrays, and gets a deterministic result/timing receipt.
 Cancellation terminates owned process groups, with escalation for uncooperative
 children; incomplete/cancelled populations cannot become passing evidence.
 
@@ -140,9 +141,11 @@ Reports retain inclusive per-operation totals/percentiles plus interval unions
 for overlap, original TRX, resource samples and SQL telemetry. Disabled timing
 does not inspect inputs; telemetry write failures do not replace test failures.
 
-For a valid frontend comparison, run the identical complete source/population
-with ASAP_FRONTEND_WORKERS=1 then 2, retaining frontend-results JSON,
-per-file timing and command wall time. Reject failed/interrupted sweeps.
+The frontend concurrency experiment ran the identical complete 67-file
+population with one and two workers, retaining results, per-file timing and
+command wall time: 455.606s versus 259.995s locally, both passing. Subsequent
+2-vCPU CI failures made the concurrent default unreliable; this measured trial
+is rejected rather than claimed as a retained speedup. Serial execution remains.
 Compare cold CI to cold CI and reuse to reuse separately. Record queue/start,
 restore/build, SQL startup, test command, browser, frontend, publish/package and
 required-gate wall times. Job overlap and runner memory must come from actual
@@ -168,6 +171,13 @@ concurrency/resources, deployment, and maintenance/performance. Findings fixed:
   consumed by deployment tests. Retain it at scripts/deployment/application.example.json.
 - Manual timer delivery initially selected an already cancelled provider timer.
   Skip disposed timers and retain the real SQL failure synchronization/assertions.
+
+- Repeated 2-vCPU frontend execution exposed timing-sensitive failures under
+  two workers. Restore serial scheduling and remove the unused concurrency list
+  and option; preserve per-file timings, cancellation and exact population checks.
+- The staff table transition probe treated a container busy indicator as an empty
+  loading body even while retained rows were ready. Target the actual tbody
+  loading placeholder and keep busy state as a separate diagnostic.
 
 Final qualification and any subsequent fixes are recorded on the existing PR,
 which remains open and unmerged.

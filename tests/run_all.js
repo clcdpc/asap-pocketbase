@@ -36,11 +36,7 @@ const files = allFiles
 assert.ok(files.length > 0, "No frontend tests selected");
 if (isSafety) assert.deepEqual(files, safetyFiles);
 
-// Audited files use per-process globals and unique temporary directories.
-// Unknown/new files stay serial until their external resource ownership is reviewed.
-const audited = new Set(JSON.parse(fs.readFileSync(path.join(testDir, "frontend-parallel.json"), "utf8")));
-const workers = Number(process.env.ASAP_FRONTEND_WORKERS || 2);
-assert.ok(Number.isInteger(workers) && workers >= 1 && workers <= 4, "ASAP_FRONTEND_WORKERS must be 1..4");
+// Keep one child active: concurrent sweeps timed out on the 2-vCPU CI runner.
 const children = new Set();
 const outcomes = new Map();
 let cancelled = false;
@@ -99,14 +95,7 @@ async function main() {
   for (const file of safety) {
     if (!cancelled) await run(file);
   }
-  const parallel = files.filter((file) => !safetyFiles.includes(file) && audited.has(file));
-  let cursor = 0;
-  await Promise.all(Array.from({ length: Math.min(workers, parallel.length) }, async () => {
-    while (!cancelled && cursor < parallel.length) {
-      await run(parallel[cursor++]);
-    }
-  }));
-  for (const file of files.filter((file) => !safetyFiles.includes(file) && !audited.has(file))) {
+  for (const file of files.filter((file) => !safetyFiles.includes(file))) {
     if (!cancelled) await run(file);
   }
   let passed = 0;
@@ -127,7 +116,7 @@ async function main() {
     fs.writeFileSync(reportPath, JSON.stringify({
       filter: isSafety ? mode : filterArg, files: isRemaining ? allFiles : files,
       executed: prior.executed + outcomes.size,
-      passed: prior.passed + passed, failed: prior.failed + failed, skipped: 0, workers,
+      passed: prior.passed + passed, failed: prior.failed + failed, skipped: 0, workers: 1,
       file_results: [...(prior.file_results || []), ...files.flatMap((file) => {
         const result = outcomes.get(file);
         if (!result) return [];

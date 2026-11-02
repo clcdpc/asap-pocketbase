@@ -265,7 +265,6 @@ class FrontendSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             shutil.copyfile(policy.ROOT / "tests/run_all.js", root / "run_all.js")
-            (root / "frontend-parallel.json").write_text('["a.test.js"]')
             (root / "a.test.js").write_text(
                 "const fs=require('fs');process.on('SIGTERM',()=>{});"
                 "fs.writeFileSync('child.pid.pending',String(process.pid));"
@@ -303,26 +302,24 @@ class FrontendSafetyTests(unittest.TestCase):
                     except ProcessLookupError:
                         pass
 
-    def test_bounded_workers_preserve_all_failures_order_and_unreviewed_serial_ownership(self):
+    def test_serial_runner_preserves_all_failures_and_completion_order(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             shutil.copyfile(policy.ROOT / "tests/run_all.js", root / "run_all.js")
-            (root / "frontend-parallel.json").write_text('["a.test.js","b.test.js"]')
-            for own, peer, code in (("a", "b", 2), ("b", "a", 0)):
+            for own, previous, code in (("a", None, 2), ("b", "a", 0), ("c", "b", 3)):
+                prerequisite = ("if(!fs.existsSync('" + previous + ".done'))process.exit(99);"
+                                if previous else "")
                 (root / (own + ".test.js")).write_text(
-                    "const fs=require('fs');fs.writeFileSync('" + own + ".started','');"
-                    "const deadline=Date.now()+5000;const tick=()=>{if(fs.existsSync('" + peer + ".started')){"
-                    "fs.writeFileSync('" + own + ".done','');console.log('" + own + " output');process.exit(" + str(code) + ");}"
-                    "if(Date.now()>deadline)process.exit(99);setTimeout(tick,10);};tick();")
-            (root / "c.test.js").write_text(
-                "const fs=require('fs');if(!fs.existsSync('a.done')||!fs.existsSync('b.done'))process.exit(99);"
-                "console.log('c output');process.exit(3);")
+                    "const fs=require('fs');" + prerequisite +
+                    "fs.writeFileSync('" + own + ".done','');console.log('" + own + " output');"
+                    "process.exit(" + str(code) + ");")
             results = root / "results.json"
-            env = {**os.environ, "ASAP_FRONTEND_WORKERS": "2", "ASAP_CI_FRONTEND_RESULTS": str(results)}
+            env = {**os.environ, "ASAP_CI_FRONTEND_RESULTS": str(results)}
             run = subprocess.run(["node", "run_all.js"], cwd=root, env=env, capture_output=True, text=True, timeout=15)
             self.assertEqual(run.returncode, 1)
             raw = json.loads(results.read_text())
             self.assertEqual((raw["executed"], raw["passed"], raw["failed"]), (3, 1, 2))
+            self.assertEqual(raw["workers"], 1)
             self.assertEqual([row["code"] for row in raw["file_results"]], [2, 0, 3])
             self.assertLess(run.stdout.index("a output"), run.stdout.index("b output"))
             self.assertLess(run.stdout.index("b output"), run.stdout.index("c output"))
@@ -332,7 +329,6 @@ class FrontendSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             shutil.copyfile(policy.ROOT / "tests/run_all.js", root / "run_all.js")
-            (root / "frontend-parallel.json").write_text('["ordinary.test.js"]')
             files = ["ci_workflow_contract.test.js", "test_iis_deployment_contract.test.js", "ordinary.test.js"]
             marker = root / "executed"
             for file in files:
