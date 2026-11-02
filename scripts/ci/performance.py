@@ -21,7 +21,7 @@ import threading
 import time
 
 from diagnostic_report import write_reports
-from sql_metrics import SqlCollector
+from sql_metrics import SqlCollector, sql_container
 
 
 CPU_FIELDS = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal")
@@ -480,9 +480,13 @@ class DockerMetrics:
 
     def __init__(self, stop, unavailable):
         self.stop, self.unavailable, self.previous = stop, unavailable, None
+        self.container = sql_container()
 
     def inspect(self):
-        text = optional_command(["docker", "inspect", "--format", self.INSPECT, "asap-sql"], self.stop)
+        if not self.container:
+            self.unavailable.add("No job-owned SQL container; Docker sampling skipped")
+            return {}
+        text = optional_command(["docker", "inspect", "--format", self.INSPECT, self.container], self.stop)
         if text is None:
             self.unavailable.add("SQL container state/resource limits unavailable (Docker missing, denied, absent or timed out)")
             return {}
@@ -506,7 +510,7 @@ class DockerMetrics:
             self.previous = None
             self.unavailable.add("SQL Docker stats skipped: container was not observed running")
             return result
-        text = optional_command(["docker", "stats", "--no-stream", "--format", self.STATS, "asap-sql"], self.stop)
+        text = optional_command(["docker", "stats", "--no-stream", "--format", self.STATS, self.container], self.stop)
         if text is None:
             self.unavailable.add("SQL Docker stats unavailable (missing, denied or timed out)")
             return result
