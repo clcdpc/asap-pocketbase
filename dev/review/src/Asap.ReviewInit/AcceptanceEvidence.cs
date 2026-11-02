@@ -52,22 +52,28 @@ internal static class AcceptanceEvidence
             command.CommandText = """
                 SELECT DB_NAME(), ORIGINAL_LOGIN(), CONVERT(int, SERVERPROPERTY('ProductMajorVersion')),
                     CONVERT(nvarchar(100), SERVERPROPERTY('Edition'));
-                SELECT r.LegacyId, CONVERT(varchar(20), r.Id), r.Status, r.AutoHold, r.BibId,
+                SELECT N'acceptance-pr410-' + scenario.[Name], CONVERT(varchar(20), r.Id), r.Status, r.AutoHold, r.BibId,
                     r.BibIdStaffVerified, CONVERT(varchar(18), r.RowVersion, 1),
                     (SELECT COUNT(*) FROM asap.TitleRequestEvent e WHERE e.TitleRequestId = r.Id),
                     r.Notes, r.CloseReason,
                     CONVERT(bit, CASE WHEN (r.PatronIdSnapshot BETWEEN 41001 AND 41011 OR r.PatronIdSnapshot IN (41013, 41014, 41015)) AND
                         r.Barcode = CONCAT(N'ACCEPTANCE', r.PatronIdSnapshot) THEN 1 ELSE 0 END),
-                    r.LegacyHoldProtected
-                FROM asap.TitleRequest r WHERE r.LegacyId LIKE N'acceptance-pr410-%';
-                SELECT c.LegacyId, CONVERT(varchar(20), c.Id), c.Status,
+                    CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM asap.HoldPlacementOperation op WHERE op.TitleRequestId = r.Id AND op.State = N'succeeded') THEN 1 ELSE 0 END)
+                FROM asap.TitleRequest r JOIN (VALUES
+                    (41001, N'purchase-reminder-on'), (41002, N'purchase-reminder-off'),
+                    (41003, N'purchase-hold'), (41004, N'purchase-no-hold'), (41005, N'purchase-duplicate'),
+                    (41006, N'reject'), (41007, N'draft'), (41008, N'close-reopen'),
+                    (41009, N'stale-action'), (41010, N'unverified'), (41011, N'stale-consent'),
+                    (41013, N'd1-closed'), (41014, N'd1-protected'), (41015, N'd1-history')
+                ) scenario([PatronId], [Name]) ON r.Barcode = CONCAT(N'ACCEPTANCE', scenario.[PatronId]);
+                SELECT N'acceptance-pr410-copy', CONVERT(varchar(20), c.Id), c.Status,
                     CONVERT(varchar(18), c.RowVersion, 1),
                     CONVERT(bit, CASE WHEN c.CreatedUtc = c.UpdatedUtc THEN 1 ELSE 0 END)
-                FROM asap.AdditionalCopyRequest c WHERE c.LegacyId = N'acceptance-pr410-copy';
+                FROM asap.AdditionalCopyRequest c WHERE c.BibId = 941012;
                 SELECT o.BusinessKey, o.Status, o.AttemptDeliveryMode, o.SuppressionReason
                 FROM asap.EmailOutbox o WHERE EXISTS
                     (SELECT 1 FROM asap.TitleRequest r
-                     WHERE r.LegacyId LIKE N'acceptance-pr410-%' AND
+                     WHERE r.Barcode LIKE N'ACCEPTANCE410%' AND
                     (o.BusinessKey LIKE N'rejection:' + CONVERT(varchar(20), r.Id) + N':%' OR
                      o.BusinessKey LIKE N'purchase-reminder:' + CONVERT(varchar(20), r.Id) + N':%' OR
                       o.BusinessKey LIKE N'staff-patron-action:%:' + CONVERT(varchar(20), r.Id) + N':%'));
@@ -94,7 +100,7 @@ internal static class AcceptanceEvidence
                     verified = reader.GetBoolean(5), version = reader.GetString(6), events = reader.GetInt32(7),
                     pristineNotes = !reader.IsDBNull(8) && reader.GetString(8) == "Acceptance fixture draft baseline",
                     closeReason = reader.IsDBNull(9) ? null : reader.GetString(9),
-                    identityBound = reader.GetBoolean(10), legacyHoldProtected = reader.GetBoolean(11)
+                    identityBound = reader.GetBoolean(10), holdHistoryRetained = reader.GetBoolean(11)
                 });
             }
             var copies = new List<object>();

@@ -7,7 +7,7 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
-    public async Task ImportedSeedMessagesPresentAsPlainTextWithoutChangingSourceOrCustomizedValues()
+    public async Task NativeMessageCopyIsReadVerbatimAcrossScopesAndFormats()
     {
         var library = await ReserveSettingsCourseLibraryIdAsync();
         var old = new[]
@@ -17,13 +17,7 @@ public sealed partial class PatronJourneyTests
             "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
             "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>"
         };
-        var expected = new[]
-        {
-            "You have successfully submitted your material suggestion! Check your email inbox for status updates.\n\nThank you for using our suggestion service.",
-            "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.\n\nThank you for using this library's suggestion service.",
-            "This is an eBook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm",
-            "This is an eAudiobook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm"
-        };
+        var expected = old;
         object originalSystemMessage;
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
@@ -33,11 +27,11 @@ public sealed partial class PatronJourneyTests
         }
         await ExecuteNonQueryAsync("""
             INSERT INTO [asap].[Organization] ([Id],[DisplayName],[OrganizationCodeId],[ParentOrganizationId],[IsActive])
-            VALUES (@org,N'Imported plain message evidence',2,1,1);
+            VALUES (@org,N'Native plain message evidence',2,1,1);
             INSERT INTO [asap].[PatronSettings] ([OrganizationId],[SuccessMessage],[AlreadySubmittedMessage],[EbookMessage],[EaudiobookMessage],[UpdatedUtc])
             VALUES (@org,@success,@duplicate,@ebook,@audio,SYSUTCDATETIME());
             INSERT INTO [asap].[MaterialFormat] ([OwnerOrganizationId],[Code],[Label],[SortOrder],[IsEnabled],[MessageBehavior],[Message],[CreatedUtc],[UpdatedUtc])
-            VALUES (@org,N'legacy_message',N'Imported message format',1000,1,N'message',@ebook,SYSUTCDATETIME(),SYSUTCDATETIME());
+            VALUES (@org,N'legacy_message',N'Native message format',1000,1,N'message',@ebook,SYSUTCDATETIME(),SYSUTCDATETIME());
             INSERT INTO [asap].[MaterialFormatOverride] ([LibraryOrganizationId],[MaterialFormatId],[Message])
             SELECT @org,[Id],@audio FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId]=1 AND [Code]=N'ebook';
             """, ("@org", library), ("@success", old[0]), ("@duplicate", old[1]), ("@ebook", old[2]), ("@audio", old[3]));
@@ -80,7 +74,7 @@ public sealed partial class PatronJourneyTests
                 Assert.IsTrue(await reader.ReadAsync());
                 for (var index = 0; index < old.Length; index++)
                 {
-                    Assert.AreEqual(old[index], reader.GetString(index), "Reads preserve exact imported source text.");
+                    Assert.AreEqual(old[index], reader.GetString(index), "Reads preserve exact configured text.");
                 }
             }
             foreach (var suffix in new[] { " ", "\0", "\nCustomized" })

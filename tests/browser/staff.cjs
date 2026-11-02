@@ -13,7 +13,7 @@ async function revealRequestActions(page) {
 
 function parseArguments(argv) {
   if (argv.length !== 25) {
-    throw new Error('Usage: node tests/browser/staff.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId>');
+    throw new Error('Usage: node tests/browser/staff.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <initialRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId>');
   }
   const parsed = new URL(argv[0]);
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== '/' ||
@@ -25,7 +25,7 @@ function parseArguments(argv) {
     artifactRoot: path.resolve(argv[1]),
     superIdentity: { staffId: argv[2], tenantId: argv[3], email: argv[4] },
     staffIdentity: { staffId: argv[5], tenantId: argv[3], email: argv[6] },
-    legacyRequestId: argv[7],
+    initialRequestId: argv[7],
     primaryRequestId: argv[8],
     blockedRequestId: argv[9],
     resolutionRequestId: argv[10],
@@ -340,7 +340,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     }
   });
   try {
-    await page.goto(`${args.baseOrigin}/staff/?request=${encodeURIComponent(args.legacyRequestId)}`, { waitUntil: 'networkidle' });
+    await page.goto(`${args.baseOrigin}/staff/?request=${encodeURIComponent(args.initialRequestId)}`, { waitUntil: 'networkidle' });
     await page.locator('#workspace').waitFor({ state: 'visible' });
     await page.locator('#request-dialog[open]').waitFor();
     assert.deepEqual(errors, [], `Request detail raised a browser error: ${errors.join('; ')}`);

@@ -109,8 +109,8 @@ async function evidence(t, name, cards, capture = {}) {
 }
 const scenarios = [
   { id: 'q1-desktop', writes: false, requirements: ['#404: six grouped columns at 1440, 1280 and 1024; long/missing values; readable actions; no covers or overflow'], run: async t => {
-    const items = await start(t), long = items.find(item => item.legacyId === 'acceptance-q1-1');
-    const missing = items.find(item => item.legacyId === 'acceptance-q1-2');
+    const items = await start(t), long = items.find(item => item.bibid === 942001);
+    const missing = items.find(item => item.bibid === 942002);
     assert.ok(long && missing, 'Deterministic long and missing-field fixtures exist');
     await search(t.page, 'Q1 copy 01', [long.id]);
     const row = rowFor(t.page, long.id);
@@ -207,7 +207,7 @@ const scenarios = [
     const ordered = [...items].sort((a, b) => a.created.localeCompare(b.created));
     await rendered(t.page, ordered.slice(25).map(item => item.id));
     const last = ordered[25]; await opener(t.page, last.id).click(); await opened(t.page, last); await close(t.page, last.id);
-    const item = items.find(item => item.legacyId === 'acceptance-q1-1');
+    const item = items.find(item => item.bibid === 942001);
     for (const query of [item.title, item.author, String(item.bibid), item.identifier, item.publication]) {
       await search(t.page, query, [item.id]);
     }
@@ -246,7 +246,7 @@ const scenarios = [
     assert.equal(t.mutations.length, 0);
   } },
   { id: 'q1-responsive-cards', writes: false, requirements: ['#404: 390px and narrow content container; grouped card content, full-width actions, keyboard and axe'], run: async t => {
-    const items = await start(t), item = items.find(item => item.legacyId === 'acceptance-q1-1');
+    const items = await start(t), item = items.find(item => item.bibid === 942001);
     await search(t.page, 'Q1 copy 01', [item.id]);
     await t.page.setViewportSize({ width: 1280, height: 900 });
     await t.page.locator(grid).evaluate(node => { node.style.maxWidth = '640px'; });
@@ -260,7 +260,7 @@ const scenarios = [
     assert.equal(t.mutations.length, 0);
   } },
   { id: 'q1-native-200', writes: false, requirements: ['#404; #405: actual native 200% zoom, responsive cards, action geometry, Enter/Escape and focus'], run: async t => {
-    const items = await start(t), item = items.find(item => item.legacyId === 'acceptance-q1-1');
+    const items = await start(t), item = items.find(item => item.bibid === 942001);
     await search(t.page, 'Q1 copy 01', [item.id]);
     await nativeZoom(t.context, t.page, 2);
     const cdp = await t.context.newCDPSession(t.page);

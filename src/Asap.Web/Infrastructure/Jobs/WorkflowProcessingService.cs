@@ -486,8 +486,7 @@ public sealed partial class WorkflowProcessingService(
             return true;
         }
 
-        return await context.TitleRequests.AsNoTracking().Where(item => item.Id == requestId)
-            .Select(item => item.LegacyHoldProtected).SingleAsync(cancellationToken);
+        return false;
     }
 
     private async Task<bool> IsManualActorAllowedLockedAsync(

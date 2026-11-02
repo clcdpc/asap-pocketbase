@@ -285,7 +285,7 @@ class LifecycleTests(unittest.TestCase):
                 self.assertGreaterEqual(len(perf.read_samples(self.output / "samples.jsonl")), 2)
                 files = list(self.output.iterdir())
                 self.assertEqual({path.name for path in files}, {"environment.json", "samples.jsonl", "summary.md",
-                    "sql-waits.jsonl", "sql-io.jsonl", "sql-activity.jsonl", "test-timings.md", "diagnostic-summary.md"})
+                    "sql-waits.jsonl", "sql-io.jsonl", "sql-activity.jsonl", "test-timings.md", "diagnostic-summary.md", "fixture-summary.json"})
                 for path in files:
                     text = path.read_text(encoding="utf-8")
                     self.assertNotIn(SECRET, text)

@@ -72,6 +72,8 @@ class Fixture:
                      *(f"Upload original {s} execution evidence" for s in fp.SUITES)]:
             self.job["steps"].append(success(name=name, started_at=reuse.iso(self.now - timedelta(minutes=120)),
                                               completed_at=reuse.iso(self.now - timedelta(minutes=95))))
+        self.browser_job = copy.deepcopy(self.job)
+        self.browser_job.update(id=10, name=self.config["browser_job"])
         self.source = {"sha": self.current["commit"], "tree": {"sha": self.current["tree"]}, "parents": []}
         self.logs = (f"2026-10-29T10:00:00.000Z [command]/usr/bin/git log -1 --format=%H\n"
                      f"2026-10-29T10:00:00.001Z {self.current['commit']}\n").encode()
@@ -87,7 +89,7 @@ class Fixture:
             self.manifests[suite] = {
                 "schema": self.config["schema"], "kind": "executed", "outcome": "passed", "suite": suite,
                 "repository": self.config["repository"], "repository_id": self.config["repository_id"],
-                "workflow": self.config["workflow"], "job": self.config["job"], "run_id": 7, "run_attempt": 2,
+                "workflow": self.config["workflow"], "job": self.config["browser_job"] if suite == "browser" else self.config["job"], "run_id": 7, "run_attempt": 2,
                 "source_commit": self.current["commit"], "source_tree": self.current["tree"],
                 "source_algorithm": fp.SOURCE_ALGORITHM,
                 "source_fingerprint": identity["source"], "fingerprint": identity["fingerprint"],
@@ -138,7 +140,7 @@ class Fixture:
         self.calls.append(path)
         if self.failure:
             raise self.failure
-        if path == "/actions/jobs/9/logs":
+        if path in ("/actions/jobs/9/logs", "/actions/jobs/10/logs"):
             return self.logs
         if path.startswith("/actions/artifacts/") and path.endswith("/zip"):
             return self.archives[int(path.split("/")[-2])]
@@ -151,7 +153,7 @@ class Fixture:
         if path.startswith("/actions/workflows/dotnet.yml/runs?"):
             return iter([copy.deepcopy(self.run)])
         if path == "/actions/runs/7/attempts/2/jobs":
-            return iter([copy.deepcopy(self.job)])
+            return iter([copy.deepcopy(self.job), copy.deepcopy(self.browser_job)])
         if path == "/actions/runs/7/artifacts":
             return iter(copy.deepcopy(list(self.artifacts.values())))
         if path.startswith("/commits/") and path.endswith("/pulls"):
@@ -232,9 +234,22 @@ class GitIdentityTests(unittest.TestCase):
 
 
 class DependencyTests(unittest.TestCase):
+    def test_only_audited_frontend_implementation_bytes_allow_backend_reuse(self):
+        config = fp.configuration()
+        for path in ("src/Asap.Web/Frontend/staff/app.js", "src/Asap.Web/Frontend/staff/styles.css"):
+            before, after = [[path, "100644", "blob", "a"]], [[path, "100644", "blob", "b"]]
+            self.assertEqual(fp.source_fingerprint(before, "dotnet", config), fp.source_fingerprint(after, "dotnet", config))
+            for suite in ("browser", "frontend"):
+                self.assertNotEqual(fp.source_fingerprint(before, suite, config), fp.source_fingerprint(after, suite, config))
+        for path in ("src/Asap.Web/Frontend/new-module.js", "src/Asap.Web/Frontend/staff/index.html",
+                     "src/Asap.Web/Build/FrontendAssets.targets", "src/Asap.Web/Features/Patron/PatronSessionService.cs",
+                     "src/Asap.Web/Infrastructure/Data/AsapDbContext.cs"):
+            self.assertNotEqual(fp.source_fingerprint([[path,"100644","blob","a"]], "dotnet", config),
+                                fp.source_fingerprint([[path,"100644","blob","b"]], "dotnet", config))
+
     def test_unknown_and_shared_dependencies_invalidate_every_suite(self):
         config = fp.configuration()
-        for path in ("unknown-new-file", "src/Asap.Web/Frontend/staff/app.js", "src/Shared/SecurityContract.cs",
+        for path in ("unknown-new-file", "src/Asap.Web/Frontend/staff/index.html", "src/Shared/SecurityContract.cs",
                      "database/Asap.Database/Scripts/PostDeployment.sql", "tests/Asap.Tests/Sql/DatabaseBaselineTests.cs",
                      "dev/review/src/Asap.ReviewInit/LocalReviewer.sql", "dev/review/src/Asap.ReviewProviders/ReviewProviders.cs",
                      "global.json", "package-lock.json",
@@ -256,17 +271,14 @@ class DependencyTests(unittest.TestCase):
         self.assertNotEqual(fp.source_fingerprint([], "dotnet", config),
                             fp.source_fingerprint([["scripts/ci/new-policy.py", "100644", "blob", "b"]], "dotnet", config))
 
-    def test_full_executor_is_identical_across_deployment_only_edits(self):
-        workflow = (fp.ROOT / ".github/workflows/dotnet.yml").read_text(encoding="utf-8")
-        baseline = fp.full_ci_execution_contract(workflow)
-        self.assertEqual(baseline, fp.full_ci_execution_contract(
-            workflow.replace("ASAP_TEST_DEPLOYMENT_ENABLED == 'true'",
-                             "ASAP_TEST_DEPLOYMENT_ENABLED == 'false'")))
-        self.assertNotEqual(baseline, fp.full_ci_execution_contract(
-            workflow.replace("scripts/ci/selection.py run", "scripts/ci/selection.py prepare")))
-        self.assertNotEqual(baseline, fp.full_ci_execution_contract(
-            workflow.replace("npm run test:browser", "npm run test:other")))
-        self.assertNotEqual(baseline, fp.full_ci_execution_contract(workflow.replace("node tests/run_all.js --ci-safety", "node other.js")))
+    def test_every_workflow_executor_and_gate_edit_invalidates_evidence(self):
+        workflow = (fp.ROOT / ".github/workflows/dotnet.yml").read_text()
+        for before, after in (("timeout-minutes: 120", "timeout-minutes: 121"),
+                              ("name: Browser qualification", "name: Changed browser qualification"),
+                              ("CI_BROWSER_RESULT", "CHANGED_BROWSER_RESULT")):
+            self.assertNotEqual(fp.full_ci_execution_contract(workflow),
+                                fp.full_ci_execution_contract(workflow.replace(before, after)))
+
 
     def test_exact_acceptance_screenshot_files_do_not_invalidate_sql(self):
         config = fp.configuration()
@@ -297,7 +309,7 @@ class DependencyTests(unittest.TestCase):
     def test_environment_count_filter_and_schema_changes_invalidate(self):
         fixture = Fixture()
         original = fixture.current["suites"]["dotnet"]
-        for key, value in (("schema", 3), ("environment", "new-runtime-or-epoch"),
+        for key, value in (("schema", 99), ("environment", "new-runtime-or-epoch"),
                            ("selection", {**original["selection"], "expected": 3}),
                            ("selection", {**original["selection"], "minimum": 3}),
                            ("selection", {**original["selection"], "filter": "new-filter"})):
@@ -319,8 +331,8 @@ class DependencyTests(unittest.TestCase):
 
 class ProvenanceTests(unittest.TestCase):
     def test_different_category_selections_cannot_share_execution_evidence(self):
-        for current_categories, evidence_categories in ((["core"], ["core", "migration", "upgrade"]),
-                                                        (["core", "migration", "upgrade"], ["core"])):
+        for current_categories, evidence_categories in ((["core"], ["unrecognized"]),
+                                                        (["unrecognized"], ["core"])):
             fixture = Fixture()
             fixture.current["suites"]["dotnet"]["selection"]["categories"] = current_categories
             manifest = fixture.manifests["dotnet"]
@@ -387,6 +399,7 @@ class ProvenanceTests(unittest.TestCase):
             # Even a forged complete artifact and successful workflow cannot
             # substitute a draft/reporting job for the original full executor.
             fixture.job["name"] = job_name
+            fixture.browser_job["name"] = job_name
             with self.subTest(job_name=job_name):
                 self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
 
@@ -478,6 +491,7 @@ class ProvenanceTests(unittest.TestCase):
         fixture = Fixture()
         fixture.run.update(event="pull_request", head_sha="e" * 40)
         fixture.job["head_sha"] = fixture.run["head_sha"]
+        fixture.browser_job["head_sha"] = fixture.run["head_sha"]
         fixture.source["parents"] = [{"sha": "f" * 40}, {"sha": fixture.run["head_sha"]}]
         for artifact in fixture.artifacts.values():
             artifact["workflow_run"]["head_sha"] = fixture.run["head_sha"]
@@ -676,7 +690,7 @@ class EnvironmentTests(unittest.TestCase):
 
 
 class GateTests(unittest.TestCase):
-    def run_gate(self, fixture, outcomes, decisions=None, mutate_plan=None, forced=False):
+    def run_gate(self, fixture, outcomes, decisions=None, mutate_plan=None, forced=False, scope=None):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         directory = Path(temporary.name)
@@ -688,6 +702,8 @@ class GateTests(unittest.TestCase):
             reuse.write_json(directory / "plan.json", plan)
         env = {"GITHUB_SHA": fixture.current["commit"], "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1",
                **{s.upper() + "_OUTCOME": value for s, value in outcomes.items() if value is not None}}
+        if scope:
+            env["ASAP_CI_SUITES"] = scope
         selections = copy.deepcopy(fixture.selections)
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(reuse, "utcnow", return_value=fixture.now), \
              mock.patch.object(fp, "configuration", return_value=fixture.config), \
@@ -700,6 +716,16 @@ class GateTests(unittest.TestCase):
              mock.patch("sys.stdout", new_callable=io.StringIO):
             reuse.verify(directory)
         return directory
+
+    def test_each_split_executor_verifies_only_its_assigned_results_and_rejects_missing_ones(self):
+        for scope in ("dotnet,frontend", "browser"):
+            suites = scope.split(",")
+            directory = self.run_gate(Fixture(), {s: "success" for s in suites}, scope=scope)
+            self.assertEqual(set(json.loads((directory / "verification.json").read_bytes())), set(suites))
+            self.assertEqual({p.name for p in (directory / "evidence").iterdir()}, set(suites))
+            for suite in suites:
+                with self.subTest(scope=scope, missing=suite), self.assertRaises(reuse.EvidenceError):
+                    self.run_gate(Fixture(), {s: "success" for s in suites if s != suite}, scope=scope)
 
     def test_successful_executions_produce_original_evidence_with_counts(self):
         fixture = Fixture()
@@ -824,15 +850,50 @@ class NativeResultsTests(unittest.TestCase):
                     reuse.execution_results("browser", selected, directory)
 
 
+class ExecutorScopeTests(unittest.TestCase):
+    def test_lookup_and_plan_publish_only_the_assigned_executor_population(self):
+        for scope in ("dotnet,frontend", "browser"):
+            for forced in (False, True):
+                with tempfile.TemporaryDirectory() as name:
+                    fixture = Fixture()
+                    fixture.current["sql_image"] = fp.SQL_TAG
+                    directory = Path(name)
+                    output = directory / "outputs"
+                    env = {"GITHUB_SHA": fixture.current["commit"], "GITHUB_RUN_ID": "99",
+                           "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": str(output), "ASAP_CI_SUITES": scope}
+                    with mock.patch.dict(os.environ, env, clear=True), \
+                         mock.patch.object(fp, "calculate", return_value=fixture.current), \
+                         mock.patch.object(reuse, "api_client", return_value=fixture), \
+                         mock.patch.object(reuse, "forced_full", return_value=forced), \
+                         mock.patch.object(reuse, "utcnow", return_value=fixture.now), \
+                         mock.patch("sys.stdout", new_callable=io.StringIO):
+                        reuse.plan(directory)
+                    decisions = json.loads((directory / "plan.json").read_bytes())["decisions"]
+                    self.assertEqual(set(decisions), set(scope.split(",")))
+                    self.assertTrue(all(d["reuse"] == (not forced) for d in decisions.values()))
+                    exported = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                    self.assertEqual(set(exported), {*scope.split(","), "schema", "sql_image"})
+
+    def test_each_executor_requires_its_exact_assigned_suites(self):
+        for job, suites in (("build-test-package", "dotnet,frontend"), ("browser-qualification", "browser")):
+            reuse.validate_executor({"GITHUB_JOB": job, "ASAP_CI_SUITES": suites})
+            for invalid in (None, "", "dotnet", "frontend", "browser" if job == "build-test-package" else "dotnet,frontend"):
+                with self.assertRaises(reuse.EvidenceError):
+                    reuse.validate_executor({"GITHUB_JOB": job, "ASAP_CI_SUITES": invalid})
+        for job in (None, "", "draft-validation", "validation"):
+            with self.assertRaises(reuse.EvidenceError):
+                reuse.validate_executor({"GITHUB_JOB": job, "ASAP_CI_SUITES": "browser"})
+
+
 class WorkflowTests(unittest.TestCase):
     def test_required_check_and_always_current_commit_packaging_are_preserved(self):
         workflow = (fp.ROOT / ".github/workflows/dotnet.yml").read_text(encoding="utf-8")
         for token in ("name: ${{ needs.validation-policy.outputs.mode == 'draft' && 'Draft CI result' || 'Build, test and package' }}",
                       "runs-on: clc-linux", "ref: ${{ github.sha }}",
                       "dotnet build Asap.sln --configuration Release", "run: npm ci", "run: npm test",
-                      "run: npm run test:browser", "--minimum-expected-tests ", "bash scripts/ci/run-with-performance.sh",
+                      "npm run test:browser", "python3 -B scripts/ci/selection.py run-draft", "bash scripts/ci/run-with-performance.sh",
                       "name: Summarize .NET/SQL diagnostic evidence", "name: Upload .NET/SQL performance telemetry",
-                      "dotnet publish src/Asap.Web/Asap.Web.csproj", "dotnet publish src/Asap.Migration/Asap.Migration.csproj",
+                      "dotnet publish src/Asap.Web/Asap.Web.csproj",
                       "commitSha = $env:GITHUB_SHA", "-ValidateOnly", "ExpectedZipSha256", "zip_sha256=$zipHash",
                       "name: Remove SQL Server test container\n        if: ${{ always() }}"):
             self.assertIn(token, workflow)
@@ -853,9 +914,11 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(f"name: asap-test-evidence-v${{{{ steps.reuse.outputs.schema }}}}-{suite}-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}", workflow)
         runtime_condition = "if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}"
         # Credentials, SQL startup/readiness and Chromium serve either executing partition.
-        self.assertEqual(workflow.count(runtime_condition), 4)
+        self.assertNotIn(runtime_condition, workflow)
+        self.assertIn("ASAP_CI_SUITES: browser", workflow)
+        self.assertIn("ASAP_CI_SUITES: dotnet,frontend", workflow)
         # Packaging is unconditional on reuse; only the existing test-IIS activation gate can deploy.
-        publishing = workflow.split("      - name: Verify publish artifacts\n", 1)[1].split("  deploy-test-iis:", 1)[0]
+        publishing = workflow.split("      - name: Verify publish artifacts\n", 1)[1].split("  browser-qualification:", 1)[0]
         self.assertNotIn("steps.reuse.outputs", publishing)
 
 

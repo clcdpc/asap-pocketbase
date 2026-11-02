@@ -5,6 +5,7 @@ using Asap.Tests.Integration;
 namespace Asap.Tests.Assets;
 
 [TestClass]
+[TestCategory(TestCategories.Browser)]
 public sealed class FrontendPublishTests
 {
     [TestMethod]

@@ -1,3 +1,5 @@
+> Historical implementation record. PocketBase migration and pre-production upgrades are retired; this file is not a current execution or release contract. See [current status](PORT-STATUS.md) and [CI qualification](../../scripts/ci/test-selection.md).
+
 # Final Development-Completion Batch
 
 Reduced Slice 9 and Slice 11 completed as one combined batch on

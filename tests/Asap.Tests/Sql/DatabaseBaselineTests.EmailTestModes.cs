@@ -6,8 +6,7 @@ namespace Asap.Tests.Sql;
 public sealed partial class DatabaseBaselineTests
 {
     [TestMethod]
-    [TestCategory(TestCategories.HistoricalUpgrade)]
-    public async Task SchemaThirteenUpgradePreservesHistoricalEmailWithoutInventingLiveAttemptEvidence()
+    public async Task CurrentSchemaRedeploymentPreservesEmailWithoutInventingLiveAttemptEvidence()
     {
         await using var connection = new SqlConnection(_databaseConnectionString);
         await connection.OpenAsync();
@@ -23,11 +22,6 @@ public sealed partial class DatabaseBaselineTests
                     N'Historical fixture', N'Historical body');
                 SELECT CONVERT(bigint, SCOPE_IDENTITY());
                 """));
-            await NonQuery(connection, """
-                DROP INDEX [IX_EmailOutbox_TestActorTime] ON [asap].[EmailOutbox];
-                ALTER TABLE [asap].[EmailOutbox] DROP COLUMN [TestRequestedByStaffUserId], [TestConfigurationVersion], [IntendedDeliveryMode], [AttemptDeliveryMode];
-                UPDATE [asap].[SchemaVersion] SET [Version] = 12 WHERE [Id] = 1;
-                """);
             var version = (byte[])(await Scalar(connection, $"SELECT [RowVersion] FROM [asap].[EmailOutbox] WHERE [Id] = {id};"))!;
             new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
             Assert.AreEqual(13, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
@@ -41,7 +35,7 @@ public sealed partial class DatabaseBaselineTests
                 """)));
             CollectionAssert.AreEqual(version,
                 (byte[])(await Scalar(connection, $"SELECT [RowVersion] FROM [asap].[EmailOutbox] WHERE [Id] = {id};"))!,
-                "Schema upgrade adds nullable metadata without rewriting historical email records.");
+                "Current-schema deployment preserves email metadata and rowversions.");
             new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
             CollectionAssert.AreEqual(version,
                 (byte[])(await Scalar(connection, $"SELECT [RowVersion] FROM [asap].[EmailOutbox] WHERE [Id] = {id};"))!);

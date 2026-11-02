@@ -9,7 +9,7 @@ public static class TitleRequestWorkflowPolicy
     private static readonly Func<TitleRequest, bool> IsHoldPlacementStage = HoldPlacementStage.Compile();
 
     public static bool CanPlaceHold(TitleRequest request) => IsHoldPlacementStage(request) &&
-        request.BibId is > 0 && request.BibIdStaffVerified && !request.LegacyHoldProtected;
+        request.BibId is > 0 && request.BibIdStaffVerified;
 
     private static TitleRequestCapabilities EvaluateCapabilities(
         TitleRequest request,
@@ -57,7 +57,7 @@ public static class TitleRequestWorkflowPolicy
     public static TitleRequestCapabilities Evaluate(TitleRequest request, bool hasIncompleteOperation,
         bool hasPlacedProtection, bool hasIncompletePickup = false)
     {
-        var protection = hasPlacedProtection || request.LegacyHoldProtected;
+        var protection = hasPlacedProtection;
         var result = EvaluateCapabilities(request, hasIncompleteOperation, protection, hasIncompletePickup);
         var actions = result.CanChangeWorkflowState
             ? new[] { "edit", "purchase", "alreadyOwn", "catalogFound", "reject", "silentClose", "closeDuplicate", "close", "reopen" }

@@ -97,72 +97,9 @@ public sealed class EmailDefaultsDeploymentTests
         CollectionAssert.AreEqual(initial, await ReadTemplatesAsync());
     }
 
-    [TestMethod]
-    [TestCategory(TestCategories.HistoricalUpgrade)]
-    public async Task UpgradeInsertsOnlyMissingDefaultsPreservesLineageAndRetiresOnlyLibraryTransportTokens()
-    {
-        await using var connection = new SqlConnection(target);
-        await connection.OpenAsync();
-        await ExecuteAsync(connection, """
-            DELETE FROM [asap].[EmailTemplate] WHERE [TemplateKey] IN (N'hold_placed', N'rejected');
-            UPDATE [asap].[EmailTemplate] SET [BodyTemplate] = N'Old seeded automatic hold promise {{title}}',
-                [DisplayName] = N'Administrator receipt', [SortOrder] = 99 WHERE [TemplateKey] = N'suggestion_submitted';
-            UPDATE [asap].[EmailTemplate] SET [SubjectTemplate] = N'', [BodyTemplate] = N'   ',
-                [IsHidden] = 1 WHERE [TemplateKey] = N'purchase_approved';
-            UPDATE [asap].[EmailTemplate] SET [SubjectTemplate] = N'Custom title {{title}}', [BodyTemplate] = N''
-                WHERE [TemplateKey] = N'already_owned';
-            INSERT INTO [asap].[Organization]
-                ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
-            VALUES (2, N'Upgrade library', 2, 1, 1), (3, N'Inactive library', 2, 1, 0);
-            INSERT INTO [asap].[EmailTemplate]
-                ([OrganizationId], [TemplateKey], [SourceTemplateId], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-            SELECT 2, [TemplateKey], [Id], NULL, NULL, N'Library body {{title}}', 1, 0, 0
-            FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted';
-            INSERT INTO [asap].[EmailTemplate]
-                ([OrganizationId], [TemplateKey], [SourceTemplateId], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-            SELECT 2, [TemplateKey], [Id], N'Library subject', NULL, 0, 0, 0
-            FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'purchase_approved';
-            INSERT INTO [asap].[EmailTemplate]
-                ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-            VALUES (1, N'rejection:custom', N'Custom system', N'System custom', N'System body', 0, 0, 60),
-                   (2, N'rejection:local', N'Custom library', N'Library custom', N'Library body', 0, 1, 70);
-            UPDATE [asap].[EmailSettings] SET [ProtectedServerToken] = N'synthetic-system-ciphertext',
-                [FromAddress] = N'system@example.org', [FromName] = N'System sender' WHERE [OrganizationId] = 1;
-            INSERT INTO [asap].[EmailSettings]
-                ([OrganizationId], [ProtectedServerToken], [FromAddress], [FromName], [UpdatedUtc])
-            VALUES (2, N'synthetic-obsolete-library-ciphertext', N'library@example.org', N'Library sender', '2026-01-02T03:04:05'),
-                   (3, NULL, N'inactive@example.org', N'Inactive sender', '2026-01-02T03:04:05');
-            """);
-        var before = await ReadTemplatesAsync();
-        var senderBefore = await ReadSendersAsync(connection);
-        Deploy();
-        var upgraded = await ReadTemplatesAsync();
-        CollectionAssert.AreEqual(before, upgraded.Where(row => before.Any(old => old.Id == row.Id)).ToList(),
-            "Upgrade must retain each saved identity, nullable/blank field, version, hidden state and lineage.");
-        Assert.AreEqual(before.Count + 2, upgraded.Count);
-        foreach (var key in new[] { "hold_placed", "rejected" })
-        {
-            var expected = BuiltInEmailTemplateExpectations.All.Single(item => item.Key == key);
-            var inserted = upgraded.Single(item => item.OrganizationId == 1 && item.Key == key);
-            Assert.AreEqual(expected.Subject, inserted.Subject);
-            Assert.AreEqual(expected.Body, inserted.Body);
-        }
-        var senderAfter = await ReadSendersAsync(connection);
-        CollectionAssert.AreEqual(senderBefore, senderAfter);
-        Assert.AreEqual(0, Convert.ToInt32(await new SqlCommand(
-            "SELECT COUNT(*) FROM [asap].[EmailSettings] WHERE [OrganizationId] <> 1 AND [ProtectedServerToken] IS NOT NULL;", connection).ExecuteScalarAsync()));
-        Assert.AreEqual("synthetic-system-ciphertext", await new SqlCommand(
-            "SELECT [ProtectedServerToken] FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1;", connection).ExecuteScalarAsync());
-        var versions = await ReadEmailVersionsAsync(connection);
-        Deploy();
-        CollectionAssert.AreEqual(upgraded, await ReadTemplatesAsync());
-        CollectionAssert.AreEqual(senderAfter, await ReadSendersAsync(connection));
-        CollectionAssert.AreEqual(versions, await ReadEmailVersionsAsync(connection),
-            "Repeated credential cleanup must not touch already clean rows.");
-    }
 
     [TestMethod]
-    public async Task PatronPlainTextDefaultsReconcileOnlyExactSeedsAcrossScopesAndRemainIdempotent()
+    public async Task PatronDefaultsAndExplicitOverridesRemainUnchangedOnRedeployment()
     {
         var old = new[]
         {
@@ -240,8 +177,8 @@ public sealed class EmailDefaultsDeploymentTests
         var after = await ReadPatronMessagesAsync(connection);
         foreach (var id in new[] { 1, 2 })
         {
-            CollectionAssert.AreEqual(expected, after[id].Messages);
-            Assert.AreNotEqual(before[id].Version, after[id].Version);
+            CollectionAssert.AreEqual(before[id].Messages, after[id].Messages);
+            Assert.AreEqual(before[id].Version, after[id].Version);
         }
         foreach (var id in Enumerable.Range(3, 6))
         {
@@ -260,7 +197,7 @@ public sealed class EmailDefaultsDeploymentTests
             var rows = new List<string>();
             while (await reader.ReadAsync())
             {
-                Assert.AreEqual(expected[rows.Count + 2], reader.GetString(0));
+                Assert.AreEqual(old[rows.Count + 2], reader.GetString(0));
                 rows.Add(reader.GetString(1));
             }
             Assert.AreEqual(2, rows.Count);

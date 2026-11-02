@@ -1,17 +1,27 @@
 {
-  "schema": 2,
+  "schema": 3,
   "repository": "clcdpc/asap-pocketbase",
   "repository_id": 1221758626,
   "workflow": ".github/workflows/dotnet.yml",
   "job": "Full CI execution",
-  "runner_labels": ["clc-linux"],
+  "browser_job": "Browser qualification",
+  "runner_labels": [
+    "clc-linux"
+  ],
   "runner_group": "clc-runners",
   "environment_epoch": "clc-linux-2026-10-29-v1",
   "lifetime_days": 14,
   "exclusions": [
     {
-      "paths": ["scripts/ci/test-reuse.md", "scripts/ci/test-selection.md"],
-      "suites": ["dotnet", "browser", "frontend"],
+      "paths": [
+        "scripts/ci/test-reuse.md",
+        "scripts/ci/test-selection.md"
+      ],
+      "suites": [
+        "dotnet",
+        "browser",
+        "frontend"
+      ],
       "reason": "Operator documentation and validation receipts only; no build, test, fingerprint or deployment command reads this document."
     },
     {
@@ -20,13 +30,83 @@
         "tests/acceptance/helpers/reporting.cjs",
         "tests/acceptance/helpers/accessibility.cjs"
       ],
-      "suites": ["dotnet", "browser", "frontend"],
+      "suites": [
+        "dotnet",
+        "browser",
+        "frontend"
+      ],
       "reason": "Standalone acceptance launcher, reporting and screenshots: consumed by acceptance/run.cjs and dev/review/runtime.cjs, never by the three required suites. Keep review providers, LocalReviewer.sql and all other acceptance/review files included."
     },
     {
-      "paths": ["tests/browser/staff-presentation.cjs"],
-      "suites": ["dotnet", "frontend"],
+      "paths": [
+        "tests/browser/staff-presentation.cjs"
+      ],
+      "suites": [
+        "dotnet",
+        "frontend"
+      ],
       "reason": "Only invoked by StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry, explicitly excluded from the non-browser partition. No retained frontend test imports this script. The browser suite includes it."
+    },
+    {
+      "paths": [
+        "src/Asap.Web/Frontend/patron/app.js",
+        "src/Asap.Web/Frontend/patron/embed.js",
+        "src/Asap.Web/Frontend/patron/js/api.js",
+        "src/Asap.Web/Frontend/patron/js/auth.js",
+        "src/Asap.Web/Frontend/patron/js/bootstrap.js",
+        "src/Asap.Web/Frontend/patron/js/config.js",
+        "src/Asap.Web/Frontend/patron/js/custom-fields.js",
+        "src/Asap.Web/Frontend/patron/js/dom.js",
+        "src/Asap.Web/Frontend/patron/js/embed.js",
+        "src/Asap.Web/Frontend/patron/js/form-rules.js",
+        "src/Asap.Web/Frontend/patron/js/form-ui.js",
+        "src/Asap.Web/Frontend/patron/js/html.js",
+        "src/Asap.Web/Frontend/patron/js/state.js",
+        "src/Asap.Web/Frontend/patron/js/steps.js",
+        "src/Asap.Web/Frontend/patron/js/submit.js",
+        "src/Asap.Web/Frontend/shared/html.js",
+        "src/Asap.Web/Frontend/shared/http.js",
+        "src/Asap.Web/Frontend/shared/latest-load.js",
+        "src/Asap.Web/Frontend/staff/app.js",
+        "src/Asap.Web/Frontend/staff/js/analytics.js",
+        "src/Asap.Web/Frontend/staff/js/bulk-delete.js",
+        "src/Asap.Web/Frontend/staff/js/confirmation.js",
+        "src/Asap.Web/Frontend/staff/js/copy-creation.js",
+        "src/Asap.Web/Frontend/staff/js/copy-detail.js",
+        "src/Asap.Web/Frontend/staff/js/custom-fields.js",
+        "src/Asap.Web/Frontend/staff/js/detail-host.js",
+        "src/Asap.Web/Frontend/staff/js/display-order.js",
+        "src/Asap.Web/Frontend/staff/js/draft-scope.js",
+        "src/Asap.Web/Frontend/staff/js/email-template-placeholders.js",
+        "src/Asap.Web/Frontend/staff/js/email-test.js",
+        "src/Asap.Web/Frontend/staff/js/http.js",
+        "src/Asap.Web/Frontend/staff/js/mutation-outcome.js",
+        "src/Asap.Web/Frontend/staff/js/navigation.js",
+        "src/Asap.Web/Frontend/staff/js/operations-controller.js",
+        "src/Asap.Web/Frontend/staff/js/patron-text-placeholders.js",
+        "src/Asap.Web/Frontend/staff/js/profile-controller.js",
+        "src/Asap.Web/Frontend/staff/js/queues.js",
+        "src/Asap.Web/Frontend/staff/js/recent-requests.js",
+        "src/Asap.Web/Frontend/staff/js/request-editor.js",
+        "src/Asap.Web/Frontend/staff/js/request-workflows.js",
+        "src/Asap.Web/Frontend/staff/js/research.js",
+        "src/Asap.Web/Frontend/staff/js/router.js",
+        "src/Asap.Web/Frontend/staff/js/session-identity.js",
+        "src/Asap.Web/Frontend/staff/js/session.js",
+        "src/Asap.Web/Frontend/staff/js/settings-domains.js",
+        "src/Asap.Web/Frontend/staff/js/settings.js",
+        "src/Asap.Web/Frontend/staff/js/shell.js",
+        "src/Asap.Web/Frontend/staff/js/suggestion-controller.js",
+        "src/Asap.Web/Frontend/staff/js/title-detail.js",
+        "src/Asap.Web/Frontend/staff/js/ui.js",
+        "src/Asap.Web/Frontend/staff/js/url-utils.js",
+        "src/Asap.Web/Frontend/staff/js/workflow.js",
+        "src/Asap.Web/Frontend/staff/styles.css"
+      ],
+      "suites": [
+        "dotnet"
+      ],
+      "reason": "Audited browser-only implementation assets. Asset hashing/publication/cache contracts and every Chromium consumer are in Browser; current-commit build/publish and complete frontend/browser suites still validate these bytes. HTML entry points, manifests, vendor assets and unknown/new paths remain included."
     }
   ]
 }

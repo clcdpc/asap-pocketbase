@@ -13,9 +13,9 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 DIRECTORY = ROOT / ".artifacts/test-selection"
-CATEGORIES = {"migration": "HistoricalMigration", "upgrade": "HistoricalUpgrade", "browser": "Browser"}
-PARTITIONS = ("core", "migration", "upgrade", "browser")
-ALL = ["core", "migration", "upgrade"]
+CATEGORIES = {"browser": "Browser"}
+PARTITIONS = ("core", "browser")
+ALL = ["core"]
 FILTERS = {key: f"TestCategory={value}" for key, value in CATEGORIES.items()}
 FILTERS["core"] = "&".join(f"TestCategory!={value}" for value in CATEGORIES.values())
 APPLICATION = "tests/Asap.Tests/bin/Release/net10.0/Asap.Tests.dll"
@@ -47,41 +47,21 @@ def full(reason, fresh=True):
 
 
 def paths_policy(paths):
-    """Only audited unrelated paths can omit history; unknown dependencies run all."""
+    """All current suites are mandatory. Unknown dependencies force fresh execution."""
     require(isinstance(paths, list) and 0 < len(paths) <= 3000, "Missing or excessive changed paths")
-    selected, reasons = {"core"}, []
     for path in paths:
-        require(isinstance(path, str) and path and not path.startswith(("/", "\\"))
-                and "\\" not in path and not any(p in ("", ".", "..") for p in path.split("/"))
+        require(isinstance(path, str) and path and not path.startswith(("/", chr(92)))
+                and chr(92) not in path and not any(p in ("", ".", "..") for p in path.split("/"))
                 and not any(ord(c) < 32 for c in path), "Invalid changed path")
-        if path.startswith((".github/", "scripts/ci/", "scripts/build/", "scripts/deployment/")) or path in (
+        if path.startswith((".github/", "scripts/", "database/")) or path.endswith(
+                (".csproj", ".sqlproj", ".props", ".targets")) or path in (
                 "tests/ci_workflow_contract.test.js", "tests/test_iis_deployment_contract.test.js",
-                "tests/run_all.js", "tests/browser/run.cjs", "tests/Asap.Tests/TestCategories.cs") or path.endswith(
-                    (".csproj", ".sqlproj", ".props", ".targets")):
-            return full("Selection, workflow, build, deployment or safety infrastructure changed: " + path)
-        if path.startswith(("database/", "src/Asap.Migration/", "tests/Asap.Tests/Migration/",
-                            "tests/fixtures/migration/", "tests/Asap.Tests/Sql/")):
-            return full("Historical migration/schema implementation, contract or fixture changed: " + path)
-        if path.startswith(("src/Shared/", "src/Asap.Web/Infrastructure/")):
-            selected.update(ALL)
-            reasons.append("Shared SQL/configuration/deployment dependency: " + path)
-        elif path.startswith(("src/Asap.Web/Features/Patron/PatronConfigurationService",
-                              "src/Asap.Web/Features/Patron/PatronMessageDefaults",
-                              "src/Asap.Web/Features/Staff/TitleRequestEndpoints")):
-            selected.add("migration")
-            reasons.append("Runtime configuration consumed by import oracles: " + path)
-        elif path.startswith("src/Asap.Web/Features/Patron/PatronSessionService"):
-            selected.add("upgrade")
-            reasons.append("Session identity consumed by upgrade oracle: " + path)
-        elif path.startswith(("src/Asap.Web/Frontend/", "src/Asap.Web/Features/",
-                              "tests/Asap.Tests/Integration/", "tests/Asap.Tests/Unit/", "tests/browser/")):
-            pass
-        elif re.fullmatch(r"tests/[^/]+\.test\.js", path):
-            pass
-        else:
+                "tests/run_all.js", "tests/browser/run.cjs", "tests/Asap.Tests/TestCategories.cs"):
+            return full("Execution, security, build or deployment contract changed: " + path)
+        if not (path.startswith(("src/Asap.Web/", "src/Shared/", "tests/Asap.Tests/", "tests/browser/"))
+                or re.fullmatch(r"tests/[^/]+\.test\.js", path)):
             return full("Unreviewed dependency path: " + path)
-    return {"categories": [key for key in ALL if key in selected], "fresh": False,
-            "reason": "; ".join(reasons) if reasons else "Only reviewed unrelated application/frontend paths changed"}
+    return full("Current suites required; reuse must independently match all dependencies", fresh=False)
 
 
 def sha(value):
@@ -204,18 +184,15 @@ def population(selected, root=ROOT):
     reviewed = json.loads((root / "scripts/ci/reviewed-test-categories.json").read_bytes())
     validate_partitions(catalog, partitions, reviewed)
     selected_uids = sorted(uid for key in selected["categories"] for uid in partitions[key])
-    omitted = [key for key in ALL if key not in selected["categories"]]
-    expression = "&".join(["TestCategory!=Browser", *(f"TestCategory!={CATEGORIES[key]}" for key in omitted)])
-    actual = discover(expression, root)
-    require(set(actual) == set(selected_uids), "Effective filter unexpectedly narrows the selected population")
+    expression = FILTERS["core"]
+    require(expression == FILTERS["core"], "Unexpected execution filter")
     catalog_identity = digest({"catalog": catalog, "partitions": partitions, "reviewed": reviewed})
     suites = {}
     for suite, tests, expression in (("dotnet", selected_uids, expression),
                                       ("browser", sorted(partitions["browser"]), FILTERS["browser"])):
         suites[suite] = {"filter": expression, "minimum": len(tests), "expected": len(tests),
                          "identities": sorted(digest(uid) for uid in tests), "population": catalog_identity}
-    suites["dotnet"].update(categories=selected["categories"], omitted=omitted,
-                             partition_counts={key: len(partitions[key]) for key in PARTITIONS})
+    suites["dotnet"].update(partition_counts={key: len(partitions[key]) for key in PARTITIONS})
     files = sorted(p.name for p in (root / "tests").glob("*.test.js"))
     require(files, "Frontend discovery is empty")
     suites["frontend"] = {"filter": "npm test (all root *.test.js files)", "minimum": len(files),
@@ -225,10 +202,10 @@ def population(selected, root=ROOT):
     return suites, round(time.monotonic() - started, 3), members
 
 
-def prepare(root=ROOT, directory=DIRECTORY, benchmark=False):
-    selected = benchmark_decision() if benchmark else decision(root=root)
+def prepare(root=ROOT, directory=DIRECTORY):
+    selected = decision(root=root)
     suites, seconds, members = population(selected, root)
-    result = {"schema": 1, "kind": "benchmark" if benchmark else "qualification", "commit": git("rev-parse", "HEAD", root=root),
+    result = {"schema": 2, "kind": "qualification", "commit": git("rev-parse", "HEAD", root=root),
               "decision": selected, "suites": suites, "discovery_seconds": seconds}
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "selection.json").write_bytes(canonical(result) + b"\n")
@@ -241,7 +218,7 @@ def prepare(root=ROOT, directory=DIRECTORY, benchmark=False):
 def load(root=ROOT, verify=False, directory=None):
     path = (directory or root / ".artifacts/test-selection") / "selection.json"
     value = json.loads(path.read_bytes())
-    require(value.get("schema") == 1 and value.get("kind") == "qualification"
+    require(value.get("schema") == 2 and value.get("kind") == "qualification"
             and value["commit"] == git("rev-parse", "HEAD", root=root), "Missing current-commit qualification population")
     if verify:
         selected = decision(root=root)
@@ -251,28 +228,7 @@ def load(root=ROOT, verify=False, directory=None):
     return value
 
 
-def benchmark_decision():
-    # Exercise the same policy on a controlled unrelated change; never a qualification result.
-    return {**paths_policy(["src/Asap.Web/Frontend/app.js"]), "fresh": True,
-            "reason": "Controlled unrelated-change benchmark"}
-
-
-def benchmark_population(root=ROOT):
-    value = json.loads((root / ".artifacts/test-selection/selection.json").read_bytes())
-    require(value.get("kind") == "benchmark" and value.get("schema") == 1
-            and value["commit"] == git("rev-parse", "HEAD", root=root)
-            and value["decision"] == benchmark_decision(), "Invalid controlled benchmark population")
-    import fingerprints
-    try:
-        fingerprints.checkout(value["commit"], root)
-    except ValueError as error:
-        raise SelectionError("Benchmark checkout must remain clean at its recorded commit") from error
-    return value
-
-
-def run(root=ROOT, benchmark=False):
-    value = benchmark_population(root) if benchmark else load(root)
-    selected = value["suites"]["dotnet"]
+def execute(selected, root=ROOT):
     args = ["dotnet", "test", "--project", "tests/Asap.Tests/Asap.Tests.csproj", "--configuration", "Release",
             "--no-build", "--no-restore", "--minimum-expected-tests", str(selected["expected"]),
             "--report-trx", "--report-trx-filename", "test-results.trx", "--results-directory", ".artifacts/ci-performance",
@@ -280,28 +236,29 @@ def run(root=ROOT, benchmark=False):
     return subprocess.call(args, cwd=root)
 
 
+def draft(root=ROOT):
+    import reuse
+    expression = ("FullyQualifiedName~Asap.Tests.Unit.|FullyQualifiedName~Asap.Tests.PolicyContractTests.|"
+                  "FullyQualifiedName~Asap.Tests.AnalyticsContractTests.")
+    tests = discover(expression, root)
+    selected = {"filter": expression, "minimum": len(tests), "expected": len(tests),
+                "identities": sorted(digest(uid) for uid in tests)}
+    result = execute(selected, root)
+    require(result == 0, "Draft tests failed")
+    reuse.execution_results("dotnet", selected)
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("prepare", "run", "prepare-benchmark", "run-benchmark", "verify-benchmark"))
+    parser.add_argument("operation", choices=("prepare", "run", "run-draft"))
     args = parser.parse_args()
     if args.operation == "prepare":
         prepare()
         return 0
-    if args.operation == "prepare-benchmark":
-        prepare(benchmark=True)
-        return 0
-    if args.operation == "verify-benchmark":
-        import reuse
-        value = benchmark_population()
-        suites, _, _ = population(benchmark_decision())
-        require(suites == value["suites"], "Benchmark population changed")
-        results = reuse.execution_results("dotnet", suites["dotnet"])
-        report = {"kind": "benchmark-only", "commit": value["commit"], "results": results,
-                  "omitted": suites["dotnet"]["omitted"], "discovery_seconds": value["discovery_seconds"]}
-        (DIRECTORY / "benchmark-results.json").write_bytes(canonical(report) + b"\n")
-        print(f"Controlled benchmark only: {results['passed']} passed, {results['failed']} failed, {results['skipped']} skipped; no qualification or reusable evidence.")
-        return 0
-    return run(benchmark=args.operation == "run-benchmark")
+    if args.operation == "run-draft":
+        return draft()
+    return execute(load()["suites"]["dotnet"])
 
 
 if __name__ == "__main__":

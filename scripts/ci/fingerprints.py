@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SUITES = ("dotnet", "browser", "frontend")
 SQL_TAG = "mcr.microsoft.com/mssql/server:2022-latest"
 CONFIG = ROOT / "scripts/ci/test-reuse.json"
-SOURCE_ALGORITHM = "full-ci-selection-v3"
+SOURCE_ALGORITHM = "current-suites-v4"
 
 
 def canonical(value):
@@ -37,7 +37,7 @@ def command(arguments, root=ROOT):
 
 def configuration():
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    if (type(config["schema"]) is not int or config["schema"] < 1
+    if (type(config["schema"]) is not int or config["schema"] != 3
             or not 1 <= config["lifetime_days"] <= 14 or not config["environment_epoch"]):
         raise ValueError("Invalid evidence lifetime/environment epoch")
     for rule in config["exclusions"]:
@@ -69,20 +69,12 @@ def tracked_entries(root=ROOT):
 
 
 def full_ci_execution_contract(workflow):
-    """Conservatively hash the test executor independently of deployment jobs.
-
-    Every edit to the full test executor invalidates old test evidence.
-    """
+    """Bind every test executor, reporting gate and deployment authorization edit."""
     workflow = workflow.replace("\r\n", "\n")
-    starts = list(re.finditer(r"(?m)^  build-test-package:[ \t]*$", workflow))
-    if len(starts) != 1:
-        raise ValueError("Full CI executor definition is missing or ambiguous")
-    tail = workflow[starts[0].end():]
-    following = re.search(r"(?m)^  [a-zA-Z0-9_-]+:[ \t]*$", tail)
-    if following is None:
-        raise ValueError("Full CI executor job boundary is missing")
-    job = workflow[starts[0].start():starts[0].end() + following.start()]
-    return digest(job)
+    if not all(len(re.findall(r"(?m)^  " + name + r":[ \\t]*$", workflow)) == 1
+               for name in ("build-test-package", "browser-qualification", "validation")):
+        raise ValueError("Missing or ambiguous required execution jobs")
+    return digest(workflow)
 
 
 def source_fingerprint(entries, suite, config, execution_contract=None):
@@ -124,7 +116,7 @@ def sql_image():
 
 
 def nuget_identity(root=ROOT):
-    paths = ["src/Asap.Web", "src/Asap.Migration", "tests/Asap.Tests",
+    paths = ["src/Asap.Web", "tests/Asap.Tests",
              "database/Asap.Database", "dev/review/src/Asap.ReviewProviders"]
     resolved = {}
     for path in paths:

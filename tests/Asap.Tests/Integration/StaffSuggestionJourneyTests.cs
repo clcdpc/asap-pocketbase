@@ -5,6 +5,7 @@ using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
+using Asap.Web.Infrastructure.Configuration;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -1742,6 +1743,15 @@ public sealed partial class PatronJourneyTests
             await using var scopedFactory = factory!.WithWebHostBuilder(builder =>
                 builder.ConfigureServices(services =>
                 {
+                    var original = factory!.Services.GetRequiredService<ExternalConfiguration>();
+                    var timeoutConfiguration = JsonSerializer.Deserialize<ExternalConfiguration>(JsonSerializer.Serialize(original))!;
+                    timeoutConfiguration.ConnectionStrings.AsapDatabase =
+                        new SqlConnectionStringBuilder(timeoutConfiguration.ConnectionStrings.AsapDatabase)
+                        {
+                            CommandTimeout = 1
+                        }.ConnectionString;
+                    services.RemoveAll<ExternalConfiguration>();
+                    services.AddSingleton(timeoutConfiguration);
                     services.RemoveAll<IPatronProvider>();
                     services.AddSingleton<IPatronProvider>(provider);
                 }));
@@ -2219,4 +2229,5 @@ public sealed partial class PatronJourneyTests
             CancellationToken cancellationToken) =>
             Task.FromResult(EmailSendResult.NotConfigured);
     }
+
 }

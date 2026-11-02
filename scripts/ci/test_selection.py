@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
+import time
 import subprocess
 import tempfile
 import unittest
@@ -23,19 +25,9 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(policy.paths_policy([path])["categories"], ["core"])
 
-    def test_migration_implementation_fixtures_and_contracts_qualify_all_history(self):
-        for path in ("src/Asap.Migration/MigrationImporter.cs", "src/Asap.Migration/MigrationContract.cs",
-                     "tests/Asap.Tests/Migration/MigrationCliTests.cs", "tests/fixtures/migration/source.json"):
-            selected = policy.paths_policy([path])
-            self.assertEqual(selected["categories"], policy.ALL)
-            self.assertTrue(selected["fresh"])
-
-    def test_runtime_dependencies_require_corresponding_import_oracles(self):
-        for path in ("src/Asap.Web/Features/Patron/PatronConfigurationService.cs",
-                     "src/Asap.Web/Features/Patron/PatronMessageDefaults.cs",
-                     "src/Asap.Web/Features/Staff/TitleRequestEndpoints.cs"):
-            with self.subTest(path=path):
-                self.assertEqual(policy.paths_policy([path])["categories"], ["core", "migration"])
+    def test_unknown_implementation_and_deleted_contracts_force_fresh_execution(self):
+        for path in ("src/Retired/Source.cs", "unknown/fixture.json"):
+            self.assertTrue(policy.paths_policy([path])["fresh"])
 
     def test_schema_deployment_shared_configuration_and_serialization_dependencies(self):
         for path in ("database/Asap.Database/Tables/SchemaVersion.sql", "src/Shared/SecurityContract.cs",
@@ -51,7 +43,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_upgrade_tests_and_session_identity_dependency(self):
         self.assertEqual(policy.paths_policy(["tests/Asap.Tests/Sql/DatabaseBaselineTests.cs"])["categories"], policy.ALL)
-        self.assertEqual(policy.paths_policy(["src/Asap.Web/Features/Patron/PatronSessionService.cs"])["categories"], ["core", "upgrade"])
+        self.assertEqual(policy.paths_policy(["src/Asap.Web/Features/Patron/PatronSessionService.cs"])["categories"], ["core"])
 
     def test_selection_and_enforcement_changes_force_fresh_full_validation(self):
         for path in (".github/workflows/dotnet.yml", "scripts/ci/selection.py", "scripts/ci/reviewed-test-categories.json",
@@ -187,26 +179,16 @@ class GitDiffTests(unittest.TestCase):
             self.assertEqual(selected["categories"], policy.ALL)
             self.assertTrue(selected["fresh"])
 
-    def test_benchmark_rejects_changed_tracked_sources(self):
-        directory = self.root / ".artifacts/test-selection"
-        directory.mkdir(parents=True)
-        value = {"kind": "benchmark", "schema": 1, "commit": self.initial,
-                 "decision": policy.benchmark_decision()}
-        (directory / "selection.json").write_text(json.dumps(value))
-        self.assertEqual(policy.benchmark_population(self.root)["commit"], self.initial)
-        (self.root / "src/Asap.Web/Frontend/app.js").write_text("Changed after benchmark planning")
-        with self.assertRaises(policy.SelectionError):
-            policy.benchmark_population(self.root)
 
     def test_renamed_or_deleted_dependency_is_still_required(self):
-        before = self.commit("src/Asap.Migration/Source.cs", "source")
-        self.git("mv", "src/Asap.Migration/Source.cs", "src/Asap.Web/Frontend/retired.txt")
+        before = self.commit("src/Unreviewed/Source.cs", "source")
+        self.git("mv", "src/Unreviewed/Source.cs", "src/Asap.Web/Frontend/retired.txt")
         self.git("commit", "-qm", "rename")
         tested = self.git("rev-parse", "HEAD")
         event = {"before": before, "after": tested, "ref": "refs/heads/main", "deleted": False, "forced": False}
         paths = policy.changed_paths("push", event, self.env(tested, "push"), self.root)
-        self.assertIn("src/Asap.Migration/Source.cs", paths)
-        self.assertIn("migration", policy.paths_policy(paths)["categories"])
+        self.assertIn("src/Unreviewed/Source.cs", paths)
+        self.assertTrue(policy.paths_policy(paths)["fresh"])
 
 
 class PopulationTests(unittest.TestCase):
@@ -232,7 +214,7 @@ class PopulationTests(unittest.TestCase):
             if mutation != "duplicate":
                 parts["core"].pop(uid)
             if mutation != "missing":
-                parts["migration"][uid] = self.catalog[uid]
+                parts["browser"][uid] = self.catalog[uid]
             with self.subTest(mutation=mutation), self.assertRaises(policy.SelectionError):
                 policy.validate_partitions(self.catalog, parts, self.reviewed)
 
@@ -246,7 +228,7 @@ class PopulationTests(unittest.TestCase):
         policy.validate_partitions(catalog, parts, self.reviewed)
 
     def test_reduced_result_cannot_satisfy_full_gate_or_same_count_wrong_tests(self):
-        core_ids = sorted(fp.digest(uid) for uid in self.partitions["core"])
+        core_ids = sorted(fp.digest(uid) for uid in self.partitions["core"])[1:]
         full_ids = sorted(fp.digest(uid) for key in policy.ALL for uid in self.partitions[key])
         results = {"total": len(core_ids), "executed": len(core_ids), "passed": len(core_ids),
                    "failed": 0, "skipped": 0, "identities": core_ids}
@@ -259,10 +241,10 @@ class PopulationTests(unittest.TestCase):
         with self.assertRaises(reuse.EvidenceError):
             reuse.passing_results(results, selected)
 
-    def test_benchmark_artifact_cannot_be_loaded_as_qualification(self):
+    def test_untrusted_plan_kind_cannot_be_loaded_as_qualification(self):
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
-            value = {"schema": 1, "kind": "benchmark", "commit": policy.git("rev-parse", "HEAD")}
+            value = {"schema": 2, "kind": "reused", "commit": policy.git("rev-parse", "HEAD")}
             (directory / "selection.json").write_text(json.dumps(value))
             with self.assertRaises(policy.SelectionError):
                 policy.load(directory=directory)
@@ -278,10 +260,74 @@ class PopulationTests(unittest.TestCase):
 
 
 class FrontendSafetyTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX process-group cancellation contract")
+    def test_cancellation_kills_uncooperative_child_and_cannot_emit_passing_evidence(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            shutil.copyfile(policy.ROOT / "tests/run_all.js", root / "run_all.js")
+            (root / "frontend-parallel.json").write_text('["a.test.js"]')
+            (root / "a.test.js").write_text(
+                "const fs=require('fs');process.on('SIGTERM',()=>{});"
+                "fs.writeFileSync('child.pid',String(process.pid));setInterval(()=>{},1000);")
+            results = root / "results.json"
+            env = {**os.environ, "ASAP_CI_FRONTEND_RESULTS": str(results)}
+            runner = subprocess.Popen(["node", "run_all.js"], cwd=root, env=env,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            child = None
+            try:
+                deadline = time.monotonic() + 5
+                while not (root / "child.pid").exists():
+                    self.assertIsNone(runner.poll(), "Runner exited before its child started")
+                    self.assertLess(time.monotonic(), deadline, "Child startup timed out")
+                    time.sleep(0.02)
+                child = int((root / "child.pid").read_text())
+                runner.send_signal(signal.SIGTERM)
+                runner.communicate(timeout=12)
+                self.assertNotEqual(runner.returncode, 0)
+                raw = json.loads(results.read_text())
+                self.assertEqual((raw["executed"], raw["passed"], raw["failed"]), (1, 0, 1))
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(child, 0)
+            finally:
+                if runner.poll() is None:
+                    runner.kill()
+                    runner.communicate(timeout=5)
+                if child is not None:
+                    try:
+                        os.killpg(child, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+    def test_bounded_workers_preserve_all_failures_order_and_unreviewed_serial_ownership(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            shutil.copyfile(policy.ROOT / "tests/run_all.js", root / "run_all.js")
+            (root / "frontend-parallel.json").write_text('["a.test.js","b.test.js"]')
+            for own, peer, code in (("a", "b", 2), ("b", "a", 0)):
+                (root / (own + ".test.js")).write_text(
+                    "const fs=require('fs');fs.writeFileSync('" + own + ".started','');"
+                    "const deadline=Date.now()+5000;const tick=()=>{if(fs.existsSync('" + peer + ".started')){"
+                    "fs.writeFileSync('" + own + ".done','');console.log('" + own + " output');process.exit(" + str(code) + ");}"
+                    "if(Date.now()>deadline)process.exit(99);setTimeout(tick,10);};tick();")
+            (root / "c.test.js").write_text(
+                "const fs=require('fs');if(!fs.existsSync('a.done')||!fs.existsSync('b.done'))process.exit(99);"
+                "console.log('c output');process.exit(3);")
+            results = root / "results.json"
+            env = {**os.environ, "ASAP_FRONTEND_WORKERS": "2", "ASAP_CI_FRONTEND_RESULTS": str(results)}
+            run = subprocess.run(["node", "run_all.js"], cwd=root, env=env, capture_output=True, text=True, timeout=15)
+            self.assertEqual(run.returncode, 1)
+            raw = json.loads(results.read_text())
+            self.assertEqual((raw["executed"], raw["passed"], raw["failed"]), (3, 1, 2))
+            self.assertEqual([row["code"] for row in raw["file_results"]], [2, 0, 3])
+            self.assertLess(run.stdout.index("a output"), run.stdout.index("b output"))
+            self.assertLess(run.stdout.index("b output"), run.stdout.index("c output"))
+
+
     def test_safety_runs_once_before_remaining_tests_and_reports_complete_union(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             shutil.copyfile(policy.ROOT / "tests/run_all.js", root / "run_all.js")
+            (root / "frontend-parallel.json").write_text('["ordinary.test.js"]')
             files = ["ci_workflow_contract.test.js", "test_iis_deployment_contract.test.js", "ordinary.test.js"]
             marker = root / "executed"
             for file in files:

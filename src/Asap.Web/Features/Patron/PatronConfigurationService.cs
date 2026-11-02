@@ -290,7 +290,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
                     value?.SortOrder ?? format.SortOrder,
                     value?.IsEnabled ?? format.IsEnabled,
                     value?.MessageBehavior ?? format.MessageBehavior ?? "none",
-                    PatronMessageDefaults.PlainText(value?.Message ?? format.Message),
+                    value?.Message ?? format.Message,
                     Field(value?.TitleMode ?? format.TitleMode ?? "required", value?.TitleLabel ?? format.TitleLabel, "Title"),
                     Field(value?.AuthorMode ?? format.AuthorMode ?? "optional", value?.AuthorLabel ?? format.AuthorLabel, "Author"),
                     Field(value?.IdentifierMode ?? format.IdentifierMode ?? "optional", value?.IdentifierLabel ?? format.IdentifierLabel, "Identifier number"),
@@ -506,7 +506,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         new(mode, string.IsNullOrWhiteSpace(label) ? fallbackLabel : label);
 
     private static string PickMessage(string? library, string? system, string fallback) =>
-        PatronMessageDefaults.PlainText(Pick(library, system, fallback))!;
+        Pick(library, system, fallback);
 
     private static string Pick(string? library, string? system, string fallback) =>
         !string.IsNullOrWhiteSpace(library)

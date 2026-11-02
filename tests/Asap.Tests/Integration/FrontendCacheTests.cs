@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 namespace Asap.Tests.Integration;
 
 [TestClass]
+[TestCategory(TestCategories.Browser)]
 [DoNotParallelize]
 public sealed class FrontendCacheTests
 {

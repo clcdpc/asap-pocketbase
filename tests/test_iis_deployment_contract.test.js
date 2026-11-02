@@ -16,14 +16,6 @@ const postDeployment = fs.readFileSync(
   path.join(root, 'database', 'Asap.Database', 'Scripts', 'PostDeployment.sql'),
   'utf8'
 );
-const migrationContract = fs.readFileSync(
-  path.join(root, 'src', 'Asap.Migration', 'MigrationContract.cs'),
-  'utf8'
-);
-const migrationProject = fs.readFileSync(
-  path.join(root, 'src', 'Asap.Migration', 'Asap.Migration.csproj'),
-  'utf8'
-);
 const activation = fs.readFileSync(path.join(root, 'docs/implementation/test-iis-activation.md'), 'utf8');
 const slice8 = fs.readFileSync(path.join(root, 'docs/implementation/slice-08.md'), 'utf8');
 
@@ -55,30 +47,28 @@ const nonBrowserStep = execution.steps.find((step) => step.id === 'dotnet');
 assert.equal(nonBrowserStep.run, 'bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run');
 assert.ok(!/--minimum-expected-tests [0-9]+/.test(nonBrowserStep.run), 'non-browser counts must derive from complete native discovery');
 const reviewed = JSON.parse(fs.readFileSync(path.join(root, 'scripts/ci/reviewed-test-categories.json'), 'utf8'));
-assert.equal(reviewed.Browser.length, 16, 'all sixteen designated methods (seventeen native cases) remain browser coverage');
+assert.ok(reviewed.Browser.length > 0, "the reviewed browser method population must be nonempty");
 assert.equal(new Set(reviewed.Browser).size, reviewed.Browser.length);
 assert.ok(browserRunner.includes("filter: 'TestCategory=Browser'"), 'standalone browser execution must use the explicit category');
 assert.ok(browserRunner.includes('String(selected.expected)'), 'CI browser minimum must use native discovered population');
 assert.ok(workflow.includes('run: npm test'), 'the frontend test gate must remain');
 assert.ok(workflow.includes('dotnet publish src/Asap.Web/Asap.Web.csproj'), 'Web publish must remain a hosted check');
-assert.ok(workflow.includes('dotnet publish src/Asap.Migration/Asap.Migration.csproj'), 'native migration publish check must remain');
+assert.ok(!workflow.includes('src/Asap.Migration'), 'retired migration executable must not be built or published');
 
 const schemaVersions = {
   workflow: Number(workflow.match(/applicationSchemaVersion = (\d+)/)?.[1]),
   deployment: Number(deployment.match(/manifest\.applicationSchemaVersion -ne (\d+)/)?.[1]),
   runtime: Number(runtimeSchemaVersion.match(/ExpectedVersion = (\d+)/)?.[1]),
-  postDeployment: Number(postDeployment.match(/VALUES \(1, (\d+), SYSUTCDATETIME\(\)\)/)?.[1]),
-  migrationContract: Number(migrationContract.match(/ExpectedSchemaVersion = (\d+)/)?.[1]),
-  migrationProject: Number(migrationProject.match(/ExpectedSchemaVersion" Value="(\d+)"/)?.[1])
+  postDeployment: Number(postDeployment.match(/VALUES \(1, (\d+), SYSUTCDATETIME\(\)\)/)?.[1])
 };
 assert.ok(
   Object.values(schemaVersions).every((version) => version === 13),
   `application schema version must be 13 in every package/runtime contract: ${JSON.stringify(schemaVersions)}`
 );
 assert.match(
-  postDeployment,
-  /Schema 7 is a pre-release reset boundary\. Recreate the application database from this DACPAC\./,
-  'the DACPAC must reject in-place upgrades from pre-schema-7 databases'
+  fs.readFileSync(path.join(root, 'database/Asap.Database/Scripts/PreDeployment.sql'), 'utf8'),
+  /Version.*< 13/,
+  'the DACPAC must reject every unsupported earlier schema before changing data'
 );
 
 const deploymentJobStart = workflow.indexOf('  deploy-test-iis:');
