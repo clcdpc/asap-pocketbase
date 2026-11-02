@@ -1,4 +1,4 @@
-"""Low-frequency, allow-listed DMV snapshots of the existing disposable asap-sql.
+"""Low-frequency, allow-listed DMV snapshots of the job-owned disposable SQL container.
 
 Credentials travel only through stdin to SQLCMDPASSWORD inside the container.
 Raw CLI output/errors are never persisted. All cumulative counters are retained;
@@ -80,9 +80,13 @@ def parse_sections(output):
     return result
 
 
+def sql_container():
+    return token(os.environ.get("ASAP_CI_SQL_CONTAINER", ""), r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}")
+
+
 class SqlMetrics:
-    # Fixed local target. No server/connection-string override is accepted.
-    COMMAND = ["docker", "exec", "--interactive", "asap-sql", "/bin/sh", "-c",
+    # Only the explicitly owned local container; no server/connection-string override.
+    COMMAND = ["/bin/sh", "-c",
                "IFS= read -r SQLCMDPASSWORD || exit 1; export SQLCMDPASSWORD; "
                "exec timeout --signal=TERM --kill-after=1s 7s /opt/mssql-tools18/bin/sqlcmd "
                "-S localhost -U sa -C -d master -l 2 -t 3 -b -y 0 -w 65535"]
@@ -93,14 +97,16 @@ class SqlMetrics:
 
     def sample(self):
         password = os.environ.get("ASAP_TEST_SQL_SA_PASSWORD", "")
+        container = sql_container()
         started = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds")
         begin = time.monotonic()
         output = None
-        if password and not any(char in password for char in "\r\n\0"):
+        if container and password and not any(char in password for char in "\r\n\0"):
             query = Path(__file__).with_name("sql-diagnostics.sql").read_text(encoding="utf-8")
-            output = self.command(self.COMMAND, self.stop, timeout=8, input_text=password + "\n" + query, preserve_partial=True)
+            output = self.command(["docker", "exec", "--interactive", container, *self.COMMAND], self.stop,
+                                  timeout=8, input_text=password + "\n" + query, preserve_partial=True)
         else:
-            self.unavailable.add("SQL DMV credentials unavailable; no alternative connection attempted")
+            self.unavailable.add("Owned SQL container or DMV credentials unavailable; no alternative connection attempted")
         return self.observe(parse_sections(output), started, time.monotonic(), time.monotonic() - begin)
 
     def observe(self, sections, started, now, collection_seconds=0):

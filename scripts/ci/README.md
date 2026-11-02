@@ -7,6 +7,12 @@ full gate, PR cancellation groups, fingerprints, trust boundaries and forced
 full CI. Performance collection below still wraps every fresh .NET/SQL
 execution; reused runs link to original test timing instead of inventing samples.
 
+Full qualification occupies one clc-linux runner. Frontend, non-browser .NET/SQL
+and browser commands run sequentially against one Release build. Native suites
+share one job-owned SQL container while retaining independent test databases.
+Evidence reuse remains independent for all three suites. The 2-vCPU VM, memory,
+runner configuration and 120-minute timeout remain unchanged.
+
 The non-browser test step runs
 `bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run`.
 The selector supplies the category filter and native-discovery count to the
@@ -34,7 +40,12 @@ SQL query is forced. Workload stdout, stderr and stdin are inherited directly.
 
 ## Output and cadence
 
-The ignored `.artifacts/ci-performance/` directory contains:
+The ignored `.artifacts/ci-performance/` directory contains the non-browser
+evidence below. Browser writes the same filenames to
+`.artifacts/browser-performance/`, including its own TRX and fixture spans;
+frontend telemetry uses `.artifacts/frontend-performance/`. The workflow sets
+`ASAP_CI_PERFORMANCE_OUTPUT` for each command, so sequential execution cannot
+overwrite another suite's samples or summaries.
 
 - `environment.json`: UTC start, validated GitHub run/attempt/SHA, runner type,
   OS/kernel/architecture, CPU model/logical count/affinity, guest RAM,
@@ -100,7 +111,8 @@ unuploaded disposable VM.
   unlimited; missing controllers are marked unavailable. The most restrictive
   visible ancestor can govern the workload. Cgroup v1 and hidden ancestors are
   explicitly unsupported/unavailable. The runner cgroup may exclude SQL.
-- Docker sampling targets only `asap-sql` with `stats --no-stream` and selected
+- Docker sampling targets only the explicit job-owned `ASAP_CI_SQL_CONTAINER`
+  with `stats --no-stream` and selected
   `inspect` fields: state/start time, CPU quota/period (microseconds), NanoCpus/cpuset, memory/swap
   limit and block-I/O weight. CPU/memory are sparse observations; SQL CPU mean
   is the mean of observations, not a full-run average. Docker's memory display
@@ -108,6 +120,9 @@ unuploaded disposable VM.
   between observations of the same container start, omitting resets/restarts.
   Configured zero limits mean Docker imposed no explicit limit, while stats may
   display guest capacity as the effective limit.
+  Without an owned container name, Docker/DMV sampling attempts no alternate
+  target. Local diagnostic runs must explicitly name their disposable container
+  as well as supply the ephemeral password for SQL DMV observations.
 - Process-name groups (`dotnet`, `sqlservr`, `testhost`/`Asap.Tests`) use stat
   counters matched by PID and start time. CPU uses clock ticks and elapsed time;
   100% means one logical CPU, so process/cgroup/container CPU can exceed 100%.

@@ -59,16 +59,19 @@ scripts/review/Invoke-AsapReview.ps1. It remains independent of ordinary CI test
 
 ## Execution and evidence
 
-Full CI execution owns non-browser .NET/SQL, frontend, current-commit publish and
-package/ValidateOnly checks. Browser qualification independently owns browser
-execution. Both need the hosted trust/current-head preflight, use separate
-ephemeral clc-linux runners and SQL containers with separate random credentials,
-and check out the same exact workflow SHA. The hosted reporting gate requires
-both jobs to succeed. Missing, failed, skipped or cancelled execution cannot
-qualify through the other job. There is no third aggregation test run.
+Full CI execution owns frontend, non-browser .NET/SQL and browser qualification,
+followed by current-commit publish/package/ValidateOnly checks. Hosted trust and
+current-head preflight still precedes allocation. One ephemeral clc-linux runner
+checks out the exact workflow SHA and builds the Release solution once. Fresh
+frontend, non-browser and browser commands run sequentially. Both native suites
+use one SQL Server 2022 container, one ephemeral password and independent
+fixture-owned databases. SQL starts only if either native suite lacks reusable
+evidence. Its unique name/dynamic loopback port and final cleanup belong to the
+job. The hosted Build, test and package reporting gate requires this full job's
+success. Draft CI result stays distinct. No extra aggregation runner is used.
 
-Evidence schema 3 rejects the former population. Each job verifies its assigned
-suite population and binds evidence to exact source dependencies, native
+Evidence schema 4 rejects the former population and two-job architecture. The
+single executor always verifies all three suites independently and binds evidence to exact source dependencies, native
 identities, environment, original run/job/attempt, immutable artifact digest,
 lifetime and the complete executor/reporting/deployment workflow contract.
 Evidence is re-fetched and independently validated at the gate. Only successful
@@ -180,4 +183,6 @@ concurrency/resources, deployment, and maintenance/performance. Findings fixed:
   loading placeholder and keep busy state as a separate diagnostic.
 
 Final qualification and any subsequent fixes are recorded on the existing PR,
-which remains open and unmerged.
+which was merged as PR #422. The subsequent sequential-runner architecture,
+cold/reuse measurements and closure review are maintained in
+[the current qualification record](../../scripts/ci/test-selection.md#sequential-runner-qualification-record).
