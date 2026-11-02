@@ -82,7 +82,7 @@ changes and unknown paths remain conservative. Build, publish, asset verificatio
 package identity/digests and ValidateOnly always use the current commit.
 
 The frontend runner executes files serially, with the two security/workflow
-files first. A two-worker trial reduced local wall time but caused timing-sensitive
+files first. A two-worker trial reduced local wall time but encountered timing-sensitive
 failures and a child-process timeout on the 2-vCPU CI runner. The worker option
 and audited concurrency list were removed. Each file owns a process, uses safe
 argument arrays, and gets a deterministic result/timing receipt.
