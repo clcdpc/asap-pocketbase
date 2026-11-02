@@ -46,6 +46,8 @@ one guarded Purchase submission, sorting/paging/filtering/refresh/scope retireme
 desktop/mobile/native 200% geometry, forced colors and the existing checkpoint
 guards. A claimed Pending hold and fifteen synthetic Suggestions supply minimal
 cardinality/pagination/scope fixtures; existing mutation fixtures remain independent.
+Their existing `ACCEPTANCE-I403-*` barcodes identify both seeding and API lookup
+on current schema 13; the retired `LegacyId` column/DTO is not used.
 The Purchase scenario is NOT RUN with `-ReadOnly`, making acceptance incomplete.
 `i403-*-geometry.json` and matching PNGs stay in the suite's normal evidence
 directory; native captures use the existing verified CDP viewport path.
@@ -410,7 +412,7 @@ update from `main` and retain this combined content:
 | `runner.test.cjs` | Dynamic module discovery and exact registry coverage; all i390 assertions (four read-only scenarios), all i403 assertions (five scenarios, only keyboard/guarded dispatch writes), and every existing suite invariant; current discovery-based CI/browser guards |
 | `README.md` | Both issue-suite descriptions, commands, evidence and authorization limits |
 | `../browser/staff-native-zoom.cjs` | Both `formatRuleGeometry` and `actionGeometry` imports; collapsed/expanded Format rules scans plus direct/overflow action geometry, scoped axe, Escape/focus and full table scans; retain named state/viewport coverage |
-| `../../dev/review/src/Asap.ReviewInit/AcceptanceFixtures.sql` | Both idempotent i390 custom fields/rules (`i390_note`, `i390_retired`) and all 16 `acceptance-i403-*` title rows, including the claimed Pending hold; preserve the existing book and claimant identities and every prior fixture |
+| `../../dev/review/src/Asap.ReviewInit/AcceptanceFixtures.sql` | Both idempotent i390 custom fields/rules (`i390_note`, `i390_retired`) and all 16 title rows keyed by their native `ACCEPTANCE-I403-*` barcodes, including the claimed Pending hold; preserve the existing book and claimant identities and every prior fixture |
 
 The expected textual conflicts are the single-line registry, adjacent issue
 documentation additions, and native-zoom imports. Resolve by retaining both

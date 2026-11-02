@@ -117,12 +117,13 @@ IF NOT EXISTS (SELECT 1 FROM asap.StaffUser WHERE NormalizedUserPrincipalName = 
 DECLARE @q1Claimant bigint = (SELECT Id FROM asap.StaffUser WHERE NormalizedUserPrincipalName = N'Q1-CLAIMANT@EXAMPLE.ORG');
 -- I403: a claimed Pending hold has exactly two row commands; a compact set
 -- of Suggestions crosses a page boundary. These rows are read-only scenarios.
+-- Native synthetic barcodes identify these fixtures; no retired mapping column.
 INSERT INTO asap.TitleRequest
-    (LegacyId, LibraryOrganizationId, PatronOrganizationId, Barcode, Email,
+    (LibraryOrganizationId, PatronOrganizationId, Barcode, Email,
      NameFirst, NameLast, LibraryNameSnapshot, Title, Author, AutoHold,
      MaterialFormatId, Status, Notes, CreatedUtc, UpdatedUtc, PatronIdSnapshot,
      ClaimedByStaffUserId, ClaimedByDisplayName, ClaimedAtUtc, ClaimType)
-SELECT CONCAT(N'acceptance-i403-', n.value), CASE WHEN n.value = 16 THEN 3 ELSE 2 END, 2,
+SELECT CASE WHEN n.value = 16 THEN 3 ELSE 2 END, 2,
     CONCAT(N'ACCEPTANCE-I403-', n.value), N'acceptance@example.org', N'Synthetic', N'Actions reader',
     N'Review Library', CONCAT(N'I403 request ', RIGHT(CONCAT(N'0', n.value), 2)), N'Synthetic actions author', 1,
     @book, CASE WHEN n.value = 1 THEN N'pending_hold' ELSE N'suggestion' END,
@@ -132,7 +133,7 @@ SELECT CONCAT(N'acceptance-i403-', n.value), CASE WHEN n.value = 16 THEN 3 ELSE 
     CASE WHEN n.value = 1 THEN CONVERT(datetime2(7), '2026-10-24T12:00:00') END,
     CASE WHEN n.value = 1 THEN N'manual' END
 FROM GENERATE_SERIES(1, 16) n
-WHERE NOT EXISTS (SELECT 1 FROM asap.TitleRequest r WHERE r.LegacyId = CONCAT(N'acceptance-i403-', n.value));
+WHERE NOT EXISTS (SELECT 1 FROM asap.TitleRequest r WHERE r.Barcode = CONCAT(N'ACCEPTANCE-I403-', n.value));
 
 INSERT INTO asap.AdditionalCopyRequest
     (LibraryOrganizationId, LibraryNameSnapshot, BibId, Title, Author, Identifier, Publication,

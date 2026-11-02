@@ -53,8 +53,10 @@ const scenarios = [
   } },
   { id: 'i403-two-and-many-resize', writes: false, requirements: ['#403: two/many actions; measured container/column changes; promotion/demotion; unique ordered commands; font changes'], run: async t => {
     const result = await json(t.context, t.origin, '/api/asap/staff/title-requests?scope=2');
-    const two = result.items.find(item => item.legacyId === 'acceptance-i403-1');
-    assert.ok(two, 'Synthetic claimed Pending hold exists');
+    const matches = result.items.filter(item => item.barcode === 'ACCEPTANCE-I403-1');
+    assert.equal(matches.length, 1, 'Exactly one native synthetic claimed Pending hold exists');
+    const [two] = matches;
+    assert.equal(two.status, 'pending_hold');
     await queue(t, two.status, two.title);
     let row = rowFor(t.page, two.id);
     assert.deepEqual((await evidence(t, row, 'i403-two-fit')).inline, ['edit', 'assign']);
