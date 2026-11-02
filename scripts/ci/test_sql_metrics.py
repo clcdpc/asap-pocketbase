@@ -181,7 +181,7 @@ class SqlLifecycleTests(unittest.TestCase):
         def command(name, style):
             match = re.search(r"      - name: " + re.escape(name)
                 + r"\n((?:        [^\n]*\n)*?)        run: " + re.escape(style)
-                + r"\n(.*?)(?=\n      - |\Z)", text, re.S)
+                + r"\n(.*?)(?=\n      - |\n  [a-zA-Z][\w-]*:|\Z)", text, re.S)
             self.assertIsNotNone(match, f"Missing SQL bootstrap step: {name}")
             self.assertIn("        shell: bash\n", match[1])
             body = textwrap.dedent(match[2]).strip()

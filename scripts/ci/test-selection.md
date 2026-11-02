@@ -114,6 +114,15 @@ must execute those process/signal/bootstrap checks. Publication using the shared
 build verified all 74 frontend assets; the extracted workflow ZIP/ValidateOnly
 steps passed without host mutation. These local package checks preceded the
 implementation commit and do not replace exact-commit CI qualification.
+The complete retained frontend suite passed all 67 files with zero failures or
+skips using one worker (579.127 summed command seconds locally on Windows;
+this is not a controlled comparison with Linux CI).
+All 47 Linux performance/SQL collector checks passed with no skips, including
+signal escalation, descendant cleanup, secret-safe bootstrap and one-container
+teardown. The separate Linux pass found and fixed a shell-contract extractor
+that consumed the next job after the final cleanup step. Running directly from
+the Windows bind mount also exceeded pre-existing subsecond timing assumptions;
+the unchanged checks passed from the container's native filesystem in 11.902s.
 
 A separate closure review examined the completed implementation:
 
@@ -140,6 +149,9 @@ A separate closure review examined the completed implementation:
   that publication still invoked a build; --no-build/--no-restore now reuses the
   validated Release output, and local publication/package validation passed.
 
-Cold and evidence-reuse Actions measurements will be recorded here after
-qualification. The active PR remains open for review and must not be merged by
-this task.
+Exact-commit cold and evidence-reuse Actions receipts, per-stage timings,
+observed CPU/memory, runner-slot accounting and final closure findings are
+maintained in [PR #427](https://github.com/clcdpc/asap-pocketbase/pull/427).
+That measured record distinguishes runner allocation from execution and the
+parallel reference from the sequential run. The PR remains open for review and
+must not be merged by this task.
