@@ -58,7 +58,7 @@ async function initialCards(page, before) {
 
 const scenarios = ['system', '2'].flatMap(scope => [
   { id: 'i390-draft-' + scope, writes: false,
-    requirements: ['#390: collapsed complete cards, configured names, SQL-backed counts, independent keyboard disclosure, draft summaries, fail-closed redraws and no presentation mutations'],
+    requirements: ['#390: collapsed complete cards, live draft names/accessibility, SQL-backed counts, independent keyboard disclosure, draft summaries, fail-closed redraws and no presentation mutations'],
     run: async t => {
       const before = await openSettings(t, scope);
       await initialCards(t.page, before);
@@ -74,6 +74,30 @@ const scenarios = ['system', '2'].flatMap(scope => [
       assert.equal(await toggle(first).getAttribute('aria-expanded'), 'true');
       assert.equal(await toggle(second).getAttribute('aria-expanded'), 'true');
       assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Disclosures never enable Save');
+      const materials = t.page.locator('#material-formats-editor [data-domain-row]');
+      for (const [index, expanded] of [[0, true], [1, false]]) {
+        const card = cards(t.page).nth(index), material = materials.nth(index);
+        if (!expanded) await toggle(card).click();
+        const label = material.locator('input[type="text"]').nth(1);
+        const originalLabel = await label.inputValue(), code = await card.getAttribute('data-rule-code');
+        const override = material.locator('.settings-domain-override-toggle');
+        const originalOverride = scope === '2' && await override.isChecked();
+        if (scope === '2') await override.check();
+        const control = await card.locator('[data-format-label="title"]').elementHandle();
+        const draftLabel = originalLabel + ' renamed draft';
+        await label.fill(draftLabel);
+        assert.equal(await card.locator('.settings-rule-identity strong').innerText(), draftLabel);
+        assert.equal(await toggle(card).getAttribute('aria-label'), `${expanded ? 'Collapse' : 'Expand'} ${draftLabel} (${code}) format rules`);
+        assert.equal(await card.locator('[data-format-field="title"]').getAttribute('aria-label'), `Title requirement for ${draftLabel} (${code})`);
+        assert.equal(await card.locator('.settings-row-actions button').last().getAttribute('aria-label'), `Delete ${draftLabel} format rule`);
+        assert.equal(await control.evaluate(node => node.isConnected), true, 'Renaming never replaces draft controls');
+        await toggle(card).click(); await toggle(card).click();
+        assert.equal(await toggle(card).getAttribute('aria-label'), `${expanded ? 'Collapse' : 'Expand'} ${draftLabel} (${code}) format rules`);
+        await label.fill(originalLabel);
+        if (scope === '2') await override.setChecked(originalOverride);
+        await control.dispose();
+      }
+      assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Restoring labels and inheritance clears the draft');
       const author = first.locator('[data-format-field="author"]');
       const original = await author.inputValue();
       for (const mode of ['required', 'optional', 'hidden']) {

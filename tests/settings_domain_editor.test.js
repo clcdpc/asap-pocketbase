@@ -202,11 +202,11 @@ const axe = require('axe-core');
       }
     }
     assert.deepStrictEqual(ruleControlNames(document.querySelector('#format-rules-editor [data-custom-rule-key="pickup_location"]')), {
-      mode: 'Pickup location mode for book', labelOverride: 'Pickup location label override for book'
+      mode: 'Pickup location mode for Book (book)', labelOverride: 'Pickup location label override for Book (book)'
     });
     const retiredRule = document.querySelector('#format-rules-editor [data-custom-rule-key="retired_type"]');
     assert.deepStrictEqual(ruleControlNames(retiredRule), {
-      mode: 'Retired type mode for book', labelOverride: 'Retired type label override for book'
+      mode: 'Retired type mode for Book (book)', labelOverride: 'Retired type label override for Book (book)'
     });
     assert.strictEqual(retiredRule.querySelector('[data-custom-rule-property="mode"]').value, 'optional');
     assert.strictEqual(retiredRule.querySelector('[data-custom-rule-property="labelOverride"]').value, 'Historical field label');
@@ -219,7 +219,7 @@ const axe = require('axe-core');
     document.getElementById('add-custom-field').click();
     assert.strictEqual(document.querySelectorAll('#format-rules-editor [data-custom-rule-key]').length, 3);
     assert.deepStrictEqual(ruleControlNames(document.querySelector('#format-rules-editor [data-custom-rule-key="field_3"]')), {
-      mode: 'New field mode for book', labelOverride: 'New field label override for book'
+      mode: 'New field mode for Book (book)', labelOverride: 'New field label override for Book (book)'
     });
     const afterDynamicAdd = editors.collect().values;
     assert.deepStrictEqual(afterDynamicAdd.codes, ['2']);
@@ -235,7 +235,7 @@ const axe = require('axe-core');
     assert.strictEqual(afterRename.rules[0].customFields.selected_at.mode, 'hidden');
     assert.strictEqual(afterRename.fields[2].key, 'selected_at');
     assert.deepStrictEqual(ruleControlNames(document.querySelector('#format-rules-editor [data-custom-rule-key="selected_at"]')), {
-      mode: 'New field mode for book', labelOverride: 'New field label override for book'
+      mode: 'New field mode for Book (book)', labelOverride: 'New field label override for Book (book)'
     });
 
     editors.populate({ ...data, autoClaimStaff: [] }, false);
@@ -387,6 +387,124 @@ const axe = require('axe-core');
         'A redraw must not silently replace the missing control\'s saved value.');
     }
     accordion.dispose();
+
+    for (const system of [true, false]) {
+      const names = module.createSettingsDomainEditors({ root });
+      const renameData = JSON.parse(JSON.stringify(accordionData));
+      renameData.effective.formats[1].label = 'Book';
+      renameData.stored.configuredSystem.formats[1].label = 'Book';
+      renameData.stored.formats[1].label = 'Book';
+      names.populate(renameData, system);
+      const formatRows = [...root.querySelectorAll('#material-formats-editor [data-domain-row]')];
+      const formatLabel = index => formatRows[index].querySelectorAll('input')[1];
+      if (!system) {
+        for (const row of formatRows) row.querySelector('.settings-domain-override-toggle').click();
+      }
+      const rulesBeforeRename = names.collect().values.rules;
+      const originalCards = rows();
+      const controls = originalCards.map(row => [...row.querySelectorAll('input, select, textarea, button')]);
+      toggle('book').click();
+      const focusedLabel = formatLabel(0);
+      focusedLabel.focus();
+      focusedLabel.value = 'Book renamed <draft>';
+      focusedLabel.setSelectionRange(2, 9);
+      focusedLabel.dispatchEvent(new window.Event('input', { bubbles: true }));
+      assert.strictEqual(document.activeElement, focusedLabel);
+      assert.strictEqual(focusedLabel.selectionStart, 2);
+      assert.strictEqual(focusedLabel.selectionEnd, 9);
+      assert.strictEqual(toggle('book').getAttribute('aria-label'), 'Collapse Book renamed <draft> (book) format rules');
+      assert.strictEqual(card('book').querySelector('.settings-rule-identity strong').textContent, 'Book renamed <draft>');
+      assert.strictEqual(card('book').querySelector('draft'), null, 'Configured labels remain plain text.');
+      assert.strictEqual(toggle('digital').getAttribute('aria-label'), 'Expand Book (digital) format rules',
+        'Equal display labels never share an identity.');
+      change(formatLabel(1), 'Book renamed <draft>');
+      const unusualCode = extraFormats[1].code;
+      change(formatLabel(2), '   ');
+      assert.strictEqual(card(unusualCode).querySelector('.settings-rule-identity strong').textContent, unusualCode);
+      assert.strictEqual(toggle(unusualCode).getAttribute('aria-label'), `Expand ${unusualCode} (${unusualCode}) format rules`);
+      assert.strictEqual(panel(unusualCode).hidden, true);
+      assert.strictEqual(panel('book').hidden, false);
+      for (const [index, row] of rows().entries()) {
+        assert.strictEqual(row, originalCards[index]);
+        assert.deepStrictEqual([...row.querySelectorAll('input, select, textarea, button')], controls[index]);
+      }
+      for (const code of ['book', 'digital', unusualCode]) {
+        const label = code === unusualCode ? unusualCode : 'Book renamed <draft>';
+        const context = `${label} (${code})`;
+        const row = card(code);
+        assert.strictEqual(row.querySelector('[data-rule-property="messageBehavior"]').getAttribute('aria-label'), `Message behavior for ${context}`);
+        assert.strictEqual(row.querySelector('[data-rule-property="message"]').getAttribute('aria-label'), `Message for ${context}`);
+        for (const name of ['title', 'author', 'identifier', 'publication']) {
+          const readable = name.charAt(0).toUpperCase() + name.slice(1);
+          assert.strictEqual(row.querySelector(`[data-format-field="${name}"]`).getAttribute('aria-label'), `${readable} requirement for ${context}`);
+          assert.strictEqual(row.querySelector(`[data-format-label="${name}"]`).getAttribute('aria-label'), `${readable} patron-facing label for ${context}`);
+        }
+        assert.strictEqual(row.querySelector('[data-custom-rule-key="pickup_location"] select').getAttribute('aria-label'), `Pickup location mode for ${context}`);
+        assert.deepStrictEqual([...row.querySelectorAll('.settings-row-actions button')].map(button => [button.title, button.getAttribute('aria-label')]),
+          [`Move ${label} up`, `Move ${label} down`, `Delete ${label} format rule`].map(label => [label, label]));
+      }
+      assert.deepStrictEqual(names.collect().values.rules, rulesBeforeRename);
+      assert.strictEqual(names.collect().domainsChanged.formats, true);
+      assert.strictEqual(names.collect().domainsChanged.rules, false, 'Renaming never dirties formatRules.');
+      toggle('book').click(); toggle('book').click();
+      assert.strictEqual(toggle('book').getAttribute('aria-label'), 'Collapse Book renamed <draft> (book) format rules',
+        'Disclosure handlers use the current draft name.');
+      change(card('digital').querySelector('[data-format-label="author"]'), 'Unrelated author draft');
+      change(card('book').querySelector('[data-rule-property="messageBehavior"]'), 'message');
+      change(card('book').querySelector('[data-rule-property="message"]'), 'Unsaved message');
+      const drafts = names.collect().values.rules;
+      const draftControl = card('digital').querySelector('[data-format-label="author"]');
+      draftControl.focus(); draftControl.setSelectionRange(1, 6);
+      change(formatLabel(1), 'Another name');
+      assert.strictEqual(document.activeElement, draftControl);
+      assert.strictEqual(draftControl.selectionStart, 1);
+      assert.strictEqual(draftControl.selectionEnd, 6);
+      assert.deepStrictEqual(names.collect().values.rules, drafts, 'Every unrelated rule draft survives name synchronization.');
+      names.populate(renameData, system);
+      assert.strictEqual(names.collect().changed, false, 'Discard/reload restores the accepted snapshot.');
+      assert.ok(rows().every(row => panel(row.dataset.ruleCode).hidden));
+      if (!system) assert.ok([...root.querySelectorAll('#material-formats-editor input[type="text"]')].every(input => input.disabled));
+      names.dispose();
+    }
+
+    const draftIdentity = module.createSettingsDomainEditors({ root });
+    draftIdentity.populate(accordionData, false);
+    root.querySelector('#add-material-format').click();
+    const customFormat = root.querySelector('#material-formats-editor').lastElementChild;
+    const customCode = customFormat.querySelector('input');
+    const initialCode = customCode.value;
+    assert.strictEqual(customCode.readOnly, false);
+    root.querySelector('#add-format-rule').click();
+    const customCard = card(initialCode);
+    const customPanel = panel(initialCode);
+    change(customCard.querySelector('[data-format-label="title"]'), 'Custom unsaved title');
+    const customControls = [...customCard.querySelectorAll('input, select, textarea, button')];
+    customCode.focus(); customCode.setSelectionRange(1, 3);
+    change(customCode, 'new\"] #draft');
+    const nextCode = customCode.value;
+    assert.strictEqual(card(initialCode), undefined, 'The old unsaved rule identity is removed.');
+    assert.strictEqual(card(nextCode), customCard);
+    assert.strictEqual(panel(nextCode), customPanel);
+    assert.strictEqual(customPanel.hidden, false);
+    assert.strictEqual(document.activeElement, customCode);
+    assert.deepStrictEqual([...customCard.querySelectorAll('input, select, textarea, button')], customControls);
+    assert.strictEqual(customCard.querySelector('.settings-rule-code').textContent, nextCode);
+    toggle(nextCode).click(); toggle(nextCode).click();
+    assert.strictEqual(customPanel.hidden, false, 'Disclosure state follows the new draft code.');
+    assert.strictEqual(toggle(nextCode).getAttribute('aria-label'), `Collapse New format (${nextCode}) format rules`);
+    const renamedRule = draftIdentity.collect().values.rules.find(rule => rule.code === nextCode);
+    assert.strictEqual(renamedRule.title.label, 'Custom unsaved title');
+    assert.ok(!draftIdentity.collect().values.rules.some(rule => rule.code === initialCode));
+    root.querySelector('#add-format-rule').click();
+    assert.strictEqual(rows().length, accordionFormats.length + 1, 'Renaming cannot produce a duplicate missing-rule card.');
+    change(customCode, 'book');
+    assert.strictEqual(card(nextCode), customCard, 'A colliding code cannot overwrite another rule identity.');
+    change(customCode, 'unique_draft');
+    assert.strictEqual(card('unique_draft'), customCard);
+    assert.strictEqual(root.querySelector('#material-formats-editor input').readOnly, true);
+    draftIdentity.populate(accordionData, false);
+    assert.strictEqual(draftIdentity.collect().changed, false);
+    draftIdentity.dispose();
 
     const codeData = JSON.parse(JSON.stringify(data));
     codeData.stored.configuredSystem.allowedPatronCodeIds.values = [2, 77];

@@ -1055,6 +1055,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     for (const [index, value] of values.entries()) {
       const custom = value.ownerOrganizationId === currentOrganizationId() && !state.system;
       const code = element('input', { type: 'text', value: value.code, readOnly: Boolean(value.id), 'data-domain-editable': 'true' });
+      const label = element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true' });
       const enabled = element('input', { type: 'checkbox', checked: value.isEnabled, 'data-domain-editable': 'true' });
       const override = checkbox('Override', state.system || value.overridden, 'settings-inline-check settings-domain-override');
       override.input.className = 'settings-domain-override-toggle';
@@ -1067,7 +1068,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         'data-format-sort-order': value.sortOrder
       }, [
         field('Code', code),
-        field('Label', element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true' })),
+        field('Label', label),
         element('label', { className: 'settings-domain-check' }, [enabled, element('span', { text: 'Shown' })]),
         custom || state.system ? null : override.wrapper,
         actions(
@@ -1077,6 +1078,37 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
           custom ? from => removeFormat(from) : null
         )
       ]);
+      const refreshNames = () => {
+        for (const rule of dom.rules?.querySelectorAll('[data-rule-code]') || []) refreshRuleFormatName(rule);
+      };
+      listen(label, 'input', refreshNames);
+      listen(label, 'change', refreshNames);
+      let ruleCode = value.code;
+      listen(code, 'change', () => {
+        const nextCode = clean(code.value);
+        if (code.readOnly || !nextCode || nextCode === ruleCode ||
+            readFormats().filter(format => format.code === nextCode).length !== 1 ||
+            state.ruleRosterCodes.includes(nextCode)) return;
+        const rule = [...(dom.rules?.querySelectorAll('[data-rule-code]') || [])]
+          .find(item => item.dataset.ruleCode === ruleCode);
+        if (rule) {
+          if (!canRedrawRules()) return;
+          // Only unsaved formats have editable codes. Move their draft rule's
+          // identity without replacing controls or changing persisted codes.
+          rule.dataset.ruleCode = nextCode;
+          state.ruleRosterCodes = state.ruleRosterCodes.map(item => item === ruleCode ? nextCode : item);
+          for (const item of state.models.rules) {
+            if (item.code === ruleCode) item.code = nextCode;
+          }
+          if (expandedRuleCodes.delete(ruleCode)) expandedRuleCodes.add(nextCode);
+          if (rulePanelIds.has(ruleCode)) {
+            rulePanelIds.set(nextCode, rulePanelIds.get(ruleCode));
+            rulePanelIds.delete(ruleCode);
+          }
+          refreshRuleFormatName(rule);
+        }
+        ruleCode = nextCode;
+      });
       if (!state.system && !custom) {
         listen(override.input, 'change', () => {
           updateRowDisabled(row, !override.input.checked);
@@ -1254,13 +1286,40 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         group.querySelector('.settings-custom-rule-name').textContent = label;
         group.querySelector('.settings-custom-rule-status').textContent = !definition
           ? 'Retired field — saved rule retained' : !definition.enabled ? 'Disabled field — saved rule retained' : '';
-        for (const [property, name] of [['mode', 'mode'], ['labelOverride', 'label override']]) {
-          group.querySelector(`[data-custom-rule-property="${property}"]`)
-            ?.setAttribute('aria-label', `${label} ${name} for ${row.dataset.ruleCode}`);
-        }
       }
+      refreshRuleFormatName(row);
       updateRuleSummary(row);
     }
+  }
+
+  function refreshRuleFormatName(row) {
+    const code = row.dataset.ruleCode;
+    const label = readFormats().find(format => format.code === code)?.label || code;
+    const context = `${label} (${code})`;
+    row.querySelector('.settings-rule-identity strong').textContent = label;
+    row.querySelector('.settings-rule-code').textContent = code;
+    const toggle = row.querySelector('[data-rule-toggle]');
+    toggle.setAttribute('aria-label', `${toggle.getAttribute('aria-expanded') === 'true' ? 'Collapse' : 'Expand'} ${context} format rules`);
+    for (const [property, name] of [['messageBehavior', 'Message behavior'], ['message', 'Message']]) {
+      row.querySelector(`[data-rule-property="${property}"]`)?.setAttribute('aria-label', `${name} for ${context}`);
+    }
+    for (const name of ['title', 'author', 'identifier', 'publication']) {
+      const readable = name.charAt(0).toUpperCase() + name.slice(1);
+      row.querySelector(`[data-format-field="${name}"]`)?.setAttribute('aria-label', `${readable} requirement for ${context}`);
+      row.querySelector(`[data-format-label="${name}"]`)?.setAttribute('aria-label', `${readable} patron-facing label for ${context}`);
+    }
+    for (const group of row.querySelectorAll('[data-custom-rule-key]')) {
+      const fieldLabel = group.querySelector('.settings-custom-rule-name').textContent;
+      for (const [property, name] of [['mode', 'mode'], ['labelOverride', 'label override']]) {
+        group.querySelector(`[data-custom-rule-property="${property}"]`)
+          ?.setAttribute('aria-label', `${fieldLabel} ${name} for ${context}`);
+      }
+    }
+    const actions = [`Move ${label} up`, `Move ${label} down`, `Delete ${label} format rule`];
+    [...row.querySelectorAll('.settings-row-actions button')].forEach((button, index) => {
+      button.title = actions[index];
+      button.setAttribute('aria-label', actions[index]);
+    });
   }
 
   function renderRules(values) {
@@ -1343,15 +1402,16 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
           actions(index, values.length, (from, offset) => reorder('rules', from, offset), from => remove('rules', from), formatLabel)]), panel
       ]);
       const updateExpansion = () => {
-        const expanded = expandedRuleCodes.has(value.code);
+        const expanded = expandedRuleCodes.has(row.dataset.ruleCode);
         panel.hidden = !expanded;
         toggle.setAttribute('aria-expanded', String(expanded));
-        toggle.setAttribute('aria-label', `${expanded ? 'Collapse' : 'Expand'} ${formatContext} format rules`);
+        refreshRuleFormatName(row);
       };
       updateExpansion();
       listen(toggle, 'click', () => {
-        if (expandedRuleCodes.has(value.code)) expandedRuleCodes.delete(value.code);
-        else expandedRuleCodes.add(value.code);
+        const code = row.dataset.ruleCode;
+        if (expandedRuleCodes.has(code)) expandedRuleCodes.delete(code);
+        else expandedRuleCodes.add(code);
         updateExpansion();
       });
       const behavior = row.querySelector('[data-rule-property="messageBehavior"]');
