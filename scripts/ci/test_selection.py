@@ -268,7 +268,8 @@ class FrontendSafetyTests(unittest.TestCase):
             (root / "frontend-parallel.json").write_text('["a.test.js"]')
             (root / "a.test.js").write_text(
                 "const fs=require('fs');process.on('SIGTERM',()=>{});"
-                "fs.writeFileSync('child.pid',String(process.pid));setInterval(()=>{},1000);")
+                "fs.writeFileSync('child.pid.pending',String(process.pid));"
+                "fs.renameSync('child.pid.pending','child.pid');setInterval(()=>{},1000);")
             results = root / "results.json"
             env = {**os.environ, "ASAP_CI_FRONTEND_RESULTS": str(results)}
             runner = subprocess.Popen(["node", "run_all.js"], cwd=root, env=env,
@@ -290,8 +291,12 @@ class FrontendSafetyTests(unittest.TestCase):
                     os.kill(child, 0)
             finally:
                 if runner.poll() is None:
-                    runner.kill()
-                    runner.communicate(timeout=5)
+                    runner.terminate()
+                    try:
+                        runner.communicate(timeout=8)
+                    except subprocess.TimeoutExpired:
+                        runner.kill()
+                        runner.communicate(timeout=5)
                 if child is not None:
                     try:
                         os.killpg(child, signal.SIGKILL)
