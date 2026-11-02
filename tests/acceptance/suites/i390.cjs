@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { checkpoint, nativeZoom } = require('../helpers/accessibility.cjs');
 const { formatRuleGeometry } = require('../helpers/format-rules.cjs');
-const { json } = require('../helpers/assertions.cjs');
+const { json, confirm } = require('../helpers/assertions.cjs');
 
 async function openSettings(t, scope) {
   await t.page.goto(t.origin + '/staff/?stage=settings&settingsScope=' + scope + '#settings-patron');
@@ -154,8 +154,9 @@ const scenarios = ['system', '2'].flatMap(scope => [
       await t.page.waitForFunction(() => document.querySelector('#settings-message').classList.contains('error'));
       assert.match(await t.page.locator('#settings-message').innerText(), /incomplete|missing a required control/i);
       await retained.dispose();
-      await t.page.reload();
-      await t.page.waitForFunction(() => document.querySelector('#settings-version').value && !document.querySelector('#settings-refresh').disabled);
+      await t.page.locator('#settings-discard').click();
+      await confirm(t.page, 'Discard changes');
+      await t.page.waitForFunction(() => document.querySelector('#settings-save').disabled && !document.querySelector('#settings-refresh').disabled);
       await initialCards(t.page, before);
       if (scope === '2') {
         const fieldCount = await t.page.locator('#additional-fields-editor [data-domain-row]').count();
