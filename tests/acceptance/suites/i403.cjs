@@ -25,7 +25,8 @@ async function evidence(t, row, name = t.id, capture = {}) {
   await (await direct.count() ? direct : row.locator('.request-title-link')).scrollIntoViewIfNeeded(); await settleActions(t.page);
   const geometry = await actionGeometry(row);
   await fs.writeFile(path.join(t.directory, name + '-geometry.json'), JSON.stringify(geometry, null, 2));
-  await checkpoint(t.page, t.directory, name, { visible: [row.locator('.request-row-actions > button')], ...capture });
+  await checkpoint(t.page, t.directory, name, { visible: [await direct.count()
+    ? row.locator('.request-row-actions > button') : row.locator('.request-title-link')], ...capture });
   return geometry;
 }
 async function close(t) {

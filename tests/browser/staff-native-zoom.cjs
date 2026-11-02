@@ -42,7 +42,7 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
         return zoom;
       };
       const zoom = await applyNativeZoom();
-      const scan = async name => {
+      const scan = async (name, visible = null) => {
         await page.evaluate(axe);
         const result = await page.evaluate(async () => ({
           violations: (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact)),
@@ -57,6 +57,13 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
         assert.equal(result.visualViewportScale, 1);
         assert.equal(result.htmlZoom, '1'); assert.equal(result.bodyZoom, '1');
         assert.ok(Math.abs(result.devicePixelRatio / ratio - 2) < 0.01);
+        if (visible) {
+          // Axe may scroll the horizontal grid while inspecting other cells.
+          // Capture this named workflow checkpoint with its action in view.
+          await visible.scrollIntoViewIfNeeded();
+          const bounds = await visible.boundingBox(), viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+          assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= viewport.width && bounds.y + bounds.height <= viewport.height);
+        }
         const session = await context.newCDPSession(page);
         const metrics = await session.send('Page.getLayoutMetrics');
         assert.equal(metrics.visualViewport.zoom, 2);
@@ -93,7 +100,7 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       const closedRow = closedTitle.locator('xpath=ancestor::tr');
       assert.deepEqual((await actionGeometry(closedRow)).inline, ['reopen']);
       assert.equal(await closedRow.locator('.request-row-more, [popover]').count(), 0);
-      await scan('closed-actions');
+      await scan('closed-actions', closedRow.locator('[data-request-action="reopen"]'));
       await activateRowAction(closedRow, 'reopen', 'Space');
       await page.locator('#confirmation-dialog[open]').getByRole('button', { name: 'Cancel', exact: true }).click();
       await page.keyboard.press('Escape'); await page.locator('#request-dialog').waitFor({ state: 'hidden' });

@@ -62,6 +62,13 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
     assert.deepEqual(await page.evaluate(async () => (await axe.run()).violations.filter(v => ['serious', 'critical'].includes(v.impact)).map(v => v.id)), []);
     await fixture.evaluate(node => { node.style.width = 'min(900px, 100%)'; }); await settleActions(page);
   }
+  const suggestionKeys = ['purchase', 'reject', 'alreadyOwn', 'claim', 'assign', 'silentClose'];
+  for (const width of ['900px', '120px']) {
+    await fixture.evaluate((node, width) => { node.style.width = width; }, width); await settleActions(page);
+    for (const key of suggestionKeys) await activateRowAction(fixture, key, width === '900px' ? 'Enter' : 'Space');
+  }
+  assert.deepEqual(await page.evaluate(() => calls.map(call => call.action)), [...suggestionKeys, ...suggestionKeys], 'Every secondary command uses the same dispatch directly and in overflow');
+  await page.evaluate(() => { calls = []; });
   await fixture.evaluate(node => { node.style.width = '210px'; }); await settleActions(page);
   const more = fixture.locator('.request-row-more');
   await more.press('Space'); assert.equal(await more.getAttribute('aria-expanded'), 'true');
@@ -100,6 +107,15 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
       { status, capabilities, autohold }); await settleActions(page);
     const wide = await actionGeometry(fixture);
     assert.equal(wide.inline[0] || null, primary); assert.equal(wide.more, 0);
+    if (primary) {
+      const before = await page.evaluate(() => calls.length);
+      await activateRowAction(fixture, primary, 'Enter');
+      assert.equal(await page.evaluate(() => calls.length), before + 1);
+      assert.equal(await page.evaluate(() => calls.at(-1).action), primary);
+      await page.evaluate(() => { current = false; });
+      await activateRowAction(fixture, primary); assert.equal(await page.evaluate(() => calls.length), before + 1);
+      await page.evaluate(() => { current = true; });
+    }
     await fixture.evaluate(node => { node.style.width = '100px'; }); await nativeZoom(context, page, 2); await settleActions(page);
     const narrow = await actionGeometry(fixture);
     assert.equal(narrow.inline[0] || null, primary);
@@ -120,11 +136,15 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
   await fixture.evaluate(node => { node.style.width = '210px'; }); await settleActions(page); await actionGeometry(fixture);
   await page.emulateMedia({ forcedColors: 'active' }); await settleActions(page); await actionGeometry(fixture);
   await fixture.evaluate(node => { node.style.fontFamily = 'monospace'; }); await settleActions(page); await actionGeometry(fixture);
+  const dispatches = await page.evaluate(() => calls.length);
   await page.evaluate(() => { window.current = false; });
-  await activateRowAction(fixture, 'purchase'); assert.equal(await page.evaluate(() => calls.length), 2);
+  await fixture.locator('.request-row-more').click();
+  assert.equal(await fixture.locator('[popover]:popover-open').count(), 0, 'A revoked session cannot reopen More');
+  await fixture.locator('[data-request-action]').evaluateAll(buttons => buttons.forEach(button => button.click()));
+  assert.equal(await page.evaluate(() => calls.length), dispatches, 'Stale direct and overflow commands cannot dispatch');
   await page.evaluate(() => { window.old = document.querySelector('[data-request-action]'); ref(null); old.click(); });
   await page.setViewportSize({ width: 800, height: 700 }); await settleActions(page);
-  assert.equal(await page.evaluate(() => calls.length), 2); assert.equal(await fixture.locator('button').count(), 0);
+  assert.equal(await page.evaluate(() => calls.length), dispatches); assert.equal(await fixture.locator('button').count(), 0);
   await page.evaluate(() => { current = true; mount(2); }); await settleActions(page);
   await page.evaluate(() => { window.retiredHost = document.querySelector('.request-row-actions'); retiredHost.remove(); });
   await settleActions(page); await settleActions(page);
