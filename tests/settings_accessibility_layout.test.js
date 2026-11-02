@@ -110,7 +110,7 @@ const { JSDOM } = require('jsdom');
       id: String(index + 10),
       code: `format_${index + 1}`,
       ownerOrganizationId: 1,
-      label: `Format ${index + 1}`,
+      label: 'Shared format label',
       isEnabled: true,
       messageBehavior: 'none',
       fields: {}
@@ -159,11 +159,12 @@ const { JSDOM } = require('jsdom');
       assert.ok(panel.querySelectorAll('[data-domain-editable]').length >= 10);
       assert.strictEqual(card.querySelectorAll('button button').length, 0);
       assert.ok([...card.querySelectorAll('.settings-row-actions button')]
-        .every(button => !toggle.contains(button) && button.getAttribute('aria-label').includes('Format')));
+        .every(button => !toggle.contains(button) && button.getAttribute('aria-label')
+          .includes(`Shared format label (${card.dataset.ruleCode})`)));
       toggle.click();
       assert.strictEqual(panel.hidden, false);
       assert.strictEqual(toggle.getAttribute('aria-expanded'), 'true');
-      assert.match(toggle.getAttribute('aria-label'), /^Collapse Format/);
+      assert.match(toggle.getAttribute('aria-label'), /^Collapse Shared format label/);
       assert.deepStrictEqual([...panel.querySelectorAll('legend')].map(node => node.textContent),
         ['Message behavior', 'Field requirements', 'Custom field rules']);
       for (const control of panel.querySelectorAll('input,select,textarea')) {
@@ -171,6 +172,9 @@ const { JSDOM } = require('jsdom');
       }
     }
     assert.strictEqual(new Set(cards.map(card => card.querySelector('[data-rule-toggle]').getAttribute('aria-controls'))).size, cards.length);
+    const headerNames = cards.flatMap(card => [...card.querySelectorAll('.settings-row-actions button')]
+      .map(button => button.getAttribute('aria-label')));
+    assert.strictEqual(new Set(headerNames).size, headerNames.length, 'Duplicate format labels have distinct action names.');
     assert.match(css, /#format-rules-editor\s*\{\s*container-type:\s*inline-size;/);
     assert.match(css, /#format-rules-editor \[hidden\]\s*\{\s*display:\s*none;/);
     assert.match(css, /@container \(min-width: 42rem\)[^]*?#format-rules-editor \.settings-rule-fields[^]*?repeat\(2, minmax\(0, 1fr\)\)/);

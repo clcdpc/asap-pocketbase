@@ -75,6 +75,7 @@ const scenarios = ['system', '2'].flatMap(scope => [
       assert.equal(await toggle(second).getAttribute('aria-expanded'), 'true');
       assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Disclosures never enable Save');
       const materials = t.page.locator('#material-formats-editor [data-domain-row]');
+      const originals = [];
       for (const [index, expanded] of [[0, true], [1, false]]) {
         const card = cards(t.page).nth(index), material = materials.nth(index);
         if (!expanded) await toggle(card).click();
@@ -82,20 +83,30 @@ const scenarios = ['system', '2'].flatMap(scope => [
         const originalLabel = await label.inputValue(), code = await card.getAttribute('data-rule-code');
         const override = material.locator('.settings-domain-override-toggle');
         const originalOverride = scope === '2' && await override.isChecked();
+        originals.push({ index, label: originalLabel, override: originalOverride });
         if (scope === '2') await override.check();
         const control = await card.locator('[data-format-label="title"]').elementHandle();
-        const draftLabel = originalLabel + ' renamed draft';
+        const draftLabel = 'Shared format label <draft>';
         await label.fill(draftLabel);
         assert.equal(await card.locator('.settings-rule-identity strong').innerText(), draftLabel);
         assert.equal(await toggle(card).getAttribute('aria-label'), `${expanded ? 'Collapse' : 'Expand'} ${draftLabel} (${code}) format rules`);
         assert.equal(await card.locator('[data-format-field="title"]').getAttribute('aria-label'), `Title requirement for ${draftLabel} (${code})`);
-        assert.equal(await card.locator('.settings-row-actions button').last().getAttribute('aria-label'), `Delete ${draftLabel} format rule`);
+        assert.deepEqual(await card.locator('.settings-row-actions button').evaluateAll(buttons =>
+          buttons.map(button => [button.title, button.getAttribute('aria-label')])),
+        [`Move ${draftLabel} (${code}) up`, `Move ${draftLabel} (${code}) down`, `Delete ${draftLabel} (${code}) format rule`]
+          .map(name => [name, name]));
         assert.equal(await control.evaluate(node => node.isConnected), true, 'Renaming never replaces draft controls');
         await toggle(card).click(); await toggle(card).click();
         assert.equal(await toggle(card).getAttribute('aria-label'), `${expanded ? 'Collapse' : 'Expand'} ${draftLabel} (${code}) format rules`);
-        await label.fill(originalLabel);
-        if (scope === '2') await override.setChecked(originalOverride);
+        // Retain both draft labels at once to exercise duplicate accessible names.
         await control.dispose();
+      }
+      const names = await cards(t.page).locator('.settings-row-actions button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')));
+      assert.equal(new Set(names).size, names.length, 'Duplicate configured labels have distinct actions in either scope');
+      for (const original of originals) {
+        const material = materials.nth(original.index);
+        await material.locator('input[type="text"]').nth(1).fill(original.label);
+        if (scope === '2') await material.locator('.settings-domain-override-toggle').setChecked(original.override);
       }
       assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Restoring labels and inheritance clears the draft');
       const author = first.locator('[data-format-field="author"]');
@@ -127,6 +138,22 @@ const scenarios = ['system', '2'].flatMap(scope => [
       await t.page.keyboard.press('Tab');
       assert.equal(await t.page.evaluate(() => Boolean(document.activeElement.closest('.settings-rule-details'))), false,
         'Collapsed controls are skipped by native Tab navigation');
+      await t.page.reload();
+      await t.page.waitForFunction(() => document.querySelector('#settings-version').value && !document.querySelector('#settings-refresh').disabled);
+      await initialCards(t.page, before);
+      // A present but invalid selector must fail before a redraw or any HTTP POST.
+      await toggle(first).click();
+      await first.locator('[data-rule-property="messageBehavior"]').selectOption('message');
+      await toggle(first).click();
+      const invalid = first.locator('[data-format-field="author"]');
+      await invalid.evaluate(node => { node.value = 'unsupported'; });
+      const retained = await first.elementHandle();
+      await first.locator('.settings-row-actions button').nth(1).click();
+      assert.equal(await retained.evaluate(node => node.isConnected), true, 'Malformed collapsed controls block a redraw');
+      await t.page.locator('#settings-save').click();
+      await t.page.waitForFunction(() => document.querySelector('#settings-message').classList.contains('error'));
+      assert.match(await t.page.locator('#settings-message').innerText(), /incomplete|missing a required control/i);
+      await retained.dispose();
       await t.page.reload();
       await t.page.waitForFunction(() => document.querySelector('#settings-version').value && !document.querySelector('#settings-refresh').disabled);
       await initialCards(t.page, before);

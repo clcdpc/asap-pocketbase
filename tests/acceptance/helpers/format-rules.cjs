@@ -15,6 +15,10 @@ async function formatRuleGeometry(page, columns) {
         groups: [...row.querySelectorAll('.settings-format-field-group')].map(group => ({
           ...rect(group), mode: rect(group.querySelector('select')), label: rect(group.querySelector('input')),
           scrollWidth: group.scrollWidth, clientWidth: group.clientWidth
+        })),
+        customGroups: [...row.querySelectorAll('.settings-custom-rule-row')].map(group => ({
+          ...rect(group), mode: rect(group.querySelector('select')), label: rect(group.querySelector('input')),
+          scrollWidth: group.scrollWidth, clientWidth: group.clientWidth
         }))
       })) };
   });
@@ -34,7 +38,16 @@ async function formatRuleGeometry(page, columns) {
       assert.ok(groups.every(group => Math.abs(group.x - groups[0].x) < 1), 'All field blocks use one column');
       assert.ok(groups.slice(1).every((group, index) => group.y > groups[index].y), 'Fields remain in reading order');
     }
-    for (const group of groups) {
+    if (card.customGroups.length > 1) {
+      const custom = card.customGroups;
+      if (columns === 2) {
+        assert.ok(Math.abs(custom[0].y - custom[1].y) < 1 && custom[1].x > custom[0].x, 'Custom rules share the two-column layout');
+      } else {
+        assert.ok(custom.every(group => Math.abs(group.x - custom[0].x) < 1), 'Custom rules use one column when narrow');
+        assert.ok(custom.slice(1).every((group, index) => group.y > custom[index].y), 'Custom rules retain their reading order');
+      }
+    }
+    for (const group of [...groups, ...card.customGroups]) {
       assert.ok(group.scrollWidth <= group.clientWidth + 1, 'Field block has no internal overflow');
       assert.ok(group.mode.width >= 160 && group.label.width >= 160, 'Controls have readable widths');
       assert.ok(group.label.y > group.mode.y, 'Requirement and editable label form a vertical block');

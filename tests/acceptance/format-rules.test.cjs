@@ -69,11 +69,13 @@ test('format cards retain complete drafts and use the actual container width at 
   const cards = page.locator('#format-rules-editor [data-rule-code]');
   const first = cards.first(), button = first.locator('[data-rule-toggle]');
   assert.equal(await cards.locator('.settings-rule-details:visible').count(), 0);
+  const collapsedHeight = (await first.boundingBox()).height;
   assert.equal(await first.locator('[data-rule-summary]').innerText(), '2 required · 1 optional · 2 hidden');
   const baseline = await page.evaluate(() => window.editors.snapshot());
   await button.focus(); await page.keyboard.press('Enter');
   await cards.nth(1).locator('[data-rule-toggle]').press('Space');
   assert.equal(await cards.locator('.settings-rule-details:visible').count(), 2);
+  assert.ok((await first.boundingBox()).height > collapsedHeight * 2, 'Collapsed summaries are substantially shorter than the complete editor.');
   await button.press('Space');
   await page.keyboard.press('Tab');
   assert.equal(await page.evaluate(() => Boolean(document.activeElement.closest('.settings-rule-details'))), false);
@@ -103,12 +105,12 @@ test('format cards retain complete drafts and use the actual container width at 
   const author = first.locator('[data-format-field="author"]');
   await author.selectOption('required');
   assert.equal(await first.locator('[data-rule-summary]').innerText(), '3 required · 0 optional · 2 hidden');
-  await first.getByRole('button', { name: 'Move Configured Book down', exact: true }).press('Enter');
+  await first.getByRole('button', { name: 'Move Configured Book (book) down', exact: true }).press('Enter');
   const book = page.locator('#format-rules-editor [data-rule-code="book"]');
   assert.equal(await book.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'true');
   assert.equal(await book.locator('[data-format-label="title"]').inputValue(), 'Unsaved title draft');
-  assert.equal(await page.evaluate(() => document.activeElement.isConnected && document.activeElement.getAttribute('aria-label')), 'Move Configured Book down');
-  await book.getByRole('button', { name: 'Move Configured Book up', exact: true }).click();
+  assert.equal(await page.evaluate(() => document.activeElement.isConnected && document.activeElement.getAttribute('aria-label')), 'Move Configured Book (book) down');
+  await book.getByRole('button', { name: 'Move Configured Book (book) up', exact: true }).click();
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   for (const [name, width, height, zoom, columns, narrow] of [
     ['desktop', 1440, 1000, 1, 2, false], ['narrow-container', 1440, 1000, 1, 1, true],
@@ -141,6 +143,27 @@ test('format cards retain complete drafts and use the actual container width at 
   await button.focus();
   await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
   assert.equal(await button.evaluate(node => getComputedStyle(node).outlineStyle !== 'none'), true);
+  await page.locator('#add-material-format').click();
+  await page.locator('#add-format-rule').click();
+  const customMaterial = page.locator('#material-formats-editor [data-domain-row]').last();
+  const customCard = cards.last(), retainedCustom = await customCard.elementHandle();
+  const panelId = await customCard.locator('[data-rule-toggle]').getAttribute('aria-controls');
+  const customTitle = customCard.locator('[data-format-label="title"]');
+  await customTitle.fill('Unsaved custom title');
+  const code = customMaterial.locator('input[type="text"]').first();
+  const draftCode = 'new"] #draft <tag>';
+  await code.fill(draftCode); await code.press('Tab');
+  await customMaterial.locator('input[type="text"]').nth(1).fill('Configured Book');
+  assert.equal(await retainedCustom.evaluate(node => node.isConnected), true);
+  assert.equal(await customCard.getAttribute('data-rule-code'), draftCode);
+  assert.equal(await customCard.locator('[data-rule-toggle]').getAttribute('aria-controls'), panelId);
+  assert.equal(await customCard.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'true');
+  assert.equal(await customTitle.inputValue(), 'Unsaved custom title');
+  for (const name of [`Move Configured Book (${draftCode}) up`, `Move Configured Book (${draftCode}) down`,
+    `Delete Configured Book (${draftCode}) format rule`]) {
+    assert.equal(await customCard.getByRole('button', { name, exact: true }).getAttribute('title'), name);
+  }
+  await retainedCustom.dispose();
   assert.deepEqual(errors, []);
   assert.deepEqual(external, []);
 });

@@ -312,9 +312,9 @@ const axe = require('axe-core');
     change(card('book').querySelector('[data-rule-property="messageBehavior"]'), 'eaudiobookMessage');
     card('book').querySelector('[data-rule-property="message"]').value = 'Temporarily hidden message draft';
     change(card('book').querySelector('[data-rule-property="messageBehavior"]'), 'none');
-    const bookMove = card('book').querySelector('[aria-label="Move Book down"]');
+    const bookMove = card('book').querySelector('[aria-label="Move Book (book) down"]');
     bookMove.focus(); bookMove.click();
-    assert.strictEqual(document.activeElement.getAttribute('aria-label'), 'Move Book down');
+    assert.strictEqual(document.activeElement.getAttribute('aria-label'), 'Move Book (book) down');
     assert.deepStrictEqual(rows().map(row => row.dataset.ruleCode), ['digital', 'book', extraFormats[1].code]);
     assert.strictEqual(panel('book').hidden, false);
     assert.strictEqual(panel('digital').hidden, false);
@@ -348,7 +348,7 @@ const axe = require('axe-core');
     assert.strictEqual(preservedDraft.author.mode, 'hidden');
     assert.strictEqual(preservedDraft.message, 'Temporarily hidden message draft');
     assert.deepStrictEqual(preservedDraft.customFields.retired_type, { mode: 'optional', labelOverride: 'Historical field label' });
-    const deleteDigital = card('digital').querySelector('[aria-label="Delete Digital edition format rule"]');
+    const deleteDigital = card('digital').querySelector('[aria-label="Delete Digital edition (digital) format rule"]');
     deleteDigital.focus(); deleteDigital.click();
     assert.strictEqual(document.activeElement, toggle('book'));
     root.querySelector('#add-format-rule').click();
@@ -372,8 +372,8 @@ const axe = require('axe-core');
     for (const mutate of [
       () => root.querySelector('#add-custom-field').click(),
       () => root.querySelector('#add-format-rule').click(),
-      () => card('book').querySelector('[aria-label="Move Book down"]').click(),
-      () => card('digital').querySelector('[aria-label="Delete Digital edition format rule"]').click(),
+      () => card('book').querySelector('[aria-label="Move Book (book) down"]').click(),
+      () => card('digital').querySelector('[aria-label="Delete Digital edition (digital) format rule"]').click(),
       () => root.querySelector('#additional-fields-editor [aria-label="Move down"]').click(),
       () => root.querySelector('#additional-fields-editor [aria-label="Delete"]').click(),
       () => change(root.querySelector('#additional-fields-editor input'), 'renamed_retired')
@@ -389,12 +389,47 @@ const axe = require('axe-core');
     accordion.dispose();
 
     for (const system of [true, false]) {
+      const malformed = module.createSettingsDomainEditors({ root });
+      for (const selector of ['[data-rule-property="messageBehavior"]', '[data-format-field="author"]',
+        '[data-custom-rule-key="retired_type"] [data-custom-rule-property="mode"]']) {
+        for (const corrupt of [
+          control => { control.value = 'unsupported'; },
+          control => { control.after(control.cloneNode(true)); },
+          control => {
+            const replacement = document.createElement('input');
+            for (const attribute of control.attributes) replacement.setAttribute(attribute.name, attribute.value);
+            replacement.value = control.value;
+            control.replaceWith(replacement);
+          }
+        ]) {
+          malformed.populate(accordionData, system);
+          const row = card('book');
+          corrupt(row.querySelector(selector));
+          assert.throws(() => malformed.collect(), /incomplete|missing a required control/,
+            'Malformed collapsed controls must fail before collection, in either scope.');
+          row.querySelector('.settings-row-actions button:nth-child(2)').click();
+          assert.strictEqual(card('book'), row, 'A redraw must not default or repair malformed controls.');
+          assert.throws(() => malformed.collect(), /incomplete|missing a required control/);
+        }
+      }
+      malformed.dispose();
+    }
+
+    for (const system of [true, false]) {
       const names = module.createSettingsDomainEditors({ root });
       const renameData = JSON.parse(JSON.stringify(accordionData));
       renameData.effective.formats[1].label = 'Book';
       renameData.stored.configuredSystem.formats[1].label = 'Book';
       renameData.stored.formats[1].label = 'Book';
       names.populate(renameData, system);
+      const assertActionNames = (code, label) => {
+        const context = `${label} (${code})`;
+        assert.deepStrictEqual([...card(code).querySelectorAll('.settings-row-actions button')]
+          .map(button => [button.title, button.getAttribute('aria-label')]),
+        [`Move ${context} up`, `Move ${context} down`, `Delete ${context} format rule`].map(name => [name, name]));
+      };
+      assertActionNames('book', 'Book');
+      assertActionNames('digital', 'Book');
       const formatRows = [...root.querySelectorAll('#material-formats-editor [data-domain-row]')];
       const formatLabel = index => formatRows[index].querySelectorAll('input')[1];
       if (!system) {
@@ -440,9 +475,11 @@ const axe = require('axe-core');
           assert.strictEqual(row.querySelector(`[data-format-label="${name}"]`).getAttribute('aria-label'), `${readable} patron-facing label for ${context}`);
         }
         assert.strictEqual(row.querySelector('[data-custom-rule-key="pickup_location"] select').getAttribute('aria-label'), `Pickup location mode for ${context}`);
-        assert.deepStrictEqual([...row.querySelectorAll('.settings-row-actions button')].map(button => [button.title, button.getAttribute('aria-label')]),
-          [`Move ${label} up`, `Move ${label} down`, `Delete ${label} format rule`].map(label => [label, label]));
+        assertActionNames(code, label);
       }
+      const actionNames = rows().flatMap(row => [...row.querySelectorAll('.settings-row-actions button')]
+        .map(button => button.getAttribute('aria-label')));
+      assert.strictEqual(new Set(actionNames).size, actionNames.length, 'Duplicate labels retain unique header action names.');
       assert.deepStrictEqual(names.collect().values.rules, rulesBeforeRename);
       assert.strictEqual(names.collect().domainsChanged.formats, true);
       assert.strictEqual(names.collect().domainsChanged.rules, false, 'Renaming never dirties formatRules.');
@@ -489,6 +526,8 @@ const axe = require('axe-core');
     assert.strictEqual(document.activeElement, customCode);
     assert.deepStrictEqual([...customCard.querySelectorAll('input, select, textarea, button')], customControls);
     assert.strictEqual(customCard.querySelector('.settings-rule-code').textContent, nextCode);
+    assert.deepStrictEqual([...customCard.querySelectorAll('.settings-row-actions button')].map(button => button.getAttribute('aria-label')),
+      [`Move New format (${nextCode}) up`, `Move New format (${nextCode}) down`, `Delete New format (${nextCode}) format rule`]);
     toggle(nextCode).click(); toggle(nextCode).click();
     assert.strictEqual(customPanel.hidden, false, 'Disclosure state follows the new draft code.');
     assert.strictEqual(toggle(nextCode).getAttribute('aria-label'), `Collapse New format (${nextCode}) format rules`);
@@ -501,6 +540,10 @@ const axe = require('axe-core');
     assert.strictEqual(card(nextCode), customCard, 'A colliding code cannot overwrite another rule identity.');
     change(customCode, 'unique_draft');
     assert.strictEqual(card('unique_draft'), customCard);
+    const customLabel = customFormat.querySelectorAll('input')[1];
+    change(customLabel, 'Book');
+    assert.deepStrictEqual([...customCard.querySelectorAll('.settings-row-actions button')].map(button => [button.title, button.getAttribute('aria-label')]),
+      ['Move Book (unique_draft) up', 'Move Book (unique_draft) down', 'Delete Book (unique_draft) format rule'].map(name => [name, name]));
     assert.strictEqual(root.querySelector('#material-formats-editor input').readOnly, true);
     draftIdentity.populate(accordionData, false);
     assert.strictEqual(draftIdentity.collect().changed, false);

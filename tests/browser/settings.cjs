@@ -52,8 +52,43 @@ async function scan(page, axeSource, artifactRoot, report, viewport) {
   assert.equal(layout.imagesLoaded, true, `Visible image failed to load in ${viewport} settings`);
 }
 
+async function verifyFormatRuleDraftNames(page) {
+  const cards = page.locator('#format-rules-editor [data-rule-code]');
+  const materials = page.locator('#material-formats-editor [data-domain-row]');
+  const originals = [];
+  for (const index of [0, 1]) {
+    const card = cards.nth(index), material = materials.nth(index);
+    const toggle = card.locator('[data-rule-toggle]');
+    const code = await card.getAttribute('data-rule-code');
+    const label = material.locator('input[type="text"]').nth(1);
+    const override = material.locator('.settings-domain-override-toggle');
+    originals.push({ index, label: await label.inputValue(), expanded: await toggle.getAttribute('aria-expanded'),
+      override: await override.count() ? await override.isChecked() : null });
+    if (await override.count()) await override.check();
+    const control = await card.locator('[data-format-label="title"]').elementHandle();
+    await label.fill('Shared label <draft>');
+    for (const name of [`Move Shared label <draft> (${code}) up`, `Move Shared label <draft> (${code}) down`,
+      `Delete Shared label <draft> (${code}) format rule`]) {
+      const action = card.getByRole('button', { name, exact: true });
+      assert.equal(await action.count(), 1);
+      assert.equal(await action.getAttribute('title'), name);
+    }
+    assert.equal(await control.evaluate(node => node.isConnected), true, 'Label input preserves the complete draft DOM.');
+    assert.equal(await toggle.getAttribute('aria-expanded'), originals[index].expanded);
+    await control.dispose();
+  }
+  const names = await cards.locator('.settings-row-actions button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')));
+  assert.equal(new Set(names).size, names.length, 'Shared labels retain distinct header action names.');
+  for (const original of originals) {
+    const material = materials.nth(original.index);
+    await material.locator('input[type="text"]').nth(1).fill(original.label);
+    if (original.override !== null) await material.locator('.settings-domain-override-toggle').setChecked(original.override);
+  }
+}
+
 async function runSystemFormatRuleEditor(page, report, waitForSettingsReady) {
   await page.locator('#settings-nav-patron').click();
+  await verifyFormatRuleDraftNames(page);
   const rule = page.locator('#format-rules-editor [data-rule-code="book"]');
   assert.equal(await rule.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'false');
   assert.equal(await page.locator('#settings-save').isDisabled(), true);
@@ -1186,6 +1221,7 @@ async function main() {
 
     await page.locator('#settings-nav-patron').click();
     const autoClaimEditor = page.locator('#format-claim-rules-editor');
+    await verifyFormatRuleDraftNames(page);
     const existingAutoClaimRules = await autoClaimEditor.locator('[data-domain-row]').evaluateAll(rows => rows.map(row => {
       const selects = row.querySelectorAll('select');
       return { materialFormatId: selects[0]?.value || '', staffUserId: selects[1]?.value || '' };

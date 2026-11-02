@@ -36,7 +36,9 @@ Review Library scopes. It checks complete collapsed cards, configured names/code
 Required/Optional/Hidden summaries (including enabled and retained disabled custom
 rules), independent keyboard disclosures, Tab behavior and dirty-state restoration.
 Live Material formats draft names update expanded/collapsed headers and accessible
-names without replacing controls or independently dirtying Format rules.
+names, including code-qualified move/delete actions for duplicate labels, without
+replacing controls or independently dirtying Format rules. In either scope, a
+malformed collapsed requirement blocks redraw and global Save before any POST.
 The library draft also removes a hidden control deliberately, checks that Add field
 cannot repair it with a default, and verifies global Save fails before any POST.
 Geometry, axe and screenshots cover desktop, a 540px editor inside a wide window,

@@ -1315,7 +1315,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
           ?.setAttribute('aria-label', `${fieldLabel} ${name} for ${context}`);
       }
     }
-    const actions = [`Move ${label} up`, `Move ${label} down`, `Delete ${label} format rule`];
+    const actions = [`Move ${context} up`, `Move ${context} down`, `Delete ${context} format rule`];
     [...row.querySelectorAll('.settings-row-actions button')].forEach((button, index) => {
       button.title = actions[index];
       button.setAttribute('aria-label', actions[index]);
@@ -1399,7 +1399,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       ]);
       const row = element('div', { className: 'settings-editor-row settings-rule-row', 'data-domain-row': 'true', 'data-rule-code': value.code }, [
         element('div', { className: 'settings-rule-heading' }, [toggle,
-          actions(index, values.length, (from, offset) => reorder('rules', from, offset), from => remove('rules', from), formatLabel)]), panel
+          actions(index, values.length, (from, offset) => reorder('rules', from, offset), from => remove('rules', from), formatContext)]), panel
       ]);
       const updateExpansion = () => {
         const expanded = expandedRuleCodes.has(row.dataset.ruleCode);
@@ -1739,18 +1739,26 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   }
 
   function validateRenderedRules(fieldKeys = new Set(readFields().map(item => item.key))) {
+    const modes = ['required', 'optional', 'hidden'];
+    const behaviors = ['none', 'message', 'ebookMessage', 'eaudiobookMessage'];
+    const hasControl = (container, selector, tag, values) => {
+      const controls = container.querySelectorAll(selector);
+      return controls.length === 1 && controls[0].matches(tag) &&
+        (!values || values.includes(controls[0].value));
+    };
     const expectedCodes = new Set(state.ruleRosterCodes);
     const renderedCodes = new Set();
     for (const row of dom.rules.querySelectorAll('[data-domain-row]')) {
       const code = clean(row.dataset.ruleCode);
-      if (!code || renderedCodes.has(code) || !row.querySelector('[data-rule-property="messageBehavior"]') ||
-          !row.querySelector('[data-rule-property="message"]')) {
+      if (!code || renderedCodes.has(code) ||
+          !hasControl(row, '[data-rule-property="messageBehavior"]', 'select', behaviors) ||
+          !hasControl(row, '[data-rule-property="message"]', 'textarea')) {
         throw new Error('A format-rule editor is incomplete. Reload settings before saving.');
       }
       renderedCodes.add(code);
       for (const name of ['title', 'author', 'identifier', 'publication']) {
-        if (!row.querySelector(`[data-format-field="${name}"]`) ||
-            !row.querySelector(`[data-format-label="${name}"]`)) {
+        if (!hasControl(row, `[data-format-field="${name}"]`, 'select', modes) ||
+            !hasControl(row, `[data-format-label="${name}"]`, 'input[type="text"]')) {
           throw new Error('A format-rule editor is missing a required control. Reload settings before saving.');
         }
       }
@@ -1763,8 +1771,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       for (const customRow of row.querySelectorAll('[data-custom-rule-key]')) {
         const key = customRow.dataset.customRuleKey;
         if (!key || actualKeys.has(key) ||
-            !customRow.querySelector('[data-custom-rule-property="mode"]') ||
-            !customRow.querySelector('[data-custom-rule-property="labelOverride"]')) {
+            !hasControl(customRow, '[data-custom-rule-property="mode"]', 'select', modes) ||
+            !hasControl(customRow, '[data-custom-rule-property="labelOverride"]', 'input[type="text"]')) {
           throw new Error('A custom field rule editor is incomplete. Reload settings before saving.');
         }
         actualKeys.add(key);
