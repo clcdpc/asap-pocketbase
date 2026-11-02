@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASAP Operations — approved design reference</title>
+<style>:root{color-scheme:light dark}body{margin:0;padding:24px;background:light-dark(#e9edef,#101820)}body>div{max-width:1100px;margin:auto}@media(max-width:680px){body{padding:0}}</style>
+</head>
+<body>
+<div id="asap-ops-mock">
+  <style>
+    #asap-ops-mock{--page:light-dark(#f4f6f7,#182129);--panel:light-dark(#fff,#202c36);--ink:light-dark(#19242d,#edf2f5);--soft:light-dark(#5c6973,#b3c1cc);--line:light-dark(#ccd5dc,#465763);--blue:light-dark(#09658a,#7bcdee);color:var(--ink);background:var(--page);font:15px/1.5 Arial,sans-serif;border-radius:6px;overflow:hidden}
+    #asap-ops-mock *{box-sizing:border-box}#asap-ops-mock .brand{background:light-dark(#0d7198,#124964);color:#fff;padding:16px 24px;display:flex;justify-content:space-between;border-bottom:4px solid #edb744;gap:16px;flex-wrap:wrap}#asap-ops-mock .brand strong{font-size:20px}
+    #asap-ops-mock main{padding:24px}#asap-ops-mock h1{font-size:30px;margin:0}#asap-ops-mock h2{font-size:22px;margin:0}#asap-ops-mock p{margin:4px 0 16px;color:var(--soft)}#asap-ops-mock .primary-nav{display:flex;gap:24px;flex-wrap:wrap;padding:0 0 15px;border-bottom:1px solid var(--line);color:var(--soft);margin-bottom:22px}#asap-ops-mock .primary-nav strong{color:var(--blue)}
+    #asap-ops-mock button,#asap-ops-mock input,#asap-ops-mock select{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:9px 12px;min-height:42px;max-width:100%}#asap-ops-mock button{cursor:pointer}#asap-ops-mock button:hover{border-color:var(--blue)}#asap-ops-mock button:focus-visible,#asap-ops-mock input:focus-visible,#asap-ops-mock select:focus-visible,#asap-ops-mock summary:focus-visible{outline:3px solid var(--blue);outline-offset:3px}#asap-ops-mock button:disabled{opacity:.45;cursor:default}
+    #asap-ops-mock .row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}#asap-ops-mock .section-nav{display:flex;gap:0;border-bottom:1px solid var(--line);margin:20px 0 24px;flex-wrap:wrap}#asap-ops-mock .section-nav button{border:0;border-radius:0;background:transparent;padding:12px 18px;border-bottom:3px solid transparent}#asap-ops-mock .section-nav button[aria-pressed=true]{border-bottom-color:var(--blue);color:var(--blue);font-weight:700}
+    #asap-ops-mock .filters{background:var(--panel);padding:18px;border-top:3px solid var(--blue);margin:18px 0;display:grid;gap:14px;grid-template-columns:repeat(4,minmax(0,1fr))}#asap-ops-mock label{display:flex;flex-direction:column;gap:5px;font-weight:600}#asap-ops-mock label input,#asap-ops-mock label select{width:100%;font-weight:400}#asap-ops-mock .search{grid-column:span 2}#asap-ops-mock .filter-footer{grid-column:1/-1;display:flex;gap:10px;align-items:center;flex-wrap:wrap}#asap-ops-mock .hint{font-size:13px;color:var(--soft)}
+    #asap-ops-mock .records{background:var(--panel);border-top:1px solid var(--line);margin-top:12px}#asap-ops-mock article{padding:17px 18px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:145px 1fr;gap:18px}#asap-ops-mock .meta{color:var(--soft);font-size:13px}#asap-ops-mock .event-title{font-weight:700}#asap-ops-mock details{margin-top:8px}#asap-ops-mock summary{color:var(--blue);cursor:pointer;width:fit-content}#asap-ops-mock .detail{margin-top:8px;padding:12px;background:var(--page);overflow-wrap:anywhere}#asap-ops-mock .pagination{margin-top:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}#asap-ops-mock .actions{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}#asap-ops-mock .emphasis{background:var(--blue);color:light-dark(#fff,#13232e);border-color:var(--blue)}#asap-ops-mock .columns{display:grid;grid-template-columns:1fr 1fr;gap:20px}#asap-ops-mock .block{background:var(--panel);padding:18px;border-top:3px solid var(--blue)}#asap-ops-mock table{width:100%;border-collapse:collapse}#asap-ops-mock th,#asap-ops-mock td{text-align:left;padding:12px 8px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}#asap-ops-mock .status{font-size:13px;background:var(--page);padding:3px 7px;display:inline-block}#asap-ops-mock [hidden]{display:none!important}#asap-ops-mock .notice{min-height:24px;color:var(--blue);margin-top:12px}
+    @media(max-width:680px){#asap-ops-mock main{padding:16px}#asap-ops-mock .filters{grid-template-columns:1fr 1fr}#asap-ops-mock .columns{grid-template-columns:1fr}#asap-ops-mock article{grid-template-columns:1fr;gap:4px}#asap-ops-mock .primary-nav{gap:14px}}@media(max-width:420px){#asap-ops-mock .filters{grid-template-columns:1fr}#asap-ops-mock .search{grid-column:auto}#asap-ops-mock .section-nav button{padding:10px 8px}}
+  </style>
+  <header class="brand"><strong>ASAP</strong><span>Wes Osborn · Super admin</span></header>
+  <main>
+    <div class="primary-nav" aria-label="Application navigation"><span>Requests</span><span>Additional copies</span><span>Analytics</span><strong>Operations</strong><span>Settings</span></div>
+    <div class="row"><div><h1>Operations</h1><p>Run workflows and review operational history.</p></div><button id="ops-refresh" type="button">↻ Refresh</button></div>
+    <nav class="section-nav" aria-label="Operations sections"><button type="button" data-view="workflow" aria-pressed="false">Workflow</button><button type="button" data-view="email" aria-pressed="false">Email operations</button><button type="button" data-view="audit" aria-pressed="true">Administration audit</button></nav>
+    <section data-panel="audit" aria-label="Administration audit">
+      <h2>Administration audit</h2><p>Find changes to staff access, settings, and library participation.</p>
+      <div class="filters">
+        <label class="search">Search history<input id="audit-search" type="search" placeholder="Person, action, or affected record"></label>
+        <label>Library scope<select id="audit-library"><option>All libraries and system</option><option>System only</option><option>Alexandria</option><option>Bexley</option></select></label>
+        <label>Action category<select id="audit-category"><option>All actions</option><option>Staff access</option><option>Settings</option><option>Library participation</option><option>Manual operations</option></select></label>
+        <label>From<input id="audit-from" type="date" value="2026-10-01"></label><label>Through<input id="audit-through" type="date" value="2026-11-02"></label>
+        <label>Performed by<select id="audit-person"><option>Anyone</option><option>Wes Osborn</option><option>Mike Fields</option></select></label>
+        <label>Sort<select id="audit-sort"><option value="new">Newest first</option><option value="old">Oldest first</option></select></label>
+        <div class="filter-footer"><button type="button" id="audit-reset">Clear filters</button><span class="hint">Times shown in Eastern Time</span></div>
+      </div>
+      <div class="row"><strong id="audit-count" aria-live="polite"></strong><span class="hint">Illustrative records</span></div>
+      <style>
+        #asap-ops-mock .audit-table-wrap{margin-top:12px;background:var(--panel);overflow-x:auto}
+        #asap-ops-mock .audit-log{table-layout:fixed;min-width:600px}
+        #asap-ops-mock .audit-log th,#asap-ops-mock .audit-log td{vertical-align:top;padding:15px 12px}
+        #asap-ops-mock .audit-log th{color:var(--soft);font-weight:600}
+        #asap-ops-mock .audit-log .when{width:18%;font-variant-numeric:tabular-nums}
+        #asap-ops-mock .audit-log .person{width:18%}
+        #asap-ops-mock .audit-log .scope{width:18%}
+        #asap-ops-mock .audit-log .change{width:46%}
+        #asap-ops-mock .audit-log .date{white-space:nowrap}
+        #asap-ops-mock .audit-log .event-target{margin-top:3px}
+      </style>
+      <div class="audit-table-wrap"><table class="audit-log" aria-label="Administrative changes"><thead><tr><th class="when" scope="col">When</th><th class="person" scope="col">Performed by</th><th class="scope" scope="col">Library / scope</th><th class="change" scope="col">Change</th></tr></thead><tbody id="audit-records"></tbody></table></div>
+      <div class="pagination"><span id="audit-page" class="meta"></span><div class="actions"><button id="audit-prev" type="button">Previous</button><button id="audit-next" type="button">Next</button></div></div>
+    </section>
+    <section data-panel="workflow" aria-label="Workflow" hidden>
+      <div class="row"><div><h2>Workflow</h2><p>Run work for the selected libraries.</p></div><label>Run scope<select><option>All libraries</option><option>Alexandria</option><option>Bexley</option></select></label></div>
+      <div class="actions"><button class="emphasis" type="button" data-demo="Workflow queued">▷ Run workflow now</button><button type="button" data-demo="Weekly summary queued — another summary can be sent for this period">Run weekly summary</button></div>
+      <div class="block"><h2>Queue progress</h2><table><thead><tr><th>Queue</th><th>State</th><th>Last updated</th></tr></thead><tbody><tr><td>Identifier processing</td><td>Completed</td><td>Today, 2:45 PM</td></tr><tr><td>Purchase promotion</td><td>Completed</td><td>Today, 2:24 PM</td></tr><tr><td>Hold placement</td><td>Completed</td><td>Today, 2:24 PM</td></tr></tbody></table></div>
+    </section>
+    <section data-panel="email" aria-label="Email operations" hidden>
+      <div class="row"><div><h2>Email operations</h2><p>Review queued messages and recorded sending outcomes.</p></div><label>View scope<select><option>All libraries and system</option><option>System only</option><option>Alexandria</option></select></label></div>
+      <div class="block"><div class="row"><div><strong>Test email</strong><div class="meta">System · ASAP Dev System &lt;asap@clcohio.org&gt;</div><div class="meta">Send to wosborn@clcohio.org · Live email via Postmark</div></div><button type="button" data-demo="Test email queued. See the email log below.">Send test email</button></div></div>
+      <style>
+        #asap-ops-mock .email-table-wrap{overflow-x:auto}
+        #asap-ops-mock .email-log th:nth-child(-n+2),#asap-ops-mock .email-log td:nth-child(-n+2){white-space:nowrap;overflow-wrap:normal}
+      </style>
+      <div class="email-table-wrap"><table class="email-log"><thead><tr><th scope="col">Reference</th><th scope="col">Created</th><th scope="col">Status</th><th scope="col">Type / detail</th></tr></thead><tbody><tr><td>10</td><td>Today, 3:10 PM</td><td><span class="status">Accepted by email service</span></td><td>Test email</td></tr><tr><td>9</td><td>Today, 2:37 PM</td><td><span class="status">Suppressed</span></td><td>Business event<br><span class="meta">Recipient domain is not allowed</span></td></tr><tr><td>8</td><td>Today, 2:33 PM</td><td><span class="status">Accepted by email service</span></td><td>Test email</td></tr></tbody></table></div>
+    </section>
+    <div class="notice" id="ops-notice" role="status" aria-live="polite"></div>
+    <hr><div class="row"><span class="hint">Concept preview · sample data · no actions affect ASAP</span><button id="staff-entry" type="button">Preview “View staff audit history” link</button></div>
+  </main>
+  <script>
+    (()=>{
+      const root=document.getElementById('asap-ops-mock'),get=id=>root.querySelector('#'+id);
+      const rows=[
+        ['2026-11-02','15:08','3:08 PM','Staff role changed','Wes Osborn','Alexandria','Staff access','Jordan Lee · Staff → Library admin','Action: staff_updated · Target: staff user 24 · Role changed from Staff to Library admin.'],
+        ['2026-11-02','14:52','2:52 PM','Email sender settings updated','Wes Osborn','System only','Settings','System sender identity','Action: system_settings_updated · Section: email · Saved sender identity updated. Credentials are not displayed.'],
+        ['2026-11-02','14:40','2:40 PM','Library participation disabled','Wes Osborn','Bexley','Library participation','Bexley · Active → Inactive','Action: organization_deactivated · ASAP participation disabled. Polaris organization unchanged.'],
+        ['2026-11-01','16:22','4:22 PM','Staff account added','Mike Fields','Alexandria','Staff access','Taylor Morgan · Staff','Action: staff_created · Target: staff user 27 · Library: Alexandria.'],
+        ['2026-10-30','10:15','10:15 AM','Weekly summary run requested','Wes Osborn','System only','Manual operations','All authorized libraries','Action: weekly_summary_force_queued · Manual run recorded. This entry records queueing, not completed delivery.'],
+        ['2026-10-28','11:06','11:06 AM','Workflow settings updated','Mike Fields','Bexley','Settings','Library workflow override','Action: library_settings_updated · Section: workflow · Library override saved.'],
+        ['2026-10-20','09:34','9:34 AM','Staff account deactivated','Wes Osborn','Bexley','Staff access','Alex Chen · Inactive','Action: staff_updated · Target: staff user 18 · Account disabled.'],
+        ['2026-10-08','11:25','11:25 AM','System settings updated','Wes Osborn','System only','Settings','System configuration','Action: system_settings_updated · Saved sections: email, patron, Polaris, workflow.']
+      ];
+      let page=0;const size=4,controls=['audit-search','audit-library','audit-category','audit-from','audit-through','audit-person','audit-sort'];
+      function render(){const q=get('audit-search').value.toLowerCase(),lib=get('audit-library').value,cat=get('audit-category').value,person=get('audit-person').value,from=get('audit-from').value,to=get('audit-through').value;
+        let filtered=rows.filter(r=>(!q||r.join(' ').toLowerCase().includes(q))&&(lib==='All libraries and system'||r[5]===lib)&&(cat==='All actions'||r[6]===cat)&&(person==='Anyone'||r[4]===person)&&(!from||r[0]>=from)&&(!to||r[0]<=to));
+        filtered.sort((a,b)=>(a[0]+a[1]).localeCompare(b[0]+b[1])*(get('audit-sort').value==='new'?-1:1));page=Math.min(page,Math.max(0,Math.ceil(filtered.length/size)-1));
+        const list=get('audit-records');list.replaceChildren();
+        for(const r of filtered.slice(page*size,(page+1)*size)){
+          const row=document.createElement('tr'),when=document.createElement('td'),person=document.createElement('td'),scope=document.createElement('td'),change=document.createElement('td');
+          const date=document.createElement('div'),time=document.createElement('div');date.className='date';date.textContent=r[0];time.className='meta';time.textContent=r[2];when.append(date,time);
+          person.textContent=r[4];scope.textContent=r[5]==='System only'?'System':r[5];
+          const title=document.createElement('div'),category=document.createElement('div'),target=document.createElement('div');title.className='event-title';title.textContent=r[3];category.className='meta';category.textContent=r[6];target.className='event-target';target.textContent=r[7];
+          const details=document.createElement('details'),summary=document.createElement('summary'),detail=document.createElement('div');summary.textContent='View details';detail.className='detail';detail.textContent=r[8];details.append(summary,detail);change.append(title,category,target,details);row.append(when,person,scope,change);list.append(row);
+        }
+        if(!filtered.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=4;cell.textContent='No audit entries match these filters.';row.append(cell);list.append(row);}
+        get('audit-count').textContent=filtered.length+' matching entries';get('audit-page').textContent=filtered.length?'Showing '+(page*size+1)+'–'+Math.min((page+1)*size,filtered.length)+' of '+filtered.length:'0 entries';get('audit-prev').disabled=page===0;get('audit-next').disabled=(page+1)*size>=filtered.length;
+      }
+      function view(name){root.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===name)));root.querySelectorAll('[data-panel]').forEach(p=>p.hidden=p.dataset.panel!==name);get('ops-notice').textContent='';}
+      root.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>view(b.dataset.view)));
+      controls.forEach(id=>get(id).addEventListener(id==='audit-search'?'input':'change',()=>{page=0;render();}));
+      get('audit-prev').onclick=()=>{page--;render();};get('audit-next').onclick=()=>{page++;render();};
+      get('audit-reset').onclick=()=>{controls.forEach(id=>{const el=get(id);if(el.tagName==='SELECT')el.selectedIndex=0;else el.value='';});page=0;render();};
+      get('ops-refresh').onclick=()=>{render();get('ops-notice').textContent='Preview refreshed. Sample data is unchanged.';};
+      root.querySelectorAll('[data-demo]').forEach(b=>b.onclick=()=>{get('ops-notice').textContent='Preview only: '+b.dataset.demo;});
+      get('staff-entry').onclick=()=>{get('audit-reset').click();get('audit-category').value='Staff access';view('audit');render();get('audit-search').focus();get('ops-notice').textContent='Opened from Staff access with staff changes selected.';};render();view('audit');
+    })();
+  </script>
+</div>
+
+</body>
+</html>
