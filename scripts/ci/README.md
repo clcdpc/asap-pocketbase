@@ -155,14 +155,17 @@ Completed elements from partial XML and complete JSONL lines remain usable.
 MTP may only persist TRX on graceful exit; hard termination may leave no TRX.
 
 The test-only `FixtureTiming` helper is disabled without its output variable.
-It wraps shared baseline/journey initialization, their initial DACPAC deployments
-(including database creation), Hangfire setup, the shared library seed and the
-migration tests' DACPAC helper. These operations issue exactly the same SQL.
+It wraps shared baseline/journey initialization, initial DACPAC deployments
+(including database creation), Hangfire setup, shared seeding and teardown.
+Per-test spans cover initialization, factory construction, actual host startup,
+client/dependency creation, provider setup, credential protection, SQL settings,
+case body/framework execution and cleanup. The extracted protocol fixture owns
+separate shared initialization. SQL operations retain their original behavior.
 Only explicit completion sets `succeeded=true`; failed/cancelled scopes retain
 false. Writes are serialized and I/O errors cannot replace fixture exceptions.
-Nested spans must not be added to wall time. Scattered per-test seeds, repeated
-upgrade deployments and migration subprocess internals remain individually
-unmeasured to avoid invasive infrastructure changes.
+Nested spans must not be added to wall time; the report retains parent/process
+identity and interval unions. See [the measurement method](../../docs/implementation/ci-simplification.md)
+for operation boundaries and observed costs.
 
 ## SQL DMV snapshots
 
