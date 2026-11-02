@@ -44,6 +44,10 @@ stays unpainted until it can be measured, including after a visible layout; its
 open popup closes and focus returns to the connected queue control. Resize and font notifications remeasure
 without replacing a stable partition. Resizing closes an open menu, restores focus
 to a connected control and promotes a focused command when space permits.
+Scroll dismissal compares the current More anchor with its opening position:
+keyboard focus may scroll an offscreen cell before activation and deliver that
+scroll event after the popup opens. An unchanged anchor keeps the popup open;
+actual anchor movement closes it and returns focus to More.
 
 ## First-party menu audit
 
@@ -73,7 +77,9 @@ The broader `tests/browser/staff.cjs` journey scopes detail workflow lookups to
 the open modal and verifies that the new row command and its detail action coexist;
 page-wide partial-name selectors must not confuse those two intentional controls.
 `tests/acceptance/direct-actions.test.cjs` checks the shipped component/CSS/fonts
-in Chromium, including native zoom, forced colors and complete labels.
+in Chromium, including native zoom, forced colors and complete labels. Its native
+keyboard regression first reproduces the delayed focus-scroll dismissal, then
+checks unchanged-position events, genuine scroll dismissal and connected focus.
 
 `i403` is the disposable acceptance suite. Run with `d1,q1,pr410` as documented in
 `tests/acceptance/README.md`. Generated evidence is local and never committed.
@@ -90,7 +96,7 @@ Final human accessibility acceptance remains under #398.
 | All five tabs, AutoHold variants and operation protection | Server allowedActions; hold capability plus workflow block; actor scope | Table inventory matrix; detail capability-revocation cases; real SQL i403 primary confirmations/Cancel |
 | Resize, real column changes, zoom, fonts, sorting/paging/filter/refetch | ResizeObserver, font events, ref disposal, grid revision ownership | Table lifecycle tests; Chromium removal/reinsertion and font/zoom; i403 resize/replacement; SQL browser journey |
 | Correct direct/menu dispatch; distinct row/title/+ and catalog searches | Shared guarded handler and authoritative `startAction` | Table exact dispatch counts; detail review/confirmation/Cancel/approval/version checks; i403 Purchase/Reject/Assign; SQL browser distinct controls |
-| Escape/Enter/Space, ARIA, popup position and connected focus | Popover lifecycle and workflow-button focus before click | Chromium keyboard/viewport resize; i403 Escape/promotion/focus; SQL native zoom scoped axe |
+| Escape/Enter/Space, ARIA, popup position and connected focus | Popover lifecycle, actual anchor-movement dismissal and workflow-button focus before click | Chromium native-200% offscreen focus/Enter/Space/delayed scroll/actual movement/Escape; viewport resize; i403 Escape/promotion/focus; SQL native zoom scoped axe |
 | Session/role/scope/stale controls invalidated | Session identity + live row + detail context guards | Table stale actor/scope/sign-out/ref retirement; detail revocation; retained workflow/navigation authority regressions and SQL mutation tests |
 | Additional-copy and #388 modal preserved | Existing direct Open and all-direct wrapping toolbar | Q1/D1 suites; retained detail/copy controller/browser tests |
 | First-party overflow audit | Tracked frontend search, excluding vendor | Audit above; placeholder/combobox/informational disclosures preserved |

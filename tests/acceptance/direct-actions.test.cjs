@@ -85,6 +85,32 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
   await fixture.evaluate(node => { node.style.width = '150px'; }); await settleActions(page);
   await activateRowAction(fixture, 'assign');
   assert.deepEqual(await page.evaluate(() => calls), [{ id: '27', connected: true, action: 'assign' }, { id: '27', connected: true, action: 'assign' }]);
+  await page.evaluate(() => {
+    const fixture = document.querySelector('#fixture'), outer = document.createElement('div'), inner = document.createElement('div');
+    outer.id = 'horizontal-actions'; outer.style.cssText = 'width:240px;max-width:100%;overflow-x:auto';
+    inner.style.width = '1200px'; fixture.before(outer); outer.append(inner); inner.append(fixture);
+    fixture.style.width = '210px'; fixture.style.marginLeft = '800px';
+  });
+  await nativeZoom(context, page, 2); await settleActions(page);
+  for (const activation of ['Enter', 'Space', 'Enter']) {
+    await page.locator('#fallback').focus();
+    await page.locator('#horizontal-actions').evaluate(node => { node.scrollLeft = 0; }); await settleActions(page);
+    await more.focus(); await page.keyboard.press(activation); await settleActions(page);
+    assert.equal(await more.getAttribute('aria-expanded'), 'true', 'Focus scrolling before activation must not dismiss the new popup');
+    assert.ok(await page.locator('#horizontal-actions').evaluate(node => node.scrollLeft > 0), 'Keyboard focus reveals the offscreen command');
+    await page.locator('#horizontal-actions').dispatchEvent('scroll');
+    assert.equal(await more.getAttribute('aria-expanded'), 'true', 'A delayed scroll event with an unchanged anchor keeps the popup open');
+    await page.locator('#horizontal-actions').evaluate(node => { node.scrollLeft -= 20; }); await settleActions(page);
+    assert.equal(await more.getAttribute('aria-expanded'), 'false', 'An actual anchor move dismisses the popup');
+    assert.equal(await more.evaluate(node => node === document.activeElement), true);
+    await more.press(activation);
+    await page.keyboard.press('Escape');
+  }
+  await nativeZoom(context, page, 1);
+  await page.evaluate(() => {
+    const fixture = document.querySelector('#fixture'), outer = document.querySelector('#horizontal-actions');
+    outer.before(fixture); outer.remove(); fixture.style.marginLeft = '';
+  }); await settleActions(page);
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await fixture.evaluate(node => { node.style.width = '100%'; });
