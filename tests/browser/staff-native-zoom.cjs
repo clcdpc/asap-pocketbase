@@ -6,7 +6,7 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 const verifyMixedFieldLayout = require('./form-layout.cjs');
 const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
-const { actionGeometry } = require('../acceptance/helpers/request-actions.cjs');
+const { actionGeometry, activateRowAction } = require('../acceptance/helpers/request-actions.cjs');
 
 // Chromium's tab API changes actual browser zoom. CSS zoom and pinch scaling
 // do not exercise the same viewport, native controls or top-layer geometry.
@@ -74,6 +74,7 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       const more = page.getByRole('button', { name: `More actions for request ${sourceId}`, exact: true });
       const row = title.locator('xpath=ancestor::tr');
       const geometry = await actionGeometry(row);
+      assert.equal(geometry.inline[0], 'purchase', 'Suggestions lead with their eligible workflow step');
       assert.ok(geometry.inline.length >= 1 && geometry.overflow.length >= 1, 'Zoom retains direct commands plus only the remainder');
       await more.focus(); await page.keyboard.press('Enter');
       assert.equal(await more.getAttribute('aria-expanded'), 'true');
@@ -85,6 +86,19 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       // The global axe scan may scroll the table and correctly dismiss an
       // anchored popup. Verify Escape before that independent full-page audit.
       await scan('table');
+      await page.locator('#status-tabs [data-status="closed"]').click();
+      await page.locator('#request-search').fill('Status transition closed 00');
+      const closedTitle = page.locator('#request-grid .request-title-link').filter({ hasText: 'Status transition closed 00' });
+      await closedTitle.waitFor();
+      const closedRow = closedTitle.locator('xpath=ancestor::tr');
+      assert.deepEqual((await actionGeometry(closedRow)).inline, ['reopen']);
+      assert.equal(await closedRow.locator('.request-row-more, [popover]').count(), 0);
+      await scan('closed-actions');
+      await activateRowAction(closedRow, 'reopen', 'Space');
+      await page.locator('#confirmation-dialog[open]').getByRole('button', { name: 'Cancel', exact: true }).click();
+      await page.keyboard.press('Escape'); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+      await page.locator('#status-tabs [data-status="suggestion"]').click();
+      await page.locator('#request-search').fill(''); await title.waitFor();
       await title.focus(); await page.keyboard.press('Enter');
       const detail = page.locator('#request-dialog[open]');
       await detail.waitFor();

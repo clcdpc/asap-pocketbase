@@ -146,9 +146,10 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await page.locator('#status-tabs [data-status="closed"]').click();
   await search.fill('TABLE-BROWSER-01');
   await page.waitForFunction(() => document.querySelector('#request-grid .request-title-link')?.textContent === 'Table browser record 01');
-  assert.deepEqual((await actionGeometry(row)).inline, ['edit']);
-  assert.equal(await row.locator('.request-row-more, [popover]').count(), 0, 'Closed Open details is direct');
-  await activateRowAction(row, 'edit', 'Space'); await page.locator('#request-dialog[open] .edit-form').waitFor(); await closeDetail();
+  assert.deepEqual((await actionGeometry(row)).inline, ['reopen']);
+  assert.equal(await row.locator('.request-row-more, [popover]').count(), 0, 'The sole Reopen command is direct');
+  await decideConfirmation(page, () => activateRowAction(row, 'reopen', 'Space'), dialog => dialog.dismiss());
+  await page.locator('#request-dialog[open] .edit-form').waitFor(); await closeDetail();
   await page.locator('#status-tabs [data-status="suggestion"]').click();
   await page.locator('#refresh-queue:not([disabled])').waitFor();
   return actions;

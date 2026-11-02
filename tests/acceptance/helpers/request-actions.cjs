@@ -32,7 +32,9 @@ async function actionGeometry(row) {
       }) };
   });
   assert.equal(new Set(result.keys).size, result.keys.length, 'No duplicate commands');
+  assert.equal(result.keys.includes('edit'), false, 'Details use the row and title link, never a workflow command');
   assert.equal(result.more, result.overflow.length ? 1 : 0, 'More exists only with actual overflow');
+  if (result.keys.length <= 1) assert.equal(result.more, 0, 'Zero/one command never creates More');
   assert.ok(!result.keys.length || result.inline.length >= 1, 'A meaningful action remains direct');
   assert.ok(result.scrollWidth <= result.clientWidth + 1, 'Controls do not overflow their action area');
   for (const { bounds: b, text } of result.controls) {

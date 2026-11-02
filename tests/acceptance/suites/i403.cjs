@@ -22,7 +22,7 @@ async function queue(t, status, title = '') {
 }
 async function evidence(t, row, name = t.id, capture = {}) {
   const direct = row.locator('.request-row-actions > [data-request-action]').first();
-  await direct.scrollIntoViewIfNeeded(); await settleActions(t.page);
+  await (await direct.count() ? direct : row.locator('.request-title-link')).scrollIntoViewIfNeeded(); await settleActions(t.page);
   const geometry = await actionGeometry(row);
   await fs.writeFile(path.join(t.directory, name + '-geometry.json'), JSON.stringify(geometry, null, 2));
   await checkpoint(t.page, t.directory, name, { visible: [row.locator('.request-row-actions > button')], ...capture });
@@ -33,19 +33,38 @@ async function close(t) {
   await t.page.waitForURL(url => !url.searchParams.has('request'));
 }
 const scenarios = [
-  { id: 'i403-closed-and-empty', writes: false, requirements: ['#403: sole Open details is direct; desktop/mobile/native 200%; no controls for an empty result'], run: async t => {
+  { id: 'i403-closed-and-empty', writes: false, requirements: ['#403: eligible Closed has sole direct Reopen at desktop/mobile/native 200%; protected Closed has zero commands and retains row/title details'], run: async t => {
     const { f, before, row } = await start(t, 'd1-closed');
     for (const [name, width, zoom] of [['desktop', 1440, 1], ['mobile', 390, 1], ['native-200', 1280, 2]]) {
       await t.page.setViewportSize({ width, height: 900 });
       if (zoom === 2) await nativeZoom(t.context, t.page, 2);
       const geometry = await evidence(t, row, t.id + '-' + name, zoom === 2 ? { nativeViewport: true } : {});
-      assert.deepEqual(geometry.inline, ['edit']); assert.equal(geometry.more, 0);
-      await activateRowAction(row, 'edit', name === 'mobile' ? 'Space' : 'Enter');
+      assert.deepEqual(geometry.inline, ['reopen']); assert.equal(geometry.more, 0);
+      await activateRowAction(row, 'reopen', name === 'mobile' ? 'Space' : 'Enter');
+      const confirmation = t.page.locator('#confirmation-dialog[open]'); await confirmation.waitFor();
+      await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+      assert.equal(await t.page.locator('#request-dialog .action-bar').getByRole('button', { name: 'Reopen', exact: true })
+        .evaluate(node => node === document.activeElement), true);
       await t.page.locator('#request-dialog[open] .action-bar').waitFor();
       assert.equal(await t.page.locator('#request-dialog .request-more, #request-dialog [popover]').count(), 0);
       await close(t);
       if (zoom === 2) await nativeZoom(t.context, t.page, 1);
     }
+    const protectedFixture = requireFixture((await t.verify()).evidence, 'd1-protected');
+    const protectedBefore = await detail(t.context, t.origin, protectedFixture);
+    assert.equal(protectedBefore.capabilities.allowedActions.includes('reopen'), false);
+    await queue(t, 'closed', protectedBefore.title);
+    const protectedRow = rowFor(t.page, protectedFixture.id);
+    assert.deepEqual((await evidence(t, protectedRow, t.id + '-protected')).keys, []);
+    assert.equal(await protectedRow.locator('button.request-row-more, [popover], [data-request-action]').count(), 0);
+    for (const path of ['title', 'row']) {
+      if (path === 'title') await protectedRow.locator('.request-title-link').press('Enter');
+      else await protectedRow.locator('td').nth(2).click();
+      await t.page.locator('#request-dialog[open]').waitFor();
+      assert.equal(await t.page.locator('#request-dialog .action-bar').getByRole('button', { name: 'Reopen', exact: true }).count(), 0);
+      await close(t);
+    }
+    await unchanged(t.context, t.origin, protectedFixture, protectedBefore);
     await t.page.locator('#request-search').fill('I403 no matching synthetic request');
     await t.page.waitForFunction(() => document.querySelectorAll('#request-grid .request-title-link').length === 0);
     assert.equal(await t.page.locator('#request-grid .request-row-actions button, #request-grid [popover]').count(), 0);
@@ -53,23 +72,26 @@ const scenarios = [
   } },
   { id: 'i403-two-and-many-resize', writes: false, requirements: ['#403: two/many actions; measured container/column changes; promotion/demotion; unique ordered commands; font changes'], run: async t => {
     const result = await json(t.context, t.origin, '/api/asap/staff/title-requests?scope=2');
-    const matches = result.items.filter(item => item.barcode === 'ACCEPTANCE-I403-1');
-    assert.equal(matches.length, 1, 'Exactly one native synthetic claimed Pending hold exists');
+    const matches = result.items.filter(item => item.barcode === 'ACCEPTANCE-I403-pending-ready');
+    assert.equal(matches.length, 1, 'Exactly one native synthetic eligible claimed Pending hold exists');
     const [two] = matches;
     assert.equal(two.status, 'pending_hold');
     await queue(t, two.status, two.title);
     let row = rowFor(t.page, two.id);
-    assert.deepEqual((await evidence(t, row, 'i403-two-fit')).inline, ['edit', 'assign']);
+    assert.equal(two.capabilities.canPlaceHold, true);
+    await actionColumn(t.page, 25);
+    assert.deepEqual((await evidence(t, row, 'i403-two-fit')).inline, ['place-hold', 'assign']);
     // Grid.js retains pixel column widths when only the outer grid narrows.
     // Constrain the actual Actions container to exercise a real width change.
     await row.locator('.request-row-actions').evaluate(node => { node.style.maxWidth = '120px'; }); await settleActions(t.page);
     const narrowTwo = await evidence(t, row, 'i403-two-container');
-    assert.deepEqual(narrowTwo.inline, ['edit']); assert.deepEqual(narrowTwo.overflow, ['assign']);
+    assert.deepEqual(narrowTwo.inline, ['place-hold']); assert.deepEqual(narrowTwo.overflow, ['assign']);
     await row.locator('.request-row-actions').evaluate(node => { node.style.maxWidth = ''; }); await settleActions(t.page);
     assert.equal((await actionGeometry(row)).more, 0);
+    await actionColumn(t.page);
     const source = await start(t); row = source.row;
     const initial = await evidence(t, row, 'i403-many-default');
-    assert.deepEqual(initial.keys, ['purchase', 'reject', 'edit', 'alreadyOwn', 'claim', 'assign', 'silentClose']);
+    assert.deepEqual(initial.keys, ['purchase', 'reject', 'alreadyOwn', 'claim', 'assign', 'silentClose']);
     await actionColumn(t.page, 70);
     assert.deepEqual((await actionGeometry(row)).inline, initial.keys);
     await actionColumn(t.page, 12);
@@ -78,6 +100,44 @@ const scenarios = [
     await row.locator('.request-row-actions').evaluate(node => { node.style.fontFamily = 'monospace'; }); await settleActions(t.page);
     await evidence(t, row, 'i403-font-change');
     await unchanged(t.context, t.origin, source.f, source.before); assert.equal(t.mutations.length, 0);
+  } },
+  { id: 'i403-primary-workflows', writes: false, requirements: ['#403: Purchases AutoHold on/off, eligible/blocked Pending holds, Placed holds; primary priority and existing confirmation/Cancel; secondary Assign; no direct mutation'], run: async t => {
+    const items = (await json(t.context, t.origin, '/api/asap/staff/title-requests?scope=2')).items;
+    for (const [suffix, key, label] of [
+      ['catalog-hold', 'catalogFound', 'Ready for hold'], ['catalog-close', 'catalogFound', 'Close without hold'],
+      ['pending-ready', 'place-hold', 'Place hold'], ['placed', 'close', 'Close request']
+    ]) {
+      const matches = items.filter(item => item.barcode === 'ACCEPTANCE-I403-' + suffix); assert.equal(matches.length, 1);
+      const before = await json(t.context, t.origin, '/api/asap/staff/title-requests/' + matches[0].id);
+      await queue(t, before.status, before.title); const row = rowFor(t.page, before.id);
+      for (const percent of [70, 8]) {
+        await actionColumn(t.page, percent);
+        const geometry = await evidence(t, row, t.id + '-' + suffix + '-' + percent);
+        assert.equal(geometry.inline[0], key);
+        if (percent === 70) assert.equal(geometry.more, 0);
+        else assert.deepEqual(geometry.overflow, ['assign']);
+        await activateRowAction(row, key, percent === 70 ? 'Enter' : 'Space');
+        const confirmation = t.page.locator('#confirmation-dialog[open]'); await confirmation.waitFor();
+        assert.equal(await confirmation.locator('h2').textContent(), label);
+        assert.equal(t.mutations.length, 0, 'Opening the workflow must not mutate');
+        await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+        assert.equal(await t.page.locator('#request-dialog .action-bar').getByRole('button', { name: label, exact: true })
+          .evaluate(node => node === document.activeElement), true);
+        await close(t);
+        await activateRowAction(row, 'assign');
+        const assignment = t.page.locator('#request-dialog .inline-form'); await assignment.waitFor();
+        await assignment.getByRole('button', { name: 'Cancel', exact: true }).click(); await close(t);
+      }
+      assert.deepEqual(await json(t.context, t.origin, '/api/asap/staff/title-requests/' + before.id), before);
+      await actionColumn(t.page);
+    }
+    for (const suffix of ['1', 'pending-blocked']) {
+      const before = items.find(item => item.barcode === 'ACCEPTANCE-I403-' + suffix); assert.ok(before);
+      assert.equal(before.capabilities.canPlaceHold, false);
+      await queue(t, 'pending_hold', before.title);
+      assert.deepEqual((await evidence(t, rowFor(t.page, before.id), t.id + '-ineligible-' + suffix)).inline, ['assign']);
+    }
+    assert.equal(t.mutations.length, 0);
   } },
   { id: 'i403-keyboard-and-guarded-dispatch', writes: true, requirements: ['#403: direct/overflow share workflow review; exactly one dispatch; Enter/Space/Escape; menu/focus reconciliation'], run: async t => {
     const { f, before, row } = await start(t, 'purchase-reminder-off'); t.allowFixture(f);

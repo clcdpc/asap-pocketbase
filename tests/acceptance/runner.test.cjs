@@ -455,7 +455,7 @@ test('registered suites match discovered modules and retain their mutation bound
   assert.equal(registry.i403.mutations, true);
   assert.equal(registry.i403.id, 'i403');
   assert.deepEqual(registry.i403.scenarios.map(s => [s.id, s.writes]), [
-    ['i403-closed-and-empty', false], ['i403-two-and-many-resize', false], ['i403-keyboard-and-guarded-dispatch', true],
+    ['i403-closed-and-empty', false], ['i403-two-and-many-resize', false], ['i403-primary-workflows', false], ['i403-keyboard-and-guarded-dispatch', true],
     ['i403-grid-replacement', false], ['i403-mobile-native-and-forced-colors', false]
   ]);
   assert.ok(registry.i403.scenarios.every(scenario => scenario.requirements.length > 0));

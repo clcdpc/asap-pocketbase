@@ -39,20 +39,26 @@ the suite:
 .\scripts\review\Invoke-AsapReview.ps1 -Pr <PR_NUMBER> -Suite i403,d1,q1,pr410
 ```
 
-Its five scenarios cover Closed's sole direct Open details, an empty result,
-two and seven eligible commands, real column/container resizing, promotion and
+Its six scenarios cover Closed's sole direct Reopen, protected Closed rows with
+zero commands, row/title detail opening, all five tabs' primary workflows,
+two and six eligible commands, real column/container resizing, promotion and
 demotion, changed font metrics, Enter/Space/Escape, menu/focus reconciliation,
 one guarded Purchase submission, sorting/paging/filtering/refresh/scope retirement,
 desktop/mobile/native 200% geometry, forced colors and the existing checkpoint
-guards. A claimed Pending hold and fifteen synthetic Suggestions supply minimal
-cardinality/pagination/scope fixtures; existing mutation fixtures remain independent.
+guards. The sixteen existing cardinality/pagination/scope fixtures are preserved.
+Five additional read-only SQL rows supply AutoHold on/off outstanding purchases,
+eligible/blocked Pending holds and a Placed hold. Each primary enters its existing
+confirmation and Cancel without a mutation; Assign is checked in direct/overflow
+forms. Existing D1 Closed/protected fixtures prove one/zero commands.
+Existing mutation fixtures remain independent.
 Their existing `ACCEPTANCE-I403-*` barcodes identify both seeding and API lookup
 on current schema 13; the retired `LegacyId` column/DTO is not used.
 The Purchase scenario is NOT RUN with `-ReadOnly`, making acceptance incomplete.
 `i403-*-geometry.json` and matching PNGs stay in the suite's normal evidence
 directory; native captures use the existing verified CDP viewport path.
-Zero eligible commands and a sole non-details command additionally have focused
-component coverage: actual authorized title rows always retain Open details.
+Zero eligible commands and sole workflow commands additionally have focused
+component coverage. Open details is absent from every Actions cell; the accessible
+title link and row background still open details.
 Role/capability revocation, sign-out and retired handler cleanup remain covered
 by the retained table/controller tests. D1 and Q1 protect their all-direct toolbars.
 Human visual/screen-reader acceptance remains tracked by #398.
@@ -409,10 +415,10 @@ update from `main` and retain this combined content:
 | Shared file | Required combined result |
 | --- | --- |
 | `suites/registry.json` | `["d1", "i390", "i403", "pr410", "q1", "s1", "smoke"]`, each once, sorted |
-| `runner.test.cjs` | Dynamic module discovery and exact registry coverage; all i390 assertions (four read-only scenarios), all i403 assertions (five scenarios, only keyboard/guarded dispatch writes), and every existing suite invariant; current discovery-based CI/browser guards |
+| `runner.test.cjs` | Dynamic module discovery and exact registry coverage; all i390 assertions (four read-only scenarios), all i403 assertions (six scenarios, only keyboard/guarded dispatch writes), and every existing suite invariant; current discovery-based CI/browser guards |
 | `README.md` | Both issue-suite descriptions, commands, evidence and authorization limits |
-| `../browser/staff-native-zoom.cjs` | Both `formatRuleGeometry` and `actionGeometry` imports; collapsed/expanded Format rules scans plus direct/overflow action geometry, scoped axe, Escape/focus and full table scans; retain named state/viewport coverage |
-| `../../dev/review/src/Asap.ReviewInit/AcceptanceFixtures.sql` | Both idempotent i390 custom fields/rules (`i390_note`, `i390_retired`) and all 16 title rows keyed by their native `ACCEPTANCE-I403-*` barcodes, including the claimed Pending hold; preserve the existing book and claimant identities and every prior fixture |
+| `../browser/staff-native-zoom.cjs` | Both Format-rule and action helper imports; collapsed/expanded Format rules scans plus direct/overflow action geometry, sole Reopen at native 200%, scoped axe, Escape/focus and full table scans; retain and verify all named state/viewport coverage in the SQL browser test |
+| `../../dev/review/src/Asap.ReviewInit/AcceptanceFixtures.sql` | Both idempotent i390 custom fields/rules (`i390_note`, `i390_retired`), all 16 original `ACCEPTANCE-I403-*` rows and five read-only workflow rows plus the blocked hold journal; preserve existing book/claimant identities and every prior fixture |
 
 The expected textual conflicts are the single-line registry, adjacent issue
 documentation additions, and native-zoom imports. Resolve by retaining both

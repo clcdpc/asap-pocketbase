@@ -33,23 +33,24 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
   await page.goto('https://localhost:8080/staff/');
   await page.evaluate(require('axe-core').source);
   await page.evaluate(async () => {
-    const { requestRowActions } = await import('/staff/js/request-row-actions.js');
+    const { requestRowActions, eligibleRowActions } = await import('/staff/js/request-row-actions.js');
     window.calls = []; window.current = true;
-    window.mount = count => {
+    window.mountActions = actions => {
       window.ref?.(null);
       const host = document.createElement('div'); host.className = 'request-row-actions';
       document.querySelector('#fixture').replaceChildren(host);
-      const names = ['Purchase', 'Reject', 'Open details', 'Already own', 'Claim', 'Assign', 'Close silently'];
-      const keys = ['purchase', 'reject', 'edit', 'alreadyOwn', 'claim', 'assign', 'silentClose'];
-      const glyphs = ['shopping-cart', 'ban', 'pencil', 'book', 'user-plus', 'users', 'archive'];
-      window.ref = requestRowActions({ id: '27', actions: names.slice(0, count).map((label, i) => ({ key: keys[i], label, glyph: glyphs[i] })),
+      window.ref = requestRowActions({ id: '27', actions,
         live: event => window.current && event.currentTarget.isConnected, onOpen: (id, opener, action) => calls.push({ id, connected: opener.isConnected, ...action }),
         fallback: document.querySelector('#fallback') });
       window.ref(host);
     };
+    const actor = { id: '20', role: 'staff', organizationId: 2 };
+    window.workflow = request => eligibleRowActions({ libraryOrgId: 2, ...request }, actor);
+    const suggestions = workflow({ status: 'suggestion', capabilities: { allowedActions: ['purchase', 'reject', 'alreadyOwn', 'silentClose'] } });
+    window.mount = count => mountActions(suggestions.slice(0, count));
   });
   const fixture = page.locator('#fixture');
-  for (const count of [0, 1, 2, 7]) {
+  for (const count of [0, 1, 2, 6]) {
     await page.evaluate(count => mount(count), count); await settleActions(page);
     assert.equal(await fixture.locator('[data-request-action]').count(), count);
     if (!count) { assert.equal(await fixture.locator('button, [popover]').count(), 0); continue; }
@@ -83,8 +84,34 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
     await nativeZoom(context, page, 2); await settleActions(page); await actionGeometry(fixture);
     await page.evaluate(() => mount(1)); await settleActions(page);
     assert.equal((await actionGeometry(fixture)).more, 0);
-    await nativeZoom(context, page, 1); await page.evaluate(() => mount(7)); await settleActions(page);
+    await nativeZoom(context, page, 1); await page.evaluate(() => mount(6)); await settleActions(page);
   }
+  for (const [status, capabilities, primary, autohold = true] of [
+    ['outstanding_purchase', { allowedActions: ['catalogFound'] }, 'catalogFound', true],
+    ['outstanding_purchase', { allowedActions: ['catalogFound'] }, 'catalogFound', false],
+    ['pending_hold', { canPlaceHold: true, canChangeWorkflowState: true }, 'place-hold'],
+    ['pending_hold', { canPlaceHold: false }, 'assign'],
+    ['hold_placed', { allowedActions: ['close'] }, 'close'],
+    ['closed', { allowedActions: ['reopen'] }, 'reopen'],
+    ['closed', { allowedActions: [], blockingReason: 'hold_history_retained' }, null]
+  ]) {
+    await fixture.evaluate(node => { node.style.width = 'min(900px, 100%)'; });
+    await page.evaluate(({ status, capabilities, autohold }) => mountActions(workflow({ status, capabilities, autohold, claimedByStaffUserId: '20' })),
+      { status, capabilities, autohold }); await settleActions(page);
+    const wide = await actionGeometry(fixture);
+    assert.equal(wide.inline[0] || null, primary); assert.equal(wide.more, 0);
+    await fixture.evaluate(node => { node.style.width = '100px'; }); await nativeZoom(context, page, 2); await settleActions(page);
+    const narrow = await actionGeometry(fixture);
+    assert.equal(narrow.inline[0] || null, primary);
+    if (narrow.keys.length <= 1) assert.equal(narrow.more, 0);
+    await nativeZoom(context, page, 1);
+  }
+  // A hidden/zero-width cell remains unpainted until measurable, then presents
+  // the actual action set. Replacing it also removes the previous menu.
+  await fixture.evaluate(node => { node.style.width = '0'; });
+  await page.evaluate(() => mount(6)); await settleActions(page);
+  assert.equal(await fixture.locator('.request-row-actions').evaluate(node => getComputedStyle(node).visibility), 'hidden');
+  await fixture.evaluate(node => { node.style.width = '210px'; }); await settleActions(page); await actionGeometry(fixture);
   await page.emulateMedia({ forcedColors: 'active' }); await settleActions(page); await actionGeometry(fixture);
   await fixture.evaluate(node => { node.style.fontFamily = 'monospace'; }); await settleActions(page); await actionGeometry(fixture);
   await page.evaluate(() => { window.current = false; });

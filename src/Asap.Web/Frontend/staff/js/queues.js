@@ -2,7 +2,7 @@ import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { byDisplayLabel } from './display-order.js';
 import { researchRecordUrl } from './research.js';
-import { RequestRowActions } from './request-row-actions.js';
+import { RequestRowActions, eligibleRowActions } from './request-row-actions.js';
 import { element, dateTime, statusLabel, closeReasonLabel, timeoutLabel } from './ui.js';
 
 function detachGridContainer(container) {
@@ -444,19 +444,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     if (column.kind === 'status') return h('div', {}, [h('span', { className: `status-badge${request.status === 'closed' ? ' closed' : ''}` }, cell),
       request.status === 'closed' ? h('small', {}, closeReasonLabel(request.closeReason)) : null]);
     if (column.kind !== 'actions') return cell;
-    const allowed = new Set(request.capabilities?.allowedActions || []);
-    // Stable priority: reviewable Purchase/Reject, explicit details, then the
-    // existing secondary workflow commands. Presentation never grants a command.
-    const actions = [];
-    if (allowed.has('purchase')) actions.push({ key: 'purchase', label: 'Purchase', glyph: 'shopping-cart', tone: 'primary-button' });
-    if (allowed.has('reject')) actions.push({ key: 'reject', label: 'Reject', glyph: 'ban', tone: 'danger-button' });
-    actions.push({ key: 'edit', label: 'Open details', glyph: 'pencil' });
-    if (allowed.has('alreadyOwn')) actions.push({ key: 'alreadyOwn', label: 'Already own', glyph: 'book' });
-    if (request.status !== 'closed') {
-      if (!request.claimedByStaffUserId) actions.push({ key: 'claim', label: 'Claim', glyph: 'user-plus' });
-      actions.push({ key: 'assign', label: 'Assign', glyph: 'users' });
-    }
-    if (allowed.has('silentClose')) actions.push({ key: 'silentClose', label: 'Close silently', glyph: 'archive' });
+    const actions = eligibleRowActions(request, owner);
     return h(RequestRowActions, { key: request.id, request, owner,
       id: request.id, actions, live, onOpen, fallback: dom.refresh });
   }

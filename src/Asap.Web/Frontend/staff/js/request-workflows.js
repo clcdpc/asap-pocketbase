@@ -2,6 +2,7 @@ import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { byDisplayLabel } from './display-order.js';
 import { positivePolarisId } from './research.js';
+import { eligibleRowActions } from './request-row-actions.js';
 import { element, icon, commandButton, statusLabel, labeledInput } from './ui.js';
 
 export function createRequestWorkflows({ context, editor, announce, request: send = authorizedJson }) {
@@ -532,9 +533,11 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     startAction(action) {
       if (!isCurrent() || isPending()) return;
       if (action === 'edit') { context.showDetails?.(); root.querySelector('.edit-form input')?.focus(); return; }
-      const label = { purchase: 'Purchase', reject: 'Reject', alreadyOwn: 'Already own', claim: 'Claim', assign: 'Assign', silentClose: 'Close silently' }[action];
+      // Re-evaluate against the authoritative detail snapshot, including claim,
+      // actor scope and operation protection, before invoking its existing UI.
+      const label = eligibleRowActions(request, actor).find(item => item.key === action)?.label;
       const button = [...root.querySelectorAll('.action-bar button')].find(control => control.textContent.trim() === label);
-      if (button && !button.disabled) button.click();
+      if (button && !button.disabled) { button.focus(); button.click(); }
       else announce('That action is no longer available. Review the current request.', 'warning');
     },
     escape() {

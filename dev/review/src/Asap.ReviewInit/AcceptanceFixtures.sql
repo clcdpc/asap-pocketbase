@@ -115,7 +115,7 @@ IF NOT EXISTS (SELECT 1 FROM asap.StaffUser WHERE NormalizedUserPrincipalName = 
     VALUES (N'q1-claimant@example.org', N'Q1-CLAIMANT@EXAMPLE.ORG',
         N'Q1 Synthetic Claimant with a deliberately long staff display name', N'q1-claimant@example.org', N'staff', 2, 1);
 DECLARE @q1Claimant bigint = (SELECT Id FROM asap.StaffUser WHERE NormalizedUserPrincipalName = N'Q1-CLAIMANT@EXAMPLE.ORG');
--- I403: a claimed Pending hold has exactly two row commands; a compact set
+-- I403: a claimed ineligible Pending hold has only Assign; a compact set
 -- of Suggestions crosses a page boundary. These rows are read-only scenarios.
 -- Native synthetic barcodes identify these fixtures; no retired mapping column.
 INSERT INTO asap.TitleRequest
@@ -134,6 +134,34 @@ SELECT CASE WHEN n.value = 16 THEN 3 ELSE 2 END, 2,
     CASE WHEN n.value = 1 THEN N'manual' END
 FROM GENERATE_SERIES(1, 16) n
 WHERE NOT EXISTS (SELECT 1 FROM asap.TitleRequest r WHERE r.Barcode = CONCAT(N'ACCEPTANCE-I403-', n.value));
+
+-- Read-only I403 workflow entry/Cancel cases. These fixtures are not added to
+-- the runner's mutation allowlist and never invoke a hold provider operation.
+INSERT INTO asap.TitleRequest
+    (LibraryOrganizationId, PatronOrganizationId, Barcode, Email, NameFirst, NameLast,
+     LibraryNameSnapshot, Title, AutoHold, MaterialFormatId, Status, BibId, BibIdStaffVerified,
+     Notes, CreatedUtc, UpdatedUtc, PatronIdSnapshot,
+     ClaimedByStaffUserId, ClaimedByDisplayName, ClaimedAtUtc, ClaimType)
+SELECT 2, 2, N'ACCEPTANCE-I403-' + f.Scenario, N'acceptance@example.org', N'Synthetic', N'Workflow reader',
+    N'Review Library', N'I403 workflow ' + f.Scenario, f.AutoHold, @book, f.Status, 940403, 1,
+    N'Acceptance fixture draft baseline', @now, @now, 40399,
+    @q1Claimant, N'Q1 Synthetic Claimant with a deliberately long staff display name', @now, N'manual'
+FROM (VALUES
+    (N'catalog-hold', N'outstanding_purchase', 1),
+    (N'catalog-close', N'outstanding_purchase', 0),
+    (N'pending-ready', N'pending_hold', 1),
+    (N'pending-blocked', N'pending_hold', 1),
+    (N'placed', N'hold_placed', 1)
+) f(Scenario, Status, AutoHold)
+WHERE NOT EXISTS (SELECT 1 FROM asap.TitleRequest r WHERE r.Barcode = N'ACCEPTANCE-I403-' + f.Scenario);
+
+INSERT INTO asap.HoldPlacementOperation
+    (TitleRequestId, PatronBarcodeSnapshot, BibIdSnapshot, AttemptNumber, State, Phase,
+     ExecutionEpoch, RequestStartedUtc)
+SELECT r.Id, r.Barcode, 940403, 1, N'operator_required', N'acquired', 1, @now
+FROM asap.TitleRequest r
+WHERE r.Barcode = N'ACCEPTANCE-I403-pending-blocked'
+  AND NOT EXISTS (SELECT 1 FROM asap.HoldPlacementOperation op WHERE op.TitleRequestId = r.Id);
 
 INSERT INTO asap.AdditionalCopyRequest
     (LibraryOrganizationId, LibraryNameSnapshot, BibId, Title, Author, Identifier, Publication,

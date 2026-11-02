@@ -1,12 +1,43 @@
 import { element, icon } from './ui.js';
 
+// Tab workflow first, then secondary commands. Capabilities are supplied by
+// the server; layout only partitions this list and never grants permission.
+export function eligibleRowActions(request, actor) {
+  if (!['staff', 'admin', 'super_admin'].includes(actor?.role) ||
+      actor.role !== 'super_admin' && String(actor.organizationId) !== String(request.libraryOrgId)) return [];
+  const allowed = new Set(request.capabilities?.allowedActions || []);
+  const actions = [];
+  const add = (key, label, glyph, tone = 'secondary-button') => actions.push({ key, label, glyph, tone });
+  if (request.status === 'suggestion') {
+    if (allowed.has('purchase')) add('purchase', 'Purchase', 'shopping-cart', 'primary-button');
+    if (allowed.has('reject')) add('reject', 'Reject', 'ban', 'danger-button');
+    if (allowed.has('alreadyOwn')) add('alreadyOwn', 'Already own', 'book');
+  } else if (request.status === 'outstanding_purchase' && allowed.has('catalogFound')) {
+    add('catalogFound', request.autohold ? 'Ready for hold' : 'Close without hold', 'arrow-right', 'primary-button');
+  } else if (request.status === 'pending_hold' && request.capabilities?.canPlaceHold === true &&
+      request.capabilities?.canChangeWorkflowState === true) {
+    add('place-hold', 'Place hold', 'bookmark', 'primary-button');
+  } else if (request.status === 'hold_placed' && allowed.has('close')) {
+    add('close', 'Close request', 'check', 'primary-button');
+  } else if (request.status === 'closed' && allowed.has('reopen')) {
+    add('reopen', 'Reopen', 'undo', 'primary-button');
+  }
+  if (request.status !== 'closed') {
+    if (!request.claimedByStaffUserId) add('claim', 'Claim', 'user-plus');
+    add('assign', 'Assign', 'users');
+  }
+  if (request.status === 'suggestion' && allowed.has('silentClose')) add('silentClose', 'Close silently', 'archive');
+  return actions;
+}
+
 // Grid.js may format an unchanged cell again while Sort/Pagination effects
 // settle. Keep that cell's ref stable so those renders preserve its open menu
 // and keyboard focus. A different accepted record/actor gets a fresh lifetime.
 export function RequestRowActions({ request, owner, ...options }) {
   const cell = window.gridjs.useRef(null);
-  if (cell.current?.request !== request || cell.current?.owner !== owner) {
-    cell.current = { request, owner, ref: requestRowActions(options) };
+  const signature = JSON.stringify(options.actions);
+  if (cell.current?.request !== request || cell.current?.owner !== owner || cell.current?.signature !== signature) {
+    cell.current = { request, owner, signature, ref: requestRowActions(options) };
   }
   return window.gridjs.h('div', { className: 'request-row-actions', ref: cell.current.ref });
 }
