@@ -131,6 +131,14 @@ Keep compact deterministic fixtures and focused current-behavior regression
 checks. A test count must represent current discovered tests; removed files
 must not be counted as coverage.
 
+Full CI uses one clc-linux runner and one Release solution build. Execute fresh
+frontend, non-browser .NET/SQL and browser suites sequentially. Share only the
+job-owned SQL Server 2022 instance; preserve independently owned test databases,
+suite output directories and evidence reuse. Always verify all three suites.
+Build, test and package remains the reporting-only required full-validation
+check; draft validation cannot substitute for it. Keep runner resources and
+deployment authorization unchanged. See `scripts/ci/test-selection.md`.
+
 Acceptance tooling is owned by the local checkout, independently of the selected
 application PR. Validate all suites locally, pin one application SHA/tooling
 snapshot/image, and run only the requested suites sequentially with fresh

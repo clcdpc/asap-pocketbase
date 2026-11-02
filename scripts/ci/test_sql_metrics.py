@@ -148,14 +148,14 @@ class SqlCounterTests(unittest.TestCase):
         self.assertEqual(set(sql.parse_sections(partial)), {"meta", "waits"})
         self.assertEqual(sql.parse_sections("CI_WAITS_BEGIN\nnot json\nCI_WAITS_END"), {})
 
-    def test_password_only_in_stdin_and_fixed_disposable_target(self):
+    def test_password_only_in_stdin_and_explicitly_owned_disposable_target(self):
         self.metrics.command.return_value = wire(snapshot())
-        with mock.patch.dict(os.environ, ASAP_TEST_SQL_SA_PASSWORD=SECRET):
+        with mock.patch.dict(os.environ, ASAP_TEST_SQL_SA_PASSWORD=SECRET, ASAP_CI_SQL_CONTAINER="asap-sql-owned-fixture"):
             rows = self.metrics.sample()
         arguments, kwargs = self.metrics.command.call_args
         self.assertNotIn(SECRET, " ".join(arguments[0]))
         self.assertNotIn("-P", arguments[0][-1])
-        self.assertIn("asap-sql", arguments[0])
+        self.assertIn("asap-sql-owned-fixture", arguments[0])
         self.assertEqual(kwargs["input_text"].splitlines()[0], SECRET)
         self.assertLessEqual(kwargs["timeout"], 8)
         self.assertTrue(kwargs["preserve_partial"])
@@ -165,6 +165,12 @@ class SqlCounterTests(unittest.TestCase):
         with mock.patch.dict(os.environ, ASAP_TEST_SQL_SA_PASSWORD=""):
             self.metrics.sample()
         self.metrics.command.assert_not_called()
+
+    def test_missing_or_invalid_owned_target_does_not_attempt_any_connection(self):
+        for name in ("", "--other-container", "invalid/name"):
+            with mock.patch.dict(os.environ, ASAP_TEST_SQL_SA_PASSWORD=SECRET, ASAP_CI_SQL_CONTAINER=name):
+                self.metrics.sample()
+            self.metrics.command.assert_not_called()
 
 
 class SqlLifecycleTests(unittest.TestCase):
@@ -188,14 +194,18 @@ class SqlLifecycleTests(unittest.TestCase):
                 f"assert all({SECRET!r} not in arg for arg in sys.argv)\n"
                 f"if sys.argv[1]=='run': assert os.environ['MSSQL_SA_PASSWORD']=={SECRET!r}; assert 'MSSQL_SA_PASSWORD' in sys.argv; assert sys.argv[-1]==os.environ['SQL_IMAGE']\n"
                 f"elif sys.argv[1]=='exec': assert sys.stdin.read()=={SECRET!r}+'\\n'; assert '-P' not in sys.argv[-1]\n"
+                "elif sys.argv[1]=='port': print('127.0.0.1:15432')\n"
+                "assert os.environ['ASAP_CI_SQL_CONTAINER'] in sys.argv\n"
                 f"with Path({str(calls)!r}).open('a') as stream: stream.write(sys.argv[1]+'\\n')\n", encoding="utf-8")
             docker.chmod(0o755)
             env = dict(os.environ, PATH=str(root), ASAP_TEST_SQL_SA_PASSWORD=SECRET,
+                       ASAP_CI_SQL_CONTAINER="asap-sql-bootstrap-fixture", GITHUB_ENV=str(root / "github-env"),
                        SQL_IMAGE="mcr.microsoft.com/mssql/server@sha256:" + "1" * 64)
-            for name, style in (("Start SQL Server 2022", ">-"), ("Wait for SQL Server", "|")):
+            for name, style in (("Start SQL Server 2022", "|"), ("Wait for SQL Server", "|"), ("Remove SQL Server test container", "|")):
                 result = subprocess.run(["/bin/bash", "-c", command(name, style)], env=env, capture_output=True, text=True, timeout=4)
                 self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(calls.read_text(), "run\nexec\n")
+            self.assertEqual(calls.read_text(), "run\nport\nexec\nrm\n")
+            self.assertIn("Server=localhost,15432;", (root / "github-env").read_text())
 
     @unittest.skipUnless(sys.platform == "linux", "Linux executable Docker fixture")
     def test_full_wrapper_uses_one_workload_and_flushes_sql_deltas(self):
@@ -219,7 +229,7 @@ class SqlLifecycleTests(unittest.TestCase):
             output = root / "evidence"
             source = f"from pathlib import Path; import time; p=Path({str(workload)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x'); time.sleep(.5); raise SystemExit(27)"
             args = [sys.executable, "-B", str(Path(perf.__file__).resolve()), "--output", str(output), "--interval", ".04", "--sql-interval", ".04", "--", sys.executable, "-c", source]
-            env = dict(os.environ, PATH=str(root), ASAP_TEST_SQL_SA_PASSWORD=SECRET)
+            env = dict(os.environ, PATH=str(root), ASAP_TEST_SQL_SA_PASSWORD=SECRET, ASAP_CI_SQL_CONTAINER="asap-sql-wrapper-fixture")
             result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=6)
             self.assertEqual(result.returncode, 27, result.stderr)
             self.assertEqual(workload.read_text(), "x")
@@ -243,7 +253,7 @@ class SqlLifecycleTests(unittest.TestCase):
             docker.chmod(0o755)
             output = root / "evidence"
             args = [sys.executable, "-B", str(Path(perf.__file__).resolve()), "--output", str(output), "--interval", ".03", "--", sys.executable, "-c", "import time; time.sleep(.4); raise SystemExit(33)"]
-            env = dict(os.environ, PATH=str(root), ASAP_TEST_SQL_SA_PASSWORD=SECRET)
+            env = dict(os.environ, PATH=str(root), ASAP_TEST_SQL_SA_PASSWORD=SECRET, ASAP_CI_SQL_CONTAINER="asap-sql-wrapper-fixture")
             started = time.monotonic()
             result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 33, result.stderr)
@@ -257,7 +267,7 @@ class SqlLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             stop, unavailable = threading.Event(), set()
             command = mock.Mock(side_effect=[wire(snapshot()), wire(snapshot(120))])
-            with mock.patch.dict(os.environ, ASAP_TEST_SQL_SA_PASSWORD=SECRET):
+            with mock.patch.dict(os.environ, ASAP_TEST_SQL_SA_PASSWORD=SECRET, ASAP_CI_SQL_CONTAINER="asap-sql-collector-fixture"):
                 collector = sql.SqlCollector(directory, .02, command, stop, unavailable)
                 deadline = time.monotonic() + 2
                 while command.call_count < 2 and time.monotonic() < deadline:

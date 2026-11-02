@@ -72,8 +72,6 @@ class Fixture:
                      *(f"Upload original {s} execution evidence" for s in fp.SUITES)]:
             self.job["steps"].append(success(name=name, started_at=reuse.iso(self.now - timedelta(minutes=120)),
                                               completed_at=reuse.iso(self.now - timedelta(minutes=95))))
-        self.browser_job = copy.deepcopy(self.job)
-        self.browser_job.update(id=10, name=self.config["browser_job"])
         self.source = {"sha": self.current["commit"], "tree": {"sha": self.current["tree"]}, "parents": []}
         self.logs = (f"2026-10-29T10:00:00.000Z [command]/usr/bin/git log -1 --format=%H\n"
                      f"2026-10-29T10:00:00.001Z {self.current['commit']}\n").encode()
@@ -89,7 +87,7 @@ class Fixture:
             self.manifests[suite] = {
                 "schema": self.config["schema"], "kind": "executed", "outcome": "passed", "suite": suite,
                 "repository": self.config["repository"], "repository_id": self.config["repository_id"],
-                "workflow": self.config["workflow"], "job": self.config["browser_job"] if suite == "browser" else self.config["job"], "run_id": 7, "run_attempt": 2,
+                "workflow": self.config["workflow"], "job": self.config["job"], "run_id": 7, "run_attempt": 2,
                 "source_commit": self.current["commit"], "source_tree": self.current["tree"],
                 "source_algorithm": fp.SOURCE_ALGORITHM,
                 "source_fingerprint": identity["source"], "fingerprint": identity["fingerprint"],
@@ -140,7 +138,7 @@ class Fixture:
         self.calls.append(path)
         if self.failure:
             raise self.failure
-        if path in ("/actions/jobs/9/logs", "/actions/jobs/10/logs"):
+        if path == "/actions/jobs/9/logs":
             return self.logs
         if path.startswith("/actions/artifacts/") and path.endswith("/zip"):
             return self.archives[int(path.split("/")[-2])]
@@ -153,7 +151,7 @@ class Fixture:
         if path.startswith("/actions/workflows/dotnet.yml/runs?"):
             return iter([copy.deepcopy(self.run)])
         if path == "/actions/runs/7/attempts/2/jobs":
-            return iter([copy.deepcopy(self.job), copy.deepcopy(self.browser_job)])
+            return iter([copy.deepcopy(self.job)])
         if path == "/actions/runs/7/artifacts":
             return iter(copy.deepcopy(list(self.artifacts.values())))
         if path.startswith("/commits/") and path.endswith("/pulls"):
@@ -274,8 +272,8 @@ class DependencyTests(unittest.TestCase):
     def test_every_workflow_executor_and_gate_edit_invalidates_evidence(self):
         workflow = (fp.ROOT / ".github/workflows/dotnet.yml").read_text()
         for before, after in (("timeout-minutes: 120", "timeout-minutes: 121"),
-                              ("name: Browser qualification", "name: Changed browser qualification"),
-                              ("CI_BROWSER_RESULT", "CHANGED_BROWSER_RESULT")):
+                              ("name: Run browser accessibility tests", "name: Changed browser execution"),
+                              ("CI_FULL_RESULT", "CHANGED_FULL_RESULT")):
             self.assertNotEqual(fp.full_ci_execution_contract(workflow),
                                 fp.full_ci_execution_contract(workflow.replace(before, after)))
 
@@ -366,6 +364,46 @@ class ProvenanceTests(unittest.TestCase):
         decisions = fixture.lookup()
         self.assertTrue(all(d["reuse"] for d in decisions.values()))
         self.assertEqual(decisions["dotnet"]["source"]["saved_seconds"], 1500)
+        self.assertEqual(fixture.calls.count("/actions/jobs/9/logs"), 1)
+
+    def test_each_suite_requires_its_own_original_success_in_the_shared_job(self):
+        for suite in fp.SUITES:
+            for name in (reuse.STEPS[suite], f"Upload original {suite} execution evidence"):
+                for outcome in ("failure", "cancelled", "skipped", "missing"):
+                    fixture = Fixture()
+                    step = next(s for s in fixture.job["steps"] if s["name"] == name)
+                    if outcome == "missing":
+                        fixture.job["steps"].remove(step)
+                    else:
+                        step["conclusion"] = outcome
+                    decisions = fixture.lookup()
+                    with self.subTest(suite=suite, name=name, outcome=outcome):
+                        self.assertEqual({s for s, d in decisions.items() if d["reuse"]}, set(fp.SUITES) - {suite})
+
+    def test_two_job_schema_and_stale_browser_job_provenance_are_incompatible(self):
+        fixture = Fixture()
+        for suite in fp.SUITES:
+            fixture.manifests[suite]["schema"] = 3
+            fixture.archive(suite)
+        self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
+        fixture = Fixture()
+        fixture.manifests["browser"]["job"] = "Browser qualification"
+        fixture.archive("browser")
+        decisions = fixture.lookup()
+        self.assertFalse(decisions["browser"]["reuse"])
+        self.assertTrue(decisions["dotnet"]["reuse"] and decisions["frontend"]["reuse"])
+
+    def test_shared_job_cannot_substitute_another_suites_archive(self):
+        for suite in fp.SUITES:
+            fixture = Fixture()
+            other = next(s for s in fp.SUITES if s != suite)
+            artifact = fixture.artifacts[suite]
+            body = fixture.archives[fixture.artifacts[other]["id"]]
+            fixture.archives[artifact["id"]] = body
+            artifact.update(size_in_bytes=len(body), digest="sha256:" + hashlib.sha256(body).hexdigest())
+            decisions = fixture.lookup()
+            with self.subTest(suite=suite):
+                self.assertFalse(decisions[suite]["reuse"])
 
     def test_unsuccessful_run_never_hits_even_with_passing_artifacts(self):
         for status, conclusion in (("completed", "failure"), ("completed", "cancelled"),
@@ -394,12 +432,11 @@ class ProvenanceTests(unittest.TestCase):
                 self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
 
     def test_draft_validation_and_reporting_gate_cannot_supply_full_suite_evidence(self):
-        for job_name in ("Draft validation", "Draft CI result", "Build, test and package"):
+        for job_name in ("Draft validation", "Draft CI result", "Build, test and package", "Browser qualification"):
             fixture = Fixture()
             # Even a forged complete artifact and successful workflow cannot
             # substitute a draft/reporting job for the original full executor.
             fixture.job["name"] = job_name
-            fixture.browser_job["name"] = job_name
             with self.subTest(job_name=job_name):
                 self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
 
@@ -491,7 +528,6 @@ class ProvenanceTests(unittest.TestCase):
         fixture = Fixture()
         fixture.run.update(event="pull_request", head_sha="e" * 40)
         fixture.job["head_sha"] = fixture.run["head_sha"]
-        fixture.browser_job["head_sha"] = fixture.run["head_sha"]
         fixture.source["parents"] = [{"sha": "f" * 40}, {"sha": fixture.run["head_sha"]}]
         for artifact in fixture.artifacts.values():
             artifact["workflow_run"]["head_sha"] = fixture.run["head_sha"]
@@ -717,9 +753,9 @@ class GateTests(unittest.TestCase):
             reuse.verify(directory)
         return directory
 
-    def test_each_split_executor_verifies_only_its_assigned_results_and_rejects_missing_ones(self):
+    def test_ambient_split_scope_cannot_narrow_the_required_suite_population(self):
         for scope in ("dotnet,frontend", "browser"):
-            suites = scope.split(",")
+            suites = fp.SUITES
             directory = self.run_gate(Fixture(), {s: "success" for s in suites}, scope=scope)
             self.assertEqual(set(json.loads((directory / "verification.json").read_bytes())), set(suites))
             self.assertEqual({p.name for p in (directory / "evidence").iterdir()}, set(suites))
@@ -735,6 +771,7 @@ class GateTests(unittest.TestCase):
             self.assertEqual(manifest["kind"], "executed")
             self.assertEqual(manifest["counts"]["passed"], 2)
             self.assertEqual(manifest["selection"]["expected"], 2)
+            self.assertEqual(manifest["job"], fixture.config["job"])
 
     def test_all_hits_are_revalidated_and_do_not_create_original_evidence(self):
         fixture = Fixture()
@@ -757,20 +794,29 @@ class GateTests(unittest.TestCase):
             self.run_gate(fixture, {s: "skipped" for s in fp.SUITES})
 
     def test_failed_or_missing_current_result_fails_gate(self):
-        for outcome in ("failure", "cancelled", None):
-            fixture = Fixture()
-            with self.subTest(outcome=outcome), self.assertRaises(ValueError):
-                self.run_gate(fixture, {"dotnet": outcome, "browser": "success", "frontend": "success"})
+        for suite in fp.SUITES:
+            for outcome in ("failure", "cancelled", "skipped", None):
+                fixture = Fixture()
+                outcomes = {s: "success" for s in fp.SUITES}
+                outcomes[suite] = outcome
+                with self.subTest(suite=suite, outcome=outcome), self.assertRaises(ValueError):
+                    self.run_gate(fixture, outcomes)
 
     def test_partial_hit_only_records_executed_suites(self):
-        fixture = Fixture()
-        fixture.artifacts.pop("browser")
-        fixture.artifacts.pop("frontend")
-        decisions = fixture.lookup()
-        directory = self.run_gate(fixture, {"dotnet": "skipped", "browser": "success", "frontend": "success"}, decisions)
-        self.assertFalse((directory / "evidence/dotnet").exists())
-        self.assertTrue((directory / "evidence/browser/manifest.json").exists())
-        self.assertTrue((directory / "evidence/frontend/manifest.json").exists())
+        # Every cold, warm and mixed scheduling combination shares one executor.
+        for mask in range(8):
+            fixture = Fixture()
+            hits = {suite for index, suite in enumerate(fp.SUITES) if mask & (1 << index)}
+            for suite in set(fp.SUITES) - hits:
+                fixture.artifacts.pop(suite)
+            decisions = fixture.lookup()
+            self.assertEqual({s for s, d in decisions.items() if d["reuse"]}, hits)
+            directory = self.run_gate(fixture, {s: "skipped" if s in hits else "success" for s in fp.SUITES}, decisions)
+            rows = json.loads((directory / "verification.json").read_bytes())
+            for suite in fp.SUITES:
+                with self.subTest(mask=mask, suite=suite):
+                    self.assertEqual(rows[suite]["status"], "REUSED" if suite in hits else "EXECUTED")
+                    self.assertEqual((directory / "evidence" / suite / "manifest.json").exists(), suite not in hits)
 
     def test_artifact_lost_after_lookup_cannot_authorize_skip(self):
         fixture = Fixture()
@@ -809,9 +855,10 @@ class NativeResultsTests(unittest.TestCase):
                 f'<ResultSummary outcome="Completed"><Counters {counts}/></ResultSummary></TestRun>')
 
     def test_native_reports_need_complete_successful_counts_and_outcomes(self):
-        with tempfile.TemporaryDirectory() as name:
+        with tempfile.TemporaryDirectory() as name, mock.patch.object(fp, "ROOT", Path(name)):
             directory = Path(name)
-            path = directory / "browser-results.trx"
+            path = directory / ".artifacts/browser-performance/test-results.trx"
+            path.parent.mkdir(parents=True)
             selection = {"minimum": 2, "expected": 2}
             path.write_text(self.report())
             self.assertEqual(reuse.execution_results("browser", selection, directory)["passed"], 2)
@@ -820,6 +867,21 @@ class NativeResultsTests(unittest.TestCase):
                 path.write_text(report)
                 with self.subTest(report=report), self.assertRaises((ValueError, ET.ParseError)):
                     reuse.execution_results("browser", selection, directory)
+
+    def test_native_suites_read_only_their_own_trx_after_sequential_execution(self):
+        with tempfile.TemporaryDirectory() as name, mock.patch.object(fp, "ROOT", Path(name)):
+            selected = {"minimum": 2, "expected": 2}
+            paths = {s: Path(name) / ".artifacts" / output / "test-results.trx"
+                     for s, output in (("dotnet", "ci-performance"), ("browser", "browser-performance"))}
+            for path in paths.values():
+                path.parent.mkdir(parents=True)
+            for failed in paths:
+                for suite, path in paths.items():
+                    path.write_text(self.report(outcome="Failed" if suite == failed else "Passed"))
+                with self.assertRaises(reuse.EvidenceError):
+                    reuse.execution_results(failed, selected)
+                passed = next(s for s in paths if s != failed)
+                self.assertEqual(reuse.execution_results(passed, selected)["passed"], 2)
 
     def test_frontend_filtered_or_incomplete_runs_cannot_be_evidence(self):
         with tempfile.TemporaryDirectory() as name:
@@ -834,10 +896,11 @@ class NativeResultsTests(unittest.TestCase):
                     reuse.execution_results("frontend", selection, directory)
 
     def test_native_omissions_duplicates_and_equal_count_substitution_fail(self):
-        with tempfile.TemporaryDirectory() as name:
+        with tempfile.TemporaryDirectory() as name, mock.patch.object(fp, "ROOT", Path(name)):
             directory = Path(name)
             selected = {"minimum": 2, "expected": 2, "identities": sorted(fp.digest(uid) for uid in ("one", "two"))}
-            path = directory / "browser-results.trx"
+            path = directory / ".artifacts/browser-performance/test-results.trx"
+            path.parent.mkdir(parents=True)
             path.write_text(self.report())
             reuse.execution_results("browser", selected, directory)
             for report in (self.report().replace('testId="two"', 'testId="one"'),
@@ -851,7 +914,7 @@ class NativeResultsTests(unittest.TestCase):
 
 
 class ExecutorScopeTests(unittest.TestCase):
-    def test_lookup_and_plan_publish_only_the_assigned_executor_population(self):
+    def test_lookup_and_plan_publish_the_complete_population_despite_ambient_scope(self):
         for scope in ("dotnet,frontend", "browser"):
             for forced in (False, True):
                 with tempfile.TemporaryDirectory() as name:
@@ -869,20 +932,16 @@ class ExecutorScopeTests(unittest.TestCase):
                          mock.patch("sys.stdout", new_callable=io.StringIO):
                         reuse.plan(directory)
                     decisions = json.loads((directory / "plan.json").read_bytes())["decisions"]
-                    self.assertEqual(set(decisions), set(scope.split(",")))
+                    self.assertEqual(set(decisions), set(fp.SUITES))
                     self.assertTrue(all(d["reuse"] == (not forced) for d in decisions.values()))
                     exported = dict(line.split("=", 1) for line in output.read_text().splitlines())
-                    self.assertEqual(set(exported), {*scope.split(","), "schema", "sql_image"})
+                    self.assertEqual(set(exported), {*fp.SUITES, "schema", "sql_image"})
 
-    def test_each_executor_requires_its_exact_assigned_suites(self):
-        for job, suites in (("build-test-package", "dotnet,frontend"), ("browser-qualification", "browser")):
-            reuse.validate_executor({"GITHUB_JOB": job, "ASAP_CI_SUITES": suites})
-            for invalid in (None, "", "dotnet", "frontend", "browser" if job == "build-test-package" else "dotnet,frontend"):
-                with self.assertRaises(reuse.EvidenceError):
-                    reuse.validate_executor({"GITHUB_JOB": job, "ASAP_CI_SUITES": invalid})
-        for job in (None, "", "draft-validation", "validation"):
+    def test_only_the_full_executor_can_qualify_suites(self):
+        reuse.validate_executor({"GITHUB_JOB": "build-test-package"})
+        for job in (None, "", "draft-validation", "validation", "removed-executor"):
             with self.assertRaises(reuse.EvidenceError):
-                reuse.validate_executor({"GITHUB_JOB": job, "ASAP_CI_SUITES": "browser"})
+                reuse.validate_executor({"GITHUB_JOB": job})
 
 
 class WorkflowTests(unittest.TestCase):
@@ -913,12 +972,11 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(f"if: ${{{{ steps.reuse.outputs.{suite} != 'true' }}}}", workflow)
             self.assertIn(f"name: asap-test-evidence-v${{{{ steps.reuse.outputs.schema }}}}-{suite}-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}", workflow)
         runtime_condition = "if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}"
-        # Credentials, SQL startup/readiness and Chromium serve either executing partition.
-        self.assertNotIn(runtime_condition, workflow)
-        self.assertIn("ASAP_CI_SUITES: browser", workflow)
-        self.assertIn("ASAP_CI_SUITES: dotnet,frontend", workflow)
+        # Credentials, SQL startup/readiness serve either executing partition.
+        self.assertEqual(workflow.count(runtime_condition), 3)
+        self.assertNotIn("ASAP_CI_SUITES:", workflow)
         # Packaging is unconditional on reuse; only the existing test-IIS activation gate can deploy.
-        publishing = workflow.split("      - name: Verify publish artifacts\n", 1)[1].split("  browser-qualification:", 1)[0]
+        publishing = workflow.split("      - name: Verify publish artifacts\n", 1)[1].split("  draft-validation:", 1)[0]
         self.assertNotIn("steps.reuse.outputs", publishing)
 
 

@@ -11,7 +11,6 @@ const draft = workflow.jobs['draft-validation'];
 const policy = workflow.jobs['validation-policy'];
 const gate = workflow.jobs.validation;
 const deploy = workflow.jobs['deploy-test-iis'];
-const browserJob = workflow.jobs['browser-qualification'];
 const reuse = JSON.parse(fs.readFileSync(path.join(root, 'scripts/ci/test-reuse.json'), 'utf8'));
 
 async function main() {
@@ -47,7 +46,7 @@ async function main() {
       } } } },
       { setOutput: (key, value) => { outputs[key] = value; }, setFailed: () => { failed = true; } }
     );
-    context.needs = { 'validation-policy': { result: failed ? 'failure' : 'success', outputs }, 'browser-qualification': { result: outputs.mode === 'full' ? 'success' : 'skipped' } };
+    context.needs = { 'validation-policy': { result: failed ? 'failure' : 'success', outputs } };
     return context;
   }
   function pr(action, isDraft, number = 17) {
@@ -290,6 +289,7 @@ async function main() {
     assert.equal(full.needs, 'validation-policy');
     assert.equal(full['continue-on-error'], undefined);
     assert.equal(step(full, 'Restore and build').run, 'dotnet build Asap.sln --configuration Release');
+    assert.match(step(full, 'Verify publish artifacts').run, /dotnet publish .* --no-build --no-restore /);
     const safety = step(full, 'Verify current CI safety contracts');
     assert.equal(safety.if, undefined);
     assert.equal(safety.run, 'node tests/run_all.js --ci-safety');
@@ -298,11 +298,11 @@ async function main() {
     assert.equal(verify.if, '${{ always() }}');
     assert.equal(verify.run, 'python3 -B scripts/ci/reuse.py verify');
     for (const suite of ['dotnet', 'browser', 'frontend']) {
-      const executor = suite === 'browser' ? browserJob : full;
-      const test = executor.steps.find((candidate) => candidate.id === suite);
+      const test = full.steps.find((candidate) => candidate.id === suite);
       assert.equal(test.if, `\${{ steps.reuse.outputs.${suite} != 'true' }}`);
       assert.equal(test['continue-on-error'], undefined);
-      assert.ok(step(executor, `Upload original ${suite} execution evidence`).if.includes("steps.verify.outcome == 'success'"));
+      const upload = step(full, `Upload original ${suite} execution evidence`);
+      assert.equal(upload.if, `\${{ steps.verify.outcome == 'success' && steps.${suite}.outcome == 'success' }}`);
     }
     const tests = step(full, 'Run .NET and real SQL tests (non-browser partition)').run;
     assert.equal(tests, 'bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run');
@@ -313,7 +313,7 @@ async function main() {
     assert.equal(step(full, 'Check test reuse safety').run, "python3 -B -m unittest discover -s scripts/ci -p 'test_*.py' -v");
     assert.equal(full.steps.filter((candidate) => /unittest discover/.test(candidate.run || '')).length, 1);
     assert.ok(full.steps.indexOf(step(full, 'Check test reuse safety')) < full.steps.indexOf(step(full, 'Find reusable test executions')));
-    assert.equal(step(browserJob, 'Run browser accessibility tests').run, 'bash scripts/ci/run-with-performance.sh npm run test:browser');
+    assert.equal(step(full, 'Run browser accessibility tests').run, 'bash scripts/ci/run-with-performance.sh npm run test:browser');
     assert.ok(full.steps.indexOf(step(full, 'Run frontend unit tests')) < full.steps.indexOf(step(full, 'Start SQL Server 2022')));
     for (const name of ['Verify publish artifacts', 'Determine exact artifact identity', 'Create exact test-IIS deployment ZIP',
       'Validate test-IIS package without host mutation', 'Upload exact test-IIS deployment artifact']) {
@@ -322,37 +322,76 @@ async function main() {
     assert.equal(step(full, 'Remove SQL Server test container').if, '${{ always() }}');
     assert.ok(!reuse.exclusions.some((rule) => rule.paths.includes('.github/workflows/dotnet.yml')));
   });
-  await check('browser and SQL qualification use independent ephemeral jobs with exact source and isolated credentials', () => {
-    assert.equal(browserJob.needs, 'validation-policy');
-    assert.equal(browserJob['runs-on'], 'clc-linux');
-    assert.equal(browserJob.name, reuse.browser_job);
-    assert.equal(step(full, 'Find reusable test executions').env.ASAP_CI_SUITES, 'dotnet,frontend');
-    assert.equal(step(full, 'Verify required test suites').env.ASAP_CI_SUITES, 'dotnet,frontend');
+  await check('full qualification owns one runner, build, discovery and SQL lifecycle with sequential suites', async () => {
+    assert.deepEqual(Object.keys(workflow.jobs), ['validation-policy', 'build-test-package', 'draft-validation', 'validation', 'deploy-test-iis']);
+    assert.equal(full['timeout-minutes'], 120);
+    assert.equal(reuse.schema, 4);
+    assert.equal(reuse.browser_job, undefined);
+    assert.equal(step(full, 'Find reusable test executions').env.ASAP_CI_SUITES, undefined);
+    assert.equal(step(full, 'Verify required test suites').env.ASAP_CI_SUITES, undefined);
     assert.equal(full.env.ASAP_CI_SUITES, undefined);
-    assert.equal(step(browserJob, 'Find reusable test executions').env.ASAP_CI_SUITES, 'browser');
-    assert.equal(step(browserJob, 'Verify required test suites').env.ASAP_CI_SUITES, 'browser');
-    assert.equal(browserJob.env.ASAP_CI_SUITES, undefined);
-    assert.ok(!full.steps.some((candidate) => candidate.id === 'browser'));
-    for (const job of [full, browserJob]) {
-      assert.equal(job.steps[0].with.ref, '${{ github.sha }}');
-      assert.match(step(job, 'Generate ephemeral SQL test credentials').run, /openssl rand/);
-      assert.equal(step(job, 'Remove SQL Server test container').if, '${{ always() }}');
-      assert.equal(step(job, 'Verify required test suites').if, '${{ always() }}');
+    for (const pattern of [/dotnet build/, /selection\.py prepare/, /reuse\.py plan/, /docker run/, /docker rm/]) {
+      assert.equal(full.steps.filter((candidate) => pattern.test(candidate.run || '')).length, 1, String(pattern));
     }
-    assert.equal(step(browserJob, 'Install browser acceptance dependencies').run, 'npx playwright install chromium');
+    const ordered = ['Run frontend unit tests', 'Generate ephemeral SQL test credentials', 'Start SQL Server 2022',
+      'Wait for SQL Server', 'Run .NET and real SQL tests (non-browser partition)', 'Run browser accessibility tests',
+      'Verify required test suites', 'Verify publish artifacts', 'Remove SQL Server test container'];
+    for (let index = 1; index < ordered.length; index++) {
+      assert.ok(full.steps.indexOf(step(full, ordered[index - 1])) < full.steps.indexOf(step(full, ordered[index])), ordered[index]);
+    }
+    for (const suite of ['frontend', 'dotnet', 'browser']) {
+      const test = full.steps.find((candidate) => candidate.id === suite);
+      assert.doesNotMatch(test.run, /&(?!&)|\b(nohup|Start-Process)\b/);
+      assert.equal(test['continue-on-error'], undefined);
+      assert.equal(step(full, 'Verify required test suites').env[`${suite.toUpperCase()}_OUTCOME`], `\${{ steps.${suite}.outcome }}`);
+    }
+    const credentials = step(full, 'Generate ephemeral SQL test credentials').run;
+    assert.match(credentials, /::add-mask::\$sql_password/);
+    assert.match(credentials, /ASAP_CI_SQL_CONTAINER=asap-sql-\$GITHUB_RUN_ID-\$GITHUB_RUN_ATTEMPT-\$\(openssl rand/);
+    assert.match(step(full, 'Start SQL Server 2022').run, /--name "\$ASAP_CI_SQL_CONTAINER"/);
+    assert.match(step(full, 'Start SQL Server 2022').run, /--publish 127\.0\.0\.1::1433/);
+    assert.match(step(full, 'Wait for SQL Server').run, /docker exec --interactive "\$ASAP_CI_SQL_CONTAINER"/);
+    assert.match(step(full, 'Remove SQL Server test container').run, /docker rm --force "\$ASAP_CI_SQL_CONTAINER"/);
+    assert.equal(step(full, 'Remove SQL Server test container').if, '${{ always() }}');
+    assert.equal(step(full, 'Install browser acceptance dependencies').run, 'npx playwright install chromium');
+    for (const context of [await routed(pr('ready_for_review', false)), await routed(pr('converted_to_draft', true))]) {
+      const active = Object.values(workflow.jobs).filter((job) => job['runs-on'] === 'clc-linux' && enabled(job, context));
+      assert.equal(active.length, 1, 'Policy selects exactly one clc-linux job');
+    }
   });
-  await check('missing, failed, skipped or cancelled browser qualification cannot make the required gate green', async () => {
-    for (const result of ['failure', 'skipped', 'cancelled', undefined, '']) {
-      const context = await routed(pr('synchronize', false));
-      context.needs['build-test-package'] = { result: 'success' };
-      context.needs['browser-qualification'] = { result };
-      assert.equal(report(context), 1);
+  await check('cold, full reuse and every mixed reuse schedule only necessary suites and one shared SQL instance', () => {
+    for (let mask = 0; mask < 8; mask++) {
+      const suites = ['frontend', 'dotnet', 'browser'];
+      const outputs = Object.fromEntries(suites.map((suite, index) => [suite, String(Boolean(mask & (1 << index)))]));
+      const context = { steps: { reuse: { outputs } } };
+      for (const suite of suites) {
+        assert.equal(enabled(full.steps.find((candidate) => candidate.id === suite), context), outputs[suite] !== 'true');
+      }
+      for (const name of ['Generate ephemeral SQL test credentials', 'Start SQL Server 2022', 'Wait for SQL Server']) {
+        assert.equal(enabled(step(full, name), context), outputs.dotnet !== 'true' || outputs.browser !== 'true');
+      }
+      assert.equal(enabled(step(full, 'Install browser acceptance dependencies'), context), outputs.browser !== 'true');
+    }
+  });
+  await check('suite diagnostics retain separate TRX, fixture timelines and resource files without copying results', () => {
+    const dotnet = full.steps.find((candidate) => candidate.id === 'dotnet');
+    const browser = full.steps.find((candidate) => candidate.id === 'browser');
+    const frontend = full.steps.find((candidate) => candidate.id === 'frontend');
+    assert.equal(new Set([dotnet, browser, frontend].map((candidate) => candidate.env.ASAP_CI_PERFORMANCE_OUTPUT)).size, 3);
+    assert.equal(browser.env.ASAP_CI_BROWSER_RESULTS, '${{ github.workspace }}/.artifacts/browser-performance/test-results.trx');
+    assert.notEqual(dotnet.env.ASAP_CI_FIXTURE_TIMINGS, browser.env.ASAP_CI_FIXTURE_TIMINGS);
+    assert.equal(step(full, 'Summarize browser diagnostic evidence').run, 'python3 -B scripts/ci/diagnostic_report.py --output .artifacts/browser-performance');
+    assert.equal(step(full, 'Upload browser performance telemetry').with.path, '.artifacts/browser-performance/');
+    assert.equal(step(full, 'Upload .NET/SQL performance telemetry').with.path, '.artifacts/ci-performance/');
+    assert.doesNotMatch(full.steps.map((candidate) => candidate.run || '').join('\n'), /\bcp\s+.*\.trx/);
+    for (const name of ['Summarize .NET/SQL diagnostic evidence', 'Summarize browser diagnostic evidence']) {
+      assert.match(step(full, name).if, /always\(\).*outcome != 'skipped'/);
     }
   });
   await check('the reporter always inspects selected execution and runs no PR code', () => {
     assert.equal(gate.if, '${{ always() }}');
     assert.deepEqual(gate.permissions, {});
-    assert.deepEqual(gate.needs, ['validation-policy', 'build-test-package', 'browser-qualification', 'draft-validation']);
+    assert.deepEqual(gate.needs, ['validation-policy', 'build-test-package', 'draft-validation']);
     assert.equal(gate['runs-on'], 'ubuntu-latest');
     assert.ok(gate.steps.every((candidate) => !candidate.uses));
     assert.equal(gate['continue-on-error'], undefined);

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SUITES = ("dotnet", "browser", "frontend")
 SQL_TAG = "mcr.microsoft.com/mssql/server:2022-latest"
 CONFIG = ROOT / "scripts/ci/test-reuse.json"
-SOURCE_ALGORITHM = "current-suites-v4"
+SOURCE_ALGORITHM = "current-suites-v5"
 
 
 def canonical(value):
@@ -37,7 +37,7 @@ def command(arguments, root=ROOT):
 
 def configuration():
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    if (type(config["schema"]) is not int or config["schema"] != 3
+    if (type(config["schema"]) is not int or config["schema"] != 4
             or not 1 <= config["lifetime_days"] <= 14 or not config["environment_epoch"]):
         raise ValueError("Invalid evidence lifetime/environment epoch")
     for rule in config["exclusions"]:
@@ -72,7 +72,7 @@ def full_ci_execution_contract(workflow):
     """Bind every test executor, reporting gate and deployment authorization edit."""
     workflow = workflow.replace("\r\n", "\n")
     if not all(len(re.findall(r"(?m)^  " + name + r":[ \\t]*$", workflow)) == 1
-               for name in ("build-test-package", "browser-qualification", "validation")):
+               for name in ("build-test-package", "validation")):
         raise ValueError("Missing or ambiguous required execution jobs")
     return digest(workflow)
 
