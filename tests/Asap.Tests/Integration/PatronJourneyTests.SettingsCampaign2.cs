@@ -8,6 +8,7 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     [DataRow(false)]
     [DataRow(true)]
     public async Task Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload(bool libraryAdmin)

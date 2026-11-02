@@ -59,7 +59,6 @@ public sealed record RequestWorkflowContext(
 public sealed record TitleRequestDto(
     string Id,
     string Type,
-    string? LegacyId,
     int LibraryOrgId,
     string LibraryOrgName,
     int? PatronOrgId,
@@ -168,10 +167,8 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         LibraryScope? scope = null)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var requestId = await LegacyRequestLinkResolver.ResolveAsync(
-            context,
+        var requestId = await RequestLinkResolver.ResolveAsync(
             context.TitleRequests.Select(item => item.Id),
-            LegacyRequestLinkResolver.TitleRequestEntityType,
             id,
             cancellationToken);
         if (!requestId.HasValue)
@@ -310,7 +307,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             var successfulOperation = latestSuccessful.GetValueOrDefault(request.Id);
             var operation = incompleteOperation ??
                 (successfulOperation is { PolarisHoldId: null } ? successfulOperation : null);
-            var protectedHistory = successfulOperation is not null || request.LegacyHoldProtected;
+            var protectedHistory = successfulOperation is not null;
             var pendingPickup = pendingPickups.GetValueOrDefault(request.Id);
             var capabilities = TitleRequestWorkflowPolicy.Evaluate(request, incompleteOperation is not null,
                 protectedHistory, pendingPickup is not null);
@@ -353,7 +350,6 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             result.Add(new TitleRequestDto(
                 request.Id.ToString(CultureInfo.InvariantCulture),
                 "title_request",
-                request.LegacyId,
                 request.LibraryOrganizationId,
                 organizations.GetValueOrDefault(request.LibraryOrganizationId)?.DisplayName ?? request.LibraryNameSnapshot ?? string.Empty,
                 request.PatronOrganizationId,

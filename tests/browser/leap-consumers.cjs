@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const [baseURL, artifacts, staffId, tenantId, email, requestId, legacyId, copyId] = process.argv.slice(2);
+const [baseURL, artifacts, staffId, tenantId, email, requestId, unverifiedRequestId, copyId] = process.argv.slice(2);
 
 (async () => {
   const browser = await chromium.launch({ headless: true });
@@ -50,8 +50,8 @@ const [baseURL, artifacts, staffId, tenantId, email, requestId, legacyId, copyId
     await checkAnchor(page.locator('#request-dialog dd a[href*="#patron/"]').first(), patron);
     await scan('title-detail'); await page.keyboard.press('Escape');
     await page.locator('[data-status="suggestion"]').click();
-    const legacyRow = page.locator('#request-grid tr').filter({ has: page.locator(`a[data-request-id="${legacyId}"]`) });
-    await legacyRow.waitFor(); assert.equal(await legacyRow.locator('a[href*="#patron/"]').count(), 0);
+    const unverifiedRow = page.locator('#request-grid tr').filter({ has: page.locator(`a[data-request-id="${unverifiedRequestId}"]`) });
+    await unverifiedRow.waitFor(); assert.equal(await unverifiedRow.locator('a[href*="#patron/"]').count(), 0);
     await page.locator('[data-view="additional-copies"]').click();
     const copyRow = page.locator('#additional-copy-grid tr').filter({ has: page.locator(`button[data-copy-id="${copyId}"]`) });
     await checkAnchor(copyRow.locator('a[href*="#bib/"]'), bib);
@@ -73,7 +73,7 @@ const [baseURL, artifacts, staffId, tenantId, email, requestId, legacyId, copyId
     await dialog.locator('#staff-patron-card-title').scrollIntoViewIfNeeded();
     await scan('selected-patron'); await page.keyboard.press('Escape');
 
-    // Defensive rendering against unusable legacy metadata is a separate
+    // Defensive rendering against unusable research metadata is a separate
     // controlled response probe. Positive surfaces above used real SQL/API data.
     await page.route('**/api/asap/staff/additional-copies?*', async route => {
       const response = await route.fetch(); const data = await response.json();

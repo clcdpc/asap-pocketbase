@@ -1,0 +1,29 @@
+{
+  "Browser": [
+    "Asap.Tests.Assets.FrontendAssetTests.BuildTargetsDoNotInvokeNodeOrNpm",
+    "Asap.Tests.Assets.FrontendAssetTests.FontAwesomeTransitiveFontAssetsArePresent",
+    "Asap.Tests.Assets.FrontendAssetTests.GitCheckoutPreservesVendorBytesWhenAutoCrlfIsEnabled",
+    "Asap.Tests.Assets.FrontendAssetTests.VendoredFilesMatchRecordedHashesAndRequiredVersions",
+    "Asap.Tests.Assets.FrontendPublishTests.CleanAndIncrementalPublishVersionTheActualPayloadWithoutChangingTemplates",
+    "Asap.Tests.Integration.FrontendCacheTests.NormalNavigationRefreshesPublishedEntryAndNestedModulesWithRealBrowserCaching",
+    "Asap.Tests.Integration.FrontendCacheTests.PublishedFirstPartyFilesRequireRevalidationAndRetainConditionalResponses",
+    "Asap.Tests.Integration.FrontendCacheTests.VendorAssetsStayCacheableAndOtherResponsesRetainTheirPolicy",
+    "Asap.Tests.Integration.PatronJourneyTests.Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload",
+    "Asap.Tests.Integration.PatronJourneyTests.ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery",
+    "Asap.Tests.Integration.PatronJourneyTests.EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance",
+    "Asap.Tests.Integration.PatronJourneyTests.LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces",
+    "Asap.Tests.Integration.PatronJourneyTests.LibraryRuleEditorBlocksAnIncompleteProjectionBeforePostingReplacement",
+    "Asap.Tests.Integration.PatronJourneyTests.LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata",
+    "Asap.Tests.Integration.PatronJourneyTests.NativeRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures",
+    "Asap.Tests.Integration.PatronJourneyTests.OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes",
+    "Asap.Tests.Integration.PatronJourneyTests.PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport",
+    "Asap.Tests.Integration.PatronJourneyTests.PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses",
+    "Asap.Tests.Integration.PatronJourneyTests.SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp",
+    "Asap.Tests.Integration.PatronJourneyTests.SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference",
+    "Asap.Tests.Integration.PatronJourneyTests.StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers",
+    "Asap.Tests.Integration.PatronJourneyTests.StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry",
+    "Asap.Tests.Integration.PatronJourneyTests.StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope",
+    "Asap.Tests.Integration.PatronJourneyTests.StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp",
+    "Asap.Tests.Integration.PatronJourneyTests.SystemFormatRuleEditorPersistsItsActualPostThroughSqlAndReload"
+  ]
+}

@@ -355,7 +355,6 @@ public sealed class QueueProgress
 public sealed class TitleRequest
 {
     public long Id { get; set; }
-    public string? LegacyId { get; set; }
     public int LibraryOrganizationId { get; set; }
     public int? PatronOrganizationId { get; set; }
     public int? StaffLibraryOrganizationIdCreatedBy { get; set; }
@@ -381,7 +380,6 @@ public sealed class TitleRequest
     public string? CloseReason { get; set; }
     public int? BibId { get; set; }
     public bool BibIdStaffVerified { get; set; }
-    public bool LegacyHoldProtected { get; set; }
     public string? Notes { get; set; }
     public long? ClaimedByStaffUserId { get; set; }
     public string? ClaimedByDisplayName { get; set; }
@@ -402,7 +400,6 @@ public sealed class TitleRequest
 public sealed class AdditionalCopyRequest
 {
     public long Id { get; set; }
-    public string? LegacyId { get; set; }
     public long? SourceTitleRequestId { get; set; }
     public int LibraryOrganizationId { get; set; }
     public string? LibraryNameSnapshot { get; set; }
@@ -592,11 +589,4 @@ public sealed class HoldPlacementOperation
     public string? LastErrorCode { get; set; }
     public string? DetailJson { get; set; }
     public byte[] RowVersion { get; set; } = [];
-}
-
-public sealed class LegacyPocketBaseMapping
-{
-    public required string EntityType { get; set; }
-    public required string PocketBaseId { get; set; }
-    public long NewId { get; set; }
 }

@@ -7,6 +7,7 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata()
     {
         factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));

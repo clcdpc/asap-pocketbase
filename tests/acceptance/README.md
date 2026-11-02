@@ -112,7 +112,7 @@ Geometry and synthetic screenshots stay beside the report under
 it consumes only the existing `close-reopen` fixture and checks
 the accessible confirmations, authoritative status/field refresh and Activity
 after each mutation. The three extra fixtures are `d1-closed` (rejected with no
-hold), `d1-protected` (retained legacy hold protection), and `d1-history` (three
+hold), `d1-protected` (a successful current hold-operation journal), and `d1-history` (three
 fixed events, including timestamp ties and IDs above JavaScript's safe range).
 They never reset consumed data. Existing PR410 fixtures and scenario behavior
 remain independent. Role variants, incomplete operations, quick-create

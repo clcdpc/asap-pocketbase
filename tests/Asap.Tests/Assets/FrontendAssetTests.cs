@@ -5,6 +5,7 @@ using System.Text.Json;
 namespace Asap.Tests.Assets;
 
 [TestClass]
+[TestCategory(TestCategories.Browser)]
 public sealed class FrontendAssetTests
 {
     [TestMethod]

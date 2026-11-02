@@ -96,7 +96,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task FirstIdentifierCycleProcessesImportedBusinessRowsWithEmptyQueueProgress()
+    public async Task FirstIdentifierCycleProcessesExistingBusinessRowsWithEmptyQueueProgress()
     {
         const int scope = 99003;
         var configuration = CreateLowCapConfiguration(pageSize: 1, maxPerRun: 2);
@@ -119,12 +119,11 @@ public sealed partial class PatronJourneyTests
 
                 var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
                     .Select(item => item.Id).SingleAsync();
-                var imported = new TitleRequest
+                var existing = new TitleRequest
                 {
-                    LegacyId = $"slice5-imported-{Guid.NewGuid():N}",
                     LibraryOrganizationId = scope,
-                    Barcode = $"s5-imported-{Guid.NewGuid():N}"[..28],
-                    Title = "Imported business row for first cycle",
+                    Barcode = $"s5-existing-{Guid.NewGuid():N}"[..28],
+                    Title = "Existing business row for first cycle",
                     Author = "Slice Five",
                     MaterialFormatId = formatId,
                     Status = "suggestion",
@@ -132,18 +131,18 @@ public sealed partial class PatronJourneyTests
                     CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-30),
                     UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-30)
                 };
-                seed.TitleRequests.Add(imported);
+                seed.TitleRequests.Add(existing);
                 await seed.SaveChangesAsync();
-                requestId = imported.Id;
+                requestId = existing.Id;
                 seed.TitleRequestEvents.Add(new TitleRequestEvent
                 {
                     TitleRequestId = requestId,
-                    EventType = "legacy_status_imported",
+                    EventType = "legacy_status_existing",
                     Status = "suggestion",
                     ActorType = "system",
-                    Message = "Imported business row retained for the first target cycle.",
+                    Message = "Existing business row retained for the first target cycle.",
                     MetadataJson = "{\"source\":\"slice5-test-import\"}",
-                    CreatedUtc = imported.CreatedUtc
+                    CreatedUtc = existing.CreatedUtc
                 });
                 await seed.SaveChangesAsync();
             }

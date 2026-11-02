@@ -79,13 +79,10 @@ public sealed class PolicyContractTests
         request.AutoHold = true;
         request.BibIdStaffVerified = true;
         Assert.IsTrue(TitleRequestWorkflowPolicy.Evaluate(request, false, false).CanPlaceHold);
-        request.LegacyHoldProtected = true;
-        Assert.IsFalse(TitleRequestWorkflowPolicy.Evaluate(request, false, false).CanPlaceHold);
+        Assert.IsFalse(TitleRequestWorkflowPolicy.Evaluate(request, false, true).CanPlaceHold);
         request.Status = RequestStatus.Closed;
-        request.LegacyHoldProtected = true;
-        Assert.IsFalse(TitleRequestWorkflowPolicy.Evaluate(request, false, false).CanChangeWorkflowState);
-        Assert.AreEqual(0, TitleRequestWorkflowPolicy.Evaluate(request, false, false).AllowedActions.Count);
-        request.LegacyHoldProtected = false;
+        Assert.IsFalse(TitleRequestWorkflowPolicy.Evaluate(request, false, true).CanChangeWorkflowState);
+        Assert.AreEqual(0, TitleRequestWorkflowPolicy.Evaluate(request, false, true).AllowedActions.Count);
         Assert.IsTrue(TitleRequestWorkflowPolicy.Evaluate(request, false, false).AllowedActions.Contains("reopen"));
         Assert.AreEqual(0, TitleRequestWorkflowPolicy.Evaluate(request, false, false, true).AllowedActions.Count);
         Assert.AreEqual(0, TitleRequestWorkflowPolicy.Evaluate(request, true, false).AllowedActions.Count);

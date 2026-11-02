@@ -7,11 +7,11 @@ DECLARE @book bigint =
 DECLARE @now datetime2(7) = SYSUTCDATETIME();
 
 INSERT INTO asap.TitleRequest
-    (LegacyId, LibraryOrganizationId, PatronOrganizationId, Barcode, Email,
+    (LibraryOrganizationId, PatronOrganizationId, Barcode, Email,
      NameFirst, NameLast, PatronCodeId, PatronCodeDescription, PreferredPickupBranchId,
      PreferredPickupBranchName, LibraryNameSnapshot, Title, Author, AutoHold,
      MaterialFormatId, Status, BibId, BibIdStaffVerified, Notes, CreatedUtc, UpdatedUtc, PatronIdSnapshot)
-SELECT N'acceptance-pr410-' + f.Scenario, 2, 2, N'ACCEPTANCE' + f.Suffix,
+SELECT 2, 2, N'ACCEPTANCE' + f.Suffix,
     N'acceptance@example.org', N'Synthetic', N'Reviewer', 1, N'Adult', 101,
     N'Main Library', N'Review Library', N'Acceptance ' + f.Scenario, N'Synthetic author',
     f.AutoHold, @book, N'suggestion', f.BibId, f.Verified,
@@ -29,29 +29,37 @@ FROM (VALUES
     (N'unverified',            N'41010', 1, 941010, 0),
     (N'stale-consent',         N'41011', 1, NULL, 0)
 ) f(Scenario, Suffix, AutoHold, BibId, Verified)
-WHERE NOT EXISTS (SELECT 1 FROM asap.TitleRequest r WHERE r.LegacyId = N'acceptance-pr410-' + f.Scenario);
+WHERE NOT EXISTS (SELECT 1 FROM asap.TitleRequest r WHERE r.Barcode = N'ACCEPTANCE' + f.Suffix);
 
--- D1 read-only states: ordinary closure, retained legacy protection, and a
+-- D1 read-only states: ordinary closure, durable successful hold protection, and a
 -- deterministic history with bigint ties. Existing PR410 fixtures stay pristine.
 INSERT INTO asap.TitleRequest
-    (LegacyId, LibraryOrganizationId, PatronOrganizationId, Barcode, Email,
+    (LibraryOrganizationId, PatronOrganizationId, Barcode, Email,
      NameFirst, NameLast, PreferredPickupBranchId, PreferredPickupBranchName,
      LibraryNameSnapshot, Title, Author, AutoHold, MaterialFormatId, Status,
-     CloseReason, LegacyHoldProtected, Notes, CreatedUtc, UpdatedUtc, PatronIdSnapshot)
-SELECT N'acceptance-pr410-' + f.Scenario, 2, 2, N'ACCEPTANCE' + f.Suffix,
+     CloseReason, Notes, CreatedUtc, UpdatedUtc, PatronIdSnapshot)
+SELECT 2, 2, N'ACCEPTANCE' + f.Suffix,
     N'acceptance@example.org', N'Synthetic', N'Reviewer with a long patron name for wrapping', 101,
     N'Main Library', N'Review Library', N'Acceptance ' + f.Scenario, N'Synthetic author',
-    1, @book, f.Status, f.CloseReason, f.Protected,
+    1, @book, f.Status, f.CloseReason,
     N'Acceptance fixture draft baseline', '2026-10-21T12:00:00', '2026-10-23T12:00:00', CONVERT(int, f.Suffix)
 FROM (VALUES
     (N'd1-closed', N'41013', N'closed', N'rejected', 0),
     (N'd1-protected', N'41014', N'closed', N'hold_completed', 1),
     (N'd1-history', N'41015', N'suggestion', NULL, 0)
 ) f(Scenario, Suffix, Status, CloseReason, Protected)
-WHERE NOT EXISTS (SELECT 1 FROM asap.TitleRequest r WHERE r.LegacyId = N'acceptance-pr410-' + f.Scenario);
+WHERE NOT EXISTS (SELECT 1 FROM asap.TitleRequest r WHERE r.Barcode = N'ACCEPTANCE' + f.Suffix);
+
+INSERT INTO asap.HoldPlacementOperation
+    (TitleRequestId, PatronBarcodeSnapshot, BibIdSnapshot, AttemptNumber, State, Phase,
+     ExecutionEpoch, RequestStartedUtc, CompletedUtc)
+SELECT r.Id, r.Barcode, 9001, 1, N'succeeded', N'result_recorded', 1, @now, @now
+FROM asap.TitleRequest r
+WHERE r.Barcode = N'ACCEPTANCE41014'
+  AND NOT EXISTS (SELECT 1 FROM asap.HoldPlacementOperation op WHERE op.TitleRequestId = r.Id);
 
 IF NOT EXISTS (SELECT 1 FROM asap.TitleRequestEvent e JOIN asap.TitleRequest r ON r.Id = e.TitleRequestId
-               WHERE r.LegacyId = N'acceptance-pr410-d1-history')
+               WHERE r.Barcode = N'ACCEPTANCE41015')
 BEGIN
     SET IDENTITY_INSERT asap.TitleRequestEvent ON;
     INSERT INTO asap.TitleRequestEvent (Id, TitleRequestId, EventType, ActorType, ActorName, Message, CreatedUtc)
@@ -61,15 +69,15 @@ BEGIN
         (CONVERT(bigint, 9007199254740993), N'edited', N'D1 earlier tied event', CONVERT(datetime2(7), '2026-10-23T12:00:00')),
         (CONVERT(bigint, 9007199254740994), N'edited', N'D1 newest tied event', CONVERT(datetime2(7), '2026-10-23T12:00:00'))
     ) f(Id, EventType, Message, CreatedUtc)
-    WHERE r.LegacyId = N'acceptance-pr410-d1-history';
+    WHERE r.Barcode = N'ACCEPTANCE41015';
     SET IDENTITY_INSERT asap.TitleRequestEvent OFF;
 END;
 
-IF NOT EXISTS (SELECT 1 FROM asap.AdditionalCopyRequest WHERE LegacyId = N'acceptance-pr410-copy')
+IF NOT EXISTS (SELECT 1 FROM asap.AdditionalCopyRequest WHERE BibId = 941012)
     INSERT INTO asap.AdditionalCopyRequest
-        (LegacyId, LibraryOrganizationId, LibraryNameSnapshot, BibId, Title, Author,
+        (LibraryOrganizationId, LibraryNameSnapshot, BibId, Title, Author,
          MaterialFormatId, FormatSnapshot, Status, CreatedByDisplayName, CreatedUtc, UpdatedUtc)
-    VALUES (N'acceptance-pr410-copy', 2, N'Review Library', 941012, N'Acceptance additional copy',
+    VALUES (2, N'Review Library', 941012, N'Acceptance additional copy',
         N'Synthetic author', @book, N'Book', N'open', N'Acceptance seed', @now, @now);
 
 IF NOT EXISTS (SELECT 1 FROM asap.EmailTemplate
@@ -127,10 +135,10 @@ FROM GENERATE_SERIES(1, 16) n
 WHERE NOT EXISTS (SELECT 1 FROM asap.TitleRequest r WHERE r.LegacyId = CONCAT(N'acceptance-i403-', n.value));
 
 INSERT INTO asap.AdditionalCopyRequest
-    (LegacyId, LibraryOrganizationId, LibraryNameSnapshot, BibId, Title, Author, Identifier, Publication,
+    (LibraryOrganizationId, LibraryNameSnapshot, BibId, Title, Author, Identifier, Publication,
      MaterialFormatId, FormatSnapshot, Status, Notes, CreatedByDisplayName, CreatedUtc, UpdatedUtc,
      ClaimedByStaffUserId, ClaimedByDisplayName, ClaimedAtUtc, ClaimType, ClosedUtc)
-SELECT CONCAT(N'acceptance-q1-', n.value), CASE WHEN n.value = 26 THEN 3 ELSE 2 END,
+SELECT CASE WHEN n.value = 26 THEN 3 ELSE 2 END,
     CASE WHEN n.value = 26 THEN N'Q1 Synthetic Library with a deliberately long display name for wrapping' ELSE N'Review Library' END,
     942000 + n.value,
     CONCAT(N'Q1 copy ', RIGHT(CONCAT(N'0', n.value), 2), CASE WHEN n.value = 1 THEN
@@ -151,5 +159,5 @@ SELECT CONCAT(N'acceptance-q1-', n.value), CASE WHEN n.value = 26 THEN 3 ELSE 2 
     CASE WHEN n.value = 1 THEN N'manual' ELSE NULL END,
     CASE WHEN n.value = 25 THEN CONVERT(datetime2(7), '2026-10-03T13:14:00') ELSE NULL END
 FROM GENERATE_SERIES(1, 26) n
-WHERE NOT EXISTS (SELECT 1 FROM asap.AdditionalCopyRequest c WHERE c.LegacyId = CONCAT(N'acceptance-q1-', n.value));
+WHERE NOT EXISTS (SELECT 1 FROM asap.AdditionalCopyRequest c WHERE c.BibId = 942000 + n.value);
 COMMIT;

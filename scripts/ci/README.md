@@ -7,11 +7,13 @@ full gate, PR cancellation groups, fingerprints, trust boundaries and forced
 full CI. Performance collection below still wraps every fresh .NET/SQL
 execution; reused runs link to original test timing instead of inventing samples.
 
-The non-browser test step runs its existing command through
-`bash scripts/ci/run-with-performance.sh dotnet test ...`. The existing filter,
-minimum count (1439), configuration, no-build flag, streams, working directory
-and exit behavior are preserved. Only TRX reporter arguments and the opt-in
-`ASAP_CI_FIXTURE_TIMINGS` output path are added to the workload step.
+The non-browser test step runs
+`bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run`.
+The selector supplies the category filter and native-discovery count to the
+existing Release/no-build `dotnet test` invocation. See [required test selection](test-selection.md)
+for routine versus full populations and controlled benchmark instructions.
+Streams, working directory and test exit behavior are preserved, along with TRX
+reporter arguments and the opt-in `ASAP_CI_FIXTURE_TIMINGS` output path.
 Python 3.9+ and its standard library are sufficient on either Ubuntu runner.
 The Bash launcher falls back to the command if Python or collector imports are
 unavailable. Collector startup, sampling, storage and summary failures warn and
@@ -142,7 +144,7 @@ tests using the actual .NET 10 test driver:
 dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --no-build --minimum-expected-tests 2 --filter 'FullyQualifiedName~PublicPatronLinkBuilderTests' --report-trx --report-trx-filename test-results.trx --results-directory .artifacts/ci-performance/reporter-validation
 ```
 
-CI uses those same three reporter options with its original filter/minimum.
+CI uses those same three reporter options with its verified selected filter/count.
 There is no second test invocation and no VSTest `--logger trx` option.
 Percentiles use linear interpolation. Framework durations and UTC spans can
 differ because of setup/overhead. Summed execution times and class totals may
@@ -153,14 +155,17 @@ Completed elements from partial XML and complete JSONL lines remain usable.
 MTP may only persist TRX on graceful exit; hard termination may leave no TRX.
 
 The test-only `FixtureTiming` helper is disabled without its output variable.
-It wraps shared baseline/journey initialization, their initial DACPAC deployments
-(including database creation), Hangfire setup, the shared library seed and the
-migration tests' DACPAC helper. These operations issue exactly the same SQL.
+It wraps shared baseline/journey initialization, initial DACPAC deployments
+(including database creation), Hangfire setup, shared seeding and teardown.
+Per-test spans cover initialization, factory construction, actual host startup,
+client/dependency creation, provider setup, credential protection, SQL settings,
+case body/framework execution and cleanup. The extracted protocol fixture owns
+separate shared initialization. SQL operations retain their original behavior.
 Only explicit completion sets `succeeded=true`; failed/cancelled scopes retain
 false. Writes are serialized and I/O errors cannot replace fixture exceptions.
-Nested spans must not be added to wall time. Scattered per-test seeds, repeated
-upgrade deployments and migration subprocess internals remain individually
-unmeasured to avoid invasive infrastructure changes.
+Nested spans must not be added to wall time; the report retains parent/process
+identity and interval unions. See [the measurement method](../../docs/implementation/ci-simplification.md)
+for operation boundaries and observed costs.
 
 ## SQL DMV snapshots
 

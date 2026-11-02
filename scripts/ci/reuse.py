@@ -18,13 +18,14 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 import fingerprints as fp
+import selection as test_selection
 
 
 DIRECTORY = fp.ROOT / ".artifacts/test-reuse"
 STEPS = {
     "dotnet": "Run .NET and real SQL tests (non-browser partition)",
     "browser": "Run browser accessibility tests",
-    "frontend": "Run legacy/frontend unit tests",
+    "frontend": "Run frontend unit tests",
 }
 LABELS = {"dotnet": ".NET/SQL", "browser": "Browser", "frontend": "Frontend"}
 MAX_ARCHIVE = 4 * 1024 * 1024
@@ -35,7 +36,7 @@ class EvidenceError(ValueError):
 
 
 def failure_reason(error):
-    return str(error) if isinstance(error, EvidenceError) else type(error).__name__
+    return str(error) if isinstance(error, (EvidenceError, test_selection.SelectionError)) else type(error).__name__
 
 
 def utcnow():
@@ -136,6 +137,9 @@ def passing_results(results, selection):
     require(len(identities) == count and len(set(identities)) == count
             and all(isinstance(i, str) and re.fullmatch(r"[0-9a-f]{64}", i) for i in identities),
             "Missing or duplicate test outcomes")
+    if "identities" in selection:
+        require(sorted(identities) == selection["identities"],
+                "Executed test identities differ from the selected discovered population")
     if "files" in selection:
         require(identities == [fp.digest(name) for name in selection["files"]], "Frontend selection mismatch")
 
@@ -166,10 +170,12 @@ def execution_results(suite, selection, directory=DIRECTORY):
         outcomes = root.findall("t:Results/t:UnitTestResult", ns)
         require(len(outcomes) == counts["total"] and all(o.get("outcome") == "Passed" for o in outcomes),
                 "Native test outcomes do not match counters")
-        require(all(o.get("executionId") for o in outcomes), "Native test identities missing")
+        executions = [o.get("executionId") for o in outcomes]
+        require(all(executions) and len(set(executions)) == len(executions), "Native execution identities missing or duplicated")
+        require(all(o.get("testId") for o in outcomes), "Native test identities missing")
         results = {"total": counts["total"], "executed": counts["executed"], "passed": counts["passed"],
                    "failed": 0, "skipped": 0,
-                   "identities": [fp.digest(o.get("executionId")) for o in outcomes]}
+                   "identities": sorted(fp.digest(o.get("testId")) for o in outcomes)}
     passing_results(results, selection)
     return results
 
@@ -184,11 +190,12 @@ class Validator:
         require(self.workflow["path"] == config["workflow"] and integer(self.workflow["id"]),
                 "Unexpected workflow identity")
 
-    def context(self, run):
+    def context(self, run, suite='dotnet'):
         config = self.config
         run_id, attempt = run["id"], run["run_attempt"]
         require(integer(run_id) and integer(attempt), "Invalid run/attempt")
-        key = run_id, attempt
+        job_name = config['browser_job'] if suite == 'browser' else config['job']
+        key = run_id, attempt, job_name
         if key in self.contexts:
             return self.contexts[key]
         require(successful(run) and run["workflow_id"] == self.workflow["id"]
@@ -204,7 +211,7 @@ class Validator:
                 and original["run_attempt"] == attempt and original["id"] == run_id,
                 "Unsuccessful or mismatched originating attempt")
         jobs = list(self.api.pages(f"/actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs"))
-        matching = [job for job in jobs if job["name"] == config["job"]]
+        matching = [job for job in jobs if job["name"] == job_name]
         require(len(matching) == 1 and successful(matching[0]), "Required job was not successful")
         job = matching[0]
         require(job["run_id"] == run_id and job["head_sha"] == run["head_sha"]
@@ -260,7 +267,7 @@ class Validator:
     def validate(self, run, artifact, suite):
         config, current = self.config, self.current["suites"][suite]
         require(not current["unavailable"], "Current environment identity is unavailable")
-        context = self.context(run)
+        context = self.context(run, suite)
         require(integer(artifact["id"]) and artifact["name"] == artifact_name(config, suite, run["id"], run["run_attempt"])
                 and artifact["expired"] is False and timestamp(artifact["expires_at"]) > self.now,
                 "Artifact is missing, expired or from another attempt")
@@ -285,7 +292,7 @@ class Validator:
                 and manifest["outcome"] == "passed" and manifest["suite"] == suite,
                 "Wrong schema/suite or reused-only evidence")
         require(manifest["repository"] == config["repository"] and manifest["repository_id"] == config["repository_id"]
-                and manifest["workflow"] == config["workflow"] and manifest["job"] == config["job"]
+                and manifest["workflow"] == config["workflow"] and manifest["job"] == (config["browser_job"] if suite == "browser" else config["job"])
                 and manifest["run_id"] == run["id"] and manifest["run_attempt"] == run["run_attempt"]
                 and manifest["source_commit"] == context["commit"] and manifest["source_tree"] == context["tree"],
                 "Forged or incomplete manifest provenance")
@@ -296,19 +303,9 @@ class Validator:
         origin_contract = self.execution_contract(context)
         source = fp.source_fingerprint(context["entries"], suite, config, origin_contract)
         require(source == current["source"], "Test source or execution contract changed")
-        algorithm = manifest.get("source_algorithm", "legacy-v1")
-        if algorithm == fp.SOURCE_ALGORITHM:
-            require(manifest["source_fingerprint"] == source
-                    and manifest["fingerprint"] == current["fingerprint"],
-                    "Current source fingerprint mismatch")
-        elif algorithm == "legacy-v1":
-            legacy = fp.legacy_source_fingerprint(context["entries"], suite, config)
-            expected = fp.digest({"schema": manifest["schema"], "suite": suite, "source": legacy,
-                                  "environment": current["environment"], "selection": current["selection"]})
-            require(manifest["source_fingerprint"] == legacy and manifest["fingerprint"] == expected,
-                    "Original legacy source fingerprint mismatch")
-        else:
-            raise EvidenceError("Unknown source fingerprint algorithm")
+        require(manifest.get("source_algorithm") == fp.SOURCE_ALGORITHM
+                and manifest["source_fingerprint"] == source
+                and manifest["fingerprint"] == current["fingerprint"], "Current source fingerprint mismatch")
         executed = timestamp(manifest["executed_at"])
         require(manifest["lifetime_days"] == config["lifetime_days"]
                 and self.now - timedelta(days=config["lifetime_days"]) <= executed <= self.now
@@ -331,10 +328,26 @@ class Validator:
                 "age_seconds": (self.now - executed).total_seconds(), "saved_seconds": seconds}
 
 
+def active_suites():
+    raw = os.environ.get("ASAP_CI_SUITES")
+    if raw is None:
+        return fp.SUITES
+    suites = tuple(raw.split(","))
+    require(suites in (("dotnet", "frontend"), ("browser",)), "Unsupported executor suite population")
+    return suites
+
+
+def validate_executor(env=None):
+    env = os.environ if env is None else env
+    scopes = {"build-test-package": "dotnet,frontend", "browser-qualification": "browser"}
+    require(env.get("GITHUB_JOB") in scopes and env.get("ASAP_CI_SUITES") == scopes[env["GITHUB_JOB"]],
+            "Executor identity does not match its mandatory suite population")
+
+
 def lookup(api, config, current, forced=False):
     decisions = {suite: {"reuse": False, "reason": "Forced full CI" if forced else "No matching successful original evidence"}
-                 for suite in fp.SUITES}
-    for suite in fp.SUITES:
+                 for suite in active_suites()}
+    for suite in active_suites():
         if current["suites"][suite]["unavailable"]:
             decisions[suite]["reason"] = current["suites"][suite]["unavailable"]
     if forced:
@@ -343,7 +356,7 @@ def lookup(api, config, current, forced=False):
         validator = Validator(api, config, current)
         runs = api.pages("/actions/workflows/dotnet.yml/runs?status=success", "workflow_runs")
         for candidate in runs:
-            pending = [s for s in fp.SUITES if not decisions[s]["reuse"] and not current["suites"][s]["unavailable"]]
+            pending = [s for s in active_suites() if not decisions[s]["reuse"] and not current["suites"][s]["unavailable"]]
             if not pending:
                 break
             # Never consider the active run or a run whose latest attempt failed.
@@ -368,19 +381,19 @@ def lookup(api, config, current, forced=False):
                 except Exception as error:
                     decisions[suite]["reason"] = "Unverifiable evidence: " + failure_reason(error)
     except Exception as error:
-        for suite in fp.SUITES:
+        for suite in active_suites():
             decisions[suite] = {"reuse": False, "reason": "GitHub lookup unavailable: " + failure_reason(error)}
     return decisions
 
 
 def forced_full():
-    if os.environ.get("ASAP_FORCE_FULL_CI") == "true" or os.environ.get("GITHUB_EVENT_NAME") == "release":
+    if (os.environ.get("ASAP_FORCE_FULL_CI") == "true" or os.environ.get("ASAP_DEPLOY_TEST_IIS") == "true"
+            or os.environ.get("GITHUB_EVENT_NAME") == "release" or os.environ.get("GITHUB_REF_TYPE") == "tag"):
         return True
-    if os.environ.get("GITHUB_REF_TYPE") == "tag":
-        return not (os.environ.get("GITHUB_EVENT_NAME") == "push"
-                    and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+-test\.[0-9]+",
-                                     os.environ.get("GITHUB_REF_NAME", "")))
-    return False
+    try:
+        return test_selection.load()["decision"]["fresh"]
+    except Exception:
+        return True
 
 
 def api_client(config):
@@ -394,7 +407,7 @@ def plan(directory=DIRECTORY):
     config = fp.configuration()
     (directory / "current.json").unlink(missing_ok=True)
     current = None
-    decisions = {s: {"reuse": False, "reason": "Fingerprint unavailable; execute normal tests"} for s in fp.SUITES}
+    decisions = {s: {"reuse": False, "reason": "Fingerprint unavailable; execute normal tests"} for s in active_suites()}
     try:
         current = fp.calculate(os.environ["GITHUB_SHA"], config)
         write_json(directory / "current.json", current)
@@ -404,13 +417,13 @@ def plan(directory=DIRECTORY):
         print(f"::notice::Test reuse unavailable ({type(error).__name__}); normal tests required.")
     write_json(directory / "plan.json", {"run_id": os.environ["GITHUB_RUN_ID"],
                "attempt": os.environ["GITHUB_RUN_ATTEMPT"], "decisions": decisions})
-    outputs = {s: str(decisions[s]["reuse"]).lower() for s in fp.SUITES}
+    outputs = {s: str(decisions[s]["reuse"]).lower() for s in active_suites()}
     outputs["schema"] = config["schema"]
     outputs["sql_image"] = current["sql_image"] if current else fp.SQL_TAG
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
         for key, value in outputs.items():
             output.write(f"{key}={value}\n")
-    for suite in fp.SUITES:
+    for suite in active_suites():
         print(f"{LABELS[suite]}: {'HIT' if decisions[suite]['reuse'] else 'MISS'} — {decisions[suite]['reason']}")
 
 
@@ -422,7 +435,7 @@ def record(config, current, suite, results, directory=DIRECTORY):
     manifest = {
         "schema": config["schema"], "kind": "executed", "outcome": "passed", "suite": suite,
         "repository": config["repository"], "repository_id": config["repository_id"],
-        "workflow": config["workflow"], "job": config["job"],
+        "workflow": config["workflow"], "job": config["browser_job"] if suite == "browser" else config["job"],
         "run_id": int(os.environ["GITHUB_RUN_ID"]), "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
         "source_commit": current["commit"], "source_tree": current["tree"],
         "source_algorithm": fp.SOURCE_ALGORITHM,
@@ -439,12 +452,22 @@ def record(config, current, suite, results, directory=DIRECTORY):
 
 def summary(rows, current):
     lines = ["## Required test verification", "", "| Suite | Current status | Original source |", "| --- | --- | --- |"]
-    for suite in fp.SUITES:
+    for suite in rows:
         row = rows[suite]
         source = row.get("source", {}).get("url")
         lines.append(f"| {LABELS[suite]} | {row['status']} | " + (f"[Original run]({source})" if source else "Current run") + " |")
     lines.append("")
-    for suite in fp.SUITES:
+    selection = current["suites"]["dotnet"]["selection"] if current else {}
+    if "partition_counts" in selection:
+        lines.extend(["| .NET category | Discovered | Coverage |", "| --- | ---: | --- |"])
+        for category, count in selection["partition_counts"].items():
+            if ('browser' if category == 'browser' else 'dotnet') not in rows:
+                continue
+            suite = "browser" if category == "browser" else "dotnet"
+            status = rows[suite]["status"]
+            lines.append(f"| {category} | {count} | {status} |")
+        lines.extend(["", f"Selected non-browser population: {selection['expected']}; native test identities must match exactly.", ""])
+    for suite in rows:
         row = rows[suite]
         identity = current["suites"][suite]["fingerprint"] if current else "unavailable"
         detail = f"- {LABELS[suite]}: `{identity}`; {row['reason']}."
@@ -468,7 +491,7 @@ def verify(directory=DIRECTORY):
         planned = json.loads((directory / "plan.json").read_bytes())
     except (OSError, ValueError):
         planned = None
-    selected = fp.selections()
+    selected = fp.selections(verify=True)
     checkout_valid = False
     try:
         commit, tree = fp.checkout(os.environ["GITHUB_SHA"])
@@ -485,14 +508,14 @@ def verify(directory=DIRECTORY):
                         and identity["schema"] == config["schema"] and identity["suite"] == suite
                         and identity["source"] == fp.source_fingerprint(entries, suite, config, contract)
                         and identity["environment"] == fp.digest(identity["environment_inputs"])
-                        and {k: v for k, v in identity["selection"].items() if k != "expected"} == selected[suite],
+                        and identity["selection"] == selected[suite],
                         "Current fingerprint inputs changed")
         checkout_valid = True
     except Exception:
         pass
     rows, failures = {}, []
     validator = None
-    for suite in fp.SUITES:
+    for suite in active_suites():
         decision = (planned or {}).get("decisions", {}).get(suite, {"reuse": False, "reason": "No reuse plan"})
         rows[suite] = {"status": "FAILED", "reason": decision["reason"]}
         try:
@@ -521,6 +544,7 @@ def verify(directory=DIRECTORY):
         except Exception as error:
             rows[suite]["reason"] = "Required verification failed: " + failure_reason(error)
             failures.append(suite)
+    selection = selected["dotnet"]
     report = summary(rows, current)
     print(report)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
@@ -538,8 +562,10 @@ def main():
         commit, tree = fp.checkout(os.environ["GITHUB_SHA"])
         print(f"Verified exact workflow source {commit}, tree {tree}")
     elif args.operation == "plan":
+        validate_executor()
         plan()
     else:
+        validate_executor()
         verify()
 
 
@@ -547,5 +573,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print(f"::error::Required test verification failed ({type(error).__name__}).", file=sys.stderr)
+        print("::error::Required test verification failed: " + failure_reason(error), file=sys.stderr)
         sys.exit(1)

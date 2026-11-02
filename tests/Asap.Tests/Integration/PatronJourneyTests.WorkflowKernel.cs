@@ -231,7 +231,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task ReopenedLegacyProtectedPendingIdentifierCannotApplyConflictingLookup()
+    public async Task ReopenedJournalProtectedPendingIdentifierCannotApplyConflictingLookup()
     {
         var provider = new ConflictingIdentifierProvider();
         var configuration = TestConfigurationFactory.Create(allowedDomains: ["example.org"]);
@@ -266,13 +266,17 @@ public sealed partial class PatronJourneyTests
                 DECLARE @requestId bigint = SCOPE_IDENTITY();
                 INSERT INTO [asap].[TitleRequestEvent]
                     ([TitleRequestId], [EventType], [Status], [ActorType], [Message], [MetadataJson], [CreatedUtc])
-                VALUES (@requestId, N'legacy_status_imported', N'closed', N'system', N'Imported placement evidence.',
-                        N'{"legacyBibProtection":true,"legacyBibId":null}', DATEADD(day, -1, SYSUTCDATETIME()));
+                VALUES (@requestId, N'historical_note', N'closed', N'system', N'Diagnostic note; journal owns authority.',
+                        N'{"untrustedProtectionHint":true,"legacyBibId":null}', DATEADD(day, -1, SYSUTCDATETIME()));
                 UPDATE [asap].[TitleRequest]
                 SET [Status] = N'suggestion', [CloseReason] = NULL, [IsbnCheckStatus] = N'pending',
-                    [LegacyHoldProtected] = 1,
                     [UpdatedUtc] = SYSUTCDATETIME()
                 WHERE [Id] = @requestId;
+                INSERT INTO [asap].[HoldPlacementOperation]
+                    ([TitleRequestId], [PatronBarcodeSnapshot], [BibIdSnapshot], [AttemptNumber], [State],
+                     [Phase], [ExecutionEpoch], [RequestStartedUtc], [CompletedUtc])
+                SELECT [Id], [Barcode], 9001, 1, N'succeeded', N'result_recorded', 1,
+                    SYSUTCDATETIME(), SYSUTCDATETIME() FROM [asap].[TitleRequest] WHERE [Id] = @requestId;
                 SELECT @requestId, [RowVersion]
                 FROM [asap].[TitleRequest]
                 WHERE [Id] = @requestId;

@@ -346,11 +346,11 @@ internal static class ReviewInitializer
             IF @book IS NULL
                 THROW 51000, 'Review seed could not find the system book material format.', 1;
 
-            IF NOT EXISTS (SELECT 1 FROM [asap].[TitleRequest] WHERE [LegacyId] = N'review-suggestion')
+            IF NOT EXISTS (SELECT 1 FROM [asap].[TitleRequest] WHERE [Barcode] = N'REVIEW1001')
             BEGIN
                 INSERT INTO [asap].[TitleRequest]
                 (
-                    [LegacyId], [LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Email],
+                    [LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Email],
                     [NameFirst], [NameLast], [PatronCodeId], [PatronCodeDescription],
                     [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
                     [Title], [Author], [Identifier], [Publication], [AutoHold], [MaterialFormatId],
@@ -358,18 +358,18 @@ internal static class ReviewInitializer
                 )
                 VALUES
                 (
-                    N'review-suggestion', 2, 2, N'REVIEW1001', N'patron@example.org',
+                    2, 2, N'REVIEW1001', N'patron@example.org',
                     N'Review', N'Patron', N'1', N'Adult', 101, N'Main Library', N'Review Library',
                     N'The Review Suggestion', N'A. Reviewer', N'9780000000001', N'Coming soon', 1, @book,
                     N'suggestion', NULL, NULL, DATEADD(day, -2, SYSUTCDATETIME()), DATEADD(day, -2, SYSUTCDATETIME())
                 );
             END;
 
-            IF NOT EXISTS (SELECT 1 FROM [asap].[TitleRequest] WHERE [LegacyId] = N'review-purchase')
+            IF NOT EXISTS (SELECT 1 FROM [asap].[TitleRequest] WHERE [Barcode] = N'REVIEW1002')
             BEGIN
                 INSERT INTO [asap].[TitleRequest]
                 (
-                    [LegacyId], [LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Email],
+                    [LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Email],
                     [NameFirst], [NameLast], [PatronCodeId], [PatronCodeDescription],
                     [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
                     [Title], [Author], [Identifier], [Publication], [AutoHold], [MaterialFormatId],
@@ -377,18 +377,18 @@ internal static class ReviewInitializer
                 )
                 VALUES
                 (
-                    N'review-purchase', 2, 2, N'REVIEW1002', N'patron@example.org',
+                    2, 2, N'REVIEW1002', N'patron@example.org',
                     N'Second', N'Patron', N'1', N'Adult', 101, N'Main Library', N'Review Library',
                     N'Awaiting Purchase', N'B. Reviewer', N'9780000000002', N'Already published', 1, @book,
                     N'outstanding_purchase', NULL, NULL, DATEADD(day, -6, SYSUTCDATETIME()), DATEADD(day, -3, SYSUTCDATETIME())
                 );
             END;
 
-            IF NOT EXISTS (SELECT 1 FROM [asap].[TitleRequest] WHERE [LegacyId] = N'review-pending-hold')
+            IF NOT EXISTS (SELECT 1 FROM [asap].[TitleRequest] WHERE [Barcode] = N'REVIEW1003')
             BEGIN
                 INSERT INTO [asap].[TitleRequest]
                 (
-                    [LegacyId], [LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Email],
+                    [LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Email],
                     [NameFirst], [NameLast], [PatronCodeId], [PatronCodeDescription],
                     [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
                     [Title], [Author], [Identifier], [Publication], [AutoHold], [MaterialFormatId],
@@ -396,18 +396,18 @@ internal static class ReviewInitializer
                 )
                 VALUES
                 (
-                    N'review-pending-hold', 2, 2, N'REVIEW1003', N'patron@example.org',
+                    2, 2, N'REVIEW1003', N'patron@example.org',
                     N'Third', N'Patron', N'1', N'Adult', 102, N'North Branch', N'Review Library',
                     N'Pending Hold Example', N'C. Reviewer', N'9780000000003', N'Already published', 1, @book,
                     N'pending_hold', NULL, N'9003', DATEADD(day, -10, SYSUTCDATETIME()), DATEADD(day, -2, SYSUTCDATETIME())
                 );
             END;
 
-            IF NOT EXISTS (SELECT 1 FROM [asap].[TitleRequest] WHERE [LegacyId] = N'review-hold-placed')
+            IF NOT EXISTS (SELECT 1 FROM [asap].[TitleRequest] WHERE [Barcode] = N'REVIEW1004')
             BEGIN
                 INSERT INTO [asap].[TitleRequest]
                 (
-                    [LegacyId], [LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Email],
+                    [LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Email],
                     [NameFirst], [NameLast], [PatronCodeId], [PatronCodeDescription],
                     [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
                     [Title], [Author], [Identifier], [Publication], [AutoHold], [MaterialFormatId],
@@ -415,18 +415,18 @@ internal static class ReviewInitializer
                 )
                 VALUES
                 (
-                    N'review-hold-placed', 2, 2, N'REVIEW1004', N'patron@example.org',
+                    2, 2, N'REVIEW1004', N'patron@example.org',
                     N'Fourth', N'Patron', N'1', N'Adult', 101, N'Main Library', N'Review Library',
                     N'Placed Hold Example', N'D. Reviewer', N'9780000000004', N'Already published', 1, @book,
                     N'hold_placed', NULL, N'9004', DATEADD(day, -15, SYSUTCDATETIME()), DATEADD(day, -1, SYSUTCDATETIME())
                 );
             END;
 
-            IF NOT EXISTS (SELECT 1 FROM [asap].[TitleRequest] WHERE [LegacyId] = N'review-closed')
+            IF NOT EXISTS (SELECT 1 FROM [asap].[TitleRequest] WHERE [Barcode] = N'REVIEW1005')
             BEGIN
                 INSERT INTO [asap].[TitleRequest]
                 (
-                    [LegacyId], [LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Email],
+                    [LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Email],
                     [NameFirst], [NameLast], [PatronCodeId], [PatronCodeDescription],
                     [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
                     [Title], [Author], [Identifier], [Publication], [AutoHold], [MaterialFormatId],
@@ -434,24 +434,24 @@ internal static class ReviewInitializer
                 )
                 VALUES
                 (
-                    N'review-closed', 2, 2, N'REVIEW1005', N'patron@example.org',
+                    2, 2, N'REVIEW1005', N'patron@example.org',
                     N'Fifth', N'Patron', N'1', N'Adult', 101, N'Main Library', N'Review Library',
                     N'Completed Review Example', N'E. Reviewer', N'9780000000005', N'Already published', 1, @book,
                     N'closed', N'hold_completed', N'9005', DATEADD(day, -30, SYSUTCDATETIME()), DATEADD(day, -5, SYSUTCDATETIME())
                 );
             END;
 
-            IF NOT EXISTS (SELECT 1 FROM [asap].[AdditionalCopyRequest] WHERE [LegacyId] = N'review-additional-copy')
+            IF NOT EXISTS (SELECT 1 FROM [asap].[AdditionalCopyRequest] WHERE [BibId] = 9010)
             BEGIN
                 INSERT INTO [asap].[AdditionalCopyRequest]
                 (
-                    [LegacyId], [LibraryOrganizationId], [LibraryNameSnapshot], [BibId], [Title], [Author],
+                    [LibraryOrganizationId], [LibraryNameSnapshot], [BibId], [Title], [Author],
                     [Identifier], [Publication], [MaterialFormatId], [FormatSnapshot], [Status],
                     [CreatedByDisplayName], [CreatedUtc], [UpdatedUtc]
                 )
                 VALUES
                 (
-                    N'review-additional-copy', 2, N'Review Library', N'9010', N'Additional Copy Example',
+                    2, N'Review Library', N'9010', N'Additional Copy Example',
                     N'F. Reviewer', N'9780000000010', N'Already published', @book, N'Book', N'open',
                     N'Review seed', DATEADD(day, -8, SYSUTCDATETIME()), DATEADD(day, -2, SYSUTCDATETIME())
                 );

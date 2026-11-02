@@ -153,7 +153,6 @@ public sealed partial class PatronSuggestionService(
                   WHERE successful.[TitleRequestId] = request.[Id]
                     AND successful.[State] = N'succeeded'
               )
-              AND request.[LegacyHoldProtected] = 0
         """;
 
     private readonly string connectionString = externalConfiguration.ConnectionStrings.AsapDatabase!;

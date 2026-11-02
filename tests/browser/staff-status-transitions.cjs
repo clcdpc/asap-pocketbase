@@ -60,7 +60,10 @@ async function observe(page) {
       if (table && !tables.has(table)) tables.set(table, ++nextTable);
       return { table: table ? tables.get(table) : null,
         ready: !!grid.querySelector('.request-title-link, .gridjs-notfound'),
-        loading: !!grid.querySelector('.gridjs-loading'),
+        // The vendor container also uses gridjs-loading during a sort while
+        // retaining committed rows. Only its table message is a loading body.
+        loading: !!grid.querySelector('tbody .gridjs-loading'),
+        busy: !!grid.querySelector('.gridjs-container.gridjs-loading'),
         rows: [...grid.querySelectorAll('.request-title-link')].map(node => node.dataset.requestId),
         summary: document.querySelector('#queue-summary').textContent,
         inert: !!grid.firstElementChild?.inert };
@@ -105,7 +108,7 @@ function stable(trace, expected, label) {
   assert.equal(trace.commits[0].ready, true, `${label}: mount only a committed table`);
   assert.deepEqual(trace.commits[0].rows, expected, `${label}: replacement contains the selected status`);
   assert.ok(trace.frames.every(frame => frame.value.ready && !frame.value.loading),
-    `${label}: no painted empty/loading startup body: ${JSON.stringify(trace.frames)}`);
+    `${label}: no painted empty/loading startup body; frames=${JSON.stringify(trace.frames)}`);
   const tables = [...new Set(trace.frames.map(frame => frame.value.table))];
   assert.equal(tables.length, 2, `${label}: one visible table transition, including the original table`);
   const firstTarget = trace.frames.findIndex(frame => frame.value.table === tables[1]);
