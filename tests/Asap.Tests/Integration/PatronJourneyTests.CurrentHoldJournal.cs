@@ -116,9 +116,15 @@ public sealed partial class PatronJourneyTests
         {
             release.TrySetResult();
             provider.AfterRefresh = null;
-            await placement;
-            await DeleteRequestAsync(request.Id);
-            await CleanupPickupJournalLibraryAsync(provider.OrganizationId);
+            try
+            {
+                await placement;
+            }
+            finally
+            {
+                await DeleteRequestAsync(request.Id);
+                await CleanupPickupJournalLibraryAsync(provider.OrganizationId);
+            }
         }
     }
 
@@ -155,8 +161,14 @@ public sealed partial class PatronJourneyTests
         finally
         {
             provider.CompleteBlockedHoldRead();
-            await placement;
-            await DeleteRequestAsync(requestId);
+            try
+            {
+                await placement;
+            }
+            finally
+            {
+                await DeleteRequestAsync(requestId);
+            }
         }
     }
 
