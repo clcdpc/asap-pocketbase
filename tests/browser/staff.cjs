@@ -488,7 +488,10 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       /q=Browser%20staff%20title%20edited/);
 
     await page.getByLabel('BIB ID', { exact: true }).fill('9001');
-    await page.getByRole('button', { name: 'Ready for hold' }).click();
+    assert.equal(await page.locator('#request-grid').getByRole('button', {
+      name: `Ready for hold request ${args.primaryRequestId}`, exact: true
+    }).count(), 1, 'The row workflow command remains distinct from the open detail toolbar');
+    await page.locator('#request-dialog[open] .action-bar').getByRole('button', { name: 'Ready for hold', exact: true }).click();
     await page.getByText(/Search Polaris, select the matching BIB/).waitFor();
     const searchCatalog = page.getByRole('button', { name: 'Search Polaris catalog' });
     await searchCatalog.focus();
@@ -590,11 +593,11 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.getByRole('link', { name: 'Open BIB in LEAP' }).waitFor();
     assert.equal(await page.getByRole('link', { name: 'Open BIB in LEAP' }).getAttribute('href'),
       'https://leap.example.test/bib/9001');
-    await page.getByRole('button', { name: 'Ready for hold' }).click();
+    await page.locator('#request-dialog[open] .action-bar').getByRole('button', { name: 'Ready for hold', exact: true }).click();
     await page.getByText('Save the current request edits before moving to Pending hold.').waitFor();
     await page.getByLabel('BIB ID', { exact: true }).fill('9002');
     await page.getByLabel('BIB ID', { exact: true }).fill('9001');
-    await page.getByRole('button', { name: 'Ready for hold' }).click();
+    await page.locator('#request-dialog[open] .action-bar').getByRole('button', { name: 'Ready for hold', exact: true }).click();
     await page.getByText(/Search Polaris, select the matching BIB/).waitFor();
 
     await searchCatalog.click();
@@ -629,7 +632,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(reconciledRequest.status, 'closed');
     assert.equal(reconciledRequest.closeReason, 'purchased_no_hold');
     await page.locator('#request-dialog .status-badge').filter({ hasText: 'Closed' }).waitFor();
-    assert.equal(await page.getByRole('button', { name: 'Place hold' }).count(), 0);
+    assert.equal(await page.locator('#request-dialog[open] .action-bar').getByRole('button', { name: 'Place hold', exact: true }).count(), 0);
 
     await page.getByRole('button', { name: 'Close request details' }).click();
     const noConfig = async route => route.fulfill({ status: 200, contentType: 'application/json',

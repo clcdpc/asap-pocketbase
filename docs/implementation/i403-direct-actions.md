@@ -69,6 +69,9 @@ details and summary, excluding vendor bundles.
 measured fit transitions, common dispatch, stale ownership/capabilities/status,
 sign-out and cleanup using the real Grid.js lifecycle. The retained SQL-backed
 table and native-zoom journeys check real geometry and direct/overflow dispatch.
+The broader `tests/browser/staff.cjs` journey scopes detail workflow lookups to
+the open modal and verifies that the new row command and its detail action coexist;
+page-wide partial-name selectors must not confuse those two intentional controls.
 `tests/acceptance/direct-actions.test.cjs` checks the shipped component/CSS/fonts
 in Chromium, including native zoom, forced colors and complete labels.
 
