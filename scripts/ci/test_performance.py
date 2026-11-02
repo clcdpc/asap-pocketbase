@@ -38,6 +38,11 @@ def running(pid):
 
 
 class CounterTests(unittest.TestCase):
+    def setUp(self):
+        patch = mock.patch.dict(os.environ, ASAP_CI_SQL_CONTAINER="asap-sql-counter-fixture")
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_cpu_uses_deltas_and_excludes_guest_double_counting(self):
         before = perf.cpu_counters("cpu 100 0 50 500 20 5 5 10 1000 0\n")
         after = perf.cpu_counters("cpu 125 0 65 530 30 10 10 20 2000 1000\n")
@@ -132,6 +137,14 @@ class CounterTests(unittest.TestCase):
         self.assertEqual(sample["state"], "exited")
         self.assertNotIn(SECRET, json.dumps(limits))
         self.assertTrue(all("stats" not in call.args[0] for call in command.call_args_list))
+        self.assertTrue(all(call.args[0][-1] == "asap-sql-counter-fixture" for call in command.call_args_list))
+
+    def test_no_owned_container_never_inspects_a_fixed_or_unrelated_target(self):
+        for name in ("", "--other-container", "invalid/name"):
+            with mock.patch.dict(os.environ, ASAP_CI_SQL_CONTAINER=name), mock.patch.object(perf, "optional_command") as command:
+                source = perf.DockerMetrics(threading.Event(), set())
+                self.assertEqual(source.sample()["state"], "unknown")
+                command.assert_not_called()
 
 
 class SyntheticProcTests(unittest.TestCase):
@@ -265,6 +278,7 @@ class LifecycleTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.output = self.root / "artifacts"
         self.env = dict(os.environ, PATH="", PYTHONDONTWRITEBYTECODE="1", ASAP_TEST_SQL_SA_PASSWORD=SECRET,
+                        ASAP_CI_SQL_CONTAINER="asap-sql-lifecycle-fixture",
                         ASAP_TEST_SQL_CONNECTION_STRING=SECRET, GITHUB_RUN_ID=SECRET,
                         GITHUB_STEP_SUMMARY=str(self.root / "step-summary.md"))
 
