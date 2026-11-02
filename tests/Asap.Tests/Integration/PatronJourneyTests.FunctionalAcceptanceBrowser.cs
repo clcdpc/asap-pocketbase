@@ -14,6 +14,7 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery()
     {
         const int library = 38077;

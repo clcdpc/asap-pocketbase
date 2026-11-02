@@ -94,6 +94,11 @@ async function fixture(route, journey, options = {}) {
       FormData: dom.window.FormData, URLSearchParams: dom.window.URLSearchParams });
     dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
+    if (options.delayedHistoryBack) {
+      // Expose attempts to navigate while dialog Close is still restoring history.
+      const nativeHistoryBack = dom.window.history.back.bind(dom.window.history);
+      dom.window.history.back = () => dom.window.setTimeout(nativeHistoryBack, 150);
+    }
     const gridPath = path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js');
     delete require.cache[require.resolve(gridPath)];
     dom.window.gridjs = require(gridPath);
@@ -218,6 +223,12 @@ async function fixture(route, journey, options = {}) {
       readStaff: () => staff,
       setStaff: value => { staff = { ...staff, ...value }; },
       params: () => new URL(dom.window.location.href).searchParams,
+      closeDetail: async () => {
+        get('#close-request').click();
+        // Closing the dialog may still be awaiting an asynchronous history traversal.
+        await until(() => !get('#request-dialog').open &&
+          !new URL(dom.window.location.href).searchParams.has('request'), 'detail closed and history restored');
+      },
       open: async () => { await until(() => get('.grid-open'), 'queue opener'); get('.grid-open').click();
         await until(() => get('#request-dialog').open, 'detail opened'); } });
   } finally {
@@ -438,7 +449,7 @@ test('empty authoritative publication is clean even with configured choices', ()
   const unload = new ui.dom.window.Event('beforeunload', { cancelable: true });
   ui.dom.window.dispatchEvent(unload);
   assert.equal(unload.defaultPrevented, false);
-  ui.get('#close-request').click(); await settle();
+  await ui.closeDetail();
   assert.equal(ui.confirms.length, 0);
 }));
 test('save protects fields while pending and clears draft after authoritative success', () => fixture(`?request=${id}`, async ui => {
@@ -456,7 +467,7 @@ test('save protects fields while pending and clears draft after authoritative su
   const unload = new ui.dom.window.Event('beforeunload', { cancelable: true });
   ui.dom.window.dispatchEvent(unload);
   assert.equal(unload.defaultPrevented, false);
-  ui.get('#close-request').click(); await settle();
+  await ui.closeDetail();
   assert.equal(ui.confirms.length, 0);
 }));
 test('new authoritative version cannot inherit ephemeral verification', () => fixture(`?request=${id}`, async ui => {
@@ -478,7 +489,7 @@ test('new authoritative version cannot inherit ephemeral verification', () => fi
 test('open close back does not reopen the closed request', () => fixture('?stage=profile', async ui => {
   ui.get('[data-view="queue"]').click(); await settle();
   for (let cycle = 0; cycle < 3; cycle += 1) {
-    await ui.open(); ui.get('#close-request').click(); await settle(); await settle();
+    await ui.open(); await ui.closeDetail();
     assert.equal(ui.params().has('request'), false);
   }
   await ui.back();
@@ -488,7 +499,7 @@ test('open close back does not reopen the closed request', () => fixture('?stage
 }));
 test('direct detail close replaces its route', () => fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
   const length = ui.dom.window.history.length;
-  ui.get('#close-request').click(); await settle();
+  await ui.closeDetail();
   assert.equal(ui.params().has('request'), false);
   assert.equal(ui.dom.window.history.length, length);
 }));
@@ -1614,7 +1625,7 @@ for (const kind of ['assignment', 'pickup', 'rejection', 'copy-assignment']) {
 
 test('Recent Requests honors the dirty Profile discard boundary', () =>
   fixture('?stage=suggestion&scope=2', async ui => {
-    await ui.open(); ui.get('#close-request').click(); await settle();
+    await ui.open(); await ui.closeDetail();
     ui.get('[data-view="profile"]').click(); await settle();
     ui.edit('#weekly-email', 'draft@example.org');
     const currentUrl = ui.dom.window.location.href;
@@ -1819,7 +1830,7 @@ test('staff roster review preserves the cached Title configuration', () =>
       if (pathname.endsWith('/audit')) return response(200, { data: [] });
     });
     ui.get('[data-view="queue"]').click(); await settle(); await ui.open();
-    ui.get('#close-request').click(); await settle();
+    await ui.closeDetail();
     ui.get('[data-view="settings"]').click(); await settle();
     ui.get('[data-settings-panel="staff"]').click();
     await until(() => rosterReads === 1 && !ui.get('#staff-refresh').disabled &&
@@ -1854,7 +1865,7 @@ for (const commit of ['library save', 'system save', 'library reset']) {
       await until(() => !ui.get('#settings-form').hidden, 'Settings cached before the Title configuration');
       ui.get('[data-view="queue"]').click(); await settle(); await ui.open();
       assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration A/);
-      ui.get('#close-request').click(); await settle();
+      await ui.closeDetail();
       ui.get('[data-view="settings"]').click(); await settle();
       ui.allowDiscard();
       if (commit === 'library reset') ui.get('#settings-reset').click();
@@ -1876,7 +1887,7 @@ for (const commit of ['library save', 'system save', 'library reset']) {
       assert.equal(configurationReads, 2, 'confirmed source change forces a configuration fetch despite failed refresh');
       assert.match(ui.get('[aria-label="Format"]').textContent, /Configuration B/);
       assert.equal(staleControlsInert, true, 'stale Settings controls cannot be edited as authoritative');
-      ui.get('#close-request').click(); await settle();
+      await ui.closeDetail();
       const beforeReturn = reloads; failRefresh = false;
       ui.get('[data-view="settings"]').click();
       await until(() => reloads > beforeReturn && !ui.get('#settings-form').inert, 'returning to Settings reviews the confirmed commit');
@@ -1906,7 +1917,7 @@ for (const kind of ['Title', 'Additional Copy']) {
         }
       });
       ui.get('[data-view="queue"]').click(); await settle(); ui.get('[data-status="closed"]').click(); await settle(); await ui.open();
-      ui.get('#close-request').click(); await settle();
+      await ui.closeDetail();
       ui.get('[data-view="settings"]').click(); await settle();
       ui.get('[data-settings-panel="staff"]').click();
       await until(() => ui.get('.settings-staff-row'), 'own admin roster row');
@@ -1921,7 +1932,7 @@ for (const kind of ['Title', 'Additional Copy']) {
       ui.get('[data-view="queue"]').click(); await settle(); await ui.open();
       assert.equal(configurationReads, 1, 'staff roster mutation preserves the Title configuration cache');
       if (kind === 'Additional Copy') {
-        ui.get('#close-request').click(); await settle();
+        await ui.closeDetail();
         ui.get('[data-view="additional-copies"]').click(); await settle();
         ui.get('[data-copy-status="closed"]').click(); await settle();
         await until(() => ui.get('#additional-copy-grid .grid-open'), 'closed Copy queue opener');
@@ -1931,7 +1942,7 @@ for (const kind of ['Title', 'Additional Copy']) {
       ui.allowDiscard();
       [...ui.get('.action-bar').querySelectorAll('button')].find(button => button.textContent.includes('Permanently delete')).click();
       await until(() => deletes === 1 && !ui.get('#request-dialog').open, 'explicit delete with accepted actorVersion');
-    }, { role: 'admin', staff: { tenantId: 'same-actor', authenticationEmail: 'admin@example.org', organizationId: 2 }, status: 'closed',
+    }, { delayedHistoryBack: true, role: 'admin', staff: { tenantId: 'same-actor', authenticationEmail: 'admin@example.org', organizationId: 2 }, status: 'closed',
       copyRequest: { status: 'closed', capabilities: { canDelete: true } } }));
 
   test(`external same-actor rowversion conflict refreshes ${kind} actorVersion without replay`, () =>
@@ -2167,7 +2178,7 @@ test('characterization: clean open assignment is disposed on departure and canno
 for (const view of ['additional-copies', 'settings']) {
   test(`characterization: Recent Requests from ${view} converges on title route`, () =>
     fixture('?stage=suggestion&scope=2', async ui => {
-      await ui.open(); ui.get('#close-request').click(); await settle();
+      await ui.open(); await ui.closeDetail();
       ui.get(`[data-view="${view}"]`).click(); await settle();
       ui.get('#recent-request-list button').click();
       await until(() => ui.get('#request-dialog').open, 'recent detail');
@@ -2653,7 +2664,7 @@ for (const source of ['profile', 'settings']) {
   for (const failure of ['server', 'transport', 'missing']) {
     test(`ownership transfer: ${source} Recent Request ${failure} preserves the source`, () =>
       fixture('?stage=suggestion&scope=2&marker=keep#anchor', async ui => {
-        await ui.open(); ui.get('#close-request').click(); await settle();
+        await ui.open(); await ui.closeDetail();
         ui.get(`[data-view="${source}"]`).click(); await settle();
         if (source === 'settings') await until(() => !ui.get('#settings-form').hidden, 'Settings ready');
         const field = source === 'profile' ? '#weekly-email' : '#patron-login-note';
@@ -2682,7 +2693,7 @@ for (const source of ['profile', 'settings']) {
   for (const accept of [false, true]) {
     test(`ownership transfer: ${source} Recent Request changed draft second consent ${accept}`, () =>
       fixture('?stage=suggestion&scope=2', async ui => {
-        await ui.open(); ui.get('#close-request').click(); await settle();
+        await ui.open(); await ui.closeDetail();
         ui.get(`[data-view="${source}"]`).click(); await settle();
         if (source === 'settings') await until(() => !ui.get('#settings-form').hidden, 'Settings ready');
         const field = source === 'profile' ? '#weekly-email' : '#patron-login-note';
@@ -2702,7 +2713,7 @@ for (const source of ['profile', 'settings']) {
           assert.equal(ui.get(field).value, 'Newer draft'); assert.equal(ui.dom.window.location.href, url);
           assert.equal(protectedUnload(ui), true);
         } else assert.equal(ui.params().get('request'), id);
-      }, { staff: { ...actorA, ...profileStaff, authenticationEmail: 'staff@example.org' } }));
+      }, { delayedHistoryBack: true, staff: { ...actorA, ...profileStaff, authenticationEmail: 'staff@example.org' } }));
   }
   test(`ownership transfer: ${source} uncertain Sign Out retains exact draft and permits deliberate retry`, () =>
     fixture(source === 'profile' ? '?stage=profile' : '?stage=settings&settingsScope=system', async ui => {

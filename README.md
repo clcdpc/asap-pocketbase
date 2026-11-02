@@ -23,8 +23,7 @@ activation remain separate deferred work.
 ## Prerequisites
 
 - .NET SDK 10.0.303 or the compatible SDK selected by `global.json`.
-- SQL Server 2022 for development and real-SQL tests. SQLite is used only by
-  the stopped-source migration tool.
+- SQL Server 2022 for development and real-SQL tests.
 - Node.js 24 and Chromium for the frontend and browser test suites.
 - An Entra test identity/configuration for local authenticated journeys.
 
@@ -66,7 +65,7 @@ The Node suite discovers the retained frontend regression files under
 Polaris/Postmark boundaries:
 
 ```powershell
-dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --minimum-expected-tests 1437
+dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release
 ```
 
 Set `ASAP_TEST_SQL_CONNECTION_STRING` when the local SQL connection is not the
@@ -77,28 +76,25 @@ of the .NET test project and are also selected by the normal browser command:
 npm run test:browser
 ```
 
-That command runs the patron, staff, and legacy-request-link Playwright
+That command runs the patron, staff, and native request-link Playwright
 journeys against loopback Kestrel with real SQL. No live Polaris, Postmark, or
 IIS host is required for ordinary development CI.
 
-## Migration
+## Database lifecycle
 
-`src/Asap.Migration` is a separate self-contained `win-x64` executable for a
-controlled cutover from a stopped legacy SQLite source and its file storage.
-It exports normalized, hashed JSON, validates the package, imports into a
-fresh SQL target, and reconciles the result. Read its
-[migration README](src/Asap.Migration/README.md) and the preserved source notes
-before handling real data. Native SQLite loading is intentional; the web app
-does not use SQLite as a persistence substitute.
+PocketBase was an internal proof of concept and had no production deployment or
+data to migrate. Its executable, source contracts, mapping table and upgrade
+compatibility have been retired. Git history preserves that implementation.
 
-The migration source identity is pinned in code and in the package manifest.
-`database/Asap.Database/Tables/LegacyPocketBaseMapping.sql` preserves the
-source-to-target mapping needed for legacy request links and migration audit.
+The DACPAC supports fresh SQL Server 2022 databases and repeat deployments of
+schema 13. Older and newer schemas fail explicitly. Existing data and data-loss
+guards remain protected; any reset of a pre-production database requires a
+separate explicit decision. Current hold/pickup journals remain authoritative.
 
 ## Test-IIS package
 
 The repository workflow builds and validates the Web publish, DACPAC,
-self-contained migration output, and the test-IIS ZIP. The package uses the
+and the test-IIS ZIP. The package uses the
 exact tested commit and a digest-before-extract gate. The deployment script's
 `-ValidateOnly` mode checks extraction and manifest integrity without mutating
 an IIS host. See [test-IIS activation](docs/implementation/test-iis-activation.md)
@@ -114,13 +110,13 @@ authorized operational task to update its deployment evidence.
 Production provider validation, live Polaris/Postmark mutations, production
 tagging, cutover, backup/recovery rehearsal, and IIS activation are deferred.
 The temporary email transport is a deterministic development/test boundary,
-not production evidence. A stopped legacy source is forensic/migration input
-only and is never documented as a writable fallback after cutover.
+not production evidence.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [DESIGN.md](DESIGN.md),
 [PRODUCT.md](PRODUCT.md), [STACK.md](STACK.md), and the current
 [port status](docs/implementation/PORT-STATUS.md) for the maintained project
-contracts. The full historical porting pack remains under `docs/dotnet-port`.
+contracts. Obsolete porting and migration contracts are archived in Git history.
+See [CI execution and evidence](scripts/ci/test-selection.md) for current qualification.
 
 ## License
 

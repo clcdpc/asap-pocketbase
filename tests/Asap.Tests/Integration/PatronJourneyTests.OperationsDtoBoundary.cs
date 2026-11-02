@@ -95,6 +95,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes()
     {
         const int scope = 382821;

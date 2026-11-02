@@ -479,7 +479,7 @@ public sealed partial class TitleRequestMutationService(
         var successfulOperation = await context.HoldPlacementOperations.AnyAsync(
             item => item.TitleRequestId == request.Id && item.State == HoldOperationState.Succeeded,
             cancellationToken);
-        var placedProtection = successfulOperation || request.LegacyHoldProtected;
+        var placedProtection = successfulOperation;
         var capabilities = TitleRequestWorkflowPolicy.Evaluate(request, incompleteOperation, placedProtection);
         if (directQueue && (!capabilities.CanChangeWorkflowState || !capabilities.CanChangeBib || !capabilities.CanEditIdentifier))
         {
@@ -1042,7 +1042,7 @@ public sealed partial class TitleRequestMutationService(
         var capability = TitleRequestWorkflowPolicy.Evaluate(
             request,
             incompleteOperation,
-            successfulOperation || request.LegacyHoldProtected);
+            successfulOperation);
         if (identifierChanged && !capability.CanEditIdentifier || bibChanged && !capability.CanChangeBib)
         {
             return (capability.BlockingReason ?? "identifier_locked_by_stage", null);
@@ -1133,8 +1133,7 @@ public sealed partial class TitleRequestMutationService(
             cancellationToken);
         var protection = await context.HoldPlacementOperations.AnyAsync(
                              item => item.TitleRequestId == request.Id && item.State == HoldOperationState.Succeeded,
-                             cancellationToken) ||
-                         request.LegacyHoldProtected;
+                             cancellationToken);
         var pendingPickup = await PickupPreferenceMutationService.HasIncompleteAsync(context, request.Id, cancellationToken);
         var capability = TitleRequestWorkflowPolicy.Evaluate(request, operation, protection, pendingPickup);
         if (!capability.CanRetryIdentifierCheck)
@@ -1225,15 +1224,14 @@ public sealed partial class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult("pickup_reconciliation_required");
         }
-        if (request.LegacyHoldProtected ||
-            await context.HoldPlacementOperations.AnyAsync(item => item.TitleRequestId == request.Id, cancellationToken))
+        if (await context.HoldPlacementOperations.AnyAsync(item => item.TitleRequestId == request.Id, cancellationToken))
         {
             return new TitleRequestMutationResult("hold_history_retained");
         }
         context.DeletedRequestAudits.Add(new DeletedRequestAudit
         {
             RequestType = "title_request",
-            OriginalRequestKey = request.LegacyId ?? request.Id.ToString(),
+            OriginalRequestKey = request.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
             LibraryOrganizationId = request.LibraryOrganizationId,
             Title = request.Title,
             Author = request.Author,

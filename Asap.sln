@@ -6,8 +6,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Asap.Web", "src\Asap.Web\As
 EndProject
 Project("{00D1A9C2-B5F0-4AF3-8072-F6C62B433612}") = "Asap.Database", "database\Asap.Database\Asap.Database.sqlproj", "{4E42DCF0-0C1E-43F8-8CEE-8A9A755F39F2}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Asap.Migration", "src\Asap.Migration\Asap.Migration.csproj", "{2537B91E-FC38-4E54-8254-659403D3AD11}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Asap.Tests", "tests\Asap.Tests\Asap.Tests.csproj", "{E7AAB36A-D0F6-47CB-B269-EA496F051F89}"
 EndProject
 Global
@@ -24,10 +22,6 @@ Global
 		{4E42DCF0-0C1E-43F8-8CEE-8A9A755F39F2}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4E42DCF0-0C1E-43F8-8CEE-8A9A755F39F2}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4E42DCF0-0C1E-43F8-8CEE-8A9A755F39F2}.Release|Any CPU.Build.0 = Release|Any CPU
-		{2537B91E-FC38-4E54-8254-659403D3AD11}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{2537B91E-FC38-4E54-8254-659403D3AD11}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{2537B91E-FC38-4E54-8254-659403D3AD11}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{2537B91E-FC38-4E54-8254-659403D3AD11}.Release|Any CPU.Build.0 = Release|Any CPU
 		{E7AAB36A-D0F6-47CB-B269-EA496F051F89}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{E7AAB36A-D0F6-47CB-B269-EA496F051F89}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E7AAB36A-D0F6-47CB-B269-EA496F051F89}.Release|Any CPU.ActiveCfg = Release|Any CPU

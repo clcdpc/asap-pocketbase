@@ -42,7 +42,6 @@ public sealed class AsapDbContext(DbContextOptions<AsapDbContext> options) : DbC
     public DbSet<DeletedRequestAudit> DeletedRequestAudits => Set<DeletedRequestAudit>();
     public DbSet<AdministrativeAudit> AdministrativeAudits => Set<AdministrativeAudit>();
     public DbSet<HoldPlacementOperation> HoldPlacementOperations => Set<HoldPlacementOperation>();
-    public DbSet<LegacyPocketBaseMapping> LegacyPocketBaseMappings => Set<LegacyPocketBaseMapping>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -133,8 +132,6 @@ public sealed class AsapDbContext(DbContextOptions<AsapDbContext> options) : DbC
             .OnDelete(DeleteBehavior.NoAction);
         modelBuilder.Entity<TitleRequestWorkflowTag>()
             .HasKey(value => new { value.TitleRequestId, value.WorkflowTagId });
-        modelBuilder.Entity<LegacyPocketBaseMapping>()
-            .HasKey(value => new { value.EntityType, value.PocketBaseId });
 
         foreach (var entityType in modelBuilder.Model.GetEntityTypes())
         {

@@ -8,7 +8,7 @@ const root = path.resolve(__dirname, '..');
 const bootstrap = path.join(root, 'scripts', 'deployment', 'Initialize-AsapTestHost.ps1');
 const bootstrapSource = fs.readFileSync(bootstrap, 'utf8');
 const documentedApplication = JSON.parse(
-  fs.readFileSync(path.join(root, 'docs', 'dotnet-port', 'examples', 'Config.example.json'), 'utf8')
+  fs.readFileSync(path.join(root, 'scripts', 'deployment', 'application.example.json'), 'utf8')
 );
 const deploymentSource = fs.readFileSync(path.join(root, 'scripts', 'deployment', 'Deploy-AsapTest.ps1'), 'utf8');
 const workflowSource = fs.readFileSync(path.join(root, '.github', 'workflows', 'dotnet.yml'), 'utf8');

@@ -1,3 +1,5 @@
+> Historical implementation record. PocketBase migration and pre-production upgrades are retired; this file is not a current execution or release contract. See [current status](PORT-STATUS.md) and [CI qualification](../../scripts/ci/test-selection.md).
+
 # Pinned Staff Workflow Reading Notes
 
 Read directly using `git show` at PocketBase commit

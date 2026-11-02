@@ -11,6 +11,7 @@ const draft = workflow.jobs['draft-validation'];
 const policy = workflow.jobs['validation-policy'];
 const gate = workflow.jobs.validation;
 const deploy = workflow.jobs['deploy-test-iis'];
+const browserJob = workflow.jobs['browser-qualification'];
 const reuse = JSON.parse(fs.readFileSync(path.join(root, 'scripts/ci/test-reuse.json'), 'utf8'));
 
 async function main() {
@@ -37,7 +38,7 @@ async function main() {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     // Run the actual hosted preflight script against a deterministic API boundary.
     await new AsyncFunction('context', 'github', 'core', policy.steps[0].with.script)(
-      { eventName: context.github.event_name, payload: context.github.event, repo: { owner, repo } },
+      { eventName: context.github.event_name, payload: context.github.event, ref: context.github.ref, repo: { owner, repo } },
       { rest: { pulls: { get: async (parameters) => {
         assert.equal(context.github.event_name, 'pull_request', 'Non-PR runs must not query a PR');
         assert.deepEqual(parameters, { owner, repo, pull_number: context.github.event.pull_request.number });
@@ -46,7 +47,7 @@ async function main() {
       } } } },
       { setOutput: (key, value) => { outputs[key] = value; }, setFailed: () => { failed = true; } }
     );
-    context.needs = { 'validation-policy': { result: failed ? 'failure' : 'success', outputs } };
+    context.needs = { 'validation-policy': { result: failed ? 'failure' : 'success', outputs }, 'browser-qualification': { result: outputs.mode === 'full' ? 'success' : 'skipped' } };
     return context;
   }
   function pr(action, isDraft, number = 17) {
@@ -98,7 +99,7 @@ async function main() {
   await check('explicit PR events and existing push/manual triggers', () => {
     assert.deepEqual(workflow.on.pull_request.types, ['opened', 'reopened', 'synchronize', 'ready_for_review', 'converted_to_draft']);
     assert.deepEqual(workflow.on.push.branches, ['main', 'codex/csharp-port', 'codex/slice-08-test-deployment']);
-    assert.deepEqual(workflow.on.push.tags, ['v*.*.*-test.*']);
+    assert.deepEqual(workflow.on.push.tags, ['v*.*.*']);
     assert.equal(workflow.on.workflow_dispatch.inputs.force_full_ci.default, false);
     assert.equal(workflow.on.workflow_dispatch.inputs.deploy_test_iis.default, false);
     assert.equal(workflow.on.pull_request_target, undefined);
@@ -202,7 +203,13 @@ async function main() {
     }
     assert.equal(enabled(deploy, push), false);
     assert.equal(enabled(deploy, tag), true);
-    assert.deepEqual(deploy.needs, ['build-test-package', 'validation']);
+    const release = await routed(nonPr('push', 112, 'refs/tags/v1.2.3'));
+    release.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
+    release.needs['build-test-package'] = { result: 'success' };
+    release.needs.validation = { result: 'success' };
+    assert.equal(enabled(full, release), true);
+    assert.equal(enabled(deploy, release), false, 'Production release tags qualify tests without test-IIS activation');
+    assert.deepEqual(deploy.needs, ['validation-policy', 'build-test-package', 'validation']);
     // Explicit status check bypasses the implicit success() that treats a skipped
     // draft-validation ancestor as a reason to skip an otherwise eligible deployment.
     assert.match(deploy.if, /!\s*cancelled\(\)/);
@@ -226,7 +233,7 @@ async function main() {
       assert.equal(report(context), 0, 'The reporting gate passes with the expected skipped draft branch');
       assert.equal(enabled(deploy, context), true, 'Full CI can deploy despite the skipped draft ancestor');
 
-      for (const dependency of ['build-test-package', 'validation']) {
+      for (const dependency of ['validation-policy', 'build-test-package', 'validation']) {
         for (const result of ['failure', 'cancelled', 'skipped', 'unexpected', undefined]) {
           context.needs[dependency].result = result;
           assert.equal(enabled(deploy, context), false, `${dependency}/${result} must block deployment`);
@@ -252,14 +259,29 @@ async function main() {
       assert.ok(!/upload-artifact/.test(candidate.uses || ''));
     }
     const unit = step(draft, 'Run SQL-independent .NET unit and configuration contracts').run;
-    assert.match(unit, /--minimum-expected-tests 100/);
-    assert.match(unit, /--filter 'FullyQualifiedName~Asap\.Tests\.Unit\.\|FullyQualifiedName~Asap\.Tests\.PolicyContractTests\.\|FullyQualifiedName~Asap\.Tests\.AnalyticsContractTests\.'/);
-    assert.equal(step(draft, 'Run legacy/frontend unit tests').run, 'npm test');
-    assert.match(step(draft, 'Check CI contracts and test reuse safety').run, /test_reuse\*\.py/);
+    assert.equal(unit, 'python3 -B scripts/ci/selection.py run-draft');
+    assert.equal(step(draft, 'Run frontend unit tests').run, 'npm test');
+    assert.match(step(draft, 'Check CI contracts and test reuse safety').run, /test_\*\.py/);
     for (const job of [full, draft]) {
       assert.equal(step(job, 'Validate workflow configuration').run, 'bash scripts/ci/check-workflows.sh');
       assert.equal(job.steps[0].with.ref, '${{ github.sha }}');
       assert.equal(step(job, 'Verify exact test source').run, 'python3 -B scripts/ci/reuse.py checkout');
+    }
+  });
+  await check('broader release qualification preserves the exact previous test-tag deployment eligibility', async () => {
+    for (const [ref, expected] of [
+      ['refs/tags/v1.2.3-test.1', true], ['refs/tags/v1.2.3-test.preview', true],
+      ['refs/tags/v1.2.3-prod-test.1', true], ['refs/tags/v1.2.3', false],
+      ['refs/tags/v1.2.3-TEST.1', false], ['refs/tags/v1.2.3-test', false],
+      ['refs/tags/v1.2.3-test.1/other', false], ['refs/tags/vgroup/1.2.3-test.1', false],
+      ['refs/heads/v1.2.3-test.1', false]
+    ]) {
+      const context = await routed(nonPr('push', 125, ref));
+      context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
+      context.needs['build-test-package'] = { result: 'success' };
+      context.needs.validation = { result: 'success' };
+      assert.equal(context.needs['validation-policy'].outputs.test_tag, String(expected), ref);
+      assert.equal(enabled(deploy, context), expected, ref);
     }
   });
   await check('full CI retains original evidence checks and current-commit packaging', () => {
@@ -270,23 +292,29 @@ async function main() {
     assert.equal(step(full, 'Restore and build').run, 'dotnet build Asap.sln --configuration Release');
     const safety = step(full, 'Verify current CI safety contracts');
     assert.equal(safety.if, undefined);
-    assert.match(safety.run, /node tests\/ci_workflow_contract\.test\.js/);
-    assert.match(safety.run, /node tests\/test_iis_deployment_contract\.test\.js/);
+    assert.equal(safety.run, 'node tests/run_all.js --ci-safety');
     assert.ok(full.steps.indexOf(safety) < full.steps.indexOf(step(full, 'Find reusable test executions')));
     const verify = step(full, 'Verify required test suites');
     assert.equal(verify.if, '${{ always() }}');
     assert.equal(verify.run, 'python3 -B scripts/ci/reuse.py verify');
     for (const suite of ['dotnet', 'browser', 'frontend']) {
-      const test = full.steps.find((candidate) => candidate.id === suite);
+      const executor = suite === 'browser' ? browserJob : full;
+      const test = executor.steps.find((candidate) => candidate.id === suite);
       assert.equal(test.if, `\${{ steps.reuse.outputs.${suite} != 'true' }}`);
       assert.equal(test['continue-on-error'], undefined);
-      assert.ok(step(full, `Upload original ${suite} execution evidence`).if.includes("steps.verify.outcome == 'success'"));
+      assert.ok(step(executor, `Upload original ${suite} execution evidence`).if.includes("steps.verify.outcome == 'success'"));
     }
     const tests = step(full, 'Run .NET and real SQL tests (non-browser partition)').run;
-    assert.match(tests, /--minimum-expected-tests 1525/);
-    assert.match(tests, /bash scripts\/ci\/run-with-performance\.sh/);
-    assert.equal(step(full, 'Run browser accessibility tests').run, 'npm run test:browser');
-    assert.ok(full.steps.indexOf(step(full, 'Run legacy/frontend unit tests')) < full.steps.indexOf(step(full, 'Start SQL Server 2022')));
+    assert.equal(tests, 'bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run');
+    assert.equal(step(full, 'Resolve required test population').run, 'python3 -B scripts/ci/selection.py prepare');
+    assert.ok(full.steps.indexOf(step(full, 'Resolve required test population')) < full.steps.indexOf(step(full, 'Find reusable test executions')));
+    assert.equal(full.steps[0].with['fetch-depth'], 0, 'Selection must have complete Git ancestry');
+    assert.equal(step(full, 'Run frontend unit tests').run, 'bash scripts/ci/run-with-performance.sh npm test -- --ci-remaining');
+    assert.equal(step(full, 'Check test reuse safety').run, "python3 -B -m unittest discover -s scripts/ci -p 'test_*.py' -v");
+    assert.equal(full.steps.filter((candidate) => /unittest discover/.test(candidate.run || '')).length, 1);
+    assert.ok(full.steps.indexOf(step(full, 'Check test reuse safety')) < full.steps.indexOf(step(full, 'Find reusable test executions')));
+    assert.equal(step(browserJob, 'Run browser accessibility tests').run, 'bash scripts/ci/run-with-performance.sh npm run test:browser');
+    assert.ok(full.steps.indexOf(step(full, 'Run frontend unit tests')) < full.steps.indexOf(step(full, 'Start SQL Server 2022')));
     for (const name of ['Verify publish artifacts', 'Determine exact artifact identity', 'Create exact test-IIS deployment ZIP',
       'Validate test-IIS package without host mutation', 'Upload exact test-IIS deployment artifact']) {
       assert.equal(step(full, name).if, undefined, `${name} must never depend on a reuse HIT`);
@@ -294,10 +322,37 @@ async function main() {
     assert.equal(step(full, 'Remove SQL Server test container').if, '${{ always() }}');
     assert.ok(!reuse.exclusions.some((rule) => rule.paths.includes('.github/workflows/dotnet.yml')));
   });
+  await check('browser and SQL qualification use independent ephemeral jobs with exact source and isolated credentials', () => {
+    assert.equal(browserJob.needs, 'validation-policy');
+    assert.equal(browserJob['runs-on'], 'clc-linux');
+    assert.equal(browserJob.name, reuse.browser_job);
+    assert.equal(step(full, 'Find reusable test executions').env.ASAP_CI_SUITES, 'dotnet,frontend');
+    assert.equal(step(full, 'Verify required test suites').env.ASAP_CI_SUITES, 'dotnet,frontend');
+    assert.equal(full.env.ASAP_CI_SUITES, undefined);
+    assert.equal(step(browserJob, 'Find reusable test executions').env.ASAP_CI_SUITES, 'browser');
+    assert.equal(step(browserJob, 'Verify required test suites').env.ASAP_CI_SUITES, 'browser');
+    assert.equal(browserJob.env.ASAP_CI_SUITES, undefined);
+    assert.ok(!full.steps.some((candidate) => candidate.id === 'browser'));
+    for (const job of [full, browserJob]) {
+      assert.equal(job.steps[0].with.ref, '${{ github.sha }}');
+      assert.match(step(job, 'Generate ephemeral SQL test credentials').run, /openssl rand/);
+      assert.equal(step(job, 'Remove SQL Server test container').if, '${{ always() }}');
+      assert.equal(step(job, 'Verify required test suites').if, '${{ always() }}');
+    }
+    assert.equal(step(browserJob, 'Install browser acceptance dependencies').run, 'npx playwright install chromium');
+  });
+  await check('missing, failed, skipped or cancelled browser qualification cannot make the required gate green', async () => {
+    for (const result of ['failure', 'skipped', 'cancelled', undefined, '']) {
+      const context = await routed(pr('synchronize', false));
+      context.needs['build-test-package'] = { result: 'success' };
+      context.needs['browser-qualification'] = { result };
+      assert.equal(report(context), 1);
+    }
+  });
   await check('the reporter always inspects selected execution and runs no PR code', () => {
     assert.equal(gate.if, '${{ always() }}');
     assert.deepEqual(gate.permissions, {});
-    assert.deepEqual(gate.needs, ['validation-policy', 'build-test-package', 'draft-validation']);
+    assert.deepEqual(gate.needs, ['validation-policy', 'build-test-package', 'browser-qualification', 'draft-validation']);
     assert.equal(gate['runs-on'], 'ubuntu-latest');
     assert.ok(gate.steps.every((candidate) => !candidate.uses));
     assert.equal(gate['continue-on-error'], undefined);

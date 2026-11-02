@@ -8,12 +8,10 @@
   for established feature queries.
 - **Jobs:** Hangfire with the pinned SQL schema asset and explicit business
   timezone/schedule configuration.
-- **Migration:** `Asap.Migration`, a self-contained `win-x64` .NET executable
-  using native SQLite loading for stopped legacy-source export and SQL import.
 - **Frontend dependencies:** pinned browser assets under
   `src/Asap.Web/Frontend/vendor`, with `vendor-manifest.json` and licenses.
 - **Development/CI tooling:** Node.js 24, npm, jsdom tests, Playwright, and
   axe-core. These tools never enter the application publish or IIS package.
-- **Deployment:** Web publish plus DACPAC and a separate migration publish;
+- **Deployment:** Web publish plus DACPAC;
   repository-side test-IIS packaging and validation are implemented, while
   runner activation and production deployment remain deferred.

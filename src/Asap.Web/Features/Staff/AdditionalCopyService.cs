@@ -23,7 +23,6 @@ public sealed record AdditionalCopyTimeoutContext(bool Enabled, int? Days);
 public sealed record AdditionalCopyDto(
     string Id,
     string Type,
-    string? LegacyId,
     string? SourceTitleRequest,
     string? SourceStatus,
     int LibraryOrgId,
@@ -145,10 +144,8 @@ public sealed class AdditionalCopyService(
         CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var requestId = await LegacyRequestLinkResolver.ResolveAsync(
-            context,
+        var requestId = await RequestLinkResolver.ResolveAsync(
             context.AdditionalCopyRequests.Select(item => item.Id),
-            LegacyRequestLinkResolver.AdditionalCopyEntityType,
             id,
             cancellationToken);
         if (!requestId.HasValue)
@@ -1025,7 +1022,6 @@ public sealed class AdditionalCopyService(
             return new AdditionalCopyDto(
                 request.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 "additional_copy",
-                request.LegacyId,
                 request.SourceTitleRequestId?.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 source?.Status,
                 request.LibraryOrganizationId,

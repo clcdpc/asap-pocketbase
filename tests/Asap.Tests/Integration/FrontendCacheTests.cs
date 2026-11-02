@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 namespace Asap.Tests.Integration;
 
 [TestClass]
+[TestCategory(TestCategories.Browser)]
 [DoNotParallelize]
 public sealed class FrontendCacheTests
 {
@@ -127,6 +128,7 @@ public sealed class FrontendCacheTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task NormalNavigationRefreshesPublishedEntryAndNestedModulesWithRealBrowserCaching()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));

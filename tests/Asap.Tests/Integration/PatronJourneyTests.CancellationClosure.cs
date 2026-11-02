@@ -253,6 +253,7 @@ public sealed partial class PatronJourneyTests
     [DataRow(true)]
     public async Task HoldHeartbeatSqlFailurePreservesPrimaryCreateFault(bool cancelCaller)
     {
+        timeProvider!.EnableManualTimers();
         var seeded = await SeedBibOwnershipRequestAsync(
             $"hold-heartbeat-primary-{Guid.NewGuid():N}",
             9001,
@@ -418,6 +419,7 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task HoldHeartbeatSqlFailureKeepsRecordedCreateResultRecoverable()
     {
+        timeProvider!.EnableManualTimers();
         var seeded = await SeedBibOwnershipRequestAsync(
             $"hold-heartbeat-result-{Guid.NewGuid():N}",
             9001,
@@ -1354,11 +1356,12 @@ public sealed partial class PatronJourneyTests
         return primedValue;
     }
 
-    private static async Task WaitForHoldHeartbeatFailureAsync(
+    private async Task WaitForHoldHeartbeatFailureAsync(
         HoldHeartbeatFailureFixture fixture,
         long primedValue)
     {
-        var timeout = DateTime.UtcNow.AddSeconds(50);
+        await timeProvider!.FireTimerAsync();
+        var timeout = DateTime.UtcNow.AddSeconds(10);
         while (DateTime.UtcNow < timeout)
         {
             var currentValue = await ReadHoldHeartbeatSequenceValueAsync(fixture.SequenceName);

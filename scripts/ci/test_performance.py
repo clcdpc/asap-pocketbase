@@ -285,7 +285,7 @@ class LifecycleTests(unittest.TestCase):
                 self.assertGreaterEqual(len(perf.read_samples(self.output / "samples.jsonl")), 2)
                 files = list(self.output.iterdir())
                 self.assertEqual({path.name for path in files}, {"environment.json", "samples.jsonl", "summary.md",
-                    "sql-waits.jsonl", "sql-io.jsonl", "sql-activity.jsonl", "test-timings.md", "diagnostic-summary.md"})
+                    "sql-waits.jsonl", "sql-io.jsonl", "sql-activity.jsonl", "test-timings.md", "diagnostic-summary.md", "fixture-summary.json"})
                 for path in files:
                     text = path.read_text(encoding="utf-8")
                     self.assertNotIn(SECRET, text)
@@ -375,7 +375,13 @@ class LifecycleTests(unittest.TestCase):
         descendant = f"import os,time; from pathlib import Path; Path({str(pidfile)!r}).write_text(str(os.getpid())); time.sleep(60)"
         client = f"import subprocess,sys,time; from pathlib import Path; subprocess.Popen([sys.executable,'-c',{descendant!r}]); p=Path({str(pidfile)!r}); end=time.monotonic()+2\nwhile not p.exists() and time.monotonic()<end: time.sleep(.01)"
         self.assertIsNone(perf.optional_command([sys.executable, "-c", client], threading.Event(), timeout=.4))
-        self.assertFalse(running(int(pidfile.read_text())))
+        # SIGKILL delivery is asynchronous for an orphaned grandchild. Unlike the
+        # reaped direct client, its exit need not finish before communicate returns.
+        pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 2
+        while running(pid) and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertFalse(running(pid), "The optional command left a running descendant")
 
     @unittest.skipUnless(LINUX, "POSIX forced termination")
     def test_cancellation_escalates_when_command_ignores_signal(self):

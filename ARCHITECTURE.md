@@ -28,9 +28,9 @@ existing parameterized Dapper/ADO.NET boundaries. Transactions, constraints,
 rowversion checks, scope predicates, and outbox/event writes are part of the
 observable contract rather than in-memory substitutes.
 
-`LegacyPocketBaseMapping` is intentional migration data. It maps source IDs to
-new IDs so old request links and audit references remain resolvable after
-cutover; it does not make the retired runtime a second application backend.
+Schema 13 supports fresh deployment and safe current-version redeployment.
+Pre-production upgrade paths are retired. Unsupported versions fail before DDL;
+deployment never resets a configured database automatically.
 
 ## Feature boundaries
 
@@ -44,15 +44,10 @@ cutover; it does not make the retired runtime a second application backend.
 - Settings are split by system, library, and system-default-with-library-
   override scope. Effective values are resolved in one service and reset is an
   explicit operation that preserves library-owned records.
-- `Asap.Migration` is a separate executable. It reads a stopped legacy SQLite
-  source, creates a normalized package, validates identity and integrity,
-  imports into SQL, and reconciles counts/fingerprints. It is not used by the
-  web request path.
-
 ## Safety boundaries
 
-The application never needs a writable legacy runtime to serve current traffic.
-The source identity and schema version used by migration are pinned and
-recorded in the package. Deterministic provider fakes and real SQL are used in
+The abandoned PocketBase proof of concept has no operational or migration role.
+Current native SQL identities and durable operation journals own links and recovery.
+Deterministic provider fakes and real SQL are used in
 ordinary CI; live Polaris, Postmark, production infrastructure, and IIS host
 activation remain separately authorized release work.

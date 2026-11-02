@@ -1,27 +1,32 @@
 'use strict';
 
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const path = require('node:path');
 
 const repositoryRoot = path.resolve(__dirname, '..', '..');
-const browserTests = [
-  'FullyQualifiedName~NormalNavigationRefreshesPublishedEntryAndNestedModulesWithRealBrowserCaching',
-  'FullyQualifiedName~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport',
-  'FullyQualifiedName~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers',
-  'FullyQualifiedName~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures',
-  'FullyQualifiedName~PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses',
-  'FullyQualifiedName~StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp',
-  'FullyQualifiedName~SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp',
-  'FullyQualifiedName~LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata',
-  'FullyQualifiedName~ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery',
-  'FullyQualifiedName~OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes',
-  'FullyQualifiedName~EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance',
-  'FullyQualifiedName~Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload',
-  'FullyQualifiedName~StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry',
-  'FullyQualifiedName~LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces',
-  'FullyQualifiedName~SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference',
-  'FullyQualifiedName~StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope',
-].join('|');
+const fs = require('node:fs');
+const dotnet = process.platform === 'win32' ? 'dotnet.exe' : 'dotnet';
+const discovery = spawnSync(dotnet, [
+  'tests/Asap.Tests/bin/Release/net10.0/Asap.Tests.dll',
+  '--list-tests', 'json', '--no-ansi', '--filter', 'TestCategory=Browser'
+], { cwd: repositoryRoot, encoding: 'utf8', shell: false });
+assert.ifError(discovery.error);
+assert.equal(discovery.status, 0, discovery.stderr);
+const catalog = JSON.parse(discovery.stdout);
+assert.equal(catalog.schemaVersion, 1);
+assert.ok(catalog.tests.length > 0);
+const identities = catalog.tests.map((test) =>
+  createHash('sha256').update(JSON.stringify(test.uid)).digest('hex')).sort();
+assert.equal(new Set(identities).size, identities.length);
+const selected = process.env.ASAP_CI_TEST_SELECTION
+  ? JSON.parse(fs.readFileSync(process.env.ASAP_CI_TEST_SELECTION, 'utf8')).suites.browser
+  : { filter: 'TestCategory=Browser', expected: identities.length, identities };
+assert.equal(selected.filter, 'TestCategory=Browser');
+assert.equal(selected.expected, identities.length);
+assert.deepEqual(selected.identities, identities);
+const browserTests = selected.filter;
 
 const child = spawn(
   process.platform === 'win32' ? 'dotnet.exe' : 'dotnet',
@@ -34,7 +39,7 @@ const child = spawn(
     '--no-build',
     '--no-restore',
     '--minimum-expected-tests',
-    '17',
+    String(selected.expected),
     '--filter',
     browserTests,
     ...(process.env.ASAP_CI_BROWSER_RESULTS ? [

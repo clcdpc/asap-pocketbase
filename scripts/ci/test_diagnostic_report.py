@@ -55,8 +55,8 @@ def write_evidence(output):
         "requests": {"active_requests": 3, "waiting_requests": 2, "blocked_sessions": 1, "max_blocked_wait_ms": 300},
         "schedulers": {"runnable_tasks": 4, "max_scheduler_runnable_tasks": 2, "queued_work_items": 0},
         "request_waits": [{"wait_type": "LCK_M_X", "request_count": 1}], "memory": None}])
-    write_jsonl(output / "fixture-timings.jsonl", [{"group": "MigrationCliTests", "operation": "dacpac_deploy_including_database_creation",
-        "duration_seconds": 2, "succeeded": True}, {"group": "MigrationCliTests", "operation": "dacpac_deploy_including_database_creation",
+    write_jsonl(output / "fixture-timings.jsonl", [{"group": "DatabaseBaselineTests", "operation": "dacpac_deploy_including_database_creation",
+        "duration_seconds": 2, "succeeded": True}, {"group": "DatabaseBaselineTests", "operation": "dacpac_deploy_including_database_creation",
         "duration_seconds": 3, "succeeded": False}])
     report.write_reports(output)
 
@@ -138,6 +138,22 @@ class ConsolidatedTests(unittest.TestCase):
             self.assertTrue((output / "test-timings.md").exists())
             self.assertIn("TRX unavailable or incomplete", path.read_text())
             self.assertIn("SQL waits: 1 flushed records", path.read_text())
+
+
+class FixtureStatisticsTests(unittest.TestCase):
+    def test_overlapping_monotonic_spans_are_not_added_as_wall_time(self):
+        rows = [dict(group="fixture", operation="host", duration_seconds=10, process_id=1,
+                     started_ticks=0, finished_ticks=100, tick_frequency=10, succeeded=True),
+                dict(group="fixture", operation="sql", duration_seconds=3, process_id=1,
+                     started_ticks=20, finished_ticks=50, tick_frequency=10, succeeded=True),
+                dict(group="fixture", operation="sql", duration_seconds=4, process_id=1,
+                     started_ticks=40, finished_ticks=80, tick_frequency=10, succeeded=True)]
+        result = report.fixture_statistics(rows)
+        self.assertEqual(result["all_operations_union_seconds"], 10)
+        sql = next(row for row in result["operations"] if row["operation"] == "sql")
+        self.assertEqual(sql["inclusive_seconds"], 7)
+        self.assertEqual(sql["interval_union_seconds"], 6)
+        self.assertEqual(sql["p50_seconds"], 3.5)
 
 
 if __name__ == "__main__":
