@@ -2618,6 +2618,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp()
     {
         factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));

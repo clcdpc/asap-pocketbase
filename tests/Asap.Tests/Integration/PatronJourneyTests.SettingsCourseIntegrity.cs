@@ -11,6 +11,7 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task SystemFormatRuleEditorPersistsItsActualPostThroughSqlAndReload()
     {
         factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
@@ -342,6 +343,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     [DataRow("partial-snapshot")]
     [DataRow("missing-row")]
     public async Task LibraryRuleEditorBlocksAnIncompleteProjectionBeforePostingReplacement(string witness)

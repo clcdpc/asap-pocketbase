@@ -1,7 +1,6 @@
 CREATE TABLE [asap].[AdditionalCopyRequest]
 (
     [Id] bigint IDENTITY(1,1) NOT NULL CONSTRAINT [PK_AdditionalCopyRequest] PRIMARY KEY,
-    [LegacyId] nvarchar(64) NULL,
     [SourceTitleRequestId] bigint NULL,
     [LibraryOrganizationId] int NOT NULL,
     [LibraryNameSnapshot] nvarchar(256) NULL,
@@ -60,9 +59,6 @@ CREATE TABLE [asap].[AdditionalCopyRequest]
 );
 GO
 
-CREATE UNIQUE INDEX [UX_AdditionalCopyRequest_LegacyId]
-    ON [asap].[AdditionalCopyRequest]([LegacyId]) WHERE [LegacyId] IS NOT NULL;
-GO
 
 CREATE INDEX [IX_AdditionalCopyRequest_LibraryStatus]
     ON [asap].[AdditionalCopyRequest]([LibraryOrganizationId], [Status], [CreatedUtc] DESC, [Id] DESC);

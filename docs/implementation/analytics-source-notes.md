@@ -1,3 +1,5 @@
+> Historical implementation record. PocketBase migration and pre-production upgrades are retired; this file is not a current execution or release contract. See [current status](PORT-STATUS.md) and [CI qualification](../../scripts/ci/test-selection.md).
+
 # Pinned Analytics Source Notes
 
 Read-only preparation, not Slice 6 implementation. Inspected exact PocketBase

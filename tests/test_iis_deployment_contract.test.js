@@ -16,14 +16,6 @@ const postDeployment = fs.readFileSync(
   path.join(root, 'database', 'Asap.Database', 'Scripts', 'PostDeployment.sql'),
   'utf8'
 );
-const migrationContract = fs.readFileSync(
-  path.join(root, 'src', 'Asap.Migration', 'MigrationContract.cs'),
-  'utf8'
-);
-const migrationProject = fs.readFileSync(
-  path.join(root, 'src', 'Asap.Migration', 'Asap.Migration.csproj'),
-  'utf8'
-);
 const activation = fs.readFileSync(path.join(root, 'docs/implementation/test-iis-activation.md'), 'utf8');
 const slice8 = fs.readFileSync(path.join(root, 'docs/implementation/slice-08.md'), 'utf8');
 
@@ -33,7 +25,7 @@ childProcess.execFileSync(
   { stdio: 'inherit' }
 );
 
-assert.ok(workflow.includes("tags:\n      - 'v*.*.*-test.*'"), 'test deployment tags should use the documented convention');
+assert.ok(workflow.includes("tags:\n      - 'v*.*.*'"), 'all release tags must qualify every category');
 assert.ok(workflow.includes('- codex/csharp-port'), 'integration-branch push trigger is required');
 assert.ok(workflow.includes('- codex/slice-08-test-deployment'), 'candidate push trigger is required');
 assert.ok(workflow.includes('  workflow_dispatch:\n'), 'manual dispatch should be declared');
@@ -47,57 +39,36 @@ assert.ok(!workflow.includes('\n    concurrency:'), 'build-test-package must not
 assert.ok(workflow.includes('Generate ephemeral SQL test credentials'), 'CI SQL credentials should be generated per run');
 assert.ok(!workflow.includes('Asap_Slice0_SQL_2026'), 'CI must not retain the historical hard-coded SQL password');
 assert.ok(workflow.includes('ref: ${{ github.sha }}'), 'the hosted job should check out the exact event SHA');
-assert.ok(workflow.includes('--minimum-expected-tests 1525'), 'the non-browser real-SQL partition must guard the current discovered test count');
-const nonBrowserFilter = workflow.match(/--filter\s*'([^']+)'/)?.[1];
-assert.ok(nonBrowserFilter, 'the non-browser real-SQL partition must explicitly exclude browser journeys');
-const nonBrowserFilterTerms = nonBrowserFilter.split('&');
-const browserExclusions = nonBrowserFilterTerms
-  .filter((term) => term.startsWith('FullyQualifiedName!~'))
-  .map((term) => term.slice('FullyQualifiedName!~'.length));
-const nonBrowserIncludes = nonBrowserFilterTerms
-  .filter((term) => term.startsWith('FullyQualifiedName~'))
-  .map((term) => term.slice('FullyQualifiedName~'.length));
-const browserJourneys = [...browserRunner.matchAll(/'FullyQualifiedName~([^']+)'/g)]
-  .map((match) => match[1]);
-assert.equal(browserJourneys.length, 16, 'the browser partition must retain all sixteen designated methods (seventeen discovered cases)');
-assert.equal(nonBrowserIncludes.length, 0, 'the non-browser partition should include all discovered tests except explicit browser exclusions');
-assert.equal(new Set(browserJourneys).size, browserJourneys.length, 'the browser partition must not list a journey twice');
-assert.deepStrictEqual(
-  [...browserExclusions].sort(),
-  [...browserJourneys].sort(),
-  'the non-browser partition must exclude exactly the designated browser methods'
-);
-assert.equal(
-  new Set(browserExclusions).size,
-  browserExclusions.length,
-  'the non-browser partition must not exclude any browser journey twice'
-);
-assert.ok(
-  nonBrowserIncludes.every((name) => !browserJourneys.includes(name)),
-  'the browser and non-browser partitions must be disjoint'
-);
-assert.match(browserRunner, /'--minimum-expected-tests',\s*'17'/,
-  'the browser runner must guard all seventeen discovered browser cases');
+const execution = YAML.parse(workflow, { uniqueKeys: true }).jobs['build-test-package'];
+const selectionStep = execution.steps.find((step) => step.name === 'Resolve required test population');
+assert.equal(selectionStep.run, 'python3 -B scripts/ci/selection.py prepare');
+assert.equal(selectionStep['continue-on-error'], undefined, 'population verification is mandatory');
+const nonBrowserStep = execution.steps.find((step) => step.id === 'dotnet');
+assert.equal(nonBrowserStep.run, 'bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run');
+assert.ok(!/--minimum-expected-tests [0-9]+/.test(nonBrowserStep.run), 'non-browser counts must derive from complete native discovery');
+const reviewed = JSON.parse(fs.readFileSync(path.join(root, 'scripts/ci/reviewed-test-categories.json'), 'utf8'));
+assert.ok(reviewed.Browser.length > 0, "the reviewed browser method population must be nonempty");
+assert.equal(new Set(reviewed.Browser).size, reviewed.Browser.length);
+assert.ok(browserRunner.includes("filter: 'TestCategory=Browser'"), 'standalone browser execution must use the explicit category');
+assert.ok(browserRunner.includes('String(selected.expected)'), 'CI browser minimum must use native discovered population');
 assert.ok(workflow.includes('run: npm test'), 'the frontend test gate must remain');
 assert.ok(workflow.includes('dotnet publish src/Asap.Web/Asap.Web.csproj'), 'Web publish must remain a hosted check');
-assert.ok(workflow.includes('dotnet publish src/Asap.Migration/Asap.Migration.csproj'), 'native migration publish check must remain');
+assert.ok(!workflow.includes('src/Asap.Migration'), 'retired migration executable must not be built or published');
 
 const schemaVersions = {
   workflow: Number(workflow.match(/applicationSchemaVersion = (\d+)/)?.[1]),
   deployment: Number(deployment.match(/manifest\.applicationSchemaVersion -ne (\d+)/)?.[1]),
   runtime: Number(runtimeSchemaVersion.match(/ExpectedVersion = (\d+)/)?.[1]),
-  postDeployment: Number(postDeployment.match(/VALUES \(1, (\d+), SYSUTCDATETIME\(\)\)/)?.[1]),
-  migrationContract: Number(migrationContract.match(/ExpectedSchemaVersion = (\d+)/)?.[1]),
-  migrationProject: Number(migrationProject.match(/ExpectedSchemaVersion" Value="(\d+)"/)?.[1])
+  postDeployment: Number(postDeployment.match(/VALUES \(1, (\d+), SYSUTCDATETIME\(\)\)/)?.[1])
 };
 assert.ok(
   Object.values(schemaVersions).every((version) => version === 13),
   `application schema version must be 13 in every package/runtime contract: ${JSON.stringify(schemaVersions)}`
 );
 assert.match(
-  postDeployment,
-  /Schema 7 is a pre-release reset boundary\. Recreate the application database from this DACPAC\./,
-  'the DACPAC must reject in-place upgrades from pre-schema-7 databases'
+  fs.readFileSync(path.join(root, 'database/Asap.Database/Scripts/PreDeployment.sql'), 'utf8'),
+  /Version.*< 13/,
+  'the DACPAC must reject every unsupported earlier schema before changing data'
 );
 
 const deploymentJobStart = workflow.indexOf('  deploy-test-iis:');
@@ -123,7 +94,7 @@ assert.ok(deployCondition.includes("vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true'"
   'deployment must retain the repository activation gate');
 assert.ok(deployCondition.includes("(github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis)"),
   'manual deployment must require explicit opt-in');
-assert.ok(deployCondition.includes("(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))"),
+assert.ok(deployCondition.includes("(github.event_name == 'push' && needs.validation-policy.outputs.test_tag == 'true')"),
   'test-release tags must remain eligible for automatic deployment');
 assert.ok(
   workflow.slice(deploymentJobStart).includes('runs-on: [self-hosted, windows, x64, asap-test-iis]'),

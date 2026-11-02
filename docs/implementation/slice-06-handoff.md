@@ -1,3 +1,5 @@
+> Historical implementation record. PocketBase migration and pre-production upgrades are retired; this file is not a current execution or release contract. See [current status](PORT-STATUS.md) and [CI qualification](../../scripts/ci/test-selection.md).
+
 # Slice 6 Thin Autonomous Supervisor Handoff
 
 ## Post-Acceptance Correction Checkpoint - 2026-09-15

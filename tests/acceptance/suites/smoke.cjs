@@ -8,7 +8,7 @@ const { human } = require('./pr410.cjs');
 
 function initialRequest(request, fixture) {
   assert.equal(request.id, fixture.id, 'Authoritative request identity');
-  assert.equal(request.legacyId, fixture.key, 'Authoritative synthetic fixture identity');
+  assert.equal(request.title, 'Acceptance ' + fixture.key.slice('acceptance-pr410-'.length), 'Authoritative native fixture title');
   assert.equal(request.libraryOrgId, 2, 'Request belongs to Review Library');
   assert.equal(request.status, 'suggestion', 'Authoritative initial Suggestion status');
   assert.equal(typeof request.version, 'string', 'Authoritative initial rowversion');

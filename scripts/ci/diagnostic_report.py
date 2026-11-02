@@ -59,6 +59,37 @@ def percentile(values, percent):
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (index - lower)
 
 
+def fixture_statistics(rows):
+    """Inclusive samples and monotonic interval unions; never add nested spans."""
+    groups = defaultdict(list)
+    for row in rows:
+        if number(row.get("duration_seconds")) and row["duration_seconds"] >= 0:
+            groups[(row.get("group", "unknown"), row.get("operation", "unknown"))].append(row)
+    def intervals(samples):
+        by_process = defaultdict(list)
+        for row in samples:
+            start, end, frequency = (row.get(key) for key in ("started_ticks", "finished_ticks", "tick_frequency"))
+            if all(number(value) for value in (start, end, frequency)) and frequency > 0 and end >= start:
+                by_process[(row.get("process_id"), frequency)].append((start / frequency, end / frequency))
+        total = 0
+        for values in by_process.values():
+            finish = None
+            for start, end in sorted(values):
+                total += max(0, end - max(start, finish if finish is not None else start))
+                finish = max(end, finish if finish is not None else end)
+        return total if by_process else None
+    result = []
+    for (group, operation), samples in sorted(groups.items()):
+        durations = [row["duration_seconds"] for row in samples]
+        result.append({"group": group, "operation": operation, "count": len(samples),
+                       "successful": sum(row.get("succeeded") is True for row in samples),
+                       "inclusive_seconds": sum(durations), "interval_union_seconds": intervals(samples),
+                       "p50_seconds": percentile(durations, 50), "p90_seconds": percentile(durations, 90),
+                       "p95_seconds": percentile(durations, 95)})
+    return {"operations": result, "all_operations_union_seconds": intervals(rows),
+            "interpretation": "Inclusive operations overlap; unions use monotonic ticks per process. Body includes nested host/provider work."}
+
+
 def seconds(value):
     match = re.fullmatch(r"(?:(\d+)\.)?(\d+):(\d{2}):(\d{2}(?:\.\d+)?)", value or "")
     if match:
@@ -260,15 +291,15 @@ def consolidated(output, trx):
                 request_waits[row["wait_type"]] = max(request_waits[row["wait_type"]], row["request_count"])
     lines += ["", "Current request waits (maximum concurrent requests observed per type): " + ("; ".join(f"{cell(name)}={count}" for name, count in sorted(request_waits.items(), key=lambda pair: pair[1], reverse=True)[:20]) or "unavailable"),
               "Blocking duration is the longest sampled current blocked-request wait; changing waits, negative blocker IDs and blockers between snapshots prevent reconstruction of full blocking episodes. DMV sections are sequential, not one atomic snapshot. The diagnostic request is excluded.",
-              "", "## Central fixture operations", "", "| Group | Operation | Count | Successful | Incomplete/failed | Total (s) | Peak (s) |", "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
+              "", "## Central fixture operations", "", "| Group | Operation | Count | Successful | Incomplete/failed | Inclusive total (s) | Peak (s) | Median (s) | p90 (s) | p95 (s) |", "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     fixture_groups = defaultdict(list)
     for row in fixtures:
         if number(row.get("duration_seconds")):
             fixture_groups[(row.get("group", "unknown"), row.get("operation", "unknown"))].append(row)
     for (group, operation), rows in sorted(fixture_groups.items()):
         successful = sum(row.get("succeeded") is True for row in rows)
-        lines.append(f"| {cell(group)} | {cell(operation)} | {len(rows)} | {successful} | {len(rows) - successful} | {fmt(sum(row['duration_seconds'] for row in rows))} | {fmt(peak(rows, 'duration_seconds'))} |")
-    lines += ["", "Fixture spans may nest/overlap test durations; do not add them to suite wall time. Coverage is limited to shared baseline/journey initialization, DACPAC deployment, Hangfire setup, the shared journey seed and migration test DACPAC helper; scattered per-test seeding and migration subprocess internals are not separately instrumented.",
+        lines.append(f"| {cell(group)} | {cell(operation)} | {len(rows)} | {successful} | {len(rows) - successful} | {fmt(sum(row['duration_seconds'] for row in rows))} | {fmt(peak(rows, 'duration_seconds'))} | {fmt(percentile([row['duration_seconds'] for row in rows], 50))} | {fmt(percentile([row['duration_seconds'] for row in rows], 90))} | {fmt(percentile([row['duration_seconds'] for row in rows], 95))} |")
+    lines += ["", "Fixture spans may nest/overlap test durations; do not add them to suite wall time. Monotonic spans identify initialization, factory construction, actual host build/start (including DI), body/framework, provider fixtures, pickup/configuration cleanup and class teardown. Inclusive totals overlap; they are never summed into wall time. Test identities are hashed. Scattered helper calls and framework internals are not independently timed.",
               "", "## UTC correlation windows", "", "| Window | Start UTC | End UTC | Guest CPU mean % | I/O wait mean % | Min available MiB | CPU/memory/I/O PSI mean % | SQL process CPU mean % | Peak cgroup throttle % | Guest disk peak interval read/write await (ms) | Host coverage (s) |", "| --- | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | --- | ---: |"]
     windows = [("Test: " + test["name"], test["start"], test["end"]) for test in sorted(trx["tests"], key=lambda row: row["seconds"], reverse=True)[:5]]
     windows += [("No recorded test interval", start, end) for start, end in sorted(timeline(trx["tests"])["gaps"], key=lambda pair: pair[1] - pair[0], reverse=True)[:3]]
@@ -310,6 +341,7 @@ def write_reports(output):
         temporary = output / (name + ".tmp")
         temporary.write_text(text, encoding="utf-8")
         temporary.replace(output / name)
+    (output / "fixture-summary.json").write_text(json.dumps(fixture_statistics(jsonl(output / "fixture-timings.jsonl")), indent=2) + "\n", encoding="utf-8")
     return output / "diagnostic-summary.md"
 
 

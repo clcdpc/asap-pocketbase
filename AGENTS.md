@@ -27,10 +27,7 @@ misreport cancellation as an ordinary failure.
   ignored generated `wwwroot` directory during build, publish, and F5.
 - `database/Asap.Database` is the source of truth for the SQL Server 2022
   `Sql160` DACPAC and the `[asap]` schema. Hangfire owns `[HangFire]`.
-- `src/Asap.Migration` is a separate self-contained migration executable. It
-  uses native SQLite loading only for a stopped legacy source, then validates,
-  imports, and reconciles a SQL target.
-- `tests/Asap.Tests` owns backend, SQL, migration, and browser-fixture
+- `tests/Asap.Tests` owns backend, SQL, and browser-fixture
   behavior. Retained Node tests cover shipped frontend contracts; Node/npm are
   development and CI tooling only.
 
@@ -38,14 +35,19 @@ misreport cancellation as an ordinary failure.
 
 Use direct EF Core for ordinary aggregates and existing feature services. Use
 selective Dapper/ADO.NET and parameterized SQL where the feature boundary
-already requires reporting, queue, reconciliation, or migration operations.
+already requires reporting, queue, reconciliation, or operational recovery.
 Keep authorization, scope predicates, transactions, constraints, rowversion
 checks, and outbox/event writes in the owning data/service layer. Do not use
 in-memory or SQLite stand-ins for SQL behavior that needs real SQL Server.
 
-The DACPAC owns schema changes. Migration source inspection and migration
-package operations may use native SQLite because that is their explicit input
-contract; do not add a second schema owner or a web-time migration path.
+The DACPAC owns schema changes. Only current schema 13 is supported. Older
+pre-production schemas fail explicitly; never automatically reset a configured
+database. Deliberate future upgrades belong in the DACPAC.
+
+PocketBase was an internal proof of concept, never production, with no data to
+migrate. Its migration implementation, historical compatibility, and frozen
+source contracts are retired. Git history is the archive. Current native SQL
+request links and durable hold/pickup operation journals remain required.
 
 Keep infrastructure/bootstrap configuration in the external JSON file selected
 by `Asap:ConfigFile`. Keep ordinary application settings in their owning SQL
@@ -79,11 +81,9 @@ pending generated audit text, and successful audit entries. Do not show a
 past-tense system entry in an editable notes field before the action succeeds.
 Append system history only after the action completes successfully.
 
-Preserve exact source identities, migration provenance, deterministic fixture
-inputs, behavior pins, and deferred operational contracts when they remain
-needed for migration, recovery, legacy links, or future release work. Git
-history is the archive for retired implementation, not a reason to keep an
-unconsumed runtime in the working tree.
+Preserve deterministic fixture inputs, current behavior pins and durable recovery
+evidence. Successful hold operations, existing-hold adoption, ambiguous provider
+outcomes, idempotency and duplicate prevention are current safety contracts.
 
 ## Frontend DOM and accessibility
 
@@ -121,13 +121,13 @@ the mutation boundary.
 
 Test observable behavior and real failure modes. Use real SQL Server 2022 for
 constraints, transactions, authorization, concurrency, settings scope,
-outbox/jobs, and migration import/reconciliation. Use deterministic provider
+and outbox/jobs. Use deterministic provider
 boundaries with no live Polaris or Postmark calls in ordinary CI.
 
 Keep the full .NET test guard, retained frontend suite, and Playwright browser
 journeys. Browser checks must fail on external requests, page errors, serious
 or critical axe findings, unexpected missing images, and horizontal overflow.
-Keep compact deterministic fixtures and focused migration regression/oracle
+Keep compact deterministic fixtures and focused current-behavior regression
 checks. A test count must represent current discovered tests; removed files
 must not be counted as coverage.
 
@@ -144,8 +144,7 @@ screen-reader acceptance. See `tests/acceptance/README.md`.
 
 ## Deployment boundaries
 
-The test-IIS workflow builds the exact tested commit, publishes Web/DACPAC and
-the separate migration artifact, validates ZIP identity and digest before
+The test-IIS workflow builds the exact tested commit, publishes Web/DACPAC, validates ZIP identity and digest before
 extraction, and keeps build/test/package jobs isolated from self-hosted
 activation. The deployment script's `-ValidateOnly` must not mutate a host. Do not check out or build
 on IIS, activate a runner, contact a host, create a production tag, deploy
@@ -154,5 +153,4 @@ production, or merge the draft PR as part of ordinary implementation.
 `test_cd_activation: pending_runner_setup` remains the documented state until
 a separately authorized task records a real successful test-IIS deployment.
 Production readiness, live providers, cutover, backup/recovery rehearsal, and
-repository rename remain deferred. A stopped legacy source is migration or
-forensic input only, never a writable fallback after cutover.
+repository rename remain deferred.

@@ -8,6 +8,7 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry()
     {
         const int first = 383091;

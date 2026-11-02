@@ -116,6 +116,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance()
     {
         const int library = 99081;

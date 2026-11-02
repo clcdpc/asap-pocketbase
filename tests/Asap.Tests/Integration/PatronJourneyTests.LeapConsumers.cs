@@ -10,6 +10,7 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    [TestCategory(TestCategories.Browser)]
     public async Task LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces()
     {
         factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
@@ -33,9 +34,9 @@ public sealed partial class PatronJourneyTests
             MaterialFormatId = format.Id, Status = "pending_hold", BibId = 9001,
             BibIdStaffVerified = true, CreatedUtc = now, UpdatedUtc = now
         };
-        var legacy = new TitleRequest
+        var unpinned = new TitleRequest
         {
-            LibraryOrganizationId = 2, Barcode = "legacy-no-native-id", Title = "LEAP legacy " + suffix,
+            LibraryOrganizationId = 2, Barcode = "unpinned-no-native-id", Title = "LEAP unverified " + suffix,
             MaterialFormatId = format.Id, Status = "suggestion", CreatedUtc = now, UpdatedUtc = now
         };
         var copy = new AdditionalCopyRequest
@@ -43,7 +44,7 @@ public sealed partial class PatronJourneyTests
             LibraryOrganizationId = 2, BibId = 9001, Title = "LEAP copy " + suffix,
             Status = "open", CreatedUtc = now, UpdatedUtc = now
         };
-        setup.TitleRequests.AddRange(request, legacy);
+        setup.TitleRequests.AddRange(request, unpinned);
         setup.AdditionalCopyRequests.Add(copy);
         await setup.SaveChangesAsync();
         try
@@ -53,7 +54,7 @@ public sealed partial class PatronJourneyTests
             using var queue = JsonDocument.Parse(await queueResponse.Content.ReadAsStringAsync());
             var row = queue.RootElement.GetProperty("items").EnumerateArray().Single(item => item.GetProperty("id").GetString() == request.Id.ToString(CultureInfo.InvariantCulture));
             Assert.AreEqual(7001, row.GetProperty("research").GetProperty("patronId").GetInt32());
-            var oldRow = queue.RootElement.GetProperty("items").EnumerateArray().Single(item => item.GetProperty("id").GetString() == legacy.Id.ToString(CultureInfo.InvariantCulture));
+            var oldRow = queue.RootElement.GetProperty("items").EnumerateArray().Single(item => item.GetProperty("id").GetString() == unpinned.Id.ToString(CultureInfo.InvariantCulture));
             Assert.AreEqual(JsonValueKind.Null, oldRow.GetProperty("research").GetProperty("patronId").ValueKind);
             using var publicConfiguration = await client.GetAsync("/api/asap/config?libraryOrgId=2");
             Assert.IsFalse((await publicConfiguration.Content.ReadAsStringAsync()).Contains("leap", StringComparison.OrdinalIgnoreCase));
@@ -63,14 +64,14 @@ public sealed partial class PatronJourneyTests
             var (exitCode, stdout, stderr) = await RunBrowserScriptAsync(root, "leap-consumers.cjs",
                 client.BaseAddress!.GetLeftPart(UriPartial.Authority), artifacts,
                 actor.Id.ToString(CultureInfo.InvariantCulture), actor.EntraTenantId.ToString(), actor.AuthenticationEmail,
-                request.Id.ToString(CultureInfo.InvariantCulture), legacy.Id.ToString(CultureInfo.InvariantCulture), copy.Id.ToString(CultureInfo.InvariantCulture));
+                request.Id.ToString(CultureInfo.InvariantCulture), unpinned.Id.ToString(CultureInfo.InvariantCulture), copy.Id.ToString(CultureInfo.InvariantCulture));
             Assert.AreEqual(0, exitCode, $"{artifacts}{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
         }
         finally
         {
             await using var cleanup = await contexts.CreateDbContextAsync();
             await cleanup.AdditionalCopyRequests.Where(item => item.Id == copy.Id).ExecuteDeleteAsync();
-            await cleanup.TitleRequests.Where(item => item.Id == request.Id || item.Id == legacy.Id).ExecuteDeleteAsync();
+            await cleanup.TitleRequests.Where(item => item.Id == request.Id || item.Id == unpinned.Id).ExecuteDeleteAsync();
             var row = await cleanup.SystemSettings.SingleAsync();
             row.LeapBibUrlPattern = originalBib; row.LeapPatronUrlPattern = originalPatron;
             await cleanup.SaveChangesAsync();

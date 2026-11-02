@@ -10,28 +10,14 @@ import subprocess
 import sys
 import urllib.request
 
+import selection as test_selection
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SUITES = ("dotnet", "browser", "frontend")
 SQL_TAG = "mcr.microsoft.com/mssql/server:2022-latest"
 CONFIG = ROOT / "scripts/ci/test-reuse.json"
-SOURCE_ALGORITHM = "full-ci-execution-v2"
-# CI-only controls are checked afresh by mandatory Python and Node contract tests.
-CONTROL_PATHS = frozenset({
-    ".github/workflows/dotnet.yml",
-    "scripts/ci/fingerprints.py",
-    "scripts/ci/reuse.py",
-    "scripts/ci/test_reuse.py",
-    "tests/ci_workflow_contract.test.js",
-    "tests/test_iis_deployment_contract.test.js",
-})
-CI_SAFETY_STEP = (
-    "      - name: Verify current CI safety contracts\n"
-    "        run: |\n"
-    "          node tests/ci_workflow_contract.test.js\n"
-    "          node tests/test_iis_deployment_contract.test.js\n"
-    "\n"
-)
+SOURCE_ALGORITHM = "current-suites-v4"
 
 
 def canonical(value):
@@ -51,7 +37,7 @@ def command(arguments, root=ROOT):
 
 def configuration():
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    if (type(config["schema"]) is not int or config["schema"] < 1
+    if (type(config["schema"]) is not int or config["schema"] != 3
             or not 1 <= config["lifetime_days"] <= 14 or not config["environment_epoch"]):
         raise ValueError("Invalid evidence lifetime/environment epoch")
     for rule in config["exclusions"]:
@@ -82,69 +68,26 @@ def tracked_entries(root=ROOT):
     return entries
 
 
-def legacy_source_fingerprint(entries, suite, config):
-    """Exact v1 source hash used only to authenticate existing executed evidence."""
-    excluded = {p for rule in config["exclusions"] if suite in rule["suites"] for p in rule["paths"]}
-    return digest(sorted(entry for entry in entries if entry[0] not in excluded))
-
-
 def full_ci_execution_contract(workflow):
-    """Conservatively hash the test executor independently of deployment jobs.
-
-    The exact mandatory CI-policy step runs anew, so only that step is omitted.
-    Every other edit to the full test executor invalidates old test evidence.
-    """
-    starts = list(re.finditer(r"(?m)^  build-test-package:[ \t]*$", workflow))
-    if len(starts) != 1:
-        raise ValueError("Full CI executor definition is missing or ambiguous")
-    tail = workflow[starts[0].end():]
-    following = re.search(r"(?m)^  [a-zA-Z0-9_-]+:[ \t]*$", tail)
-    if following is None:
-        raise ValueError("Full CI executor job boundary is missing")
-    job = workflow[starts[0].start():starts[0].end() + following.start()]
-    if "      - name: Verify current CI safety contracts" in job:
-        if job.count(CI_SAFETY_STEP) != 1:
-            raise ValueError("Current CI safety contract step has changed unexpectedly")
-        job = job.replace(CI_SAFETY_STEP, "")
-    return digest(job)
+    """Bind every test executor, reporting gate and deployment authorization edit."""
+    workflow = workflow.replace("\r\n", "\n")
+    if not all(len(re.findall(r"(?m)^  " + name + r":[ \\t]*$", workflow)) == 1
+               for name in ("build-test-package", "browser-qualification", "validation")):
+        raise ValueError("Missing or ambiguous required execution jobs")
+    return digest(workflow)
 
 
 def source_fingerprint(entries, suite, config, execution_contract=None):
     # Default include unknown/new code, fixtures, tests, and dependencies.
-    excluded = ({p for rule in config["exclusions"] if suite in rule["suites"] for p in rule["paths"]}
-                | CONTROL_PATHS)
+    excluded = {p for rule in config["exclusions"] if suite in rule["suites"] for p in rule["paths"]}
     files = sorted(entry for entry in entries if entry[0] not in excluded)
     # Optional contract argument is for isolated pure-entry tests only.
     return (digest({"files": files, "execution_contract": execution_contract})
             if execution_contract is not None else digest(files))
 
 
-def selections(root=ROOT):
-    workflow = (root / ".github/workflows/dotnet.yml").read_text(encoding="utf-8")
-    browser = (root / "tests/browser/run.cjs").read_text(encoding="utf-8")
-    minimum = int(re.search(r"--minimum-expected-tests (\d+)", workflow)[1])
-    non_browser = re.search(r"--filter\s*'([^']+)'", workflow)[1]
-    browser_filter = "|".join(re.findall(r"'FullyQualifiedName~([^']+)'", browser))
-    browser_filter = "|".join("FullyQualifiedName~" + term for term in browser_filter.split("|"))
-    browser_minimum = int(re.search(r"'--minimum-expected-tests',\s*'(\d+)'", browser)[1])
-    files = sorted(p.name for p in (root / "tests").glob("*.test.js"))
-    return {
-        "dotnet": {"filter": non_browser, "minimum": minimum},
-        "browser": {"filter": browser_filter, "minimum": browser_minimum},
-        "frontend": {"filter": "npm test (all root *.test.js files)", "minimum": len(files), "files": files},
-    }
-
-
-def discover(selection, root=ROOT):
-    output = command(["dotnet", "test", "--project", "tests/Asap.Tests/Asap.Tests.csproj",
-                      "--configuration", "Release", "--no-build", "--no-restore", "--list-tests",
-                      "--filter", selection["filter"]], root)
-    # MTP colors redirected discovery output when GITHUB_ACTIONS=true.
-    output = re.sub(r"\x1b\[[0-9;]*m", "", output)
-    counts = re.findall(r"^Discovered (\d+) tests\.$", output, re.MULTILINE)
-    if len(counts) != 1 or int(counts[0]) < selection["minimum"]:
-        raise ValueError("Test discovery did not meet the retained minimum")
-    return int(counts[0])
+def selections(root=ROOT, verify=False):
+    return test_selection.load(root, verify=verify)["suites"]
 
 
 def sql_image():
@@ -173,7 +116,7 @@ def sql_image():
 
 
 def nuget_identity(root=ROOT):
-    paths = ["src/Asap.Web", "src/Asap.Migration", "tests/Asap.Tests",
+    paths = ["src/Asap.Web", "tests/Asap.Tests",
              "database/Asap.Database", "dev/review/src/Asap.ReviewProviders"]
     resolved = {}
     for path in paths:
@@ -270,7 +213,6 @@ def calculate(expected, config, root=ROOT):
     suites = {}
     for suite in SUITES:
         selection = selected[suite]
-        selection["expected"] = len(selection["files"]) if suite == "frontend" else discover(selection, root)
         inputs = {"schema": config["schema"], "suite": suite,
                   "source": source_fingerprint(entries, suite, config, contract),
                   "environment": digest(environments[suite]), "selection": selection}

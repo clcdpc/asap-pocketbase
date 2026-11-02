@@ -1,8 +1,8 @@
 # Browser acceptance suite
 
 `npm run test:browser` is the full browser-suite entry point. It selects the
-seventeen integration cases and runs them through the same Testing Kestrel
-fixtures used by the .NET test suite (sixteen use real SQL):
+current Browser category, discovered by the native test runner. SQL-backed
+journeys use the Testing Kestrel fixtures:
 
 - `patron.cjs`: 10 desktop/mobile patron states and 3 authentication/session
   race scenarios.
@@ -11,14 +11,13 @@ fixtures used by the .NET test suite (sixteen use real SQL):
   round trips, repeated Operations actions, keyboard workflows, current-actor
   revisions, operational catalog retirement/reactivation after Settings commits,
   and stale rejection, queued notification, reopen and silent close.
-- `legacy-links.cjs`: 18 desktop/mobile success and failure states covering
-  shared, numeric, and type-qualified request links.
+- `request-links.cjs`: 18 desktop/mobile success and failure states covering
+  native bigint links, scope, missing records, and type-qualified request links.
 - `patron-submit-session.cjs`: controlled frontend response/session races.
   These simulate suggestion replies; they do not prove a server commit.
 - `staff-request-contracts.cjs`: real request
-  editing and imported historical snapshots. The owning fixture exports,
-  imports and reconciles before starting the app. It also checks imported
-  effective configuration, staff authority, protected holds, additional-copy
+  editing with a native current-schema SQL fixture. It checks effective
+  configuration, staff authority, current successful hold journals, additional-copy
   links and new submission/automatic claiming through HTTP and SQL.
 - `settings.cjs`: real Settings
   GET/editor POST/reload, ownership, override metadata and lossless identity;
@@ -60,9 +59,10 @@ fixtures used by the .NET test suite (sixteen use real SQL):
   control, normal navigation/reload and unchanged-resource 304/vendor reuse.
   Request routing is deliberately disabled because routing disables caching.
 
-The sixteen selected methods are named explicitly in `run.cjs`; the two Settings
-role DataRows make seventeen discovered cases. Several methods own more
-than one Node runner. Other .NET cases also contain embedded browser checks.
+`run.cjs` selects the Browser category. It includes frontend publish/cache and
+asset-serving contracts as well as browser journeys; native discovery and exact
+TRX identity verification determine the current population. Several methods own
+more than one Node runner.
 Counts refer to discovered .NET cases, not scanned states or assertions.
 
 Each integration journey provisions its isolated SQL fixture, starts the Testing app with

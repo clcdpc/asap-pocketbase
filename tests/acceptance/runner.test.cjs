@@ -486,10 +486,10 @@ test('D1 admits only pristine synthetic closed/protected/history fixture states'
     ['d1-history', 'suggestion', 3, false, null]
   ]) {
     const row = { id: '9007199254740993', key: 'acceptance-pr410-' + key, status, events,
-      legacyHoldProtected: protectedHold, closeReason, pristineNotes: true, identityBound: true };
+      holdHistoryRetained: protectedHold, closeReason, pristineNotes: true, identityBound: true };
     assert.equal(requireFixture({ titles: [row] }, key), row);
     for (const change of [{ identityBound: false }, { pristineNotes: false }, { events: events + 1 },
-      { legacyHoldProtected: !protectedHold }, { status: 'pending_hold' }, { closeReason: 'changed' }]) {
+      { holdHistoryRetained: !protectedHold }, { status: 'pending_hold' }, { closeReason: 'changed' }]) {
       assert.throws(() => requireFixture({ titles: [{ ...row, ...change }] }, key), /consumed or has changed/);
     }
     assert.throws(() => requireFixture({ titles: [row, row] }, key), /ambiguous/);

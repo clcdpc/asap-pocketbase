@@ -56,8 +56,8 @@ public sealed class DacpacDeploymentService
             return;
         }
 
-        // The DACPAC remains the only DDL owner. Run its idempotent guards and
-        // narrowly specified retirements before DacFx computes data-loss guards.
+        // The DACPAC remains the only DDL owner. Check its read-only schema identity
+        // guards before DacFx plans any changes or evaluates data-loss guards.
         using var script = package.PreDeploymentScript;
         using var reader = new StreamReader(script);
         using var connection = new SqlConnection(databaseConnectionString);
