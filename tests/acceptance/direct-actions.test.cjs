@@ -112,6 +112,12 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
   await page.evaluate(() => mount(6)); await settleActions(page);
   assert.equal(await fixture.locator('.request-row-actions').evaluate(node => getComputedStyle(node).visibility), 'hidden');
   await fixture.evaluate(node => { node.style.width = '210px'; }); await settleActions(page); await actionGeometry(fixture);
+  await fixture.locator('.request-row-more').press('Enter');
+  await fixture.evaluate(node => { node.style.width = '0'; }); await settleActions(page);
+  assert.equal(await fixture.locator('.request-row-actions').evaluate(node => getComputedStyle(node).visibility), 'hidden', 'An already measured cell also retires its visible layout at zero width');
+  assert.equal(await fixture.locator('[popover]:popover-open').count(), 0);
+  assert.equal(await page.locator('#fallback').evaluate(node => node === document.activeElement), true);
+  await fixture.evaluate(node => { node.style.width = '210px'; }); await settleActions(page); await actionGeometry(fixture);
   await page.emulateMedia({ forcedColors: 'active' }); await settleActions(page); await actionGeometry(fixture);
   await fixture.evaluate(node => { node.style.fontFamily = 'monospace'; }); await settleActions(page); await actionGeometry(fixture);
   await page.evaluate(() => { window.current = false; });

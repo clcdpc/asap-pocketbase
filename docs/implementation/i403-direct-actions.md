@@ -40,7 +40,8 @@ contract even when action measurement increases rendering work.
 Grid.js ref retirement aborts listeners, cancels deferred layout, disconnects
 observers and closes/removes the popover. Changed descriptor sets also retire the
 old cell lifetime even when the record object is reused. A zero-width container
-stays unpainted until it can be measured. Resize and font notifications remeasure
+stays unpainted until it can be measured, including after a visible layout; its
+open popup closes and focus returns to the connected queue control. Resize and font notifications remeasure
 without replacing a stable partition. Resizing closes an open menu, restores focus
 to a connected control and promotes a focused command when space permits.
 

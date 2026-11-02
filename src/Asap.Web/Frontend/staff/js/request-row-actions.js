@@ -104,7 +104,12 @@ export function requestRowActions({ id, actions, live, onOpen, fallback }) {
       if (disposed) return;
       if (!node.isConnected) { if (mounted) dispose(); return; }
       mounted = true;
-      if (node.clientWidth === 0) return;
+      if (node.clientWidth === 0) {
+        close();
+        if (node.contains(document.activeElement) && fallback?.isConnected) fallback.focus({ preventScroll: true });
+        delete node.dataset.ready;
+        return;
+      }
       const focused = document.activeElement;
       const actionIndex = buttons.indexOf(focused);
       const hadFocus = node.contains(focused);
