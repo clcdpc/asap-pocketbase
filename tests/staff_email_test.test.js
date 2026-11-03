@@ -45,7 +45,7 @@ const recoveryFixture = journey => fixture(async environment => {
     const root = get('#settings-email-test');
     const button = root.querySelector('[data-email-test="send"]');
     const result = root.querySelector('[data-email-test="result"]');
-    let status = { id: '9007199254740993', organizationId: 2, status: 'sent', deliveryMode: 'postmark' };
+    let status = { id: '9007199254740993', organizationId: 2, status: 'sent', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' };
     const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
       calls.push({ path, init });
       if (init.method === 'POST') { posts.push({ path, init }); return pendingPost.promise; }
@@ -107,7 +107,7 @@ const recoveryFixture = journey => fixture(async environment => {
       if (path.includes('/test-context')) return saved(value.organizationId);
       if (init.method === 'POST') return pending.promise;
       if (fail) throw Object.assign(new Error('not yet visible'), { status: 404 });
-      return { code: 'ok', data: { id: '9223372036854775807', organizationId: 2, status: 'sent', deliveryMode: 'postmark' } };
+      return { code: 'ok', data: { id: '9223372036854775807', organizationId: 2, status: 'sent', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } };
     } });
     controller.sync(); await settle();
     const sending = controller.send();
@@ -196,7 +196,7 @@ const recoveryFixture = journey => fixture(async environment => {
         observations += 1;
         if (observations === 2) return paused.promise;
         return { code: 'ok', data: { id: accepted.data.id, organizationId: 2,
-          status: observations === 1 ? 'pending' : 'sent', deliveryMode: 'postmark' } };
+          status: observations === 1 ? 'pending' : 'sent', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } };
       } });
     controller.sync(); await settle(); await controller.send(); await settle();
     clock.advance(6000);
@@ -207,7 +207,7 @@ const recoveryFixture = journey => fixture(async environment => {
     const manual = controller.refresh();
     value = { ...value, active: false }; controller.sync();
     paused.resolve({ code: 'ok', data: { id: accepted.data.id, organizationId: 2,
-      status: 'sent', deliveryMode: 'postmark' } });
+      status: 'sent', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } });
     await manual;
     assert.doesNotMatch(root.textContent, /email service accepted/, 'panel exit retires an in-flight status reply');
     value = { ...value, active: true }; controller.sync(); await settle();
@@ -285,7 +285,7 @@ const recoveryFixture = journey => fixture(async environment => {
           if (path.includes('/test-context')) return saved(2);
           if (init.method === 'POST') { posts += 1; throw new Error('Lost submission'); }
           if (!visible) throw notFound();
-          return { code: 'ok', data: { id: accepted.data.id, organizationId: 2, deliveryMode: 'postmark', ...row } };
+          return { code: 'ok', data: { id: accepted.data.id, organizationId: 2, deliveryMode: 'postmark', version: 'AAAAAAAAAAE=', ...row } };
         } });
       controller.sync(); await settle(); await controller.send(); await controller.refresh();
       advance(60001); await controller.refresh();
@@ -394,7 +394,7 @@ const recoveryFixture = journey => fixture(async environment => {
     root.querySelector('[data-email-test="send"]').click(); await settle();
     const storageKey = 'asap.staff.email-test.stale-status.2';
     const next = dom.window.sessionStorage.getItem(storageKey);
-    oldRead.resolve({ code: 'ok', data: { id: accepted.data.id, organizationId: 2, status: 'sent', deliveryMode: 'postmark' } });
+    oldRead.resolve({ code: 'ok', data: { id: accepted.data.id, organizationId: 2, status: 'sent', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } });
     await stale;
     assert.equal(dom.window.sessionStorage.getItem(storageKey), next, 'an old status cannot alter the new intent');
     assert.equal(root.querySelector('[data-email-test="send"]').disabled, true);
@@ -469,7 +469,7 @@ const recoveryFixture = journey => fixture(async environment => {
         if (init.method === 'POST') { posts += 1; return oldPost.promise; }
         if (pause) return finalRead.promise;
         if (acknowledged) return { code: 'ok', data: { id: accepted.data.id, organizationId: 2,
-          status: 'failed', lastErrorCode: 'provider_timeout', deliveryMode: 'postmark' } };
+          status: 'failed', lastErrorCode: 'provider_timeout', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } };
         throw notFound();
       };
       const first = createEmailTestController({ root: firstRoot, context: () => ({ ...value, active: firstActive }), request });
@@ -565,7 +565,7 @@ const recoveryFixture = journey => fixture(async environment => {
           dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id: accepted.data.id, status: 'sent', pending: false }));
           let initial = true, posts = 0, status = 'sent';
           const response = () => ({ code: 'ok', data: { id: accepted.data.id, organizationId: 2, status,
-            lastErrorCode: status === 'failed' ? 'provider_timeout' : null, deliveryMode: 'postmark' } });
+            lastErrorCode: status === 'failed' ? 'provider_timeout' : null, deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } });
           const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
             if (init.method === 'POST') posts += 1;
             if (path.includes('/test-context')) return contextRead.promise;
@@ -613,7 +613,7 @@ const recoveryFixture = journey => fixture(async environment => {
           request: async (path, init = {}) => {
             if (path.includes('/test-context')) return saved(2);
             if (init.method === 'POST') { posts += 1; return accepted; }
-            return { code: 'ok', data: { id: accepted.data.id, organizationId: 2, deliveryMode: 'postmark', ...outcome } };
+            return { code: 'ok', data: { id: accepted.data.id, organizationId: 2, deliveryMode: 'postmark', version: 'AAAAAAAAAAE=', ...outcome } };
           } });
         controller.sync(); await settle(); await controller.send();
         await settle(); clock.advance(6000);
@@ -642,7 +642,7 @@ const recoveryFixture = journey => fixture(async environment => {
       const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
         if (path.includes('/test-context')) return saved(value.organizationId);
         if (init.method === 'POST') { posts += 1; id = '9007199254740995'; return { ...accepted, data: { ...accepted.data, id } }; }
-        return { code: 'ok', data: { id, organizationId: value.organizationId, status: 'sent', deliveryMode: 'postmark' } };
+        return { code: 'ok', data: { id, organizationId: value.organizationId, status: 'sent', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } };
       } });
       controller.sync(); await settle();
       const cancellation = new dom.window.AbortController();
@@ -667,5 +667,279 @@ const recoveryFixture = journey => fixture(async environment => {
       controller.dispose();
     });
   }
+  for (const panel of ['settings', 'operations']) {
+    for (const version of [undefined, 'unreadable', 'AAE=', 'AAAAAAAAAAJ=']) {
+      await fixture(async ({ load, get, dom }) => {
+        const { createEmailTestController } = await load('email-test');
+        const value = { ownerKey: 'invalid-version', organizationId: 2, active: true, ready: true };
+        const key = 'asap.staff.email-test.invalid-version.2';
+        const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+        const original = JSON.stringify({ operationId, id: accepted.data.id, pending: true, status: 'pending' });
+        dom.window.sessionStorage.setItem(key, original);
+        const root = get(`#${panel}-email-test`);
+        let currentVersion = version, posts = 0;
+        const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
+          if (path.includes('/test-context')) return saved(2);
+          if (init.method === 'POST') posts += 1;
+          return { code: 'ok', data: { id: accepted.data.id, organizationId: 2, status: 'sent', deliveryMode: 'postmark', version: currentVersion } };
+        } });
+        controller.sync(); await settle();
+        const guarded = JSON.parse(dom.window.sessionStorage.getItem(key));
+        assert.equal(guarded.operationId, operationId);
+        assert.equal(guarded.id, accepted.data.id);
+        assert.equal(guarded.status, 'pending', 'unreadable freshness cannot advance saved processing state');
+        assert.equal(guarded.pending, true);
+        assert.equal(guarded.version, undefined);
+        assert.equal(guarded.unconfirmed, true, 'unreadable status retains a Send guard across restoration');
+        assert.equal(root.querySelector('[data-email-test="send"]').disabled, true);
+        assert.match(root.querySelector('[data-email-test="result"]').textContent, /outcome is unconfirmed/);
+        assert.equal(controller.adopt(2, operationId, { id: accepted.data.id, organizationId: 2,
+          status: 'sent', deliveryMode: 'postmark', version }), false, 'legacy exact recovery also requires readable freshness evidence');
+        assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).unconfirmed, true);
+        assert.equal(await controller.refresh(), undefined, 'malformed observations cannot supply a presentation accessor');
+        await controller.send(); assert.equal(posts, 0);
+        currentVersion = 'AAAAAAAAAAI='; await controller.refresh();
+        assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).operationId, operationId);
+        assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).pending, false);
+        controller.dispose();
+      });
+    }
+  }
+  for (const panel of ['settings', 'operations']) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createEmailTestController } = await load('email-test');
+      let value = { ownerKey: 'reconciling-owner', organizationId: 2, active: true, ready: true, reconciling: true };
+      const root = get(`#${panel}-email-test`), key = 'asap.staff.email-test.reconciling-owner.2';
+      const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+      dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id: accepted.data.id, pending: false, status: 'failed' }));
+      let reads = 0, posts = 0;
+      const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
+        if (path.includes('/test-context')) return saved(2);
+        if (init.method === 'POST') posts += 1;
+        reads += 1;
+        return { code: 'ok', data: { id: accepted.data.id, organizationId: 2, status: 'failed',
+          lastErrorCode: 'mail_not_configured', version: 'AAAAAAAAAAE=' } };
+      } });
+      controller.sync(); await settle();
+      assert.ok(reads > 0, 'the submission guard does not cancel status reconciliation');
+      assert.equal(root.querySelector('[data-email-test="send"]').disabled, true);
+      assert.match(root.querySelector('[data-email-test="result"]').textContent, /Checking the current test and email log/);
+      await controller.send(); root.querySelector('[data-email-test="send"]').dispatchEvent(new dom.window.Event('click'));
+      assert.equal(posts, 0);
+      assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).operationId, operationId);
+      value = { ...value, reconciling: false }; controller.sync();
+      assert.equal(root.querySelector('[data-email-test="send"]').disabled, false, 'consumed reconciliation releases a resolved request');
+      controller.dispose();
+    });
+  }
+  for (const panel of ['settings', 'operations']) {
+    for (const outcome of ['failed', 'malformed', 'older']) {
+      await fixture(async ({ load, get, dom }) => {
+        const { createEmailTestController } = await load('email-test');
+        const value = { ownerKey: 'restored-terminal', organizationId: 2, active: true, ready: true };
+        const key = 'asap.staff.email-test.restored-terminal.2';
+        const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+        dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id: accepted.data.id, status: 'failed',
+          lastErrorCode: 'mail_not_configured', pending: false, version: 'AAAAAAAAAAI=' }));
+        const root = get(`#${panel}-email-test`), send = root.querySelector('[data-email-test="send"]');
+        const result = root.querySelector('[data-email-test="result"]');
+        let read = deferred(), posts = 0;
+        const options = { root, context: () => value, request: async (path, init = {}) => {
+          if (path.includes('/test-context')) return saved(2);
+          if (init.method === 'POST') posts += 1;
+          return read.promise;
+        } };
+        let controller = createEmailTestController(options);
+        controller.sync(); await settle();
+        assert.equal(send.disabled, true, `${panel}: restoration blocks Send while its exact read is held`);
+        assert.match(result.textContent, /Checking the current test/);
+        await controller.send(); send.dispatchEvent(new dom.window.Event('click'));
+        assert.equal(posts, 0);
+        if (outcome === 'failed') read.reject(Object.assign(new Error('Unavailable'), { status: 503 }));
+        else read.resolve({ code: 'ok', data: { id: accepted.data.id, organizationId: 2, status: 'sent',
+          deliveryMode: 'postmark', version: outcome === 'older' ? 'AAAAAAAAAAE=' : 'unreadable' } });
+        await settle();
+        let stored = JSON.parse(dom.window.sessionStorage.getItem(key));
+        assert.equal(stored.operationId, operationId);
+        assert.equal(stored.status, 'failed');
+        assert.equal(stored.version, 'AAAAAAAAAAI=');
+        assert.equal(stored.pending, false, 'a lookup failure does not invent a processing result');
+        assert.equal(stored.unconfirmed, true);
+        assert.equal(send.disabled, true, `${outcome}: unreadable status must not release Send`);
+        assert.match(result.textContent, /outcome is unconfirmed.*Another test remains blocked.*Reference/);
+        await controller.send(); assert.equal(posts, 0);
+        controller.dispose();
+        read = deferred();
+        controller = createEmailTestController(options); controller.sync(); await settle();
+        assert.equal(send.disabled, true, 'the persisted unresolved guard survives controller recreation');
+        read.reject(Object.assign(new Error('Still unavailable'), { status: 503 })); await settle();
+        await controller.send(); send.dispatchEvent(new dom.window.Event('click'));
+        assert.equal(posts, 0);
+        assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).operationId, operationId);
+        read = deferred();
+        const recovering = controller.refresh();
+        read.resolve({ code: 'ok', data: { id: accepted.data.id, organizationId: 2, status: 'sent',
+          deliveryMode: 'postmark', version: 'AAAAAAAAAAM=' } });
+        await recovering;
+        stored = JSON.parse(dom.window.sessionStorage.getItem(key));
+        assert.equal(stored.unconfirmed, false, 'a fresh valid exact completion releases the unresolved guard');
+        assert.equal(stored.operationId, operationId);
+        assert.equal(send.disabled, false);
+        assert.equal(result.hidden, true, 'confirmed routine success still belongs in the log');
+        assert.equal(posts, 0);
+        controller.dispose();
+      });
+    }
+  }
+  await fixture(async ({ load, get, dom }) => {
+    const { createEmailTestController } = await load('email-test');
+    const value = { ownerKey: 'cancelled-review', organizationId: 2, active: true, ready: true };
+    const key = 'asap.staff.email-test.cancelled-review.2';
+    dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId: '130e5f99-b59c-4e39-9718-bec1e7e5d94d',
+      id: accepted.data.id, pending: false, status: 'sent', version: 'AAAAAAAAAAE=' }));
+    let held = null;
+    const controller = createEmailTestController({ root: get('#settings-email-test'), context: () => value,
+      request: async path => path.includes('/test-context') ? saved(2) : held ? held.promise
+        : { code: 'ok', data: { id: accepted.data.id, organizationId: 2, status: 'sent', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } } });
+    controller.sync(); await settle();
+    const before = dom.window.sessionStorage.getItem(key), cancellation = new dom.window.AbortController();
+    held = deferred();
+    const refresh = controller.refresh({ signal: cancellation.signal });
+    cancellation.abort(); held.reject(Object.assign(new Error('Cancelled read'), { name: 'AbortError' }));
+    await refresh;
+    assert.equal(dom.window.sessionStorage.getItem(key), before, 'cancellation cannot persist an ordinary unconfirmed failure');
+    assert.equal(get('#settings-email-test [data-email-test="send"]').disabled, false);
+    controller.dispose();
+  });
+  for (const panel of ['settings', 'operations']) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createEmailTestController } = await load('email-test');
+      const value = { ownerKey: 'lost-terminal-storage', organizationId: 2, active: true, ready: true };
+      const key = 'asap.staff.email-test.lost-terminal-storage.2';
+      const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+      dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id: accepted.data.id, pending: false,
+        status: 'failed', lastErrorCode: 'mail_not_configured', version: 'AAAAAAAAAAE=' }));
+      const root = get(`#${panel}-email-test`), navigations = [];
+      let posts = 0;
+      const controller = createEmailTestController({ root, context: () => value,
+        onOperations: scope => navigations.push(scope), request: async (path, init = {}) => {
+          if (path.includes('/test-context')) return saved(2);
+          if (init.method === 'POST') posts += 1;
+          throw Object.assign(new Error('Status unavailable'), { status: 503 });
+        } });
+      controller.sync(); await settle();
+      assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).unconfirmed, true,
+        'a real failed exact lookup creates the unresolved guard');
+      dom.window.sessionStorage.removeItem(key);
+      controller.sync(); await controller.send();
+      root.querySelector('[data-email-test="send"]').dispatchEvent(new dom.window.Event('click'));
+      assert.equal(posts, 0, 'removing persisted status cannot resolve the in-memory guarded request');
+      assert.equal(root.querySelector('[data-email-test="send"]').disabled, true);
+      assert.match(root.querySelector('[data-email-test="result"]').textContent, /stored test reference is unavailable/);
+      if (panel === 'settings') {
+        root.querySelector('[data-email-test="operations"]').click(); await settle();
+        const restored = JSON.parse(dom.window.sessionStorage.getItem(key));
+        assert.equal(restored.operationId, operationId); assert.equal(restored.id, accepted.data.id);
+        assert.equal(restored.pending, false); assert.equal(restored.unconfirmed, true);
+        assert.deepEqual(navigations, [2], 'Settings retains the guarded terminal request before departure');
+      }
+      controller.dispose();
+    });
+  }
+  for (const outcome of ['failed', 'valid', 'cancelled']) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createEmailTestController } = await load('email-test');
+      const value = { ownerKey: 'storage-before-observation', organizationId: 2, active: true, ready: true };
+      const key = 'asap.staff.email-test.storage-before-observation.2';
+      const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+      dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id: accepted.data.id, pending: false,
+        status: 'failed', lastErrorCode: 'mail_not_configured', version: 'AAAAAAAAAAE=' }));
+      let held = deferred(), posts = 0;
+      const request = async (path, init = {}) => {
+        if (path.includes('/test-context')) return saved(2);
+        if (init.method === 'POST') posts += 1;
+        return held.promise;
+      };
+      const root = get('#settings-email-test'), navigations = [];
+      let controller = createEmailTestController({ root, context: () => value, request,
+        onOperations: scope => navigations.push(scope) });
+      controller.sync(); await settle();
+      const cancellation = new dom.window.AbortController();
+      const observation = outcome === 'cancelled' ? controller.refresh({ signal: cancellation.signal }) : null;
+      await settle();
+      dom.window.sessionStorage.removeItem(key);
+      if (outcome === 'failed') held.reject(Object.assign(new Error('Status unavailable'), { status: 503 }));
+      else if (outcome === 'valid') held.resolve({ code: 'ok', data: { id: accepted.data.id, organizationId: 2,
+        status: 'sent', deliveryMode: 'postmark', version: 'AAAAAAAAAAI=' } });
+      else {
+        cancellation.abort(); held.reject(Object.assign(new Error('Cancelled'), { name: 'AbortError' }));
+        await observation;
+        assert.doesNotMatch(root.querySelector('[data-email-test="result"]').textContent, /outcome is unconfirmed/,
+          'cancellation alone does not become an ordinary status failure');
+      }
+      await settle();
+      if (outcome !== 'cancelled') {
+        assert.equal(root.querySelector('[data-email-test="send"]').disabled, true,
+          'missing storage guards the original before a failed or valid observation can return early');
+      }
+      await controller.send(); root.querySelector('[data-email-test="send"]').dispatchEvent(new dom.window.Event('click'));
+      assert.equal(posts, 0);
+      assert.equal(root.querySelector('[data-email-test="send"]').disabled, true);
+      assert.match(root.querySelector('[data-email-test="result"]').textContent, /stored test reference is unavailable/);
+      root.querySelector('[data-email-test="operations"]').click(); await settle();
+      let stored = JSON.parse(dom.window.sessionStorage.getItem(key));
+      assert.deepEqual(navigations, [2]);
+      assert.equal(stored.operationId, operationId); assert.equal(stored.id, accepted.data.id);
+      assert.equal(stored.unconfirmed, true); assert.equal(stored.pending, false);
+      assert.equal(stored.status, 'failed'); assert.equal(stored.version, 'AAAAAAAAAAE=');
+      controller.dispose();
+      held = deferred();
+      controller = createEmailTestController({ root: get('#operations-email-test'), context: () => value, request });
+      controller.sync(); await settle();
+      assert.equal(get('#operations-email-test [data-email-test="send"]').disabled, true, 'the original guard survives restoration');
+      held.resolve({ code: 'ok', data: { id: accepted.data.id, organizationId: 2, status: 'sent',
+        deliveryMode: 'postmark', version: 'AAAAAAAAAAI=' } });
+      await settle();
+      stored = JSON.parse(dom.window.sessionStorage.getItem(key));
+      assert.equal(stored.operationId, operationId); assert.equal(stored.unconfirmed, false);
+      assert.equal(stored.status, 'sent'); assert.equal(stored.version, 'AAAAAAAAAAI=');
+      assert.equal(get('#operations-email-test [data-email-test="send"]').disabled, false,
+        'restored storage and a fresh valid completion recover ordinary new-send permission');
+      assert.equal(posts, 0);
+      controller.dispose();
+    });
+  }
+  await fixture(async ({ load, get, dom }) => {
+    const { createEmailTestController } = await load('email-test');
+    const value = { ownerKey: 'adoption-review', organizationId: 2, active: true, ready: true };
+    const key = 'asap.staff.email-test.adoption-review.2';
+    const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+    const root = get('#operations-email-test');
+    dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id: accepted.data.id, status: 'failed',
+      lastErrorCode: 'mail_not_configured', pending: false, unconfirmed: true, version: 'AAAAAAAAAAI=' }));
+    const controller = createEmailTestController({ root, context: () => value, request: async path => {
+      if (path.includes('/test-context')) return saved(2);
+      throw Object.assign(new Error('Unavailable'), { status: 503 });
+    } });
+    controller.sync(); await settle();
+    const row = { id: accepted.data.id, organizationId: 2, status: 'failed', lastErrorCode: 'mail_not_configured',
+      deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' };
+    const before = dom.window.sessionStorage.getItem(key);
+    assert.equal(controller.adopt(2, operationId, row), false, 'older adoption cannot clear a newer remembered guard');
+    assert.equal(controller.adopt(2, operationId, { ...row, id: '9007199254740995', version: 'AAAAAAAAAAM=' }), false,
+      'the original operation cannot change its acknowledged reference');
+    assert.equal(controller.adopt(2, '2d52da70-c805-4e99-ac52-b2f30cab4120', { ...row, version: 'AAAAAAAAAAM=' }), false,
+      'another operation cannot replace an unresolved remembered request');
+    assert.equal(dom.window.sessionStorage.getItem(key), before);
+    assert.equal(root.querySelector('[data-email-test="send"]').disabled, true);
+    assert.equal(controller.adopt(2, operationId, { ...row, version: 'AAAAAAAAAAI=' }), true,
+      'equal valid evidence for the original reference can confirm its result');
+    assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).unconfirmed, false);
+    assert.equal(root.querySelector('[data-email-test="send"]').disabled, false);
+    assert.equal(controller.adopt(2, operationId, { ...row, status: 'pending', version: 'AAAAAAAAAAM=' }), true);
+    assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).pending, true);
+    assert.equal(root.querySelector('[data-email-test="send"]').disabled, true);
+    controller.dispose();
+  });
   console.log('Shared saved-configuration email test controller lifecycle, no-replay and mode evidence passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

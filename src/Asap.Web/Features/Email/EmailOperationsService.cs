@@ -105,7 +105,7 @@ public sealed class EmailOperationsService(
             row.DeliveryClass, row.AttemptCount, row.LastErrorCode, row.SuppressionReason,
             createdUtc = DateTime.SpecifyKind(row.CreatedUtc, DateTimeKind.Utc),
             sentUtc = row.SentUtc.HasValue ? DateTime.SpecifyKind(row.SentUtc.Value, DateTimeKind.Utc) : (DateTime?)null,
-            deliveryMode = mode, row.IntendedDeliveryMode
+            deliveryMode = mode, row.IntendedDeliveryMode, version = StaffVersion.Encode(row.RowVersion)
         });
     }
 

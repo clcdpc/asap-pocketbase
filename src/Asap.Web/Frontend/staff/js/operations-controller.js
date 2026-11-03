@@ -4,7 +4,7 @@ import { element, commandButton, text, dateTime } from './ui.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
 import { actorKey } from './session-identity.js';
 import { byDisplayLabel } from './display-order.js';
-import { createEmailTestController, emailTestStatusMessage, emailOperationStatusLabel } from './email-test.js';
+import { createEmailTestController, emailTestStatusMessage, emailOperationStatusLabel, emailRowVersionBytes } from './email-test.js';
 import { createAdministrationAudit } from './administration-audit.js';
 
 export function createOperationsController({ root, sessionIdentity, announce, onScopeChange,
@@ -14,7 +14,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   const events = new window.AbortController();
   let active = false;
   let disposed = false;
-  let libraries = [], staffOwner = null, projection = null;
+  let libraries = [], staffOwner = null, projection = null, emailReconciliation = null;
   const dom = {
     operationsScopeField: root.querySelector('#operations-scope-field'),
     operationsScope: root.querySelector('#operations-scope'),
@@ -52,6 +52,8 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     context: () => ({ ownerKey: sessionIdentity.actor()?.key, version: sessionIdentity.preferences()?.version,
       organizationId: ['all', 'system'].includes(state.emailScope) ? 1 : Number(state.emailScope),
       active: active && !disposed, ready: Boolean(sessionIdentity.actor()), dirty: false,
+      reconciling: Boolean(emailReconciliation && sessionIdentity.isCurrent(emailReconciliation.owner) &&
+        emailReconciliation.scope === state.emailScope && !emailReconciliation.signal.aborted),
       blocked: Boolean(state.operationMutation) }) });
 
   function setLibraries(organizations) {
@@ -323,11 +325,20 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     const rendered = { owner: sessionIdentity.preferences(), scope: state.operationsScope, emailScope: state.emailScope };
     projection = rendered;
     const listedEmails = data.email?.items || [];
-    // A failed-first bounded log can omit the new test. The exact authorized
-    // read adds that current reference without inventing retry proof or mixing
-    // a newer status with an existing list row's certified retry snapshot.
-    const emailItems = data.test && (state.emailScope === 'all' || data.test.organizationId === (state.emailScope === 'system' ? 1 : Number(state.emailScope))) && !listedEmails.some(row => row.id === data.test.id)
-      ? [{ ...data.test, canRetry: false }, ...listedEmails] : listedEmails;
+    let emailItems = listedEmails;
+    if (data.test && (state.emailScope === 'all' || data.test.organizationId === (state.emailScope === 'system' ? 1 : Number(state.emailScope)))) {
+      const index = listedEmails.findIndex(row => row.id === data.test.id);
+      if (index < 0) emailItems = [{ ...data.test, canRetry: false }, ...listedEmails];
+      else {
+        // SQL rowversions are eight big-endian bytes. Compare canonical decoded
+        // bytes, not Base64 spelling, status rank or lossy JavaScript numbers.
+        const exactVersion = emailRowVersionBytes(data.test.version), listedVersion = emailRowVersionBytes(listedEmails[index].version);
+        if (exactVersion !== null && (listedVersion === null || exactVersion > listedVersion)) {
+          emailItems = [...listedEmails];
+          emailItems[index] = { ...data.test, canRetry: false };
+        }
+      }
+    }
     renderOperationsTable(
       dom.queueProgressTable,
       [
@@ -373,6 +384,11 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     const load = reads.begin('operations');
     const requestedScope = state.operationsScope;
     const requestedEmailScope = state.emailScope;
+    const reconciliation = { owner, scope: requestedEmailScope, signal: load.signal };
+    emailReconciliation = reconciliation;
+    emailTest.sync();
+    const currentLoad = () => load.isCurrent() && sessionIdentity.isCurrent(owner) &&
+      requestedScope === state.operationsScope && requestedEmailScope === state.emailScope;
     const retained = state.operationMutation;
     if (retained?.uncertain) { clearReview(retained); updateOperationControls(); }
     // Only the control being disabled owns this handoff. Background reads must
@@ -387,21 +403,36 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     const clearLoading = !options.silent ? announce('Loading operations...') : null;
     try {
       const query = operationsQuery(requestedScope);
-      // Reconcile the exact remembered test even when an unrelated table read
-      // fails. Both read paths remain owned by this scope/session/load.
-      const [tables, test] = await Promise.allSettled([
+      const emailRead = request(`/api/asap/staff/email-operations${emailQuery(requestedEmailScope)}`, { signal: load.signal });
+      const testRead = options.reconcileTest === false ? Promise.resolve() : emailTest.refresh({ signal: load.signal });
+      // Consume available email evidence before unrelated queue/catalog/audit
+      // waits, including failures. Send remains guarded until this pair settles.
+      const emailPair = Promise.allSettled([emailRead, testRead]).then(([listed, test]) => {
+        if (currentLoad()) {
+          if (listed.status === 'fulfilled' && test.status === 'fulfilled') {
+            const exact = test.value?.();
+            const candidate = exact && listed.value?.items?.find(row => row.id === exact.id);
+            if (candidate) test.value(candidate);
+          }
+          if (emailReconciliation === reconciliation) { emailReconciliation = null; emailTest.sync(); }
+        }
+        return { listed, test };
+      });
+      const [tables, pair] = await Promise.allSettled([
         Promise.all([
           request(`/api/asap/staff/workflow/queues${query}`, { signal: load.signal }),
-          request(`/api/asap/staff/email-operations${emailQuery(requestedEmailScope)}`, { signal: load.signal }),
+          emailRead,
           sessionIdentity.preferences().role === 'super_admin'
             ? request('/api/asap/staff/organizations', { signal: load.signal })
             : Promise.resolve(null)
         ]),
-        options.reconcileTest === false ? Promise.resolve() : emailTest.refresh({ signal: load.signal }),
+        emailPair,
         state.section === 'audit' ? audit.refresh() : Promise.resolve()
       ]);
       if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== state.operationsScope || requestedEmailScope !== state.emailScope) return false;
       if (tables.status === 'rejected') throw tables.reason;
+      if (pair.status === 'rejected') throw pair.reason;
+      const { test } = pair.value;
       if (test.status === 'rejected') throw test.reason;
       const [queue, email, organizationResult] = tables.value;
       const organizations = organizationResult?.data ?? organizationResult;
@@ -433,7 +464,9 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== state.operationsScope || requestedEmailScope !== state.emailScope) return false;
       // Resolve the operation-bound latest observation after every asynchronous
       // read, including audit and retained-command review. A newer poll wins.
-      renderOperations({ queue, email, test: test.value?.() });
+      const currentTest = test.value?.();
+      const listedTest = currentTest && email?.items?.find(row => row.id === currentTest.id);
+      renderOperations({ queue, email, test: listedTest ? test.value(listedTest) : currentTest });
       updateOperationControls();
       return true;
     } catch (error) {
@@ -443,6 +476,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       }
       return false;
     } finally {
+      if (emailReconciliation === reconciliation && load.isCurrent()) { emailReconciliation = null; emailTest.sync(); }
       document.removeEventListener('focusin', moved);
       if (typeof clearLoading === 'function') clearLoading();
       if (load.isCurrent()) dom.refreshOperations.disabled = false;

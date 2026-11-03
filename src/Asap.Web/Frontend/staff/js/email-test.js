@@ -19,6 +19,14 @@ const unknownCodes = new Set(['provider_timeout', 'transport_failure', 'ambiguou
   'provider_start_deadline_exceeded']);
 const absenceRecheckDelay = 60000;
 
+export function emailRowVersionBytes(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const bytes = window.atob(value);
+    return bytes.length === 8 && window.btoa(bytes) === value ? bytes : null;
+  } catch { return null; }
+}
+
 export function emailOperationStatusLabel(row) {
   if (row.status === 'pending') return 'Queued';
   if (row.status === 'sending') return 'Submitting';
@@ -64,6 +72,7 @@ export function createEmailTestController({ root, context, request = authorizedJ
   let resultText = '', savedContextMessage = '', acknowledgement = null;
   const currentKey = value => value?.ownerKey && Number.isInteger(value.organizationId) && value.organizationId > 0
     ? `${value.ownerKey}|${value.organizationId}|${value.version ?? ''}` : null;
+  const isUnresolved = value => Boolean(value?.pending || value?.unconfirmed);
   const storageKey = value => `asap.staff.email-test.${encodeURIComponent(value.ownerKey)}.${value.organizationId}`;
   const current = owner => !disposed && owner.generation === generation && key === currentKey(context()) && context().active;
   function stopReads() {
@@ -98,17 +107,21 @@ export function createEmailTestController({ root, context, request = authorizedJ
     if (value?.retired) return dom.retire ? `Retired unrecorded client request ${value.operationId}. A message may still arrive; keep the retirement reference for operator review.` : '';
     if (value?.rejected) return reasons[value.rejectionCode] || (value.rejectionCode === 'email_test_cooldown'
       ? 'A recent test was already requested. Wait before requesting another test.' : 'The previous test request was rejected; no new message was queued.');
+    if (value?.unconfirmed) return unconfirmedMessage(value);
     return value?.pending ? pendingMessage(value) : '';
   }
   function reconcileStored(value) {
     const stored = restore(value);
     if (record && !stored) {
       absence = null; latestObservation = null;
+      // Losing storage cannot resolve an original intent, even before its
+      // first observation finishes. Retain the guard for emergency persistence.
+      if (!record.retired && !record.rejected) record.unconfirmed = true;
       message(`The stored test reference is unavailable. The current request remains unresolved. Reference ${record.id || record.operationId}.`);
       render(); return true;
     }
     if ((!record && !stored) || record && stored &&
-        ['operationId', 'id', 'pending', 'status', 'lastErrorCode', 'retired', 'rejected'].every(field => record[field] === stored[field])) return false;
+        ['operationId', 'id', 'pending', 'status', 'lastErrorCode', 'version', 'retired', 'rejected', 'unconfirmed'].every(field => record[field] === stored[field])) return false;
     // The other panel can learn a late acknowledgement while this panel holds
     // a retired snapshot. Re-read shared authority before retirement or a send.
     stopObservation(); absence = null; latestObservation = null; record = stored;
@@ -146,6 +159,10 @@ export function createEmailTestController({ root, context, request = authorizedJ
     return `The existing test is unresolved. ${dom.retire ? 'Refresh operations to check it.'
       : 'Use View email operations to check it and review recovery options.'} No new test will be requested. Reference ${value.id || value.operationId}.`;
   }
+  function unconfirmedMessage(value) {
+    return `The test outcome is unconfirmed. ${dom.retire ? 'Refresh operations to check it.'
+      : 'Use View email operations to check it and review recovery options.'} Another test remains blocked until this request can be checked. Reference ${value.id || value.operationId}.`;
+  }
   function clearAcknowledgement() {
     if (acknowledgement !== null) window.clearTimeout(acknowledgement);
     acknowledgement = null;
@@ -160,7 +177,7 @@ export function createEmailTestController({ root, context, request = authorizedJ
     }, acknowledgementDuration);
   }
   function renderFeedback() {
-    dom.result.textContent = [!submitting && blockedMessage(context()), savedContextMessage, resultText]
+    dom.result.textContent = [!submitting && sendBlockedMessage(context()), savedContextMessage, resultText]
       .filter((value, index, values) => value && values.indexOf(value) === index).join(' ');
     dom.result.hidden = !dom.result.textContent;
   }
@@ -169,10 +186,16 @@ export function createEmailTestController({ root, context, request = authorizedJ
       : value.blocked ? 'Wait for the current settings or operation result before sending a test email.'
         : !value.ready ? 'Load the current saved settings before sending a test email.' : '';
   }
+  function sendBlockedMessage(value) {
+    return blockedMessage(value) || (value.reconciling
+      ? 'Checking the current test and email log before another test email can be requested.'
+      : observing ? 'Checking the current test before another test email can be requested.'
+        : record?.unconfirmed ? unconfirmedMessage(record) : '');
+  }
   function render() {
     const value = context(), barrier = blockedMessage(value);
-    dom.send.disabled = disposed || !value.active || Boolean(barrier) || loading || submitting || retiring ||
-      saved?.state !== 'ready' || Boolean(record?.pending);
+    dom.send.disabled = disposed || !value.active || Boolean(sendBlockedMessage(value)) || loading || submitting || retiring ||
+      saved?.state !== 'ready' || isUnresolved(record);
     if (dom.retire) {
       dom.retire.hidden = !canRetire();
       dom.retire.disabled = disposed || !value.active || Boolean(barrier) || loading || submitting || observing || retiring;
@@ -222,6 +245,29 @@ export function createEmailTestController({ root, context, request = authorizedJ
       if (current(owner) && sequence === contextSequence) { loading = false; contextRead = null; render(); }
     }
   }
+  function acceptObservation(owner, observed, row, signal) {
+    absence = null;
+    observed.id = row.id;
+    observed.status = row.status;
+    observed.lastErrorCode = row.lastErrorCode;
+    observed.version = row.version;
+    observed.retired = false;
+    observed.unconfirmed = false;
+    observed.pending = row.status === 'pending' || row.status === 'sending' ||
+      row.status === 'failed' && (unknownCodes.has(row.lastErrorCode) || !row.lastErrorCode);
+    updateStored(observed);
+    latestObservation = { record: observed, row, signal };
+    if (row.status === 'suppressed' || row.status === 'failed' || row.status === 'sent' && row.deliveryMode !== 'postmark') {
+      message(emailTestStatusMessage(row));
+    } else if (acknowledgement === null) {
+      message(observed.pending ? pendingMessage(observed) : '');
+    }
+    if (row.status === 'pending' || row.status === 'sending') {
+      if (Date.now() < deadline) timer = window.setTimeout(() => void observe(owner), pollInterval);
+      else if (acknowledgement === null) message(pendingMessage(observed));
+    }
+    render();
+  }
   async function observe(owner, manual = false, retireOnMissing = false, signal) {
     if (signal?.aborted || !current(owner) || !record || submitting || retiring && !retireOnMissing) return;
     if (manual) { deadline = Date.now() + observationLimit; latestObservation = null; }
@@ -240,40 +286,38 @@ export function createEmailTestController({ root, context, request = authorizedJ
       const response = await request(path, { signal: read.signal });
       if (read.signal.aborted || !current(owner) || sequence !== statusSequence || record !== observed || reconcileStored(owner.value)) return;
       const row = response?.data;
-      if (response?.code !== 'ok' || !canonicalId(row?.id) || row.organizationId !== owner.value.organizationId ||
+      if (response?.code !== 'ok' || !canonicalId(row?.id) || emailRowVersionBytes(row.version) === null || row.organizationId !== owner.value.organizationId ||
           observed.id && row.id !== observed.id ||
           !['pending', 'sending', 'sent', 'suppressed', 'failed'].includes(row.status)) {
         throw new Error('The test-email status could not be confirmed.');
       }
-      absence = null;
-      observed.id = row.id;
-      observed.status = row.status;
-      observed.lastErrorCode = row.lastErrorCode;
-      observed.retired = false;
-      observed.pending = row.status === 'pending' || row.status === 'sending' ||
-        row.status === 'failed' && (unknownCodes.has(row.lastErrorCode) || !row.lastErrorCode);
-      updateStored(observed);
-      latestObservation = { record: observed, row, signal };
-      if (row.status === 'suppressed' || row.status === 'failed' || row.status === 'sent' && row.deliveryMode !== 'postmark') {
-        message(emailTestStatusMessage(row));
-      } else if (acknowledgement === null) {
-        message(observed.pending ? pendingMessage(observed) : '');
-      }
-      if (row.status === 'pending' || row.status === 'sending') {
-        if (Date.now() < deadline) timer = window.setTimeout(() => void observe(owner), pollInterval);
-        else if (acknowledgement === null) message(pendingMessage(observed));
-      }
+      const priorVersion = emailRowVersionBytes(observed.version);
+      if (priorVersion !== null && emailRowVersionBytes(row.version) < priorVersion) throw new Error('The test-email status is older than its remembered result.');
+      acceptObservation(owner, observed, row, signal);
       // Table reads may outlast an automatic poll. Resolve the latest validated
       // observation at render time, still bound to this original request.
-      return () => {
+      return snapshot => {
         if (signal?.aborted || !current(owner) || record !== observed || latestObservation?.record !== observed ||
             latestObservation.signal?.aborted || reconcileStored(owner.value)) return null;
+        const version = emailRowVersionBytes(snapshot?.version);
+        if (snapshot?.id === observed.id && snapshot.organizationId === owner.value.organizationId &&
+            snapshot.deliveryClass === 'operational_test' && ['pending', 'sending', 'sent', 'suppressed', 'failed'].includes(snapshot.status) &&
+            version !== null && version > emailRowVersionBytes(latestObservation.row.version)) {
+          stopObservation();
+          // The newer authorized list snapshot updates processing state, never
+          // retry authority. Its complete listed row separately owns that proof.
+          acceptObservation(owner, observed, { ...snapshot, canRetry: false }, signal);
+        }
         return latestObservation.row;
       };
     } catch (error) {
       if (!read.signal.aborted && current(owner) && sequence === statusSequence && record === observed && !isAbortError(error)) {
         latestObservation = null;
         if (reconcileStored(owner.value)) return;
+        // An unreadable lookup cannot release a remembered terminal request:
+        // it may have been retried since that result. Retain this guard across
+        // panel changes and reload until an exact read can confirm its status.
+        observed.unconfirmed = true; updateStored(observed);
         // Only an authorized, exact by-intent not_found is absence evidence.
         // Repeated absence cannot prove that an older request will never commit.
         if (!observed.id && observed.pending && !observed.rejected &&
@@ -288,7 +332,7 @@ export function createEmailTestController({ root, context, request = authorizedJ
                 references.push({ operationId: observed.operationId, reviewedAt: new Date(now).toISOString() });
               }
               window.sessionStorage.setItem(`${storageKey(owner.value)}.retirement-references`, JSON.stringify(references));
-              const retired = { ...observed, pending: false, retired: true };
+              const retired = { ...observed, pending: false, retired: true, unconfirmed: false };
               if (!updateStored(retired)) throw new Error('The original reference could not be retained.');
               record = retired; absence = null; renderHistory(owner.value);
               message(`Retired the unrecorded client request ${observed.operationId}. A delayed request may still commit and a message may still arrive. A separate Send test email action creates a new request.`);
@@ -304,7 +348,7 @@ export function createEmailTestController({ root, context, request = authorizedJ
           }
         } else {
           absence = null;
-          message(`The test outcome is unconfirmed. ${dom.retire ? 'Refresh operations to check it.' : 'Use View email operations to check it and review recovery options.'} No new test was requested. Reference ${observed.id || observed.operationId}.`);
+          message(unconfirmedMessage(observed));
         }
       }
     } finally {
@@ -337,7 +381,7 @@ export function createEmailTestController({ root, context, request = authorizedJ
   async function send() {
     const value = context();
     if (!disposed && value.active && key === currentKey(value) && reconcileStored(value)) return;
-    if (disposed || !value.active || blockedMessage(value) || loading || submitting || retiring || saved?.state !== 'ready' || record?.pending) return;
+    if (disposed || !value.active || sendBlockedMessage(value) || loading || submitting || retiring || saved?.state !== 'ready' || isUnresolved(record)) return;
     const owner = { generation, value: { ...value } };
     const attempt = { storageKey: storageKey(value), operationId: window.crypto.randomUUID(),
       id: null, pending: true, configurationVersion: saved.configurationVersion, intendedDeliveryMode: 'postmark' };
@@ -408,7 +452,7 @@ export function createEmailTestController({ root, context, request = authorizedJ
     reconcileStored(value);
     // Preserve an in-memory unresolved identity before navigation destroys this
     // panel, even if session storage was removed after the original submission.
-    if (record?.pending && !ownsStored(record) && !store(record)) {
+    if (isUnresolved(record) && !ownsStored(record) && !store(record)) {
       message(`The recovery reference could not be retained. Keep this page open and restore session storage before opening Operations. Reference ${record.id || record.operationId}.`);
       return;
     }
@@ -417,10 +461,16 @@ export function createEmailTestController({ root, context, request = authorizedJ
   render();
   function adopt(organizationId, operationId, row) {
     const value = context();
-    if (!value.ownerKey || !uuid(operationId) || !canonicalId(row?.id) || row.organizationId !== organizationId) return false;
+    if (!value.ownerKey || !uuid(operationId) || !canonicalId(row?.id) || emailRowVersionBytes(row.version) === null || row.organizationId !== organizationId) return false;
     const target = { ...value, organizationId }, prior = restore(target);
-    if (prior?.pending && prior.operationId !== operationId) return false;
-    const recovered = { storageKey: storageKey(target), operationId, id: row.id, status: row.status, lastErrorCode: row.lastErrorCode,
+    if (isUnresolved(prior) && prior.operationId !== operationId) return false;
+    if (prior?.operationId === operationId && prior.id) {
+      if (prior.id !== row.id) return false;
+      const version = emailRowVersionBytes(prior.version);
+      if (version !== null && emailRowVersionBytes(row.version) < version) return false;
+    }
+    const recovered = { storageKey: storageKey(target), operationId, id: row.id, status: row.status, lastErrorCode: row.lastErrorCode, version: row.version,
+      unconfirmed: false,
       pending: row.status === 'pending' || row.status === 'sending' ||
         row.status === 'failed' && (unknownCodes.has(row.lastErrorCode) || !row.lastErrorCode) };
     if (!store(recovered)) return false;

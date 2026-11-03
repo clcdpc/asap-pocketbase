@@ -16,7 +16,7 @@ are not application inputs.
 | Issue | Acceptance evidence | Tests | Independent reviews | Commit |
 | --- | --- | --- | --- | --- |
 | #430 | Operations-only link removed; Settings link, saved context, exact recovery identity and focusable log retained | Focused email-test and Operations Node files PASS; saved-email real-SQL/Chromium journey 1/1 PASS with six checkpoints | Luna MAX independent review and closure audit PASS; no actionable findings | `ac57372` |
-| #431 | One refresh; truthful log/status; guarded Settings handoff; exact identity/recovery; latest current test visible beyond 500 failed rows | SQL 23/23 then targeted 6/6 PASS; final browser 1/1 and five focused Node invocations PASS | Luna MAX and Astra HIGH final R3 closure PASS; all findings resolved | `c33e327` |
+| #431 | One refresh; truthful log/status; guarded Settings handoff; exact identity/recovery; latest current test visible beyond 500 failed rows | SQL 23/23 then 6/6 PASS; final correction SQL 9/9, ten focused Node commands and saved-email browser 1/1 PASS | Luna MAX / Astra HIGH plus final Astra XHIGH code audit cleared after combined remediation below | `c33e327` plus closure correction; exact SHAs in PR |
 | #432 | One forced manual action; distinct deliberate identities, original-identity retry and gesture guards | Five frontend files PASS (262 navigation journeys); SQL 27/27 and browser 1/1 PASS | Luna MAX / Astra HIGH independent closure PASS; no actionable findings | `ee835b6` |
 | #434 | Three addressable sections; full-history scoped audit; Staff access handoff; approved responsive layout | SQL 11/11, retained browser 4/4, final audit browser 1/1, focused Node PASS; pre-review full frontend 68/68 | Luna MAX / Astra HIGH / Terra MAX final R2 closure PASS; all findings resolved | This change; exact SHA in consolidated PR |
 
@@ -172,6 +172,37 @@ Executed qualification (separate runs, not unique-case totals):
 - Final Release build: zero warnings/errors. All 25 frozen source/test hashes
   were independently verified. Evidence is retained outside Git under the
   existing `i450` root, using `i434-r1-review-*` and `i434-r2-review-*` names.
+
+### Combined adversarial code audit and correction
+
+Astra XHIGH inspected the complete four-issue diff, all five issue descriptions,
+the pinned reference and actual source/tests/receipts. Its initial audit found a
+stale existing test-email row and inaccurate System-scope documentation. Further
+independent Luna MAX, Astra HIGH and Astra XHIGH probes exposed timing, handoff
+and storage-loss variants. All actionable findings were fixed on this branch;
+the final R3b functional, security and adversarial code reviews are clear.
+
+| Finding | Resolution and observable regression |
+| --- | --- |
+| Existing listed reference hides newer exact status | Exact reads expose the existing canonical SQL rowversion. Compare decoded eight-byte values and select complete snapshots; never combine newer presentation with stale retry authority |
+| Newer list state disagrees with remembered recovery state | The original operation-bound accessor accepts strictly newer same-reference/scope evidence, updates remembered status/polling, and rejects older responses; original UUID and pending Send protection remain |
+| Send unlocks before slow unrelated reads finish | Load-owned Send-only guidance covers exact/list reconciliation. Consume that pair before queue/catalog/audit waits or errors; old callbacks cannot unlock a newer refresh |
+| Failed lookup or restored Settings/reload permits another send | Shared observation-in-progress and persisted unconfirmed guards survive departure. Failed/malformed/older reads cannot resolve an existing request; current valid evidence or supported explicit retirement clears the guard |
+| Storage disappears before or after failed observation | Preserve the in-memory original as unresolved before early return; retain the same UUID before navigation or visibly block departure when persistence fails. Fresh retained evidence restores ordinary permission |
+| Older legacy adoption clears current recovery evidence | Reject older same-operation/reference versions, changed acknowledged references and replacement of another unresolved intent; equal/fresh valid evidence remains usable |
+| System test guidance says aggregate | Operational documentation now identifies the explicit System-only email view |
+
+Final correction qualification: ten focused Node commands PASS, including all
+eight selected actual email-navigation journeys; real SQL 9/9 PASS; Release
+builds PASS with zero warnings/errors. Source/generated assets match recorded
+hashes. Final R3b saved-email SQL/Chromium journey is 1/1 PASS with six clean
+states, original lost-acknowledgement identity and one recording-provider POST
+and worker job. R3a audit remains 1/1 PASS (26 clean states, 22 visible-focus
+witnesses and four mobile queue cases); R3b changes neither audit logic/CSS nor
+backend code, so those are retained receipts, not claimed repeated executions.
+No live provider calls occurred. Actual receipts and nine-file freeze manifests
+are external `i450-closure-*` evidence. The earlier full-frontend attempt was
+interrupted for remediation and is explicitly incomplete, not passing evidence.
 
 ## Integration qualification
 

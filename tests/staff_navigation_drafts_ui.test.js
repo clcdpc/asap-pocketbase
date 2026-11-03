@@ -126,7 +126,7 @@ async function fixture(route, journey, options = {}) {
     const confirms = [];
     let discard = false;
     let operationResponse = null;
-    let apiResponse = null;
+    let apiResponse = options.api || null;
     global.fetch = async (url, init = {}) => {
       calls.push({ url, init });
       const parsed = new URL(url, dom.window.location.href);
@@ -266,7 +266,7 @@ for (const settingsScope of ['system', '2']) {
           assert.equal(parsed.searchParams.get('operationId'), operationId);
           assert.equal(parsed.searchParams.get('organizationId'), String(organizationId));
           return response(200, { code: 'ok', data: { id: '9007199254740993', organizationId,
-            status: 'failed', lastErrorCode: 'provider_timeout', deliveryMode: 'postmark' } });
+            status: 'failed', lastErrorCode: 'provider_timeout', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } });
         }
       });
       if (settingsScope !== 'system') {
@@ -290,6 +290,209 @@ for (const settingsScope of ['system', '2']) {
       assert.equal(new URL(list.url, 'https://localhost').searchParams.get('organizationId'), settingsScope === 'system' ? '1' : '2');
       assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0, 'navigation never silently saves or resends');
     }));
+}
+test('email operations navigation guards the original terminal test while Settings rechecks after departure', () =>
+  fixture('?stage=settings&settingsScope=system#settings-smtp', async ui => {
+    const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+    const key = `asap.staff.email-test.${encodeURIComponent(actorKey(ui.readStaff()))}.1`;
+    ui.dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id, pending: true, status: 'pending' }));
+    let releaseList, finishSettingsRead, settingsReads = 0, phase = 'operations';
+    const list = new Promise(resolve => { releaseList = resolve; });
+    const settingsRead = new Promise(resolve => { finishSettingsRead = resolve; });
+    ui.setApi(({ pathname }) => {
+      if (pathname.endsWith('/email-operations')) return list;
+      if (pathname.endsWith(`/email-operations/${id}`)) {
+        if (phase === 'settings') { settingsReads += 1; return settingsRead; }
+        return response(200, { code: 'ok', data: { id, organizationId: 1,
+          status: phase === 'recover' ? 'sent' : 'failed', lastErrorCode: 'mail_not_configured',
+          deliveryClass: 'operational_test', deliveryMode: 'postmark', version: phase === 'recover' ? 'AAAAAAAAAAM=' : 'AAAAAAAAAAE=' } });
+      }
+    });
+    ui.get('#settings-email-test [data-email-test="operations"]').click();
+    await until(() => !ui.get('#operations-view').hidden &&
+      JSON.parse(ui.dom.window.sessionStorage.getItem(key)).pending === false &&
+      /Checking the current test and email log/.test(ui.get('#operations-email-test [data-email-test="result"]').textContent),
+    'Operations holds the email pair after accepting the older terminal result');
+    phase = 'settings'; ui.get('[data-view="settings"]').click();
+    await until(() => !ui.get('#settings-view').hidden && settingsReads > 0, 'Settings starts its own exact reconciliation');
+    const send = ui.get('#settings-email-test [data-email-test="send"]');
+    const feedback = ui.get('#settings-email-test [data-email-test="result"]');
+    assert.equal(send.disabled, true, 'normal Operations departure cannot create a Send window in Settings');
+    assert.equal(feedback.hidden, false); assert.match(feedback.textContent, /Checking the current test/);
+    send.dispatchEvent(new ui.dom.window.Event('click')); await settle();
+    assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+    finishSettingsRead(response(503, { message: 'Exact test lookup unavailable' }));
+    await until(() => JSON.parse(ui.dom.window.sessionStorage.getItem(key)).unconfirmed === true, 'the failed Settings lookup retains recovery');
+    assert.equal(send.disabled, true); assert.match(feedback.textContent, /outcome is unconfirmed.*Another test remains blocked/);
+    releaseList(response(200, { items: [{ id, organizationId: 1, status: 'pending', deliveryClass: 'operational_test',
+      deliveryMode: 'postmark', version: 'AAAAAAAAAAI=', canRetry: false }] }));
+    await settle();
+    send.dispatchEvent(new ui.dom.window.Event('click')); await settle();
+    assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+    assert.equal(JSON.parse(ui.dom.window.sessionStorage.getItem(key)).operationId, operationId);
+    assert.equal(JSON.parse(ui.dom.window.sessionStorage.getItem(key)).unconfirmed, true,
+      'the departed Operations pair cannot release the current Settings guard');
+    phase = 'recover'; ui.get('#settings-email-test [data-email-test="operations"]').click();
+    await until(() => !ui.get('#operations-view').hidden && /Provider accepted/.test(ui.get('#email-operations-table').textContent),
+      'a later valid exact result confirms the original request in Operations');
+    assert.equal(JSON.parse(ui.dom.window.sessionStorage.getItem(key)).operationId, operationId);
+    assert.equal(JSON.parse(ui.dom.window.sessionStorage.getItem(key)).unconfirmed, false);
+    assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+  }));
+test('email operations navigation keeps reload and same-scope restoration guarded through a failed exact lookup', async () => {
+  const staff = { id: '20', role: 'super_admin', organizationId: 1, tenantId: 'restoration-tenant',
+    authenticationEmail: 'restoration@example.org' };
+  const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+  const key = `asap.staff.email-test.${encodeURIComponent(actorKey(staff))}.1`;
+  const storage = new Map([[key, JSON.stringify({ operationId, id, status: 'failed', lastErrorCode: 'mail_not_configured',
+    pending: false, version: 'AAAAAAAAAAE=' })]]);
+  for (const restored of [false, true]) {
+    let finishRead, exactReads = 0;
+    const read = new Promise(resolve => { finishRead = resolve; });
+    await fixture('?stage=settings&settingsScope=system#settings-smtp', async ui => {
+      await until(() => exactReads > 0, 'restored Settings starts the exact original lookup');
+      const send = ui.get('#settings-email-test [data-email-test="send"]');
+      const feedback = ui.get('#settings-email-test [data-email-test="result"]');
+      assert.equal(send.disabled, true, `${restored ? 'reload' : 'first restoration'}: held reconciliation blocks Send`);
+      assert.match(feedback.textContent, /Checking the current test/);
+      send.dispatchEvent(new ui.dom.window.Event('click')); await settle();
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+      finishRead(response(503, { message: 'Exact test lookup unavailable' }));
+      await until(() => /outcome is unconfirmed/.test(feedback.textContent), 'failed reconciliation remains actionable');
+      assert.equal(send.disabled, true); assert.equal(feedback.hidden, false);
+      assert.match(feedback.textContent, /View email operations.*Another test remains blocked.*Reference/);
+      send.dispatchEvent(new ui.dom.window.Event('click')); await settle();
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+      const record = JSON.parse(ui.dom.window.sessionStorage.getItem(key));
+      assert.equal(record.operationId, operationId); assert.equal(record.id, id);
+      assert.equal(record.pending, false); assert.equal(record.status, 'failed');
+      assert.equal(record.version, 'AAAAAAAAAAE='); assert.equal(record.unconfirmed, true);
+    }, { storage, staff, api: ({ pathname, parsed }) => {
+      if (!pathname.endsWith(`/email-operations/${id}`)) return;
+      assert.equal(parsed.searchParams.get('organizationId'), '1');
+      exactReads += 1; return read;
+    } });
+  }
+});
+for (const writeFailure of [false, true]) {
+  test(`email operations navigation retains guarded terminal identity after storage removal (write failure: ${writeFailure})`, async () => {
+    const staff = { id: '20', role: 'super_admin', organizationId: 1, tenantId: 'storage-tenant',
+      authenticationEmail: 'storage@example.org' };
+    const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+    const key = `asap.staff.email-test.${encodeURIComponent(actorKey(staff))}.1`;
+    const storage = new Map([[key, JSON.stringify({ operationId, id, status: 'failed', lastErrorCode: 'mail_not_configured',
+      pending: false, version: 'AAAAAAAAAAE=' })]]);
+    await fixture('?stage=settings&settingsScope=system#settings-smtp', async ui => {
+      await until(() => JSON.parse(ui.dom.window.sessionStorage.getItem(key)).unconfirmed === true,
+        'a real failed exact lookup guards the original terminal request');
+      const send = ui.get('#settings-email-test [data-email-test="send"]');
+      const feedback = ui.get('#settings-email-test [data-email-test="result"]');
+      ui.dom.window.sessionStorage.removeItem(key);
+      send.dispatchEvent(new ui.dom.window.Event('click')); await settle();
+      assert.equal(send.disabled, true); assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+      assert.match(feedback.textContent, /stored test reference is unavailable/);
+      const link = ui.get('#settings-email-test [data-email-test="operations"]');
+      if (writeFailure) {
+        const originalSetItem = ui.dom.window.Storage.prototype.setItem;
+        try {
+          ui.dom.window.Storage.prototype.setItem = () => { throw new Error('Storage writes unavailable'); };
+          link.click(); await settle();
+          assert.equal(ui.get('#settings-view').hidden, false, 'failed retention blocks actual departure');
+          assert.equal(ui.get('#operations-view').hidden, true);
+          assert.match(feedback.textContent, /Keep this page open and restore session storage/);
+          assert.equal(ui.dom.window.sessionStorage.getItem(key), null);
+          send.dispatchEvent(new ui.dom.window.Event('click')); await settle();
+          assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+        } finally { ui.dom.window.Storage.prototype.setItem = originalSetItem; }
+      }
+      link.click();
+      await until(() => !ui.get('#operations-view').hidden && ui.dom.window.document.activeElement === ui.get('#email-operations-table'),
+        'retained original identity reaches the scoped Operations log');
+      const record = JSON.parse(ui.dom.window.sessionStorage.getItem(key));
+      assert.equal(record.operationId, operationId); assert.equal(record.id, id);
+      assert.equal(record.status, 'failed'); assert.equal(record.version, 'AAAAAAAAAAE=');
+      assert.equal(record.pending, false); assert.equal(record.unconfirmed, true);
+      assert.equal(ui.get('#send-test-email').disabled, true);
+      assert.match(ui.get('#operations-email-test [data-email-test="result"]').textContent, /outcome is unconfirmed/);
+      ui.get('#send-test-email').dispatchEvent(new ui.dom.window.Event('click')); await settle();
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+    }, { staff, storage, api: ({ pathname }) => {
+      if (pathname.endsWith(`/email-operations/${id}`)) return response(503, { message: 'Exact test lookup unavailable' });
+      if (pathname.endsWith('/email-operations')) return response(200, { items: [{ id, organizationId: 1, status: 'pending',
+        deliveryClass: 'operational_test', deliveryMode: 'postmark', version: 'AAAAAAAAAAI=', canRetry: false }] });
+    } });
+  });
+}
+for (const writeFailure of [false, true]) {
+  test(`email operations navigation retains original intent when storage disappears before lookup failure (write failure: ${writeFailure})`, async () => {
+    const staff = { id: '20', role: 'super_admin', organizationId: 1, tenantId: 'storage-order-tenant',
+      authenticationEmail: 'storage-order@example.org' };
+    const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+    const key = `asap.staff.email-test.${encodeURIComponent(actorKey(staff))}.1`;
+    const storage = new Map([[key, JSON.stringify({ operationId, id, status: 'failed', lastErrorCode: 'mail_not_configured',
+      pending: false, version: 'AAAAAAAAAAE=' })]]);
+    let finishRead, exactReads = 0;
+    const heldRead = new Promise(resolve => { finishRead = resolve; });
+    await fixture('?stage=settings&settingsScope=system#settings-smtp', async ui => {
+      await until(() => exactReads > 0, 'the original terminal lookup is held');
+      const send = ui.get('#settings-email-test [data-email-test="send"]');
+      const feedback = ui.get('#settings-email-test [data-email-test="result"]');
+      ui.dom.window.sessionStorage.removeItem(key);
+      finishRead(response(503, { message: 'Exact test lookup unavailable' }));
+      await until(() => /stored test reference is unavailable/.test(feedback.textContent), 'lookup failure notices missing storage');
+      assert.equal(send.disabled, true, 'the early missing-storage return guards the original terminal request');
+      assert.equal(ui.dom.window.sessionStorage.getItem(key), null);
+      send.dispatchEvent(new ui.dom.window.Event('click')); await settle();
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+      const link = ui.get('#settings-email-test [data-email-test="operations"]');
+      if (writeFailure) {
+        const originalSetItem = ui.dom.window.Storage.prototype.setItem;
+        try {
+          ui.dom.window.Storage.prototype.setItem = () => { throw new Error('Storage writes unavailable'); };
+          link.click(); await settle();
+          assert.equal(ui.get('#settings-view').hidden, false);
+          assert.equal(ui.get('#operations-view').hidden, true, 'failed persistence blocks departure');
+          assert.match(feedback.textContent, /Keep this page open and restore session storage/);
+          assert.equal(ui.dom.window.sessionStorage.getItem(key), null);
+          send.dispatchEvent(new ui.dom.window.Event('click')); await settle();
+          assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+        } finally { ui.dom.window.Storage.prototype.setItem = originalSetItem; }
+      }
+      link.click();
+      await until(() => !ui.get('#operations-view').hidden && ui.dom.window.document.activeElement === ui.get('#email-operations-table'),
+        'original guarded intent is retained before Operations takes ownership');
+      const record = JSON.parse(ui.dom.window.sessionStorage.getItem(key));
+      assert.equal(record.operationId, operationId); assert.equal(record.id, id);
+      assert.equal(record.unconfirmed, true); assert.equal(record.pending, false);
+      assert.equal(record.status, 'failed'); assert.equal(record.version, 'AAAAAAAAAAE=');
+      assert.equal(ui.get('#send-test-email').disabled, true);
+      ui.get('#send-test-email').dispatchEvent(new ui.dom.window.Event('click')); await settle();
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+    }, { staff, storage, api: ({ pathname }) => {
+      if (pathname.endsWith(`/email-operations/${id}`)) { exactReads += 1; return heldRead; }
+      if (pathname.endsWith('/email-operations')) return response(200, { items: [{ id, organizationId: 1, status: 'pending',
+        deliveryClass: 'operational_test', deliveryMode: 'postmark', version: 'AAAAAAAAAAI=', canRetry: false }] });
+    } });
+    let finishRestoredRead, restoredReads = 0;
+    const restoredRead = new Promise(resolve => { finishRestoredRead = resolve; });
+    await fixture('?stage=settings&settingsScope=system#settings-smtp', async ui => {
+      await until(() => restoredReads > 0, 'reload reconciles the retained original reference');
+      const send = ui.get('#settings-email-test [data-email-test="send"]');
+      assert.equal(send.disabled, true); send.dispatchEvent(new ui.dom.window.Event('click')); await settle();
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+      assert.equal(JSON.parse(ui.dom.window.sessionStorage.getItem(key)).operationId, operationId);
+      finishRestoredRead(response(200, { code: 'ok', data: { id, organizationId: 1, status: 'sent', deliveryClass: 'operational_test',
+        deliveryMode: 'postmark', version: 'AAAAAAAAAAM=' } }));
+      await until(() => send.disabled === false, 'fresh valid completion restores ordinary new-send permission');
+      const record = JSON.parse(ui.dom.window.sessionStorage.getItem(key));
+      assert.equal(record.operationId, operationId); assert.equal(record.id, id);
+      assert.equal(record.status, 'sent'); assert.equal(record.version, 'AAAAAAAAAAM=');
+      assert.equal(record.unconfirmed, false); assert.equal(record.pending, false);
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+    }, { staff, storage, api: ({ pathname }) => {
+      if (pathname.endsWith(`/email-operations/${id}`)) { restoredReads += 1; return restoredRead; }
+    } });
+  });
 }
 for (const [role, scope, expected] of [['super_admin', 'system', 'all'], ['super_admin', '2', '2'], ['admin', '2', '2']]) {
   test(`staff audit guarded navigation uses authorized roster scope ${role} ${scope}`, () =>

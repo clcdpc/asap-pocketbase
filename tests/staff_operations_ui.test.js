@@ -139,7 +139,7 @@ function operationResult(url) {
       }
       if (/\/email-operations\/9007199254740995\?/.test(url) && options.method !== 'POST') {
         return response(200, { code: 'ok', data: { id: '9007199254740995', organizationId: 2,
-          status: 'sent', deliveryMode: 'postmark' } });
+          status: 'sent', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } });
       }
       if (url.endsWith('/api/asap/staff/organizations')) return response(200, { code: 'ok', data: organizations });
       if (url.includes('/workflow/queues')) {

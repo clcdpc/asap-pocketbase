@@ -20,7 +20,7 @@ Observation stops when the panel/session/scope changes or after one minute.
 Use Settings' **View email operations**, available before or after a test, to
 open and refresh the authorized log. Unsaved Settings edits require a departure
 decision; navigation never saves them. System tests open the authorized
-all-library view, which includes System records. **Refresh operations** reloads
+**System only** email view. **Refresh operations** reloads
 the tables and reconciles the exact remembered test by reference or original
 request UUID. A missing row in the bounded log is not absence evidence.
 Refresh never sends, retries or retires a request. Submission acknowledgement is
