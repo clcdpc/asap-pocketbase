@@ -16,8 +16,8 @@ are not application inputs.
 | Issue | Acceptance evidence | Tests | Independent reviews | Commit |
 | --- | --- | --- | --- | --- |
 | #430 | Operations-only link removed; Settings link, saved context, exact recovery identity and focusable log retained | Focused email-test and Operations Node files PASS; saved-email real-SQL/Chromium journey 1/1 PASS with six checkpoints | Luna MAX independent review and closure audit PASS; no actionable findings | `ac57372` |
-| #431 | One refresh; truthful log/status; guarded Settings handoff; exact identity/recovery; latest current test visible beyond 500 failed rows | SQL 23/23 then targeted 6/6 PASS; final browser 1/1 and five focused Node invocations PASS | Luna MAX and Astra HIGH final R3 closure PASS; all findings resolved | Issue-specific commit introducing this row |
-| #432 | Pending | Pending | Luna MAX / Astra HIGH pending | Pending |
+| #431 | One refresh; truthful log/status; guarded Settings handoff; exact identity/recovery; latest current test visible beyond 500 failed rows | SQL 23/23 then targeted 6/6 PASS; final browser 1/1 and five focused Node invocations PASS | Luna MAX and Astra HIGH final R3 closure PASS; all findings resolved | `c33e327` |
+| #432 | One forced manual action; distinct deliberate identities, original-identity retry and gesture guards | Five frontend files PASS (262 navigation journeys); SQL 27/27 and browser 1/1 PASS | Luna MAX / Astra HIGH independent closure PASS; no actionable findings | Issue-specific commit introducing this row |
 | #434 | Pending | Pending | Luna MAX / Astra HIGH / Terra MAX pending | Pending |
 
 Implementation and functional-review agents use the requested available models:
@@ -89,6 +89,39 @@ Executed qualification (counts describe separate runs, not unique totals):
 
 Exact commands, TRX, browser reports and images are retained outside Git under
 `Documents/Codex/2026-11-02/i450/`; latest receipts use `i431-r3-*`.
+
+### #432 qualification
+
+The single Run weekly summary action uses the existing forced endpoint. It
+retains durable command capture/recovery, scope, recipient rules and ordinary
+scheduled processing. Native double-click detail and held-key guards distinguish
+one activation from a later deliberate run; backend execution is unchanged.
+
+- Operations controller/UI, all 262 navigation/draft journeys, postcommit-401,
+  and shared email-controller Node checks: PASS.
+- Focused real SQL: 27/27 PASS, no skips/failures. Native discovery verifies all
+  27 UIDs across 15 intended method/data-case populations. Coverage includes a
+  fresh same-period run after acceptance, retry without another provider call,
+  eligibility/opt-out/inactivity/empty/suppression, scope/actor authority, audit,
+  ordinary deduplication, cancellation, and all seven ordinary schedules.
+- Dedicated SQL/Chromium journey: 1/1 PASS; eight accepted jobs with seven UUIDs
+  and original-ID/library retry. Trusted click details `[1,2]`, held Enter,
+  subsequent Space/new ID, lost acknowledgement/reload/read-only refresh,
+  selected/aggregate/admin scope, keyboard focus and four desktop/mobile scans
+  pass. No provider delivery is performed by the browser command.
+- The initial SQL command failed its guessed minimum-30 guard despite 27
+  successful cases. Discovery confirmed 27 and the correctly guarded rerun
+  exited zero. Browser harness failures were corrected using actual trusted
+  down/up events and the existing scope-specific feedback contract; final R3
+  passed. Initial failure receipts remain retained, not counted as successes.
+- Exact commands, discovery, TRX and images: external `i432-*` evidence.
+- Independent Luna MAX and Astra HIGH reviewed actual code, SQL/browser tests
+  and receipts and found no actionable issues. Luna independently reran all
+  five frontend files, browser-script syntax and diff checks; Astra reran the
+  controller/postcommit checks and an extra committed-UUID/refresh-401 probe.
+  Scope, actor revalidation, recipient rules, audit and scheduling were traced
+  through endpoint, worker and SQL mutation/deduplication paths. Both issue
+  closure audits passed before #434 implementation began.
 
 ## Integration qualification
 

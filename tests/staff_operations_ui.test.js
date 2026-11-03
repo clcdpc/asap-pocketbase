@@ -174,6 +174,8 @@ function operationResult(url) {
     assert.equal(operationsTab.hidden, false, 'admins should see Operations');
     assert.equal(document.getElementById('operations-view').hidden, false);
     assert.equal(document.getElementById('operations-scope').value, 'all');
+    assert.equal(document.getElementById('force-weekly-now'), null, 'there is no separate force action');
+    assert.equal(document.getElementById('run-weekly-now').textContent.trim(), 'Run weekly summary');
     assert.deepEqual([...document.getElementById('operations-scope').options].map(option => option.value), ['all', '2'],
       'the operational selector contains only active code-2 libraries');
     assert.equal(document.querySelector('#operations-email-test [data-email-test="operations"]'), null,
@@ -207,13 +209,23 @@ function operationResult(url) {
     await settle();
     document.getElementById('run-weekly-now').click();
     await settle();
-    assertRequest(requests.find(item => item.url.includes('force=false')), '/api/asap/staff/workflow/weekly-summary/run-now', null, null);
+    const allLibrariesRun = requests.filter(item => item.url.includes('/weekly-summary/run-now'));
+    assert.equal(allLibrariesRun.length, 1);
+    assertRequest(allLibrariesRun[0], '/api/asap/staff/workflow/weekly-summary/run-now', null, null);
+    const firstRun = new URL(allLibrariesRun[0].url, 'https://localhost');
+    assert.equal(firstRun.searchParams.get('force'), 'true');
+    assert.match(firstRun.searchParams.get('operationId'), /^[0-9a-f-]{36}$/i);
     scope.value = '2';
     scope.dispatchEvent(new dom.window.Event('change'));
     await settle();
-    document.getElementById('force-weekly-now').click();
+    document.getElementById('run-weekly-now').click();
     await settle();
-    assertRequest(requests.find(item => item.url.includes('force=true')), '/api/asap/staff/workflow/weekly-summary/run-now', '2', null);
+    const libraryRun = requests.filter(item => item.url.includes('/weekly-summary/run-now'))[1];
+    assertRequest(libraryRun, '/api/asap/staff/workflow/weekly-summary/run-now', '2', null);
+    const secondRun = new URL(libraryRun.url, 'https://localhost');
+    assert.equal(secondRun.searchParams.get('force'), 'true');
+    assert.notEqual(secondRun.searchParams.get('operationId'), firstRun.searchParams.get('operationId'),
+      'another deliberate run receives a fresh durable identity');
     document.getElementById('send-test-email').click();
     await settle();
     assertRequest(requests.find(item => item.url.includes('/email-operations/test?') && item.options.method === 'POST'),

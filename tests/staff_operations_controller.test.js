@@ -43,6 +43,101 @@ async function loadOperationsController(load) {
   } };
 }
 (async () => {
+  for (const scope of ['all', '3']) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createOperationsController } = await loadOperationsController(load);
+      const identity = createSessionIdentity(), owner = identity.accept(actor('weekly-gestures'));
+      const posts = [], receipts = [];
+      const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+        announce() {}, onScopeChange() {}, clearReceipt() {}, onReceipt: message => receipts.push(message),
+        request: async (path, init = {}) => {
+          if (init.method === 'POST') { posts.push(path); return committedOperationResult(path); }
+          return path.endsWith('/organizations') ? { data: organizationCatalog } : { items: [] };
+        } });
+      controller.setStaff(owner); controller.activate(); await controller.refresh();
+      get('#operations-scope').value = scope;
+      get('#operations-scope').dispatchEvent(new dom.window.Event('change')); await settle();
+      const run = get('#run-weekly-now');
+      assert.equal(get('#force-weekly-now'), null);
+      assert.equal(run.textContent.trim(), 'Run weekly summary');
+      const click = detail => run.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, detail }));
+      click(1);
+      assert.equal(run.disabled, true, 'the journal locks synchronously before the POST');
+      await settle();
+      assert.equal(run.disabled, false, 'the first acknowledgement has already completed');
+      click(2); await settle();
+      assert.equal(posts.length, 1, 'the second click of the same native double-click is not another deliberate run');
+      for (const key of ['Enter', ' ']) {
+        const repeat = new dom.window.KeyboardEvent('keydown', { key, repeat: true, bubbles: true, cancelable: true });
+        run.dispatchEvent(repeat);
+        assert.equal(repeat.defaultPrevented, true, 'held activation keys cannot synthesize fresh clicks after a fast acknowledgement');
+        const deliberate = new dom.window.KeyboardEvent('keydown', { key, repeat: false, bubbles: true, cancelable: true });
+        run.dispatchEvent(deliberate);
+        assert.equal(deliberate.defaultPrevented, false, 'a new key gesture keeps native button activation');
+      }
+      click(1); await settle();
+      // Keyboard/accessibility activation has click detail zero and remains a
+      // deliberate gesture; native key synthesis itself is covered by Chromium.
+      click(0); await settle();
+      assert.equal(posts.length, 3);
+      const urls = posts.map(path => new URL(path, 'https://localhost'));
+      assert.ok(urls.every(url => url.searchParams.get('force') === 'true'));
+      assert.ok(urls.every(url => url.searchParams.get('organizationId') === (scope === 'all' ? null : scope)));
+      assert.equal(new Set(urls.map(url => url.searchParams.get('operationId'))).size, 3,
+        'each subsequent deliberate gesture owns a fresh durable identity');
+      assert.ok(receipts.every(message => /Weekly summary Run .* queued\./.test(message)));
+      assert.ok(receipts.every(message => !/forced|sent|delivered/i.test(message)));
+      controller.dispose();
+    });
+  }
+
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createOperationsController } = await loadOperationsController(load);
+    const identity = createSessionIdentity(), owner = identity.accept(actor('weekly-lost-ack'));
+    const posts = [];
+    let rejectFirst;
+    const options = { root: get('#operations-view'), sessionIdentity: identity,
+      announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {},
+      request: async (path, init = {}) => {
+        if (init.method === 'POST') {
+          posts.push(path);
+          if (posts.length === 1) return new Promise((resolve, reject) => { rejectFirst = reject; });
+          return committedOperationResult(path);
+        }
+        return path.endsWith('/organizations') ? { data: organizationCatalog } : { items: [] };
+      } };
+    const first = createOperationsController(options);
+    first.setStaff(owner); first.activate(); await first.refresh();
+    get('#operations-scope').value = '3';
+    get('#operations-scope').dispatchEvent(new dom.window.Event('change')); await settle();
+    get('#run-weekly-now').click(); get('#run-weekly-now').click();
+    assert.equal(posts.length, 1, 'pending repeated activation sends one request');
+    assert.equal(get('#operations-scope').disabled, true);
+    assert.equal(get('#send-test-email').disabled, true);
+    rejectFirst(new Error('Acknowledgement lost')); await settle();
+    assert.equal(get('#run-weekly-now').disabled, true);
+    assert.equal(get('#operations-outcome button'), null, 'uncertain retry waits for explicit review');
+    const storageKey = `asap.staff.operation.${owner.tenantId}.${owner.id}.${encodeURIComponent(identity.actor().key)}`;
+    const original = JSON.parse(dom.window.sessionStorage.getItem(storageKey));
+    first.dispose();
+    const restored = createOperationsController(options);
+    restored.setStaff(owner); restored.activate(); await restored.refresh();
+    assert.equal(posts.length, 1, 'reload and refresh are read-only');
+    assert.equal(get('#operations-scope').value, 'all', 'visible scope does not replace the captured retry scope');
+    get('#operations-outcome button').click(); await settle();
+    assert.equal(posts.length, 2);
+    assert.equal(posts[1], posts[0], 'retry keeps the exact original UUID, forced path and library scope');
+    assert.equal(dom.window.sessionStorage.getItem(storageKey), null);
+    get('#run-weekly-now').click(); await settle();
+    assert.equal(posts.length, 3);
+    const next = new URL(posts[2], 'https://localhost');
+    assert.notEqual(next.searchParams.get('operationId'), original.operationId);
+    assert.equal(next.searchParams.get('organizationId'), null, 'new work uses the currently selected scope');
+    restored.dispose();
+  });
+
   await fixture(async ({ load, get, dom }) => {
     const { createSessionIdentity } = await load('session-identity');
     const { createOperationsController } = await loadOperationsController(load);
@@ -263,7 +358,7 @@ async function loadOperationsController(load) {
         }
         const second = createOperationsController(options); second.setStaff(session.preferences()); second.activate();
         assert.equal(await second.refresh(), true);
-        const controls = ['#run-workflow-now', '#run-weekly-now', '#force-weekly-now', '#send-test-email', '#operations-scope'];
+        const controls = ['#run-workflow-now', '#run-weekly-now', '#send-test-email', '#operations-scope'];
         for (const selector of controls) assert.equal(get(selector).disabled, false, `${kind} cannot block ${selector}`);
         assert.equal(await second.refresh(), true);
         assert.equal(get('#operations-outcome').hidden, true, 'foreign recovery cannot become current/reviewed');
@@ -436,7 +531,7 @@ async function loadOperationsController(load) {
   });
   const status200Commands = [
     { selector: '#run-workflow-now', path: '/api/asap/staff/workflow/run-now', message: 'Workflow run' },
-    { selector: '#run-weekly-now', path: '/api/asap/staff/workflow/weekly-summary/run-now?force=false', message: 'Weekly summary' },
+    { selector: '#run-weekly-now', path: '/api/asap/staff/workflow/weekly-summary/run-now?force=true', message: 'Weekly summary' },
     // The shared email-test controller owns the new visible action; this entry
     // retains the generic legacy acknowledgement/recovery contract.
     { legacyTest: true, path: '/api/asap/staff/email-operations/test', message: 'Test email' },
@@ -569,7 +664,7 @@ async function loadOperationsController(load) {
       assert.equal(receipts[0][2].outcome, 'uncertain', `${invalid.name}: malformed 2xx is not confirmed`);
       assert.equal(get('#operations-outcome').hidden, false);
       assert.equal(get('#operations-outcome button'), null, `${invalid.name}: no retry before authoritative review`);
-      for (const selector of ['#run-workflow-now', '#run-weekly-now', '#force-weekly-now', '#send-test-email']) {
+      for (const selector of ['#run-workflow-now', '#run-weekly-now', '#send-test-email']) {
         assert.equal(get(selector).disabled, true, `${invalid.name}: controls remain guarded`);
       }
       const key = `asap.staff.operation.${owner.tenantId}.${owner.id}.${encodeURIComponent(identity.actor().key)}`;

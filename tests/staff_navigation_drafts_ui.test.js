@@ -628,9 +628,9 @@ for (const exit of ['close', 'escape', 'search-Escape', 'top-level', 'back', 'si
 test('operations guard different mutations while pending and uncertain', () => fixture('?stage=operations', async ui => {
   let reject;
   ui.setOperation(() => new Promise((resolve, fail) => { reject = fail; }));
-  ui.get('#force-weekly-now').click();
+  ui.get('#run-weekly-now').click();
   await until(() => reject, 'operation dispatched');
-  ui.get('#force-weekly-now').click(); ui.get('#send-test-email').click();
+  ui.get('#run-weekly-now').click(); ui.get('#send-test-email').click();
   await settle();
   assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 1);
   reject(new Error('Network disconnected')); await settle();
@@ -699,7 +699,7 @@ for (const status of [202, 400]) {
 }
 test('uncertain forced operation requires review and reuses its identity', () => fixture('?stage=operations', async ui => {
   ui.setOperation(() => { throw new Error('Connection lost'); });
-  ui.get('#force-weekly-now').click(); await settle();
+  ui.get('#run-weekly-now').click(); await settle();
   const first = ui.calls.find(call => call.init.method === 'POST');
   assert.equal(ui.get('#operations-outcome button'), null);
   ui.get('[data-view="profile"]').click(); await settle();
@@ -719,7 +719,7 @@ test('reload preserves an unresolved operation and retries only its recorded ide
   fixture('?stage=operations', async ui => {
     assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
     assert.equal(ui.get('#send-test-email').disabled, true);
-    assert.equal(ui.get('#force-weekly-now').disabled, true);
+    assert.equal(ui.get('#run-weekly-now').disabled, true);
     await until(() => ui.get('#operations-outcome button'), 'current Operations reviewed after reload');
     ui.setOperation(({ parsed }) => response(202, queuedWorkflowAcknowledgement(parsed)));
     ui.get('#operations-outcome button').click();
@@ -731,7 +731,7 @@ test('reload preserves an unresolved operation and retries only its recorded ide
     assert.equal(query.get('operationId'), '33333333-3333-4333-8333-333333333333');
     assert.equal(ui.dom.window.sessionStorage.getItem(operationStorageKey(ui.readStaff())), null);
   }, { retainedOperation: { path: '/api/asap/staff/workflow/weekly-summary/run-now?force=true',
-    message: 'Forced weekly summary', scope: '3', operationId: '33333333-3333-4333-8333-333333333333' } }));
+    message: 'Weekly summary', scope: '3', operationId: '33333333-3333-4333-8333-333333333333' } }));
 
 for (const [component, change] of [['email', { authenticationEmail: 'replacement@example.org' }],
   ['role', { role: 'admin' }], ['organization', { organizationId: 3 }]]) {
@@ -744,7 +744,7 @@ for (const [component, change] of [['email', { authenticationEmail: 'replacement
         message: 'Original forced summary', scope: '2', operationId: '33333333-3333-4333-8333-333333333333',
         ...(legacy ? {} : { actorKey: actorKey(original) }) });
       return fixture('?stage=operations', async ui => {
-        for (const selector of ['#run-workflow-now', '#run-weekly-now', '#force-weekly-now', '#send-test-email']) {
+        for (const selector of ['#run-workflow-now', '#run-weekly-now', '#send-test-email']) {
           assert.equal(ui.get(selector).disabled, false, `${component} replacement cannot inherit the command guard`);
         }
         assert.equal(ui.get('#operations-outcome').hidden, true);

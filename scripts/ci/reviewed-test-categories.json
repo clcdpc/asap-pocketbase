@@ -25,6 +25,7 @@
     "Asap.Tests.Integration.PatronJourneyTests.StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry",
     "Asap.Tests.Integration.PatronJourneyTests.StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope",
     "Asap.Tests.Integration.PatronJourneyTests.StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp",
-    "Asap.Tests.Integration.PatronJourneyTests.SystemFormatRuleEditorPersistsItsActualPostThroughSqlAndReload"
+    "Asap.Tests.Integration.PatronJourneyTests.SystemFormatRuleEditorPersistsItsActualPostThroughSqlAndReload",
+    "Asap.Tests.Integration.PatronJourneyTests.WeeklySummaryBrowserPreservesGestureIdentityRecoveryAndAuthorizedRunScope"
   ]
 }

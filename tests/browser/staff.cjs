@@ -2805,8 +2805,8 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     };
     await page.route('**/api/asap/staff/workflow/weekly-summary/run-now?*', operationRoute);
     await page.evaluate(() => {
-      document.getElementById('force-weekly-now').click();
-      document.getElementById('force-weekly-now').click();
+      document.getElementById('run-weekly-now').click();
+      document.getElementById('run-weekly-now').click();
       document.getElementById('send-test-email').click();
     });
     await dispatched.promise;
@@ -2814,7 +2814,7 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     assert.equal(await page.locator('#send-test-email').isDisabled(), true);
     await page.getByRole('button', { name: 'Profile', exact: true }).click();
     release.resolve();
-    await page.waitForFunction(() => !document.getElementById('force-weekly-now').disabled);
+    await page.waitForFunction(() => !document.getElementById('run-weekly-now').disabled);
     assert.equal(await page.locator('#profile-view').isVisible(), true);
     await page.unroute('**/api/asap/staff/workflow/weekly-summary/run-now?*', operationRoute);
     assert.deepEqual(errors, []);

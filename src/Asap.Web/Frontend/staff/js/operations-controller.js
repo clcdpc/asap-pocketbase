@@ -19,7 +19,6 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     operationsScope: root.querySelector('#operations-scope'),
     runWorkflowNow: root.querySelector('#run-workflow-now'),
     runWeeklyNow: root.querySelector('#run-weekly-now'),
-    forceWeeklyNow: root.querySelector('#force-weekly-now'),
     sendTestEmail: root.querySelector('#send-test-email'),
     refreshOperations: root.querySelector('#refresh-operations'),
     queueProgressTable: root.querySelector('#queue-progress-table'),
@@ -219,7 +218,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     if (disposed) return;
     const operation = state.operationMutation;
     const locked = Boolean(operation);
-    for (const control of [dom.runWorkflowNow, dom.runWeeklyNow, dom.forceWeeklyNow,
+    for (const control of [dom.runWorkflowNow, dom.runWeeklyNow,
       dom.operationsScope, ...dom.emailOperationsTable.querySelectorAll('button')]) control.disabled = locked;
     emailTest.sync();
     const notice = dom.outcome;
@@ -476,8 +475,17 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     void loadOperations();
   });
   listen(dom.runWorkflowNow, 'click', () => runOperation('/api/asap/staff/workflow/run-now', 'Workflow run'));
-  listen(dom.runWeeklyNow, 'click', () => runOperation('/api/asap/staff/workflow/weekly-summary/run-now?force=false', 'Weekly summary'));
-  listen(dom.forceWeeklyNow, 'click', () => runOperation('/api/asap/staff/workflow/weekly-summary/run-now?force=true', 'Forced weekly summary'));
+  listen(dom.runWeeklyNow, 'click', event => {
+    // Native click counts identify one double-click gesture even when the first
+    // request completes before its second click. A later single click is new work.
+    if (event.detail > 1) return;
+    void runOperation('/api/asap/staff/workflow/weekly-summary/run-now?force=true', 'Weekly summary');
+  });
+  listen(dom.runWeeklyNow, 'keydown', event => {
+    // Enter can synthesize another click on every repeated keydown after a fast
+    // acknowledgement re-enables the button. One held key is still one gesture.
+    if (event.repeat && (event.key === 'Enter' || event.key === ' ')) event.preventDefault();
+  });
   listen(dom.refreshOperations, 'click', () => loadOperations());
   return {
     setStaff, setLibraries, currentScope: () => state.operationsScope,
