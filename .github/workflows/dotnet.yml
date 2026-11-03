@@ -17,6 +17,11 @@ on:
         type: boolean
         required: false
         default: false
+      test_sql_plan_only:
+        description: Produce a candidate SQL data-loss plan without changing test IIS or SQL
+        type: boolean
+        required: false
+        default: false
       force_full_ci:
         description: Ignore test evidence and execute every required suite
         type: boolean
@@ -594,6 +599,9 @@ jobs:
       }}
     runs-on: [self-hosted, windows, x64, asap-test-iis]
     environment: asap-test-iis
+    concurrency:
+      group: asap-test-iis
+      cancel-in-progress: false
     timeout-minutes: 20
 
     steps:
@@ -609,9 +617,29 @@ jobs:
           EXPECTED_ZIP_SHA256: ${{ needs.build-test-package.outputs.zip_sha256 }}
           EXPECTED_COMMIT_SHA: ${{ github.sha }}
           EXPECTED_DEPLOYMENT_LABEL: ${{ needs.build-test-package.outputs.deployment_label }}
+          SQL_PLAN_ONLY: ${{ toJSON(inputs.test_sql_plan_only) }}
+          EXPLICIT_TEST_DEPLOYMENT: ${{ toJSON(inputs.deploy_test_iis) }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
+          function Read-RunBoolean([string] $Value) {
+            if ($Value -ceq 'true') { return $true }
+            if ($Value -ceq 'false' -or ($Value -ceq 'null' -and $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch')) { return $false }
+            throw 'SQL deployment controls must be typed boolean inputs.'
+          }
+          $planOnly = Read-RunBoolean $env:SQL_PLAN_ONLY
+          if ($planOnly -and (
+              $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
+              $env:EXPLICIT_TEST_DEPLOYMENT -cne 'true' -or
+              $env:GITHUB_REF -cnotmatch '^refs/tags/v[^/]*\.[^/]*\.[^/]*-test\.[^/]*$')) {
+            throw 'SQL plan-only diagnostics require an explicit manual test-IIS dispatch on a test tag.'
+          }
+          # The installer reads the persistent, default-off policy from the
+          # DEV host's deployment.json. Tag pushes need no dispatch inputs.
+          $sqlOptions = @{
+            SqlPlanOnly = $planOnly
+            SqlPlanOutputDirectory = Join-Path $env:RUNNER_TEMP "asap-sql-plan-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+          }
           $zipPath = (Resolve-Path .artifacts/incoming/asap-test-deployment.zip).Path
           $expectedHash = $env:EXPECTED_ZIP_SHA256
           if ([string]::IsNullOrWhiteSpace($expectedHash)) {
@@ -629,8 +657,17 @@ jobs:
               -DeploymentZip $zipPath `
               -ExpectedZipSha256 $expectedHash `
               -ExpectedCommitSha $env:EXPECTED_COMMIT_SHA `
-              -ExpectedDeploymentLabel $env:EXPECTED_DEPLOYMENT_LABEL
+              -ExpectedDeploymentLabel $env:EXPECTED_DEPLOYMENT_LABEL @sqlOptions
           }
           finally {
             Remove-Item -LiteralPath $bootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
           }
+
+      - name: Upload deployment SQL plan
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-sql-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/asap-sql-plan-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: ignore
+          retention-days: 7

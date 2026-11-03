@@ -6,6 +6,12 @@ Merged #420 (`50f1483a30e2b738b0082e91c452081011f502c6`) and #421 are ancestors
 of that base. The existing checkout's unrelated browser edits are preserved in
 place; implementation uses an isolated managed worktree.
 
+Before final qualification, the branch incorporates current `main` commit
+`e3fe8edca4ae872548939663cd7c397f528a906f` (#451). That upstream change adds
+deployment tooling and its tests; application and database source are unchanged
+by the integration. Final gates use the integrated head. The completed 68-file
+frontend run on `4c8e853` remains separate from those final-head receipts.
+
 The authoritative visual reference is
 [`operations-audit-mockup.html` at `d85d22f`](https://github.com/clcdpc/asap-pocketbase/blob/d85d22f2373bf38080e80d0a893c8daa49a504ee/docs/design/operations-audit-mockup.html).
 Only the production application is changed; reference data and preview tools

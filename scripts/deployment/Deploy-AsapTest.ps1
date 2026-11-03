@@ -24,11 +24,20 @@ param(
     [ValidateRange(1, 30)]
     [int] $ReadinessPollSeconds = 2,
 
-    [switch] $ValidateOnly
+    [switch] $ValidateOnly,
+
+    [switch] $SqlPlanOnly,
+
+    [string] $SqlPlanOutputDirectory = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# Package validation never reads the persistent host deployment settings.
+if ($ValidateOnly -and $SqlPlanOnly) {
+    throw 'ValidateOnly cannot be combined with SQL plan or data-loss controls.'
+}
 
 function Get-Sha256Hex {
     param(
@@ -416,6 +425,16 @@ function Get-SqlConnectionDetails {
         throw 'SQL deployment connection string is not valid.'
     }
 
+    foreach ($aliases in @(
+        @('Data Source', 'Server', 'Address', 'Addr', 'Network Address'),
+        @('Initial Catalog', 'Database'),
+        @('Integrated Security', 'Trusted_Connection')
+    )) {
+        if (@($aliases | Where-Object { $builder.ContainsKey($_) }).Count -gt 1) {
+            throw 'SQL connection string contains ambiguous aliases.'
+        }
+    }
+
     $dataSource = $null
     foreach ($name in @('Data Source', 'Server', 'Address', 'Addr', 'Network Address')) {
         if ($builder.ContainsKey($name)) {
@@ -454,6 +473,23 @@ function Get-SqlConnectionDetails {
     }
 }
 
+function Get-DevSqlOverrideSettings {
+    param([Parameter(Mandatory = $true)] [object] $Configuration)
+    $property = $Configuration.PSObject.Properties['AllowSqlDataLoss']
+    if ($null -ne $property -and $property.Value -isnot [bool]) {
+        throw 'Host AllowSqlDataLoss must be a JSON boolean; missing defaults to false.'
+    }
+    $enabled = $null -ne $property -and $property.Value -eq $true
+    $target = $Configuration.PSObject.Properties['SqlDataLossTarget']
+    if ($enabled -and ($null -eq $target -or $null -eq $target.Value)) {
+        throw 'Host AllowSqlDataLoss requires an operator-verified SqlDataLossTarget.'
+    }
+    return [pscustomobject]@{
+        Enabled = $enabled
+        Target = if ($null -ne $target) { $target.Value } else { $null }
+    }
+}
+
 function Read-HostConfiguration {
     param(
         [Parameter(Mandatory = $true)]
@@ -471,6 +507,7 @@ function Read-HostConfiguration {
     catch {
         throw 'Host deployment configuration is not valid JSON.'
     }
+    $override = Get-DevSqlOverrideSettings -Configuration $config
 
     $deploymentPath = Get-FullPath -Path (Get-RequiredText -Object $config -Name 'DeploymentPath') -Name 'DeploymentPath'
     $stagingRoot = Get-FullPath -Path (Get-RequiredText -Object $config -Name 'StagingRoot') -Name 'StagingRoot'
@@ -544,6 +581,8 @@ function Read-HostConfiguration {
         HangfireDatabaseConnectionString = Get-RequiredText -Object $config -Name 'HangfireDatabaseConnectionString'
         SqlPackagePath = $sqlPackagePath
         SqlCmdPath = $sqlCmdPath
+        AllowSqlDataLoss = $override.Enabled
+        SqlDataLossTarget = $override.Target
     }
 }
 
@@ -678,11 +717,19 @@ function Invoke-DacpacPublish {
         [string] $ConnectionString,
 
         [Parameter(Mandatory = $true)]
-        [string] $DacpacPath
+        [string] $DacpacPath,
+
+        [switch] $AllowSqlDataLoss,
+
+        [object] $Plan
     )
 
+    if ($AllowSqlDataLoss) {
+        Assert-DevSqlPlan -Plan $Plan
+    }
+
     # Execute the validated DACPAC's own idempotent schema guards/retirements
-    # before SqlPackage builds its plan. Keep all other data-loss protection.
+    # before any publish. The opt-in never bypasses schema identity/version checks.
     $package = [IO.Compression.ZipFile]::OpenRead($DacpacPath)
     $preflightPath = [IO.Path]::GetTempFileName()
     try {
@@ -708,6 +755,18 @@ function Invoke-DacpacPublish {
         Remove-Item -LiteralPath $preflightPath -Force -ErrorAction SilentlyContinue
     }
 
+    if ($AllowSqlDataLoss) {
+        # Execute the scope-checked bytes, rather than asking an unprotected
+        # Publish action to generate a different plan after the checks.
+        Assert-DevSqlPlan -Plan $Plan
+        $sqlArguments = @(Get-SqlCmdArguments -ConnectionString $ConnectionString)
+        & $SqlCmdPath @sqlArguments '-i' $Plan.ScriptPath
+        if ($LASTEXITCODE -ne 0) {
+            throw 'DEV application SQL plan execution failed; database state may have changed.'
+        }
+        return
+    }
+
     $arguments = @(
         '/Action:Publish',
         "/SourceFile:$DacpacPath",
@@ -721,6 +780,268 @@ function Invoke-DacpacPublish {
     if ($LASTEXITCODE -ne 0) {
         throw 'Application DACPAC publish failed.'
     }
+}
+
+function Get-DeploymentMachineName {
+    return [Environment]::MachineName
+}
+
+function Assert-SqlDataLossTarget {
+    param(
+        [Parameter(Mandatory = $true)] [object] $Config,
+        [Parameter(Mandatory = $true)] [string] $ExpectedTarget
+    )
+
+    Assert-NonProductionConfiguration -Configuration $Config.ExternalConfiguration
+    try {
+        $target = $ExpectedTarget | ConvertFrom-Json
+        foreach ($name in @('machineName', 'iisHostName', 'sqlServerName', 'databaseName')) {
+            [void] (Get-RequiredText -Object $target -Name $name)
+        }
+        $environmentName = Get-RequiredText -Object $Config.ExternalConfiguration.Environment -Name 'Name'
+    }
+    catch {
+        throw 'SQL data-loss target identity is missing or malformed.'
+    }
+    $readiness = [Uri] $Config.ReadinessUrl
+    if ($environmentName -notin @('Test', 'Development', 'Dev') -or
+        -not $target.machineName.Equals('DEVWEB', [StringComparison]::OrdinalIgnoreCase) -or
+        -not $target.iisHostName.Equals('devasap.clcohio.org', [StringComparison]::OrdinalIgnoreCase) -or
+        -not $target.machineName.Equals((Get-DeploymentMachineName), [StringComparison]::OrdinalIgnoreCase) -or
+        $readiness.Scheme -ne 'https' -or $readiness.Port -ne 443 -or $readiness.UserInfo -ne '' -or
+        -not $target.iisHostName.Equals($readiness.DnsSafeHost, [StringComparison]::OrdinalIgnoreCase) -or
+        $target.databaseName -in @('master', 'model', 'msdb', 'tempdb')) {
+        throw 'SQL data-loss target does not match the pinned non-production machine/site/database.'
+    }
+    $bindings = @(Get-WebBinding -Name $Config.IisSiteName -Protocol 'https' -ErrorAction Stop)
+    if (-not @($bindings | Where-Object {
+        ([string] $_.bindingInformation).Equals("*:443:$($target.iisHostName)", [StringComparison]::OrdinalIgnoreCase) -or
+        ([string] $_.bindingInformation) -match (':443:' + [regex]::Escape($target.iisHostName) + '$')
+    }).Count) {
+        throw 'SQL data-loss target host has no matching HTTPS IIS binding.'
+    }
+
+    $runtimeConnectionString = Get-RequiredText -Object $Config.ExternalConfiguration.ConnectionStrings -Name 'AsapDatabase'
+    foreach ($text in @($Config.AsapDatabaseConnectionString, $runtimeConnectionString)) {
+        $builder = [System.Data.Common.DbConnectionStringBuilder]::new()
+        $builder.PSObject.Properties['ConnectionString'].Value = $text
+        foreach ($key in @('Failover Partner', 'AttachDBFilename', 'Initial File Name', 'Extended Properties', 'User Instance')) {
+            if ($builder.ContainsKey($key)) {
+                throw 'SQL data-loss connections cannot use failover or file-attachment routing.'
+            }
+        }
+    }
+    $deploymentSql = Get-SqlConnectionDetails -ConnectionString $Config.AsapDatabaseConnectionString
+    $runtimeSql = Get-SqlConnectionDetails -ConnectionString $runtimeConnectionString
+    if (-not $runtimeSql.IntegratedSecurity -or -not $deploymentSql.IntegratedSecurity -or
+        -not $runtimeSql.DataSource.Equals($deploymentSql.DataSource, [StringComparison]::OrdinalIgnoreCase) -or
+        -not $runtimeSql.Database.Equals($deploymentSql.Database, [StringComparison]::OrdinalIgnoreCase) -or
+        -not $deploymentSql.Database.Equals($target.databaseName, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'SQL data-loss runtime and deployment database targets do not match.'
+    }
+
+    # The connection's server text may be an alias. Verify the server/database
+    # actually reached, rather than treating a label/boolean as proof of DEV.
+    $arguments = @(Get-SqlCmdArguments -ConnectionString $Config.AsapDatabaseConnectionString)
+    $query = "SET NOCOUNT ON; SELECT CONCAT('ASAP_TARGET|', CONVERT(nvarchar(128), SERVERPROPERTY('ServerName')), '|', DB_NAME());"
+    $output = & $Config.SqlCmdPath @arguments '-w' '65535' '-Q' $query 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw 'SQL data-loss target identity query failed.'
+    }
+    $identities = @($output | ForEach-Object { ([string] $_).Trim() } | Where-Object { $_ -cmatch '^ASAP_TARGET\|[^|]+\|[^|]+$' })
+    $expectedIdentity = "ASAP_TARGET|$($target.sqlServerName)|$($target.databaseName)"
+    if ($identities.Count -ne 1 -or -not $identities[0].Equals($expectedIdentity, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'SQL data-loss connected server/database does not match the independently pinned target.'
+    }
+    return [ordered]@{
+        machineName = $target.machineName
+        iisHostName = $target.iisHostName
+        sqlServerName = $target.sqlServerName
+        databaseName = $target.databaseName
+    }
+}
+
+function Get-SqlPlanSha256 {
+    param(
+        [Parameter(Mandatory = $true)] [object] $Context,
+        [Parameter(Mandatory = $true)] [string] $ScriptPath,
+        [Parameter(Mandatory = $true)] [string] $ReportPath
+    )
+    $identity = [ordered]@{
+        context = $Context
+        scriptSha256 = (Get-FileHash -LiteralPath $ScriptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        reportSha256 = (Get-FileHash -LiteralPath $ReportPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    } | ConvertTo-Json -Depth 5 -Compress
+    return Get-Sha256Hex -Bytes ([Text.Encoding]::UTF8.GetBytes($identity))
+}
+
+function New-DacpacPlan {
+    param(
+        [Parameter(Mandatory = $true)] [object] $Config,
+        [Parameter(Mandatory = $true)] [object] $Archive,
+        [Parameter(Mandatory = $true)] [string] $OutputDirectory,
+        [object] $Target,
+        [switch] $AllowSqlDataLoss
+    )
+    $directory = Get-FullPath -Path $OutputDirectory -Name 'SqlPlanOutputDirectory'
+    if ((Test-PathWithin -CandidatePath $directory -DirectoryPath $Config.DeploymentPath) -or
+        (Test-PathWithin -CandidatePath $directory -DirectoryPath $Archive.StagingPath) -or
+        (Test-Path -LiteralPath $directory)) {
+        throw 'SQL plan output must be a new directory outside web and temporary package staging.'
+    }
+    New-Item -ItemType Directory -Path $directory | Out-Null
+    $scriptPath = Join-Path $directory 'deployment.sql'
+    $reportPath = Join-Path $directory 'deployment.xml'
+    $blockOption = if ($AllowSqlDataLoss) { '/p:BlockOnPossibleDataLoss=False' } else { '/p:BlockOnPossibleDataLoss=True' }
+    $options = @(
+        "/SourceFile:$($Archive.DacpacPath)",
+        "/TargetConnectionString:$($Config.AsapDatabaseConnectionString)",
+        $blockOption,
+        '/p:CreateNewDatabase=False',
+        '/p:DropObjectsNotInSource=False',
+        '/p:ScriptDatabaseOptions=False'
+    )
+    # Script/DeployReport only read the target. Neither publishes nor runs the
+    # DACPAC's pre/post-deployment SQL. A candidate plan may describe ANY loss.
+    foreach ($action in @(
+        @{ Name = 'Script'; Path = $scriptPath },
+        @{ Name = 'DeployReport'; Path = $reportPath }
+    )) {
+        $null = & $Config.SqlPackagePath "/Action:$($action.Name)" @options "/OutputPath:$($action.Path)" 2>&1
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $action.Path -PathType Leaf) -or
+            (Get-Item -LiteralPath $action.Path).Length -eq 0) {
+            throw "Application DACPAC $($action.Name) preflight failed; IIS and database were not changed."
+        }
+    }
+    $context = [ordered]@{
+        schemaVersion = 2
+        commitSha = $Archive.Manifest.commitSha
+        allowSqlDataLoss = [bool] $AllowSqlDataLoss
+        target = $Target
+    }
+    $hash = Get-SqlPlanSha256 -Context $context -ScriptPath $scriptPath -ReportPath $reportPath
+    # Origin.xml contains build metadata, so a same-source rebuild can change
+    # the DACPAC's binary digest. Keep it for audit, outside the approval hash.
+    # Exact tested ZIP/manifest/DACPAC integrity is independently checked above;
+    # the approved SQL/report bytes describe the effects we actually execute.
+    $receipt = [ordered]@{ context = $context; dacpacSha256 = $Archive.DacpacHash; planSha256 = $hash }
+    [IO.File]::WriteAllText((Join-Path $directory 'plan.json'), ($receipt | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+    Write-Host "SQL preflight plan: $directory; SHA-256: $hash."
+    return [pscustomobject]@{ Context = $context; ScriptPath = $scriptPath; ReportPath = $reportPath; DacpacPath = $Archive.DacpacPath; Hash = $hash }
+}
+
+function Assert-DevSqlPlan {
+    param([Parameter(Mandatory = $true)] [object] $Plan)
+    if ($Plan.Context.schemaVersion -ne 2 -or $Plan.Hash -cnotmatch '^[0-9a-f]{64}$' -or
+        $Plan.Context.allowSqlDataLoss -isnot [bool] -or $Plan.Context.allowSqlDataLoss -ne $true -or
+        $null -eq $Plan.Context.target -or
+        -not (Get-SqlPlanSha256 -Context $Plan.Context -ScriptPath $Plan.ScriptPath -ReportPath $Plan.ReportPath).Equals(
+            $Plan.Hash, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'DEV SQL plan is invalid or changed after preflight.'
+    }
+
+    # Pre/post scripts can execute SQL outside DacFx's operation report. Pin the
+    # reviewed current scripts (only line endings are normalized). Changes need
+    # review before extending the standing legacy-column retirement scope.
+    $scripts = @{
+        'predeploy.sql' = '37c63b2e07940b10a2c5006c258b0e8735bf3d85a334d6b8d3316c0342b3c7ba'
+        'postdeploy.sql' = '6922678f14b20772b548dff995f2b840abd3f3ee30c0c6d06dd4c1c6b5c6575a'
+    }
+    $package = [IO.Compression.ZipFile]::OpenRead($Plan.DacpacPath)
+    try {
+        foreach ($name in $scripts.Keys) {
+            $entry = $package.GetEntry($name)
+            if ($null -eq $entry) { throw 'DEV override requires the reviewed DACPAC pre/post scripts.' }
+            $reader = [IO.StreamReader]::new($entry.Open())
+            try { $sql = $reader.ReadToEnd().Replace("`r`n", "`n") }
+            finally { $reader.Dispose() }
+            if ((Get-Sha256Hex -Bytes ([Text.Encoding]::UTF8.GetBytes($sql))) -cne $scripts[$name]) {
+                throw "DEV override blocked: $name changed. Review the script before extending the data-loss scope."
+            }
+        }
+    }
+    finally { $package.Dispose() }
+
+    $settings = [Xml.XmlReaderSettings]::new()
+    $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
+    $settings.XmlResolver = $null
+    $reader = [Xml.XmlReader]::Create($Plan.ReportPath, $settings)
+    $report = [Xml.XmlDocument]::new()
+    $report.XmlResolver = $null
+    try { $report.Load($reader) }
+    finally { $reader.Dispose() }
+    $ns = [Xml.XmlNamespaceManager]::new($report.NameTable)
+    $ns.AddNamespace('r', 'http://schemas.microsoft.com/sqlserver/dac/DeployReport/2012/02')
+    $root = $report.DocumentElement
+    if ($root.LocalName -cne 'DeploymentReport' -or $root.NamespaceURI -cne $ns.LookupNamespace('r') -or
+        $root.SelectNodes('r:Alerts', $ns).Count -ne 1 -or $root.SelectNodes('r:Operations', $ns).Count -ne 1) {
+        throw 'DEV override blocked: unrecognized deployment report format.'
+    }
+    foreach ($child in $root.ChildNodes | Where-Object NodeType -eq Element) {
+        if ($child.NamespaceURI -cne $root.NamespaceURI -or $child.LocalName -cnotin @('Alerts', 'Operations')) {
+            throw 'DEV override blocked: unrecognized report section.'
+        }
+    }
+    $columns = @{
+        '[asap].[AdditionalCopyRequest].[LegacyId]' = '[asap].[AdditionalCopyRequest]'
+        '[asap].[TitleRequest].[LegacyId]' = '[asap].[TitleRequest]'
+        '[asap].[TitleRequest].[LegacyHoldProtected]' = '[asap].[TitleRequest]'
+    }
+    $issues = @{}
+    $retirements = @{}
+    foreach ($alert in $root.SelectNodes('r:Alerts/*', $ns)) {
+        if ($alert.NamespaceURI -cne $root.NamespaceURI -or $alert.LocalName -cne 'Alert' -or $alert.GetAttribute('Name') -cne 'DataIssue' -or
+            $alert.SelectNodes('r:Issue', $ns).Count -eq 0) {
+            throw "DEV override blocked: unexpected alert $($alert.GetAttribute('Name')). Review the retained plan."
+        }
+        foreach ($issue in $alert.SelectNodes('*', $ns)) {
+            $id = $issue.GetAttribute('Id')
+            $value = $issue.GetAttribute('Value')
+            $matchedColumns = @($columns.Keys | Where-Object { $value -ceq "The column $_ is being dropped, data loss could occur." })
+            if ($issue.NamespaceURI -cne $root.NamespaceURI -or $issue.LocalName -cne 'Issue' -or
+                $issue.SelectNodes('*', $ns).Count -ne 0 -or $matchedColumns.Count -ne 1 -or $id -cnotmatch '^\d+$' -or
+                $issues.ContainsKey($id) -or $retirements.ContainsKey($matchedColumns[0])) {
+                throw "DEV override blocked: unexpected possible data loss: $value. Review the retained plan."
+            }
+            $issues[$id] = $matchedColumns[0]
+            $retirements[$matchedColumns[0]] = $true
+            Write-Host "Authorized DEV legacy retirement: $($matchedColumns[0])."
+        }
+    }
+    $dependentDrops = @{
+        '[asap].[AdditionalCopyRequest].[UX_AdditionalCopyRequest_LegacyId]' = @('SqlIndex', '[asap].[AdditionalCopyRequest].[LegacyId]')
+        '[asap].[DF_TitleRequest_LegacyHoldProtected]' = @('SqlDefaultConstraint', '[asap].[TitleRequest].[LegacyHoldProtected]')
+    }
+    $referenced = @{}
+    foreach ($operation in $root.SelectNodes('r:Operations/*', $ns)) {
+        $operationName = $operation.GetAttribute('Name')
+        if ($operation.NamespaceURI -cne $root.NamespaceURI -or $operation.LocalName -cne 'Operation' -or $operationName -cnotin @('Create', 'Alter', 'Drop') -or
+            $operation.SelectNodes('r:Item', $ns).Count -eq 0) {
+            throw "DEV override blocked: unexpected operation $operationName. Review the retained plan."
+        }
+        foreach ($item in $operation.SelectNodes('*', $ns)) {
+            $value = $item.GetAttribute('Value')
+            $type = $item.GetAttribute('Type')
+            if ($item.NamespaceURI -cne $root.NamespaceURI -or $item.LocalName -cne 'Item' -or [string]::IsNullOrWhiteSpace($value) -or [string]::IsNullOrWhiteSpace($type)) {
+                throw 'DEV override blocked: malformed deployment operation.'
+            }
+            if ($operationName -eq 'Drop' -and (-not $dependentDrops.ContainsKey($value) -or
+                $dependentDrops[$value][0] -cne $type -or -not $retirements.ContainsKey($dependentDrops[$value][1]))) {
+                throw "DEV override blocked: unexpected drop $value ($type). Review the retained plan."
+            }
+            foreach ($reference in $item.SelectNodes('*', $ns)) {
+                $id = $reference.GetAttribute('Id')
+                if ($reference.NamespaceURI -cne $root.NamespaceURI -or $reference.LocalName -cne 'Issue' -or
+                    $reference.SelectNodes('*', $ns).Count -ne 0 -or -not $issues.ContainsKey($id) -or
+                    $operationName -cne 'Alter' -or $type -cne 'SqlTable' -or $columns[$issues[$id]] -cne $value) {
+                    throw 'DEV override blocked: malformed or unrecognized issue reference.'
+                }
+                $referenced[$id] = $true
+            }
+        }
+    }
+    if ($referenced.Count -ne $issues.Count) { throw 'DEV override blocked: unreferenced data-loss warning.' }
+    Write-Host "DEV SQL plan passed the standing legacy-retirement policy ($($issues.Count) column removals)."
 }
 
 function Test-IisConfiguration {
@@ -894,6 +1215,76 @@ function Write-DeploymentState {
     [IO.File]::WriteAllText($Path, $json, [Text.UTF8Encoding]::new($false))
 }
 
+function Invoke-TestDeployment {
+    param(
+        [Parameter(Mandatory = $true)] [object] $Config,
+        [Parameter(Mandatory = $true)] [object] $Archive,
+        [bool] $NeedsDacpac,
+        [bool] $NeedsHangfire,
+        [switch] $AllowSqlDataLoss,
+        [object] $SqlPlan,
+        [int] $TimeoutSeconds,
+        [int] $PollSeconds
+    )
+    if ($AllowSqlDataLoss) {
+        Assert-DevSqlPlan -Plan $SqlPlan
+        $null = Assert-SqlDataLossTarget -Config $Config -ExpectedTarget ($SqlPlan.Context.target | ConvertTo-Json -Compress)
+    }
+    $priorState = (Get-WebAppPoolState -Name $Config.IisAppPoolName -ErrorAction Stop).Value
+    if ($priorState -notin @('Started', 'Stopped')) {
+        throw "Application pool must be stably Started or Stopped before deployment (actual $priorState)."
+    }
+    # Failure to retain recovery material must leave IIS and the database alone.
+    $backupPath = Backup-WebPayload -DeploymentPath $Config.DeploymentPath -BackupRoot $Config.BackupRoot
+    Write-Host "Retained previous web payload at $backupPath."
+    $mutationStarted = $false
+    try {
+        Stop-TestAppPool -AppPoolName $Config.IisAppPoolName
+        if ($NeedsDacpac) {
+            # A failed native process can have partially committed. Never infer
+            # rollback or old-web compatibility from its exit code/message.
+            $mutationStarted = $true
+            Invoke-DacpacPublish -SqlCmdPath $Config.SqlCmdPath -SqlPackagePath $Config.SqlPackagePath `
+                -ConnectionString $Config.AsapDatabaseConnectionString -DacpacPath $Archive.DacpacPath `
+                -AllowSqlDataLoss:$AllowSqlDataLoss -Plan $SqlPlan
+        }
+        if ($NeedsHangfire) {
+            $mutationStarted = $true
+            Invoke-HangfireSchemaInstall -SqlCmdPath $Config.SqlCmdPath `
+                -ConnectionString $Config.HangfireDatabaseConnectionString -InstallScriptPath $Archive.HangfireScriptPath
+            $installedVersion = Get-HangfireSchemaVersion -SqlCmdPath $Config.SqlCmdPath `
+                -ConnectionString $Config.HangfireDatabaseConnectionString
+            if ($installedVersion -ne 9) {
+                throw "Hangfire schema preparation completed without expected version 9 (actual $installedVersion)."
+            }
+        }
+        $mutationStarted = $true
+        Replace-WebPayload -StagedWebRoot $Archive.WebRoot -DeploymentPath $Config.DeploymentPath
+        Start-TestAppPool -AppPoolName $Config.IisAppPoolName
+        if (-not (Test-Ready -Uri $Config.ReadinessUrl -TimeoutSeconds $TimeoutSeconds -PollSeconds $PollSeconds)) {
+            throw 'Test-IIS /health/ready did not return HTTP 200 with status healthy within the bounded timeout.'
+        }
+        Write-DeploymentState -Path $Config.StatePath -Manifest $Archive.Manifest -ZipHash $Archive.ZipHash
+    }
+    catch {
+        $failure = $_
+        try {
+            if (-not $mutationStarted -and $priorState -eq 'Started') {
+                Start-TestAppPool -AppPoolName $Config.IisAppPoolName
+                Write-Warning 'Restored the previously running pool: no database or web mutation was attempted.'
+            }
+            else {
+                Stop-TestAppPool -AppPoolName $Config.IisAppPoolName
+                Write-Warning "Pool retained Stopped. Database/web compatibility requires operator review; backup: $backupPath. No automatic database rollback or web restore."
+            }
+        }
+        catch {
+            Write-Warning "Pool recovery failed; current state is uncertain: $($_.Exception.Message). Backup: $backupPath."
+        }
+        throw $failure
+    }
+}
+
 if ($ValidateOnly) {
     $validationStagingPath = Join-Path ([IO.Path]::GetTempPath()) ("asap-test-package-" + [guid]::NewGuid().ToString('N'))
     try {
@@ -912,6 +1303,14 @@ if ($ValidateOnly) {
 }
 
 $hostConfig = Read-HostConfiguration -Path $ConfigPath
+$allowSqlDataLoss = $hostConfig.AllowSqlDataLoss
+if ($allowSqlDataLoss -and $ExpectedDeploymentLabel -cnotmatch '^v[^/]*\.[^/]*\.[^/]*-test\.[^/]*$') {
+    throw 'The persistent DEV SQL override requires a test release tag; production labels are protected independently.'
+}
+if (($SqlPlanOnly -or $allowSqlDataLoss) -and
+    ($null -eq $hostConfig.SqlDataLossTarget -or [string]::IsNullOrWhiteSpace($SqlPlanOutputDirectory))) {
+    throw 'DEV SQL plan/override requires verified host SqlDataLossTarget and a plan output directory.'
+}
 $stagingPath = Join-Path $hostConfig.StagingRoot ("deployment-" + [guid]::NewGuid().ToString('N'))
 try {
     $archive = Test-DeploymentArchive `
@@ -924,12 +1323,52 @@ try {
         -WebRoot $archive.WebRoot `
         -ExternalApplicationConfigPath $hostConfig.ExternalApplicationConfigPath
     $null = Test-IisConfiguration -Config $hostConfig
+    $sqlPlan = $null
+    if ($SqlPlanOnly -or $allowSqlDataLoss) {
+        $target = Assert-SqlDataLossTarget -Config $hostConfig -ExpectedTarget ($hostConfig.SqlDataLossTarget | ConvertTo-Json -Compress)
+        if ($allowSqlDataLoss) {
+            Write-Warning 'Persistent DEV SQL data-loss override is ENABLED. It remains enabled across test tags until the environment setting is disabled.'
+        }
+        $sqlPlan = New-DacpacPlan -Config $hostConfig -Archive $archive -Target $target `
+            -OutputDirectory $SqlPlanOutputDirectory -AllowSqlDataLoss
+        if ($SqlPlanOnly) {
+            Write-Host 'SQL PLAN ONLY: inspect deployment.sql, deployment.xml and plan.json. No SQL, recovery option, IIS state, web payload or deployment state was changed.'
+            exit 0
+        }
+        try {
+            Assert-DevSqlPlan -Plan $sqlPlan
+            [IO.File]::WriteAllText((Join-Path $SqlPlanOutputDirectory 'policy-result.txt'), 'ALLOWED by the standing DEV legacy-column retirement policy.')
+        }
+        catch {
+            [IO.File]::WriteAllText((Join-Path $SqlPlanOutputDirectory 'policy-result.txt'), "BLOCKED: $($_.Exception.Message)")
+            throw
+        }
+    }
     $state = Read-DeploymentState -StatePath $hostConfig.StatePath
     $hangfireVersion = Get-HangfireSchemaVersion `
         -SqlCmdPath $hostConfig.SqlCmdPath `
         -ConnectionString $hostConfig.HangfireDatabaseConnectionString
     if ($hangfireVersion -gt 9) {
         throw "Hangfire schema version $hangfireVersion is newer than the tested version 9."
+    }
+
+    $needsDacpac = $null -eq $state -or
+        -not (Get-ManifestText -Manifest $state -Name 'dacpacSha256').Equals($archive.DacpacHash, [StringComparison]::OrdinalIgnoreCase)
+    $needsHangfire = $hangfireVersion -lt 9
+    if ($needsDacpac -and -not $allowSqlDataLoss) {
+        # Detect planning failures before stopping the existing application.
+        $protectedPlanDirectory = if ([string]::IsNullOrWhiteSpace($SqlPlanOutputDirectory)) {
+            Join-Path ([IO.Path]::GetTempPath()) ("asap-protected-sql-plan-" + [guid]::NewGuid().ToString('N'))
+        }
+        else { $SqlPlanOutputDirectory }
+        try {
+            $null = New-DacpacPlan -Config $hostConfig -Archive $archive -OutputDirectory $protectedPlanDirectory
+        }
+        finally {
+            if ([string]::IsNullOrWhiteSpace($SqlPlanOutputDirectory)) {
+                Remove-Item -LiteralPath $protectedPlanDirectory -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     Set-NonProductionDatabaseRecovery `
@@ -946,40 +1385,9 @@ try {
         exit 0
     }
 
-    $needsDacpac = $null -eq $state -or
-        -not (Get-ManifestText -Manifest $state -Name 'dacpacSha256').Equals($archive.DacpacHash, [StringComparison]::OrdinalIgnoreCase)
-    $needsHangfire = $hangfireVersion -lt 9
-
-    Stop-TestAppPool -AppPoolName $hostConfig.IisAppPoolName
-    if ($needsDacpac) {
-        Invoke-DacpacPublish `
-            -SqlCmdPath $hostConfig.SqlCmdPath `
-            -SqlPackagePath $hostConfig.SqlPackagePath `
-            -ConnectionString $hostConfig.AsapDatabaseConnectionString `
-            -DacpacPath $archive.DacpacPath
-    }
-    if ($needsHangfire) {
-        Invoke-HangfireSchemaInstall `
-            -SqlCmdPath $hostConfig.SqlCmdPath `
-            -ConnectionString $hostConfig.HangfireDatabaseConnectionString `
-            -InstallScriptPath $archive.HangfireScriptPath
-        $installedHangfireVersion = Get-HangfireSchemaVersion `
-            -SqlCmdPath $hostConfig.SqlCmdPath `
-            -ConnectionString $hostConfig.HangfireDatabaseConnectionString
-        if ($installedHangfireVersion -ne 9) {
-            throw "Hangfire schema preparation completed without expected version 9 (actual $installedHangfireVersion)."
-        }
-    }
-
-    $backupPath = Backup-WebPayload -DeploymentPath $hostConfig.DeploymentPath -BackupRoot $hostConfig.BackupRoot
-    Write-Host "Retained previous web payload at $backupPath."
-    Replace-WebPayload -StagedWebRoot $archive.WebRoot -DeploymentPath $hostConfig.DeploymentPath
-    Start-TestAppPool -AppPoolName $hostConfig.IisAppPoolName
-    if (-not (Test-Ready -Uri $hostConfig.ReadinessUrl -TimeoutSeconds $ReadinessTimeoutSeconds -PollSeconds $ReadinessPollSeconds)) {
-        throw 'Test-IIS /health/ready did not return HTTP 200 with status healthy within the bounded timeout.'
-    }
-
-    Write-DeploymentState -Path $hostConfig.StatePath -Manifest $archive.Manifest -ZipHash $archive.ZipHash
+    Invoke-TestDeployment -Config $hostConfig -Archive $archive -NeedsDacpac $needsDacpac -NeedsHangfire $needsHangfire `
+        -AllowSqlDataLoss:$allowSqlDataLoss -SqlPlan $sqlPlan `
+        -TimeoutSeconds $ReadinessTimeoutSeconds -PollSeconds $ReadinessPollSeconds
     Write-Host "Test-IIS deployment succeeded for $($archive.Manifest.versionOrLabel) at $($archive.Manifest.commitSha)."
 }
 finally {

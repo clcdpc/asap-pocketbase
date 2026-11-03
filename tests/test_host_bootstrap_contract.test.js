@@ -169,6 +169,7 @@ try {
   );
   assert.strictEqual(generatedApplication.Application.LogPath, path.join(hostRoot, 'Logs'));
   assert.strictEqual(generatedDeployment.StagingRoot, path.join(hostRoot, 'Staging'));
+  assert.strictEqual(generatedDeployment.AllowSqlDataLoss, false, 'new hosts must default to protected SQL publication');
   assert.strictEqual(generatedDeployment.BackupRoot, path.join(hostRoot, 'Backups'));
   assert.strictEqual(generatedDeployment.ExternalApplicationConfigPath, applicationPath);
 
