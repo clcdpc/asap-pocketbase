@@ -30,8 +30,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     context: () => ({ ownerKey: sessionIdentity.actor()?.key, version: sessionIdentity.preferences()?.version,
       organizationId: state.operationsScope === 'all' ? 1 : Number(state.operationsScope),
       active: active && !disposed, ready: Boolean(sessionIdentity.actor()), dirty: false,
-      blocked: Boolean(state.operationMutation) }),
-    onOperations: () => { dom.emailOperationsTable.focus(); dom.emailOperationsTable.scrollIntoView?.({ block: 'nearest' }); } });
+      blocked: Boolean(state.operationMutation) }) });
 
   function setLibraries(organizations) {
       if (disposed) return;

@@ -133,8 +133,15 @@ async function main() {
     await page.locator('#operations-view').waitFor({ state: 'visible' });
     await page.waitForFunction(scope => document.getElementById('operations-scope').value === scope, scope);
     const operations = page.locator('#operations-email-test');
+    assert.equal(await operations.locator('[data-email-test="operations"]').count(), 0,
+      'Operations does not show a redundant link to its own Email operations log');
     await operations.locator('[data-email-test="result"]').filter({ hasText: `Reference ${reference}.` }).waitFor();
     assert.equal(report.posts.length, 2, 'the scoped Operations handoff observes the original reference');
+    const emailOperationsTable = page.locator('#email-operations-table');
+    assert.equal(await emailOperationsTable.getAttribute('tabindex'), '0', 'the Email operations log remains keyboard reachable');
+    await emailOperationsTable.focus();
+    assert.equal(await emailOperationsTable.evaluate(node => node === document.activeElement), true,
+      'keyboard focus can reach the Email operations log');
     const stored = await page.evaluate(() => Object.fromEntries(Object.keys(sessionStorage)
       .filter(key => key.startsWith('asap.staff.email-test.')).map(key => [key, sessionStorage.getItem(key)])));
     await scan(page, 'operations-email-desktop');
@@ -151,6 +158,15 @@ async function main() {
     await mobile.reload({ waitUntil: 'networkidle' });
     await mobileSetup.locator('[data-email-test="result"]').filter({ hasText: `Reference ${reference}.` }).waitFor();
     assert.equal(report.posts.length, 2, 'page reload restores status without replay');
+    assert.equal(await mobileSetup.locator('[data-email-test="operations"]').count(), 1,
+      'Settings retains View email operations after restoring a test reference');
+    await mobileSetup.locator('[data-email-test="operations"]').press('Enter');
+    await mobile.locator('#operations-view').waitFor({ state: 'visible' });
+    await mobile.waitForFunction(scope => document.getElementById('operations-scope').value === scope, scope);
+    assert.equal(report.posts.length, 2, 'Settings navigation observes the existing test without sending another email');
+    assert.equal(await mobile.locator('#operations-email-test [data-email-test="operations"]').count(), 0,
+      'the Operations-only action stays absent on narrow layouts');
+    await scan(mobile, 'operations-email-mobile');
     report.sameReferenceAfterReload = true;
     assert.equal(report.externalRequests, 0);
     assert.deepEqual(report.pageErrors, []);

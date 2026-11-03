@@ -138,8 +138,10 @@ export function createEmailTestController({ root, context, request = authorizedJ
     dom.refresh.disabled = !value.active || loading || submitting || retiring;
     dom.retire.hidden = !canRetire();
     dom.retire.disabled = disposed || !value.active || Boolean(barrier) || loading || submitting || observing || retiring;
-    dom.operations.hidden = !record || Boolean(record.rejected);
-    dom.operations.disabled = !value.active;
+    if (dom.operations) {
+      dom.operations.hidden = !record || Boolean(record.rejected);
+      dom.operations.disabled = !value.active;
+    }
     if (barrier && !submitting) dom.result.textContent = barrier;
     else dom.result.textContent = resultText;
   }
@@ -339,7 +341,7 @@ export function createEmailTestController({ root, context, request = authorizedJ
     const owner = { generation, value: { ...context() } };
     if (record) void observe(owner, true); else void loadContext(owner);
   }, { signal: events.signal });
-  dom.operations.addEventListener('click', () => onOperations(context().organizationId, record?.id), { signal: events.signal });
+  dom.operations?.addEventListener('click', () => onOperations(context().organizationId, record?.id), { signal: events.signal });
   render();
   function adopt(organizationId, operationId, row) {
     const value = context();

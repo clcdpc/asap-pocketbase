@@ -171,6 +171,16 @@ function operationResult(url) {
     assert.equal(document.getElementById('operations-scope').value, 'all');
     assert.deepEqual([...document.getElementById('operations-scope').options].map(option => option.value), ['all', '2'],
       'the operational selector contains only active code-2 libraries');
+    assert.equal(document.querySelector('#operations-email-test [data-email-test="operations"]'), null,
+      'Operations does not show the redundant link to its own email log');
+    assert.ok(document.querySelector('#settings-email-test [data-email-test="operations"]'),
+      'Settings retains its scoped navigation to Email operations');
+    const emailOperationsTable = document.getElementById('email-operations-table');
+    assert.equal(emailOperationsTable.tabIndex, 0, 'the email log remains keyboard focusable');
+    emailOperationsTable.focus();
+    assert.equal(document.activeElement, emailOperationsTable, 'keyboard focus can reach the email log');
+    assert.equal(requests.filter(item => item.url.includes('/email-operations/test?') && item.options.method === 'POST').length, 0,
+      'loading the shared Operations controller does not send a test email');
     assert.equal(document.querySelectorAll('#email-operations-table tbody tr').length, 5);
     assert.equal(document.querySelector('#email-operations-table').textContent.includes('<unsafe-error>'), true);
     assert.equal(document.querySelector('#email-operations-table').querySelector('script'), null, 'runtime text must not become markup');
