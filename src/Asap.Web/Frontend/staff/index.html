@@ -341,9 +341,13 @@
               <fieldset id="settings-system-links" class="settings-fieldset" data-system-only="true">
                 <legend>System links</legend>
                 <div class="settings-grid">
-                  <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="staffUrl" data-system-only="true">
-                    <span>Staff URL</span><input id="system-staff-url" type="url" autocomplete="url">
-                  </label>
+                  <div class="settings-staff-url-control wide">
+                    <label class="settings-field" data-setting-section="systemSettings" data-setting-key="staffUrl" data-system-only="true">
+                      <span>Staff URL</span><input id="system-staff-url" type="url" autocomplete="url">
+                    </label>
+                    <button id="use-current-staff-url" class="secondary-button" type="button" hidden>Use current address</button>
+                    <p id="system-staff-url-candidate" class="field-help" role="status" aria-live="polite"></p>
+                  </div>
                   <label class="settings-field" data-setting-section="systemSettings" data-setting-key="leapBibUrlPattern" data-system-only="true">
                     <span>LEAP BIB record URL pattern</span><input id="leap-bib-url-pattern" type="url" aria-describedby="leap-bib-help">
                     <small id="leap-bib-help" class="field-help">Optional HTTP(S) URL. Use {{bibid}} for the Polaris BIB ID. Example: https://leap.example.org/LeapWebApp/staff/default#bibrecords/{{bibid}}</small>

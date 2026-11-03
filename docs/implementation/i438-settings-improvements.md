@@ -24,8 +24,8 @@ the parent Codex session.
 | --- | --- | --- | --- | --- |
 | 1 | #395 | Header compacted; focused DOM/scope checks and SQL/browser presentation PASS | Luna MAX clear after retained-test correction | `78b0943` |
 | 2 | #448 | Complete Branding fieldset moved first; focused DOM/logo and SQL/browser presentation PASS | Luna MAX clear, including rendered desktop/mobile | `0c8ccef` |
-| 3 | #445 | Redundant paragraph removed; focused DOM/picker/scope and SQL/browser tests PASS | Luna MAX clear, including desktop/mobile gap check | This issue commit; exact SHA in PR |
-| 4 | #449 | Pending | Pending Luna MAX | Pending |
+| 3 | #445 | Redundant paragraph removed; focused DOM/picker/scope and SQL/browser tests PASS | Luna MAX clear, including desktop/mobile gap check | `35de01e` |
+| 4 | #449 | Explicit validated URL draft action; focused controller/layout/scope PASS, links 2/2 and SQL/browser 1/1 PASS | Luna MAX clear after wait/identity test corrections and rendered checks | This issue commit; exact SHA in PR |
 | 5 | #409 | Pending | Pending Luna MAX / Astra HIGH | Pending |
 | 6 | #437 | Pending | Pending Luna MAX / Astra HIGH | Pending |
 | 7 | #446 | Pending | Pending Luna MAX / Astra HIGH | Pending |
@@ -45,7 +45,7 @@ the parent Codex session.
   PASS, 1/1, no failures/skips. This establishes the local SQL/HTTP harness;
   it is not final implementation qualification.
 - Node dependencies and Chromium installed; .NET SDK 10.0.303 / Node 24.19.0.
-- Real SQL Server 2022 and deterministic provider boundaries are used for
+- Real SQL Server 2022 Developer 16.0.1210.3 (metadata explicitly verified) and deterministic provider boundaries are used for
   mutation and browser journeys. No live Polaris/Postmark actions are part of
   ordinary qualification.
 - Full frontend, exact discovered .NET/SQL and browser populations, sequential
@@ -135,3 +135,39 @@ guidance remain intact; no replacement copy or placeholder picker is added.
   page errors.
 - Receipt: `results/i445-presentation.trx`; actual captures/report are in ignored
   `staff-presentation-ec394271bf4747d09a9fa157c8b51abe`.
+
+## #449 — suggest the current Staff URL
+
+The explicit Use current address action displays a candidate built from the
+browser origin plus `/staff/`. It strips credentials/query/fragment, preserves
+nondefault ports and accepts HTTPS or the existing exact HTTP loopback hosts.
+It never promotes HTTP to HTTPS. Choosing it dispatches normal input/change
+events; ordinary Save settings persists the draft. Loading never applies it.
+System-only, active actor/panel, loading, inert and mutation guards remain in
+place. Applying an already-saved match leaves the form clean with truthful
+feedback.
+
+- Existing generated-link contracts: exact discovery and PASS 2/2, no failures
+  or skips (`results/i449-link-contract.trx`).
+- Focused controller/email, layout and scope Node files: PASS, including
+  independent Luna reruns. Cases cover configured/blank values, credentials,
+  query/hash, ports, HTTPS, exact HTTP loopback including IPv6, unsupported
+  origins, inert/library contexts, normal payload/save/reload, and an already
+  matching saved value. A final direct actor-replacement regression is also
+  green: a valid stale action cannot alter a distinct manual draft or emit
+  input/change events/POST before the new accepted load.
+- Assets refreshed through the existing MSBuild target. Retained real-SQL
+  presentation browser: PASS 1/1, no failures/skips; 76 scanned states, six System
+  URL keyboard contexts plus library disabled checks, 12 prior header and 12
+  Branding contexts. It exercises keyboard activation, dirty/no-write behavior,
+  refresh cancellation/discard and long mobile candidate wrapping. Axe serious/
+  critical, missing images, external requests, page errors and overflow are zero.
+- Review identified an early refresh wait in the already-matching test branch;
+  it now awaits the GET response and refresh completion. Luna confirmed the
+  timing gap independently. Luna also requested direct actor-replacement
+  coverage; that meaningful regression was added and passed. Final Luna MAX
+  verification is clear, including the corrected wait, a fresh actor-regression
+  rerun, and actual desktop/mobile/long-candidate renders. No actionable finding
+  remains.
+- Raw browser receipt: `results/i449-presentation.trx`; actual captures/report
+  are in ignored `staff-presentation-861b1ec9f91041a6949e9ae1372923b3`.

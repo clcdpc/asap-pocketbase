@@ -272,6 +272,9 @@ export function createSettingsController({
     message: root.querySelector('#settings-message'),
     scopeField: root.querySelector('#settings-scope-field'),
     scope: root.querySelector('#settings-scope'),
+    systemStaffUrl: root.querySelector('#system-staff-url'),
+    useCurrentStaffUrl: root.querySelector('#use-current-staff-url'),
+    staffUrlCandidate: root.querySelector('#system-staff-url-candidate'),
     form: root.querySelector('#settings-form'),
     version: root.querySelector('#settings-version'),
     nav: [...root.querySelectorAll('#settings-nav [data-settings-panel]')],
@@ -344,6 +347,7 @@ export function createSettingsController({
     visible: false,
     bound: false
   };
+  let currentStaffUrlSuggestion = null;
   const reads = createLatestLoad(), events = new window.AbortController();
   let disposed = false, contextGeneration = 0, drafts = createDraftScope(), scopePreparation = null;
   const emailTest = createEmailTestController({ root: root.querySelector('#settings-email-test'),
@@ -483,6 +487,36 @@ export function createSettingsController({
 
   function isSystem() {
     return state.scope === 'system';
+  }
+
+  function buildCurrentStaffUrlSuggestion() {
+    try {
+      const currentAddress = new URL(window.location.href);
+      const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(currentAddress.hostname);
+      if (currentAddress.protocol !== 'https:' &&
+          !(currentAddress.protocol === 'http:' && loopback)) return null;
+      const candidate = new URL('/staff/', currentAddress.origin);
+      if (candidate.origin === 'null') return null;
+      candidate.username = '';
+      candidate.password = '';
+      candidate.search = '';
+      candidate.hash = '';
+      return candidate.href;
+    } catch {
+      return null;
+    }
+  }
+
+  function renderCurrentStaffUrlSuggestion(result = '') {
+    currentStaffUrlSuggestion = buildCurrentStaffUrlSuggestion();
+    dom.useCurrentStaffUrl.hidden = !currentStaffUrlSuggestion;
+    dom.staffUrlCandidate.textContent = currentStaffUrlSuggestion
+      ? result === 'applied'
+        ? `Staff URL draft updated to ${currentStaffUrlSuggestion}. Save settings to persist it.`
+        : result === 'unchanged'
+          ? `Staff URL already matches the current address: ${currentStaffUrlSuggestion}.`
+          : `Current address candidate: ${currentStaffUrlSuggestion}`
+      : 'Current address unavailable. Use HTTPS or HTTP on localhost, 127.0.0.1, or [::1].';
   }
 
   function captureSettingsContext() {
@@ -1247,6 +1281,7 @@ export function createSettingsController({
     const configuredSystem = object(stored.configuredSystem);
     const libraryOverride = object(stored.libraryOverride);
     const systemSettings = object(stored.systemSettings);
+    renderCurrentStaffUrlSuggestion();
     const effective = object(data.effective);
     const effectivePatron = object(data.ui_text || effective);
     const systemWorkflow = mergeConfigured(configuredSystem.workflow, null, stored.workflow);
@@ -2251,6 +2286,17 @@ export function createSettingsController({
     listen(dom.form, 'submit', saveSettings);
     listen(dom.form, 'input', draftChanged);
     listen(dom.form, 'change', draftChanged);
+    listen(dom.useCurrentStaffUrl, 'click', () => {
+      if (!currentStaffUrlSuggestion || disposed || !state.visible || state.staff?.role !== 'super_admin' ||
+          !isSystem() || state.activePanel !== 'start' || !state.data || state.loading || state.saving ||
+          state.pendingMutation || state.awaitingReload || state.outcomeUncertain || dom.form.inert ||
+          dom.useCurrentStaffUrl.matches(':disabled') || dom.systemStaffUrl.matches(':disabled')) return;
+      const alreadyCurrent = dom.systemStaffUrl.value === currentStaffUrlSuggestion;
+      dom.systemStaffUrl.value = currentStaffUrlSuggestion;
+      dom.systemStaffUrl.dispatchEvent(new window.Event('input', { bubbles: true }));
+      dom.systemStaffUrl.dispatchEvent(new window.Event('change', { bubbles: true }));
+      renderCurrentStaffUrlSuggestion(alreadyCurrent ? 'unchanged' : 'applied');
+    });
     listen(dom.scope, 'change', changeScope);
     listen(dom.switchSystem, 'click', async () => {
       if (state.staff?.role !== 'super_admin') return;

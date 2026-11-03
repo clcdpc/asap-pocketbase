@@ -158,6 +158,13 @@ async function flush() {
     assert.deepStrictEqual(settingsRequests, ['/api/asap/staff/settings?orgId=2']);
     assert.strictEqual(document.getElementById('settings-scope').value, '2');
     assert.strictEqual(document.getElementById('settings-scope-field').hidden, true);
+    const currentAddressButton = document.getElementById('use-current-staff-url');
+    assert.strictEqual(currentAddressButton.hidden, false, 'A valid local address candidate remains reviewable in Library context.');
+    assert.strictEqual(currentAddressButton.matches(':disabled'), true, 'The system-only fieldset disables the suggestion action in Library context.');
+    const staffUrl = document.getElementById('system-staff-url');
+    const originalStaffUrl = staffUrl.value;
+    currentAddressButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    assert.strictEqual(staffUrl.value, originalStaffUrl, 'A library administrator cannot apply the system URL suggestion.');
     assert.match(document.getElementById('settings-library-context-title').textContent, /Editing Library Two settings/);
     assert.match(document.getElementById('settings-library-context-guidance').textContent, /apply to every library/);
     assert.strictEqual(document.getElementById('settings-switch-system').hidden, true);

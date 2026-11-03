@@ -74,6 +74,16 @@ const { JSDOM } = require('jsdom');
       'system-staff-url', 'leap-bib-url-pattern', 'leap-patron-url-pattern',
       'format-icon-url-pattern', 'patron-embed-allowed-origins', 'ui-system-not-enabled-msg', 'ui-misconfigured-msg'
     ]);
+    const staffUrl = document.getElementById('system-staff-url');
+    assert.strictEqual(staffUrl.closest('label').querySelector('span').textContent, 'Staff URL');
+    assert.strictEqual(staffUrl.closest('.settings-staff-url-control').classList.contains('wide'), true);
+    const useCurrentAddress = document.getElementById('use-current-staff-url');
+    assert.strictEqual(useCurrentAddress.closest('#settings-system-links'), document.getElementById('settings-system-links'));
+    assert.strictEqual(useCurrentAddress.type, 'button');
+    assert.strictEqual(useCurrentAddress.textContent, 'Use current address');
+    const staffUrlCandidate = document.getElementById('system-staff-url-candidate');
+    assert.strictEqual(staffUrlCandidate.getAttribute('role'), 'status');
+    assert.strictEqual(staffUrlCandidate.getAttribute('aria-live'), 'polite');
     assert.deepStrictEqual(controls(fieldset('email-from-address')), ['email-from-address', 'email-from-name']);
     assert.strictEqual(legend('email-from-address'), 'Sender identity');
     assert.deepStrictEqual(controls(fieldset('email-postmark-token')), ['email-postmark-token', 'email-clear-postmark-token']);
@@ -113,7 +123,7 @@ const { JSDOM } = require('jsdom');
       'pending-hold-timeout-enabled', 'pending-hold-timeout-days',
       'additional-copy-timeout-enabled', 'additional-copy-timeout-days'
     ]);
-    ['polaris-host', 'polaris-domain', 'system-staff-url', 'format-icon-url-pattern',
+    ['polaris-host', 'polaris-domain', 'format-icon-url-pattern',
       'email-postmark-token', 'email-clear-postmark-token', 'staff-add-email', 'patron-page-title'].forEach(wide);
     const ids = [...document.querySelectorAll('[id]')].map(element => element.id);
     assert.strictEqual(new Set(ids).size, ids.length, 'control IDs must remain unique');

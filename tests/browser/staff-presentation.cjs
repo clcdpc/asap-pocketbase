@@ -9,7 +9,7 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
 
 (async () => {
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
-  const report = { externalRequests: [], pageErrors: [], states: [], settingsHeaders: [], brandingPlacements: [] };
+  const report = { externalRequests: [], pageErrors: [], states: [], settingsHeaders: [], brandingPlacements: [], staffUrlSuggestions: [] };
   for (const persistent of [false, true]) {
     const browser = await chromium.launch({ headless: true, ...(persistent ? { ignoreDefaultArgs: ['--hide-scrollbars'] } : {}) });
     try {
@@ -22,6 +22,11 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
         });
         const page = await context.newPage();
         page.on('pageerror', error => report.pageErrors.push(error.message)); rejectNativeDialogs(page, report.pageErrors);
+        const staffSettingsPosts = [];
+        page.on('request', request => {
+          const url = new URL(request.url());
+          if (request.method() === 'POST' && url.pathname === '/api/asap/staff/settings') staffSettingsPosts.push(url.pathname);
+        });
         const quietFeedback = async () => {
           await page.waitForFunction(() => document.querySelector('#app-status').textContent === '');
           const feedback = await page.locator('#app-status').evaluate(node => ({
@@ -250,6 +255,118 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
             document.getElementById('settings-version').value && !document.getElementById('settings-form').inert &&
             !document.getElementById('settings-refresh').disabled, scope);
           await measureSettingsHeader(scope);
+          await page.locator('#settings-nav-start').click();
+          const staffUrlInput = page.locator('#system-staff-url');
+          const useCurrentAddress = page.getByRole('button', { name: 'Use current address', exact: true });
+          const staffUrlPreview = page.locator('#system-staff-url-candidate');
+          assert.equal(await page.getByLabel('Staff URL', { exact: true }).count(), 1,
+            `${width}px/${scope}: Staff URL retains its accessible label`);
+          assert.equal(await staffUrlPreview.getAttribute('role'), 'status');
+          assert.equal(await staffUrlPreview.getAttribute('aria-live'), 'polite');
+          assert.equal(await staffUrlPreview.isVisible(), true);
+          assert.equal(await useCurrentAddress.isVisible(), true,
+            `${width}px/${scope}: a supported current address has an explicit action`);
+          const suggestionGeometry = await page.evaluate(() => {
+            const input = document.getElementById('system-staff-url').getBoundingClientRect();
+            const button = document.getElementById('use-current-staff-url').getBoundingClientRect();
+            const preview = document.getElementById('system-staff-url-candidate');
+            const bounds = preview.getBoundingClientRect();
+            return { width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
+              input: { top: input.top, right: input.right, bottom: input.bottom },
+              button: { top: button.top, left: button.left, bottom: button.bottom },
+              preview: { top: bounds.top, bottom: bounds.bottom, width: bounds.width,
+                scrollWidth: preview.scrollWidth, overflowWrap: getComputedStyle(preview).overflowWrap } };
+          });
+          if (width > 760) {
+            assert.ok(suggestionGeometry.button.left >= suggestionGeometry.input.right,
+              `${width}px/${scope}: action sits beside Staff URL`);
+          } else {
+            assert.ok(suggestionGeometry.button.top >= suggestionGeometry.input.bottom,
+              `${width}px/${scope}: action stacks below Staff URL on mobile`);
+          }
+          assert.ok(suggestionGeometry.preview.top >= suggestionGeometry.button.bottom,
+            `${width}px/${scope}: candidate is visible below the input/action`);
+          assert.ok(suggestionGeometry.scrollWidth <= suggestionGeometry.width,
+            `${width}px/${scope}: suggestion controls have no horizontal overflow`);
+
+          if (scope === 'system') {
+            const expectedCandidate = await page.evaluate(() => new URL('/staff/', window.location.href).href);
+            assert.equal(await staffUrlPreview.textContent(), `Current address candidate: ${expectedCandidate}`,
+              'The displayed candidate uses only the browser origin and canonical Staff path.');
+            const candidateUrl = new URL(expectedCandidate);
+            assert.equal(candidateUrl.pathname, '/staff/');
+            assert.equal(candidateUrl.search, '');
+            assert.equal(candidateUrl.hash, '');
+            assert.equal(candidateUrl.username, '');
+            assert.equal(candidateUrl.password, '');
+            const originalStaffUrl = await staffUrlInput.inputValue();
+            const writesBefore = staffSettingsPosts.length;
+            await staffUrlInput.focus();
+            await page.keyboard.press('Tab');
+            assert.equal(await page.evaluate(() => document.activeElement.id), 'use-current-staff-url',
+              `${width}px/${scope}: keyboard reaches the suggestion directly after Staff URL`);
+            assert.equal(await useCurrentAddress.evaluate(node => node.matches(':focus-visible')), true,
+              `${width}px/${scope}: the suggestion action has visible keyboard focus`);
+            await page.keyboard.press('Enter');
+            assert.equal(await staffUrlInput.inputValue(), expectedCandidate);
+            const changed = originalStaffUrl !== expectedCandidate;
+            assert.equal(await page.locator('#settings-save').isEnabled(), changed,
+              `${width}px/${scope}: applying the candidate updates only a changed draft`);
+            assert.equal(await page.locator('#settings-save-title').textContent(), changed ? 'Unsaved changes' : 'No changes');
+            assert.match(await staffUrlPreview.textContent(), changed
+              ? /Staff URL draft updated/ : /Staff URL already matches/);
+            await scan(`settings-current-address-${scope}`);
+            if (width === 390) {
+              const originalPreview = await staffUrlPreview.textContent();
+              const longEligibleCandidate = `Current address candidate: https://${'long-subdomain.'.repeat(16)}example.org:9443/staff/`;
+              try {
+                await staffUrlPreview.evaluate((node, text) => { node.textContent = text; }, longEligibleCandidate);
+                const wrapped = await page.evaluate(() => {
+                  const preview = document.getElementById('system-staff-url-candidate');
+                  const bounds = preview.getBoundingClientRect();
+                  return { width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
+                    previewWidth: bounds.width, previewScrollWidth: preview.scrollWidth,
+                    overflowWrap: getComputedStyle(preview).overflowWrap };
+                });
+                assert.equal(wrapped.overflowWrap, 'anywhere');
+                assert.ok(wrapped.previewWidth > 0 && wrapped.previewScrollWidth <= wrapped.previewWidth + 1,
+                  'A long eligible origin wraps inside the mobile candidate area.');
+                assert.ok(wrapped.scrollWidth <= wrapped.width, 'A long mobile candidate does not cause horizontal overflow.');
+                await scan(`settings-current-address-long-${scope}`);
+              } finally {
+                await staffUrlPreview.evaluate((node, text) => { node.textContent = text; }, originalPreview);
+              }
+            }
+            if (changed) {
+              await decideConfirmation(page, () => page.locator('#settings-refresh').click(), dialog => dialog.dismiss());
+              assert.equal(await staffUrlInput.inputValue(), expectedCandidate,
+                'Canceling refresh preserves the selected candidate draft.');
+              assert.equal(await page.locator('#settings-save').isEnabled(), true);
+              await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
+              await page.waitForFunction(expected => {
+                const form = document.getElementById('settings-form');
+                return !form.inert && document.getElementById('settings-save').disabled &&
+                  document.getElementById('system-staff-url').value === expected;
+              }, originalStaffUrl);
+            } else {
+              const acceptedReload = page.waitForResponse(response => response.request().method() === 'GET' &&
+                new URL(response.url()).pathname === '/api/asap/staff/settings');
+              await page.locator('#settings-refresh').click();
+              await acceptedReload;
+              await page.waitForFunction(() => !document.getElementById('settings-refresh').disabled &&
+                !document.getElementById('settings-form').inert);
+              await page.waitForFunction(expected => !document.getElementById('settings-form').inert &&
+                document.getElementById('system-staff-url').value === expected, originalStaffUrl);
+            }
+            assert.equal(staffSettingsPosts.length, writesBefore,
+              `${width}px/${scope}: choosing, canceling, and discarding a suggestion never sends a save`);
+            report.staffUrlSuggestions.push({ width, candidate: expectedCandidate, changed, originalStaffUrl,
+              mobileLongCandidateWrapped: width === 390 });
+          } else {
+            assert.equal(await staffUrlInput.isDisabled(), true, `${width}px/${scope}: the system field remains disabled in Library scope`);
+            assert.equal(await useCurrentAddress.evaluate(node => node.matches(':disabled')), true,
+              `${width}px/${scope}: the suggestion action is disabled in Library scope`);
+          }
           await page.locator('#settings-nav-workflow').click();
           await measureHeading('#add-common-creator');
           assert.equal(await page.locator('#patron-code-eligibility legend').textContent(), 'Patron code eligibility');
