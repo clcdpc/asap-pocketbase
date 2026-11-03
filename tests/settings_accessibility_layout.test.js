@@ -27,12 +27,15 @@ const { JSDOM } = require('jsdom');
     const header = document.querySelector('#settings-view .settings-header');
     assert.ok(header && !header.classList.contains('section-heading'));
     assert.deepStrictEqual([...header.querySelectorAll('[id]')].map(element => element.id), [
-      'settings-title', 'settings-context-summary', 'settings-scope-field',
-      'settings-scope', 'settings-refresh', 'settings-message'
-    ], 'the compact header must preserve its hooks and logical reading order');
+      'settings-title', 'settings-scope-field', 'settings-scope', 'settings-refresh', 'settings-message'
+    ], 'the compact header must omit repeated scope text and preserve its controls');
+    assert.strictEqual(header.querySelector('#settings-context-summary'), null);
     const toolbar = header.querySelector('.settings-toolbar');
     assert.strictEqual(document.getElementById('settings-scope-field').parentElement, toolbar);
     assert.strictEqual(document.getElementById('settings-refresh').parentElement, toolbar);
+    assert.strictEqual(document.getElementById('settings-message').parentElement, toolbar);
+    assert.strictEqual(document.querySelector('#settings-scope-field > span').textContent, 'Settings scope');
+    assert.strictEqual(document.getElementById('settings-scope').getAttribute('aria-label'), 'Settings scope');
     assert.strictEqual(document.getElementById('settings-message').getAttribute('role'), 'status');
     assert.strictEqual(document.getElementById('settings-message').getAttribute('aria-live'), 'polite');
     const settingsSource = fs.readFileSync(path.join(frontendRoot, 'staff', 'js', 'settings.js'), 'utf8');

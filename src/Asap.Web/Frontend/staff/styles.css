@@ -334,13 +334,13 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .analytics-row strong { text-align: right; }
 
 .settings-header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); align-items: start; gap: 4px 20px; margin-bottom: 12px; }
-.settings-heading { grid-row: span 2; min-width: 0; }
+.settings-heading { min-width: 0; }
 .settings-heading h1 { margin: 0; font-size: 1.65rem; }
-.settings-heading p { margin: 4px 0 0; color: var(--muted); overflow-wrap: anywhere; }
-.settings-toolbar { display: flex; align-items: end; justify-content: flex-end; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.settings-toolbar { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .settings-toolbar .compact-field { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .settings-toolbar select { width: 220px; max-width: 100%; min-width: 0; }
-.settings-message { grid-column: 2; min-width: 0; max-width: 400px; margin: 0; color: var(--muted); font-size: .86rem; overflow-wrap: anywhere; }
+.settings-toolbar .settings-message { flex: 0 1 400px; min-width: 0; max-width: 400px; margin: 0; color: var(--muted); font-size: .86rem; overflow-wrap: anywhere; }
+.settings-toolbar .settings-message:empty { flex: 0 0 0; width: 0; max-width: 0; }
 .settings-message.error { color: var(--danger); font-weight: 700; }
 .settings-message.success { color: var(--success); font-weight: 700; }
 .settings-layout { display: grid; grid-template-columns: minmax(170px, 210px) minmax(0, 1fr); gap: 20px; align-items: start; }
@@ -708,11 +708,9 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
   .polaris-form, #polaris-pair-fields { grid-template-columns: 1fr; }
   .edit-form .wide, .resolution-form .wide { grid-column: 1; }
   .settings-header { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .settings-heading { grid-row: auto; }
   .settings-toolbar { justify-content: flex-start; }
   .settings-toolbar .compact-field { display: grid; flex: 1 1 240px; gap: 4px; }
   .settings-toolbar select { width: 100%; }
-  .settings-message { grid-column: 1; }
   .settings-layout { grid-template-columns: 1fr; gap: 12px; }
   .settings-sidebar { position: static; overflow-x: auto; }
   .settings-nav { display: flex; gap: 4px; min-width: max-content; }

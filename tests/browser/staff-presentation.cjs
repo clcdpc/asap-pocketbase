@@ -9,7 +9,7 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
 
 (async () => {
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
-  const report = { externalRequests: [], pageErrors: [], states: [] };
+  const report = { externalRequests: [], pageErrors: [], states: [], settingsHeaders: [] };
   for (const persistent of [false, true]) {
     const browser = await chromium.launch({ headless: true, ...(persistent ? { ignoreDefaultArgs: ['--hide-scrollbars'] } : {}) });
     try {
@@ -132,11 +132,124 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
               : current.top - previous.bottom;
           });
         });
+        const measureSettingsHeader = async scope => {
+          const message = page.locator('#settings-message');
+          const originalMessage = await message.evaluate(node => ({ text: node.textContent, className: node.className }));
+          try {
+            await message.evaluate(node => { node.textContent = ''; node.className = 'settings-message'; });
+            const compact = await page.evaluate(() => {
+              const rect = node => {
+                const bounds = node.getBoundingClientRect();
+                return { top: bounds.top, right: bounds.right, bottom: bounds.bottom,
+                  left: bounds.left, width: bounds.width, height: bounds.height };
+              };
+              const header = document.querySelector('#settings-view .settings-header');
+              const title = document.getElementById('settings-title');
+              const toolbar = header.querySelector('.settings-toolbar');
+              const status = document.getElementById('settings-message');
+              const layout = document.querySelector('#settings-view .settings-layout');
+              const titleBounds = title.getBoundingClientRect(), toolbarBounds = toolbar.getBoundingClientRect();
+              return {
+                header: rect(header), gridRows: getComputedStyle(header).gridTemplateRows.trim().split(/\s+/).filter(Boolean),
+                title: rect(title), toolbar: rect(toolbar), status: rect(status), layout: rect(layout),
+                titleToolbarOverlap: titleBounds.top < toolbarBounds.bottom && toolbarBounds.top < titleBounds.bottom,
+                summaryPresent: header.querySelector('#settings-context-summary') !== null,
+                headerText: header.textContent.trim(),
+                scopeValue: document.getElementById('settings-scope').value,
+                selectedScopeLabel: document.querySelector('#settings-scope option:checked')?.textContent.trim(),
+                scopeLabel: document.querySelector('#settings-scope-field > span')?.textContent.trim(),
+                scopeVisible: document.getElementById('settings-scope-field').getClientRects().length > 0,
+                refreshVisible: document.getElementById('settings-refresh').getClientRects().length > 0,
+                statusText: status.textContent.trim(), statusRole: status.getAttribute('role'),
+                statusLive: status.getAttribute('aria-live'), statusInToolbar: toolbar.contains(status),
+                viewportWidth: innerWidth, scrollWidth: document.documentElement.scrollWidth
+              };
+            });
+            assert.equal(compact.summaryPresent, false, `${width}px/${scope}: no repeated context subtitle`);
+            assert.doesNotMatch(compact.headerText, /System level configuration|Library configuration for/,
+              `${width}px/${scope}: header does not repeat the selected scope`);
+            assert.equal(compact.scopeValue, scope);
+            if (scope === 'system') {
+              assert.equal(compact.selectedScopeLabel, 'System level');
+            } else {
+              assert.ok(compact.selectedScopeLabel && compact.selectedScopeLabel !== 'System level',
+                `${width}px/${scope}: selected library remains identified by the scope selector`);
+            }
+            assert.equal(compact.scopeLabel, 'Settings scope');
+            assert.equal(compact.scopeVisible, true);
+            assert.equal(compact.refreshVisible, true);
+            assert.equal(compact.statusText, '');
+            assert.equal(compact.statusRole, 'status');
+            assert.equal(compact.statusLive, 'polite');
+            assert.equal(compact.statusInToolbar, true);
+            assert.ok(compact.layout.top >= compact.header.bottom, `${width}px/${scope}: content follows the header`);
+            assert.ok(compact.scrollWidth <= compact.viewportWidth, `${width}px/${scope}: compact header has no horizontal overflow`);
+            if (width > 760) {
+              assert.equal(compact.gridRows.length, 1, `${width}px/${scope}: desktop header has one grid row`);
+              assert.ok(compact.header.height <= 50, `${width}px/${scope}: empty status leaves no reserved row (${compact.header.height}px)`);
+              assert.equal(compact.titleToolbarOverlap, true, `${width}px/${scope}: title and toolbar share the desktop row`);
+            } else {
+              assert.equal(compact.gridRows.length, 2, `${width}px/${scope}: mobile stacks only title and toolbar`);
+              assert.equal(compact.titleToolbarOverlap, false, `${width}px/${scope}: mobile controls do not collide with the title`);
+              assert.ok(compact.toolbar.top >= compact.title.bottom, `${width}px/${scope}: toolbar follows the title`);
+            }
+
+            const longStatus = 'Settings could not be loaded for this scope. Please refresh and retry. '.repeat(3).trim();
+            await message.evaluate((node, text) => { node.className = 'settings-message error'; node.textContent = text; }, longStatus);
+            const expanded = await page.evaluate(() => {
+              const rect = node => {
+                const bounds = node.getBoundingClientRect();
+                return { top: bounds.top, right: bounds.right, bottom: bounds.bottom,
+                  left: bounds.left, width: bounds.width, height: bounds.height };
+              };
+              const header = document.querySelector('#settings-view .settings-header');
+              const title = document.getElementById('settings-title');
+              const toolbar = header.querySelector('.settings-toolbar');
+              const status = document.getElementById('settings-message');
+              const layout = document.querySelector('#settings-view .settings-layout');
+              const titleBounds = title.getBoundingClientRect(), toolbarBounds = toolbar.getBoundingClientRect();
+              return {
+                header: rect(header), gridRows: getComputedStyle(header).gridTemplateRows.trim().split(/\s+/).filter(Boolean),
+                title: rect(title), toolbar: rect(toolbar), status: rect(status), layout: rect(layout),
+                titleToolbarOverlap: titleBounds.top < toolbarBounds.bottom && toolbarBounds.top < titleBounds.bottom,
+                statusText: status.textContent.trim(), statusRole: status.getAttribute('role'),
+                statusLive: status.getAttribute('aria-live'), statusInToolbar: toolbar.contains(status),
+                statusClipped: status.scrollHeight > status.clientHeight + 1,
+                viewportWidth: innerWidth, scrollWidth: document.documentElement.scrollWidth
+              };
+            });
+            assert.equal(expanded.statusText, longStatus, `${width}px/${scope}: long error text is retained`);
+            assert.equal(expanded.statusRole, 'status');
+            assert.equal(expanded.statusLive, 'polite');
+            assert.equal(expanded.statusInToolbar, true);
+            assert.equal(expanded.statusClipped, false, `${width}px/${scope}: wrapped error is not clipped`);
+            assert.ok(expanded.status.height > 0, `${width}px/${scope}: long error remains visible`);
+            assert.ok(expanded.header.height >= compact.header.height, `${width}px/${scope}: header grows around its status`);
+            assert.ok(expanded.layout.top >= expanded.header.bottom, `${width}px/${scope}: workflow content remains below the expanded header`);
+            assert.ok(expanded.scrollWidth <= expanded.viewportWidth, `${width}px/${scope}: long error causes no horizontal overflow`);
+            if (width > 760) {
+              assert.equal(expanded.gridRows.length, 1, `${width}px/${scope}: wrapped status does not add a desktop grid row`);
+            } else {
+              assert.equal(expanded.gridRows.length, 2, `${width}px/${scope}: wrapped status stays within the stacked toolbar row`);
+              assert.equal(expanded.titleToolbarOverlap, false, `${width}px/${scope}: wrapped status does not collide with the title`);
+            }
+            report.settingsHeaders.push({ width, scope, emptyHeight: compact.header.height,
+              longStatusHeight: expanded.header.height, emptyGridRows: compact.gridRows.length,
+              longStatusGridRows: expanded.gridRows.length });
+            await scan(`settings-header-long-${scope}`);
+          } finally {
+            await message.evaluate((node, original) => {
+              node.textContent = original.text;
+              node.className = original.className;
+            }, originalMessage);
+          }
+        };
         for (const scope of ['system', '383091']) {
           await page.locator('#settings-scope').selectOption(scope);
           await page.waitForFunction(scope => document.getElementById('settings-scope').value === scope &&
             document.getElementById('settings-version').value && !document.getElementById('settings-form').inert &&
             !document.getElementById('settings-refresh').disabled, scope);
+          await measureSettingsHeader(scope);
           await page.locator('#settings-nav-workflow').click();
           await measureHeading('#add-common-creator');
           assert.equal(await page.locator('#patron-code-eligibility legend').textContent(), 'Patron code eligibility');

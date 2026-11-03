@@ -269,7 +269,6 @@ export function createSettingsController({
   onEmailTestOperations = () => {}, onEmailTestSubmitted = () => {}, onStaffAuditHistory = () => {}
 }) {
   const dom = {
-    contextSummary: root.querySelector('#settings-context-summary'),
     message: root.querySelector('#settings-message'),
     scopeField: root.querySelector('#settings-scope-field'),
     scope: root.querySelector('#settings-scope'),
@@ -1263,9 +1262,6 @@ export function createSettingsController({
       ? mergeConfigured(configuredSystem.email, null, data.emails)
       : mergeConfigured(configuredSystem.email, libraryOverride.email, data.emails);
 
-    dom.contextSummary.textContent = isSystem()
-      ? 'System level configuration'
-      : `Library configuration for ${data.organization?.name || `organization ${organizationId()}`}`;
     dom.version.value = data.version || '';
     setSystemFields(systemSettings);
     setPolarisFields(configuredSystem.polaris || stored.polaris);

@@ -3223,11 +3223,11 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await page.waitForFunction(() => document.querySelector('#email-readiness-warning')?.textContent
       .includes('Email delivery is not configured'));
     await page.waitForFunction(() => !document.getElementById('settings-form').hidden &&
-      document.getElementById('settings-context-summary').textContent.includes('Library configuration'));
+      !document.getElementById('settings-form').inert && !document.getElementById('settings-system-context').hidden);
     await page.locator('#settings-scope').selectOption('system');
     await page.locator('#email-readiness-warning').waitFor({ state: 'hidden' });
     await page.waitForFunction(() => !document.getElementById('settings-form').hidden &&
-      document.getElementById('settings-context-summary').textContent === 'System level configuration');
+      !document.getElementById('settings-form').inert && document.getElementById('settings-system-context').hidden);
     await page.unroute('**/api/asap/staff/email-readiness*', scopedEmailReadiness);
     assert.equal(await page.locator('#settings-nav [role="tab"][tabindex="0"]').count(), 1);
     await page.locator('#settings-nav-workflow').focus();
