@@ -15,8 +15,8 @@ are not application inputs.
 
 | Issue | Acceptance evidence | Tests | Independent reviews | Commit |
 | --- | --- | --- | --- | --- |
-| #430 | Operations-only link removed; Settings link, saved context, exact recovery identity and focusable log retained | Focused email-test and Operations Node files PASS; saved-email real-SQL/Chromium journey 1/1 PASS with six checkpoints | Luna MAX independent review and closure audit PASS; no actionable findings | Issue-specific commit introducing this section |
-| #431 | Pending | Pending | Luna MAX / Astra HIGH pending | Pending |
+| #430 | Operations-only link removed; Settings link, saved context, exact recovery identity and focusable log retained | Focused email-test and Operations Node files PASS; saved-email real-SQL/Chromium journey 1/1 PASS with six checkpoints | Luna MAX independent review and closure audit PASS; no actionable findings | `ac57372` |
+| #431 | One refresh; truthful log/status; guarded Settings handoff; exact identity/recovery; latest current test visible beyond 500 failed rows | SQL 23/23 then targeted 6/6 PASS; final browser 1/1 and five focused Node invocations PASS | Luna MAX and Astra HIGH final R3 closure PASS; all findings resolved | Issue-specific commit introducing this row |
 | #432 | Pending | Pending | Luna MAX / Astra HIGH pending | Pending |
 | #434 | Pending | Pending | Luna MAX / Astra HIGH / Terra MAX pending | Pending |
 
@@ -45,6 +45,50 @@ verified before the next issue starts.
 - Independent Luna MAX reviewed the complete code/test diff, inspected all six
   browser states and their report, and independently reran the Operations UI
   Node file successfully. It found no actionable defects or #430 acceptance gaps.
+
+### #431 qualification and review resolutions
+
+Settings retains saved context, Send, and always-available guarded navigation.
+Both screens remove individual status refresh and routine terminal results.
+Main refresh reconciles by reference or original operation identity without
+writes, independently of table failures. Session recovery, explicit retirement,
+late acknowledgement and scope/account ownership remain enforced. The log uses
+recorded delivery-mode evidence; provider acceptance never means mailbox receipt.
+
+Independent Luna MAX and Astra HIGH reviewed actual source/tests after each
+remediation. Their final R3 closure passes have no actionable findings.
+
+| Finding | Resolution and regression |
+| --- | --- |
+| Luna P2: retirement focuses disabled Send | Choose enabled Send, main Refresh, or focusable log; test blocked/unavailable context and busy Refresh |
+| Astra P2: historical result hides current configuration block | Retain readiness guidance separately from history; test both panels, response orders and unresolved outcomes |
+| Astra P2: table failure skips exact reconciliation | Run independent reads with owning-load cancellation; test queue/list/catalog failure, known/unknown reference and zero writes |
+| Astra validation: 20ms acknowledgement race | Controlled window clock verifies acknowledgement before expiry and clearing at expiry; the independently observed initial failure is resolved |
+| Luna P2: 500 failures hide newly submitted test | Keep bounded failed-first query; prepend current authorized exact test only if absent, without retry authority; SQL tests seed 501 failures |
+| Luna P2: delayed table renders older queued observation | Resolve operation-bound latest-observation accessor after tables finish; test newer poll, identity/storage replacement, scope/account/deactivation and cancellation |
+
+Executed qualification (counts describe separate runs, not unique totals):
+
+- Focused real SQL: 23/23 PASS; subsequent targeted SQL: 6/6 PASS, including
+  pending/sent/suppressed beyond the list bound, actual-mode evidence, HTTP
+  idempotency and the retained failed-first contract. No skips or failures.
+- Final `staff_email_test`, `staff_operations_controller`,
+  `staff_operations_ui`, selected email-navigation (2 journeys), and
+  `staff_operations_postcommit_401_ui` Node invocations: PASS.
+- Final saved-email SQL/Chromium journey: 1/1 PASS; six desktop/mobile scans
+  with zero serious/critical axe findings, page errors, external requests,
+  missing images or page overflow. Two deliberate client submissions include
+  one never reaching the server and one committed with a lost acknowledgement;
+  five exact by-intent reads preserve the same reference. SQL verifies one
+  recording-provider request and one worker job.
+- Final reviewers independently reran focused Node checks and adverse probes,
+  including post-poll cancellation and storage loss. Astra also completed 262
+  navigation/draft journeys during remediation; the final focused navigation
+  rerun passed. An accidentally broad Luna navigation invocation was stopped
+  and is not counted as a complete run.
+
+Exact commands, TRX, browser reports and images are retained outside Git under
+`Documents/Codex/2026-11-02/i450/`; latest receipts use `i431-r3-*`.
 
 ## Integration qualification
 

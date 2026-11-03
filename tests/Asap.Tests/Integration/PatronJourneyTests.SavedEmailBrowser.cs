@@ -74,6 +74,7 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(Guid.TryParse(report.RootElement.GetProperty("retiredUnrecordedIntent").GetString(), out _));
             Assert.AreEqual(6, report.RootElement.GetProperty("states").GetArrayLength());
             Assert.IsTrue(report.RootElement.GetProperty("sameReferenceAfterReload").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("lostAcknowledgementReconciled").GetBoolean());
             Assert.HasCount(1, handler.Sends, "One explicit browser click must produce exactly one provider POST.");
             Assert.HasCount(1, jobIds, "The ordinary durable dispatcher creates one automatic delivery job.");
             await using var verify = await contexts.CreateDbContextAsync();

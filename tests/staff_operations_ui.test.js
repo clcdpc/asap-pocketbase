@@ -119,7 +119,12 @@ function operationResult(url) {
         { id: '71', status: 'failed', deliveryClass: 'business_event', lastErrorCode: 'mail_not_configured', suppressionReason: null, createdUtc: '2026-09-14T11:59:00Z', version: 'missing-proof-version' },
         { id: '9007199254740993', status: 'failed', deliveryClass: 'operational_test', lastErrorCode: 'mail_not_configured', canRetry: true, suppressionReason: null, createdUtc: '2026-09-14T11:58:00Z', version: 'email-version' },
         { id: '73', status: 'failed', deliveryClass: 'business_event', lastErrorCode: 'mail_not_configured', canRetry: false, suppressionReason: null, createdUtc: '2026-09-14T11:57:00Z', version: 'dispatch-marker-version' },
-        { id: '42', status: 'sent', deliveryClass: 'business_event', lastErrorCode: null, suppressionReason: null, createdUtc: '2026-09-14T11:00:00Z', version: 'sent-version' }
+        { id: '42', status: 'sent', deliveryMode: 'postmark', deliveryClass: 'business_event', lastErrorCode: null, suppressionReason: null, createdUtc: '2026-09-14T11:00:00Z', version: 'sent-version' },
+        { id: '43', status: 'sent', deliveryMode: 'file', deliveryClass: 'operational_test', createdUtc: '2026-09-14T10:59:00Z' },
+        { id: '44', status: 'sent', deliveryMode: 'unknown', deliveryClass: 'operational_test', createdUtc: '2026-09-14T10:58:00Z' },
+        { id: '45', status: 'failed', lastErrorCode: 'provider_timeout', deliveryClass: 'operational_test', createdUtc: '2026-09-14T10:57:00Z' },
+        { id: '46', status: 'suppressed', suppressionReason: 'test_configuration_changed', deliveryClass: 'operational_test', createdUtc: '2026-09-14T10:56:00Z' },
+        { id: '47', status: 'pending', deliveryClass: 'operational_test', createdUtc: '2026-09-14T10:55:00Z' }
       ]
     };
 
@@ -181,7 +186,7 @@ function operationResult(url) {
     assert.equal(document.activeElement, emailOperationsTable, 'keyboard focus can reach the email log');
     assert.equal(requests.filter(item => item.url.includes('/email-operations/test?') && item.options.method === 'POST').length, 0,
       'loading the shared Operations controller does not send a test email');
-    assert.equal(document.querySelectorAll('#email-operations-table tbody tr').length, 5);
+    assert.equal(document.querySelectorAll('#email-operations-table tbody tr').length, 10);
     assert.equal(document.querySelector('#email-operations-table').textContent.includes('<unsafe-error>'), true);
     assert.equal(document.querySelector('#email-operations-table').querySelector('script'), null, 'runtime text must not become markup');
     assert.match(document.querySelector('#email-operations-table').textContent, /9007199254740993/);
@@ -213,15 +218,21 @@ function operationResult(url) {
     await settle();
     assertRequest(requests.find(item => item.url.includes('/email-operations/test?') && item.options.method === 'POST'),
       '/api/asap/staff/email-operations/test', '2', { configurationVersion: 'A'.repeat(64), intendedDeliveryMode: 'postmark' });
-    assert.match(document.querySelector('#operations-email-test').textContent, /email service accepted/);
+    assert.match(document.querySelector('#operations-email-test').textContent, /queued for processing.*Email operations/);
 
     const emailRows = [...document.querySelectorAll('#email-operations-table tbody tr')];
-    const rowForId = id => emailRows.find(row => row.textContent.includes(id));
+    const rowForId = id => emailRows.find(row => row.cells[0].textContent === id);
     assert.equal(rowForId('70').querySelector('button'), null, 'unknown failures are not retryable without explicit server proof');
     assert.equal(rowForId('71').querySelector('button'), null, 'missing canRetry proof is denied even for mail_not_configured');
     assert.ok(rowForId('9007199254740993').querySelector('button'), 'only the explicitly certified no-send row exposes Retry');
     assert.equal(rowForId('73').querySelector('button'), null, 'dispatch-start evidence overrides the no-send error label');
     assert.equal(rowForId('42').querySelector('button'), null, 'sent rows never expose Retry');
+    assert.match(rowForId('42').textContent, /Provider accepted/);
+    assert.match(rowForId('43').textContent, /Captured locally; no mailbox delivery/);
+    assert.match(rowForId('44').textContent, /delivery mode unverified/);
+    assert.match(rowForId('45').textContent, /Acceptance unconfirmed/);
+    assert.match(rowForId('46').textContent, /Suppressed/);
+    assert.match(rowForId('47').textContent, /Queued/);
     const retry = rowForId('9007199254740993').querySelector('button');
     retry.click();
     await settle();

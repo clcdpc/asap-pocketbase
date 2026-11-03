@@ -247,6 +247,45 @@ async function fixture(route, journey, options = {}) {
 
 const cases = [];
 const test = (name, body) => cases.push({ name, body });
+for (const settingsScope of ['system', '2']) {
+  test(`email operations navigation protects drafts and recovers the original ${settingsScope} test identity`, () =>
+    fixture(`?stage=settings&settingsScope=${settingsScope}#settings-smtp`, async ui => {
+      const link = ui.get('#settings-email-test [data-email-test="operations"]');
+      assert.equal(link.hidden, false, 'the link is available before any test');
+      assert.equal(ui.get('#settings-email-test [data-email-test="refresh"]'), null);
+      assert.equal(ui.get('#settings-email-test [data-email-test="retire"]'), null);
+      const organizationId = settingsScope === 'system' ? 1 : 2;
+      const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+      const key = `asap.staff.email-test.${encodeURIComponent(actorKey(ui.readStaff()))}.${organizationId}`;
+      ui.dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, pending: true, id: null }));
+      ui.setApi(({ pathname, parsed }) => {
+        if (pathname.endsWith('/email-operations/test')) {
+          assert.equal(parsed.searchParams.get('operationId'), operationId);
+          assert.equal(parsed.searchParams.get('organizationId'), String(organizationId));
+          return response(200, { code: 'ok', data: { id: '9007199254740993', organizationId,
+            status: 'failed', lastErrorCode: 'provider_timeout', deliveryMode: 'postmark' } });
+        }
+      });
+      if (settingsScope !== 'system') {
+        const override = ui.get('[data-setting-key="fromName"] .settings-override-toggle');
+        override.checked = true; override.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+      }
+      ui.edit('#email-from-name', 'Unsaved sender');
+      link.click(); await settle();
+      assert.equal(ui.get('#settings-view').hidden, false, 'declining departure preserves Settings');
+      assert.equal(ui.get('#email-from-name').value, 'Unsaved sender');
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+      ui.allowDiscard(); link.click();
+      await until(() => ui.get('#operations-view').hidden === false &&
+        ui.dom.window.document.activeElement === ui.get('#email-operations-table'), 'scoped email log receives focus');
+      assert.equal(ui.get('#operations-scope').value, settingsScope === 'system' ? 'all' : '2');
+      assert.equal(JSON.parse(ui.dom.window.sessionStorage.getItem(key)).id, '9007199254740993');
+      assert.equal(ui.get('#send-test-email').disabled, true, 'an unknown original outcome still blocks a new test after navigation');
+      const list = ui.calls.filter(call => new URL(call.url, 'https://localhost').pathname.endsWith('/email-operations')).at(-1);
+      assert.equal(new URL(list.url, 'https://localhost').searchParams.get('organizationId'), settingsScope === 'system' ? null : '2');
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0, 'navigation never silently saves or resends');
+    }));
+}
 test('committed title status synchronizes detail queue and accepted URL', () => fixture(`?stage=suggestion&scope=2&request=${id}&marker=keep#anchor`, async ui => {
   await until(() => ui.get('#request-dialog').open, 'detail open');
   ui.setOperation(() => response(200, { committed: true,

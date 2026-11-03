@@ -266,7 +266,7 @@ export function createSettingsController({
   refreshCurrentStaff = async () => true,
   onRefreshed = () => {},
   onUnconfirmed = () => {},
-  onEmailTestOperations = () => {}
+  onEmailTestOperations = () => {}, onEmailTestSubmitted = () => {}
 }) {
   const dom = {
     contextSummary: root.querySelector('#settings-context-summary'),
@@ -354,7 +354,7 @@ export function createSettingsController({
       organizationId: organizationId(), active: state.visible && state.activePanel === 'smtp' && !disposed,
       ready: Boolean(state.data && String(state.data.orgId) === String(state.scope) && !state.awaitingReload && !state.loading),
       dirty: isDirty(), blocked: Boolean(state.pendingMutation || state.saving || state.outcomeUncertain || state.awaitingReload) }),
-    onOperations: onEmailTestOperations });
+    onOperations: onEmailTestOperations, onSubmitted: onEmailTestSubmitted });
   let settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
   let staffCreateDraft = null;
   let polarisTest = null;

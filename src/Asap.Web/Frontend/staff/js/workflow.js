@@ -161,8 +161,13 @@ export function createWorkflowApp() {
     prepareDeparture: navigation.prepareDeparture,
     onPanelChange: navigation.settingsPanelChanged,
     onScopeChange: scope => { navigation.settingsScopeChanged(scope); void shell.refreshReadiness(); },
-    onEmailTestOperations: async organizationId => {
-      if (await navigation.switchView('operations')) await operations.openEmailScope(organizationId);
+    onEmailTestOperations: async (organizationId, intent) => {
+      const owner = sessionIdentity.preferences();
+      if (intent.ownerKey !== sessionIdentity.actor()?.key) return;
+      if (await navigation.switchView('operations') && sessionIdentity.isCurrent(owner)) await operations.openEmailScope(organizationId);
+    },
+    onEmailTestSubmitted: owner => {
+      if (owner.ownerKey === sessionIdentity.actor()?.key) return operations.refresh({ silent: true, reconcileTest: false });
     },
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner),
     onConfigurationCommitted: (owner, scope) => {

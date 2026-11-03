@@ -4,7 +4,7 @@ import { element, commandButton, text, dateTime } from './ui.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
 import { actorKey } from './session-identity.js';
 import { byDisplayLabel } from './display-order.js';
-import { createEmailTestController, emailTestStatusMessage } from './email-test.js';
+import { createEmailTestController, emailTestStatusMessage, emailOperationStatusLabel } from './email-test.js';
 
 export function createOperationsController({ root, sessionIdentity, announce, onScopeChange,
   onReceipt, clearReceipt, request = authorizedJson }) {
@@ -27,6 +27,8 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     outcome: root.querySelector('#operations-outcome'),
   };
   const emailTest = createEmailTestController({ root: root.querySelector('#operations-email-test'), request,
+    onSubmitted: () => loadOperations({ silent: true }),
+    focusRecovery: () => (dom.refreshOperations.disabled ? dom.emailOperationsTable : dom.refreshOperations).focus(),
     context: () => ({ ownerKey: sessionIdentity.actor()?.key, version: sessionIdentity.preferences()?.version,
       organizationId: state.operationsScope === 'all' ? 1 : Number(state.operationsScope),
       active: active && !disposed, ready: Boolean(sessionIdentity.actor()), dirty: false,
@@ -54,7 +56,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       dom.operationsScope.value = reconciledScope;
       const changed = state.operationsScope !== reconciledScope;
       state.operationsScope = reconciledScope;
-      if (changed) onScopeChange();
+      if (changed) { clearOperations(); onScopeChange(); }
     }
 
   function setStaff(staff) {
@@ -64,6 +66,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     }
     staffOwner = staff;
     reads.begin('operations').abort();
+    clearOperations();
     state.operationMutation = null;
     state.operationsScope = staff?.role === 'super_admin' ? 'all' : String(staff?.organizationId || 'all');
     dom.operationsScopeField.hidden = staff?.role !== 'super_admin';
@@ -88,6 +91,12 @@ export function createOperationsController({ root, sessionIdentity, announce, on
 
   function operationsQuery(scope = state.operationsScope) {
     return scope && scope !== 'all' ? `?organizationId=${encodeURIComponent(scope)}` : '';
+  }
+
+  function clearOperations() {
+    projection = null;
+    dom.queueProgressTable.replaceChildren(element('p', { text: 'Queue progress has not been loaded for this context.' }));
+    dom.emailOperationsTable.replaceChildren(element('p', { text: 'Email operations have not been loaded for this context.' }));
   }
 
   function captureOperation(value) {
@@ -271,6 +280,12 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   function renderOperations(data) {
     const rendered = { owner: sessionIdentity.preferences(), scope: state.operationsScope };
     projection = rendered;
+    const listedEmails = data.email?.items || [];
+    // A failed-first bounded log can omit the new test. The exact authorized
+    // read adds that current reference without inventing retry proof or mixing
+    // a newer status with an existing list row's certified retry snapshot.
+    const emailItems = data.test && !listedEmails.some(row => row.id === data.test.id)
+      ? [{ ...data.test, canRetry: false }, ...listedEmails] : listedEmails;
     renderOperationsTable(
       dom.queueProgressTable,
       [
@@ -295,7 +310,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       [
         { label: 'Reference', render: row => element('span', { text: String(row.id) }) },
         { label: 'Created', render: row => element('time', { text: dateTime(row.createdUtc), datetime: row.createdUtc }) },
-        { label: 'Status', key: 'status' },
+        { label: 'Status', render: row => element('span', { text: emailOperationStatusLabel(row) }) },
         { label: 'Type', key: 'deliveryClass' },
         { label: 'Error', render: row => element('span', { text: row.lastErrorCode || row.suppressionReason || 'None' }) },
         { label: 'Action', render: row => {
@@ -305,7 +320,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
           }, 'secondary-button');
         } }
       ],
-      data.email?.items || [],
+      emailItems,
       'No email operations have been recorded for this scope.'
     );
   }
@@ -321,14 +336,22 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     const clearLoading = !options.silent ? announce('Loading workflow operations...') : null;
     try {
       const query = operationsQuery(requestedScope);
-      const [queue, email, organizationResult] = await Promise.all([
-        request(`/api/asap/staff/workflow/queues${query}`, { signal: load.signal }),
-        request(`/api/asap/staff/email-operations${query}`, { signal: load.signal }),
-        sessionIdentity.preferences().role === 'super_admin'
-          ? request('/api/asap/staff/organizations', { signal: load.signal })
-          : Promise.resolve(null)
+      // Reconcile the exact remembered test even when an unrelated table read
+      // fails. Both read paths remain owned by this scope/session/load.
+      const [tables, test] = await Promise.allSettled([
+        Promise.all([
+          request(`/api/asap/staff/workflow/queues${query}`, { signal: load.signal }),
+          request(`/api/asap/staff/email-operations${query}`, { signal: load.signal }),
+          sessionIdentity.preferences().role === 'super_admin'
+            ? request('/api/asap/staff/organizations', { signal: load.signal })
+            : Promise.resolve(null)
+        ]),
+        options.reconcileTest === false ? Promise.resolve() : emailTest.refresh({ signal: load.signal })
       ]);
       if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== state.operationsScope) return false;
+      if (tables.status === 'rejected') throw tables.reason;
+      if (test.status === 'rejected') throw test.reason;
+      const [queue, email, organizationResult] = tables.value;
       const organizations = organizationResult?.data ?? organizationResult;
       if (sessionIdentity.preferences().role === 'super_admin' && Array.isArray(organizations)) {
         const activeLibraries = organizations
@@ -337,7 +360,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         setLibraries(activeLibraries);
         if (requestedScope !== state.operationsScope) return loadOperations(options);
       }
-      renderOperations({ queue, email });
+      renderOperations({ queue, email, test: test.value?.() });
       // Visible scope is only presentation. Retry requires reads under the
       // retained command's exact authority, including a currently active library.
       if (retained?.uncertain && state.operationMutation === retained && sessionIdentity.isCurrent(retained.owner) &&
@@ -447,6 +470,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   listen(dom.operationsScope, 'change', () => {
     if (state.operationMutation) { dom.operationsScope.value = state.operationsScope; return; }
     state.operationsScope = dom.operationsScope.value;
+    clearOperations();
     emailTest.sync();
     onScopeChange();
     void loadOperations();
@@ -464,6 +488,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       const scope = organizationId === 1 ? 'all' : String(organizationId);
       if (owner.role === 'super_admin' ? scope !== 'all' && !libraries.some(item => String(item.id) === scope)
         : organizationId !== owner.organizationId) return false;
+      if (state.operationsScope !== scope) clearOperations();
       state.operationsScope = scope; dom.operationsScope.value = scope; emailTest.sync(); onScopeChange();
       if (!await loadOperations({ silent: true })) return false;
       dom.emailOperationsTable.focus();
@@ -480,8 +505,8 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       updateOperationControls();
     },
     activate() { active = true; emailTest.sync(); },
-    deactivate() { active = false; emailTest.invalidate(); projection = null; reads.begin('operations').abort(); },
-    invalidate() { emailTest.invalidate(); projection = null; reads.begin('operations').abort(); },
+    deactivate() { active = false; emailTest.invalidate(); clearOperations(); reads.begin('operations').abort(); },
+    invalidate() { emailTest.invalidate(); clearOperations(); reads.begin('operations').abort(); },
     refresh: loadOperations, run: runOperation,
     inspectDeparture: () => ({ owner: active ? state.operationsScope : null, blocked: disposed, dirty: false }),
     signedOut() { active = false; setStaff(null); },

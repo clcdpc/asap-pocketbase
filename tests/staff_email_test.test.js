@@ -8,6 +8,26 @@ const saved = organizationId => ({ code: 'ok', data: { organizationId, scopeName
   deliveryMode: 'postmark', state: 'ready', blockingReason: null, configurationVersion: fingerprint } });
 const accepted = { code: 'queued', data: { id: '9007199254740993', version: 'outbox-v1', dispatchDelayed: false } };
 const notFound = () => Object.assign(new Error('No recorded test'), { status: 404, response: { code: 'not_found' } });
+function controlledTimers(window) {
+  let now = 0, sequence = 0;
+  const timers = new Map();
+  window.setTimeout = (callback, delay = 0) => {
+    const id = ++sequence;
+    timers.set(id, { callback, at: now + delay });
+    return id;
+  };
+  window.clearTimeout = id => timers.delete(id);
+  return { advance(milliseconds) {
+    const target = now + milliseconds;
+    while (true) {
+      const next = [...timers].filter(([, timer]) => timer.at <= target).sort((left, right) => left[1].at - right[1].at)[0];
+      if (!next) break;
+      const [id, timer] = next;
+      now = timer.at; timers.delete(id); timer.callback();
+    }
+    now = target;
+  } };
+}
 const recoveryFixture = journey => fixture(async environment => {
   const originalNow = Date.now;
   let now = originalNow();
@@ -17,8 +37,9 @@ const recoveryFixture = journey => fixture(async environment => {
 });
 
 (async () => {
-  await fixture(async ({ load, get }) => {
+  await fixture(async ({ load, get, dom }) => {
     const { createEmailTestController, emailTestStatusMessage } = await load('email-test');
+    const clock = controlledTimers(dom.window);
     let value = { ownerKey: 'actor-a', organizationId: 2, active: true, ready: true, dirty: false, blocked: false };
     const calls = [], posts = [], pendingPost = deferred();
     const root = get('#settings-email-test');
@@ -30,7 +51,7 @@ const recoveryFixture = journey => fixture(async environment => {
       if (init.method === 'POST') { posts.push({ path, init }); return pendingPost.promise; }
       if (path.includes('/test-context')) return saved(Number(new URL(path, 'https://localhost').searchParams.get('organizationId')));
       return { code: 'ok', data: status };
-    }, pollInterval: 5, observationLimit: 20 });
+    } });
     assert.equal(button.disabled, true);
     controller.sync(); await settle();
     assert.equal(button.disabled, false);
@@ -50,12 +71,19 @@ const recoveryFixture = journey => fixture(async environment => {
     assert.equal(new URL(posts[0].path, 'https://localhost').searchParams.get('organizationId'), '2');
     assert.match(result.textContent, /Requesting test email/);
     pendingPost.resolve(accepted); await sending; await settle();
-    assert.match(result.textContent, /email service accepted/);
+    assert.match(result.textContent, /queued for processing.*Email operations/);
     assert.doesNotMatch(result.textContent, /delivered to|received in/i);
     assert.match(result.textContent, /9007199254740993/);
     assert.equal(posts.length, 1);
     assert.equal(button.disabled, false);
     assert.ok(calls.some(call => call.path === '/api/asap/staff/email-operations/9007199254740993?organizationId=2'));
+    assert.equal(root.querySelector('[data-email-test="refresh"]'), null);
+    assert.equal(root.querySelector('[data-email-test="retire"]'), null, 'Settings routes detailed recovery to Operations');
+    clock.advance(5999);
+    assert.match(result.textContent, /queued for processing.*Email operations/, 'the acknowledgement remains until its explicit expiry');
+    clock.advance(1);
+    assert.equal(result.hidden, true, 'the routine submission acknowledgement is brief');
+    assert.equal(result.textContent, '');
     status = { ...status, deliveryMode: 'file' };
     await controller.refresh();
     assert.match(result.textContent, /local test message.*No email was sent/);
@@ -155,12 +183,13 @@ const recoveryFixture = journey => fixture(async environment => {
       restored.dispose();
     });
   }
-  await fixture(async ({ load, get }) => {
+  await fixture(async ({ load, get, dom }) => {
     const { createEmailTestController } = await load('email-test');
     let value = { ownerKey: 'bounded-observer', organizationId: 2, active: true, ready: true, dirty: false, blocked: false };
+    const clock = controlledTimers(dom.window);
     const root = get('#settings-email-test'), paused = deferred();
     let posts = 0, observations = 0;
-    const controller = createEmailTestController({ root, context: () => value, observationLimit: 0, pollInterval: 5,
+    const controller = createEmailTestController({ root, context: () => value, observationLimit: 0,
       request: async (path, init = {}) => {
         if (path.includes('/test-context')) return saved(2);
         if (init.method === 'POST') { posts += 1; return accepted; }
@@ -170,9 +199,10 @@ const recoveryFixture = journey => fixture(async environment => {
           status: observations === 1 ? 'pending' : 'sent', deliveryMode: 'postmark' } };
       } });
     controller.sync(); await settle(); await controller.send(); await settle();
-    assert.match(root.querySelector('[data-email-test="result"]').textContent, /Still waiting.*Reference/);
+    clock.advance(6000);
+    assert.match(root.querySelector('[data-email-test="result"]').textContent, /queued for processing.*View email operations.*Reference/);
     assert.equal(root.querySelector('[data-email-test="send"]').disabled, true);
-    await new Promise(resolve => setTimeout(resolve, 20));
+    clock.advance(60000); await settle();
     assert.equal(observations, 1, 'the automatic observer stops at its deadline without requesting another message');
     const manual = controller.refresh();
     value = { ...value, active: false }; controller.sync();
@@ -181,8 +211,8 @@ const recoveryFixture = journey => fixture(async environment => {
     await manual;
     assert.doesNotMatch(root.textContent, /email service accepted/, 'panel exit retires an in-flight status reply');
     value = { ...value, active: true }; controller.sync(); await settle();
-    assert.match(root.textContent, /email service accepted/);
-    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(root.querySelector('[data-email-test="result"]').hidden, true, 'restored routine success belongs in the log');
+    clock.advance(60000); await settle();
     assert.equal(observations, 3, 'a terminal result stops automatic observation');
     assert.equal(posts, 1, 'manual status refresh and panel restoration never POST the accepted intent again');
     controller.dispose();
@@ -190,7 +220,7 @@ const recoveryFixture = journey => fixture(async environment => {
   await recoveryFixture(async ({ load, get, dom, advance }) => {
     const { createEmailTestController } = await load('email-test');
     const value = { ownerKey: 'never-recorded', organizationId: 2, active: true, ready: true, dirty: false, blocked: false };
-    const root = get('#settings-email-test'), posts = [], lookups = [];
+    const root = get('#operations-email-test'), posts = [], lookups = [];
     const options = { root, context: () => value, request: async (path, init = {}) => {
       if (path.includes('/test-context')) return saved(2);
       if (init.method === 'POST') {
@@ -286,7 +316,7 @@ const recoveryFixture = journey => fixture(async environment => {
     await recoveryFixture(async ({ load, get, advance }) => {
       const { createEmailTestController } = await load('email-test');
       const value = { ownerKey: 'no-proof', organizationId: 2, active: true, ready: true, dirty: false, blocked: false };
-      const root = get('#settings-email-test');
+      const root = get('#operations-email-test');
       let fail = false, posts = 0;
       const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
         if (path.includes('/test-context')) return saved(2);
@@ -312,7 +342,7 @@ const recoveryFixture = journey => fixture(async environment => {
     await recoveryFixture(async ({ load, get, dom, advance }) => {
       const { createEmailTestController } = await load('email-test');
       let value = { ownerKey: 'recovery-owner', organizationId: 2, active: true, ready: true, dirty: false, blocked: false };
-      const root = get('#settings-email-test'), finalRead = deferred(), posts = [];
+      const root = get('#operations-email-test'), finalRead = deferred(), posts = [];
       let pause = false;
       const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
         if (path.includes('/test-context')) return saved(value.organizationId);
@@ -349,7 +379,7 @@ const recoveryFixture = journey => fixture(async environment => {
   await recoveryFixture(async ({ load, get, dom, advance }) => {
     const { createEmailTestController } = await load('email-test');
     const value = { ownerKey: 'stale-status', organizationId: 2, active: true, ready: true, dirty: false, blocked: false };
-    const root = get('#settings-email-test'), oldRead = deferred();
+    const root = get('#operations-email-test'), oldRead = deferred();
     let posts = 0, reads = 0;
     const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
       if (path.includes('/test-context')) return saved(2);
@@ -375,7 +405,7 @@ const recoveryFixture = journey => fixture(async environment => {
   await recoveryFixture(async ({ load, get, dom, advance }) => {
     const { createEmailTestController } = await load('email-test');
     let value = { ownerKey: 'late-ack', organizationId: 2, active: true, ready: true, dirty: false, blocked: false };
-    const root = get('#settings-email-test'), oldPost = deferred();
+    const root = get('#operations-email-test'), oldPost = deferred();
     let posts = 0;
     const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
       if (path.includes('/test-context')) return saved(value.organizationId);
@@ -405,7 +435,7 @@ const recoveryFixture = journey => fixture(async environment => {
   await recoveryFixture(async ({ load, get, dom, advance }) => {
     const { createEmailTestController } = await load('email-test');
     const value = { ownerKey: 'retain-failure', organizationId: 2, active: true, ready: true, dirty: false, blocked: false };
-    const root = get('#settings-email-test');
+    const root = get('#operations-email-test');
     let posts = 0;
     const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
       if (path.includes('/test-context')) return saved(2);
@@ -469,7 +499,7 @@ const recoveryFixture = journey => fixture(async environment => {
     await recoveryFixture(async ({ load, get, dom, advance }) => {
       const { createEmailTestController } = await load('email-test');
       const value = { ownerKey: 'lost-storage', organizationId: 2, active: true, ready: true, dirty: false, blocked: false };
-      const root = get('#settings-email-test');
+      const root = get('#operations-email-test');
       let posts = 0;
       const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
         if (path.includes('/test-context')) return saved(2);
@@ -488,6 +518,152 @@ const recoveryFixture = journey => fixture(async environment => {
       assert.equal(posts, 1, 'lost or malformed storage cannot resolve an in-memory uncertain intent');
       dom.window.sessionStorage.setItem(key, original); await controller.refresh();
       assert.equal(root.querySelector('[data-email-test="retire"]').hidden, true, 'restoring storage requires fresh absence evidence');
+      controller.dispose();
+    });
+  }
+  for (const storageUnavailable of [false, true]) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createEmailTestController } = await load('email-test');
+      const value = { ownerKey: 'navigation-recovery', organizationId: 2, active: true, ready: true };
+      const root = get('#settings-email-test'), key = 'asap.staff.email-test.navigation-recovery.2';
+      const navigations = [];
+      const controller = createEmailTestController({ root, context: () => value,
+        onOperations: (...args) => navigations.push(args), request: async (path, init = {}) => {
+          if (path.includes('/test-context')) return saved(2);
+          if (init.method === 'POST') throw new Error('Unknown acknowledgement');
+          throw notFound();
+        } });
+      controller.sync(); await settle();
+      assert.equal(root.querySelector('[data-email-test="operations"]').hidden, false);
+      await controller.send();
+      const original = JSON.parse(dom.window.sessionStorage.getItem(key));
+      dom.window.sessionStorage.removeItem(key);
+      if (storageUnavailable) dom.window.Storage.prototype.setItem = () => { throw new Error('Storage unavailable'); };
+      root.querySelector('[data-email-test="operations"]').click(); await settle();
+      assert.equal(navigations.length, storageUnavailable ? 0 : 1);
+      assert.equal(root.querySelector('[data-email-test="send"]').disabled, true);
+      if (storageUnavailable) {
+        assert.match(root.querySelector('[data-email-test="result"]').textContent, /Keep this page open and restore session storage/);
+      } else {
+        assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).operationId, original.operationId,
+          'navigation preserves the original in-memory identity after storage loss');
+        assert.equal(navigations[0][0], 2);
+        assert.equal(navigations[0][1].ownerKey, value.ownerKey);
+      }
+      controller.dispose();
+    });
+  }
+  for (const panel of ['settings', 'operations']) {
+    for (const reason of ['recipient_domain_not_allowed', 'mail_not_configured']) {
+      for (const order of ['context-first', 'status-first']) {
+        await fixture(async ({ load, get, dom }) => {
+          const { createEmailTestController } = await load('email-test');
+          const root = get(`#${panel}-email-test`), contextRead = deferred(), statusRead = deferred();
+          const value = { ownerKey: 'blocked-history', organizationId: 2, active: true, ready: true };
+          const key = 'asap.staff.email-test.blocked-history.2';
+          const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+          dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id: accepted.data.id, status: 'sent', pending: false }));
+          let initial = true, posts = 0, status = 'sent';
+          const response = () => ({ code: 'ok', data: { id: accepted.data.id, organizationId: 2, status,
+            lastErrorCode: status === 'failed' ? 'provider_timeout' : null, deliveryMode: 'postmark' } });
+          const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
+            if (init.method === 'POST') posts += 1;
+            if (path.includes('/test-context')) return contextRead.promise;
+            if (initial) { initial = false; return statusRead.promise; }
+            return response();
+          } });
+          controller.sync();
+          const blocked = { ...saved(2), data: { ...saved(2).data, state: 'blocked', blockingReason: reason } };
+          if (order === 'context-first') { contextRead.resolve(blocked); await settle(); statusRead.resolve(response()); }
+          else { statusRead.resolve(response()); await settle(); contextRead.resolve(blocked); }
+          await settle();
+          const result = root.querySelector('[data-email-test="result"]');
+          const guidance = reason === 'mail_not_configured' ? /Configure the System Postmark credential/ : /allowed-recipient policy/;
+          assert.equal(result.hidden, false, `${panel}/${order}: completed history must not hide saved readiness guidance`);
+          assert.match(result.textContent, guidance);
+          assert.equal(root.querySelector('[data-email-test="send"]').disabled, true);
+          assert.match(root.querySelector('[data-email-test="context"]').textContent, /Live email via Postmark/);
+          status = 'failed'; await controller.refresh();
+          assert.match(result.textContent, /Acceptance is unconfirmed/);
+          assert.match(result.textContent, guidance, 'readiness and unresolved outcome guidance remain independently visible');
+          const stored = JSON.parse(dom.window.sessionStorage.getItem(key));
+          assert.equal(stored.operationId, operationId);
+          assert.equal(stored.id, accepted.data.id);
+          assert.equal(stored.pending, true);
+          await controller.send(); assert.equal(posts, 0, 'blocked configuration never weakens the original intent guard');
+          controller.dispose();
+        });
+      }
+    }
+    for (const outcome of [
+      { status: 'pending', pending: true, message: /queued for processing/ },
+      { status: 'sent', pending: false, message: /^$/ },
+      { status: 'suppressed', suppressionReason: 'test_configuration_changed', pending: false, message: /not sent/ },
+      { status: 'failed', lastErrorCode: 'recipient_invalid', pending: false, message: /could not complete/ },
+      { status: 'failed', lastErrorCode: 'provider_timeout', pending: true, message: /Acceptance is unconfirmed/ }
+    ]) {
+      await fixture(async ({ load, get, dom }) => {
+        const { createEmailTestController } = await load('email-test');
+        const clock = controlledTimers(dom.window);
+        const root = get(`#${panel}-email-test`), submissions = [];
+        const value = { ownerKey: `outcome-${panel}`, organizationId: 2, active: true, ready: true };
+        let posts = 0;
+        const controller = createEmailTestController({ root, context: () => value,
+          observationLimit: 0, onSubmitted: owner => submissions.push(owner),
+          request: async (path, init = {}) => {
+            if (path.includes('/test-context')) return saved(2);
+            if (init.method === 'POST') { posts += 1; return accepted; }
+            return { code: 'ok', data: { id: accepted.data.id, organizationId: 2, deliveryMode: 'postmark', ...outcome } };
+          } });
+        controller.sync(); await settle(); await controller.send();
+        await settle(); clock.advance(6000);
+        assert.match(root.querySelector('[data-email-test="result"]').textContent, outcome.message);
+        assert.equal(root.querySelector('[data-email-test="result"]').hidden, outcome.status === 'sent');
+        assert.equal(root.querySelector('[data-email-test="send"]').disabled, outcome.pending);
+        assert.equal(submissions.length, 1, 'every accepted submission requests a log refresh');
+        assert.equal(submissions[0].ownerKey, value.ownerKey);
+        await controller.refresh();
+        assert.equal(posts, 1, 'status refresh never sends a second test');
+        assert.equal(JSON.parse(dom.window.sessionStorage.getItem(`asap.staff.email-test.${value.ownerKey}.2`)).pending, outcome.pending);
+        controller.dispose();
+      });
+    }
+  }
+  for (const change of ['replacement', 'stored-status', 'new-send', 'scope', 'account', 'deactivate', 'cancel']) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createEmailTestController } = await load('email-test');
+      controlledTimers(dom.window);
+      let value = { ownerKey: 'observation-owner', organizationId: 2, active: true, ready: true };
+      const key = 'asap.staff.email-test.observation-owner.2';
+      const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+      const root = get('#operations-email-test');
+      let id = accepted.data.id, posts = 0;
+      dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id, pending: false, status: 'sent' }));
+      const controller = createEmailTestController({ root, context: () => value, request: async (path, init = {}) => {
+        if (path.includes('/test-context')) return saved(value.organizationId);
+        if (init.method === 'POST') { posts += 1; id = '9007199254740995'; return { ...accepted, data: { ...accepted.data, id } }; }
+        return { code: 'ok', data: { id, organizationId: value.organizationId, status: 'sent', deliveryMode: 'postmark' } };
+      } });
+      controller.sync(); await settle();
+      const cancellation = new dom.window.AbortController();
+      const current = await controller.refresh({ signal: cancellation.signal });
+      assert.equal(current().id, accepted.data.id);
+      if (change === 'replacement') {
+        dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId: '2d52da70-c805-4e99-ac52-b2f30cab4120', id: '9007199254740995', pending: true }));
+      } else if (change === 'stored-status') {
+        dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id, pending: true, status: 'failed', lastErrorCode: 'provider_timeout' }));
+      } else if (change === 'new-send') {
+        await controller.send(); await settle();
+        assert.notEqual(JSON.parse(dom.window.sessionStorage.getItem(key)).operationId, operationId);
+      } else if (change === 'scope') {
+        value = { ...value, organizationId: 3 }; controller.sync(); await settle();
+      } else if (change === 'account') {
+        value = { ...value, ownerKey: 'replacement-owner' }; controller.sync(); await settle();
+      } else if (change === 'deactivate') {
+        value = { ...value, active: false }; controller.sync();
+      } else cancellation.abort();
+      assert.equal(current(), null, `${change}: an old accessor cannot return a stale or replacement operation`);
+      assert.equal(posts, change === 'new-send' ? 1 : 0);
       controller.dispose();
     });
   }

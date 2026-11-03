@@ -21,7 +21,8 @@ public sealed record EmailOperationItem(
     DateTime CreatedUtc,
     DateTime? SentUtc,
     string Version,
-    bool CanRetry);
+    bool CanRetry,
+    string DeliveryMode);
 
 public sealed record EmailOperationResult(string Code, object? Data = null);
 
@@ -370,6 +371,7 @@ public sealed class EmailOperationsService(
                 item.SentUtc,
                 item.RowVersion,
                 item.ProviderMessageId,
+                item.AttemptDeliveryMode,
                 item.SendingStartedUtc,
                 item.LeaseId,
                 item.LeaseExpiresUtc,
@@ -384,7 +386,9 @@ public sealed class EmailOperationsService(
             item.SentUtc.HasValue ? DateTime.SpecifyKind(item.SentUtc.Value, DateTimeKind.Utc) : null,
             StaffVersion.Encode(item.RowVersion),
             IsCertifiedForRetry(item.Status, item.LastErrorCode, item.ProviderMessageId, item.SendingStartedUtc,
-                item.LeaseId, item.LeaseExpiresUtc, item.NextAttemptUtc)))
+                item.LeaseId, item.LeaseExpiresUtc, item.NextAttemptUtc),
+            item.AttemptDeliveryMode ??
+                (item.ProviderMessageId?.StartsWith("file:", StringComparison.Ordinal) == true ? "file" : "unknown")))
             .ToArray();
     }
 

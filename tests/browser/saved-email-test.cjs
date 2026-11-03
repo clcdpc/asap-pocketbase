@@ -15,7 +15,7 @@ async function main() {
     ...(process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH
       ? { executablePath: process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH } : {}) });
   const axeSource = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
-  const report = { externalRequests: 0, pageErrors: [], posts: [], states: [] };
+  const report = { externalRequests: 0, pageErrors: [], posts: [], lookups: [], states: [] };
   const contexts = [];
   async function newPage(width, stored = {}) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, extraHTTPHeaders: {
@@ -34,6 +34,9 @@ async function main() {
     page.on('request', request => {
       if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/email-operations/test') {
         report.posts.push({ url: request.url(), body: request.postDataJSON() });
+      }
+      if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/asap/staff/email-operations/test') {
+        report.lookups.push(request.url());
       }
     });
     return page;
@@ -57,16 +60,24 @@ async function main() {
     const startTime = Date.now();
     await page.clock.setFixedTime(startTime);
     let abandonNext = true;
-    await page.route('**/api/asap/staff/email-operations/test?*', route => {
+    await page.route('**/api/asap/staff/email-operations/test?*', async route => {
       if (route.request().method() === 'POST' && abandonNext) {
         abandonNext = false;
         return route.abort('failed'); // The first intent never reaches Kestrel/SQL.
+      }
+      if (route.request().method() === 'POST') {
+        const result = await route.fetch();
+        assert.equal(result.status(), 202, 'the second request commits before its acknowledgement is lost');
+        return route.abort('failed');
       }
       return route.continue();
     });
     await page.goto(`${origin}/staff/?stage=settings&settingsScope=${scope}#settings-smtp`, { waitUntil: 'networkidle' });
     const setup = page.locator('#settings-email-test');
     await setup.waitFor({ state: 'visible' });
+    assert.equal(await setup.locator('[data-email-test="refresh"]').count(), 0);
+    assert.equal(await setup.locator('[data-email-test="retire"]').count(), 0);
+    assert.equal(await setup.locator('[data-email-test="operations"]').isVisible(), true, 'navigation is available before a send');
     await setup.locator('[data-email-test="send"]:not([disabled])').waitFor().catch(async error => {
       await page.screenshot({ path: path.join(artifacts, 'email-test-unavailable.png'), fullPage: true });
       throw new Error(`${error.message}\nSaved email context: ${await setup.textContent()}`);
@@ -81,6 +92,9 @@ async function main() {
     assert.match(await setup.locator('[data-email-test="result"]').textContent(), /Save or discard/);
     assert.match(await setup.locator('[data-email-test="context"]').textContent(), /Saved library sender/,
       'draft sender controls never replace the saved test context');
+    await decideConfirmation(page, () => setup.locator('[data-email-test="operations"]').press('Enter'), dialog => dialog.dismiss());
+    assert.equal(await page.locator('#settings-view').isVisible(), true);
+    assert.equal(await page.locator('#email-from-name').inputValue(), 'Unsaved test sender', 'declined navigation preserves the draft');
     await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
     await setup.locator('[data-email-test="send"]:not([disabled])').waitFor();
     assert.equal(report.posts.length, 0, 'saved-context checks and discard never send');
@@ -90,35 +104,42 @@ async function main() {
     await setup.locator('[data-email-test="result"]').filter({ hasText: 'outcome is unconfirmed' }).waitFor();
     const abandoned = new URL(report.posts[0].url).searchParams.get('operationId');
     assert.equal(await setup.locator('[data-email-test="send"]').isDisabled(), true);
-    await setup.locator('[data-email-test="refresh"]').click();
-    await setup.locator('[data-email-test="result"]').filter({ hasText: `No server record was found for request ${abandoned}` }).waitFor();
-    assert.equal(await setup.locator('[data-email-test="retire"]').isHidden(), true);
+    assert.match(await setup.locator('[data-email-test="result"]').textContent(), /View email operations/);
     await page.reload({ waitUntil: 'networkidle' });
-    await setup.locator('[data-email-test="result"]').filter({ hasText: `No server record was found for request ${abandoned}` }).waitFor();
+    await setup.locator('[data-email-test="result"]').filter({ hasText: `Reference ${abandoned}.` }).waitFor();
     assert.equal(report.posts.length, 1, 'controller recreation only reconciles the original absent intent');
+    await setup.locator('[data-email-test="operations"]').press('Enter');
+    await page.locator('#operations-view').waitFor({ state: 'visible' });
+    const operations = page.locator('#operations-email-test');
+    const emailOperationsTable = page.locator('#email-operations-table');
+    await operations.locator('[data-email-test="result"]').filter({ hasText: `No server record was found for request ${abandoned}` }).waitFor();
+    await page.waitForFunction(() => document.activeElement === document.getElementById('email-operations-table'));
+    assert.equal(await operations.locator('[data-email-test="refresh"]').count(), 0);
+    assert.equal(await operations.locator('[data-email-test="operations"]').count(), 0,
+      'Operations does not show a redundant link to its own Email operations log');
+    assert.equal(await operations.locator('[data-email-test="retire"]').isHidden(), true);
     await page.clock.setFixedTime(startTime + 60001);
-    await setup.locator('[data-email-test="refresh"]').click();
-    await setup.locator('[data-email-test="retire"]').waitFor({ state: 'visible' });
-    await setup.locator('[data-email-test="retire"]').focus();
-    await decideConfirmation(page, () => setup.locator('[data-email-test="retire"]').press('Enter'), dialog => dialog.accept());
-    await setup.locator('[data-email-test="result"]').filter({ hasText: 'Retired the unrecorded client request' }).waitFor();
+    await page.locator('#refresh-operations').click();
+    await operations.locator('[data-email-test="retire"]').waitFor({ state: 'visible' });
+    await operations.locator('[data-email-test="retire"]').focus();
+    await decideConfirmation(page, () => operations.locator('[data-email-test="retire"]').press('Enter'), dialog => dialog.accept());
+    await operations.locator('[data-email-test="result"]').filter({ hasText: 'Retired the unrecorded client request' }).waitFor();
     assert.equal(report.posts.length, 1, 'explicit retirement makes only a final real status lookup');
-    assert.equal(await setup.locator('[data-email-test="send"]').evaluate(node => node === document.activeElement), true,
+    assert.equal(await operations.locator('[data-email-test="send"]').evaluate(node => node === document.activeElement), true,
       'retirement restores useful keyboard focus');
-    await setup.locator('[data-email-test="history"] summary').click();
-    assert.match(await setup.locator('[data-email-test="history"]').textContent(), new RegExp(abandoned));
-    await scan(page, 'settings-email-retired-desktop');
+    await operations.locator('[data-email-test="history"] summary').click();
+    assert.match(await operations.locator('[data-email-test="history"]').textContent(), new RegExp(abandoned));
+    await scan(page, 'operations-email-retired-desktop');
     await page.setViewportSize({ width: 390, height: 900 });
-    await scan(page, 'settings-email-retired-mobile');
+    await scan(page, 'operations-email-retired-mobile');
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.goto(`${origin}/staff/?stage=settings&settingsScope=${scope}#settings-smtp`, { waitUntil: 'networkidle' });
     await setup.locator('[data-email-test="send"]:not([disabled])').waitFor();
-    assert.match(await setup.locator('[data-email-test="history"]').textContent(), new RegExp(abandoned));
+    assert.equal(await setup.locator('[data-email-test="history"]').count(), 0, 'Settings leaves detailed references in Operations');
     assert.equal(report.posts.length, 1, 'restoring a retired reference never sends');
     report.retiredUnrecordedIntent = abandoned;
     await setup.locator('[data-email-test="send"]').press('Space');
-    await setup.locator('[data-email-test="result"]').filter({ hasText: 'The email service accepted your test message.' })
-      .waitFor({ timeout: 60000 });
+    await setup.locator('[data-email-test="result"]').filter({ hasText: 'outcome is unconfirmed' }).waitFor();
     assert.equal(report.posts.length, 2);
     assert.equal(new URL(report.posts[1].url).searchParams.get('organizationId'), scope);
     assert.match(new URL(report.posts[1].url).searchParams.get('operationId'), /^[0-9a-f-]{36}$/i);
@@ -126,18 +147,27 @@ async function main() {
     assert.equal(report.posts[1].body.intendedDeliveryMode, 'postmark');
     assert.match(report.posts[1].body.configurationVersion, /^[0-9a-f]{64}$/i);
     assert.doesNotMatch(await setup.locator('[data-email-test="result"]').textContent(), /was delivered|was received/i);
-    const reference = (await setup.locator('[data-email-test="result"]').textContent()).match(/Reference (\d+)\./)[1];
-    report.reference = reference;
+    const committedIntent = new URL(report.posts[1].url).searchParams.get('operationId');
+    assert.match(await setup.locator('[data-email-test="result"]').textContent(), new RegExp(committedIntent),
+      'a committed test with a lost acknowledgement keeps the original operation ID');
     await scan(page, 'settings-email-desktop');
     await setup.locator('[data-email-test="operations"]').click();
     await page.locator('#operations-view').waitFor({ state: 'visible' });
     await page.waitForFunction(scope => document.getElementById('operations-scope').value === scope, scope);
-    const operations = page.locator('#operations-email-test');
-    assert.equal(await operations.locator('[data-email-test="operations"]').count(), 0,
-      'Operations does not show a redundant link to its own Email operations log');
-    await operations.locator('[data-email-test="result"]').filter({ hasText: `Reference ${reference}.` }).waitFor();
+    await page.waitForFunction(() => Object.keys(sessionStorage).some(key => {
+      if (!key.startsWith('asap.staff.email-test.') || key.endsWith('.retirement-references')) return false;
+      const record = JSON.parse(sessionStorage.getItem(key)); return record.id && !record.pending && !record.retired;
+    }), null, { timeout: 60000 });
+    const reference = await page.evaluate(operationId => Object.keys(sessionStorage).map(key => {
+      try { return JSON.parse(sessionStorage.getItem(key)); } catch { return null; }
+    }).find(record => record?.operationId === operationId).id, committedIntent);
+    report.reference = reference;
+    assert.ok(report.lookups.some(url => new URL(url).searchParams.get('operationId') === committedIntent &&
+      new URL(url).searchParams.get('organizationId') === scope), 'lost committed acknowledgement is reconciled by its original scoped identity');
+    report.lostAcknowledgementReconciled = true;
+    await page.locator('#refresh-operations').click();
+    await emailOperationsTable.locator('tbody tr').filter({ hasText: reference }).filter({ hasText: 'Provider accepted' }).waitFor();
     assert.equal(report.posts.length, 2, 'the scoped Operations handoff observes the original reference');
-    const emailOperationsTable = page.locator('#email-operations-table');
     assert.equal(await emailOperationsTable.getAttribute('tabindex'), '0', 'the Email operations log remains keyboard reachable');
     await emailOperationsTable.focus();
     assert.equal(await emailOperationsTable.evaluate(node => node === document.activeElement), true,
@@ -149,20 +179,21 @@ async function main() {
     const mobile = await newPage(390, stored);
     await mobile.goto(`${origin}/staff/?stage=settings&settingsScope=${scope}#settings-smtp`, { waitUntil: 'networkidle' });
     const mobileSetup = mobile.locator('#settings-email-test');
-    await mobileSetup.locator('[data-email-test="result"]').filter({ hasText: `Reference ${reference}.` }).waitFor();
-    assert.match(await mobileSetup.textContent(), /email service accepted/);
-    await mobileSetup.locator('[data-email-test="refresh"]').click();
-    await mobileSetup.locator('[data-email-test="result"]').filter({ hasText: `Reference ${reference}.` }).waitFor();
+    await mobileSetup.locator('[data-email-test="send"]:not([disabled])').waitFor();
+    assert.equal(await mobileSetup.locator('[data-email-test="result"]').isHidden(), true, 'routine saved results are shown in the log');
     assert.equal(report.posts.length, 2, 'restoration and manual observation never request another message');
     await scan(mobile, 'settings-email-mobile');
     await mobile.reload({ waitUntil: 'networkidle' });
-    await mobileSetup.locator('[data-email-test="result"]').filter({ hasText: `Reference ${reference}.` }).waitFor();
+    await mobileSetup.locator('[data-email-test="send"]:not([disabled])').waitFor();
     assert.equal(report.posts.length, 2, 'page reload restores status without replay');
     assert.equal(await mobileSetup.locator('[data-email-test="operations"]').count(), 1,
       'Settings retains View email operations after restoring a test reference');
     await mobileSetup.locator('[data-email-test="operations"]').press('Enter');
     await mobile.locator('#operations-view').waitFor({ state: 'visible' });
     await mobile.waitForFunction(scope => document.getElementById('operations-scope').value === scope, scope);
+    await mobile.waitForFunction(() => document.activeElement === document.getElementById('email-operations-table'));
+    await mobile.locator('#refresh-operations').press('Enter');
+    await mobile.locator('#email-operations-table tbody tr').filter({ hasText: reference }).filter({ hasText: 'Provider accepted' }).waitFor();
     assert.equal(report.posts.length, 2, 'Settings navigation observes the existing test without sending another email');
     assert.equal(await mobile.locator('#operations-email-test [data-email-test="operations"]').count(), 0,
       'the Operations-only action stays absent on narrow layouts');
