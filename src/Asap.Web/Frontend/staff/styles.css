@@ -207,11 +207,18 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 #request-grid time > span, #request-grid small { display: block; }
 #request-grid time small { margin-top: 3px; color: var(--muted); font-size: .78rem; }
 #request-grid .claim-label { font-size: .85rem; }
-.request-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.request-row-actions > button { min-height: 32px; padding: 5px 6px; font-size: .78rem; }
-.request-row-actions > .request-row-more { min-width: 32px; }
+.request-row-actions { position: relative; display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; }
+.request-row-actions:not([data-ready]) { visibility: hidden; }
+.request-row-command, .request-row-more { flex: 0 0 auto; min-height: 36px; padding: 5px 6px; font-size: .78rem; white-space: nowrap; }
+.request-row-actions > .request-row-more { min-width: 36px; }
+.request-row-actions > .request-row-command:only-child, .request-actions-wrap > .request-row-command { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.request-actions-wrap { flex-wrap: wrap; }
+/* Intrinsic measurements use the real controls, synchronously before paint. */
+.request-row-actions[data-measuring] > .request-row-command { width: max-content; max-width: none; white-space: nowrap; }
+.request-row-actions[data-measuring] > .request-row-more { position: absolute; visibility: hidden; }
 .request-table-menu { position: fixed; inset: auto; margin: 0; min-width: 180px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: auto; padding: 6px; background: #fff; border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 6px 20px #0003; }
 .request-table-menu:popover-open { display: grid; gap: 4px; }
+.request-table-menu[data-measuring] { display: flex; width: max-content; max-width: none; visibility: hidden; }
 .request-table-menu > button { justify-content: flex-start; }
 @media (max-width: 1100px) {
   #request-grid table.gridjs-table { min-width: 1080px; }

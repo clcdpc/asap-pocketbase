@@ -31,6 +31,44 @@ Run the existing feature suite with:
 .\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite pr410
 ```
 
+Issue #403 adds `i403` for measured title-row action overflow. Run it with its
+relevant regressions, directly from PowerShell 7 in a tooling checkout containing
+the suite:
+
+```powershell
+.\scripts\review\Invoke-AsapReview.ps1 -Pr <PR_NUMBER> -Suite i403,d1,q1,pr410
+```
+
+Its six scenarios cover Closed's sole direct Reopen, protected Closed rows with
+zero commands, row/title detail opening, all five tabs' primary workflows,
+two and six eligible commands, real column/container resizing, promotion and
+demotion, changed font metrics, Enter/Space/Escape, menu/focus reconciliation,
+one guarded Purchase submission, sorting/paging/filtering/refresh/scope retirement,
+desktop/mobile/native 200% geometry, forced colors and the existing checkpoint
+guards. The sixteen existing cardinality/pagination/scope fixtures are preserved.
+Five additional read-only SQL rows supply AutoHold on/off outstanding purchases,
+eligible/blocked Pending holds and a Placed hold. Each primary enters its existing
+confirmation and Cancel without a mutation; Assign is checked in direct/overflow
+forms. Existing D1 Closed/protected fixtures prove one/zero commands.
+Existing mutation fixtures remain independent.
+Their existing `ACCEPTANCE-I403-*` barcodes identify both seeding and API lookup
+on current schema 13; the retired `LegacyId` column/DTO is not used.
+The Purchase scenario is NOT RUN with `-ReadOnly`, making acceptance incomplete.
+`i403-*-geometry.json` and matching PNGs stay in the suite's normal evidence
+directory; native captures use the existing verified CDP viewport path.
+Zero eligible commands and sole workflow commands additionally have focused
+component coverage. Open details is absent from every Actions cell; the accessible
+title link and row background still open details.
+Role/capability revocation, sign-out and retired handler cleanup remain covered
+by the retained table/controller tests. D1 and Q1 protect their all-direct toolbars.
+Human visual/screen-reader acceptance remains tracked by #398.
+
+For a focused local Chromium regression without SQL/WSLC:
+
+```powershell
+node --test tests/acceptance/direct-actions.test.cjs
+```
+
 The `i390` Format rules suite reviews real synthetic SQL settings in System and
 Review Library scopes. It checks complete collapsed cards, configured names/codes,
 Required/Optional/Hidden summaries (including enabled and retained disabled custom
@@ -400,26 +438,36 @@ invariants. Adding a suite does not require editing an expected suite count/list
 
 ## PR #420 and #421 integration contract
 
-Keep the two PR branches independent until #420 merges. At that point #421 must
-update from `main` and retain this combined content:
+PR #420 merged into `main` as `50f1483a30e2b738b0082e91c452081011f502c6`.
+PR #421 integrates that actual base into its existing branch. Preserve this
+combined content during qualification and any later updates:
 
 | Shared file | Required combined result |
 | --- | --- |
 | `suites/registry.json` | `["d1", "i390", "i403", "pr410", "q1", "s1", "smoke"]`, each once, sorted |
-| `runner.test.cjs` | Dynamic module discovery and exact registry coverage; all i390 assertions (four read-only scenarios), all i403 assertions (five scenarios, only keyboard/guarded dispatch writes), and every existing suite invariant; current discovery-based CI/browser guards |
+| `runner.test.cjs` | Dynamic module discovery and exact registry coverage; all i390 assertions (four read-only scenarios), all i403 assertions (six scenarios, only keyboard/guarded dispatch writes), and every existing suite invariant; current discovery-based CI/browser guards |
 | `README.md` | Both issue-suite descriptions, commands, evidence and authorization limits |
-| `../browser/staff-native-zoom.cjs` | Both `formatRuleGeometry` and `actionGeometry` imports; collapsed/expanded Format rules scans plus direct/overflow action geometry, scoped axe, Escape/focus and full table scans; retain named state/viewport coverage |
-| `../../dev/review/src/Asap.ReviewInit/AcceptanceFixtures.sql` | Both idempotent i390 custom fields/rules (`i390_note`, `i390_retired`) and all 16 `acceptance-i403-*` title rows, including the claimed Pending hold; preserve the existing book and claimant identities and every prior fixture |
+| `../browser/staff-native-zoom.cjs` | Both Format-rule and action helper imports; collapsed/expanded Format rules scans plus direct/overflow action geometry, sole Reopen and full offscreen-focus restoration at native 200%, scoped axe, Escape/focus and full table scans; verify all nine named states at each of 1280/1440 physical pixels (18 checkpoints) in both JS and SQL browser assertions |
+| `../../dev/review/src/Asap.ReviewInit/AcceptanceFixtures.sql` | Both idempotent i390 custom fields/rules (`i390_note`, `i390_retired`), all 16 original `ACCEPTANCE-I403-*` rows and five read-only workflow rows plus the blocked hold journal; preserve existing book/claimant identities and every prior fixture |
 
-The expected textual conflicts are the single-line registry, adjacent issue
-documentation additions, and native-zoom imports. Resolve by retaining both
-additions. Runner assertions, SQL fixture blocks and CSS changes must also be
-reviewed even when Git merges them automatically. Do not duplicate fixture keys,
-replace another suite's data, or broaden runtime/scenario/endpoint/rowversion
-write authorization. This records a future resolution; neither branch includes
-the other PR's implementation or fixture additions.
+The textual conflicts include the registry, adjacent issue documentation,
+native-zoom imports, and both C#/JS checkpoint assertions. Retain both additions.
+Review runner assertions, SQL fixture blocks and CSS even when Git merges them
+automatically. Do not duplicate fixture keys, replace another suite's data, or
+broaden runtime/scenario/endpoint/rowversion write authorization. Keep the
+format/field collision and persisted-rule preservation regressions alongside the
+actual-200% offscreen-focus regression.
 
-After the update, run `i390,i403,s1,d1,q1,pr410` sequentially against the integrated
-head with separate evidence, then complete full CI and closure review. Full CI
-qualification and the merge decision remain separate from draft validation;
-human visual/screen-reader acceptance remains tracked by #398.
+Run `i390,i403,s1,d1,q1,pr410` sequentially against one pinned integrated head,
+with separate evidence, plus targeted controller/Chromium/real-SQL integration
+checks. Return the qualified checkpoint for independent Luna review before
+merging #421.
+
+For this authorized dev rollout, the user deferred the full CI suite to the
+actual deployment qualification and requested cancellation of redundant rollout
+runs. This does not change workflow policy or branch protection. The deployment
+run must force fresh full CI (`force_full_ci=true`) and must not be cancelled as
+redundant. The existing workflow completes tests, packaging and its required
+reporting gate before deployment activation; it cannot deploy first and run full
+CI afterward without a separate workflow change. Human visual/screen-reader
+acceptance remains tracked by #398.

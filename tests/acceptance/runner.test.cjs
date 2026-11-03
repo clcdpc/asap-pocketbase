@@ -457,6 +457,13 @@ test('registered suites match discovered modules and retain their mutation bound
     assert.ok(suite.id === 'q1' || suite.uncovered.length > 0, 'Existing suites retain their uncovered-requirement records');
   }
   assert.equal(registry.q1.mutations, false);
+  assert.equal(registry.i403.mutations, true);
+  assert.equal(registry.i403.id, 'i403');
+  assert.deepEqual(registry.i403.scenarios.map(s => [s.id, s.writes]), [
+    ['i403-closed-and-empty', false], ['i403-two-and-many-resize', false], ['i403-primary-workflows', false], ['i403-keyboard-and-guarded-dispatch', true],
+    ['i403-grid-replacement', false], ['i403-mobile-native-and-forced-colors', false]
+  ]);
+  assert.ok(registry.i403.scenarios.every(scenario => scenario.requirements.length > 0));
   assert.deepEqual(registry.q1.uncovered, []);
   assert.equal(registry.q1.scenarios.length, 5);
   assert.ok(registry.q1.scenarios.every(scenario => scenario.writes === false && scenario.requirements.length > 0));

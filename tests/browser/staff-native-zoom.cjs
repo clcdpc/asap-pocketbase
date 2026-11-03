@@ -6,6 +6,7 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 const verifyMixedFieldLayout = require('./form-layout.cjs');
 const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
+const { actionGeometry, activateRowAction } = require('../acceptance/helpers/request-actions.cjs');
 const { formatRuleGeometry } = require('../acceptance/helpers/format-rules.cjs');
 
 // Chromium's tab API changes actual browser zoom. CSS zoom and pinch scaling
@@ -42,7 +43,7 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
         return zoom;
       };
       const zoom = await applyNativeZoom();
-      const scan = async name => {
+      const scan = async (name, visible = null) => {
         await page.evaluate(axe);
         const result = await page.evaluate(async () => ({
           violations: (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact)),
@@ -57,6 +58,13 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
         assert.equal(result.visualViewportScale, 1);
         assert.equal(result.htmlZoom, '1'); assert.equal(result.bodyZoom, '1');
         assert.ok(Math.abs(result.devicePixelRatio / ratio - 2) < 0.01);
+        if (visible) {
+          // Axe may scroll the horizontal grid while inspecting other cells.
+          // Capture this named workflow checkpoint with its action in view.
+          await visible.scrollIntoViewIfNeeded();
+          const bounds = await visible.boundingBox(), viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+          assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= viewport.width && bounds.y + bounds.height <= viewport.height);
+        }
         const session = await context.newCDPSession(page);
         const metrics = await session.send('Page.getLayoutMetrics');
         assert.equal(metrics.visualViewport.zoom, 2);
@@ -72,10 +80,49 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       await wrapper.focus(); await page.keyboard.press('ArrowRight');
       assert.equal(await wrapper.getAttribute('role'), 'region');
       const more = page.getByRole('button', { name: `More actions for request ${sourceId}`, exact: true });
+      const row = title.locator('xpath=ancestor::tr');
+      const geometry = await actionGeometry(row);
+      assert.equal(geometry.inline[0], 'purchase', 'Suggestions lead with their eligible workflow step');
+      assert.ok(geometry.inline.length >= 1 && geometry.overflow.length >= 1, 'Zoom retains direct commands plus only the remainder');
       await more.focus(); await page.keyboard.press('Enter');
-      await scan('table');
+      assert.equal(await more.getAttribute('aria-expanded'), 'true');
+      await page.evaluate(axe);
+      assert.deepEqual(await page.evaluate(async id => (await axe.run(document.getElementById(`request-row-${id}-actions`)))
+        .violations.filter(item => ['serious', 'critical'].includes(item.impact)), sourceId), []);
       await page.keyboard.press('Escape');
       assert.equal(await more.evaluate(node => node === document.activeElement), true);
+      await more.press('Space');
+      assert.equal(await more.evaluate(node => {
+        const wrapper = node.closest('.gridjs-wrapper');
+        wrapper.scrollLeft = 0;
+        return node.getBoundingClientRect().left >= wrapper.getBoundingClientRect().right;
+      }), true, 'The native-zoom grid scroll fully clips the open menu trigger');
+      await page.waitForFunction(id => document.querySelector(`#request-row-${id}-actions`)
+        ?.matches(':popover-open') === false, sourceId);
+      assert.equal(await more.evaluate(node => node === document.activeElement), true);
+      assert.equal(await more.evaluate(node => {
+        const bounds = node.getBoundingClientRect(), clip = node.closest('.gridjs-wrapper').getBoundingClientRect();
+        const hit = document.elementFromPoint((bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2);
+        return bounds.left >= Math.max(0, clip.left) && bounds.right <= Math.min(innerWidth, clip.right) &&
+          bounds.top >= Math.max(0, clip.top) && bounds.bottom <= Math.min(innerHeight, clip.bottom) &&
+          (hit === node || node.contains(hit));
+      }), true, 'Dismissal restores visible, unobscured trigger focus after full clipping');
+      // The global axe scan may scroll the table and correctly dismiss an
+      // anchored popup. Verify Escape before that independent full-page audit.
+      await scan('table');
+      await page.locator('#status-tabs [data-status="closed"]').click();
+      await page.locator('#request-search').fill('Status transition closed 00');
+      const closedTitle = page.locator('#request-grid .request-title-link').filter({ hasText: 'Status transition closed 00' });
+      await closedTitle.waitFor();
+      const closedRow = closedTitle.locator('xpath=ancestor::tr');
+      assert.deepEqual((await actionGeometry(closedRow)).inline, ['reopen']);
+      assert.equal(await closedRow.locator('.request-row-more, [popover]').count(), 0);
+      await scan('closed-actions', closedRow.locator('[data-request-action="reopen"]'));
+      await activateRowAction(closedRow, 'reopen', 'Space');
+      await page.locator('#confirmation-dialog[open]').getByRole('button', { name: 'Cancel', exact: true }).click();
+      await page.keyboard.press('Escape'); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+      await page.locator('#status-tabs [data-status="suggestion"]').click();
+      await page.locator('#request-search').fill(''); await title.waitFor();
       await title.focus(); await page.keyboard.press('Enter');
       const detail = page.locator('#request-dialog[open]');
       await detail.waitFor();

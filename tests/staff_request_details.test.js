@@ -23,11 +23,11 @@ async function setup(ui, initial = source, options = {}) {
   const identity = createSessionIdentity(); identity.accept(options.actor || actor);
   const host = createDetailHost({ root: ui.get('#request-dialog') });
   let current = initial, pending = null;
-  const calls = [], quick = [], lookups = [];
+  const calls = [], quick = [], lookups = [], announcements = [];
   const controller = createTitleDetailController({ host, sessionIdentity: identity,
     polarisLookup: { open: context => lookups.push(context), close() {}, invalidate() {} },
     copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
-    announce() {}, beforeOpen: () => ({ isCurrent: () => true }), beforeClose: () => true,
+    announce: (...args) => announcements.push(args), beforeOpen: () => ({ isCurrent: () => true }), beforeClose: () => true,
     isNavigationCurrent: () => true, getNavigationGeneration: () => 1, getScope: () => 'all',
     onAlign: async () => ({ scope: 'all', commit: () => 1 }), onOpened() {}, onClosed() {},
     getFocusReturn: () => null, refreshQueue: async () => true, queueSequence: () => 1,
@@ -42,13 +42,129 @@ async function setup(ui, initial = source, options = {}) {
       return path.includes('/title-requests/') ? current : {};
     } });
   await controller.open(current.id); await settle();
-  return { controller, host, identity, calls, quick, lookups, root: ui.get('#request-dialog'),
+  return { controller, host, identity, calls, quick, lookups, announcements, root: ui.get('#request-dialog'),
     async show(next) { current = next; await controller.open(next.id); await settle(); },
+    async start(action, next = current) { current = next; await controller.open(next.id, null, { action }); await settle(); },
     complete(next) { current = next; pending({ committed: true, request: next }); },
     dispose() { controller.dispose(); host.dispose(); } };
 }
 
 (async () => {
+  // These row intents enter the same real detail controls as toolbar clicks.
+  // Leave confirmation open to prove the opener cannot bypass consent.
+  for (const [status, action, allowed, autohold, label] of [
+    ['outstanding_purchase', 'catalogFound', ['catalogFound'], true, 'Ready for hold'],
+    ['outstanding_purchase', 'catalogFound', ['catalogFound'], false, 'Close without hold'],
+    ['pending_hold', 'place-hold', [], true, 'Place hold'],
+    ['hold_placed', 'close', ['close'], true, 'Close request'],
+    ['closed', 'reopen', ['reopen'], true, 'Reopen request'],
+    ['suggestion', 'alreadyOwn', ['alreadyOwn'], true, 'Already own'],
+    ['suggestion', 'silentClose', ['silentClose'], true, 'Close silently']
+  ]) await fixture(async ui => {
+    require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, () => null);
+    const request = { ...source, status, autohold, bibidStaffVerified: true,
+      capabilities: { ...capabilities, allowedActions: allowed, canPlaceHold: action === 'place-hold' } };
+    const t = await setup(ui, request);
+    try {
+      const mutations = () => t.calls.filter(call => call.init.method);
+      await t.start(action);
+      const confirmation = ui.get('#confirmation-dialog');
+      assert.equal(confirmation.open, true, action + ' requires its established confirmation');
+      assert.equal(ui.get('#confirmation-title').textContent, label);
+      assert.equal(mutations().length, 0, 'Opening a row workflow never mutates before approval');
+      confirmation.querySelector('.form-actions button:first-child').click(); await settle();
+      assert.equal(mutations().length, 0, 'Cancel leaves the request unchanged');
+      assert.equal(document.activeElement, button(t.root, action === 'reopen' ? 'Reopen' : label));
+      await t.start(action);
+      confirmation.querySelector('.form-actions button:last-child').click(); await settle();
+      assert.equal(mutations().length, 1, 'Approval dispatches exactly once');
+      assert.equal(mutations()[0].init.body.version, 'v1');
+      assert.equal(mutations()[0].path.endsWith(action === 'place-hold' ? '/place-hold' : '/action'), true);
+      if (action !== 'place-hold') assert.equal(mutations()[0].init.body.action, action);
+    } finally { t.dispose(); }
+  });
+
+  for (const [status, action, extra = {}] of [
+    ['suggestion', 'purchase'], ['suggestion', 'reject'], ['suggestion', 'alreadyOwn'],
+    ['suggestion', 'silentClose'], ['outstanding_purchase', 'catalogFound'],
+    ['pending_hold', 'place-hold', { canPlaceHold: false }],
+    ['pending_hold', 'place-hold', { canPlaceHold: true, canChangeWorkflowState: false, blockingReason: 'hold_operation_incomplete' }],
+    ['pending_hold', 'place-hold', { canPlaceHold: true, canChangeWorkflowState: false, blockingReason: 'pickup_reconciliation_required' }],
+    ['hold_placed', 'close'], ['closed', 'reopen', { blockingReason: 'hold_history_retained' }]
+  ]) await fixture(async ui => {
+    const t = await setup(ui);
+    try {
+      await t.start(action, { ...source, status, capabilities: { ...capabilities, allowedActions: [], ...extra } });
+      assert.equal(t.calls.some(call => call.init.method), false, 'Capability revoked between row and detail cannot mutate');
+      assert.equal(Boolean(ui.get('#confirmation-dialog')?.open), false);
+      assert.equal(t.root.querySelector('.action-choice'), null);
+      assert.ok(t.announcements.some(([message]) => /no longer available/.test(message)), action + ' explains invalidation');
+    } finally { t.dispose(); }
+  });
+
+  for (const action of ['purchase', 'reject', 'assign', 'claim']) await fixture(async ui => {
+    const t = await setup(ui);
+    try {
+      await t.start(action);
+      if (action === 'claim') {
+        assert.equal(t.calls.filter(c => c.init.method).length, 1);
+        assert.match(t.calls.find(c => c.init.method).path, /\/claim$/);
+      } else {
+        const panel = t.root.querySelector(action === 'assign' ? '.inline-form' : '.action-choice');
+        assert.ok(panel, action + ' opens its choice form');
+        assert.equal(t.calls.some(c => c.init.method), false);
+        [...panel.querySelectorAll('button')].find(b => b.textContent.trim() === 'Cancel').click(); await settle();
+        assert.equal(panel.isConnected, false);
+        assert.equal(t.calls.some(c => c.init.method), false);
+      }
+    } finally { t.dispose(); }
+  });
+
+  for (const [status, action, allowed] of [
+    ['suggestion', 'purchase', ['purchase']], ['suggestion', 'reject', ['reject']],
+    ['suggestion', 'alreadyOwn', ['alreadyOwn']], ['suggestion', 'silentClose', ['silentClose']],
+    ['outstanding_purchase', 'catalogFound', ['catalogFound']], ['pending_hold', 'place-hold', []],
+    ['hold_placed', 'close', ['close']], ['closed', 'reopen', ['reopen']],
+    ['suggestion', 'claim', []], ['suggestion', 'assign', []]
+  ]) await fixture(async ui => {
+    const request = { ...source, status, bibidStaffVerified: true, autohold: true,
+      capabilities: { ...capabilities, allowedActions: allowed, canPlaceHold: true } };
+    const t = await setup(ui, request);
+    try {
+      // A late queued row intent cannot start against a changed actor/library.
+      for (const replacement of [{ ...actor, role: 'staff', organizationId: 3 }, { ...actor, role: 'retired' }]) {
+        t.identity.accept(replacement); await t.start(action);
+        assert.equal(t.calls.some(c => c.init.method), false, action + ' honors changed actor scope/role');
+        assert.equal(t.root.querySelector('.action-choice, .inline-form'), null);
+        assert.equal(Boolean(ui.get('#confirmation-dialog')?.open), false);
+      }
+    } finally { t.dispose(); }
+  });
+
+  for (const [status, action] of [['outstanding_purchase', 'catalogFound'], ['pending_hold', 'place-hold'],
+    ['hold_placed', 'close'], ['closed', 'reopen']]) await fixture(async ui => {
+    require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, () => null);
+    const t = await setup(ui, { ...source, status, autohold: true, bibidStaffVerified: true,
+      capabilities: { ...capabilities, canPlaceHold: true, allowedActions: [action] } });
+    try {
+      await t.start(action);
+      const consent = ui.get('#confirmation-dialog .form-actions button:last-child'); assert.ok(consent);
+      t.identity.accept({ ...actor, role: 'staff', organizationId: 3 }); consent.click(); await settle();
+      assert.equal(t.calls.some(c => c.init.method), false, action + ' rechecks ownership after consent');
+    } finally { t.dispose(); }
+  });
+
+  for (const [action, next] of [['claim', { ...source, claimedByStaffUserId: '99' }],
+    ['assign', { ...source, status: 'closed', capabilities: { allowedActions: [] } }]]) await fixture(async ui => {
+    const t = await setup(ui);
+    try {
+      await t.start(action, next);
+      assert.equal(t.calls.some(c => c.init.method), false);
+      assert.equal(t.root.querySelector('.inline-form'), null);
+      assert.ok(t.announcements.some(([message]) => /no longer available/.test(message)));
+    } finally { t.dispose(); }
+  });
+
   for (const [request, staff, expected, disabled = []] of [
     [{ ...source, claimedByStaffUserId: '20' }, actor, ['Unclaim', 'Purchase', 'Assign', 'Already own', 'Close silently', 'Reject']],
     [{ ...source, claimedByStaffUserId: '21' }, actor, ['Clear claim', 'Purchase', 'Assign', 'Already own', 'Close silently', 'Reject']],

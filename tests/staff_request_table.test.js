@@ -24,6 +24,83 @@ async function until(predicate, message) {
 }
 
 (async () => {
+  await fixture(async ({ load, dom, get }) => {
+    const { requestRowActions, eligibleRowActions } = await load('request-row-actions');
+    const actor = { id: '20', role: 'staff', organizationId: 2 };
+    const record = { libraryOrgId: 2, claimedByStaffUserId: '20' };
+    for (const [status, capabilities, expected] of [
+      ['suggestion', { allowedActions: ['purchase', 'reject', 'alreadyOwn', 'silentClose'] }, ['purchase', 'reject', 'alreadyOwn', 'assign', 'silentClose']],
+      ['suggestion', {}, ['assign']],
+      ['outstanding_purchase', { allowedActions: ['catalogFound'] }, ['catalogFound', 'assign']],
+      ['outstanding_purchase', {}, ['assign']],
+      ['pending_hold', { canPlaceHold: true, canChangeWorkflowState: true }, ['place-hold', 'assign']],
+      ['pending_hold', { canPlaceHold: false, canChangeWorkflowState: true }, ['assign']],
+      ['pending_hold', { canPlaceHold: true, canChangeWorkflowState: false }, ['assign']],
+      ['hold_placed', { allowedActions: ['close'] }, ['close', 'assign']],
+      ['hold_placed', {}, ['assign']],
+      ['closed', { allowedActions: ['reopen'] }, ['reopen']],
+      ['closed', { allowedActions: [], blockingReason: 'hold_history_retained' }, []]
+    ]) {
+      const request = { ...record, status, capabilities };
+      assert.deepEqual(eligibleRowActions(request, actor).map(a => a.key), expected, status);
+      assert.deepEqual(eligibleRowActions(request, { ...actor, organizationId: 3 }), [], 'Other library cannot offer commands');
+      assert.deepEqual(eligibleRowActions(request, { ...actor, role: 'retired' }), [], 'Unknown role cannot offer commands');
+    }
+    for (const autohold of [true, false]) {
+      assert.equal(eligibleRowActions({ ...record, status: 'outstanding_purchase', autohold,
+        capabilities: { allowedActions: ['catalogFound'] } }, actor)[0].label, autohold ? 'Ready for hold' : 'Close without hold');
+    }
+    const observers = new Set();
+    dom.window.ResizeObserver = class {
+      constructor(callback) { this.callback = callback; observers.add(this); }
+      observe() {}
+      disconnect() { observers.delete(this); }
+    };
+    let width = 300, current = true;
+    const host = document.createElement('div'); get('#queue-view').append(host);
+    Object.defineProperty(host, 'clientWidth', { get: () => width });
+    host.getBoundingClientRect = () => ({ width });
+    const rect = dom.window.HTMLElement.prototype.getBoundingClientRect;
+    dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+      return { width: this.classList.contains('request-row-more') ? 36 : 80 };
+    };
+    const settle = () => new Promise(resolve => dom.window.requestAnimationFrame(() => dom.window.requestAnimationFrame(resolve)));
+    const resized = async value => { width = value; for (const observer of observers) observer.callback(); await settle(); };
+    const dispatched = [];
+    const options = { id: '27', live: () => current, onOpen: (...args) => dispatched.push(args), fallback: get('#refresh-queue') };
+    const mount = actions => {
+      const ref = requestRowActions({ ...options, actions }); ref(host); return () => ref(null);
+    };
+    let unmount = mount([]); await settle();
+    assert.equal(host.children.length, 0, 'Zero commands have no controls or popover'); unmount();
+    unmount = mount([{ key: 'claim', label: 'Claim', glyph: 'user-plus' }]);
+    await resized(20);
+    assert.equal(host.children.length, 1, 'Even an extremely narrow sole action stays direct');
+    host.firstElementChild.click(); assert.deepEqual(dispatched.at(-1)[2], { action: 'claim' }); unmount();
+    const actions = ['purchase', 'reject', 'alreadyOwn', 'assign'].map(key => ({ key, label: key, glyph: 'pencil' }));
+    unmount = mount(actions); await resized(400);
+    const inline = () => [...host.querySelectorAll(':scope > [data-request-action]')].map(n => n.dataset.requestAction);
+    assert.deepEqual(inline(), actions.map(a => a.key)); assert.equal(host.querySelector('[popover]'), null);
+    await resized(200); // Two natural 80px buttons plus More fit exactly.
+    assert.deepEqual(inline(), ['purchase', 'reject']);
+    assert.deepEqual([...host.querySelectorAll('[popover] button')].map(n => n.dataset.requestAction), ['alreadyOwn', 'assign']);
+    assert.equal(host.querySelectorAll('[data-request-action]').length, 4, 'Each command exists exactly once');
+    const prior = dispatched.length;
+    host.querySelector('[data-request-action="assign"]').click();
+    assert.equal(dispatched.length, prior + 1); assert.deepEqual(dispatched.at(-1)[2], { action: 'assign' });
+    assert.equal(dispatched.at(-1)[1], host.querySelector('.request-row-more'), 'Overflow uses its connected trigger as the workflow opener');
+    host.querySelector('[data-request-action="alreadyOwn"]').focus();
+    await resized(400);
+    assert.equal(document.activeElement.dataset.requestAction, 'alreadyOwn', 'Promoted command retains focus');
+    assert.equal(host.querySelector('[popover], .request-row-more'), null);
+    await resized(120); assert.deepEqual(inline(), ['purchase']);
+    current = false;
+    host.querySelector('[data-request-action]').click(); assert.equal(dispatched.length, prior + 1, 'Revoked context cannot dispatch');
+    const retired = host.firstElementChild; unmount(); retired.click();
+    assert.equal(dispatched.length, prior + 1, 'Retired controls have no handlers');
+    assert.equal(observers.size, 0, 'Unmount retires every observer');
+    dom.window.HTMLElement.prototype.getBoundingClientRect = rect;
+  });
   await fixture(async ({ load, get, dom }) => {
     const { createSessionIdentity } = await load('session-identity');
     const { createTitleQueue } = await load('queues');
@@ -124,6 +201,39 @@ async function until(predicate, message) {
     await queue.refresh(); await until(() => get('#request-grid').textContent.includes('New authorized projection'), 'New scope renders after retirement.');
     const wrapper = get('#request-grid .gridjs-wrapper');
     assert.equal(wrapper.tabIndex, 0); assert.equal(wrapper.getAttribute('role'), 'region');
+    const stableCommand = first().querySelector('[data-request-action]'); stableCommand.focus();
+    get('#request-grid th:nth-child(2) button').click();
+    await until(() => first()?.querySelector('.request-title-link')?.textContent === 'New authorized projection', 'An unchanged single row settles its Grid.js sort effects');
+    assert.equal(stableCommand.isConnected, false, 'Grid.js retires the prior cell when its sort pipeline replaces rows');
+    assert.equal(document.activeElement, get('#refresh-queue'), 'Retired cell focus returns to its connected queue control');
+    const retiredOpens = opened.length; stableCommand.click();
+    assert.equal(opened.length, retiredOpens, 'Retired sort controls cannot dispatch');
+    const previousActorButton = first().querySelector('[data-request-action]'), previousOpens = opened.length;
+    const libraryStaff = { ...staff, role: 'staff', organizationId: 3 };
+    session.accept(libraryStaff); previousActorButton.click();
+    assert.equal(opened.length, previousOpens, 'A role/library identity replacement revokes existing controls immediately');
+    queue.clear(); queue.setStaff(libraryStaff); await queue.refresh();
+    await until(() => first()?.querySelector('[data-request-action]'), 'Authorized library staff receive their refreshed server capabilities');
+    for (const [status, claim, capabilities, expected] of [
+      ['closed', null, { allowedActions: ['reopen'] }, ['reopen']],
+      ['closed', null, { allowedActions: [], blockingReason: 'hold_history_retained' }, []],
+      ['outstanding_purchase', '20', { allowedActions: ['catalogFound'] }, ['catalogFound', 'assign']],
+      ['pending_hold', '20', { canPlaceHold: true, canChangeWorkflowState: true }, ['place-hold', 'assign']],
+      ['pending_hold', '20', { canPlaceHold: false }, ['assign']],
+      ['hold_placed', '99', { allowedActions: ['close'] }, ['close', 'assign']],
+      ['suggestion', null, { allowedActions: ['reject'] }, ['reject', 'claim', 'assign']]
+    ]) {
+      const previous = context; context = { ...context, status }; queue.contextChanged(context, previous);
+      data = [{ ...data[0], status, claimedByStaffUserId: claim, capabilities }];
+      await queue.refresh();
+      await until(() => first()?.querySelectorAll('[data-request-action]').length === expected.length, 'Accepted status/capability projection replaces its commands');
+      assert.deepEqual([...first().querySelectorAll('[data-request-action]')].map(n => n.dataset.requestAction), expected);
+      assert.equal(first().querySelector('[data-request-action="edit"]'), null, 'Details remain a row/title path');
+      if (!expected.length) assert.equal(first().querySelector('.request-row-more, [popover]'), null);
+    }
+    const revoked = first().querySelector('[data-request-action]'), opensBeforeSignout = opened.length;
+    session.clear(); queue.signedOut(); revoked.click();
+    assert.equal(opened.length, opensBeforeSignout, 'Signed-out rows cannot dispatch');
     phase = 'dispose'; queue.dispose();
     assert.equal(staleSearch.isCurrent(), false);
     completed = true;

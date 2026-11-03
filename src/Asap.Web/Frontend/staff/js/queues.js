@@ -2,6 +2,7 @@ import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { byDisplayLabel } from './display-order.js';
 import { researchRecordUrl } from './research.js';
+import { RequestRowActions, eligibleRowActions } from './request-row-actions.js';
 import { element, dateTime, statusLabel, closeReasonLabel, timeoutLabel } from './ui.js';
 
 function detachGridContainer(container) {
@@ -26,6 +27,15 @@ function createQueueGrid(options, container) {
       return selected ? { ...column, sort: { ...column.sort, direction: selected.direction } } : { ...column };
     });
     const grid = new window.gridjs.Grid({ ...configuration, columns });
+    const store = grid.config.store, dispatch = store.dispatch.bind(store);
+    store.dispatch = update => dispatch(state => {
+      const next = update(state);
+      // These grids process accepted local arrays, never a Grid.js server
+      // fetch. Deferred Sort/Pagination effects must retain the accepted view
+      // rather than paint a second loading indicator after the frame commits.
+      return state.data && next.data === state.data && next.status === 1
+        ? { ...next, status: state.status } : next;
+    });
     if (sort) {
       grid.config.store.dispatch(state => ({ ...state,
         sort: { ...sort, columns: sort.columns.map(column => ({ ...column })) } }));
@@ -434,51 +444,9 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     if (column.kind === 'status') return h('div', {}, [h('span', { className: `status-badge${request.status === 'closed' ? ' closed' : ''}` }, cell),
       request.status === 'closed' ? h('small', {}, closeReasonLabel(request.closeReason)) : null]);
     if (column.kind !== 'actions') return cell;
-    const command = (label, action, name, className = 'secondary-button') => h('button', {
-      type: 'button', className, 'aria-label': `${label} request ${request.id}`,
-      onClick: event => {
-        if (!live(event)) return;
-        const popup = event.currentTarget.closest('[popover]');
-        const opener = popup ? popup.parentElement.querySelector('.request-row-more') : event.currentTarget;
-        popup?.hidePopover();
-        onOpen(request.id, opener, { action });
-      }
-    }, [glyph(name), label]);
-    const allowed = new Set(request.capabilities?.allowedActions || []);
-    const options = [command('Open details', 'edit', 'pencil')];
-    if (allowed.has('alreadyOwn')) options.push(command('Already own', 'alreadyOwn', 'book'));
-    if (request.status !== 'closed') {
-      if (!request.claimedByStaffUserId) options.push(command('Claim', 'claim', 'user-plus'));
-      options.push(command('Assign', 'assign', 'users'));
-    }
-    if (allowed.has('silentClose')) options.push(command('Close silently', 'silentClose', 'archive'));
-    const popupId = `request-row-${request.id}-actions`;
-    const more = h('button', { type: 'button', className: 'request-row-more secondary-button', 'aria-label': `More actions for request ${request.id}`,
-      'aria-controls': popupId, 'aria-expanded': 'false', title: 'More actions',
-      onClick: event => {
-        if (!live(event)) return;
-        const popup = event.currentTarget.parentElement.querySelector('[popover]');
-        if (popup.matches(':popover-open')) { popup.hidePopover(); return; }
-        popup.showPopover();
-        const rect = event.currentTarget.getBoundingClientRect();
-        popup.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - popup.offsetWidth - 8))}px`;
-        popup.style.top = `${Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - popup.offsetHeight - 8))}px`;
-        popup.querySelector('button')?.focus();
-      }
-    }, glyph('ellipsis-h'));
-    return h('div', { className: 'request-row-actions' }, [
-      allowed.has('purchase') ? command('Purchase', 'purchase', 'shopping-cart', 'primary-button') : null,
-      allowed.has('reject') ? command('Reject', 'reject', 'ban', 'danger-button') : null,
-      more,
-      h('div', { id: popupId, popover: 'auto', className: 'request-table-menu', role: 'group', 'aria-label': `Actions for request ${request.id}`,
-        onToggle: event => event.currentTarget.parentElement.querySelector('.request-row-more')?.setAttribute('aria-expanded', String(event.newState === 'open')),
-        onKeyDown: event => {
-          if (event.key !== 'Escape') return;
-          event.preventDefault(); event.stopPropagation(); event.currentTarget.hidePopover();
-          event.currentTarget.parentElement.querySelector('.request-row-more')?.focus();
-        }
-      }, options)
-    ]);
+    const actions = eligibleRowActions(request, owner);
+    return h(RequestRowActions, { key: request.id, request, owner,
+      id: request.id, actions, live, onOpen, fallback: dom.refresh });
   }
 
   function renderGrid({ preservePage = false } = {}) {
