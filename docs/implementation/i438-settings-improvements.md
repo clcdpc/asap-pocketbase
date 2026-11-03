@@ -22,8 +22,8 @@ the parent Codex session.
 
 | Order | Issue | Acceptance and tests | Independent review | Commit |
 | --- | --- | --- | --- | --- |
-| 1 | #395 | Header compacted; focused DOM/scope checks and SQL/browser presentation PASS | Luna MAX clear after retained-test correction | This issue commit; exact SHA in PR |
-| 2 | #448 | Pending | Pending Luna MAX | Pending |
+| 1 | #395 | Header compacted; focused DOM/scope checks and SQL/browser presentation PASS | Luna MAX clear after retained-test correction | `78b0943` |
+| 2 | #448 | Complete Branding fieldset moved first; focused DOM/logo and SQL/browser presentation PASS | Luna MAX clear, including rendered desktop/mobile | This issue commit; exact SHA in PR |
 | 3 | #445 | Pending | Pending Luna MAX | Pending |
 | 4 | #449 | Pending | Pending Luna MAX | Pending |
 | 5 | #409 | Pending | Pending Luna MAX / Astra HIGH | Pending |
@@ -90,3 +90,26 @@ context and permission guidance remain available.
 Raw R2 receipt: `results/i395-presentation-r2.trx` under the external evidence
 directory. Captures/report are in the ignored browser artifact directory
 `staff-presentation-6aefd6831cd9403d95b97e7de2122ffc`.
+
+## #448 — Branding first in Patron experience
+
+The complete existing Branding fieldset is moved unchanged immediately after the
+panel introduction. Public patron portal, Patron text, and Publication options
+and formats retain their relative order. No JavaScript, CSS or persistence path
+changes are needed.
+
+- Focused DOM/layout and multipart-logo tests: PASS, including independent Luna
+  reruns. Browser-script syntax and diff checks PASS.
+- Incremental Release build: PASS, zero warnings/errors.
+- Retained real-SQL presentation browser: PASS, 1/1, no failures/skips. New checks
+  verify all eight Branding IDs remain together, visual/DOM section order,
+  keyboard entry with visible focus, and desktop/mobile System/library placement.
+  Existing axe/image/overflow/traffic/page-error guards remain active.
+- Parent and independent source review confirm an exact block move. Independent
+  Luna MAX inspected desktop/mobile renders and all 12 placement contexts and
+  found no actionable defects. The run contains 68 scanned states; guards report
+  zero serious/critical axe findings, missing images, external requests, page
+  errors or page overflow. The library keyboard witness enters its Branding
+  override control, retaining inherited read-only behavior.
+- Receipt: `results/i448-presentation.trx`; actual captures/report are in ignored
+  `staff-presentation-56868cd00897467f8d556780bbe04f25`.

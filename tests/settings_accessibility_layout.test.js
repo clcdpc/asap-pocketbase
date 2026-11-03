@@ -43,6 +43,17 @@ const { JSDOM } = require('jsdom');
       assert.strictEqual(document.querySelectorAll(`#${match[1]}`).length, 1, match[1]);
     }
 
+    const patronFieldsets = [...document.querySelectorAll('#settings-patron > fieldset.settings-fieldset')];
+    assert.deepStrictEqual(patronFieldsets.map(fieldset => fieldset.querySelector('legend').textContent.trim()), [
+      'Branding', 'Public patron portal', 'Patron text', 'Publication options and formats'
+    ], 'Branding is the first Patron experience section while the other sections retain their order');
+    assert.strictEqual(patronFieldsets[0].previousElementSibling, document.querySelector('#settings-patron > .settings-panel-heading'),
+      'Branding follows the Patron experience introduction immediately');
+    assert.deepStrictEqual([...patronFieldsets[0].querySelectorAll('[id]')].map(element => element.id), [
+      'branding-preview-source', 'branding-preview', 'branding-alt', 'branding-logo', 'save-branding-logo',
+      'discard-branding-draft', 'clear-branding-logo', 'branding-status'
+    ], 'The complete existing Branding editor remains together in one fieldset');
+
     const controls = scope => [...scope.querySelectorAll('input, select, textarea')].map(control => control.id);
     const fieldset = id => document.getElementById(id).closest('fieldset');
     const legend = id => fieldset(id).querySelector('legend').textContent;
@@ -183,7 +194,7 @@ const { JSDOM } = require('jsdom');
     assert.match(css, /@container \(min-width: 42rem\)[^]*?#format-rules-editor \.settings-rule-fields[^]*?repeat\(2, minmax\(0, 1fr\)\)/);
 
     dom.window.close();
-    console.log('Settings header hooks, save-bar styles, field layout, and dynamic labels passed');
+    console.log('Settings header hooks, Patron section order, save-bar styles, field layout, and dynamic labels passed');
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }

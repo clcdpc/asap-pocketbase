@@ -9,7 +9,7 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
 
 (async () => {
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
-  const report = { externalRequests: [], pageErrors: [], states: [], settingsHeaders: [] };
+  const report = { externalRequests: [], pageErrors: [], states: [], settingsHeaders: [], brandingPlacements: [] };
   for (const persistent of [false, true]) {
     const browser = await chromium.launch({ headless: true, ...(persistent ? { ignoreDefaultArgs: ['--hide-scrollbars'] } : {}) });
     try {
@@ -268,6 +268,49 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
           await page.locator('#settings-discard').waitFor({ state: 'hidden' });
           await page.locator('#settings-refresh:not([disabled])').waitFor();
           await page.locator('#settings-nav-patron').click();
+          await page.locator('#settings-patron').waitFor({ state: 'visible' });
+          const brandingPlacement = await page.evaluate(() => {
+            const panel = document.getElementById('settings-patron');
+            const intro = panel.querySelector('.settings-panel-heading');
+            const fieldsets = [...panel.children].filter(node => node.matches('fieldset.settings-fieldset'));
+            const rect = node => {
+              const bounds = node.getBoundingClientRect();
+              return { top: bounds.top, bottom: bounds.bottom, left: bounds.left, right: bounds.right,
+                width: bounds.width, height: bounds.height };
+            };
+            return {
+              legends: fieldsets.map(fieldset => fieldset.querySelector('legend').textContent.trim()),
+              intro: rect(intro), fieldsets: fieldsets.map(rect),
+              brandingIds: [...fieldsets[0].querySelectorAll('[id]')].map(node => node.id),
+              viewportWidth: innerWidth, scrollWidth: document.documentElement.scrollWidth
+            };
+          });
+          assert.deepEqual(brandingPlacement.legends, [
+            'Branding', 'Public patron portal', 'Patron text', 'Publication options and formats'
+          ], `${width}px/${scope}: Branding is first and the other Patron sections retain their order`);
+          assert.deepEqual(brandingPlacement.brandingIds, [
+            'branding-preview-source', 'branding-preview', 'branding-alt', 'branding-logo', 'save-branding-logo',
+            'discard-branding-draft', 'clear-branding-logo', 'branding-status'
+          ], `${width}px/${scope}: preview, inputs, actions, and feedback remain together`);
+          assert.ok(brandingPlacement.fieldsets[0].top >= brandingPlacement.intro.bottom,
+            `${width}px/${scope}: Branding follows the Patron experience introduction`);
+          for (let index = 1; index < brandingPlacement.fieldsets.length; index++) {
+            assert.ok(brandingPlacement.fieldsets[index].top >= brandingPlacement.fieldsets[index - 1].bottom,
+              `${width}px/${scope}: Patron fieldsets retain visual DOM order`);
+          }
+          assert.ok(brandingPlacement.scrollWidth <= brandingPlacement.viewportWidth,
+            `${width}px/${scope}: Branding placement has no horizontal page overflow`);
+          await page.keyboard.press('Tab');
+          const brandingFocus = await page.evaluate(() => {
+            const first = document.querySelector('#settings-patron > fieldset.settings-fieldset');
+            return { insideBranding: first.contains(document.activeElement), visible: document.activeElement.matches(':focus-visible'),
+              id: document.activeElement.id };
+          });
+          assert.equal(brandingFocus.insideBranding, true, `${width}px/${scope}: keyboard focus enters Branding first`);
+          assert.equal(brandingFocus.visible, true, `${width}px/${scope}: first Branding control has visible keyboard focus`);
+          report.brandingPlacements.push({ width, scope, legends: brandingPlacement.legends,
+            fieldsetBounds: brandingPlacement.fieldsets, focusedControl: brandingFocus.id });
+          await scan(`settings-branding-${scope}`);
           for (const buttonId of ['#add-publication-option', '#add-material-format', '#add-custom-field', '#add-format-rule', '#add-auto-claim-rule']) {
             if (await page.locator(buttonId).isVisible()) await measureHeading(buttonId);
           }

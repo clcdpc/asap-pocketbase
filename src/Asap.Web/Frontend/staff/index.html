@@ -564,6 +564,21 @@
                 <p>Patron-facing text, publication choices, formats, custom fields, and branding.</p>
               </div>
               <fieldset class="settings-fieldset">
+                <legend>Branding</legend>
+                <p id="branding-preview-source" class="settings-callout"></p>
+                <img id="branding-preview" class="settings-branding-preview" alt="" hidden>
+                <div class="settings-grid">
+                  <label class="settings-field wide" data-setting-section="branding" data-setting-key="altText"><span>Logo alternate text</span><input id="branding-alt" type="text"></label>
+                  <label class="settings-field wide"><span>Logo image</span><input id="branding-logo" type="file" accept="image/png,image/jpeg,image/gif"></label>
+                </div>
+                <div class="form-actions settings-inline-actions">
+                  <button id="save-branding-logo" class="secondary-button" type="button"><i class="fa fa-picture-o" aria-hidden="true"></i> Save logo</button>
+                  <button id="discard-branding-draft" class="secondary-button" type="button" hidden>Remove unsaved image selection</button>
+                  <button id="clear-branding-logo" class="secondary-button" type="button"><i class="fa fa-times" aria-hidden="true"></i> Clear image (use inherited image)</button>
+                </div>
+                <p id="branding-status" class="settings-result" role="status"></p>
+              </fieldset>
+              <fieldset class="settings-fieldset">
                 <legend>Public patron portal</legend>
                 <p id="patron-public-url-status" class="settings-callout" role="status"></p>
                 <div id="patron-public-links" data-settings-ignore="true" hidden>
@@ -629,21 +644,6 @@
                   <div class="settings-domain-heading"><strong>Auto-claim rules</strong><button id="add-auto-claim-rule" class="secondary-button" type="button"><i class="fa fa-plus" aria-hidden="true"></i> Add rule</button></div>
                   <div id="format-claim-rules-editor" class="settings-row-editor" aria-live="polite"></div>
                 </div>
-              </fieldset>
-              <fieldset class="settings-fieldset">
-                <legend>Branding</legend>
-                <p id="branding-preview-source" class="settings-callout"></p>
-                <img id="branding-preview" class="settings-branding-preview" alt="" hidden>
-                <div class="settings-grid">
-                  <label class="settings-field wide" data-setting-section="branding" data-setting-key="altText"><span>Logo alternate text</span><input id="branding-alt" type="text"></label>
-                  <label class="settings-field wide"><span>Logo image</span><input id="branding-logo" type="file" accept="image/png,image/jpeg,image/gif"></label>
-                </div>
-                <div class="form-actions settings-inline-actions">
-                  <button id="save-branding-logo" class="secondary-button" type="button"><i class="fa fa-picture-o" aria-hidden="true"></i> Save logo</button>
-                  <button id="discard-branding-draft" class="secondary-button" type="button" hidden>Remove unsaved image selection</button>
-                  <button id="clear-branding-logo" class="secondary-button" type="button"><i class="fa fa-times" aria-hidden="true"></i> Clear image (use inherited image)</button>
-                </div>
-                <p id="branding-status" class="settings-result" role="status"></p>
               </fieldset>
             </section>
 
