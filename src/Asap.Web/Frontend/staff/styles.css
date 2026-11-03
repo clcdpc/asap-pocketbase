@@ -403,14 +403,38 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-option-subrow { display: grid; grid-template-columns: minmax(110px, .8fr) minmax(150px, 1fr) auto 40px; align-items: center; gap: 8px; min-width: 0; }
 .settings-option-subrow input { width: 100%; min-width: 0; }
 .settings-option-subrow > button { width: 40px; min-height: 40px; padding: 0; }
-.settings-rule-row { grid-template-columns: minmax(0, 1fr); }
-.settings-rule-row > .settings-row-actions { grid-column: auto; }
-.settings-rule-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
-.settings-rule-heading strong { overflow-wrap: anywhere; }
-.settings-rule-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 10px; }
-.settings-format-field-group { display: grid; grid-template-columns: minmax(68px, .65fr) minmax(0, 1fr) minmax(0, 1.2fr); align-items: end; gap: 6px; min-width: 0; }
-.settings-format-field-name { padding-bottom: 10px; color: var(--muted); font-size: .78rem; font-weight: 800; text-transform: capitalize; }
-.settings-format-field-group select, .settings-format-field-group input { width: 100%; min-width: 0; }
+#format-rules-editor { container-type: inline-size; }
+#format-rules-editor .settings-rule-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
+#format-rules-editor .settings-rule-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; }
+#format-rules-editor .settings-rule-toggle { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 4px 8px; flex: 1 1 20rem; min-width: 0; min-height: 44px; padding: 6px; text-align: left; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 4px; cursor: pointer; }
+#format-rules-editor .settings-rule-toggle:hover { background: #e2edf1; }
+#format-rules-editor .settings-rule-toggle:focus-visible { outline: 3px solid var(--brand-dark); outline-offset: 2px; }
+#format-rules-editor .settings-rule-chevron { font-size: 1.6rem; line-height: 1; text-align: center; }
+#format-rules-editor .settings-rule-toggle[aria-expanded="true"] .settings-rule-chevron { transform: rotate(90deg); }
+#format-rules-editor .settings-rule-identity { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; overflow-wrap: anywhere; }
+#format-rules-editor .settings-rule-code { color: var(--muted); font-size: .8rem; }
+#format-rules-editor .settings-rule-summary { grid-column: 2; color: var(--muted); font-size: .84rem; overflow-wrap: anywhere; }
+#format-rules-editor .settings-row-actions { margin-left: auto; }
+#format-rules-editor .settings-icon-button { width: 44px; height: 44px; flex: 0 0 44px; }
+#format-rules-editor .settings-rule-details { display: grid; gap: 18px; padding-top: 16px; min-width: 0; }
+#format-rules-editor [hidden] { display: none; }
+#format-rules-editor .settings-rule-section { display: grid; gap: 12px; min-width: 0; margin: 0; padding: 12px 0 0; border: 0; border-top: 1px solid var(--line); }
+#format-rules-editor .settings-rule-section > legend { padding: 0 8px 0 0; color: var(--ink); font-size: .9rem; font-weight: 800; }
+#format-rules-editor .settings-rule-fields, #format-rules-editor .settings-rule-custom-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px 24px; }
+#format-rules-editor .settings-format-field-group, #format-rules-editor .settings-custom-rule-row { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; align-items: stretch; gap: 6px; min-width: 0; }
+#format-rules-editor .settings-format-field-name, #format-rules-editor .settings-custom-rule-name { grid-row: auto; padding: 0; color: var(--ink); font-size: .84rem; overflow-wrap: anywhere; }
+#format-rules-editor .settings-custom-rule-status { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
+#format-rules-editor .settings-custom-rule-status:empty { display: none; }
+/* Use the editor's available width, including beside the Settings navigation. */
+@container (min-width: 42rem) {
+  #format-rules-editor .settings-rule-fields, #format-rules-editor .settings-rule-custom-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #format-rules-editor .settings-rule-toggle { grid-template-columns: 20px minmax(0, 1fr) auto; }
+  #format-rules-editor .settings-rule-summary { grid-column: 3; }
+}
+@media (forced-colors: active) {
+  #format-rules-editor .settings-rule-row, #format-rules-editor .settings-rule-section { border-color: CanvasText; }
+  #format-rules-editor .settings-rule-toggle:focus-visible { outline-color: Highlight; }
+}
 .settings-staff-list { display: grid; gap: 12px; min-width: 0; }
 .settings-staff-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; padding: 12px; background: var(--soft); border: 1px solid #d6dde1; border-left: 3px solid var(--brand); }
 .settings-staff-row.inactive { border-left-color: var(--warning); }
@@ -425,9 +449,6 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-audit-item { display: grid; gap: 4px; min-width: 0; padding: 10px 12px; background: var(--soft); border: 1px solid #d6dde1; }
 .settings-audit-item strong, .settings-audit-item span { overflow-wrap: anywhere; }
 .settings-audit-meta { color: var(--muted); font-size: .84rem; }
-.settings-rule-custom-fields { display: grid; gap: 8px; }
-.settings-custom-rule-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(120px, .8fr) minmax(160px, 1.2fr); align-items: center; gap: 8px; min-width: 0; }
-.settings-custom-rule-row > span { overflow-wrap: anywhere; color: var(--muted); font-size: .84rem; font-weight: 700; }
 .settings-template-row { grid-template-columns: repeat(2, minmax(0, 1fr)); border-left-color: var(--brand-dark); }
 .settings-template-row > .settings-domain-field:nth-child(4) { grid-column: 1 / -1; }
 .settings-template-row .settings-domain-field textarea { min-height: 132px; line-height: 1.45; }

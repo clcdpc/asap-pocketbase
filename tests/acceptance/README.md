@@ -31,7 +31,35 @@ Run the existing feature suite with:
 .\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite pr410
 ```
 
-The S1 Workflow Settings suite is entirely read-only:
+The `i390` Format rules suite reviews real synthetic SQL settings in System and
+Review Library scopes. It checks complete collapsed cards, configured names/codes,
+Required/Optional/Hidden summaries (including enabled and retained disabled custom
+rules), independent keyboard disclosures, Tab behavior and dirty-state restoration.
+Live Material formats draft names update expanded/collapsed headers and accessible
+names, including code-qualified move/delete actions for duplicate labels, without
+replacing controls or independently dirtying Format rules. In either scope, a
+malformed collapsed requirement blocks redraw and global Save before any POST.
+The library draft also removes a hidden control deliberately, checks that Add field
+cannot repair it with a default, and verifies global Save fails before any POST.
+Geometry, axe and screenshots cover desktop, a 540px editor inside a wide window,
+390px mobile, forced colors/reduced motion, and verified native 200% zoom, expanded
+and collapsed. It uses the existing read-only runner guards; no Settings POST is
+authorized. Persisted Save/inheritance and hidden-DOM failure cases remain in the
+retained Settings SQL/browser journeys; `pr410` covers global Discard and Reset.
+
+Run the issue suite and selected regressions exactly once in order from PowerShell 7:
+
+```powershell
+.\scripts\review\Invoke-AsapReview.ps1 -Pr <PR_NUMBER> -Suite i390,s1,pr410
+```
+
+Each suite receives its own fresh database/container and evidence directory under
+`$HOME/ASAP-Acceptance/`. I390 captures are `i390-{draft,layout}-{system,2}-*.png`
+with matching `*-geometry.json`; native zoom evidence retains CDP metrics and uses
+the existing verified viewport capture. Generated evidence is never committed.
+Final human visual/screen-reader acceptance remains tracked by #398.
+
+The S1 Workflow Settings suite is entirely read-only and can also be run alone:
 
 ```powershell
 .\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite s1
@@ -337,6 +365,7 @@ dotnet build dev/review/src/Asap.ReviewProviders/Asap.ReviewProviders.csproj -c 
 dotnet build dev/review/src/Asap.ReviewBootstrap/Asap.ReviewBootstrap.csproj -c Release
 node --test tests/acceptance/runner.test.cjs tests/acceptance/authentication.test.cjs tests/acceptance/launcher.test.cjs tests/acceptance/transport.test.cjs tests/acceptance/infrastructure.test.cjs
 node --test tests/acceptance/workflow-settings.test.cjs
+node --test tests/acceptance/format-rules.test.cjs
 npm test
 ```
 
@@ -365,3 +394,32 @@ the correct nonzero result and diagnostics and leave no container behind.
 
 Add a future suite as `suites/<id>.cjs` and add its name to `registry.json`.
 Reuse the existing scenarios/helpers, fixture allowlist and report contract.
+The runner test derives its expected registry from sorted suite modules, checks
+exact JSON/export coverage, and keeps the individual suites' scenario and write
+invariants. Adding a suite does not require editing an expected suite count/list.
+
+## PR #420 and #421 integration contract
+
+Keep the two PR branches independent until #420 merges. At that point #421 must
+update from `main` and retain this combined content:
+
+| Shared file | Required combined result |
+| --- | --- |
+| `suites/registry.json` | `["d1", "i390", "i403", "pr410", "q1", "s1", "smoke"]`, each once, sorted |
+| `runner.test.cjs` | Dynamic module discovery and exact registry coverage; all i390 assertions (four read-only scenarios), all i403 assertions (five scenarios, only keyboard/guarded dispatch writes), and every existing suite invariant; current discovery-based CI/browser guards |
+| `README.md` | Both issue-suite descriptions, commands, evidence and authorization limits |
+| `../browser/staff-native-zoom.cjs` | Both `formatRuleGeometry` and `actionGeometry` imports; collapsed/expanded Format rules scans plus direct/overflow action geometry, scoped axe, Escape/focus and full table scans; retain named state/viewport coverage |
+| `../../dev/review/src/Asap.ReviewInit/AcceptanceFixtures.sql` | Both idempotent i390 custom fields/rules (`i390_note`, `i390_retired`) and all 16 `acceptance-i403-*` title rows, including the claimed Pending hold; preserve the existing book and claimant identities and every prior fixture |
+
+The expected textual conflicts are the single-line registry, adjacent issue
+documentation additions, and native-zoom imports. Resolve by retaining both
+additions. Runner assertions, SQL fixture blocks and CSS changes must also be
+reviewed even when Git merges them automatically. Do not duplicate fixture keys,
+replace another suite's data, or broaden runtime/scenario/endpoint/rowversion
+write authorization. This records a future resolution; neither branch includes
+the other PR's implementation or fixture additions.
+
+After the update, run `i390,i403,s1,d1,q1,pr410` sequentially against the integrated
+head with separate evidence, then complete full CI and closure review. Full CI
+qualification and the merge decision remain separate from draft validation;
+human visual/screen-reader acceptance remains tracked by #398.
