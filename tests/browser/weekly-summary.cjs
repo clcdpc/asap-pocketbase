@@ -162,6 +162,11 @@ async function main() {
     const retry = page.getByRole('button', { name: 'Retry same operation', exact: true });
     await retry.waitFor({ state: 'visible' });
     assert.equal(report.posts.length, 5, 'reload reviews the retained operation without resending');
+    assert.equal(await page.locator('#operations-scope').inputValue(), scope, 'reload retains the addressable Run scope');
+    const aggregateReview = new URL(page.url()); aggregateReview.searchParams.set('runScope', 'all');
+    await page.goto(aggregateReview.href, { waitUntil: 'networkidle' });
+    await retry.waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#operations-scope').inputValue(), 'all', 'an explicit aggregate view cannot replace original retry authority');
     await page.locator('#refresh-operations').press('Enter');
     await retry.waitFor({ state: 'visible' });
     assert.equal(report.posts.length, 5, 'explicit refresh remains read-only');
@@ -169,8 +174,8 @@ async function main() {
     await retry.press('Enter');
     await page.locator('#run-weekly-now:not([disabled])').waitFor();
     await page.locator('#refresh-operations:not([disabled])').waitFor();
-    // The acknowledgement belongs to the original library, while reload opens
-    // the aggregate view. Existing scope guards suppress a foreign-scope toast;
+    // The acknowledgement belongs to the original library, while an explicit
+    // aggregate view is selected. Scope guards suppress a foreign-scope toast;
     // confirmed journal cleanup and the real response establish this retry.
     assert.equal(await page.evaluate(() => Object.keys(sessionStorage).some(key => key.startsWith('asap.staff.operation.'))), false);
     assert.equal(report.posts.length, 6);

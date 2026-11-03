@@ -226,6 +226,9 @@ function operationResult(url) {
     assert.equal(secondRun.searchParams.get('force'), 'true');
     assert.notEqual(secondRun.searchParams.get('operationId'), firstRun.searchParams.get('operationId'),
       'another deliberate run receives a fresh durable identity');
+    const emailScope = document.getElementById('email-view-scope');
+    emailScope.value = '2'; emailScope.dispatchEvent(new dom.window.Event('change'));
+    await settle();
     document.getElementById('send-test-email').click();
     await settle();
     assertRequest(requests.find(item => item.url.includes('/email-operations/test?') && item.options.method === 'POST'),
@@ -291,6 +294,8 @@ function operationResult(url) {
     await settle();
     scope.value = 'all';
     scope.dispatchEvent(new dom.window.Event('change'));
+    emailScope.value = 'all';
+    emailScope.dispatchEvent(new dom.window.Event('change'));
     await settle();
     oldQueue.resolve(response(200, queuePayload('2')));
     oldEmail.reject(new Error('stale old scope failure'));

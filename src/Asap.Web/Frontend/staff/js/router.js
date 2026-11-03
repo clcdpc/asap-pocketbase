@@ -1,12 +1,14 @@
 import { readUrl, historyPath, applyQueueContext, replaceStageUrl, replaceRequestUrl, requestUrl,
   requestedStatusFromUrl, requestedRequestIdFromUrl, requestedSettingsPanelFromUrl,
-  requestedSettingsScopeFromUrl, requestedOperationalScopeFromUrl, requestedCopyStatusFromUrl } from './url-utils.js';
+  requestedSettingsScopeFromUrl, requestedOperationalScopeFromUrl, requestedCopyStatusFromUrl,
+  requestedOperationsContextFromUrl, applyOperationsContext } from './url-utils.js';
 
 export function parseStaffRoute(href) {
   const stage = requestedStatusFromUrl(href);
   return Object.freeze({ stage, requestId: requestedRequestIdFromUrl(href),
     scope: requestedOperationalScopeFromUrl(href), copyStatus: requestedCopyStatusFromUrl(href),
-    settingsScope: requestedSettingsScopeFromUrl(href), panel: requestedSettingsPanelFromUrl(href) });
+    settingsScope: requestedSettingsScopeFromUrl(href), panel: requestedSettingsPanelFromUrl(href),
+    operations: requestedOperationsContextFromUrl(href) });
 }
 
 export function createRouter() {
@@ -70,6 +72,7 @@ export function createRouter() {
 
   function pushSettingsPanelParameter(panel) {
     const url = readUrl();
+    applyOperationsContext(url, null);
     url.searchParams.delete('request');
     url.searchParams.set('stage', 'settings');
     url.hash = `settings-${panel}`;
@@ -80,6 +83,7 @@ export function createRouter() {
 
   function pushSettingsScopeParameter(scope) {
     const url = readUrl();
+    applyOperationsContext(url, null);
     url.searchParams.set('stage', 'settings');
     url.searchParams.set('settingsScope', String(scope));
     writeHistory(historyPath(url));
@@ -87,6 +91,7 @@ export function createRouter() {
 
   function pushSettingsRouteParameter(scope, panel) {
     const url = readUrl();
+    applyOperationsContext(url, null);
     url.searchParams.delete('request');
     url.searchParams.set('stage', 'settings');
     url.searchParams.set('settingsScope', String(scope));
@@ -143,6 +148,9 @@ export function createRouter() {
     replaceRequest: replaceRequestParameter, replaceStage: replaceStageParameter,
     pushSettingsPanel: pushSettingsPanelParameter, pushSettingsScope: pushSettingsScopeParameter,
     pushSettingsRoute: pushSettingsRouteParameter,
+    pushOperationsRoute(context, { replace = false } = {}) {
+      writeHistory(replaceStageUrl(window.location.href, 'operations', { operations: context }), replace); remember();
+    },
     start(onTraversal) {
       initializeStaffHistory(); remember();
       window.addEventListener('popstate', () => {

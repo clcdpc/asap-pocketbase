@@ -148,6 +148,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     let holdRoster = false, releaseRoster, loseProfileResponse = false, failRoster = false;
     const committedMessages = [];
     let refreshedCount = 0;
+    const auditNavigation = [];
     const { dom, controller } = await setupController(
       settingsModule,
       frontendRoot,
@@ -235,6 +236,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       },
       {
         onCommitted: message => committedMessages.push(message),
+        onStaffAuditHistory: (...args) => auditNavigation.push(args),
         onRefreshed: () => { refreshedCount += 1; }
       }
     );
@@ -248,8 +250,11 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     document.getElementById('settings-nav-staff').click();
     await waitFor(() => document.getElementById('settings-staff-users-list').textContent.includes('Ada Admin'));
     assert.ok(requests.includes('/api/asap/staff/users'));
-    assert.ok(requests.includes('/api/asap/staff/audit?limit=50'));
-    assert.ok(document.getElementById('settings-staff-audit-list').textContent.includes('staff_created'));
+    assert.equal(requests.some(url => url.includes('/api/asap/staff/audit')), false);
+    assert.equal(document.getElementById('settings-staff-audit-list'), null);
+    assert.equal(document.getElementById('staff-audit-refresh'), null);
+    document.getElementById('staff-audit-history').click();
+    assert.equal(auditNavigation[0][0], null, 'System Staff roster intentionally opens aggregate authorized history');
     assert.deepStrictEqual([...document.querySelectorAll('.settings-staff-heading strong')].map(item => item.textContent),
       ['aaron@example.org', 'Ada Admin', 'Inactive Selector'], 'Sort the actual visible fallback name, not empty displayName.');
     assert.deepStrictEqual([...document.querySelectorAll('#staff-add-organization option')].map(option => option.textContent),
@@ -492,7 +497,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     );
     document.getElementById('settings-nav-staff').click();
     await waitFor(() => adminRequests.includes('/api/asap/staff/users?orgId=2'));
-    assert.ok(adminRequests.includes('/api/asap/staff/audit?limit=50&organizationId=2'));
+    assert.equal(adminRequests.some(url => url.includes('/api/asap/staff/audit')), false);
     assert.strictEqual(document.getElementById('staff-add-role').textContent.includes('Super admin'), false);
     assert.strictEqual(document.getElementById('staff-add-organization').disabled, true);
     assert.strictEqual([...document.querySelectorAll('.settings-staff-row button')].some(button => button.textContent === 'Rebind identity'), false);

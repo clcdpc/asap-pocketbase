@@ -191,6 +191,8 @@ async function fixture(route, journey, options = {}) {
       if (pathname.endsWith('/suggestions')) return operationResponse ? operationResponse() : response(409, {
         code: 'duplicate_open_request', duplicate: { id, matchType: 'title_format' } });
       if (pathname.endsWith('/workflow/queues') || pathname.endsWith('/email-operations')) return response(200, { items: [] });
+      if (pathname.endsWith('/audit')) return response(200, { code: 'ok', data: { items: [], count: 0, page: 1, pageSize: 25,
+        actors: [], libraries: organizations.filter(item => item.id > 1) } });
       if (init.method === 'DELETE') return operationResponse ? operationResponse() : response(200, { deleted: true });
       if (init.method === 'POST') {
         if (operationResponse) return operationResponse({ url, init, parsed, pathname });
@@ -215,6 +217,7 @@ async function fixture(route, journey, options = {}) {
     const forward = async () => { dom.window.history.forward(); await settle(); await settle(); };
     await journey({ dom, get, edit, back, forward, calls, confirms,
       allowDiscard: () => { discard = true; },
+      denyDiscard: () => { discard = false; },
       readRequest: () => request,
       readCopyRequest: () => copyRequest,
       setOperation: fn => { operationResponse = fn; },
@@ -278,14 +281,50 @@ for (const settingsScope of ['system', '2']) {
       ui.allowDiscard(); link.click();
       await until(() => ui.get('#operations-view').hidden === false &&
         ui.dom.window.document.activeElement === ui.get('#email-operations-table'), 'scoped email log receives focus');
-      assert.equal(ui.get('#operations-scope').value, settingsScope === 'system' ? 'all' : '2');
+      assert.equal(ui.get('#operations-scope').value, 'all', 'Email navigation preserves independent workflow Run scope');
+      assert.equal(ui.get('#email-view-scope').value, settingsScope === 'system' ? 'system' : '2');
+      assert.equal(ui.get('#operations-email-panel').hidden, false);
       assert.equal(JSON.parse(ui.dom.window.sessionStorage.getItem(key)).id, '9007199254740993');
       assert.equal(ui.get('#send-test-email').disabled, true, 'an unknown original outcome still blocks a new test after navigation');
       const list = ui.calls.filter(call => new URL(call.url, 'https://localhost').pathname.endsWith('/email-operations')).at(-1);
-      assert.equal(new URL(list.url, 'https://localhost').searchParams.get('organizationId'), settingsScope === 'system' ? null : '2');
+      assert.equal(new URL(list.url, 'https://localhost').searchParams.get('organizationId'), settingsScope === 'system' ? '1' : '2');
       assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0, 'navigation never silently saves or resends');
     }));
 }
+for (const [role, scope, expected] of [['super_admin', 'system', 'all'], ['super_admin', '2', '2'], ['admin', '2', '2']]) {
+  test(`staff audit guarded navigation uses authorized roster scope ${role} ${scope}`, () =>
+    fixture(`?stage=settings&settingsScope=${scope}#settings-staff`, async ui => {
+      const link = ui.get('#staff-audit-history');
+      assert.ok(link); assert.equal(ui.get('#settings-staff-audit-list'), null); assert.equal(ui.get('#staff-audit-refresh'), null);
+      ui.edit('#staff-add-email', 'unsaved-person@example.org');
+      const before = ui.dom.window.location.href;
+      link.click(); await settle();
+      assert.equal(ui.get('#settings-view').hidden, false); assert.equal(ui.get('#staff-add-email').value, 'unsaved-person@example.org');
+      assert.equal(ui.dom.window.location.href, before);
+      assert.equal(ui.calls.some(call => new URL(call.url, 'https://localhost').pathname.endsWith('/audit')), false);
+      ui.allowDiscard(); link.click();
+      await until(() => ui.get('#operations-view').hidden === false && ui.dom.window.document.activeElement === ui.get('#audit-search'), 'staff audit filtered and focused');
+      assert.equal(ui.params().get('opSection'), 'audit'); assert.equal(ui.params().get('auditScope'), expected);
+      assert.equal(ui.get('#audit-category').value, 'staff'); assert.equal(ui.get('#audit-scope').value, expected);
+      assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
+      const entries = ui.dom.window.history.length;
+      for (const query of ['R', 'Re', 'Recorded person']) ui.edit('#audit-search', query);
+      assert.equal(ui.dom.window.history.length, entries, 'typed filters replace the accepted route without character-by-character history');
+      assert.equal(ui.params().get('auditSearch'), 'Recorded person');
+      ui.get('#operations-email-tab').click(); await settle(); assert.equal(ui.params().get('opSection'), 'email');
+      await ui.back(); assert.equal(ui.get('#operations-audit-panel').hidden, false); assert.equal(ui.get('#audit-category').value, 'staff');
+      assert.equal(ui.get('#audit-search').value, 'Recorded person');
+      await ui.forward(); assert.equal(ui.get('#operations-email-panel').hidden, false);
+      await ui.back(); await ui.back();
+      assert.equal(ui.get('#settings-view').hidden, false, 'the Staff entry is one navigation step from Settings');
+      ui.denyDiscard(); ui.edit('#staff-add-email', 'keep-forward-draft@example.org');
+      await ui.forward();
+      assert.equal(ui.get('#settings-view').hidden, false); assert.equal(ui.get('#staff-add-email').value, 'keep-forward-draft@example.org');
+      ui.allowDiscard(); await ui.forward();
+      assert.equal(ui.get('#operations-audit-panel').hidden, false); assert.equal(ui.get('#audit-search').value, 'Recorded person');
+    }, { role, staff: { organizationId: role === 'admin' ? 2 : 1 } }));
+}
+
 test('committed title status synchronizes detail queue and accepted URL', () => fixture(`?stage=suggestion&scope=2&request=${id}&marker=keep#anchor`, async ui => {
   await until(() => ui.get('#request-dialog').open, 'detail open');
   ui.setOperation(() => response(200, { committed: true,
@@ -2864,7 +2903,7 @@ test('ownership transfer: committed Settings scope refreshes the active Staff ro
     await until(() => ui.get('[aria-label="Display name for Library staff"]'), 'committed scope automatically reviews its active roster');
     assert.equal(ui.params().get('settingsScope'), '2'); assert.equal(protectedUnload(ui), false);
     assert.ok(ui.calls.some(call => call.url.includes('/users?orgId=2')));
-    assert.ok(ui.calls.some(call => call.url.includes('/audit?limit=50&organizationId=2')));
+    assert.equal(ui.calls.some(call => new URL(call.url, 'https://localhost').pathname.endsWith('/audit')), false, 'Staff roster does not load embedded audit history');
   }));
 
 for (const failure of ['failed load', 'changed draft']) {

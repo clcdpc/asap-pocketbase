@@ -83,7 +83,8 @@ export function createWorkflowApp() {
         prepare: scope => settings.prepareScope(scope),
         isReady: () => settings.isReady(),
         currentScope: () => settings.currentScope(), currentPanel: () => settings.currentPanel() },
-      operations: { activate: () => operations.activate(), deactivate: () => operations.deactivate(),
+      operations: { activate: () => operations.activate(router.requested().stage === 'operations' ? router.requested().operations : undefined), deactivate: () => operations.deactivate(),
+        currentRoute: () => operations.currentRoute(),
         refresh: options => operations.refresh(options), refreshOnEntry: () => operations.refresh() },
       profile: { activate: () => profile.activate(), deactivate: () => profile.deactivate() },
       analytics: { activate: () => analytics.activate(), deactivate: () => analytics.deactivate(),
@@ -151,7 +152,8 @@ export function createWorkflowApp() {
     onSessionLost: () => session.lose(), onAccessUnavailable: () => session.accessUnavailable()
   });
   const operations = createOperationsController({ root: get('#operations-view'), sessionIdentity, announce,
-    onScopeChange: shell.refreshReadiness, onReceipt, clearReceipt
+    onScopeChange: shell.refreshReadiness, onReceipt, clearReceipt,
+    onRouteChange: (route, options) => router.pushOperationsRoute(route, options)
   });
   const profile = createProfileController({ root: get('#profile-view'), sessionIdentity, announce, onReceipt, clearReceipt,
     onPreferences: (staff, owner) => session.updatePreferences(staff, owner),
@@ -168,6 +170,11 @@ export function createWorkflowApp() {
     },
     onEmailTestSubmitted: owner => {
       if (owner.ownerKey === sessionIdentity.actor()?.key) return operations.refresh({ silent: true, reconcileTest: false });
+    },
+    onStaffAuditHistory: async (organizationId, intent) => {
+      const owner = sessionIdentity.preferences();
+      if (intent.ownerKey !== sessionIdentity.actor()?.key) return;
+      if (await navigation.switchView('operations') && sessionIdentity.isCurrent(owner)) await operations.openStaffAuditScope(organizationId);
     },
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner),
     onConfigurationCommitted: (owner, scope) => {

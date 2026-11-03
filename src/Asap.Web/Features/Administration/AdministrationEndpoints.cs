@@ -321,15 +321,24 @@ public static class AdministrationEndpoints
 
     private static async Task<IResult> ListAuditAsync(
         HttpContext context,
+        string? scope,
         int? organizationId,
-        int? limit,
+        string? search, string? category, DateTimeOffset? fromUtc, DateTimeOffset? beforeUtc,
+        string? actorId, string? sort, int? page, int? pageSize,
         AdministrationService service,
-        CancellationToken cancellationToken) =>
-        ToResult(await service.ListAuditAsync(
-            StaffAuthenticationEndpoints.RequireCurrentStaff(context),
-            organizationId,
-            limit ?? 100,
+        CancellationToken cancellationToken)
+    {
+        var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+        var defaultScope = actor.Role == StaffRole.SuperAdmin ? LibraryScope.All : LibraryScope.ForLibrary(actor.OrganizationId);
+        if (scope is not null && organizationId.HasValue ||
+            !LibraryScope.TryParse(scope ?? organizationId?.ToString(System.Globalization.CultureInfo.InvariantCulture), defaultScope, out var requestedScope))
+        {
+            return Results.BadRequest(new { code = "audit_query_invalid" });
+        }
+        return ToResult(await service.ListAuditAsync(actor,
+            new AdministrationAuditQuery(requestedScope, search, category, fromUtc, beforeUtc, actorId, sort ?? "newest", page ?? 1, pageSize ?? 25),
             cancellationToken));
+    }
 
     private static async Task<IResult> RunWorkflowNowAsync(
         HttpContext context,

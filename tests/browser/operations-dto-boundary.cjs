@@ -162,6 +162,9 @@ async function main() {
       page.on('pageerror', error => report.pageErrors.push(error.message)); rejectNativeDialogs(page, report.pageErrors);
       await page.goto(`${origin}/staff/?stage=operations`, { waitUntil: 'networkidle' });
       await page.locator('#operations-view').waitFor({ state: 'visible' });
+      await page.locator('#operations-email-tab').click();
+      await refresh(page, () => page.locator('#email-view-scope').selectOption(scope));
+      await page.locator('#operations-workflow-tab').click();
       await refresh(page, () => page.locator('#operations-scope').selectOption(scope));
       await verifyProjection(page, scenario);
       await refresh(page, () => page.locator('#operations-scope').selectOption('2'));

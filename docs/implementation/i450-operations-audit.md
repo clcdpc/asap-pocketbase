@@ -17,8 +17,8 @@ are not application inputs.
 | --- | --- | --- | --- | --- |
 | #430 | Operations-only link removed; Settings link, saved context, exact recovery identity and focusable log retained | Focused email-test and Operations Node files PASS; saved-email real-SQL/Chromium journey 1/1 PASS with six checkpoints | Luna MAX independent review and closure audit PASS; no actionable findings | `ac57372` |
 | #431 | One refresh; truthful log/status; guarded Settings handoff; exact identity/recovery; latest current test visible beyond 500 failed rows | SQL 23/23 then targeted 6/6 PASS; final browser 1/1 and five focused Node invocations PASS | Luna MAX and Astra HIGH final R3 closure PASS; all findings resolved | `c33e327` |
-| #432 | One forced manual action; distinct deliberate identities, original-identity retry and gesture guards | Five frontend files PASS (262 navigation journeys); SQL 27/27 and browser 1/1 PASS | Luna MAX / Astra HIGH independent closure PASS; no actionable findings | Issue-specific commit introducing this row |
-| #434 | Pending | Pending | Luna MAX / Astra HIGH / Terra MAX pending | Pending |
+| #432 | One forced manual action; distinct deliberate identities, original-identity retry and gesture guards | Five frontend files PASS (262 navigation journeys); SQL 27/27 and browser 1/1 PASS | Luna MAX / Astra HIGH independent closure PASS; no actionable findings | `ee835b6` |
+| #434 | Three addressable sections; full-history scoped audit; Staff access handoff; approved responsive layout | SQL 11/11, retained browser 4/4, final audit browser 1/1, focused Node PASS; pre-review full frontend 68/68 | Luna MAX / Astra HIGH / Terra MAX final R2 closure PASS; all findings resolved | This change; exact SHA in consolidated PR |
 
 Implementation and functional-review agents use the requested available models:
 Luna MAX for #430 and functional reviews; Sol MAX for #431/#432/#434;
@@ -123,11 +123,64 @@ one activation from a later deliberate run; backend execution is unchanged.
   through endpoint, worker and SQL mutation/deduplication paths. Both issue
   closure audits passed before #434 implementation began.
 
+### #434 qualification and review resolutions
+
+Operations uses Workflow, Email operations and Administration audit, in order,
+with one main refresh and addressable section/filter state. Run, email and audit
+scopes remain independent. Settings email navigation and Staff access history
+use guarded departures; the global Staff roster opens aggregate staff history,
+while a selected library opens that library. System-only history remains a
+distinct selection. No mockup preview controls or sample records are shipped.
+
+The audit service filters/counts/pages the full authorized SQL history. Pages
+are bounded to 100 (UI 25), with numeric ID tie-breaking, historical actor
+choices, and local calendar dates converted to half-open UTC boundaries across
+DST changes. Existing transaction/actor locks protect authority. Only safe
+action-specific recorded details are projected; raw JSON is neither returned
+nor searched. Actor and affected-record fields stay separate.
+
+Luna MAX, Astra HIGH and Terra MAX independently inspected actual source,
+tests and receipts. Their final R2 issue closure decisions have no actionable
+findings. Terra compared both themes and desktop/mobile captures with the
+pinned reference and independently reproduced the corrected focus behavior
+using the production controller, markup and stylesheet in Chromium.
+
+| Finding | Resolution and regression |
+| --- | --- |
+| Astra/Luna P2: stale super-admin ticket exposes library options after demotion | Compare the locked current role/library with the ticket before any projection; real lifecycle demotion verifies stale-ticket rejection and current-admin scope isolation |
+| Terra/Luna P2: mobile queue fragments six columns | Readable minimum table width inside the existing scroll region; 320/390px in both themes verify token widths, keyboard scrolling and no page overflow |
+| Terra/Luna P2: disabling pager/main Refresh loses focus | Stable loading handoff and current-load/session/user-movement guards; delayed success/failure, boundaries, both directions and background refresh tests |
+| Terra/Luna R1 P2: restored pager focus is offscreen | Native focus reveals available buttons; unavailable boundaries reveal the results start. Full 25-row first/last pages verify viewport bounds as well as active-element identity |
+
+Executed qualification (separate runs, not unique-case totals):
+
+- Pre-review full frontend: 68/68 files PASS, no failures/skips. Final remediation
+  focused audit, Operations controller/UI and postcommit-401 files PASS; R1 also
+  passed shared email and selected email/staff navigation checks.
+- Real SQL: final 11/11 PASS, no skips, including full history beyond 200 rows,
+  scope/options/details/count isolation, actor narrowing, stable bigint ties,
+  DST boundaries, invalid queries and lifecycle revalidation.
+- R1 combined SQL/Chromium: 4/4 PASS, covering audit and the retained saved-email,
+  weekly-summary and UTC/bigint journeys. Final R2 audit journey: 1/1 PASS,
+  26 clean states, 22 visible-focus witnesses, four mobile queue cases and
+  48 native PNGs. Zero serious/critical axe findings, external requests, page
+  errors, unexpected missing images, page overflow or writes.
+- The new visibility assertion deliberately failed against retained R1 built
+  assets: Next was at y=3807–3851 in a 1000px viewport. Rebuilt R2 passed with
+  Next/Previous at y=913–956 and visible boundary/error targets. This failed
+  control run is retained separately and is not counted as qualification.
+- Final Release build: zero warnings/errors. All 25 frozen source/test hashes
+  were independently verified. Evidence is retained outside Git under the
+  existing `i450` root, using `i434-r1-review-*` and `i434-r2-review-*` names.
+
 ## Integration qualification
 
-Pending final implementation and adversarial audit. Test results below will
-record actual execution, rather than discovery or agent summaries alone.
-Expensive SQL/browser and WSLC acceptance suites run sequentially.
+The consolidated PR records the immutable final head, fresh complete frontend,
+non-browser .NET/SQL and browser execution receipts, full CI required gate,
+selected WSLC acceptance results and final Astra XHIGH adversarial closure.
+Counts come from current discovery and exact executed identities, with no
+skipped required checks. Expensive suites run sequentially; acceptance pins one
+application SHA/tooling snapshot/image and uses fresh disposable state per suite.
 
 ## Boundaries
 

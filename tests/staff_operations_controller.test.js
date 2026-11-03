@@ -568,6 +568,9 @@ async function loadOperationsController(load) {
       await controller.refresh();
 
       if (command.retry) {
+        get('#email-view-scope').value = '3';
+        get('#email-view-scope').dispatchEvent(new dom.window.Event('change'));
+        await controller.refresh();
         const row = [...get('#email-operations-table').querySelectorAll('tr')]
           .find(item => item.textContent.includes('71'));
         assert.ok(row, 'retry-email witness loads the captured failed row');
@@ -754,8 +757,8 @@ async function loadOperationsController(load) {
       assert.ok(exact[0].path.includes(`organizationId=${recovery.organizationId}`));
       assert.ok(exact[0].path.includes(recovery.id || `operationId=${operationId}`));
       if (recovery.organizationId === 1) {
-        assert.equal(controller.currentScope(), 'all');
-        assert.ok(calls.some(call => call.path === '/api/asap/staff/email-operations'), 'the authorized aggregate includes System tests');
+        assert.equal(controller.currentScope(), '1');
+        assert.ok(calls.some(call => call.path === '/api/asap/staff/email-operations?organizationId=1'), 'the explicit System view includes System tests');
       }
       pause = true;
       const oldRefresh = controller.refresh(); await started;
@@ -798,12 +801,12 @@ async function loadOperationsController(load) {
     controller.setStaff(owner); controller.activate(); await controller.refresh();
     assert.match(get('#queue-progress-table').textContent, /queue-visible-A-all/);
     assert.match(get('#email-operations-table').textContent, /email-visible-A-all/);
-    get('#operations-scope').value = '2';
-    get('#operations-scope').dispatchEvent(new dom.window.Event('change'));
+    get('#email-view-scope').value = '2';
+    get('#email-view-scope').dispatchEvent(new dom.window.Event('change'));
     assert.doesNotMatch(get('#queue-progress-table').textContent, /visible-A/, 'scope changes remove old queue rows before awaiting reads');
     assert.doesNotMatch(get('#email-operations-table').textContent, /visible-A/, 'scope changes remove old email rows before awaiting reads');
-    get('#operations-scope').value = '3';
-    get('#operations-scope').dispatchEvent(new dom.window.Event('change'));
+    get('#email-view-scope').value = '3';
+    get('#email-view-scope').dispatchEvent(new dom.window.Event('change'));
     await controller.refresh();
     assert.match(get('#email-operations-table').textContent, /email-visible-A-3/);
     resolveOld({ items: [{ queueName: 'stale-library-2' }] });
@@ -967,7 +970,7 @@ async function loadOperationsController(load) {
     assert.equal(rows().filter(row => row.cells[0].textContent === currentId).length, 1);
     assert.equal(rows()[0].querySelector('button').textContent.trim(), 'Retry', 'fresh listed retry proof stays on its complete listed row');
     assert.equal(calls.filter(call => call.init.method === 'POST').length, 1, 'submission and follow-up reads create one test request');
-    get('#operations-scope').value = '2'; get('#operations-scope').dispatchEvent(new dom.window.Event('change'));
+    get('#email-view-scope').value = '2'; get('#email-view-scope').dispatchEvent(new dom.window.Event('change'));
     assert.doesNotMatch(get('#email-operations-table').textContent, new RegExp(currentId), 'scope transitions immediately retire the exact row');
     await controller.refresh();
     assert.doesNotMatch(get('#email-operations-table').textContent, new RegExp(currentId));
@@ -979,7 +982,7 @@ async function loadOperationsController(load) {
     assert.doesNotMatch(get('#email-operations-table').textContent, new RegExp(currentId), 'a later load cannot reuse another account’s exact result');
     controller.dispose();
   });
-  for (const update of ['poll', 'replacement']) {
+  for (const update of ['poll', 'replacement', 'audit-poll', 'audit-failure']) {
     await fixture(async ({ load, get, dom }) => {
       const { createSessionIdentity } = await load('session-identity');
       const { createOperationsController } = await loadOperationsController(load);
@@ -1006,7 +1009,12 @@ async function loadOperationsController(load) {
         announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
           calls.push({ path, init });
           if (path.endsWith('/organizations')) return { data: organizationCatalog };
-          if (path.endsWith('/email-operations')) return table;
+          if (path.endsWith('/email-operations')) return update.startsWith('audit-') ? { items: [] } : table;
+          if (path.includes('/staff/audit?')) {
+            await table;
+            if (update === 'audit-failure') throw new Error('Audit read failed');
+            return { code: 'ok', data: { items: [], count: 0, page: 1, pageSize: 25, actors: [], libraries: [] } };
+          }
           if (path.includes(`/email-operations/${id}?`)) {
             observations += 1;
             return { code: 'ok', data: { id, organizationId: 1, status, deliveryMode: 'postmark',
@@ -1014,11 +1022,11 @@ async function loadOperationsController(load) {
           }
           return { items: [] };
         } });
-      controller.setStaff(owner); controller.activate(); await settle();
+      controller.setStaff(owner); controller.activate(update.startsWith('audit-') ? { section: 'audit' } : undefined); await settle();
       const loading = controller.refresh(); await settle();
       assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).status, 'pending');
       const beforePoll = observations;
-      if (update === 'poll') {
+      if (update !== 'replacement') {
         status = 'sent'; advance(2000); await settle();
         assert.equal(observations, beforePoll + 1, 'useful automatic observation remains enabled while table reads are slow');
         assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).status, 'sent');
@@ -1027,7 +1035,7 @@ async function loadOperationsController(load) {
           id: '9007199254740995', pending: true, status: 'pending' }));
       }
       releaseTable({ items: [] }); await loading;
-      if (update === 'poll') {
+      if (update !== 'replacement') {
         const row = get('#email-operations-table tbody tr');
         assert.equal(row.cells[0].textContent, id);
         assert.match(row.textContent, /Provider accepted/);

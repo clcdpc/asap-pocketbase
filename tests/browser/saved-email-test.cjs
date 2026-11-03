@@ -153,7 +153,7 @@ async function main() {
     await scan(page, 'settings-email-desktop');
     await setup.locator('[data-email-test="operations"]').click();
     await page.locator('#operations-view').waitFor({ state: 'visible' });
-    await page.waitForFunction(scope => document.getElementById('operations-scope').value === scope, scope);
+    await page.waitForFunction(scope => document.getElementById('email-view-scope').value === scope, scope);
     await page.waitForFunction(() => Object.keys(sessionStorage).some(key => {
       if (!key.startsWith('asap.staff.email-test.') || key.endsWith('.retirement-references')) return false;
       const record = JSON.parse(sessionStorage.getItem(key)); return record.id && !record.pending && !record.retired;
@@ -190,7 +190,7 @@ async function main() {
       'Settings retains View email operations after restoring a test reference');
     await mobileSetup.locator('[data-email-test="operations"]').press('Enter');
     await mobile.locator('#operations-view').waitFor({ state: 'visible' });
-    await mobile.waitForFunction(scope => document.getElementById('operations-scope').value === scope, scope);
+    await mobile.waitForFunction(scope => document.getElementById('email-view-scope').value === scope, scope);
     await mobile.waitForFunction(() => document.activeElement === document.getElementById('email-operations-table'));
     await mobile.locator('#refresh-operations').press('Enter');
     await mobile.locator('#email-operations-table tbody tr').filter({ hasText: reference }).filter({ hasText: 'Provider accepted' }).waitFor();
