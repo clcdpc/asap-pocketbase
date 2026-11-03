@@ -25,8 +25,8 @@ the parent Codex session.
 | 1 | #395 | Header compacted; focused DOM/scope checks and SQL/browser presentation PASS | Luna MAX clear after retained-test correction | `78b0943` |
 | 2 | #448 | Complete Branding fieldset moved first; focused DOM/logo and SQL/browser presentation PASS | Luna MAX clear, including rendered desktop/mobile | `0c8ccef` |
 | 3 | #445 | Redundant paragraph removed; focused DOM/picker/scope and SQL/browser tests PASS | Luna MAX clear, including desktop/mobile gap check | `35de01e` |
-| 4 | #449 | Explicit validated URL draft action; focused controller/layout/scope PASS, links 2/2 and SQL/browser 1/1 PASS | Luna MAX clear after wait/identity test corrections and rendered checks | This issue commit; exact SHA in PR |
-| 5 | #409 | Pending | Pending Luna MAX / Astra HIGH | Pending |
+| 4 | #449 | Explicit validated URL draft action; focused controller/layout/scope PASS, links 2/2 and SQL/browser 1/1 PASS | Luna MAX clear after wait/identity test corrections and rendered checks | `dde686a` |
+| 5 | #409 | Accepted credential help and local outcomes; Node, SQL 3/3 and final browser 1/1 PASS | Luna MAX / Astra HIGH clear after P2 correction | This issue commit; exact SHA in PR |
 | 6 | #437 | Pending | Pending Luna MAX / Astra HIGH | Pending |
 | 7 | #446 | Pending | Pending Luna MAX / Astra HIGH | Pending |
 | 8 | #447 | Pending | Pending Luna MAX / Astra HIGH | Pending |
@@ -171,3 +171,57 @@ feedback.
   remains.
 - Raw browser receipt: `results/i449-presentation.trx`; actual captures/report
   are in ignored `staff-presentation-861b1ec9f91041a6949e9ae1372923b3`.
+
+## #409 — Polaris credential status and local action feedback
+
+Implementation uses Sol MAX under the task's explicit complexity exception:
+diagnostic display shares cancellation and reload paths with committed and
+uncertain organization mutations. Functional review remains independent Luna
+MAX; security/data-integrity review uses Astra HIGH.
+
+Saved/missing help reads only accepted `hasApiKey` / `hasAdminPassword` booleans.
+Replacement values stay blank on load; saved presence does not claim current
+connectivity. Actions and local feedback form one right-aligned responsive group.
+The form becomes inert during sync, so a separate hidden live region outside
+the form announces local pending/results without duplicate visible notices.
+Existing receipt, configuration/catalog callbacks and recovery ownership remain.
+
+- Six focused Node scripts PASS: feedback, diagnostic, Staff Access, layout,
+  save-completion and mutation-scope race. Browser-script syntax and diff checks PASS.
+- Exact focused real-SQL/HTTP discovery and execution: PASS 3/3, no failures or
+  skips; covers setup readiness, invalid/retired/library Polaris writes and
+  administration/settings HTTP scope (`results/i409-sql.trx`).
+- Astra HIGH initial audit was clear. Three independently rerun Node files
+  and extra failed-preload, AbortError, late committed and uncertain-owner probes
+  pass. It verified blank/library payloads, accepted flags, unchanged protected
+  secret/auth contracts, receipts, reload-required/uncertain guards and live
+  region retirement.
+- Browser R1 failed an existing tab-focus assertion after accepted sync correctly
+  invalidated Queue data. Queue review completed late and moved focus during the
+  assertion. The test now awaits Queue visibility, refresh completion and quiet
+  feedback before the unchanged focus/offset checks. This is a test timing fix;
+  callbacks and focus styling are retained. R1 remains a failed receipt, not a pass.
+- Browser R2 passed 1/1 after the navigation-wait correction (124 scanned states),
+  before the credential-help correction below; it is historical qualification.
+- Luna P2: first credential replacement could be confirmed saved, then GET 503
+  left the help claiming no secret was saved. The regression reproduced this
+  before the fix. Only after exact acknowledgement and current-owner validation,
+  submitted replacements now receive explicit saved/reload-needed help; accepted
+  presence flags and secret input values are untouched. An authoritative GET
+  replaces the hint. Both-credential committed/rejected/uncertain cases and later
+  successful refresh pass. Astra independently verified those cases plus single-
+  credential, blank/library, later false-flag and retired-owner probes; final
+  security re-review is clear.
+- Final retained real-SQL browser R3: PASS 1/1, no failures/skips, 130 scanned
+  states. Six Polaris System contexts cover saved/missing replacements,
+  first-save/failed-refresh recovery, diagnostics, sync pending/success/rejected/
+  uncertain/committed-refresh-failed outcomes, keyboard, desktop/mobile and CSS
+  200% wrapping. Library disabled checks and previous header/Branding/URL checks
+  remain green. Deterministic endpoint responses exercise UI outcomes; the
+  separate real-SQL/HTTP tests above verify unchanged server authority. All
+  axe/image/overflow/traffic/page-error guards pass.
+- R1: `results/i409-presentation.trx` (failed); R2 and final R3 each retain their
+  own external log/TRX. Final captures/report are in ignored
+  `staff-presentation-d03961c7ddbd4460b97e071d25a91c88`. Luna final independent
+  source/TRX/report and desktop/mobile/200% rendered review is clear, including
+  the P2 regression and Queue focus wait. No actionable findings remain.

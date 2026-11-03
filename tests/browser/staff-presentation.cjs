@@ -7,9 +7,186 @@ const { chromium } = require('playwright');
 const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
 const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
 
+async function verifyPolarisSettings(page, width, scope, scan, report) {
+  await page.locator('#settings-nav-polaris').click();
+  const key = page.locator('#polaris-api-key'), password = page.locator('#polaris-admin-pass');
+  const keyStatus = page.locator('#polaris-api-key-status'), passwordStatus = page.locator('#polaris-admin-pass-status');
+  assert.equal(await page.getByLabel('API key', { exact: true }).count(), 1);
+  assert.equal(await page.getByLabel('System staff password', { exact: true }).count(), 1);
+  assert.equal(await key.inputValue(), ''); assert.equal(await password.inputValue(), '');
+  assert.equal(await key.getAttribute('aria-describedby'), 'polaris-api-key-status');
+  assert.equal(await password.getAttribute('aria-describedby'), 'polaris-admin-pass-status');
+  if (scope !== 'system') {
+    for (const control of [key, password, page.locator('#btn-test-polaris'), page.locator('#btn-sync-organizations')]) {
+      assert.equal(await control.isDisabled(), true, 'Polaris credentials and actions remain System only');
+    }
+    await scan(`settings-polaris-library-${scope}`);
+    return;
+  }
+
+  let savedKey = false, savedPassword = false, saveRejected = false, failedReload = false;
+  let version = 1, testReply = 'success', syncReply = 'success', releaseTest, releaseSync, testStarted, syncStarted;
+  const posted = [];
+  const settingsRoute = async route => {
+    if (failedReload) return route.fulfill({ status: 503, json: { message: 'Fixture settings reload unavailable.' } });
+    const response = await route.fetch();
+    assert.equal(response.status(), 200);
+    const data = await response.json();
+    data.version = `polaris-browser-${version}`;
+    const polaris = { ...data.stored.polaris, hasApiKey: savedKey, hasAdminPassword: savedPassword };
+    data.stored.polaris = polaris; data.stored.configuredSystem.polaris = polaris;
+    await route.fulfill({ response, json: data });
+  };
+  const saveRoute = async route => {
+    const body = route.request().postDataJSON(); posted.push(body);
+    if (saveRejected) return route.fulfill({ status: 400, json: { message: 'Polaris replacement rejected.' } });
+    if (body.polaris?.apiKey) savedKey = true;
+    if (body.polaris?.adminPassword) savedPassword = true;
+    await route.fulfill({ status: 200, json: { code: 'saved', data: { orgId: body.orgId, version: `polaris-browser-${++version}` } } });
+  };
+  const testRoute = async route => {
+    if (testReply === 'pending') await new Promise(resolve => { releaseTest = resolve; testStarted?.(); });
+    await route.fulfill(testReply === 'failure' ? { status: 502, json: { code: 'polaris_unavailable' } }
+      : { status: 200, json: { code: 'polaris_connected', data: { connected: true, organizationCount: 3 } } })
+      .catch(error => { if (!/closed|handled|aborted/i.test(error.message)) throw error; });
+  };
+  const syncRoute = async route => {
+    if (syncReply === 'pending') await new Promise(resolve => { releaseSync = resolve; syncStarted?.(); });
+    await route.fulfill(syncReply === 'uncertain' ? { status: 503, json: { message: 'Fixture provider unavailable.' } }
+      : syncReply === 'rejected' ? { status: 400, json: { message: 'Organizations could not be synchronized because the provider rejected this configuration. Review the saved system integration settings before trying again.' } }
+        : { status: 200, json: { code: 'synced', data: { received: 4, changed: 1 } } });
+  };
+  await page.route('**/api/asap/staff/settings?*', settingsRoute);
+  await page.route('**/api/asap/staff/settings', saveRoute);
+  await page.route('**/api/asap/staff/polaris/test', testRoute);
+  await page.route('**/api/asap/staff/organizations/sync', syncRoute);
+  const ready = () => page.waitForFunction(() => !document.getElementById('settings-form').inert &&
+    !document.getElementById('settings-refresh').disabled);
+  const reload = async () => { await page.locator('#settings-refresh').click(); await ready(); };
+  const save = async () => { await page.locator('#settings-save').click(); await ready(); };
+  const local = async (id, text) => {
+    await page.locator(id).filter({ hasText: text }).waitFor();
+    assert.equal(await page.locator('#polaris-action-announcement').textContent(), await page.locator(id).textContent());
+    for (const selector of ['#settings-message', '#app-status']) {
+      assert.doesNotMatch(await page.locator(selector).textContent(), /Connected;|Polaris connection|Synchronized|synchronization outcome|provider rejected/i,
+        'Polaris operation feedback has no duplicate visible global notice');
+    }
+  };
+  const geometry = () => page.locator('.settings-polaris-actions').evaluate(group => {
+    const rect = node => { const r = node.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height }; };
+    return { group: rect(group), buttons: [...group.querySelectorAll('button')].map(rect),
+      feedback: rect(group.querySelector('.settings-polaris-feedback')), liveOutsideForm: !document.getElementById('polaris-action-announcement').closest('form'),
+      livePosition: getComputedStyle(document.getElementById('polaris-action-announcement')).position };
+  });
+  try {
+    await reload();
+    assert.equal(await keyStatus.textContent(), 'No API key saved.');
+    assert.equal(await passwordStatus.textContent(), 'No system staff password saved.');
+    await key.fill('browser-replacement-key'); await password.fill('browser-replacement-password');
+    assert.equal(await keyStatus.textContent(), 'No API key saved.', 'typing leaves the accepted missing indicator unchanged');
+    saveRejected = true; await save();
+    assert.equal(await key.inputValue(), 'browser-replacement-key');
+    assert.equal(await password.inputValue(), 'browser-replacement-password');
+    assert.equal(await keyStatus.textContent(), 'No API key saved.', 'a rejected replacement is still unsaved');
+    saveRejected = false; failedReload = true;
+    await page.locator('#settings-save').click();
+    await page.locator('#settings-message').filter({ hasText: 'Settings saved, but current values could not be refreshed.' }).waitFor();
+    assert.equal(await keyStatus.textContent(), 'API key replacement saved. Reload settings to refresh the credential status.');
+    assert.equal(await passwordStatus.textContent(), 'System staff password replacement saved. Reload settings to refresh the credential status.');
+    assert.equal(await key.inputValue(), 'browser-replacement-key');
+    assert.equal(await password.inputValue(), 'browser-replacement-password');
+    await scan('settings-polaris-replacements-committed-reload-failed');
+    failedReload = false; await reload();
+    assert.equal(await key.inputValue(), ''); assert.equal(await password.inputValue(), '');
+    assert.match(await keyStatus.textContent(), /^API key saved\. Leave blank/);
+    assert.match(await passwordStatus.textContent(), /^System staff password saved\. Leave blank/);
+    assert.equal(posted.at(-1).polaris.apiKey, 'browser-replacement-key');
+    assert.equal(posted.at(-1).polaris.adminPassword, 'browser-replacement-password');
+    await page.locator('#polaris-access-id').fill('blank-secret-browser-witness'); await save();
+    assert.equal(Object.hasOwn(posted.at(-1).polaris, 'apiKey'), false);
+    assert.equal(Object.hasOwn(posted.at(-1).polaris, 'adminPassword'), false);
+    await reload();
+    const emptyGeometry = await geometry();
+    await page.locator('#polaris-system-user-id').focus(); await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'btn-test-polaris');
+    assert.equal(await page.locator('#btn-test-polaris').evaluate(button => button.matches(':focus-visible')), true);
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'btn-sync-organizations');
+    const testPending = new Promise(resolve => { testStarted = resolve; });
+    testReply = 'pending'; await page.locator('#btn-test-polaris').press('Enter'); await testPending;
+    await local('#polaris-test-result', 'Testing saved Polaris connection...');
+    await page.waitForFunction(() => document.getElementById('btn-test-polaris').disabled);
+    await scan('settings-polaris-test-pending');
+    testReply = 'success'; releaseTest();
+    await local('#polaris-test-result', 'Connected; 3 organizations available.');
+    const connectedGeometry = await geometry();
+    assert.equal(connectedGeometry.liveOutsideForm, true); assert.equal(connectedGeometry.livePosition, 'absolute');
+    if (width > 760) {
+      const { group, buttons, feedback } = connectedGeometry;
+      assert.ok(Math.abs(feedback.right - group.right) < 1, 'Polaris action/result group is right aligned');
+      assert.ok(buttons[0].right < buttons[1].left && buttons[1].right < feedback.left, 'feedback follows both buttons');
+      for (const button of buttons) {
+        assert.ok(Math.abs((button.top + button.bottom - feedback.top - feedback.bottom) / 2) < 1, 'feedback and buttons are vertically centered');
+      }
+      assert.ok(Math.abs(buttons[0].left - emptyGeometry.buttons[0].left) < 1, 'feedback has reserved space before it arrives');
+    } else {
+      assert.ok(connectedGeometry.feedback.top >= connectedGeometry.buttons.at(-1).bottom, 'mobile feedback wraps below the buttons');
+    }
+    await scan('settings-polaris-connected');
+    testReply = 'failure'; await page.locator('#btn-test-polaris:not([disabled])').click();
+    await local('#polaris-test-result', 'Polaris is unavailable.');
+    assert.match(await keyStatus.textContent(), /^API key saved\./, 'connection failure cannot change accepted saved presence');
+    const syncPending = new Promise(resolve => { syncStarted = resolve; });
+    syncReply = 'pending'; await page.locator('#btn-sync-organizations').click(); await syncPending;
+    await local('#organizations-sync-result', 'Synchronizing Polaris organizations...');
+    assert.equal(await page.locator('#polaris-test-result').textContent(), '');
+    assert.equal(await page.locator('#settings-form').evaluate(form => form.inert), true);
+    await scan('settings-polaris-sync-pending');
+    syncReply = 'success'; releaseSync();
+    await local('#organizations-sync-result', 'Synchronized 4 organizations.'); await ready();
+    await scan('settings-polaris-synchronized');
+    failedReload = true; await page.locator('#btn-sync-organizations').click();
+    await local('#organizations-sync-result', 'Synchronized 4 organizations. Current values could not be refreshed. Reload before editing.');
+    assert.equal(await page.locator('#settings-form').evaluate(form => form.inert), true);
+    await scan('settings-polaris-committed-reload-failed');
+    failedReload = false; await reload();
+    assert.equal(await page.locator('#organizations-sync-result').textContent(), '');
+    syncReply = 'uncertain'; await page.locator('#btn-sync-organizations').click();
+    await local('#organizations-sync-result', 'Organization synchronization outcome is uncertain. Reload current values before retrying.');
+    assert.equal(await page.locator('#settings-form').evaluate(form => form.inert), true);
+    await scan('settings-polaris-uncertain');
+    await reload();
+    syncReply = 'rejected'; await page.locator('#btn-sync-organizations').click();
+    await local('#organizations-sync-result', 'Organizations could not be synchronized because the provider rejected'); await ready();
+    if (width === 1280) {
+      await page.evaluate(() => { document.documentElement.style.zoom = '2'; });
+      await scan('settings-polaris-zoom-200');
+      await page.evaluate(() => { document.documentElement.style.zoom = ''; });
+    } else { await scan('settings-polaris-rejected'); }
+    testReply = 'pending'; releaseTest = null;
+    const retiredTestPending = new Promise(resolve => { testStarted = resolve; });
+    await page.locator('#btn-test-polaris').click(); await retiredTestPending;
+    await local('#polaris-test-result', 'Testing saved Polaris connection...');
+    await page.locator('#profile-button').click(); await page.locator('#profile-view:not([hidden])').waitFor();
+    testReply = 'success'; releaseTest();
+    await page.locator('[data-view="settings"]').click(); await ready();
+    assert.equal(await page.locator('#polaris-test-result').textContent(), '', 'retired diagnostic feedback stays cleared after returning');
+    assert.equal(await page.locator('#polaris-action-announcement').textContent(), '');
+    report.polarisSettings.push({ width, scope, blankReplacements: true, savedFlags: true,
+      localFeedback: true, mutationRecovery: true, emptyGeometry, connectedGeometry });
+  } finally {
+    await page.evaluate(() => { document.documentElement.style.zoom = ''; });
+    await page.unroute('**/api/asap/staff/settings?*', settingsRoute);
+    await page.unroute('**/api/asap/staff/settings', saveRoute);
+    await page.unroute('**/api/asap/staff/polaris/test', testRoute);
+    await page.unroute('**/api/asap/staff/organizations/sync', syncRoute);
+    await reload();
+  }
+}
+
 (async () => {
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
-  const report = { externalRequests: [], pageErrors: [], states: [], settingsHeaders: [], brandingPlacements: [], staffUrlSuggestions: [] };
+  const report = { externalRequests: [], pageErrors: [], states: [], settingsHeaders: [], brandingPlacements: [], staffUrlSuggestions: [], polarisSettings: [] };
   for (const persistent of [false, true]) {
     const browser = await chromium.launch({ headless: true, ...(persistent ? { ignoreDefaultArgs: ['--hide-scrollbars'] } : {}) });
     try {
@@ -367,6 +544,7 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
             assert.equal(await useCurrentAddress.evaluate(node => node.matches(':disabled')), true,
               `${width}px/${scope}: the suggestion action is disabled in Library scope`);
           }
+          await verifyPolarisSettings(page, width, scope, scan, report);
           await page.locator('#settings-nav-workflow').click();
           await measureHeading('#add-common-creator');
           assert.equal(await page.locator('#patron-code-eligibility legend').textContent(), 'Patron code eligibility');
@@ -456,6 +634,11 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
           await page.evaluate(() => { document.documentElement.style.zoom = ''; });
         }
         await page.locator('[data-view="queue"]').click();
+        // Polaris sync retires the operational catalog. Finish its reviewed route
+        // activation and queue reload before checking the tab's keyboard focus.
+        await page.locator('#queue-view:not([hidden])').waitFor();
+        await page.locator('#refresh-queue:not([disabled])').waitFor();
+        await quietFeedback();
         const lastTab = page.locator('.view-tabs button:not([hidden])').last();
         await page.keyboard.press('Tab');
         await lastTab.focus();

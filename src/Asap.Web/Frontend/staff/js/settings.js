@@ -288,6 +288,7 @@ export function createSettingsController({
     syncOrganizations: root.querySelector('#btn-sync-organizations'),
     polarisResult: root.querySelector('#polaris-test-result'),
     syncResult: root.querySelector('#organizations-sync-result'),
+    polarisAnnouncement: root.querySelector('#polaris-action-announcement'),
     organizationStatus: root.querySelector('#organizations-status-message'),
     organizations: root.querySelector('#settings-organizations-list'),
     enabledLibraries: root.querySelector('#enabled-libraries-checkbox-container'),
@@ -570,22 +571,22 @@ export function createSettingsController({
     }
   }
 
-  function recordFailure(operation, error, message) {
+  function recordFailure(operation, error, message, report = notify) {
     if (operation.outcome === 'committed') return;
     operation.outcome = isUnconfirmedMutationFailure(error) ? 'uncertain' : 'rejected';
     if (operation.outcome !== 'uncertain') return;
     onUnconfirmed(message, operation.owner, operation);
-    if (isSettingsOperationCurrent(operation)) { state.unconfirmedMutation = operation; markUnconfirmedMutation(message); }
+    if (isSettingsOperationCurrent(operation)) { state.unconfirmedMutation = operation; markUnconfirmedMutation(message, report); }
   }
 
   function isUnconfirmedMutationFailure(error) {
     return error?.outcomeUnknown === true || !error?.status || error.status === 408 || error.status >= 500 || isAbortError(error);
   }
 
-  function markUnconfirmedMutation(message) {
+  function markUnconfirmedMutation(message, report = notify) {
     state.outcomeUncertain = true;
     state.awaitingReload = true;
-    notify(message, 'error');
+    report(message, 'error');
   }
 
   function holdSettingsMutation(operation) {
@@ -625,6 +626,22 @@ export function createSettingsController({
     reads.begin('administration-polaris-test').abort();
     polarisTest = null;
     dom.testPolaris.disabled = false;
+    clearPolarisFeedback();
+  }
+
+  function clearPolarisFeedback() {
+    for (const result of [dom.polarisResult, dom.syncResult]) {
+      result.textContent = '';
+      result.className = 'settings-result';
+    }
+    dom.polarisAnnouncement.textContent = '';
+  }
+
+  function setPolarisFeedback(result, message, kind = '') {
+    clearPolarisFeedback();
+    result.textContent = message;
+    result.className = `settings-result${kind ? ` ${kind}` : ''}`;
+    dom.polarisAnnouncement.textContent = message;
   }
 
   function organizationId() {
@@ -966,6 +983,12 @@ export function createSettingsController({
     for (const [key, id] of POLARIS_FIELDS) writeControl(document.getElementById(id), property(polaris, key));
     document.getElementById('polaris-api-key').value = '';
     document.getElementById('polaris-admin-pass').value = '';
+    document.getElementById('polaris-api-key-status').textContent = property(polaris, 'hasApiKey') === true
+      ? 'API key saved. Leave blank to keep the current key; enter a new key to replace it.'
+      : 'No API key saved.';
+    document.getElementById('polaris-admin-pass-status').textContent = property(polaris, 'hasAdminPassword') === true
+      ? 'System staff password saved. Leave blank to keep the current password; enter a new password to replace it.'
+      : 'No system staff password saved.';
   }
 
   function setSender(email) {
@@ -1272,6 +1295,7 @@ export function createSettingsController({
   }
 
   function populate(data) {
+    clearPolarisFeedback();
     releaseLogoDraft();
     dom.logo.value = '';
     dom.discardLogoDraft.hidden = true;
@@ -1363,6 +1387,8 @@ export function createSettingsController({
   async function load(options = {}) {
     if (disposed || !state.staff || state.staff.role === 'staff') return;
     if (state.pendingMutation && state.pendingMutation !== options.owner) return false;
+    if (options.owner !== polarisTest && options.owner?.slot !== 'administration-settings-organization-sync') cancelPolarisTest();
+    const report = options.report || notify;
     reads.begin('administration-patron-codes').abort();
     const context = captureSettingsContext();
     state.loading = true;
@@ -1388,7 +1414,7 @@ export function createSettingsController({
       if (!loadState.isCurrent() || !isSettingsContextCurrent(context) || !state.visible ||
           state.pendingMutation && state.pendingMutation !== options.owner) return false;
       if (snapshot !== snapshotDrafts()) {
-        notify('Settings edits changed during reload. Save or discard the edits before reloading again.', 'warning');
+        report('Settings edits changed during reload. Save or discard the edits before reloading again.', 'warning');
         return false;
       }
       const data = settingsResponse?.data && settingsResponse?.version === undefined
@@ -1428,7 +1454,7 @@ export function createSettingsController({
       return true;
     } catch (error) {
       if (loadState.isCurrent() && isSettingsContextCurrent(context) && state.visible && !isAbortError(error) && error.status !== 401) {
-        notify(state.outcomeUncertain
+        report(state.outcomeUncertain
           ? 'Settings change outcome is still uncertain. Current values could not be reloaded; try again before editing.'
           : error.message || 'Settings could not be loaded.', 'error');
       }
@@ -1821,6 +1847,14 @@ export function createSettingsController({
       if (mutation.catalogChanged) onOrganizationCatalogCommitted(mutation.owner);
       if (!isSettingsOperationCurrent(mutation)) return;
       state.data.version = response?.data?.version || state.data.version;
+      if (payload.polaris?.apiKey) {
+        document.getElementById('polaris-api-key-status').textContent =
+          'API key replacement saved. Reload settings to refresh the credential status.';
+      }
+      if (payload.polaris?.adminPassword) {
+        document.getElementById('polaris-admin-pass-status').textContent =
+          'System staff password replacement saved. Reload settings to refresh the credential status.';
+      }
       state.baselineSnapshot = snapshotForm(dom.form);
       domainEditors.setBaseline();
       state.awaitingReload = true;
@@ -2014,9 +2048,12 @@ export function createSettingsController({
     const operation = beginSettingsOperation('administration-polaris-test');
     polarisTest = operation;
     dom.testPolaris.disabled = true;
+    setPolarisFeedback(dom.polarisResult, 'Testing saved Polaris connection...');
     try {
-      if (isDirty() && !await load({ silent: true })) return;
+      if (isDirty() && !await load({ silent: true, owner: operation,
+        report: () => setPolarisFeedback(dom.polarisResult, 'The Polaris connection test could not start because saved settings could not be reloaded.', 'error') })) return;
       if (!isSettingsOperationCurrent(operation)) return;
+      setPolarisFeedback(dom.polarisResult, 'Testing saved Polaris connection...');
       const response = await authorizedJson('/api/asap/staff/polaris/test', {
         method: 'POST',
         body: {},
@@ -2028,15 +2065,11 @@ export function createSettingsController({
         throw new Error('Polaris connection response is incomplete.');
       }
       const data = response.data;
-      dom.polarisResult.textContent = data.connected
-        ? `Connected; ${data.organizationCount || 0} organizations available.`
-        : `Polaris is unavailable${data.errorCode ? ` (${data.errorCode})` : ''}.`;
-      notify(data.connected ? 'Polaris connection succeeded.' : 'Polaris connection is unavailable.', data.connected ? 'success' : 'error');
+      setPolarisFeedback(dom.polarisResult, `Connected; ${data.organizationCount} organizations available.`, 'success');
     } catch (error) {
       if (isSettingsOperationCurrent(operation) && error.status !== 401 && !isAbortError(error)) {
         const unavailable = error.status === 502 || error.response?.code === 'polaris_unavailable';
-        dom.polarisResult.textContent = unavailable ? 'Polaris is unavailable.' : 'The Polaris connection test could not be completed.';
-        notify(dom.polarisResult.textContent, 'error');
+        setPolarisFeedback(dom.polarisResult, unavailable ? 'Polaris is unavailable.' : 'The Polaris connection test could not be completed.', 'error');
       }
     } finally {
       if (polarisTest === operation) { polarisTest = null; if (!disposed) dom.testPolaris.disabled = false; }
@@ -2048,6 +2081,7 @@ export function createSettingsController({
     const mutation = beginSettingsMutation('administration-settings-organization-sync', null);
     if (!mutation) return;
     dom.syncOrganizations.disabled = true;
+    setPolarisFeedback(dom.syncResult, 'Synchronizing Polaris organizations...');
     try {
       const response = await authorizedJson('/api/asap/staff/organizations/sync', {
         method: 'POST',
@@ -2060,20 +2094,27 @@ export function createSettingsController({
       recordCommitted(mutation, 'Polaris organizations synchronized.', 'system');
       onOrganizationCatalogCommitted(mutation.owner);
       if (!isSettingsOperationCurrent(mutation)) return;
-      dom.syncResult.textContent = `Synchronized ${response.data.received} organizations.`;
-      const refreshed = await load({ silent: true, owner: mutation });
-      if (isSettingsOperationCurrent(mutation)) notify(refreshed
-        ? 'Polaris organizations synchronized.'
-        : 'Polaris organizations synchronized, but current values could not be refreshed.',
-      refreshed ? 'success' : 'error');
+      const summary = `Synchronized ${response.data.received} organizations.`;
+      setPolarisFeedback(dom.syncResult, `${summary} Refreshing current values...`);
+      const refreshed = await load({ silent: true, owner: mutation, report: () => {} });
+      if (isSettingsOperationCurrent(mutation)) setPolarisFeedback(dom.syncResult, refreshed
+        ? summary : `${summary} Current values could not be refreshed. Reload before editing.`, refreshed ? 'success' : 'error');
     } catch (error) {
-      recordFailure(mutation, error, 'Settings change outcome is uncertain. Reload current values before retrying.');
+      recordFailure(mutation, error, 'Organization synchronization outcome is uncertain. Reload current values before retrying.',
+        (message, kind) => setPolarisFeedback(dom.syncResult, message, kind));
       if (isSettingsOperationCurrent(mutation) && error.status !== 401 && !isAbortError(error)) {
-        notify(error.message || 'Organizations could not be synchronized.', 'error');
+        if (mutation.outcome === 'committed') {
+          setPolarisFeedback(dom.syncResult, 'Polaris organizations synchronized, but current values could not be refreshed. Reload before editing.', 'error');
+        } else if (mutation.outcome !== 'uncertain') {
+          setPolarisFeedback(dom.syncResult, error.message || 'Organizations could not be synchronized.', 'error');
+        }
       }
     } finally {
       finishSettingsMutation(mutation);
-      if (isSettingsContextCurrent(mutation.context)) dom.syncOrganizations.disabled = false;
+      if (isSettingsContextCurrent(mutation.context)) {
+        dom.syncOrganizations.disabled = false;
+        updateDirtyState();
+      }
     }
   }
 

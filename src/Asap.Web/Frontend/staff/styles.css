@@ -387,6 +387,8 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-staff-url-control #system-staff-url-candidate { grid-column: 1 / -1; margin: 0; }
 .settings-staff-url-control #system-staff-url-candidate:empty { display: none; }
 .settings-field.wide { grid-column: 1 / -1; }
+.settings-field[data-setting-section="polaris"] { align-content: start; }
+.settings-field[data-setting-section="polaris"] .field-help { font-weight: 400; }
 .settings-grid > .wide { grid-column: 1 / -1; }
 .settings-field textarea { width: 100%; }
 .patron-text-label { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; }
@@ -418,6 +420,11 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 #patron-public-links .settings-field { margin-top: 12px; }
 #patron-public-links input, #patron-public-links textarea { width: 100%; overflow-wrap: anywhere; }
 .settings-inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.settings-polaris-actions { margin-top: 0; }
+.settings-polaris-actions > button { flex: 0 0 auto; max-width: 100%; }
+.settings-polaris-feedback { flex: 0 1 24rem; min-width: 0; min-height: 22px; max-width: 100%; }
+.settings-polaris-feedback .settings-result { min-height: 0; margin: 0; overflow-wrap: anywhere; }
+.settings-polaris-feedback .settings-result:empty { display: none; }
 .settings-row-editor { display: grid; gap: 10px; min-width: 0; }
 .settings-editor-row {
   display: grid;

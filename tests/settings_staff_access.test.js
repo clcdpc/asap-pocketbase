@@ -660,7 +660,8 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         `${transfer}: the new owner can start its own sync without waiting for the retired request`);
       assert.equal(replacementSyncStillOwnsDisabledState, true,
         `${transfer}: the retired completion cannot unlock a newer pending sync`);
-      assert.equal(replacementMessageBeforeItsResult, '', `${transfer}: the retired result does not paint success into the new owner`);
+      assert.equal(replacementMessageBeforeItsResult, 'Synchronizing Polaris organizations...',
+        `${transfer}: the retired result does not replace the new owner's pending feedback`);
       assert.deepStrictEqual(receiptOwners, [actorA, actorB], `${transfer}: each known response retains its captured owner`);
       assert.deepStrictEqual(catalogCallbackOwners, [actorA, actorB]);
       assert.deepStrictEqual(acceptedCatalogOwners, [actorB], `${transfer}: stale catalog callback cannot affect the replacement owner`);
