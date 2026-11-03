@@ -5,7 +5,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { nativeZoom } = require('./helpers/accessibility.cjs');
+const { nativeZoom, visibleEvidence } = require('./helpers/accessibility.cjs');
 const { actionGeometry, settleActions, activateRowAction } = require('./helpers/request-actions.cjs');
 const frontend = path.resolve(__dirname, '../../src/Asap.Web/Frontend');
 
@@ -105,7 +105,55 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
     assert.equal(await more.evaluate(node => node === document.activeElement), true);
     await more.press(activation);
     await page.keyboard.press('Escape');
+    await more.press(activation);
+    const fullyClipped = await page.locator('#horizontal-actions').evaluate(node => {
+      node.scrollLeft = 0;
+      const viewport = node.getBoundingClientRect(), trigger = node.querySelector('.request-row-more').getBoundingClientRect();
+      return trigger.left >= viewport.right;
+    });
+    assert.equal(fullyClipped, true, 'The scroll moves More entirely outside the visible grid');
+    await settleActions(page);
+    assert.equal(await more.getAttribute('aria-expanded'), 'false');
+    assert.equal(await more.evaluate(node => node === document.activeElement), true);
+    await visibleEvidence(more);
+    await page.locator('#horizontal-actions').dispatchEvent('scroll');
+    assert.equal(await more.getAttribute('aria-expanded'), 'false', 'Focus-reveal scroll events cannot reopen the menu');
+    await more.press(activation);
+    assert.equal(await more.getAttribute('aria-expanded'), 'true', 'The revealed trigger can reopen normally');
+    await page.keyboard.press('Escape');
+    await visibleEvidence(more);
   }
+  const beforeInterruptedScroll = await page.evaluate(() => calls.length);
+  await more.press('Enter');
+  await page.locator('#horizontal-actions').evaluate(node => {
+    node.scrollLeft = 0;
+    document.querySelector('#fallback').focus();
+  });
+  await settleActions(page);
+  assert.equal(await more.getAttribute('aria-expanded'), 'false');
+  assert.equal(await page.locator('#fallback').evaluate(node => node === document.activeElement), true,
+    'A scroll dismissal must not steal a newer focus target');
+  assert.equal(await page.locator('#horizontal-actions').evaluate(node => node.scrollLeft), 0);
+  await more.focus(); await more.press('Space'); await settleActions(page);
+  assert.equal(await more.getAttribute('aria-expanded'), 'true');
+  await page.locator('#horizontal-actions').evaluate(node => {
+    window.retiredMore = node.querySelector('.request-row-more');
+    node.scrollLeft = 0;
+    ref(null);
+  });
+  await settleActions(page);
+  assert.equal(await page.locator('#fallback').evaluate(node => node === document.activeElement), true);
+  assert.equal(await page.evaluate(() => retiredMore.isConnected), false);
+  assert.equal(await page.locator('[popover]:popover-open').count(), 0);
+  assert.equal(await page.locator('#horizontal-actions').evaluate(node => node.scrollLeft), 0,
+    'A queued scroll cannot reveal a retired row');
+  await page.evaluate(() => { retiredMore.click(); mount(6); }); await settleActions(page);
+  await page.locator('#horizontal-actions').dispatchEvent('scroll');
+  assert.equal(await page.locator('[popover]:popover-open').count(), 0);
+  assert.equal(await page.evaluate(() => calls.length), beforeInterruptedScroll, 'Dismissal and retirement never dispatch an action');
+  await more.focus(); await more.press('Enter'); await settleActions(page);
+  assert.equal(await more.getAttribute('aria-expanded'), 'true', 'A new row is unaffected by retired scroll work');
+  await page.keyboard.press('Escape'); await visibleEvidence(more);
   await nativeZoom(context, page, 1);
   await page.evaluate(() => {
     const fixture = document.querySelector('#fixture'), outer = document.querySelector('#horizontal-actions');

@@ -47,7 +47,9 @@ to a connected control and promotes a focused command when space permits.
 Scroll dismissal compares the current More anchor with its opening position:
 keyboard focus may scroll an offscreen cell before activation and deliver that
 scroll event after the popup opens. An unchanged anchor keeps the popup open;
-actual anchor movement closes it and returns focus to More.
+actual anchor movement closes it. If the menu still owns focus, native focus
+restoration reveals More even when scrolling clipped it completely. A newer
+focus target is preserved; queued scroll work cannot revive a retired row.
 
 ## First-party menu audit
 
@@ -79,7 +81,10 @@ page-wide partial-name selectors must not confuse those two intentional controls
 `tests/acceptance/direct-actions.test.cjs` checks the shipped component/CSS/fonts
 in Chromium, including native zoom, forced colors and complete labels. Its native
 keyboard regression first reproduces the delayed focus-scroll dismissal, then
-checks unchanged-position events, genuine scroll dismissal and connected focus.
+checks unchanged-position events, genuine scroll dismissal and visible connected
+focus after full clipping at actual 200%, repeated reopening, newer focus and
+row retirement before a queued scroll event. The SQL-backed native-zoom journey
+also scrolls the trigger completely out of view at both physical widths.
 
 `i403` is the disposable acceptance suite. Run with `d1,q1,pr410` as documented in
 `tests/acceptance/README.md`. Generated evidence is local and never committed.

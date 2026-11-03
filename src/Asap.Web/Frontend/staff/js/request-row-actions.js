@@ -73,7 +73,12 @@ export function requestRowActions({ id, actions, live, onOpen, fallback }) {
       if (!opened()) return;
       popup.hidePopover();
       more.setAttribute('aria-expanded', 'false');
-      if (restore && more.isConnected) more.focus({ preventScroll: true });
+      // Hiding a popover may already restore focus without scrolling. Explicitly
+      // reveal the trigger, even when the browser considers it focused already.
+      if (restore && more.isConnected) {
+        more.focus({ preventScroll: true });
+        more.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      }
     }
     more.addEventListener('click', event => {
       if (!live(event)) return;

@@ -7,6 +7,7 @@ const { chromium } = require('playwright');
 const verifyMixedFieldLayout = require('./form-layout.cjs');
 const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
 const { actionGeometry, activateRowAction } = require('../acceptance/helpers/request-actions.cjs');
+const { visibleEvidence } = require('../acceptance/helpers/accessibility.cjs');
 
 // Chromium's tab API changes actual browser zoom. CSS zoom and pinch scaling
 // do not exercise the same viewport, native controls or top-layer geometry.
@@ -90,6 +91,16 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
         .violations.filter(item => ['serious', 'critical'].includes(item.impact)), sourceId), []);
       await page.keyboard.press('Escape');
       assert.equal(await more.evaluate(node => node === document.activeElement), true);
+      await more.press('Space');
+      assert.equal(await more.evaluate(node => {
+        const wrapper = node.closest('.gridjs-wrapper');
+        wrapper.scrollLeft = 0;
+        return node.getBoundingClientRect().left >= wrapper.getBoundingClientRect().right;
+      }), true, 'The native-zoom grid scroll fully clips the open menu trigger');
+      await page.waitForFunction(id => document.querySelector(`#request-row-${id}-actions`)
+        ?.matches(':popover-open') === false, sourceId);
+      assert.equal(await more.evaluate(node => node === document.activeElement), true);
+      await visibleEvidence(more);
       // The global axe scan may scroll the table and correctly dismiss an
       // anchored popup. Verify Escape before that independent full-page audit.
       await scan('table');
