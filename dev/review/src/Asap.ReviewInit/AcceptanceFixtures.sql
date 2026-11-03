@@ -105,6 +105,23 @@ IF NOT EXISTS (SELECT 1 FROM asap.PatronCodeEligibilityMember WHERE Organization
 
 -- Q1 presentation/navigation only: 24 extra open tasks plus the two existing
 -- copy seeds cross the 25-row page boundary. No acceptance scenario mutates them.
+-- I390 draft-only review: one enabled requirement and one retained disabled
+-- rule. These library-owned records never change application schema or guards.
+INSERT INTO asap.PatronCustomField (LibraryOrganizationId, FieldKey, FieldType, Label, IsEnabled, SortOrder)
+SELECT 2, f.FieldKey, N'text', f.Label, f.IsEnabled, f.SortOrder
+FROM (VALUES
+    (N'i390_note', N'Synthetic recommendation details', 1, 910),
+    (N'i390_retired', N'Synthetic retired field', 0, 920)
+) f(FieldKey, Label, IsEnabled, SortOrder)
+WHERE NOT EXISTS (SELECT 1 FROM asap.PatronCustomField d WHERE d.LibraryOrganizationId = 2 AND d.FieldKey = f.FieldKey);
+
+INSERT INTO asap.MaterialFormatCustomFieldRule (LibraryOrganizationId, MaterialFormatId, PatronCustomFieldId, Mode, LabelOverride)
+SELECT 2, @book, d.Id, N'required', CASE WHEN d.FieldKey = N'i390_retired' THEN N'Retained historical label' ELSE NULL END
+FROM asap.PatronCustomField d
+WHERE d.LibraryOrganizationId = 2 AND d.FieldKey IN (N'i390_note', N'i390_retired')
+    AND NOT EXISTS (SELECT 1 FROM asap.MaterialFormatCustomFieldRule r
+        WHERE r.LibraryOrganizationId = 2 AND r.MaterialFormatId = @book AND r.PatronCustomFieldId = d.Id);
+
 UPDATE asap.SystemSettings SET LeapBibUrlPattern = N'https://catalog.example.org/bib/{{bibid}}'
 WHERE OrganizationId = 1 AND NULLIF(LTRIM(RTRIM(LeapBibUrlPattern)), N'') IS NULL;
 IF NOT EXISTS (SELECT 1 FROM asap.Organization WHERE Id = 3)

@@ -110,6 +110,10 @@ Final human accessibility acceptance remains under #398.
 The new five workflow fixtures are read-only and outside the mutation allowlist.
 I403's sole writable scenario remains its existing approved synthetic Purchase.
 Real provider mutations are not authorized or used. Human assistive-technology
-acceptance is #398. PR #420 integration remains deferred until its normal merge;
-then retain both suites/fixtures/native scans/CSS and run the combined registry
-and `i390,i403,s1,d1,q1,pr410` qualification described in the acceptance README.
+acceptance is #398. PR #420 merged as
+`50f1483a30e2b738b0082e91c452081011f502c6`; PR #421 integrates that actual
+base, retaining both suites, fixtures, native scans and CSS. The combined
+`i390,i403,s1,d1,q1,pr410` qualification and independent integration review are
+described in the acceptance README. For this authorized dev rollout, full CI is
+deferred to the actual deployment qualification, which must force a fresh run;
+the existing workflow completes full CI before activation.

@@ -180,6 +180,7 @@ async function main() {
     await admin.locator('#settings-nav-workflow').click();
     await admin.locator('#allow-patron-autohold-opt-out').check();
     await admin.locator('#settings-nav-patron').click();
+    await admin.locator('#format-rules-editor [data-rule-code="book"] [data-rule-toggle]').click();
     await admin.locator('#format-rules-editor [data-rule-code="book"] [data-format-field="publication"]').selectOption('optional');
     await admin.locator('#publication-options-use-system').uncheck();
     const publications = admin.locator('#publication-options-editor [data-domain-row]');

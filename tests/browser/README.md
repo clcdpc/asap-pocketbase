@@ -23,6 +23,10 @@ journeys use the Testing Kestrel fixtures:
   GET/editor POST/reload, ownership, override metadata and lossless identity;
   the Campaign 2 super-admin/library-admin cases cover editable new keys,
   collisions, placeholder focus ownership, conditional fields and scope guards.
+  The focused Format rules draft case seeds colliding generated format/field
+  names, then creates a format and custom field in one global Save. It verifies
+  the original required rule and the new rule independently through POST,
+  SQL and reload, with desktop/mobile axe and overflow checks.
 - `functional-acceptance.cjs`: real Settings editor to patron form to SQL,
   required/hidden/optional fields, stale Settings writes, validation failures,
   one pickup write, committed response loss, patron switching, a current
@@ -49,9 +53,11 @@ journeys use the Testing Kestrel fixtures:
   sort/page/refresh/filter state, row/title/menu keyboard behavior, Purchase,
   Reject, Claim and Unclaim. An 80-event history checks the persistent footer.
   `staff-native-zoom.cjs` uses Chromium's tab zoom API through a test-only local
-  extension at physical widths 1280 and 1440. Eight states cover the table's
-  open menu, long detail context, mixed native controls and patron placeholder
-  insertion. The checks require zoom 2, doubled DPR, CDP zoom 2, CSS zoom 1 and
+  extension at physical widths 1280 and 1440. Each width checks nine named states:
+  table, closed-actions, detail, confirmation, new-suggestion, workflow-picker,
+  format-rules-collapsed, format-rules-expanded and patron-placeholder. The 18
+  checkpoints retain both Format-rule scans and the action menu's full offscreen
+  focus restoration. The checks require zoom 2, doubled DPR, CDP zoom 2, CSS zoom 1 and
   pinch scale 1; CSS zoom is not substituted for this acceptance evidence.
 
 - `frontend-cache.cjs`: published staff/patron files served through Program,

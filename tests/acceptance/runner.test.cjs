@@ -442,6 +442,11 @@ test('registered suites match discovered modules and retain their mutation bound
   assert.equal(registry.s1.mutations, false);
   assert.equal(registry.s1.scenarios.length, 6);
   assert.ok(registry.s1.scenarios.every(scenario => scenario.writes === false));
+  assert.equal(registry.i390.id, 'i390');
+  assert.equal(registry.i390.mutations, false);
+  assert.ok(registry.i390.scenarios.every(scenario => scenario.writes === false && scenario.requirements.length > 0));
+  assert.deepEqual(new Set(registry.i390.scenarios.map(scenario => scenario.id)),
+    new Set(['i390-draft-system', 'i390-layout-system', 'i390-draft-2', 'i390-layout-2']));
   assert.deepEqual(registry.smoke.scenarios.map(s => [s.id, s.writes]), [
     ['smoke-authenticated-review', false], ['smoke-synthetic-close', true]
   ]);

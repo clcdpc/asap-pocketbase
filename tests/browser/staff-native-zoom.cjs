@@ -7,6 +7,7 @@ const { chromium } = require('playwright');
 const verifyMixedFieldLayout = require('./form-layout.cjs');
 const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
 const { actionGeometry, activateRowAction } = require('../acceptance/helpers/request-actions.cjs');
+const { formatRuleGeometry } = require('../acceptance/helpers/format-rules.cjs');
 
 // Chromium's tab API changes actual browser zoom. CSS zoom and pinch scaling
 // do not exercise the same viewport, native controls or top-layer geometry.
@@ -172,6 +173,12 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       await picker.press('Escape');
       assert.equal(await picker.evaluate(node => node === document.activeElement), true);
       await page.locator('#settings-nav-patron').click();
+      const formatRule = page.locator('#format-rules-editor [data-rule-code]').first();
+      await formatRule.evaluate(node => node.scrollIntoView({ block: 'start' }));
+      await scan('format-rules-collapsed');
+      await formatRule.locator('[data-rule-toggle]').press('Enter');
+      await formatRuleGeometry(page, 1);
+      await scan('format-rules-expanded');
       const message = page.locator('#patron-success-message');
       await message.fill('Before selected after');
       await message.evaluate(node => node.setSelectionRange(7, 15));
