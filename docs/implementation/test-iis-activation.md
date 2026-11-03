@@ -372,32 +372,32 @@ deployment configuration or repository security settings.
 The IIS activation job is serialized for this target and never cancels an
 already running activation when another test tag arrives.
 
-### Plans and standing authorized scope
+### Plans and DEV authorization
 
 SqlPackage's false flag permits **all** possible data-loss changes in a plan;
 it is not a three-column SQL switch. Before stopping IIS or changing recovery
 options, the installer generates and retains the complete `deployment.sql`,
 `deployment.xml` and `plan.json`. Logs identify that the persistent override is
-enabled and list authorized removals. The workflow uploads SQL-plan artifacts
-for both tag and manual runs, including blocked runs, for seven days.
+enabled and display plan alerts and operation counts. The workflow uploads
+SQL-plan artifacts for both tag and manual runs, including blocked runs, for
+seven days.
 
-The standing DEV policy automatically accepts only removal of
-`AdditionalCopyRequest.LegacyId`, `TitleRequest.LegacyId` and
-`TitleRequest.LegacyHoldProtected`, plus their required
-`UX_AdditionalCopyRequest_LegacyId` index and
-`DF_TitleRequest_LegacyHoldProtected` default constraint. Ordinary creates and
-alters without loss warnings continue without a new approval. The report must
-match the recognized DacFx format and bind each warning to its table operation.
-Other drops, new loss warnings, data motion/table rebuilds and unknown report
-shapes stop before activation; review the retained plan and escalate broader
-destructive scope rather than silently accepting it.
+On the independently verified DEV target, `AllowSqlDataLoss=true` authorizes
+the complete tested DACPAC plan, including column/table drops, constraint
+replacements and data motion. There is no per-object allowlist or extra
+approval for individual schema changes. This permission remains enabled until
+the operator sets it false. Treat DEV data as disposable while it is enabled.
+Missing or false retains SqlPackage's normal possible-data-loss protection.
+Malformed settings, target mismatches and invalid report formats still stop
+before activation.
 
-The reviewed schema-13 DACPAC pre/post scripts are also fingerprinted, because
-their SQL lies outside the operation report. Changes require review before
-extending this standing policy. Only line endings are normalized for these
-source fingerprints. The SQL/report bytes are hashed and rechecked immediately
-before activation/execution; the installer executes that exact checked script
-with `sqlcmd -b` instead of asking unprotected Publish to replan.
+The plan receipt binds its exact tested DACPAC digest, target, commit and
+enabled state to the generated SQL/report bytes. The DACPAC and plan integrity
+are rechecked immediately before activation/execution; legitimate future
+DACPAC pre/post script changes do not require updating a separate fingerprint
+allowlist. The installer still executes the DACPAC's schema identity/version
+preflight and then that exact checked script with `sqlcmd -b`, rather than
+asking unprotected Publish to replan.
 Schema identity/version guards, Hangfire checks, readiness and successful-state
 recording remain mandatory. No database reset is performed.
 

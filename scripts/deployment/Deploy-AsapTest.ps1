@@ -756,7 +756,7 @@ function Invoke-DacpacPublish {
     }
 
     if ($AllowSqlDataLoss) {
-        # Execute the scope-checked bytes, rather than asking an unprotected
+        # Execute the integrity-checked bytes, rather than asking an unprotected
         # Publish action to generate a different plan after the checks.
         Assert-DevSqlPlan -Plan $Plan
         $sqlArguments = @(Get-SqlCmdArguments -ConnectionString $ConnectionString)
@@ -914,16 +914,15 @@ function New-DacpacPlan {
         }
     }
     $context = [ordered]@{
-        schemaVersion = 2
+        schemaVersion = 3
         commitSha = $Archive.Manifest.commitSha
         allowSqlDataLoss = [bool] $AllowSqlDataLoss
         target = $Target
+        dacpacSha256 = $Archive.DacpacHash
     }
     $hash = Get-SqlPlanSha256 -Context $context -ScriptPath $scriptPath -ReportPath $reportPath
-    # Origin.xml contains build metadata, so a same-source rebuild can change
-    # the DACPAC's binary digest. Keep it for audit, outside the approval hash.
-    # Exact tested ZIP/manifest/DACPAC integrity is independently checked above;
-    # the approved SQL/report bytes describe the effects we actually execute.
+    # Bind the exact tested DACPAC as well as its generated SQL/report. A new
+    # build receives its own plan; there is no per-run approval hash input.
     $receipt = [ordered]@{ context = $context; dacpacSha256 = $Archive.DacpacHash; planSha256 = $hash }
     [IO.File]::WriteAllText((Join-Path $directory 'plan.json'), ($receipt | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
     Write-Host "SQL preflight plan: $directory; SHA-256: $hash."
@@ -932,36 +931,19 @@ function New-DacpacPlan {
 
 function Assert-DevSqlPlan {
     param([Parameter(Mandatory = $true)] [object] $Plan)
-    if ($Plan.Context.schemaVersion -ne 2 -or $Plan.Hash -cnotmatch '^[0-9a-f]{64}$' -or
+    if ($Plan.Context.schemaVersion -ne 3 -or $Plan.Hash -cnotmatch '^[0-9a-f]{64}$' -or
         $Plan.Context.allowSqlDataLoss -isnot [bool] -or $Plan.Context.allowSqlDataLoss -ne $true -or
+        $Plan.Context.dacpacSha256 -cnotmatch '^[0-9a-f]{64}$' -or
         $null -eq $Plan.Context.target -or
+        (Get-FileHash -LiteralPath $Plan.DacpacPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Plan.Context.dacpacSha256 -or
         -not (Get-SqlPlanSha256 -Context $Plan.Context -ScriptPath $Plan.ScriptPath -ReportPath $Plan.ReportPath).Equals(
             $Plan.Hash, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'DEV SQL plan is invalid or changed after preflight.'
     }
 
-    # Pre/post scripts can execute SQL outside DacFx's operation report. Pin the
-    # reviewed current scripts (only line endings are normalized). Changes need
-    # review before extending the standing legacy-column retirement scope.
-    $scripts = @{
-        'predeploy.sql' = '37c63b2e07940b10a2c5006c258b0e8735bf3d85a334d6b8d3316c0342b3c7ba'
-        'postdeploy.sql' = '6922678f14b20772b548dff995f2b840abd3f3ee30c0c6d06dd4c1c6b5c6575a'
-    }
-    $package = [IO.Compression.ZipFile]::OpenRead($Plan.DacpacPath)
-    try {
-        foreach ($name in $scripts.Keys) {
-            $entry = $package.GetEntry($name)
-            if ($null -eq $entry) { throw 'DEV override requires the reviewed DACPAC pre/post scripts.' }
-            $reader = [IO.StreamReader]::new($entry.Open())
-            try { $sql = $reader.ReadToEnd().Replace("`r`n", "`n") }
-            finally { $reader.Dispose() }
-            if ((Get-Sha256Hex -Bytes ([Text.Encoding]::UTF8.GetBytes($sql))) -cne $scripts[$name]) {
-                throw "DEV override blocked: $name changed. Review the script before extending the data-loss scope."
-            }
-        }
-    }
-    finally { $package.Dispose() }
-
+    # The verified DEV host setting authorizes the complete tested DACPAC plan,
+    # including its pre/post SQL. Keep integrity and report visibility rather
+    # than a second, per-object schema policy.
     $settings = [Xml.XmlReaderSettings]::new()
     $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
     $settings.XmlResolver = $null
@@ -975,73 +957,20 @@ function Assert-DevSqlPlan {
     $root = $report.DocumentElement
     if ($root.LocalName -cne 'DeploymentReport' -or $root.NamespaceURI -cne $ns.LookupNamespace('r') -or
         $root.SelectNodes('r:Alerts', $ns).Count -ne 1 -or $root.SelectNodes('r:Operations', $ns).Count -ne 1) {
-        throw 'DEV override blocked: unrecognized deployment report format.'
+        throw 'DEV SQL plan has an unrecognized deployment report format.'
     }
     foreach ($child in $root.ChildNodes | Where-Object NodeType -eq Element) {
         if ($child.NamespaceURI -cne $root.NamespaceURI -or $child.LocalName -cnotin @('Alerts', 'Operations')) {
-            throw 'DEV override blocked: unrecognized report section.'
+            throw 'DEV SQL plan has an unrecognized report section.'
         }
     }
-    $columns = @{
-        '[asap].[AdditionalCopyRequest].[LegacyId]' = '[asap].[AdditionalCopyRequest]'
-        '[asap].[TitleRequest].[LegacyId]' = '[asap].[TitleRequest]'
-        '[asap].[TitleRequest].[LegacyHoldProtected]' = '[asap].[TitleRequest]'
+    foreach ($issue in $root.SelectNodes('r:Alerts/r:Alert/r:Issue', $ns)) {
+        Write-Warning "DEV SQL plan alert: $($issue.GetAttribute('Value'))"
     }
-    $issues = @{}
-    $retirements = @{}
-    foreach ($alert in $root.SelectNodes('r:Alerts/*', $ns)) {
-        if ($alert.NamespaceURI -cne $root.NamespaceURI -or $alert.LocalName -cne 'Alert' -or $alert.GetAttribute('Name') -cne 'DataIssue' -or
-            $alert.SelectNodes('r:Issue', $ns).Count -eq 0) {
-            throw "DEV override blocked: unexpected alert $($alert.GetAttribute('Name')). Review the retained plan."
-        }
-        foreach ($issue in $alert.SelectNodes('*', $ns)) {
-            $id = $issue.GetAttribute('Id')
-            $value = $issue.GetAttribute('Value')
-            $matchedColumns = @($columns.Keys | Where-Object { $value -ceq "The column $_ is being dropped, data loss could occur." })
-            if ($issue.NamespaceURI -cne $root.NamespaceURI -or $issue.LocalName -cne 'Issue' -or
-                $issue.SelectNodes('*', $ns).Count -ne 0 -or $matchedColumns.Count -ne 1 -or $id -cnotmatch '^\d+$' -or
-                $issues.ContainsKey($id) -or $retirements.ContainsKey($matchedColumns[0])) {
-                throw "DEV override blocked: unexpected possible data loss: $value. Review the retained plan."
-            }
-            $issues[$id] = $matchedColumns[0]
-            $retirements[$matchedColumns[0]] = $true
-            Write-Host "Authorized DEV legacy retirement: $($matchedColumns[0])."
-        }
+    foreach ($operation in $root.SelectNodes('r:Operations/r:Operation', $ns)) {
+        Write-Host "DEV SQL plan $($operation.GetAttribute('Name')): $($operation.SelectNodes('r:Item', $ns).Count) item(s)."
     }
-    $dependentDrops = @{
-        '[asap].[AdditionalCopyRequest].[UX_AdditionalCopyRequest_LegacyId]' = @('SqlIndex', '[asap].[AdditionalCopyRequest].[LegacyId]')
-        '[asap].[DF_TitleRequest_LegacyHoldProtected]' = @('SqlDefaultConstraint', '[asap].[TitleRequest].[LegacyHoldProtected]')
-    }
-    $referenced = @{}
-    foreach ($operation in $root.SelectNodes('r:Operations/*', $ns)) {
-        $operationName = $operation.GetAttribute('Name')
-        if ($operation.NamespaceURI -cne $root.NamespaceURI -or $operation.LocalName -cne 'Operation' -or $operationName -cnotin @('Create', 'Alter', 'Drop') -or
-            $operation.SelectNodes('r:Item', $ns).Count -eq 0) {
-            throw "DEV override blocked: unexpected operation $operationName. Review the retained plan."
-        }
-        foreach ($item in $operation.SelectNodes('*', $ns)) {
-            $value = $item.GetAttribute('Value')
-            $type = $item.GetAttribute('Type')
-            if ($item.NamespaceURI -cne $root.NamespaceURI -or $item.LocalName -cne 'Item' -or [string]::IsNullOrWhiteSpace($value) -or [string]::IsNullOrWhiteSpace($type)) {
-                throw 'DEV override blocked: malformed deployment operation.'
-            }
-            if ($operationName -eq 'Drop' -and (-not $dependentDrops.ContainsKey($value) -or
-                $dependentDrops[$value][0] -cne $type -or -not $retirements.ContainsKey($dependentDrops[$value][1]))) {
-                throw "DEV override blocked: unexpected drop $value ($type). Review the retained plan."
-            }
-            foreach ($reference in $item.SelectNodes('*', $ns)) {
-                $id = $reference.GetAttribute('Id')
-                if ($reference.NamespaceURI -cne $root.NamespaceURI -or $reference.LocalName -cne 'Issue' -or
-                    $reference.SelectNodes('*', $ns).Count -ne 0 -or -not $issues.ContainsKey($id) -or
-                    $operationName -cne 'Alter' -or $type -cne 'SqlTable' -or $columns[$issues[$id]] -cne $value) {
-                    throw 'DEV override blocked: malformed or unrecognized issue reference.'
-                }
-                $referenced[$id] = $true
-            }
-        }
-    }
-    if ($referenced.Count -ne $issues.Count) { throw 'DEV override blocked: unreferenced data-loss warning.' }
-    Write-Host "DEV SQL plan passed the standing legacy-retirement policy ($($issues.Count) column removals)."
+    Write-Host 'The verified DEV override authorizes this complete DACPAC plan, including possible data loss.'
 }
 
 function Test-IisConfiguration {
@@ -1327,7 +1256,7 @@ try {
     if ($SqlPlanOnly -or $allowSqlDataLoss) {
         $target = Assert-SqlDataLossTarget -Config $hostConfig -ExpectedTarget ($hostConfig.SqlDataLossTarget | ConvertTo-Json -Compress)
         if ($allowSqlDataLoss) {
-            Write-Warning 'Persistent DEV SQL data-loss override is ENABLED. It remains enabled across test tags until the environment setting is disabled.'
+            Write-Warning 'Persistent DEV SQL data-loss override is ENABLED and permits the complete DACPAC plan, including data loss. It remains enabled across test tags until the environment setting is disabled.'
         }
         $sqlPlan = New-DacpacPlan -Config $hostConfig -Archive $archive -Target $target `
             -OutputDirectory $SqlPlanOutputDirectory -AllowSqlDataLoss
@@ -1337,7 +1266,7 @@ try {
         }
         try {
             Assert-DevSqlPlan -Plan $sqlPlan
-            [IO.File]::WriteAllText((Join-Path $SqlPlanOutputDirectory 'policy-result.txt'), 'ALLOWED by the standing DEV legacy-column retirement policy.')
+            [IO.File]::WriteAllText((Join-Path $SqlPlanOutputDirectory 'policy-result.txt'), 'ALLOWED: the verified DEV host setting authorizes this complete, integrity-checked DACPAC plan, including possible data loss.')
         }
         catch {
             [IO.File]::WriteAllText((Join-Path $SqlPlanOutputDirectory 'policy-result.txt'), "BLOCKED: $($_.Exception.Message)")
