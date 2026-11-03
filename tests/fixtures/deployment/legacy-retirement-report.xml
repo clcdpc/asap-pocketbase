@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DacFx 170.4.83, current source versus the schema-13 pre-retirement model.
+     Generated offline; contains schema metadata only, no database connection. -->
+<DeploymentReport xmlns="http://schemas.microsoft.com/sqlserver/dac/DeployReport/2012/02">
+  <Alerts>
+    <Alert Name="DataIssue">
+      <Issue Value="The column [asap].[AdditionalCopyRequest].[LegacyId] is being dropped, data loss could occur." Id="1" />
+      <Issue Value="The column [asap].[TitleRequest].[LegacyHoldProtected] is being dropped, data loss could occur." Id="2" />
+      <Issue Value="The column [asap].[TitleRequest].[LegacyId] is being dropped, data loss could occur." Id="3" />
+    </Alert>
+  </Alerts>
+  <Operations>
+    <Operation Name="Drop">
+      <Item Value="[asap].[AdditionalCopyRequest].[UX_AdditionalCopyRequest_LegacyId]" Type="SqlIndex" />
+      <Item Value="[asap].[DF_TitleRequest_LegacyHoldProtected]" Type="SqlDefaultConstraint" />
+    </Operation>
+    <Operation Name="Alter">
+      <Item Value="[asap].[AdditionalCopyRequest]" Type="SqlTable"><Issue Id="1" /></Item>
+      <Item Value="[asap].[TitleRequest]" Type="SqlTable"><Issue Id="2" /><Issue Id="3" /></Item>
+    </Operation>
+  </Operations>
+</DeploymentReport>
