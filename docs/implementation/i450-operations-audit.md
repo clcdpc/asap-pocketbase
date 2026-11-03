@@ -23,7 +23,7 @@ are not application inputs.
 | --- | --- | --- | --- | --- |
 | #430 | Operations-only link removed; Settings link, saved context, exact recovery identity and focusable log retained | Focused email-test and Operations Node files PASS; saved-email real-SQL/Chromium journey 1/1 PASS with six checkpoints | Luna MAX independent review and closure audit PASS; no actionable findings | `ac57372` |
 | #431 | One refresh; truthful log/status; guarded Settings handoff; exact identity/recovery; latest current test visible beyond 500 failed rows | SQL 23/23 then 6/6 PASS; final correction SQL 9/9, ten focused Node commands and saved-email browser 1/1 PASS | Luna MAX / Astra HIGH plus final Astra XHIGH code audit cleared after combined remediation below | `c33e327` plus closure correction; exact SHAs in PR |
-| #432 | One forced manual action; distinct deliberate identities, original-identity retry and gesture guards | Five frontend files PASS (262 navigation journeys); SQL 27/27 and browser 1/1 PASS | Luna MAX / Astra HIGH independent closure PASS; no actionable findings | `ee835b6` |
+| #432 | One forced manual action; distinct deliberate identities, original-identity retry and gesture guards | SQL 27/27 and browser 1/1 PASS; warm-fixture correction 6/6 and broader 28/28 PASS | Luna MAX / Astra HIGH and combined Astra XHIGH test-fix review clear | `ee835b6` plus fixture correction; exact SHAs in PR |
 | #434 | Three addressable sections; full-history scoped audit; Staff access handoff; approved responsive layout | SQL 11/11, retained browser 4/4, final audit browser 1/1, focused Node PASS; pre-review full frontend 68/68 | Luna MAX / Astra HIGH / Terra MAX final R2 closure PASS; all findings resolved | This change; exact SHA in consolidated PR |
 
 Implementation and functional-review agents use the requested available models:
@@ -209,6 +209,26 @@ backend code, so those are retained receipts, not claimed repeated executions.
 No live provider calls occurred. Actual receipts and nine-file freeze manifests
 are external `i450-closure-*` evidence. The earlier full-frontend attempt was
 interrupted for remediation and is explicitly incomplete, not passing evidence.
+
+### Full-run fixture qualification
+
+The first complete native run on `357bf94` executed all 1,423 discovered
+non-browser identities: 1,419 passed, four failed, none skipped. The four new
+weekly-recipient cases assumed no competing subscribers, while an earlier
+profile test intentionally left the configured System super-admin opted in.
+Production correctly includes that recipient in library summaries.
+
+A test-only correction temporarily isolates captured competing opt-in flags,
+then restores and verifies their exact SQL values in protected cleanup. It
+preserves the full execution/assertion block, including zero/one whole-prefix
+counts, suppression, audit and dispatcher checks; production source is unchanged.
+The warm profile-plus-five-case reproduction failed four of six before the fix;
+the same six UIDs passed afterward. The broader weekly/profile population passed
+28/28 with no skips. Both passing TRXs prove profile execution first and exact
+System subscription restoration after every case. Luna MAX, Astra HIGH and
+Astra XHIGH independently cleared the correction. These focused passes do not
+replace the required fresh complete rerun; the failed full receipt remains
+explicitly unqualified in external evidence.
 
 ## Integration qualification
 

@@ -330,38 +330,52 @@ public sealed partial class PatronJourneyTests
         var auditKey = manualRunId.ToString("N");
         var businessPrefix = $"weekly-summary-force:{manualRunId:N}:";
         var requestId = 0L;
-        string? oldStaffUrl;
-        await using (var seed = await contexts.CreateDbContextAsync())
-        {
-            var system = await seed.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
-            oldStaffUrl = system.StaffApplicationUrl;
-            system.StaffApplicationUrl = "https://staff.example.org/staff/";
-            var staff = await seed.StaffUsers.SingleAsync(item => item.Id == recipient.Id);
-            staff.IsActive = scenario != "inactive";
-            staff.WeeklyActionSummaryEnabled = scenario != "opted_out";
-            staff.WeeklyActionSummaryEmail = scenario == "invalid_recipient" ? "invalid-address"
-                : scenario == "restricted_recipient" ? "weekly@outside.invalid" : "weekly-eligible@example.org";
-            if (scenario != "empty")
-            {
-                var format = await seed.MaterialFormats.SingleAsync(item => item.Code == "book");
-                var now = timeProvider!.GetUtcNow().UtcDateTime;
-                var request = new TitleRequest
-                {
-                    LibraryOrganizationId = scope, Barcode = $"s5-eligibility-{Guid.NewGuid():N}"[..40],
-                    Title = "Forced weekly eligibility", MaterialFormatId = format.Id,
-                    Status = "suggestion", CreatedUtc = now, UpdatedUtc = now
-                };
-                seed.TitleRequests.Add(request);
-                await seed.SaveChangesAsync();
-                requestId = request.Id;
-            }
-            else
-            {
-                await seed.SaveChangesAsync();
-            }
-        }
+        string? oldStaffUrl = null;
+        var oldStaffUrlCaptured = false;
+        var competingRecipientFlags = new Dictionary<long, bool>();
         try
         {
+            await using (var seed = await contexts.CreateDbContextAsync())
+            {
+                var system = await seed.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+                oldStaffUrl = system.StaffApplicationUrl;
+                oldStaffUrlCaptured = true;
+                system.StaffApplicationUrl = "https://staff.example.org/staff/";
+                // Selected-library runs also include opted-in System super-admins.
+                // Preserve their preferences while isolating this recipient fixture.
+                foreach (var otherRecipient in await seed.StaffUsers.Where(item => item.Id != recipient.Id &&
+                             item.IsActive && item.WeeklyActionSummaryEnabled &&
+                             (item.OrganizationId == scope ||
+                              item.Role == StaffRole.SuperAdmin && item.OrganizationId == LibraryScope.SystemOrganizationId))
+                         .ToListAsync())
+                {
+                    competingRecipientFlags[otherRecipient.Id] = otherRecipient.WeeklyActionSummaryEnabled;
+                    otherRecipient.WeeklyActionSummaryEnabled = false;
+                }
+                var staff = await seed.StaffUsers.SingleAsync(item => item.Id == recipient.Id);
+                staff.IsActive = scenario != "inactive";
+                staff.WeeklyActionSummaryEnabled = scenario != "opted_out";
+                staff.WeeklyActionSummaryEmail = scenario == "invalid_recipient" ? "invalid-address"
+                    : scenario == "restricted_recipient" ? "weekly@outside.invalid" : "weekly-eligible@example.org";
+                if (scenario != "empty")
+                {
+                    var format = await seed.MaterialFormats.SingleAsync(item => item.Code == "book");
+                    var now = timeProvider!.GetUtcNow().UtcDateTime;
+                    var request = new TitleRequest
+                    {
+                        LibraryOrganizationId = scope, Barcode = $"s5-eligibility-{Guid.NewGuid():N}"[..40],
+                        Title = "Forced weekly eligibility", MaterialFormatId = format.Id,
+                        Status = "suggestion", CreatedUtc = now, UpdatedUtc = now
+                    };
+                    seed.TitleRequests.Add(request);
+                    await seed.SaveChangesAsync();
+                    requestId = request.Id;
+                }
+                else
+                {
+                    await seed.SaveChangesAsync();
+                }
+            }
             var result = await factory.Services.GetRequiredService<BackgroundWorkflowJobs>()
                 .SendForcedWeeklyStaffSummaryAsync(
                     new StaffJobEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId),
@@ -389,15 +403,37 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
-            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;", ("@prefix", businessPrefix + "%"));
-            await ExecuteNonQueryAsync("DELETE FROM [asap].[AdministrativeAudit] WHERE [TargetId] = @id;", ("@id", auditKey));
-            await DeleteRequestIdsAsync(contexts, [requestId]);
-            await using var restore = await contexts.CreateDbContextAsync();
-            var system = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
-            system.StaffApplicationUrl = oldStaffUrl;
-            await restore.SaveChangesAsync();
-            await DeactivateCorrectiveStaffAsync(admin.Id);
-            await DeactivateCorrectiveStaffAsync(recipient.Id);
+            try
+            {
+                await using var restore = await contexts.CreateDbContextAsync();
+                if (oldStaffUrlCaptured)
+                {
+                    var system = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+                    system.StaffApplicationUrl = oldStaffUrl;
+                }
+                foreach (var (recipientId, originalFlag) in competingRecipientFlags)
+                {
+                    var competingRecipient = await restore.StaffUsers.SingleAsync(item => item.Id == recipientId);
+                    competingRecipient.WeeklyActionSummaryEnabled = originalFlag;
+                }
+                await restore.SaveChangesAsync();
+                foreach (var (recipientId, originalFlag) in competingRecipientFlags)
+                {
+                    var restoredFlag = await restore.StaffUsers.AsNoTracking().Where(item => item.Id == recipientId)
+                        .Select(item => item.WeeklyActionSummaryEnabled).SingleAsync();
+                    Assert.AreEqual(originalFlag, restoredFlag, "Every competing recipient retains its original opt-in flag.");
+                    TestContext.WriteLine("Competing weekly recipient {0}: captured opt-in {1}; restored opt-in {2}.",
+                        recipientId, originalFlag, restoredFlag);
+                }
+            }
+            finally
+            {
+                await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;", ("@prefix", businessPrefix + "%"));
+                await ExecuteNonQueryAsync("DELETE FROM [asap].[AdministrativeAudit] WHERE [TargetId] = @id;", ("@id", auditKey));
+                await DeleteRequestIdsAsync(contexts, [requestId]);
+                await DeactivateCorrectiveStaffAsync(admin.Id);
+                await DeactivateCorrectiveStaffAsync(recipient.Id);
+            }
         }
     }
 
