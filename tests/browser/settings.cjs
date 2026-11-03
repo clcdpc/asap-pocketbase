@@ -919,9 +919,80 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   await scan(page, axeSource, args.artifactRoot, report, 'campaign2-forced-colors');
 }
 
+async function runLibraryFormatRuleDrafts(page, args, report, saveSettings, ready) {
+  const read = () => page.evaluate(async scope => {
+    const response = await fetch(`/api/asap/staff/settings?orgId=${scope}`);
+    if (!response.ok) throw new Error(`Settings GET ${response.status}`);
+    return response.json();
+  }, args.scopeId);
+  await page.locator('#settings-nav-patron').click();
+  const initial = await read();
+  const originalRule = initial.stored.formatRules.find(rule => rule.code === args.formatCode);
+  const savedKey = Object.keys(originalRule.customFields)[0];
+  assert.equal(args.formatCode, `custom_${initial.effective.formats.length + 1}`, 'Seed the generated-code collision.');
+  assert.equal(savedKey, `field_${initial.stored.customFields.length + 1}`, 'Seed the generated-key collision.');
+  const existing = page.locator(`#format-rules-editor [data-rule-code="${args.formatCode}"]`);
+  await existing.locator('[data-rule-toggle]').click();
+  await existing.locator('[data-format-label="title"]').fill('Existing title draft preserved');
+  const existingControl = await existing.locator('[data-custom-rule-property="mode"]').elementHandle();
+
+  await page.locator('#add-material-format').click();
+  const material = page.locator('#material-formats-editor [data-domain-row]').last();
+  const generatedCode = await material.locator('input').first().inputValue();
+  assert.notEqual(generatedCode.toLowerCase(), args.formatCode.toLowerCase());
+  const newCode = generatedCode + '_renamed';
+  await material.locator('input').first().fill(newCode);
+  await material.locator('input').nth(1).fill('New draft format');
+  assert.equal(await existingControl.evaluate(node => node.isConnected && node.closest('[data-rule-code]').dataset.ruleCode), args.formatCode);
+  await page.locator('#add-format-rule').click();
+  const addedRule = page.locator(`#format-rules-editor [data-rule-code="${newCode}"]`);
+  assert.equal(await addedRule.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'true');
+
+  await page.locator('#add-custom-field').click();
+  const definition = page.locator('#additional-fields-editor [data-domain-row]').last();
+  const generatedKey = await definition.locator('input').first().inputValue();
+  assert.notEqual(generatedKey.toLowerCase(), savedKey.toLowerCase());
+  await definition.locator('input[type="checkbox"]').uncheck();
+  assert.equal(await addedRule.locator(`[data-custom-rule-key="${generatedKey}"] .settings-custom-rule-status`).innerText(),
+    'Disabled field — not shown to patrons');
+  await definition.locator('input[type="checkbox"]').check();
+  const newKey = generatedKey + '_renamed';
+  await definition.locator('input').first().fill(newKey);
+  await definition.locator('input').nth(1).fill('New draft field');
+  const custom = addedRule.locator(`[data-custom-rule-key="${newKey}"]`);
+  await custom.locator('select').selectOption('required');
+  await custom.locator('input').fill('New rule witness');
+  await existingControl.dispose();
+
+  // Creating the field and format in one POST exercises the real transaction's
+  // intermediate SaveChanges, which can persist a stolen rule if collection is wrong.
+  const payload = await saveSettings();
+  assert.ok(payload.formats.some(format => format.code === newCode && format.id === null));
+  assert.ok(payload.customFields.some(field => field.key === newKey && field.id === null));
+  assert.deepEqual(payload.formatRules.find(rule => rule.code === args.formatCode).customFields[savedKey],
+    originalRule.customFields[savedKey]);
+  assert.deepEqual(payload.formatRules.find(rule => rule.code === newCode).customFields[newKey],
+    { mode: 'required', labelOverride: 'New rule witness' });
+  await page.reload({ waitUntil: 'networkidle' });
+  await ready(args.scopeId);
+  await page.locator('#settings-nav-patron').click();
+  const saved = await read();
+  const savedRule = saved.stored.formatRules.find(rule => rule.code === args.formatCode);
+  assert.deepEqual(savedRule.customFields, originalRule.customFields, 'Existing saved rules survive the combined SQL save.');
+  assert.equal(saved.effective.formats.find(format => format.code === args.formatCode).title.label, 'Existing title draft preserved');
+  assert.ok(saved.effective.formats.find(format => format.code === newCode)?.id);
+  assert.ok(saved.stored.customFields.find(field => field.key === newKey)?.id);
+  assert.deepEqual(saved.stored.formatRules.find(rule => rule.code === newCode).customFields,
+    { [newKey]: { mode: 'required', labelOverride: 'New rule witness' } });
+  await addedRule.locator('[data-rule-toggle]').click();
+  assert.equal(await custom.locator('select').inputValue(), 'required');
+  assert.equal(await custom.locator('input').inputValue(), 'New rule witness');
+  report.formatRuleDrafts = { newCode, newKey, savedKey, roundTrip: true };
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
-  if (!['full', 'system-format-rule', 'library-rule-partial-snapshot', 'library-rule-missing-row', 'library-metadata', 'campaign2', 'campaign2-library-admin'].includes(args.mode)) {
+  if (!['full', 'system-format-rule', 'library-rule-partial-snapshot', 'library-rule-missing-row', 'library-format-rule-drafts', 'library-metadata', 'campaign2', 'campaign2-library-admin'].includes(args.mode)) {
     throw new Error(`Unsupported settings browser mode: ${args.mode}`);
   }
   if (args.mode.startsWith('library-rule-') && (!args.formatCode || args.scopeId === 'system')) {
@@ -1074,6 +1145,17 @@ async function main() {
       assert.equal(traffic.externalRequests, 0, 'The library metadata journey requested external assets.');
       await page.close();
       await context.close();
+      return;
+    }
+    if (args.mode === 'library-format-rule-drafts') {
+      await runLibraryFormatRuleDrafts(page, args, report, saveSettings, waitForSettingsReady);
+      await scan(page, axeSource, args.artifactRoot, report, 'desktop');
+      await page.setViewportSize({ width: 390, height: 844 });
+      await scan(page, axeSource, args.artifactRoot, report, 'mobile');
+      assert.equal(postedPayloads.length, 1, 'The combined new-format/new-field draft must persist in one POST.');
+      assert.deepEqual(pageErrors, []);
+      assert.equal(traffic.externalRequests, 0);
+      await page.close(); await context.close();
       return;
     }
     if (args.mode === 'system-format-rule') {

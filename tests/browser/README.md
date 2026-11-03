@@ -23,6 +23,10 @@ journeys use the Testing Kestrel fixtures:
   GET/editor POST/reload, ownership, override metadata and lossless identity;
   the Campaign 2 super-admin/library-admin cases cover editable new keys,
   collisions, placeholder focus ownership, conditional fields and scope guards.
+  The focused Format rules draft case seeds colliding generated format/field
+  names, then creates a format and custom field in one global Save. It verifies
+  the original required rule and the new rule independently through POST,
+  SQL and reload, with desktop/mobile axe and overflow checks.
 - `functional-acceptance.cjs`: real Settings editor to patron form to SQL,
   required/hidden/optional fields, stale Settings writes, validation failures,
   one pickup write, committed response loss, patron switching, a current

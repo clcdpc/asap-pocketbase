@@ -286,7 +286,7 @@ const axe = require('axe-core');
     }
     assert.match(toggle('digital').textContent, /Digital edition.*digital/);
     assert.strictEqual(summary(), '2 required · 3 optional · 0 hidden', 'Disabled and retired rules never enter patron-visible counts.');
-    assert.match(card('book').textContent, /Disabled field — saved rule retained/);
+    assert.match(card('book').textContent, /Disabled field — not shown to patrons/);
     toggle('book').click(); toggle('digital').click(); toggle('book').click();
     assert.strictEqual(panel('book').hidden, true);
     assert.strictEqual(panel('digital').hidden, false, 'Disclosures are independent.');
@@ -548,6 +548,74 @@ const axe = require('axe-core');
     draftIdentity.populate(accordionData, false);
     assert.strictEqual(draftIdentity.collect().changed, false);
     draftIdentity.dispose();
+
+    for (const [savedCode, savedKey] of [['custom_3', 'field_3'], ['CUSTOM_3', 'FIELD_3']]) {
+      const collisionData = JSON.parse(JSON.stringify(data));
+      const savedFormat = { ...collisionData.stored.configuredSystem.formats[0], id: '91',
+        code: savedCode, ownerOrganizationId: 2, label: 'Saved custom format',
+        customFields: { [savedKey]: { mode: 'required', labelOverride: 'Saved rule witness' } } };
+      collisionData.stored.libraryOverride.formats = [savedFormat];
+      collisionData.stored.formats.push(savedFormat);
+      collisionData.effective.formats.push(savedFormat);
+      collisionData.stored.customFields[1].key = savedKey;
+      collisionData.effective.customFields = [collisionData.stored.customFields[1]];
+      for (const format of [collisionData.stored.configuredSystem.formats[0],
+        collisionData.stored.formats[0], collisionData.effective.formats[0]]) {
+        format.customFields[savedKey] = format.customFields.pickup_location;
+        delete format.customFields.pickup_location;
+      }
+      collisionData.stored.formatRules[0].customFields[savedKey] = collisionData.stored.formatRules[0].customFields.pickup_location;
+      delete collisionData.stored.formatRules[0].customFields.pickup_location;
+      collisionData.stored.formatRules.push({ code: savedCode, customFields: savedFormat.customFields });
+      const collisions = module.createSettingsDomainEditors({ root });
+      collisions.populate(collisionData, false);
+      toggle(savedCode).click();
+      change(card(savedCode).querySelector('[data-format-label="title"]'), 'Existing unsaved title');
+      const existingRules = collisions.collect().values.rules;
+      const savedCard = card(savedCode);
+      root.querySelector('#add-material-format').click();
+      let newFormat = root.querySelector('#material-formats-editor').lastElementChild;
+      assert.notStrictEqual(newFormat.querySelector('input').value.toLowerCase(), savedCode.toLowerCase(),
+        'Generated codes must avoid existing formats, including case-insensitive collisions.');
+      change(newFormat.querySelector('input'), 'new_unique_format');
+      assert.strictEqual(card(savedCode), savedCard, 'Naming a new format must not take an existing rule card.');
+      assert.deepStrictEqual(collisions.collect().values.rules, existingRules);
+      root.querySelector('#add-format-rule').click();
+      assert.strictEqual(panel('new_unique_format').hidden, false);
+      assert.deepStrictEqual(collisions.collect().values.rules.find(rule => rule.code === savedCode),
+        existingRules.find(rule => rule.code === savedCode));
+
+      root.querySelector('#add-custom-field').click();
+      let newField = root.querySelector('#additional-fields-editor').lastElementChild;
+      const newKey = newField.querySelector('input').value;
+      assert.notStrictEqual(newKey.toLowerCase(), savedKey.toLowerCase(),
+        'Generated keys must avoid saved definitions and their rule identities.');
+      newField.querySelector('input[type="checkbox"]').click();
+      assert.strictEqual(card('book').querySelector(`[data-custom-rule-key="${newKey}"] .settings-custom-rule-status`).textContent,
+        'Disabled field — not shown to patrons', 'A never-saved field must not claim that a saved rule was retained.');
+      change(newField.querySelector('input'), 'new_unique_field');
+      assert.ok(collisions.collect().values.fields.some(field => field.key === 'new_unique_field'));
+      assert.deepStrictEqual(collisions.collect().values.rules.find(rule => rule.code === savedCode).customFields[savedKey],
+        { mode: 'required', labelOverride: 'Saved rule witness' });
+      newField.querySelector('[aria-label="Delete"]').click();
+      assert.strictEqual(collisions.collect().values.fields.length, 2, 'A new field remains removable without discarding other drafts.');
+      assert.strictEqual(collisions.collect().values.rules.find(rule => rule.code === savedCode).title.label, 'Existing unsaved title');
+
+      // Recover a duplicate entered by hand after another action redraws Material formats.
+      collisions.populate(collisionData, false);
+      const originalRules = collisions.collect().values.rules;
+      const originalCard = card(savedCode);
+      root.querySelector('#add-material-format').click();
+      newFormat = root.querySelector('#material-formats-editor').lastElementChild;
+      change(newFormat.querySelector('input'), savedCode);
+      root.querySelector('#add-material-format').click();
+      newFormat = root.querySelectorAll('#material-formats-editor [data-domain-row]')[2];
+      change(newFormat.querySelector('input'), 'recovered_format');
+      assert.strictEqual(card(savedCode), originalCard, 'A duplicate draft code never owns another format\'s existing rule.');
+      assert.deepStrictEqual(collisions.collect().values.rules, originalRules);
+      assert.strictEqual(collisions.collect().domainsChanged.rules, false);
+      collisions.dispose();
+    }
 
     const codeData = JSON.parse(JSON.stringify(data));
     codeData.stored.configuredSystem.allowedPatronCodeIds.values = [2, 77];

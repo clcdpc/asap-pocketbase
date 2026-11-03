@@ -1086,10 +1086,15 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       let ruleCode = value.code;
       listen(code, 'change', () => {
         const nextCode = clean(code.value);
+        const formats = readFormats();
         if (code.readOnly || !nextCode || nextCode === ruleCode ||
-            readFormats().filter(format => format.code === nextCode).length !== 1 ||
+            formats.filter(format => format.code === nextCode).length !== 1 ||
             state.ruleRosterCodes.includes(nextCode)) return;
-        const rule = [...(dom.rules?.querySelectorAll('[data-rule-code]') || [])]
+        // A duplicate draft may have survived a Material formats redraw. It
+        // must not acquire the rule belonging to the other format with that code.
+        const sharedCode = formats.some((format, otherIndex) => otherIndex !== index &&
+          format.code.toLowerCase() === ruleCode.toLowerCase());
+        const rule = !sharedCode && [...(dom.rules?.querySelectorAll('[data-rule-code]') || [])]
           .find(item => item.dataset.ruleCode === ruleCode);
         if (rule) {
           if (!canRedrawRules()) return;
@@ -1285,7 +1290,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         const label = definition?.label || `Retired field (${group.dataset.customRuleKey})`;
         group.querySelector('.settings-custom-rule-name').textContent = label;
         group.querySelector('.settings-custom-rule-status').textContent = !definition
-          ? 'Retired field — saved rule retained' : !definition.enabled ? 'Disabled field — saved rule retained' : '';
+          ? 'Retired field — saved rule retained' : !definition.enabled ? 'Disabled field — not shown to patrons' : '';
       }
       refreshRuleFormatName(row);
       updateRuleSummary(row);
@@ -1927,8 +1932,22 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     while (keys.has(`provider_${index}`)) index += 1;
     return { id: null, key: `provider_${index}`, label: 'New provider', urlTemplate: '', isEnabled: false, overridden: true };
   });
-  bindAdd('formats', values => ({ id: null, code: `custom_${values.length + 1}`, ownerOrganizationId: currentOrganizationId(), label: 'New format', isEnabled: true, overridden: true }));
-  bindAdd('fields', values => ({ id: null, key: `field_${values.length + 1}`, type: 'text', label: 'New field', enabled: true, options: [] }));
+  bindAdd('formats', values => {
+    const codes = new Set([...state.models.formats, ...values].map(value => value.code.toLowerCase()));
+    for (const code of state.ruleRosterCodes) codes.add(code.toLowerCase());
+    let index = values.length + 1;
+    while (codes.has(`custom_${index}`)) index += 1;
+    return { id: null, code: `custom_${index}`, ownerOrganizationId: currentOrganizationId(), label: 'New format', isEnabled: true, overridden: true };
+  });
+  bindAdd('fields', values => {
+    const keys = new Set([...state.models.fields, ...values].map(value => value.key.toLowerCase()));
+    for (const rule of state.models.rules) {
+      for (const key of Object.keys(rule.customFields)) keys.add(key.toLowerCase());
+    }
+    let index = values.length + 1;
+    while (keys.has(`field_${index}`)) index += 1;
+    return { id: null, key: `field_${index}`, type: 'text', label: 'New field', enabled: true, options: [] };
+  });
   bindAdd('rules', values => {
     const format = readFormats().find(item => !values.some(rule => rule.code === item.code));
     if (!format) return null;

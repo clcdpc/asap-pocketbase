@@ -11,6 +11,7 @@
     "Asap.Tests.Integration.PatronJourneyTests.Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload",
     "Asap.Tests.Integration.PatronJourneyTests.ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery",
     "Asap.Tests.Integration.PatronJourneyTests.EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance",
+    "Asap.Tests.Integration.PatronJourneyTests.FormatRuleDraftIdentitiesSurviveCombinedFormatAndFieldCreationThroughSqlAndReload",
     "Asap.Tests.Integration.PatronJourneyTests.LeapLinksBrowserUsesPinnedNativeIdsAcrossStaffSurfaces",
     "Asap.Tests.Integration.PatronJourneyTests.LibraryRuleEditorBlocksAnIncompleteProjectionBeforePostingReplacement",
     "Asap.Tests.Integration.PatronJourneyTests.LibrarySettingsProductionGetEditorPostPreservesOverrideAndOwnedMetadata",
