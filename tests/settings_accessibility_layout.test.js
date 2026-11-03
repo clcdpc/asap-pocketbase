@@ -87,6 +87,11 @@ const { JSDOM } = require('jsdom');
       'patron-code-eligibility-enabled', 'patron-codes-use-system', 'patron-code-picker',
       'patron-code-selection', 'patron-code-eligibility-message'
     ]);
+    const patronCodeEligibility = document.getElementById('patron-code-eligibility');
+    assert.equal([...patronCodeEligibility.querySelectorAll('p')]
+      .some(paragraph => paragraph.textContent.trim() === 'The patron-code eligibility message is displayed as written.'), false);
+    const eligibilityMessage = document.getElementById('patron-code-eligibility-message');
+    assert.equal(eligibilityMessage.closest('label').querySelector('span').textContent, 'Patron-code eligibility message');
     assert.strictEqual(document.querySelector('label[for="patron-code-picker"]').textContent, 'Allowed patron-code IDs');
     assert.strictEqual(document.getElementById('patron-code-picker').getAttribute('role'), 'combobox');
     assert.strictEqual(document.getElementById('patron-code-picker').getAttribute('aria-controls'), 'patron-code-options');

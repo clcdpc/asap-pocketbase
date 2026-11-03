@@ -253,6 +253,12 @@ const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
           await page.locator('#settings-nav-workflow').click();
           await measureHeading('#add-common-creator');
           assert.equal(await page.locator('#patron-code-eligibility legend').textContent(), 'Patron code eligibility');
+          assert.equal(await page.locator('#patron-code-eligibility').getByText(
+            'The patron-code eligibility message is displayed as written.', { exact: true }).count(), 0,
+          `${scope}: the redundant patron-code eligibility callout is absent`);
+          assert.equal(await page.locator('#patron-code-eligibility-message').evaluate(node =>
+            node.closest('label').querySelector('span').textContent.trim()), 'Patron-code eligibility message',
+          `${scope}: the message editor keeps its label`);
           await providerGeometry(page);
           if (await page.locator('#add-provider').isVisible()) await measureHeading('#add-provider');
           const inherit = page.locator('#common-creators-use-system');

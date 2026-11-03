@@ -23,8 +23,8 @@ the parent Codex session.
 | Order | Issue | Acceptance and tests | Independent review | Commit |
 | --- | --- | --- | --- | --- |
 | 1 | #395 | Header compacted; focused DOM/scope checks and SQL/browser presentation PASS | Luna MAX clear after retained-test correction | `78b0943` |
-| 2 | #448 | Complete Branding fieldset moved first; focused DOM/logo and SQL/browser presentation PASS | Luna MAX clear, including rendered desktop/mobile | This issue commit; exact SHA in PR |
-| 3 | #445 | Pending | Pending Luna MAX | Pending |
+| 2 | #448 | Complete Branding fieldset moved first; focused DOM/logo and SQL/browser presentation PASS | Luna MAX clear, including rendered desktop/mobile | `0c8ccef` |
+| 3 | #445 | Redundant paragraph removed; focused DOM/picker/scope and SQL/browser tests PASS | Luna MAX clear, including desktop/mobile gap check | This issue commit; exact SHA in PR |
 | 4 | #449 | Pending | Pending Luna MAX | Pending |
 | 5 | #409 | Pending | Pending Luna MAX / Astra HIGH | Pending |
 | 6 | #437 | Pending | Pending Luna MAX / Astra HIGH | Pending |
@@ -113,3 +113,25 @@ changes are needed.
   override control, retaining inherited read-only behavior.
 - Receipt: `results/i448-presentation.trx`; actual captures/report are in ignored
   `staff-presentation-56868cd00897467f8d556780bbe04f25`.
+
+## #445 — remove redundant patron-code callout
+
+Only the standalone “displayed as written” paragraph is removed. The existing
+message label/textarea, workflow binding, eligibility controls and useful picker
+guidance remain intact; no replacement copy or placeholder picker is added.
+
+- Focused layout, patron-code picker and scope Node tests: PASS. Independent Luna
+  also reran settings-save-completion successfully. Browser-script syntax and
+  diff checks PASS.
+- Frontend assets refreshed through the existing MSBuild CopyFrontendToWebRoot
+  target; no compiled backend source changed.
+- Retained real-SQL presentation browser: PASS, 1/1, no failures/skips. It checks
+  callout absence and the retained message label in both scopes while repeating
+  the header, Branding, accessibility, image, overflow and traffic safeguards.
+- Independent Luna MAX source and rendered desktop/mobile review is clear.
+  It verified the paragraph and its reserved space are gone, with the labeled
+  editor retained. The final browser receipt has 68 scanned states and zero
+  serious/critical axe findings, missing images, overflow, external requests or
+  page errors.
+- Receipt: `results/i445-presentation.trx`; actual captures/report are in ignored
+  `staff-presentation-ec394271bf4747d09a9fa157c8b51abe`.
