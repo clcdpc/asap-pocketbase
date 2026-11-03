@@ -226,6 +226,21 @@ try {
         throw 'Schema 13 deployment manifest was not accepted.'
     }
 
+    $validationArguments = @('-NoLogo', '-NoProfile', '-File', $deploymentScriptPath,
+        '-DeploymentZip', $validZip, '-ExpectedZipSha256', (Get-FileHash -LiteralPath $validZip).Hash,
+        '-ExpectedCommitSha', $manifest.commitSha, '-ExpectedDeploymentLabel', $manifest.versionOrLabel,
+        '-ConfigPath', (Join-Path $archiveFixtureRoot 'must-not-read-host.json'), '-ValidateOnly')
+    $validationOutput = & (Get-Process -Id $PID).Path @validationArguments 2>&1
+    if ($LASTEXITCODE -ne 0 -or "$validationOutput" -notlike '*Validated test-IIS artifact*') {
+        throw "ValidateOnly must validate the real ZIP without reading host configuration: $validationOutput"
+    }
+    foreach ($invalidControl in @('-AllowSqlDataLoss', '-SqlPlanOnly')) {
+        $rejectedOutput = & (Get-Process -Id $PID).Path @validationArguments $invalidControl 2>&1
+        if ($LASTEXITCODE -eq 0 -or "$rejectedOutput" -notlike '*ValidateOnly cannot be combined*') {
+            throw "ValidateOnly must reject $invalidControl before host access: $rejectedOutput"
+        }
+    }
+
     $manifest.applicationSchemaVersion = 6
     [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     $invalidZip = Join-Path $archiveFixtureRoot 'invalid.zip'

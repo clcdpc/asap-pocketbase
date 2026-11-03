@@ -24,6 +24,11 @@ childProcess.execFileSync(
   ['-NoLogo', '-NoProfile', '-File', path.join(__dirname, 'test_deployment_configuration_preflight.ps1')],
   { stdio: 'inherit' }
 );
+childProcess.execFileSync(
+  'pwsh',
+  ['-NoLogo', '-NoProfile', '-File', path.join(__dirname, 'test_deployment_sql_plan.ps1')],
+  { stdio: 'inherit' }
+);
 
 assert.ok(workflow.includes("tags:\n      - 'v*.*.*'"), 'all release tags must qualify every category');
 assert.ok(workflow.includes('- codex/csharp-port'), 'integration-branch push trigger is required');
@@ -154,7 +159,7 @@ const recovery = deployment.indexOf('    Set-NonProductionDatabaseRecovery `', d
 const exactSuccess = deployment.indexOf('The exact test-IIS artifact is already recorded and ready');
 assert.ok(recovery > deployment.indexOf('if ($hangfireVersion -gt 9)') && recovery < exactSuccess,
   'recovery enforcement must follow host/schema preflight and precede exact-artifact success');
-assert.ok(recovery < deployment.indexOf('    if ($needsDacpac)'), 'recovery must run independently of DACPAC publication');
+assert.ok(recovery < deployment.indexOf('    Invoke-TestDeployment -Config $hostConfig'), 'recovery must run independently of DACPAC publication');
 assert.match(deployment.slice(recovery, exactSuccess), /-ConnectionString \$hostConfig\.AsapDatabaseConnectionString/);
 assert.strictEqual((deployment.match(/    Set-NonProductionDatabaseRecovery `/g) || []).length, 1, 'Hangfire must not receive a separate recovery command');
 assert.ok(!/RECOVERY\s+SIMPLE/i.test(postDeployment + fs.readFileSync(path.join(root, 'database/Asap.Database/Scripts/PreDeployment.sql'), 'utf8')),
@@ -166,7 +171,7 @@ assert.ok(deployment.includes("(^|/)(application|deployment)\\.json$"), 'host-ow
 const archiveValidation = deployment.indexOf('$archive = Test-DeploymentArchive', deployment.indexOf('$hostConfig = Read-HostConfiguration'));
 const pointerValidation = deployment.indexOf('Test-PublishedApplicationConfigPath', archiveValidation);
 const iisValidation = deployment.indexOf('$null = Test-IisConfiguration', archiveValidation);
-const poolStop = deployment.indexOf('Stop-TestAppPool', iisValidation);
+const poolStop = deployment.indexOf('    Invoke-TestDeployment -Config $hostConfig', iisValidation);
 assert.ok(archiveValidation >= 0 && pointerValidation > archiveValidation, 'the staged web payload must be available before pointer validation');
 assert.ok(pointerValidation < iisValidation && iisValidation < poolStop, 'pointer mismatch must fail before IIS validation or mutation');
 assert.ok(activation.includes('gh workflow run dotnet.yml'), 'activation docs should provide the explicit CLI dispatch');

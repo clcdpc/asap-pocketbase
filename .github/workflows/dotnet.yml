@@ -17,6 +17,21 @@ on:
         type: boolean
         required: false
         default: false
+      test_sql_plan_only:
+        description: Produce a candidate SQL data-loss plan without changing test IIS or SQL
+        type: boolean
+        required: false
+        default: false
+      allow_test_sql_data_loss:
+        description: Execute only the explicitly reviewed test SQL plan for this run
+        type: boolean
+        required: false
+        default: false
+      reviewed_test_sql_plan_sha256:
+        description: SHA-256 from the reviewed candidate SQL plan (required with allow_test_sql_data_loss)
+        type: string
+        required: false
+        default: ''
       force_full_ci:
         description: Ignore test evidence and execute every required suite
         type: boolean
@@ -609,9 +624,45 @@ jobs:
           EXPECTED_ZIP_SHA256: ${{ needs.build-test-package.outputs.zip_sha256 }}
           EXPECTED_COMMIT_SHA: ${{ github.sha }}
           EXPECTED_DEPLOYMENT_LABEL: ${{ needs.build-test-package.outputs.deployment_label }}
+          SQL_PLAN_ONLY: ${{ toJSON(inputs.test_sql_plan_only) }}
+          ALLOW_SQL_DATA_LOSS: ${{ toJSON(inputs.allow_test_sql_data_loss) }}
+          EXPLICIT_TEST_DEPLOYMENT: ${{ toJSON(inputs.deploy_test_iis) }}
+          REVIEWED_SQL_PLAN_SHA256: ${{ inputs.reviewed_test_sql_plan_sha256 }}
+          SQL_DATA_LOSS_TARGET: ${{ vars.ASAP_TEST_SQL_DATA_LOSS_TARGET }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
+          function Read-RunBoolean([string] $Value) {
+            if ($Value -ceq 'true') { return $true }
+            if ($Value -ceq 'false' -or ($Value -ceq 'null' -and $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch')) { return $false }
+            throw 'SQL deployment controls must be typed boolean inputs.'
+          }
+          $planOnly = Read-RunBoolean $env:SQL_PLAN_ONLY
+          $allowDataLoss = Read-RunBoolean $env:ALLOW_SQL_DATA_LOSS
+          if ($planOnly -and $allowDataLoss) {
+            throw 'Choose SQL plan only or reviewed SQL execution, not both.'
+          }
+          if (($planOnly -or $allowDataLoss) -and (
+              $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
+              $env:EXPLICIT_TEST_DEPLOYMENT -cne 'true' -or
+              ($env:GITHUB_REF -cnotmatch '^refs/heads/[^\s]+$' -and
+               $env:GITHUB_REF -cnotmatch '^refs/tags/v[^/]*\.[^/]*\.[^/]*-test\.[^/]*$'))) {
+            throw 'SQL plan/data-loss controls require an explicit manual test-IIS deployment from a branch or test tag.'
+          }
+          if (($allowDataLoss -and $env:REVIEWED_SQL_PLAN_SHA256 -cnotmatch '^[0-9a-fA-F]{64}$') -or
+              (-not $allowDataLoss -and -not [string]::IsNullOrEmpty($env:REVIEWED_SQL_PLAN_SHA256))) {
+            throw 'A reviewed SQL plan SHA-256 is required only for explicit data-loss execution.'
+          }
+          $sqlOptions = @{}
+          if ($planOnly -or $allowDataLoss) {
+            $sqlOptions = @{
+              SqlPlanOnly = $planOnly
+              AllowSqlDataLoss = $allowDataLoss
+              ReviewedSqlPlanSha256 = $env:REVIEWED_SQL_PLAN_SHA256
+              ExpectedSqlDataLossTarget = $env:SQL_DATA_LOSS_TARGET
+              SqlPlanOutputDirectory = Join-Path $env:RUNNER_TEMP "asap-sql-plan-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+            }
+          }
           $zipPath = (Resolve-Path .artifacts/incoming/asap-test-deployment.zip).Path
           $expectedHash = $env:EXPECTED_ZIP_SHA256
           if ([string]::IsNullOrWhiteSpace($expectedHash)) {
@@ -629,8 +680,17 @@ jobs:
               -DeploymentZip $zipPath `
               -ExpectedZipSha256 $expectedHash `
               -ExpectedCommitSha $env:EXPECTED_COMMIT_SHA `
-              -ExpectedDeploymentLabel $env:EXPECTED_DEPLOYMENT_LABEL
+              -ExpectedDeploymentLabel $env:EXPECTED_DEPLOYMENT_LABEL @sqlOptions
           }
           finally {
             Remove-Item -LiteralPath $bootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
           }
+
+      - name: Upload candidate or approved SQL plan
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.test_sql_plan_only || inputs.allow_test_sql_data_loss) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-sql-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/asap-sql-plan-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: ignore
+          retention-days: 7

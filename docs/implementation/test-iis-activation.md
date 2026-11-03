@@ -307,16 +307,112 @@ Use an exact reviewed test tag such as `v1.0.0-test.1`. Dispatch `.NET baseline`
 from GitHub Actions, or run:
 
 ```text
-gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref v1.0.0-test.1
+gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref v1.0.0-test.1 -f deploy_test_iis=true
 ```
 
 The hosted job builds, tests, publishes, packages, and hashes the exact commit.
 The ZIP excludes host-owned `application.json`, `deployment.json`, keys, logs,
 staging data, and backups. The self-hosted job verifies the ZIP and manifest,
-validates the two application-config pointers and existing IIS/SQL state, then
-stops the app pool before database or live-file mutation. It publishes required
-schema changes, backs up the previous web payload, replaces files, starts the
+validates the two application-config pointers and existing IIS/SQL state, and
+preflights the protected SQL plan before stopping the app pool. It retains the
+previous web payload before stopping IIS, publishes required schema changes, replaces files, starts the
 pool, and polls `/health/ready` with normal TLS validation.
+
+### One-run SQL data-loss exception
+
+This is a deployment-only operational control, not a system/library application
+setting. `allow_test_sql_data_loss` is a typed boolean, defaults to false, and
+must be deliberately selected on each manual test-IIS run. Ordinary runs and
+test-tag pushes keep `BlockOnPossibleDataLoss=True`. Production-tag dispatches
+cannot use either SQL exception control. Existing full CI, activation and
+environment gates remain mandatory.
+
+An independently reviewed non-production target must first be pinned in the
+`asap-test-iis` environment's GitHub Actions variable named
+`ASAP_TEST_SQL_DATA_LOSS_TARGET`, with this JSON shape:
+
+```json
+{
+  "machineName": "VERIFIED-TEST-IIS-MACHINE",
+  "iisHostName": "verified-test-host.example.invalid",
+  "sqlServerName": "VERIFIED-TEST-SQL\\INSTANCE",
+  "databaseName": "VerifiedTestDatabase"
+}
+```
+
+Do not copy these placeholders or infer DEV from `IsNonProduction` alone.
+An operator must independently verify that this exact machine, HTTPS site and
+SQL server/database are the intended disposable target before configuring the
+pins. The script checks the executing machine, the configured readiness host
+and its actual IIS HTTPS binding, runtime/deployment SQL target agreement, and
+the canonical connected `SERVERPROPERTY('ServerName')`/`DB_NAME()` against the
+pins. It also requires a real boolean `Environment.IsNonProduction=true` and
+an environment name of Test, Development or Dev, and rejects system databases.
+An alias resolving to a different SQL instance fails. Missing pins fail closed.
+These checks enforce the operator's reviewed target policy; self-declared
+environment labels do not independently establish that a database is DEV.
+
+1. Generate a candidate plan from the new implementation's reviewed branch or
+   test tag. Keep both the source ref and receipt commit SHA for the review:
+
+   ```text
+   gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref <reviewed-branch-or-test-tag> -f deploy_test_iis=true -f test_sql_plan_only=true -f force_full_ci=true
+   ```
+
+   This still requires successful full CI, then reads IIS/SQL and writes only
+   review files. It does not execute the DACPAC pre/post scripts, change SQL
+   recovery, stop/start IIS, replace web files, or write deployment state.
+   Download `asap-test-sql-plan-<run>-<attempt>`: `deployment.sql`,
+   `deployment.xml`, and `review.json`. Review artifacts expire after seven days.
+
+2. Review **all** generated SQL and the complete deployment report, including
+   pre/post-deployment SQL, constraints, rebuilds, type changes and removals.
+   The known test.26 failure involved
+   `AdditionalCopyRequest.LegacyId`, `TitleRequest.LegacyId`, and
+   `TitleRequest.LegacyHoldProtected`. Do not assume these are the only
+   destructive operations: SqlPackage's false option covers every possible
+   data-loss change in the plan. If anything broader appears, resolve it or
+   obtain specific authorization for that complete new plan before proceeding.
+
+3. Only after explicit authorization of the complete plan, run the same reviewed
+   source with its `review.json` hash:
+
+   ```text
+   gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref <same-reviewed-branch-or-test-tag> -f deploy_test_iis=true -f allow_test_sql_data_loss=true -f reviewed_test_sql_plan_sha256=<reviewed-planSha256> -f force_full_ci=true
+   ```
+
+   The script regenerates the plan and requires exact hashes of the SQL/report
+   bytes, commit and verified target identity before any activation or
+   SQL recovery change. Any drift, including a broader drop, blocks the run and
+   retains the new candidate artifact for review. It executes those exact SQL
+   bytes through `sqlcmd -b`; it never asks an unprotected Publish action to
+   create a different plan. The DACPAC's schema identity/version preflight
+   remains in force. Archive/manifest identity, readiness, Hangfire checks,
+   protected default publishing, and successful-state recording remain intact.
+
+The SQL/report approval hash is deliberately not normalized or automatically
+accepted. Differences in SqlPackage output, source commit or target identity
+require another review, even when they appear harmless. Each receipt records
+that run's binary DACPAC digest for audit. It is outside the approval hash:
+same-source builds change `Origin.xml` packaging metadata. The existing exact
+ZIP/manifest/DACPAC integrity checks still run independently for every artifact;
+approval requires unchanged executable SQL/report bytes from that tested source.
+If a later build cannot reproduce the plan, use the original, fully tested artifact for a separately authorized
+operator invocation of `Deploy-AsapTest.ps1` with `-SqlPlanOnly`, then
+`-AllowSqlDataLoss -ReviewedSqlPlanSha256 <hash>` and the same independently
+pinned `-ExpectedSqlDataLossTarget` JSON. Each invocation requires a new
+`-SqlPlanOutputDirectory` outside the replaceable web path and package staging.
+No deployment/reset is authorized merely by generating a candidate hash.
+
+`-ValidateOnly` stays package-only and rejects SQL exception controls before
+reading host configuration. The old test.26 ZIP predates this interface; do
+not patch/repackage it or try to pass new switches to its installer. Build and
+qualify a new artifact containing the reviewed implementation first.
+
+SqlPackage documents the separate non-executing
+[Script action](https://learn.microsoft.com/en-us/sql/tools/sqlpackage/sqlpackage-script?view=sql-server-ver17)
+and the scope of
+[BlockOnPossibleDataLoss](https://learn.microsoft.com/en-us/sql/tools/sqlpackage/sqlpackage-publish?view=sql-server-ver17).
 
 ### Verification Evidence
 
@@ -340,10 +436,19 @@ idempotent when readiness is healthy. Backups are not automatically pruned.
 
 - Package, configuration, path, IIS, SQL, or pointer preflight failures occur
   before the app pool is stopped and leave the live site untouched.
-- A DACPAC, Hangfire, backup, or file-replacement failure after the pool stops
-  may leave it stopped. Inspect actual SQL and filesystem state before restart.
-- A readiness failure occurs after pool start, retains new files for
-  repair-forward, and does not write successful deployment state.
+- A failed backup leaves the pool untouched. A stop failure before any schema
+  or file mutation restores a previously Started pool; an initially Stopped
+  pool remains stopped. Transitional pool states fail before activation.
+- Once a DACPAC/Hangfire execution or web replacement has been attempted, any
+  failure causes a bounded attempt to stop the pool. Partial SQL execution is
+  possible; there is no automatic restart or restoration of old web files.
+  Inspect SQL/files and confirm compatibility before separately authorizing recovery.
+- A readiness or state-write failure also stops the pool, retains new files and
+  the prior web backup for repair-forward, and does not report deployment success.
+- Recovery failures report uncertain pool state while retaining the original
+  deployment error and backup path. A terminated/killed runner cannot guarantee
+  catch/finally recovery. This implementation does not inspect or repair a pool
+  left stopped by an earlier installer, including test.26.
 - Deployment performs no automatic SQL backup, database rollback, file
   rollback, or production deployment behavior.
 
