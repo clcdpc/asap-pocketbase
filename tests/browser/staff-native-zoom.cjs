@@ -7,7 +7,6 @@ const { chromium } = require('playwright');
 const verifyMixedFieldLayout = require('./form-layout.cjs');
 const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
 const { actionGeometry, activateRowAction } = require('../acceptance/helpers/request-actions.cjs');
-const { visibleEvidence } = require('../acceptance/helpers/accessibility.cjs');
 
 // Chromium's tab API changes actual browser zoom. CSS zoom and pinch scaling
 // do not exercise the same viewport, native controls or top-layer geometry.
@@ -100,7 +99,13 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       await page.waitForFunction(id => document.querySelector(`#request-row-${id}-actions`)
         ?.matches(':popover-open') === false, sourceId);
       assert.equal(await more.evaluate(node => node === document.activeElement), true);
-      await visibleEvidence(more);
+      assert.equal(await more.evaluate(node => {
+        const bounds = node.getBoundingClientRect(), clip = node.closest('.gridjs-wrapper').getBoundingClientRect();
+        const hit = document.elementFromPoint((bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2);
+        return bounds.left >= Math.max(0, clip.left) && bounds.right <= Math.min(innerWidth, clip.right) &&
+          bounds.top >= Math.max(0, clip.top) && bounds.bottom <= Math.min(innerHeight, clip.bottom) &&
+          (hit === node || node.contains(hit));
+      }), true, 'Dismissal restores visible, unobscured trigger focus after full clipping');
       // The global axe scan may scroll the table and correctly dismiss an
       // anchored popup. Verify Escape before that independent full-page audit.
       await scan('table');
