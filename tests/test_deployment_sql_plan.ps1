@@ -164,8 +164,21 @@ try {
     $plan = New-DacpacPlan -Config $config -Archive $archive -Target $target -AllowSqlDataLoss -OutputDirectory (Join-Path $fixture 'candidate')
     foreach ($call in $script:nativeCalls) { Assert-True ($call -contains '/p:BlockOnPossibleDataLoss=False' -and $call -notcontains '/Action:Publish') 'Candidate preflight must describe loss without publishing.' }
     Assert-DevSqlPlan -Plan $plan
+
+    # Test.27's actual target report must be accepted with the DEV setting on,
+    # including all 39 check-constraint replacements. False must still reject.
+    $actualReport = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/deployment/test27-check-constraint-replacements.xml') -Raw
+    [IO.File]::WriteAllText($plan.ReportPath, $actualReport)
+    $plan.Hash = Get-SqlPlanSha256 -Context $plan.Context -ScriptPath $plan.ScriptPath -ReportPath $plan.ReportPath
+    Assert-DevSqlPlan -Plan $plan
+    $plan.Context.allowSqlDataLoss = $false
+    $plan.Hash = Get-SqlPlanSha256 -Context $plan.Context -ScriptPath $plan.ScriptPath -ReportPath $plan.ReportPath
+    Assert-Failure { Assert-DevSqlPlan -Plan $plan } '*invalid or changed*'
+    $plan.Context.allowSqlDataLoss = $true
+    [IO.File]::WriteAllText($plan.ReportPath, $script:legacyReport)
+    $plan.Hash = Get-SqlPlanSha256 -Context $plan.Context -ScriptPath $plan.ScriptPath -ReportPath $plan.ReportPath
     Assert-Failure { Assert-DevSqlPlan -Plan $protected } '*invalid or changed*'
-    foreach ($path in @($plan.ScriptPath, $plan.ReportPath)) {
+    foreach ($path in @($plan.ScriptPath, $plan.ReportPath, $plan.DacpacPath)) {
         $bytes = [IO.File]::ReadAllBytes($path)
         [IO.File]::AppendAllText($path, 'unreviewed broader drop')
         Assert-Failure { Assert-DevSqlPlan -Plan $plan } '*invalid or changed*'
@@ -181,30 +194,32 @@ try {
     $plan.Context.target.databaseName = 'AsapTest'
     $originalHash = $plan.Hash
     $noLoss = '<DeploymentReport xmlns="http://schemas.microsoft.com/sqlserver/dac/DeployReport/2012/02"><Alerts /><Operations /></DeploymentReport>'
-    foreach ($report in @($noLoss, $noLoss.Replace('<Operations />', '<Operations><Operation Name="Create"><Item Value="[asap].[NewTable]" Type="SqlTable" /></Operation></Operations>'))) {
+    $authorizedReports = @(
+        $noLoss,
+        $noLoss.Replace('<Operations />', '<Operations><Operation Name="Create"><Item Value="[asap].[NewTable]" Type="SqlTable" /></Operation></Operations>'),
+        $noLoss.Replace('<Operations />', '<Operations><Operation Name="Drop"><Item Value="[asap].[LiveTable]" Type="SqlTable" /></Operation></Operations>'),
+        $noLoss.Replace('<Alerts />', '<Alerts><Alert Name="DataMotion"><Issue Value="Table data will be moved." /></Alert></Alerts>'),
+        $actualReport.Replace('[asap].[TitleRequest].[LegacyId]', '[asap].[TitleRequest].[LiveColumn]')
+    )
+    foreach ($report in $authorizedReports) {
         [IO.File]::WriteAllText($plan.ReportPath, $report)
         $plan.Hash = Get-SqlPlanSha256 -Context $plan.Context -ScriptPath $plan.ScriptPath -ReportPath $plan.ReportPath
         Assert-DevSqlPlan -Plan $plan
     }
     $badReports = @(
-        $script:legacyReport.Replace('The column [asap].[AdditionalCopyRequest].[LegacyId]', 'The column [asap].[AdditionalCopyRequest].[UnreviewedColumn]'),
-        $script:legacyReport.Replace('Name="DataIssue"', 'Name="DataMotion"'),
-        $script:legacyReport.Replace('Name="Alter"', 'Name="TableRebuild"'),
-        $script:legacyReport.Replace('[asap].[AdditionalCopyRequest].[UX_AdditionalCopyRequest_LegacyId]', '[asap].[OtherTable]'),
-        $script:legacyReport.Replace('Type="SqlIndex"', 'Type="SqlTable"'),
-        $script:legacyReport.Replace('<Issue Id="3" />', ''),
-        $script:legacyReport.Replace('Id="3"', 'Id="1"'),
         $noLoss.Replace('DeployReport/2012/02', 'unknown-report-version'),
-        $noLoss.Replace('<Alerts />', '<Alerts><Alert Name="DataIssue" /></Alerts>'),
         $noLoss.Replace('<Alerts />', '<Alerts /><Alerts />'),
-        $script:legacyReport.Replace('<Issue Id="3" />', '<Issue xmlns="urn:unknown" Id="3" />'),
-        $noLoss.Replace('<Operations />', '<Operations><Operation Name="Drop"><Item Value="[asap].[LiveTable]" Type="SqlTable" /></Operation></Operations>')
+        $noLoss.Replace('<Operations />', ''),
+        $noLoss.Replace('<Operations />', '<Operations /><Unexpected />')
     )
     foreach ($report in $badReports) {
         [IO.File]::WriteAllText($plan.ReportPath, $report)
         $plan.Hash = Get-SqlPlanSha256 -Context $plan.Context -ScriptPath $plan.ScriptPath -ReportPath $plan.ReportPath
-        Assert-Failure { Assert-DevSqlPlan -Plan $plan } '*DEV override blocked*'
+        Assert-Failure { Assert-DevSqlPlan -Plan $plan } '*unrecognized*'
     }
+    [IO.File]::WriteAllText($plan.ReportPath, '<!DOCTYPE DeploymentReport [<!ENTITY forbidden "x">]>' + $noLoss)
+    $plan.Hash = Get-SqlPlanSha256 -Context $plan.Context -ScriptPath $plan.ScriptPath -ReportPath $plan.ReportPath
+    Assert-Failure { Assert-DevSqlPlan -Plan $plan } '*DTD*'
     [IO.File]::WriteAllText($plan.ReportPath, $script:legacyReport); $plan.Hash = $originalHash
     $changedRoot = Join-Path $fixture 'changed-scripts'
     New-Item -ItemType Directory -Path $changedRoot | Out-Null
@@ -213,8 +228,13 @@ try {
     $changedDacpac = Join-Path $fixture 'changed.dacpac'
     [IO.Compression.ZipFile]::CreateFromDirectory($changedRoot, $changedDacpac)
     $plan.DacpacPath = $changedDacpac
-    Assert-Failure { Assert-DevSqlPlan -Plan $plan } '*postdeploy.sql changed*'
+    Assert-Failure { Assert-DevSqlPlan -Plan $plan } '*invalid or changed*'
+    $plan.Context.dacpacSha256 = (Get-FileHash -LiteralPath $changedDacpac -Algorithm SHA256).Hash.ToLowerInvariant()
+    $plan.Hash = Get-SqlPlanSha256 -Context $plan.Context -ScriptPath $plan.ScriptPath -ReportPath $plan.ReportPath
+    Assert-DevSqlPlan -Plan $plan
     $plan.DacpacPath = $dacpac
+    $plan.Context.dacpacSha256 = $archive.DacpacHash
+    $plan.Hash = $originalHash
     $publish = @{ SqlCmdPath = $config.SqlCmdPath; SqlPackagePath = $config.SqlPackagePath; ConnectionString = $connection; DacpacPath = $dacpac }
     $script:nativeCalls.Clear()
     Invoke-DacpacPublish @publish
