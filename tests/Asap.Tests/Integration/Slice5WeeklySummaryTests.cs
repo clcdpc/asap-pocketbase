@@ -312,6 +312,132 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    [DataRow("opted_out", null)]
+    [DataRow("inactive", null)]
+    [DataRow("empty", null)]
+    [DataRow("invalid_recipient", "recipient_missing_or_invalid")]
+    [DataRow("restricted_recipient", "recipient_domain_not_allowed")]
+    public async Task ForcedManualWeeklySummaryRetainsRecipientEligibilitySuppressionAndEmptyBehavior(string scenario, string? suppression)
+    {
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var scope = Slice5IsolatedLibraryId;
+        await EnsureSlice5IsolatedLibraryAsync(contexts, scope);
+        var admin = await CreateCorrectiveStaffAsync(superAdmin, "admin", scope);
+        var actor = await ReadCorrectiveStaffAsync(admin);
+        var recipient = await CreateCorrectiveStaffAsync(superAdmin, "staff", scope);
+        var manualRunId = Guid.NewGuid();
+        var auditKey = manualRunId.ToString("N");
+        var businessPrefix = $"weekly-summary-force:{manualRunId:N}:";
+        var requestId = 0L;
+        string? oldStaffUrl = null;
+        var oldStaffUrlCaptured = false;
+        var competingRecipientFlags = new Dictionary<long, bool>();
+        try
+        {
+            await using (var seed = await contexts.CreateDbContextAsync())
+            {
+                var system = await seed.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+                oldStaffUrl = system.StaffApplicationUrl;
+                oldStaffUrlCaptured = true;
+                system.StaffApplicationUrl = "https://staff.example.org/staff/";
+                // Selected-library runs also include opted-in System super-admins.
+                // Preserve their preferences while isolating this recipient fixture.
+                foreach (var otherRecipient in await seed.StaffUsers.Where(item => item.Id != recipient.Id &&
+                             item.IsActive && item.WeeklyActionSummaryEnabled &&
+                             (item.OrganizationId == scope ||
+                              item.Role == StaffRole.SuperAdmin && item.OrganizationId == LibraryScope.SystemOrganizationId))
+                         .ToListAsync())
+                {
+                    competingRecipientFlags[otherRecipient.Id] = otherRecipient.WeeklyActionSummaryEnabled;
+                    otherRecipient.WeeklyActionSummaryEnabled = false;
+                }
+                var staff = await seed.StaffUsers.SingleAsync(item => item.Id == recipient.Id);
+                staff.IsActive = scenario != "inactive";
+                staff.WeeklyActionSummaryEnabled = scenario != "opted_out";
+                staff.WeeklyActionSummaryEmail = scenario == "invalid_recipient" ? "invalid-address"
+                    : scenario == "restricted_recipient" ? "weekly@outside.invalid" : "weekly-eligible@example.org";
+                if (scenario != "empty")
+                {
+                    var format = await seed.MaterialFormats.SingleAsync(item => item.Code == "book");
+                    var now = timeProvider!.GetUtcNow().UtcDateTime;
+                    var request = new TitleRequest
+                    {
+                        LibraryOrganizationId = scope, Barcode = $"s5-eligibility-{Guid.NewGuid():N}"[..40],
+                        Title = "Forced weekly eligibility", MaterialFormatId = format.Id,
+                        Status = "suggestion", CreatedUtc = now, UpdatedUtc = now
+                    };
+                    seed.TitleRequests.Add(request);
+                    await seed.SaveChangesAsync();
+                    requestId = request.Id;
+                }
+                else
+                {
+                    await seed.SaveChangesAsync();
+                }
+            }
+            var result = await factory.Services.GetRequiredService<BackgroundWorkflowJobs>()
+                .SendForcedWeeklyStaffSummaryAsync(
+                    new StaffJobEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId),
+                    scope, manualRunId, CancellationToken.None);
+            Assert.AreEqual("completed", result.Code);
+            await using var verify = await contexts.CreateDbContextAsync();
+            var rows = await verify.EmailOutbox.AsNoTracking()
+                .Where(item => item.BusinessKey != null && item.BusinessKey.StartsWith(businessPrefix)).ToArrayAsync();
+            if (suppression is null)
+            {
+                Assert.HasCount(0, rows, "Forcing does not bypass opt-in, active-recipient or empty-summary rules.");
+            }
+            else
+            {
+                Assert.HasCount(1, rows);
+                Assert.AreEqual(recipient.Id, rows[0].RecipientStaffUserId);
+                Assert.AreEqual("suppressed", rows[0].Status);
+                Assert.AreEqual(suppression, rows[0].SuppressionReason);
+                Assert.IsNull(rows[0].BodyText);
+            }
+            Assert.AreEqual(1, await verify.AdministrativeAudits.CountAsync(item =>
+                item.Action == "weekly_summary_force_queued" && item.TargetId == auditKey &&
+                item.ActorStaffUserId == actor.Id && item.OrganizationId == scope));
+            Assert.HasCount(0, dispatcher!.EnqueuedIds, "Ineligible and suppressed recipients cannot dispatch delivery work.");
+        }
+        finally
+        {
+            try
+            {
+                await using var restore = await contexts.CreateDbContextAsync();
+                if (oldStaffUrlCaptured)
+                {
+                    var system = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+                    system.StaffApplicationUrl = oldStaffUrl;
+                }
+                foreach (var (recipientId, originalFlag) in competingRecipientFlags)
+                {
+                    var competingRecipient = await restore.StaffUsers.SingleAsync(item => item.Id == recipientId);
+                    competingRecipient.WeeklyActionSummaryEnabled = originalFlag;
+                }
+                await restore.SaveChangesAsync();
+                foreach (var (recipientId, originalFlag) in competingRecipientFlags)
+                {
+                    var restoredFlag = await restore.StaffUsers.AsNoTracking().Where(item => item.Id == recipientId)
+                        .Select(item => item.WeeklyActionSummaryEnabled).SingleAsync();
+                    Assert.AreEqual(originalFlag, restoredFlag, "Every competing recipient retains its original opt-in flag.");
+                    TestContext.WriteLine("Competing weekly recipient {0}: captured opt-in {1}; restored opt-in {2}.",
+                        recipientId, originalFlag, restoredFlag);
+                }
+            }
+            finally
+            {
+                await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;", ("@prefix", businessPrefix + "%"));
+                await ExecuteNonQueryAsync("DELETE FROM [asap].[AdministrativeAudit] WHERE [TargetId] = @id;", ("@id", auditKey));
+                await DeleteRequestIdsAsync(contexts, [requestId]);
+                await DeactivateCorrectiveStaffAsync(admin.Id);
+                await DeactivateCorrectiveStaffAsync(recipient.Id);
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task NormalWeeklySummaryUsesBusinessPeriodAndQueuesOnlyOnceForCurrentRecipient()
     {
         var superAdmin = await ReadConfiguredSuperAdminAsync();
@@ -623,6 +749,7 @@ public sealed partial class PatronJourneyTests
         var admin = await CreateCorrectiveStaffAsync(superAdmin, "admin", scope);
         var actor = await ReadCorrectiveStaffAsync(admin);
         var manualRunId = Guid.Parse("5676ae00-1c84-43e5-a346-73c9b9cc49be");
+        var nextManualRunId = Guid.Parse("5676ae00-1c84-43e5-a346-73c9b9cc49bf");
         var manualRunAuditKey = manualRunId.ToString("N");
         var businessPrefix = $"weekly-summary-force:{manualRunId:N}:";
         var requestIds = new List<long>();
@@ -704,11 +831,48 @@ public sealed partial class PatronJourneyTests
                 new StaffIdentityEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId));
             Assert.AreEqual("completed", second.Code);
             Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(item => item.BusinessKey == $"{businessPrefix}{actor.Id}"));
+
+            var delivery = factory.Services.GetRequiredService<EmailOutboxJobs>();
+            var sender = (RecordingEmailSender)factory.Services.GetRequiredService<IEmailSender>();
+            await delivery.DeliverAsync(outbox.Id, CancellationToken.None);
+            Assert.AreEqual("sent", (await ReadOutboxStateAsync(outbox.Id)).Status);
+            Assert.HasCount(1, sender.Envelopes);
+
+            // A retry after provider acceptance still owns the same intent. A
+            // deliberate next run in this unchanged reporting period is new work.
+            await service.SendWeeklyStaffSummaryAsync(manualRunId, scope, CancellationToken.None,
+                new StaffIdentityEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId));
+            await delivery.DeliverAsync(outbox.Id, CancellationToken.None);
+            Assert.HasCount(1, sender.Envelopes, "Retrying the accepted manual operation cannot deliver again.");
+            Assert.AreEqual(1, await verify.AdministrativeAudits.CountAsync(item =>
+                item.Action == "weekly_summary_force_queued" && item.TargetId == manualRunAuditKey));
+
+            var next = await service.SendWeeklyStaffSummaryAsync(nextManualRunId, scope, CancellationToken.None,
+                new StaffIdentityEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId));
+            Assert.AreEqual("completed", next.Code);
+            Assert.AreEqual(nextManualRunId, next.ManualRunId);
+            var nextKey = $"weekly-summary-force:{nextManualRunId:N}:{actor.Id}";
+            var nextOutbox = await verify.EmailOutbox.AsNoTracking().SingleAsync(item => item.BusinessKey == nextKey);
+            Assert.AreNotEqual(outbox.Id, nextOutbox.Id);
+            Assert.AreEqual("pending", nextOutbox.Status);
+            Assert.AreEqual(outbox.Subject, nextOutbox.Subject, "Both deliberate runs summarize the same reporting period and actions.");
+            var nextAuditKey = nextManualRunId.ToString("N");
+            Assert.AreEqual(1, await verify.AdministrativeAudits.CountAsync(item =>
+                item.Action == "weekly_summary_force_queued" && item.TargetId == nextAuditKey &&
+                item.ActorStaffUserId == actor.Id && item.OrganizationId == scope));
+            await delivery.DeliverAsync(nextOutbox.Id, CancellationToken.None);
+            Assert.HasCount(2, sender.Envelopes, "A new manual identity can deliver another summary after the first was accepted.");
         }
         finally
         {
+            await ExecuteNonQueryAsync("""
+                DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN
+                    (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @first OR [BusinessKey] LIKE @next);
+                """, ("@first", businessPrefix + "%"), ("@next", $"weekly-summary-force:{nextManualRunId:N}:%"));
             await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;", ("@prefix", businessPrefix + "%"));
             await ExecuteNonQueryAsync("DELETE FROM [asap].[AdministrativeAudit] WHERE [TargetId] = @id;", ("@id", manualRunId.ToString("N")));
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;", ("@prefix", $"weekly-summary-force:{nextManualRunId:N}:%"));
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[AdministrativeAudit] WHERE [TargetId] = @id;", ("@id", nextManualRunId.ToString("N")));
             await ExecuteNonQueryAsync("DELETE FROM [asap].[AdditionalCopyRequest] WHERE [Id] IN (SELECT [Id] FROM [asap].[AdditionalCopyRequest] WHERE [Id] = @id);", ("@id", copyIds[0]));
             await ExecuteNonQueryAsync("DELETE FROM [asap].[TitleRequest] WHERE [Id] IN (@first, @second);", ("@first", requestIds[0]), ("@second", requestIds[1]));
             await using var restore = await contextFactory.CreateDbContextAsync();

@@ -817,6 +817,11 @@ public sealed partial class PatronJourneyTests
                 var storedRecurringJob = Hangfire.Storage.InvocationData.DeserializePayload(fields["Job"]).DeserializeJob();
                 Assert.AreEqual(expectedJob.Type, storedRecurringJob.Type);
                 Assert.AreEqual(expectedJob.Method, storedRecurringJob.Method.Name);
+                if (id == "asap-weekly-staff-summary")
+                {
+                    Assert.IsNull(storedRecurringJob.Args[0], "Scheduled summaries retain ordinary period deduplication.");
+                    Assert.IsNull(storedRecurringJob.Args[1], "Scheduled summaries retain their normal aggregate scope.");
+                }
                 // Hangfire 1.8.25 keeps the RecurringJobOptions queue in the hash,
                 // while the explicit AddOrUpdate queue is serialized with the invocation.
                 Assert.AreEqual(expectedJob.Queue, storedRecurringJob.Queue);

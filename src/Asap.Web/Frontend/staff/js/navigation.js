@@ -163,7 +163,8 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     if (name === 'settings' && !replace) {
       router.pushSettingsRoute(views.settings.currentScope(), views.settings.currentPanel());
     } else {
-      router[replace ? 'replaceStage' : 'pushStage'](stage, { scope: context.scope, copyStatus: context.additionalCopyStatus });
+      router[replace ? 'replaceStage' : 'pushStage'](stage, { scope: context.scope, copyStatus: context.additionalCopyStatus,
+        operations: name === 'operations' ? views.operations.currentRoute?.() : undefined });
     }
     router.remember();
   }

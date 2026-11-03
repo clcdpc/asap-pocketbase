@@ -17,7 +17,15 @@ limited to one per administrator per minute and five per scope per minute.
 Status observation uses the exact scoped reference, including after a lost
 acknowledgement or beyond the Operations list limit; it never resubmits a test.
 Observation stops when the panel/session/scope changes or after one minute.
-Refresh test status or View email operations to continue checking the same test.
+Use Settings' **View email operations**, available before or after a test, to
+open and refresh the authorized log. Unsaved Settings edits require a departure
+decision; navigation never saves them. System tests open the authorized
+**System only** email view. **Refresh operations** reloads
+the tables and reconciles the exact remembered test by reference or original
+request UUID. A missing row in the bounded log is not absence evidence.
+Refresh never sends, retries or retires a request. Submission acknowledgement is
+brief; actionable errors and unresolved-outcome guidance remain visible. Ongoing
+saved results and detailed recovery controls live in Operations.
 Stopping observation does not cancel a committed outbox entry.
 
 ## Recovering an unrecorded client request
@@ -26,7 +34,8 @@ If a submission never reaches the server, its original request UUID remains in
 this browser session and Send stays disabled. Reloading or opening the other
 panel reconciles that same UUID; it does not resend it.
 
-1. Keep the same signed-in actor and scope. Use Refresh test status. Only the
+1. Keep the same signed-in actor and scope. Open **View email operations** from
+   Settings, then use **Refresh operations**. Only the
    authorized by-request lookup returning `404` with `not_found` counts as
    absence evidence. A network/authentication/server error or malformed response
    cannot authorize retirement.
@@ -95,7 +104,8 @@ tests. Issue #293 remains open until an authorized human records these results:
    Record environment and scope without recording credentials.
 2. Open Settings > Email / Postmark. Confirm the saved scope, From, primary
    recipient and live mode. Click Send test email once.
-3. Observe automatic queue/worker progress and provider acceptance. Record the
+3. Open **View email operations** and use **Refresh operations** to observe
+   queue/worker progress and provider acceptance. Record the
    operation reference and safe acceptance evidence. Do not manually trigger a job.
 4. Observe receipt in the intended mailbox or junk/quarantine. Confirm the From
    identity, scope, requested UTC time and matching operation reference. Record

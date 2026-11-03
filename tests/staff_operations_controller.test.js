@@ -1,5 +1,20 @@
 const assert = require('node:assert/strict');
 const { fixture } = require('./helpers/staff-controller.cjs');
+const settle = async () => { for (let index = 0; index < 10; index += 1) await new Promise(resolve => setImmediate(resolve)); };
+function controlledTimers(window) {
+  let timerId = 0, tick = 0;
+  const timers = new Map();
+  window.setTimeout = (callback, delay = 0) => {
+    const token = ++timerId; timers.set(token, { callback, at: tick + delay }); return token;
+  };
+  window.clearTimeout = token => timers.delete(token);
+  return { advance(milliseconds) {
+    tick += milliseconds;
+    for (const [token, timer] of [...timers]) {
+      if (timer.at <= tick) { timers.delete(token); timer.callback(); }
+    }
+  } };
+}
 const actor = id => ({ id, tenantId: `tenant-${id}`, authenticationEmail: `${id}@example.org`,
   organizationId: 1, role: 'super_admin', version: 'v1' });
 const organizationCatalog = [
@@ -42,6 +57,101 @@ async function loadOperationsController(load) {
   } };
 }
 (async () => {
+  for (const scope of ['all', '3']) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createOperationsController } = await loadOperationsController(load);
+      const identity = createSessionIdentity(), owner = identity.accept(actor('weekly-gestures'));
+      const posts = [], receipts = [];
+      const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+        announce() {}, onScopeChange() {}, clearReceipt() {}, onReceipt: message => receipts.push(message),
+        request: async (path, init = {}) => {
+          if (init.method === 'POST') { posts.push(path); return committedOperationResult(path); }
+          return path.endsWith('/organizations') ? { data: organizationCatalog } : { items: [] };
+        } });
+      controller.setStaff(owner); controller.activate(); await controller.refresh();
+      get('#operations-scope').value = scope;
+      get('#operations-scope').dispatchEvent(new dom.window.Event('change')); await settle();
+      const run = get('#run-weekly-now');
+      assert.equal(get('#force-weekly-now'), null);
+      assert.equal(run.textContent.trim(), 'Run weekly summary');
+      const click = detail => run.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, detail }));
+      click(1);
+      assert.equal(run.disabled, true, 'the journal locks synchronously before the POST');
+      await settle();
+      assert.equal(run.disabled, false, 'the first acknowledgement has already completed');
+      click(2); await settle();
+      assert.equal(posts.length, 1, 'the second click of the same native double-click is not another deliberate run');
+      for (const key of ['Enter', ' ']) {
+        const repeat = new dom.window.KeyboardEvent('keydown', { key, repeat: true, bubbles: true, cancelable: true });
+        run.dispatchEvent(repeat);
+        assert.equal(repeat.defaultPrevented, true, 'held activation keys cannot synthesize fresh clicks after a fast acknowledgement');
+        const deliberate = new dom.window.KeyboardEvent('keydown', { key, repeat: false, bubbles: true, cancelable: true });
+        run.dispatchEvent(deliberate);
+        assert.equal(deliberate.defaultPrevented, false, 'a new key gesture keeps native button activation');
+      }
+      click(1); await settle();
+      // Keyboard/accessibility activation has click detail zero and remains a
+      // deliberate gesture; native key synthesis itself is covered by Chromium.
+      click(0); await settle();
+      assert.equal(posts.length, 3);
+      const urls = posts.map(path => new URL(path, 'https://localhost'));
+      assert.ok(urls.every(url => url.searchParams.get('force') === 'true'));
+      assert.ok(urls.every(url => url.searchParams.get('organizationId') === (scope === 'all' ? null : scope)));
+      assert.equal(new Set(urls.map(url => url.searchParams.get('operationId'))).size, 3,
+        'each subsequent deliberate gesture owns a fresh durable identity');
+      assert.ok(receipts.every(message => /Weekly summary Run .* queued\./.test(message)));
+      assert.ok(receipts.every(message => !/forced|sent|delivered/i.test(message)));
+      controller.dispose();
+    });
+  }
+
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createOperationsController } = await loadOperationsController(load);
+    const identity = createSessionIdentity(), owner = identity.accept(actor('weekly-lost-ack'));
+    const posts = [];
+    let rejectFirst;
+    const options = { root: get('#operations-view'), sessionIdentity: identity,
+      announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {},
+      request: async (path, init = {}) => {
+        if (init.method === 'POST') {
+          posts.push(path);
+          if (posts.length === 1) return new Promise((resolve, reject) => { rejectFirst = reject; });
+          return committedOperationResult(path);
+        }
+        return path.endsWith('/organizations') ? { data: organizationCatalog } : { items: [] };
+      } };
+    const first = createOperationsController(options);
+    first.setStaff(owner); first.activate(); await first.refresh();
+    get('#operations-scope').value = '3';
+    get('#operations-scope').dispatchEvent(new dom.window.Event('change')); await settle();
+    get('#run-weekly-now').click(); get('#run-weekly-now').click();
+    assert.equal(posts.length, 1, 'pending repeated activation sends one request');
+    assert.equal(get('#operations-scope').disabled, true);
+    assert.equal(get('#send-test-email').disabled, true);
+    rejectFirst(new Error('Acknowledgement lost')); await settle();
+    assert.equal(get('#run-weekly-now').disabled, true);
+    assert.equal(get('#operations-outcome button'), null, 'uncertain retry waits for explicit review');
+    const storageKey = `asap.staff.operation.${owner.tenantId}.${owner.id}.${encodeURIComponent(identity.actor().key)}`;
+    const original = JSON.parse(dom.window.sessionStorage.getItem(storageKey));
+    first.dispose();
+    const restored = createOperationsController(options);
+    restored.setStaff(owner); restored.activate(); await restored.refresh();
+    assert.equal(posts.length, 1, 'reload and refresh are read-only');
+    assert.equal(get('#operations-scope').value, 'all', 'visible scope does not replace the captured retry scope');
+    get('#operations-outcome button').click(); await settle();
+    assert.equal(posts.length, 2);
+    assert.equal(posts[1], posts[0], 'retry keeps the exact original UUID, forced path and library scope');
+    assert.equal(dom.window.sessionStorage.getItem(storageKey), null);
+    get('#run-weekly-now').click(); await settle();
+    assert.equal(posts.length, 3);
+    const next = new URL(posts[2], 'https://localhost');
+    assert.notEqual(next.searchParams.get('operationId'), original.operationId);
+    assert.equal(next.searchParams.get('organizationId'), null, 'new work uses the currently selected scope');
+    restored.dispose();
+  });
+
   await fixture(async ({ load, get, dom }) => {
     const { createSessionIdentity } = await load('session-identity');
     const { createOperationsController } = await loadOperationsController(load);
@@ -262,7 +372,7 @@ async function loadOperationsController(load) {
         }
         const second = createOperationsController(options); second.setStaff(session.preferences()); second.activate();
         assert.equal(await second.refresh(), true);
-        const controls = ['#run-workflow-now', '#run-weekly-now', '#force-weekly-now', '#send-test-email', '#operations-scope'];
+        const controls = ['#run-workflow-now', '#run-weekly-now', '#send-test-email', '#operations-scope'];
         for (const selector of controls) assert.equal(get(selector).disabled, false, `${kind} cannot block ${selector}`);
         assert.equal(await second.refresh(), true);
         assert.equal(get('#operations-outcome').hidden, true, 'foreign recovery cannot become current/reviewed');
@@ -419,7 +529,7 @@ async function loadOperationsController(load) {
         if (path.includes('/email-operations/test?')) {
           observed += 1;
           assert.equal(new URL(path, 'https://localhost').searchParams.get('operationId'), operationId);
-          return { code: 'ok', data: { id: '9223372036854775807', organizationId: 3, status: 'sent', deliveryMode: 'postmark' } };
+          return { code: 'ok', data: { id: '9223372036854775807', organizationId: 3, status: 'sent', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } };
         }
         return { items: [] };
       } });
@@ -435,7 +545,7 @@ async function loadOperationsController(load) {
   });
   const status200Commands = [
     { selector: '#run-workflow-now', path: '/api/asap/staff/workflow/run-now', message: 'Workflow run' },
-    { selector: '#run-weekly-now', path: '/api/asap/staff/workflow/weekly-summary/run-now?force=false', message: 'Weekly summary' },
+    { selector: '#run-weekly-now', path: '/api/asap/staff/workflow/weekly-summary/run-now?force=true', message: 'Weekly summary' },
     // The shared email-test controller owns the new visible action; this entry
     // retains the generic legacy acknowledgement/recovery contract.
     { legacyTest: true, path: '/api/asap/staff/email-operations/test', message: 'Test email' },
@@ -472,6 +582,9 @@ async function loadOperationsController(load) {
       await controller.refresh();
 
       if (command.retry) {
+        get('#email-view-scope').value = '3';
+        get('#email-view-scope').dispatchEvent(new dom.window.Event('change'));
+        await controller.refresh();
         const row = [...get('#email-operations-table').querySelectorAll('tr')]
           .find(item => item.textContent.includes('71'));
         assert.ok(row, 'retry-email witness loads the captured failed row');
@@ -568,7 +681,7 @@ async function loadOperationsController(load) {
       assert.equal(receipts[0][2].outcome, 'uncertain', `${invalid.name}: malformed 2xx is not confirmed`);
       assert.equal(get('#operations-outcome').hidden, false);
       assert.equal(get('#operations-outcome button'), null, `${invalid.name}: no retry before authoritative review`);
-      for (const selector of ['#run-workflow-now', '#run-weekly-now', '#force-weekly-now', '#send-test-email']) {
+      for (const selector of ['#run-workflow-now', '#run-weekly-now', '#send-test-email']) {
         assert.equal(get(selector).disabled, true, `${invalid.name}: controls remain guarded`);
       }
       const key = `asap.staff.operation.${owner.tenantId}.${owner.id}.${encodeURIComponent(identity.actor().key)}`;
@@ -621,5 +734,560 @@ async function loadOperationsController(load) {
       controller.dispose();
     });
   }
-  console.log('Operations controller: canonical and malformed command outcome fixtures passed');
+  for (const recovery of [
+    { organizationId: 2, id: '9007199254740993' },
+    { organizationId: 2, id: null },
+    { organizationId: 1, id: null }
+  ]) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createOperationsController } = await loadOperationsController(load);
+      const identity = createSessionIdentity(), owner = identity.accept(actor('remembered-test'));
+      const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+      const key = `asap.staff.email-test.${encodeURIComponent(identity.actor().key)}.${recovery.organizationId}`;
+      dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id: recovery.id, pending: true }));
+      const calls = [];
+      let status = 'failed', pause = false, resolveOld, oldStarted;
+      const started = new Promise(resolve => { oldStarted = resolve; });
+      const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+        announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
+          calls.push({ path, init });
+          if (path.endsWith('/organizations')) return { data: organizationCatalog };
+          if (/\/email-operations\/(test|9007199254740993)\?/.test(path)) {
+            if (pause) { pause = false; oldStarted(); return new Promise(resolve => { resolveOld = resolve; }); }
+            return { code: 'ok', data: { id: '9007199254740993', organizationId: recovery.organizationId,
+              status, lastErrorCode: 'provider_timeout', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } };
+          }
+          return { items: [] }; // The bounded log deliberately contains no matching row.
+        } });
+      controller.setStaff(owner); controller.activate();
+      await controller.openEmailScope(recovery.organizationId);
+      assert.equal(get('#send-test-email').disabled, true, 'an empty visible log cannot resolve an uncertain exact test');
+      assert.equal(get('#email-operations-table tbody tr').cells[0].textContent, '9007199254740993',
+        'the authorized exact test is represented even when the bounded log omits it');
+      assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).pending, true);
+      const exact = calls.filter(call => /\/email-operations\/(test|9007199254740993)\?/.test(call.path));
+      assert.ok(exact.length > 0);
+      assert.ok(exact[0].path.includes(`organizationId=${recovery.organizationId}`));
+      assert.ok(exact[0].path.includes(recovery.id || `operationId=${operationId}`));
+      if (recovery.organizationId === 1) {
+        assert.equal(controller.currentScope(), '1');
+        assert.ok(calls.some(call => call.path === '/api/asap/staff/email-operations?organizationId=1'), 'the explicit System view includes System tests');
+      }
+      pause = true;
+      const oldRefresh = controller.refresh(); await started;
+      status = 'sent';
+      await controller.refresh();
+      assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).pending, false);
+      resolveOld({ code: 'ok', data: { id: '9007199254740993', organizationId: recovery.organizationId,
+        status: 'failed', lastErrorCode: 'provider_timeout', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } });
+      await oldRefresh;
+      assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).pending, false, 'a stale status reply cannot replace a newer sent result');
+      assert.match(get('#email-operations-table tbody tr').textContent, /Provider accepted/,
+        'a superseded exact read cannot replace the current visible test row');
+      assert.equal(get('#send-test-email').disabled, false);
+      assert.equal(get('#operations-email-test [data-email-test="result"]').hidden, true);
+      const beforeMainRefresh = calls.length;
+      get('#refresh-operations').click();
+      for (let index = 0; index < 10; index += 1) await new Promise(resolve => setImmediate(resolve));
+      assert.ok(calls.length > beforeMainRefresh, 'the main refresh control reloads operational data');
+      assert.equal(calls.filter(call => call.init.method === 'POST').length, 0, 'refresh never sends, retries, or retires a test');
+      controller.dispose();
+    });
+  }
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createOperationsController } = await loadOperationsController(load);
+    const identity = createSessionIdentity();
+    let owner = identity.accept(actor('visible-A')), resolveOld;
+    const paused = new Promise(resolve => { resolveOld = resolve; });
+    const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+      announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async path => {
+        if (path.endsWith('/organizations')) return { data: organizationCatalog };
+        const scope = new URL(path, 'https://localhost').searchParams.get('organizationId') || 'all';
+        const name = `${identity.preferences().id}-${scope}`;
+        if (path.includes('/workflow/queues')) {
+          if (scope === '2') return paused;
+          return { items: [{ queueName: `queue-${name}` }] };
+        }
+        return { items: [{ id: '1', status: 'failed', lastErrorCode: `email-${name}` }] };
+      } });
+    controller.setStaff(owner); controller.activate(); await controller.refresh();
+    assert.match(get('#queue-progress-table').textContent, /queue-visible-A-all/);
+    assert.match(get('#email-operations-table').textContent, /email-visible-A-all/);
+    get('#email-view-scope').value = '2';
+    get('#email-view-scope').dispatchEvent(new dom.window.Event('change'));
+    assert.doesNotMatch(get('#queue-progress-table').textContent, /visible-A/, 'scope changes remove old queue rows before awaiting reads');
+    assert.doesNotMatch(get('#email-operations-table').textContent, /visible-A/, 'scope changes remove old email rows before awaiting reads');
+    get('#email-view-scope').value = '3';
+    get('#email-view-scope').dispatchEvent(new dom.window.Event('change'));
+    await controller.refresh();
+    assert.match(get('#email-operations-table').textContent, /email-visible-A-3/);
+    resolveOld({ items: [{ queueName: 'stale-library-2' }] });
+    for (let index = 0; index < 10; index += 1) await new Promise(resolve => setImmediate(resolve));
+    assert.doesNotMatch(get('#operations-view').textContent, /stale-library-2/);
+    owner = identity.accept(actor('visible-B')); controller.setStaff(owner);
+    assert.doesNotMatch(get('#queue-progress-table').textContent, /visible-A/, 'account changes remove old queue data synchronously');
+    assert.doesNotMatch(get('#email-operations-table').textContent, /visible-A/, 'account changes remove old email data synchronously');
+    await controller.refresh();
+    assert.match(get('#email-operations-table').textContent, /email-visible-B-all/);
+    controller.deactivate();
+    assert.doesNotMatch(get('#email-operations-table').textContent, /visible-B/, 'leaving the screen retires its rendered context');
+    controller.dispose();
+  });
+  for (const failure of ['queues', 'email-operations']) {
+    for (const knownReference of [false, true]) {
+      await fixture(async ({ load, get, dom }) => {
+        const { createSessionIdentity } = await load('session-identity');
+        const { createOperationsController } = await loadOperationsController(load);
+        const identity = createSessionIdentity(), owner = identity.accept(actor('independent-recovery'));
+        const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+        const key = `asap.staff.email-test.${encodeURIComponent(identity.actor().key)}.1`;
+        dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, pending: true,
+          id: knownReference ? '9007199254740993' : null }));
+        let recover = false;
+        const calls = [], announcements = [];
+        const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+          announce: (...args) => announcements.push(args), onScopeChange() {}, onReceipt() {}, clearReceipt() {},
+          request: async (path, init = {}) => {
+            calls.push({ path, init });
+            if (/\/email-operations\/(test|9007199254740993)\?/.test(path)) {
+              if (!recover) throw new Error('Exact lookup was temporarily unavailable');
+              return { code: 'ok', data: { id: '9007199254740993', organizationId: 1,
+                status: 'sent', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } };
+            }
+            if (path.endsWith(`/${failure}`)) throw new Error(`${failure} is unavailable`);
+            if (path.endsWith('/organizations')) return { data: organizationCatalog };
+            return { items: [] };
+          } });
+        controller.setStaff(owner); controller.activate(); await settle();
+        assert.equal(get('#send-test-email').disabled, true);
+        assert.match(get('#operations-email-test [data-email-test="result"]').textContent, /unconfirmed/);
+        recover = true;
+        assert.equal(await controller.refresh(), false, 'table failures remain failures after independent exact reconciliation');
+        const stored = JSON.parse(dom.window.sessionStorage.getItem(key));
+        assert.equal(stored.operationId, operationId);
+        assert.equal(stored.id, '9007199254740993');
+        assert.equal(stored.pending, false, 'a recovered exact read resolves the original intent despite unrelated table failure');
+        assert.equal(get('#send-test-email').disabled, false);
+        assert.equal(get('#operations-email-test [data-email-test="result"]').hidden, true);
+        assert.ok(announcements.some(([message, tone]) => message === `${failure} is unavailable` && tone === 'error'));
+        const lookups = calls.filter(call => /\/email-operations\/(test|9007199254740993)\?/.test(call.path));
+        assert.equal(lookups.length, 2);
+        assert.ok(lookups.every(call => call.path.includes(knownReference ? '/9007199254740993?' : `operationId=${operationId}`)));
+        assert.equal(calls.filter(call => call.init.method === 'POST').length, 0, 'refresh never resends, retries, or retires');
+        assert.equal(dom.window.sessionStorage.getItem(`${key}.retirement-references`), null);
+        controller.dispose();
+      });
+    }
+  }
+  for (const readiness of ['blocked', 'unavailable']) {
+    for (const refreshPending of [false, true]) {
+      await fixture(async ({ load, get, dom }) => {
+        const originalNow = Date.now;
+        let now = originalNow();
+        Date.now = () => now;
+        try {
+          const { createSessionIdentity } = await load('session-identity');
+          const { createOperationsController } = await load('operations-controller');
+          const identity = createSessionIdentity(), owner = identity.accept(actor('retirement-focus'));
+          const key = `asap.staff.email-test.${encodeURIComponent(identity.actor().key)}.1`;
+          const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+          dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, pending: true, id: null }));
+          let holdTables = false, releaseTables;
+          const held = new Promise(resolve => { releaseTables = resolve; });
+          const calls = [];
+          const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+            announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
+              calls.push({ path, init });
+              if (path.includes('/test-context')) {
+                if (readiness === 'unavailable') throw new Error('Saved context is temporarily unavailable');
+                return { code: 'ok', data: { organizationId: 1, scopeName: 'System', deliveryMode: 'postmark',
+                  state: 'blocked', blockingReason: 'mail_not_configured', configurationVersion: 'A'.repeat(64) } };
+              }
+              if (path.includes('/email-operations/test?')) throw Object.assign(new Error('Not recorded'), { status: 404, response: { code: 'not_found' } });
+              if (path.endsWith('/organizations')) return { data: organizationCatalog };
+              if (holdTables && path.includes('/workflow/queues')) return held;
+              return { items: [] };
+            } });
+          get('#operations-view').hidden = false;
+          controller.setStaff(owner); controller.activate(); await settle();
+          now += 60001; await controller.refresh();
+          const retire = get('#operations-email-test [data-email-test="retire"]');
+          assert.equal(retire.hidden, false);
+          assert.equal(get('#send-test-email').disabled, true);
+          let loading;
+          if (refreshPending) { holdTables = true; loading = controller.refresh(); await settle(); }
+          retire.focus(); retire.click(); await settle();
+          assert.equal(retire.hidden, true);
+          const focus = get(refreshPending ? '#email-operations-table' : '#refresh-operations');
+          assert.equal(dom.window.document.activeElement, focus, `${readiness}: retirement focuses an enabled visible recovery control`);
+          assert.equal(Boolean(focus.disabled), false);
+          const result = get('#operations-email-test [data-email-test="result"]');
+          assert.equal(result.hidden, false);
+          assert.equal(result.getAttribute('aria-live'), 'polite');
+          assert.match(result.textContent, /Retired the unrecorded client request/);
+          assert.match(result.textContent, readiness === 'blocked' ? /Configure the System Postmark credential/ : /Saved test-email context is unavailable/);
+          const stored = JSON.parse(dom.window.sessionStorage.getItem(key));
+          assert.equal(stored.operationId, operationId); assert.equal(stored.retired, true);
+          assert.equal(calls.filter(call => call.init.method === 'POST').length, 0);
+          if (loading) { releaseTables({ items: [] }); await loading; }
+          controller.dispose();
+        } finally { Date.now = originalNow; }
+      });
+    }
+  }
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createOperationsController } = await loadOperationsController(load);
+    const identity = createSessionIdentity(), owner = identity.accept(actor('visible-current-test'));
+    const currentId = '9007199254740993', createdUtc = '2026-11-03T13:00:00Z';
+    const failures = Array.from({ length: 500 }, (_, index) => ({ id: String(1000 + index),
+      organizationId: 1, status: 'failed', deliveryClass: 'business_event', lastErrorCode: 'retained_failure',
+      createdUtc: '2026-11-02T13:00:00Z', canRetry: false }));
+    const calls = [];
+    let queued = false, included = false, status = 'pending';
+    const exact = () => ({ id: currentId, organizationId: 1, status, deliveryClass: 'operational_test',
+      createdUtc, deliveryMode: 'postmark', version: 'AAAAAAAAAAE=', lastErrorCode: status === 'failed' ? 'mail_not_configured' : null,
+      canRetry: true }); // Exact-read responses never provide retry authority.
+    const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+      announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
+        calls.push({ path, init });
+        const url = new URL(path, 'https://localhost');
+        if (init.method === 'POST') { queued = true; return committedOperationResult(path); }
+        if (url.pathname.endsWith('/organizations')) return { data: organizationCatalog };
+        if (url.pathname.endsWith(`/email-operations/${currentId}`)) return { code: 'ok', data: exact() };
+        if (url.pathname.endsWith('/email-operations')) {
+          const show = queued && included && !url.searchParams.has('organizationId') && identity.preferences() === owner;
+          return { items: show ? [{ ...exact(), version: 'AAAAAAAAAAE=', canRetry: status === 'failed' }, ...failures.slice(0, 499)] : failures };
+        }
+        return { items: [] };
+      } });
+    controller.setStaff(owner); controller.activate(); await controller.refresh();
+    assert.equal(get('#email-operations-table tbody').rows.length, 500);
+    const beforeSend = calls.length;
+    get('#send-test-email').click(); await settle();
+    const rows = () => [...get('#email-operations-table tbody').rows];
+    assert.equal(rows().length, 501, 'one exact current test supplements the bounded failed-first log');
+    assert.equal(rows()[0].cells[0].textContent, currentId, 'the newly queued current test appears first without another click');
+    assert.match(rows()[0].textContent, /Queued.*operational_test/);
+    assert.equal(rows()[0].querySelector('time').getAttribute('datetime'), createdUtc);
+    assert.equal(rows()[0].querySelector('button'), null);
+    assert.deepEqual(rows().slice(1).map(row => row.cells[0].textContent), failures.map(row => row.id), 'normal failed-first row order is retained');
+    assert.ok(calls.slice(beforeSend).some(call => call.init.method !== 'POST' && new URL(call.path, 'https://localhost').pathname.endsWith('/email-operations')));
+    included = true; await controller.refresh();
+    assert.equal(rows().length, 500);
+    assert.equal(rows().filter(row => row.cells[0].textContent === currentId).length, 1, 'a reference already in the fresh list is not duplicated');
+    status = 'failed'; included = false; await controller.refresh();
+    assert.equal(rows()[0].querySelector('button'), null, 'exact-only failure evidence cannot invent a retry snapshot');
+    included = true; await controller.refresh();
+    assert.equal(rows().filter(row => row.cells[0].textContent === currentId).length, 1);
+    assert.equal(rows()[0].querySelector('button').textContent.trim(), 'Retry', 'fresh listed retry proof stays on its complete listed row');
+    assert.equal(calls.filter(call => call.init.method === 'POST').length, 1, 'submission and follow-up reads create one test request');
+    get('#email-view-scope').value = '2'; get('#email-view-scope').dispatchEvent(new dom.window.Event('change'));
+    assert.doesNotMatch(get('#email-operations-table').textContent, new RegExp(currentId), 'scope transitions immediately retire the exact row');
+    await controller.refresh();
+    assert.doesNotMatch(get('#email-operations-table').textContent, new RegExp(currentId));
+    await controller.openEmailScope(1);
+    assert.match(get('#email-operations-table').textContent, new RegExp(currentId));
+    const replacement = identity.accept(actor('different-current-test-owner')); controller.setStaff(replacement);
+    assert.doesNotMatch(get('#email-operations-table').textContent, new RegExp(currentId), 'account transitions retire the prior exact row');
+    await controller.refresh();
+    assert.doesNotMatch(get('#email-operations-table').textContent, new RegExp(currentId), 'a later load cannot reuse another account’s exact result');
+    controller.dispose();
+  });
+  for (const update of ['poll', 'replacement', 'audit-poll', 'audit-failure', 'listed-queue', 'listed-audit']) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createOperationsController } = await loadOperationsController(load);
+      const identity = createSessionIdentity(), owner = identity.accept(actor('latest-visible-test'));
+      const key = `asap.staff.email-test.${encodeURIComponent(identity.actor().key)}.1`;
+      const id = '9007199254740993', operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+      dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id, pending: true, status: 'pending' }));
+      const clock = controlledTimers(dom.window);
+      const delayedAudit = update.startsWith('audit-') || update === 'listed-audit';
+      const listed = update.startsWith('listed-');
+      const listedRow = { id, organizationId: 1, status: 'pending', deliveryClass: 'operational_test',
+        createdUtc: '2026-11-03T13:00:00Z', deliveryMode: 'postmark', version: 'AAAAAAAAAAE=', canRetry: false };
+      let releaseTable, status = 'pending', observations = 0;
+      const table = new Promise(resolve => { releaseTable = resolve; });
+      const calls = [];
+      const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+        announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
+          calls.push({ path, init });
+          if (path.endsWith('/organizations')) return { data: organizationCatalog };
+          if (path.endsWith('/workflow/queues') && update === 'listed-queue') return table;
+          if (path.endsWith('/email-operations')) return listed ? { items: [listedRow] } : delayedAudit ? { items: [] } : table;
+          if (path.includes('/staff/audit?')) {
+            await table;
+            if (update === 'audit-failure') throw new Error('Audit read failed');
+            return { code: 'ok', data: { items: [], count: 0, page: 1, pageSize: 25, actors: [], libraries: [] } };
+          }
+          if (path.includes(`/email-operations/${id}?`)) {
+            observations += 1;
+            return { code: 'ok', data: { id, organizationId: 1, status, deliveryMode: 'postmark',
+              deliveryClass: 'operational_test', createdUtc: '2026-11-03T13:00:00Z', version: status === 'sent' ? 'AAAAAAAAAAI=' : 'AAAAAAAAAAE=' } };
+          }
+          return { items: [] };
+        } });
+      controller.setStaff(owner); controller.activate(delayedAudit ? { section: 'audit' } : undefined); await settle();
+      const loading = controller.refresh(); await settle();
+      assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).status, 'pending');
+      const beforePoll = observations;
+      if (update !== 'replacement') {
+        status = 'sent'; clock.advance(2000); await settle();
+        assert.equal(observations, beforePoll + 1, 'useful automatic observation remains enabled while table reads are slow');
+        assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).status, 'sent');
+      } else {
+        dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId: '2d52da70-c805-4e99-ac52-b2f30cab4120',
+          id: '9007199254740995', pending: true, status: 'pending' }));
+      }
+      releaseTable({ items: [] }); await loading;
+      if (update !== 'replacement') {
+        const row = get('#email-operations-table tbody tr');
+        assert.equal(get('#email-operations-table tbody').rows.length, 1, 'the current reference is rendered once');
+        assert.equal(row.cells[0].textContent, id);
+        assert.match(row.textContent, /Provider accepted/);
+        assert.doesNotMatch(row.textContent, /Queued/);
+        assert.equal(row.querySelector('button'), null);
+      } else {
+        assert.doesNotMatch(get('#email-operations-table').textContent, new RegExp(id), 'a storage-replaced operation cannot fall back to the captured old row');
+        assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).operationId, '2d52da70-c805-4e99-ac52-b2f30cab4120');
+      }
+      assert.equal(calls.filter(call => call.init.method === 'POST').length, 0, 'polling and table rendering are read-only');
+      controller.dispose();
+    });
+  }
+  for (const scenario of [
+    { name: 'newer exact acceptance', exact: 'sent', exactNewer: true, listed: 'failed', retry: false, label: /Provider accepted/ },
+    { name: 'newer exact ambiguity removes old retry proof', exact: 'failed', error: 'provider_timeout', exactNewer: true, listed: 'failed', retry: false, label: /Acceptance unconfirmed/ },
+    { name: 'newer listed retry is pending again', exact: 'failed', listed: 'pending', retry: false, label: /Queued/ },
+    { name: 'newer listed certified failure', exact: 'sent', listed: 'failed', retry: true, label: /Failed/ },
+    { name: 'equal complete listed snapshot', exact: 'failed', equal: true, listed: 'failed', retry: true, label: /Failed/ },
+    { name: 'malformed listed token cannot supply retry proof', exact: 'sent', listed: 'failed', malformedList: true, retry: false, label: /Provider accepted/ }
+  ]) {
+    await fixture(async ({ load, get, dom }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createOperationsController } = await loadOperationsController(load);
+      const clock = controlledTimers(dom.window);
+      const identity = createSessionIdentity(), owner = identity.accept(actor('snapshot-order'));
+      const id = '9007199254740993', operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+      const older = Buffer.from('7fffffffffffffff', 'hex').toString('base64');
+      const newer = Buffer.from('8000000000000000', 'hex').toString('base64');
+      const exactVersion = scenario.exactNewer || scenario.equal ? newer : older;
+      const listedVersion = scenario.malformedList ? 'unreadable' : scenario.exactNewer ? older : newer;
+      const key = `asap.staff.email-test.${encodeURIComponent(identity.actor().key)}.1`;
+      dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id, status: 'pending', pending: true }));
+      const posts = [];
+      let exactReads = 0;
+      const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+        announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
+          if (init.method === 'POST') { posts.push({ path, init }); return committedOperationResult(path); }
+          if (path.endsWith('/organizations')) return { data: organizationCatalog };
+          if (path.endsWith('/email-operations')) return { items: [{ id, organizationId: 1, status: scenario.listed,
+            lastErrorCode: scenario.listed === 'failed' ? 'mail_not_configured' : null,
+            deliveryClass: 'operational_test', deliveryMode: 'postmark', version: listedVersion, canRetry: scenario.listed === 'failed' }] };
+          if (path.includes(`/email-operations/${id}?`)) {
+            exactReads += 1;
+            return { code: 'ok', data: { id, organizationId: 1,
+              status: scenario.exact, lastErrorCode: scenario.error || (scenario.exact === 'failed' ? 'mail_not_configured' : null),
+              deliveryClass: 'operational_test', deliveryMode: 'postmark', version: exactVersion } };
+          }
+          return { items: [] };
+        } });
+      controller.setStaff(owner); controller.activate(); await controller.refresh();
+      const rows = [...get('#email-operations-table tbody').rows];
+      assert.equal(rows.length, 1, scenario.name);
+      assert.match(rows[0].textContent, scenario.label, scenario.name);
+      assert.equal(Boolean(rows[0].querySelector('button')), scenario.retry, scenario.name);
+      const stored = JSON.parse(dom.window.sessionStorage.getItem(key));
+      const currentStatus = scenario.exactNewer || scenario.malformedList ? scenario.exact : scenario.listed;
+      assert.equal(stored.status, currentStatus, `${scenario.name}: remembered processing state matches the freshest valid snapshot`);
+      assert.equal(stored.pending, currentStatus === 'pending' || scenario.error === 'provider_timeout');
+      assert.equal(get('#send-test-email').disabled, stored.pending, 'a newer pending retry continues to block a new test');
+      assert.equal(stored.operationId, operationId);
+      assert.equal(stored.version, scenario.exactNewer || scenario.malformedList ? exactVersion : listedVersion);
+      if (currentStatus === 'pending') {
+        const beforePoll = exactReads;
+        clock.advance(2000); await settle();
+        assert.equal(exactReads, beforePoll + 1, 'the newer pending list result continues exact observation');
+        const afterPoll = JSON.parse(dom.window.sessionStorage.getItem(key));
+        assert.equal(afterPoll.version, listedVersion, 'an older subsequent exact response cannot roll remembered state backwards');
+        assert.equal(afterPoll.pending, true);
+        assert.equal(get('#send-test-email').disabled, true);
+      }
+      if (scenario.retry) {
+        rows[0].querySelector('button').click(); await settle();
+        assert.equal(posts.length, 1);
+        assert.equal(posts[0].init.body.version, listedVersion, 'retry retains the selected complete list snapshot');
+      } else assert.equal(posts.length, 0);
+      controller.dispose();
+    });
+  }
+  for (const hold of ['queue', 'audit']) {
+    for (const fail of [false, true]) {
+      await fixture(async ({ load, get, dom }) => {
+        const { createSessionIdentity } = await load('session-identity');
+        const { createOperationsController } = await loadOperationsController(load);
+        controlledTimers(dom.window);
+        const identity = createSessionIdentity(), owner = identity.accept(actor('guarded-reconciliation'));
+        const id = '9007199254740993', operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+        const key = `asap.staff.email-test.${encodeURIComponent(identity.actor().key)}.1`;
+        dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id, pending: true, status: 'pending' }));
+        let releaseList, releaseUnrelated, rejectUnrelated;
+        const list = new Promise(resolve => { releaseList = resolve; });
+        const unrelated = new Promise((resolve, reject) => { releaseUnrelated = resolve; rejectUnrelated = reject; });
+        const posts = [];
+        const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+          announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
+            if (init.method === 'POST') { posts.push(path); return committedOperationResult(path); }
+            if (path.endsWith('/organizations')) return { data: organizationCatalog };
+            if (path.endsWith('/email-operations')) return list;
+            if (path.endsWith('/workflow/queues')) return hold === 'queue' ? unrelated : { items: [] };
+            if (path.includes('/staff/audit?')) {
+              await unrelated;
+              return { code: 'ok', data: { items: [], count: 0, page: 1, pageSize: 25, actors: [], libraries: [] } };
+            }
+            if (path.includes(`/email-operations/${id}?`)) return { code: 'ok', data: { id, organizationId: 1,
+              status: 'failed', lastErrorCode: 'mail_not_configured', deliveryClass: 'operational_test',
+              deliveryMode: 'postmark', version: 'AAAAAAAAAAE=' } };
+            return { items: [] };
+          } });
+        controller.setStaff(owner); controller.activate(hold === 'audit' ? { section: 'audit' } : undefined);
+        const loading = controller.refresh(); await settle();
+        const send = get('#send-test-email'), feedback = get('#operations-email-test [data-email-test="result"]');
+        assert.equal(send.disabled, true, 'Send is guarded even when the old exact terminal result resolves before the list');
+        assert.equal(feedback.hidden, false);
+        assert.match(feedback.textContent, /Checking the current test and email log/);
+        send.dispatchEvent(new dom.window.Event('click'));
+        assert.equal(posts.length, 0);
+        if (fail) { rejectUnrelated(new Error('Unrelated read failed')); await settle(); }
+        assert.equal(send.disabled, true, 'a fast unrelated failure cannot skip pending email evidence');
+        releaseList({ items: [{ id, organizationId: 1, status: 'pending', deliveryClass: 'operational_test',
+          deliveryMode: 'postmark', version: 'AAAAAAAAAAI=', canRetry: false }] });
+        await settle();
+        const duringHold = JSON.parse(dom.window.sessionStorage.getItem(key));
+        assert.equal(duringHold.operationId, operationId);
+        assert.equal(duringHold.version, 'AAAAAAAAAAI=');
+        assert.equal(duringHold.pending, true, 'newer pending evidence is consumed before unrelated waits complete');
+        assert.equal(send.disabled, true);
+        assert.match(feedback.textContent, /queued for processing/);
+        send.dispatchEvent(new dom.window.Event('click'));
+        assert.equal(posts.length, 0, `${hold}: Send during the held refresh cannot replace the original operation`);
+        if (!fail) releaseUnrelated({ items: [] });
+        await loading;
+        send.dispatchEvent(new dom.window.Event('click'));
+        assert.equal(posts.length, 0);
+        assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).operationId, operationId);
+        assert.equal(send.disabled, true, 'successful or failed finalization preserves pending safety');
+        controller.dispose();
+      });
+    }
+  }
+  for (const outcome of ['failed', 'malformed', 'older']) {
+    for (const hold of ['queue', 'audit']) {
+      for (const fail of [false, true]) {
+        await fixture(async ({ load, get, dom }) => {
+          const { createSessionIdentity } = await load('session-identity');
+          const { createOperationsController } = await loadOperationsController(load);
+          controlledTimers(dom.window);
+          const identity = createSessionIdentity(), owner = identity.accept(actor('unreadable-reconciliation'));
+          const id = '9007199254740993', operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+          const key = `asap.staff.email-test.${encodeURIComponent(identity.actor().key)}.1`;
+          dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id, status: 'failed',
+            lastErrorCode: 'mail_not_configured', version: 'AAAAAAAAAAE=', pending: false }));
+          let releaseList, releaseUnrelated, rejectUnrelated;
+          const list = new Promise(resolve => { releaseList = resolve; });
+          const unrelated = new Promise((resolve, reject) => { releaseUnrelated = resolve; rejectUnrelated = reject; });
+          const posts = [];
+          const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+            announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
+              if (init.method === 'POST') { posts.push(path); return committedOperationResult(path); }
+              if (path.endsWith('/organizations')) return { data: organizationCatalog };
+              if (path.endsWith('/email-operations')) return list;
+              if (path.endsWith('/workflow/queues')) return hold === 'queue' ? unrelated : { items: [] };
+              if (path.includes('/staff/audit?')) {
+                await unrelated;
+                return { code: 'ok', data: { items: [], count: 0, page: 1, pageSize: 25, actors: [], libraries: [] } };
+              }
+              if (path.includes(`/email-operations/${id}?`)) {
+                if (outcome === 'failed') throw Object.assign(new Error('Status unavailable'), { status: 503 });
+                return { code: 'ok', data: { id, organizationId: 1, status: 'sent', deliveryMode: 'postmark',
+                  version: outcome === 'older' ? 'AAAAAAAAAAA=' : 'unreadable' } };
+              }
+              return { items: [] };
+            } });
+          controller.setStaff(owner); controller.activate(hold === 'audit' ? { section: 'audit' } : undefined);
+          const loading = controller.refresh(); await settle();
+          const send = get('#send-test-email'), feedback = get('#operations-email-test [data-email-test="result"]');
+          send.dispatchEvent(new dom.window.Event('click'));
+          assert.equal(posts.length, 0, `${outcome}: the held pair cannot release Send`);
+          if (fail) { rejectUnrelated(new Error('Unrelated read failed')); await settle(); }
+          releaseList({ items: [{ id, organizationId: 1, status: 'pending', deliveryClass: 'operational_test',
+            deliveryMode: 'postmark', version: 'AAAAAAAAAAI=', canRetry: false }] });
+          await settle();
+          assert.equal(send.disabled, true, `${outcome}/${hold}: no usable exact accessor leaves a safe unresolved guard`);
+          assert.equal(feedback.hidden, false);
+          assert.match(feedback.textContent, /outcome is unconfirmed.*Another test remains blocked/);
+          send.dispatchEvent(new dom.window.Event('click'));
+          const stored = JSON.parse(dom.window.sessionStorage.getItem(key));
+          assert.equal(stored.operationId, operationId);
+          assert.equal(stored.status, 'failed', 'an unreadable exact response cannot advance the remembered status');
+          assert.equal(stored.version, 'AAAAAAAAAAE=');
+          assert.equal(stored.unconfirmed, true);
+          assert.equal(posts.length, 0, 'a successful newer list plus unreadable exact status never creates another intent');
+          if (!fail) releaseUnrelated({ items: [] });
+          await loading;
+          send.dispatchEvent(new dom.window.Event('click'));
+          assert.equal(posts.length, 0);
+          assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).operationId, operationId);
+          assert.equal(send.disabled, true, 'successful or failed unrelated completion cannot release the unresolved guard');
+          if (!fail) assert.match(get('#email-operations-table').textContent, /Queued/);
+          controller.dispose();
+        });
+      }
+    }
+  }
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createOperationsController } = await loadOperationsController(load);
+    controlledTimers(dom.window);
+    const identity = createSessionIdentity(), owner = identity.accept(actor('refresh-ownership'));
+    const id = '9007199254740993', operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+    const key = `asap.staff.email-test.${encodeURIComponent(identity.actor().key)}.1`;
+    dom.window.sessionStorage.setItem(key, JSON.stringify({ operationId, id, status: 'pending', pending: true }));
+    let phase = 0, releaseOldList, releaseNewList, releaseOldQueue;
+    const oldList = new Promise(resolve => { releaseOldList = resolve; });
+    const newList = new Promise(resolve => { releaseNewList = resolve; });
+    const oldQueue = new Promise(resolve => { releaseOldQueue = resolve; });
+    const posts = [];
+    const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+      announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
+        if (init.method === 'POST') { posts.push(path); return committedOperationResult(path); }
+        if (path.endsWith('/organizations')) return { data: organizationCatalog };
+        if (path.endsWith('/email-operations')) return ++phase === 1 ? oldList : newList;
+        if (path.endsWith('/workflow/queues')) return phase === 1 ? oldQueue : { items: [] };
+        if (path.includes(`/email-operations/${id}?`)) return { code: 'ok', data: { id, organizationId: 1,
+          status: 'failed', lastErrorCode: 'mail_not_configured', deliveryClass: 'operational_test', version: 'AAAAAAAAAAE=' } };
+        return { items: [] };
+      } });
+    controller.setStaff(owner); controller.activate();
+    const older = controller.refresh(); await settle();
+    const newer = controller.refresh(); await settle();
+    releaseOldList({ items: [{ id, organizationId: 1, status: 'pending', deliveryClass: 'operational_test', version: 'AAAAAAAAAAI=' }] });
+    releaseOldQueue({ items: [] }); await older;
+    const send = get('#send-test-email');
+    assert.equal(send.disabled, true, 'an older finally cannot clear the newer refresh guard');
+    assert.match(get('#operations-email-test [data-email-test="result"]').textContent, /Checking the current test and email log/);
+    assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).version, 'AAAAAAAAAAE=', 'a superseded list cannot update current operation state');
+    send.dispatchEvent(new dom.window.Event('click')); assert.equal(posts.length, 0);
+    releaseNewList({ items: [{ id, organizationId: 1, status: 'pending', deliveryClass: 'operational_test', version: 'AAAAAAAAAAM=' }] });
+    await newer;
+    assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).version, 'AAAAAAAAAAM=');
+    assert.equal(JSON.parse(dom.window.sessionStorage.getItem(key)).operationId, operationId);
+    assert.equal(send.disabled, true);
+    assert.equal(posts.length, 0);
+    controller.dispose();
+  });
+  console.log('Operations controller: canonical command outcomes and exact read-only test recovery passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -40,6 +40,15 @@ const {
 const origin = 'https://staff.example.test';
 const url = (query) => `${origin}/staff/${query}`;
 
+for (const destination of [
+  replaceRequestUrl(url('?stage=operations&opSection=audit&runScope=2&emailScope=system&auditSearch=person&auditScope=all'), '47'),
+  requestUrl(url('?stage=operations&opSection=audit&auditCategory=staff&auditActor=9007199254740993'), '47', 'suggestion'),
+  replaceStageUrl(url('?stage=operations&opSection=email&emailScope=system&auditPage=3'), 'settings')
+]) {
+  assert.equal([...new URL(destination, origin).searchParams.keys()].some(key => /^(opSection|runScope|emailScope|audit)/.test(key)), false,
+    'Operations view/filter context must not travel into request or Settings routes');
+}
+
 for (const [query, expected] of [
   ['?stage=submitted', 'suggestion'],
   ['?stage=new', 'suggestion'],

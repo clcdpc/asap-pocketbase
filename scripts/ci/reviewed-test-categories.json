@@ -8,6 +8,7 @@
     "Asap.Tests.Integration.FrontendCacheTests.NormalNavigationRefreshesPublishedEntryAndNestedModulesWithRealBrowserCaching",
     "Asap.Tests.Integration.FrontendCacheTests.PublishedFirstPartyFilesRequireRevalidationAndRetainConditionalResponses",
     "Asap.Tests.Integration.FrontendCacheTests.VendorAssetsStayCacheableAndOtherResponsesRetainTheirPolicy",
+    "Asap.Tests.Integration.PatronJourneyTests.AdministrationAuditBrowserPreservesSectionsFiltersScopesDraftsAndApprovedLayouts",
     "Asap.Tests.Integration.PatronJourneyTests.Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload",
     "Asap.Tests.Integration.PatronJourneyTests.ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery",
     "Asap.Tests.Integration.PatronJourneyTests.EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance",
@@ -25,6 +26,7 @@
     "Asap.Tests.Integration.PatronJourneyTests.StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry",
     "Asap.Tests.Integration.PatronJourneyTests.StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope",
     "Asap.Tests.Integration.PatronJourneyTests.StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp",
-    "Asap.Tests.Integration.PatronJourneyTests.SystemFormatRuleEditorPersistsItsActualPostThroughSqlAndReload"
+    "Asap.Tests.Integration.PatronJourneyTests.SystemFormatRuleEditorPersistsItsActualPostThroughSqlAndReload",
+    "Asap.Tests.Integration.PatronJourneyTests.WeeklySummaryBrowserPreservesGestureIdentityRecoveryAndAuthorizedRunScope"
   ]
 }

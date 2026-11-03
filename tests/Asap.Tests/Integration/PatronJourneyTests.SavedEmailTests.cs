@@ -115,6 +115,212 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task SavedEmailTestLogUsesRecordedDeliveryModeWithoutInferringHistoricalAcceptance()
+    {
+        const int scope = 382936;
+        var staff = await CreateSavedEmailActorAsync();
+        using var client = await CreateAuthenticatedStaffClientAsync(factory!, await ReadCorrectiveStaffAsync(staff));
+        await SeedSavedEmailScopeAsync(scope);
+        try
+        {
+            var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+            await using (var context = await contexts.CreateDbContextAsync())
+            {
+                foreach (var (mode, provider) in new (string?, string?)[]
+                {
+                    ("postmark", "recorded-provider-id"), ("file", "file:recorded-capture"),
+                    (null, "file:historical-capture"), (null, "historical-provider-id")
+                })
+                {
+                    context.EmailOutbox.Add(new EmailOutbox
+                    {
+                        OrganizationId = scope, DeliveryClass = "operational_test", Status = "sent",
+                        AttemptDeliveryMode = mode, ProviderMessageId = provider,
+                        ToAddress = "primary-test@example.org", FromAddress = "asap@example.org",
+                        Subject = "Recorded test", BodyText = "Safe fixture body",
+                        CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                        SentUtc = timeProvider.GetUtcNow().UtcDateTime
+                    });
+                }
+                await context.SaveChangesAsync();
+            }
+            using var response = await client.GetAsync($"/api/asap/staff/email-operations?organizationId={scope}");
+            Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var rows = json.RootElement.GetProperty("items").EnumerateArray().ToArray();
+            Assert.HasCount(4, rows);
+            CollectionAssert.AreEquivalent(new[] { "postmark", "file", "file", "unknown" },
+                rows.Select(row => row.GetProperty("deliveryMode").GetString()!).ToArray());
+            foreach (var row in rows)
+            {
+                Assert.IsFalse(row.TryGetProperty("providerMessageId", out _));
+                Assert.IsFalse(row.TryGetProperty("toAddress", out _));
+                using var exact = await client.GetAsync($"/api/asap/staff/email-operations/{row.GetProperty("id").GetString()}?organizationId={scope}");
+                using var exactJson = JsonDocument.Parse(await exact.Content.ReadAsStringAsync());
+                Assert.AreEqual(row.GetProperty("deliveryMode").GetString(),
+                    exactJson.RootElement.GetProperty("data").GetProperty("deliveryMode").GetString());
+                Assert.AreEqual(row.GetProperty("version").GetString(),
+                    exactJson.RootElement.GetProperty("data").GetProperty("version").GetString());
+            }
+        }
+        finally
+        {
+            await CleanupSavedEmailScopeAsync(scope);
+            await DeactivateCorrectiveStaffAsync(staff.Id);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("pending")]
+    [DataRow("sent")]
+    [DataRow("suppressed")]
+    public async Task SavedEmailTestCurrentReferenceRemainsReadableBeyondFailedFirstLogLimit(string status)
+    {
+        const int scope = 382939;
+        var staff = await CreateSavedEmailActorAsync();
+        using var client = await CreateAuthenticatedStaffClientAsync(factory!, await ReadCorrectiveStaffAsync(staff));
+        await SeedSavedEmailScopeAsync(scope);
+        try
+        {
+            var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+            await using (var context = await contexts.CreateDbContextAsync())
+            {
+                context.EmailOutbox.AddRange(Enumerable.Range(0, 501).Select(index => new EmailOutbox
+                {
+                    OrganizationId = scope, Status = "failed", DeliveryClass = "operational_test",
+                    LastErrorCode = "retained_failure", ToAddress = "primary-test@example.org",
+                    FromAddress = "asap@example.org", Subject = "Retained failure", BodyText = "Safe fixture body",
+                    CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-1).AddSeconds(index)
+                }));
+                await context.SaveChangesAsync();
+            }
+            var saved = await ReadSavedEmailContextAsync(client, scope);
+            var operationId = Guid.NewGuid();
+            using var submission = await client.PostAsJsonAsync(
+                $"/api/asap/staff/email-operations/test?organizationId={scope}&operationId={operationId:D}", SavedEmailInput(saved));
+            Assert.AreEqual(HttpStatusCode.Accepted, submission.StatusCode);
+            using var acknowledgement = JsonDocument.Parse(await submission.Content.ReadAsStringAsync());
+            var id = acknowledgement.RootElement.GetProperty("data").GetProperty("id").GetString()!;
+            await using (var context = await contexts.CreateDbContextAsync())
+            {
+                var row = await context.EmailOutbox.SingleAsync(item => item.Id == long.Parse(id, CultureInfo.InvariantCulture));
+                row.Status = status;
+                if (status == "sent")
+                {
+                    row.SentUtc = timeProvider!.GetUtcNow().UtcDateTime;
+                    row.AttemptDeliveryMode = "postmark";
+                    row.ProviderMessageId = "recorded-current-test";
+                }
+                if (status == "suppressed")
+                {
+                    row.SuppressedUtc = timeProvider!.GetUtcNow().UtcDateTime;
+                    row.SuppressionReason = "test_configuration_changed";
+                }
+                await context.SaveChangesAsync();
+            }
+            using var list = await client.GetAsync($"/api/asap/staff/email-operations?organizationId={scope}");
+            using var listed = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
+            var rows = listed.RootElement.GetProperty("items").EnumerateArray().ToArray();
+            Assert.HasCount(500, rows, "The ordinary query remains bounded and failed-first.");
+            Assert.IsTrue(rows.All(row => row.GetProperty("status").GetString() == "failed"));
+            Assert.IsFalse(rows.Any(row => row.GetProperty("id").GetString() == id));
+            foreach (var path in new[]
+            {
+                $"/api/asap/staff/email-operations/{id}?organizationId={scope}",
+                $"/api/asap/staff/email-operations/test?organizationId={scope}&operationId={operationId:D}"
+            })
+            {
+                using var lookup = await client.GetAsync(path);
+                Assert.AreEqual(HttpStatusCode.OK, lookup.StatusCode);
+                using var exact = JsonDocument.Parse(await lookup.Content.ReadAsStringAsync());
+                var row = exact.RootElement.GetProperty("data");
+                Assert.AreEqual(id, row.GetProperty("id").GetString());
+                Assert.AreEqual(scope, row.GetProperty("organizationId").GetInt32());
+                Assert.AreEqual(status, row.GetProperty("status").GetString());
+                Assert.AreEqual("operational_test", row.GetProperty("deliveryClass").GetString());
+                Assert.IsTrue(row.GetProperty("createdUtc").GetString()!.EndsWith('Z'));
+                Assert.AreEqual(status == "sent" ? "postmark" : "unknown", row.GetProperty("deliveryMode").GetString());
+                Assert.IsFalse(row.TryGetProperty("canRetry", out _), "Exact reads do not provide list retry authority.");
+                Assert.AreEqual(8, Convert.FromBase64String(row.GetProperty("version").GetString()!).Length);
+            }
+            Assert.AreEqual(502, await CountSavedEmailRowsAsync(scope), "Read-only projection lookup creates no extra test.");
+        }
+        finally
+        {
+            await CleanupSavedEmailScopeAsync(scope);
+            await DeactivateCorrectiveStaffAsync(staff.Id);
+        }
+    }
+
+    [TestMethod]
+    public async Task SavedEmailTestSnapshotsExposeMatchingIncreasingVersionsWithoutRetryAuthority()
+    {
+        const int scope = 382940;
+        var staff = await CreateSavedEmailActorAsync();
+        using var client = await CreateAuthenticatedStaffClientAsync(factory!, await ReadCorrectiveStaffAsync(staff));
+        await SeedSavedEmailScopeAsync(scope);
+        try
+        {
+            var saved = await ReadSavedEmailContextAsync(client, scope);
+            using var submission = await client.PostAsJsonAsync(
+                $"/api/asap/staff/email-operations/test?organizationId={scope}&operationId={Guid.NewGuid():D}", SavedEmailInput(saved));
+            Assert.AreEqual(HttpStatusCode.Accepted, submission.StatusCode);
+            using var acknowledgement = JsonDocument.Parse(await submission.Content.ReadAsStringAsync());
+            var id = acknowledgement.RootElement.GetProperty("data").GetProperty("id").GetString()!;
+            async Task<(JsonElement Listed, JsonElement Exact)> ReadSnapshotsAsync()
+            {
+                using var list = await client.GetAsync($"/api/asap/staff/email-operations?organizationId={scope}");
+                using var listed = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
+                using var lookup = await client.GetAsync($"/api/asap/staff/email-operations/{id}?organizationId={scope}");
+                using var exact = JsonDocument.Parse(await lookup.Content.ReadAsStringAsync());
+                var listedRow = listed.RootElement.GetProperty("items").EnumerateArray().Single(row => row.GetProperty("id").GetString() == id).Clone();
+                var exactRow = exact.RootElement.GetProperty("data").Clone();
+                Assert.AreEqual(listedRow.GetProperty("version").GetString(), exactRow.GetProperty("version").GetString());
+                Assert.AreEqual(8, Convert.FromBase64String(exactRow.GetProperty("version").GetString()!).Length);
+                Assert.IsFalse(exactRow.TryGetProperty("canRetry", out _));
+                return (listedRow, exactRow);
+            }
+            var queued = await ReadSnapshotsAsync();
+            var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+            await using (var context = await contexts.CreateDbContextAsync())
+            {
+                var row = await context.EmailOutbox.SingleAsync(item => item.Id == long.Parse(id, CultureInfo.InvariantCulture));
+                row.Status = "failed";
+                row.LastErrorCode = "mail_not_configured";
+                row.NextAttemptUtc = null;
+                await context.SaveChangesAsync();
+            }
+            var failed = await ReadSnapshotsAsync();
+            Assert.IsTrue(failed.Listed.GetProperty("canRetry").GetBoolean());
+            Assert.IsTrue(Convert.FromBase64String(failed.Exact.GetProperty("version").GetString()!).AsSpan()
+                .SequenceCompareTo(Convert.FromBase64String(queued.Exact.GetProperty("version").GetString()!)) > 0);
+            await using (var context = await contexts.CreateDbContextAsync())
+            {
+                var row = await context.EmailOutbox.SingleAsync(item => item.Id == long.Parse(id, CultureInfo.InvariantCulture));
+                row.Status = "sent";
+                row.LastErrorCode = null;
+                row.SentUtc = timeProvider!.GetUtcNow().UtcDateTime;
+                row.AttemptDeliveryMode = "postmark";
+                row.ProviderMessageId = "recorded-version-test";
+                await context.SaveChangesAsync();
+            }
+            var accepted = await ReadSnapshotsAsync();
+            Assert.IsFalse(accepted.Listed.GetProperty("canRetry").GetBoolean());
+            Assert.IsTrue(Convert.FromBase64String(accepted.Exact.GetProperty("version").GetString()!).AsSpan()
+                .SequenceCompareTo(Convert.FromBase64String(failed.Exact.GetProperty("version").GetString()!)) > 0);
+            using var staleRetry = await client.PostAsJsonAsync($"/api/asap/staff/email-operations/{id}/retry",
+                new { version = failed.Listed.GetProperty("version").GetString() });
+            Assert.AreEqual(HttpStatusCode.Conflict, staleRetry.StatusCode, "The older certified retry snapshot cannot authorize a later state.");
+            Assert.AreEqual(1, await CountSavedEmailRowsAsync(scope));
+        }
+        finally
+        {
+            await CleanupSavedEmailScopeAsync(scope);
+            await DeactivateCorrectiveStaffAsync(staff.Id);
+        }
+    }
+
+    [TestMethod]
     public async Task SavedEmailTestCooldownSerializesActorAcrossScopesAndFiveClicksPerScope()
     {
         const int scope = 382937, otherScope = 382938;

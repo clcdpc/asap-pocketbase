@@ -266,7 +266,7 @@ export function createSettingsController({
   refreshCurrentStaff = async () => true,
   onRefreshed = () => {},
   onUnconfirmed = () => {},
-  onEmailTestOperations = () => {}
+  onEmailTestOperations = () => {}, onEmailTestSubmitted = () => {}, onStaffAuditHistory = () => {}
 }) {
   const dom = {
     contextSummary: root.querySelector('#settings-context-summary'),
@@ -296,8 +296,7 @@ export function createSettingsController({
     staffRole: root.querySelector('#staff-add-role'),
     staffOrganization: root.querySelector('#staff-add-organization'),
     staffUsers: root.querySelector('#settings-staff-users-list'),
-    staffAuditRefresh: root.querySelector('#staff-audit-refresh'),
-    staffAudit: root.querySelector('#settings-staff-audit-list'),
+    staffAuditHistory: root.querySelector('#staff-audit-history'),
     saveLogo: root.querySelector('#save-branding-logo'),
     discardLogoDraft: root.querySelector('#discard-branding-draft'),
     clearLogo: root.querySelector('#clear-branding-logo'),
@@ -325,7 +324,6 @@ export function createSettingsController({
     organizationsReady: false,
     baselineParticipationIds: null,
     staffUsers: [],
-    staffAudit: [],
     staffCanAssignSuperAdmin: false,
     staffAccessLoaded: false,
     lastStaffCleanup: null,
@@ -354,7 +352,7 @@ export function createSettingsController({
       organizationId: organizationId(), active: state.visible && state.activePanel === 'smtp' && !disposed,
       ready: Boolean(state.data && String(state.data.orgId) === String(state.scope) && !state.awaitingReload && !state.loading),
       dirty: isDirty(), blocked: Boolean(state.pendingMutation || state.saving || state.outcomeUncertain || state.awaitingReload) }),
-    onOperations: onEmailTestOperations });
+    onOperations: onEmailTestOperations, onSubmitted: onEmailTestSubmitted });
   let settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
   let staffCreateDraft = null;
   let polarisTest = null;
@@ -1240,42 +1238,6 @@ export function createSettingsController({
     }
   }
 
-  function auditDetails(details) {
-    const text = clean(details);
-    if (!text) return '';
-    try {
-      const parsed = JSON.parse(text);
-      if (!parsed || typeof parsed !== 'object') return text;
-      return Object.entries(parsed).map(([key, value]) => `${key}: ${value}`).join('; ');
-    } catch {
-      return text;
-    }
-  }
-
-  function renderStaffAudit() {
-    if (!dom.staffAudit) return;
-    dom.staffAudit.replaceChildren();
-    if (state.staffAudit.length === 0) {
-      dom.staffAudit.append(node('li', { className: 'settings-empty', text: 'No audit entries found for this scope.' }));
-      return;
-    }
-    for (const entry of state.staffAudit) {
-      const details = auditDetails(property(entry, 'detailsJson'));
-      const created = clean(property(entry, 'createdUtc')) || '';
-      const targetType = clean(property(entry, 'targetType'));
-      const targetId = clean(property(entry, 'targetId'));
-      dom.staffAudit.append(node('li', { className: 'settings-audit-item' }, [
-        node('strong', { text: property(entry, 'action') || 'administration_action' }),
-        node('span', {
-          className: 'settings-audit-meta',
-          text: `${created}${property(entry, 'actorName') ? ` by ${property(entry, 'actorName')}` : ''}` +
-            `${targetType ? `; ${targetType}${targetId ? ` ${targetId}` : ''}` : ''}`
-        }),
-        details ? node('span', { text: details }) : null
-      ]));
-    }
-  }
-
   function populate(data) {
     releaseLogoDraft();
     dom.logo.value = '';
@@ -1339,7 +1301,6 @@ export function createSettingsController({
     renderOrganizations();
     resetStaffCreateDraft();
     renderStaffUsers();
-    renderStaffAudit();
     dom.scope.value = state.scope;
     state.baselineSnapshot = snapshotForm(dom.form);
     updateDirtyState();
@@ -1455,13 +1416,6 @@ export function createSettingsController({
     return scope ? `/api/asap/staff/users?orgId=${encodeURIComponent(scope)}` : '/api/asap/staff/users';
   }
 
-  function staffAuditUrl() {
-    const scope = scopedStaffOrganizationId();
-    const query = new URLSearchParams({ limit: '50' });
-    if (scope) query.set('organizationId', scope);
-    return `/api/asap/staff/audit?${query.toString()}`;
-  }
-
   async function loadStaffAccess(options = {}) {
     if (disposed || !state.staff || state.staff.role === 'staff') return false;
     if (state.pendingMutation && state.pendingMutation !== options.owner) return false;
@@ -1470,19 +1424,12 @@ export function createSettingsController({
     const loadState = beginSettingsOperation('administration-staff-access');
     const clearLoading = !options.silent ? setStaffStatus(`Loading staff access for ${scopedStaffLabel()}...`) : null;
     if (dom.staffRefresh) dom.staffRefresh.disabled = true;
-    if (dom.staffAuditRefresh) dom.staffAuditRefresh.disabled = true;
     try {
       const review = state.unconfirmedMutation || state.awaitingReloadMutation;
       if (review?.slot === 'administration-staff-mutation' && String(review.staffId) === String(loadState.context.owner.id)) {
         if (!await refreshCurrentStaff(loadState.context.owner) || !isSettingsOperationCurrent(loadState)) return false;
       }
-      const [usersResponse, auditResponse] = await Promise.all([
-        authorizedJson(staffUsersUrl(), { signal: loadState.signal }),
-        authorizedJson(staffAuditUrl(), { signal: loadState.signal }).catch(error => {
-          if (isAbortError(error) || error.status === 401) throw error;
-          return { data: [] };
-        })
-      ]);
+      const usersResponse = await authorizedJson(staffUsersUrl(), { signal: loadState.signal });
       if (!isSettingsOperationCurrent(loadState)) return false;
       if (snapshot !== snapshotDrafts()) {
         setStaffStatus('Edits changed during roster reload. Save or discard the edits before reloading again.', 'warning');
@@ -1491,15 +1438,12 @@ export function createSettingsController({
       const users = usersResponse?.data ?? usersResponse ?? {};
       state.staffUsers = Array.isArray(users.users) ? users.users : [];
       state.staffCanAssignSuperAdmin = Boolean(users.canAssignSuperAdmin);
-      const audit = auditResponse?.data ?? auditResponse;
-      state.staffAudit = Array.isArray(audit) ? audit : [];
       state.staffAccessLoaded = true;
       if (review?.slot === 'administration-staff-mutation') {
         state.unconfirmedMutation = null; state.outcomeUncertain = false; state.awaitingReload = false; state.awaitingReloadMutation = null;
       }
       dom.form.inert = Boolean(state.pendingMutation || state.awaitingReload);
       renderStaffUsers();
-      renderStaffAudit();
       updateDirtyState();
       onRefreshed(loadState.context.owner, { kind: 'staff', scope: loadState.context.scope,
         changed: review?.slot === 'administration-staff-mutation' });
@@ -1513,7 +1457,6 @@ export function createSettingsController({
       clearLoading?.();
       if (isSettingsOperationCurrent(loadState)) {
         if (dom.staffRefresh) dom.staffRefresh.disabled = false;
-        if (dom.staffAuditRefresh) dom.staffAuditRefresh.disabled = false;
       }
       reads.finish('administration-staff-access', loadState.token);
     }
@@ -2191,12 +2134,12 @@ export function createSettingsController({
         state.scope = scope;
         if (!staffReview) { state.awaitingReload = false; state.awaitingReloadMutation = null; }
         acceptOrganizationCatalog(organizations);
-        state.staffUsers = []; state.staffAudit = []; state.staffAccessLoaded = false; state.lastStaffCleanup = null;
+        state.staffUsers = []; state.staffAccessLoaded = false; state.lastStaffCleanup = null;
         populateScopeOptions();
         const choices = codesResponse?.data ?? codesResponse;
         populate({ ...data, patronCodeChoices: Array.isArray(choices) ? choices : [],
           patronCodeChoicesUnavailable: !Array.isArray(choices) });
-        renderStaffUsers(); renderStaffAudit(); dom.form.hidden = false; dom.form.inert = state.awaitingReload; dom.refresh.disabled = false;
+        renderStaffUsers(); dom.form.hidden = false; dom.form.inert = state.awaitingReload; dom.refresh.disabled = false;
         onRefreshed(operation.context.owner, { kind: 'settings', scope });
       } };
     } catch (error) {
@@ -2276,13 +2219,11 @@ export function createSettingsController({
       state.scope = String(staff.organizationId);
     }
     state.staffUsers = [];
-    state.staffAudit = [];
     state.staffAccessLoaded = false;
     state.lastStaffCleanup = null;
     populateScopeOptions();
     populateStaffCreateControls();
     renderStaffUsers();
-    renderStaffAudit();
   }
 
   function signedOut() {
@@ -2300,12 +2241,10 @@ export function createSettingsController({
     state.organizationsReady = false;
     state.baselineParticipationIds = null;
     state.staffUsers = [];
-    state.staffAudit = [];
     state.staffAccessLoaded = false;
     state.lastStaffCleanup = null;
     state.baselineSnapshot = [];
     renderStaffUsers();
-    renderStaffAudit();
     updateDirtyState();
     return message;
   }
@@ -2382,7 +2321,10 @@ export function createSettingsController({
       return loadStaffAccess({ discard: true });
     };
     listen(dom.staffRefresh, 'click', refreshStaff);
-    listen(dom.staffAuditRefresh, 'click', refreshStaff);
+    listen(dom.staffAuditHistory, 'click', () => {
+      if (disposed || !state.visible || state.activePanel !== 'staff' || !state.staff) return;
+      onStaffAuditHistory(scopedStaffOrganizationId(), { ownerKey: actorKey(state.staff) });
+    });
     listen(dom.saveLogo, 'click', () => saveLogo(false));
     listen(dom.clearLogo, 'click', () => saveLogo(true));
     listen(document.getElementById('email-postmark-token'), 'input', event => {

@@ -24,17 +24,6 @@ public sealed record OrganizationSummary(
     DateTime? LastSyncedUtc,
     string Version);
 
-public sealed record AdministrativeAuditEntry(
-    long Id,
-    long? ActorStaffUserId,
-    string? ActorName,
-    int? OrganizationId,
-    string Action,
-    string? TargetType,
-    string? TargetId,
-    string? DetailsJson,
-    DateTime CreatedUtc);
-
 public sealed partial class AdministrationService(
     IDbContextFactory<AsapDbContext> contextFactory,
     PatronConfigurationService patronConfiguration,
@@ -738,60 +727,6 @@ public sealed partial class AdministrationService(
                 organizationCount = result.OrganizationCount,
                 errorCode = result.SafeErrorCode
             });
-    }
-
-    public async Task<AdministrationResult> ListAuditAsync(
-        CurrentStaff actor,
-        int? organizationId,
-        int limit,
-        CancellationToken cancellationToken)
-    {
-        if (actor.Role is not (StaffRole.Admin or StaffRole.SuperAdmin))
-        {
-            return new AdministrationResult("staff_scope_forbidden");
-        }
-        if (actor.Role != StaffRole.SuperAdmin && organizationId.HasValue && organizationId != actor.OrganizationId)
-        {
-            return new AdministrationResult("staff_scope_forbidden");
-        }
-
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var scope = actor.Role == StaffRole.SuperAdmin ? organizationId : actor.OrganizationId;
-        // Audit reads participate in the same scope boundary as the mutations they expose.
-        // Lock routing organizations before the actor row so a changed binding, role, or
-        // organization cannot authorize a stale request while lifecycle code is committing.
-        var targetOrganizationId = scope ?? actor.OrganizationId;
-        await using var transaction = await context.Database.BeginTransactionAsync(
-            System.Data.IsolationLevel.Serializable,
-            cancellationToken);
-        var locked = await LockAndRevalidateActorAsync(
-            context,
-            actor,
-            targetOrganizationId,
-            [],
-            cancellationToken);
-        if (locked.Failure is not null)
-        {
-            return locked.Failure;
-        }
-        var rows = await context.AdministrativeAudits.AsNoTracking()
-            .Where(item => !scope.HasValue || item.OrganizationId == scope)
-            .OrderByDescending(item => item.CreatedUtc)
-            .ThenByDescending(item => item.Id)
-            .Take(Math.Clamp(limit, 1, 200))
-            .Select(item => new AdministrativeAuditEntry(
-                item.Id,
-                item.ActorStaffUserId,
-                item.ActorName,
-                item.OrganizationId,
-                item.Action,
-                item.TargetType,
-                item.TargetId,
-                item.DetailsJson,
-                item.CreatedUtc))
-            .ToListAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        return new AdministrationResult("ok", rows);
     }
 
     public async Task<AdministrationResult> SaveLogoAsync(

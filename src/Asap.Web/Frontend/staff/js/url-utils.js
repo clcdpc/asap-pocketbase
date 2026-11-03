@@ -63,6 +63,27 @@ export function requestedOperationalScopeFromUrl(href) {
   return readUrl(href).searchParams.get('scope') || '';
 }
 
+const operationsParameters = ['opSection', 'runScope', 'emailScope', 'auditScope', 'auditSearch', 'auditCategory', 'auditFrom', 'auditThrough', 'auditActor', 'auditSort', 'auditPage'];
+
+export function requestedOperationsContextFromUrl(href) {
+  const params = readUrl(href).searchParams;
+  return { section: params.get('opSection') || 'workflow', runScope: params.get('runScope') || '', emailScope: params.get('emailScope') || '',
+    audit: Object.fromEntries(['scope', 'search', 'category', 'from', 'through', 'actor', 'sort', 'page']
+      .map(field => [field, params.get(`audit${field[0].toUpperCase()}${field.slice(1)}`) || ''])) };
+}
+
+export function applyOperationsContext(url, context) {
+  for (const key of operationsParameters) url.searchParams.delete(key);
+  if (!context) return;
+  url.searchParams.set('opSection', context.section || 'workflow');
+  for (const field of ['runScope', 'emailScope']) if (context[field]) url.searchParams.set(field, context[field]);
+  for (const [field, value] of Object.entries(context.audit || {})) {
+    if (value && ['scope', 'search', 'category', 'from', 'through', 'actor', 'sort', 'page'].includes(field)) {
+      url.searchParams.set(`audit${field[0].toUpperCase()}${field.slice(1)}`, String(value));
+    }
+  }
+}
+
 export function requestedCopyStatusFromUrl(href) {
   return readUrl(href).searchParams.get('copyStatus') === 'closed' ? 'closed' : 'open';
 }
@@ -81,6 +102,7 @@ export function applyQueueContext(url, stage, context) {
 
 export function replaceRequestUrl(href, id, additionalCopy = false) {
   const url = readUrl(href);
+  applyOperationsContext(url, null);
   const normalizedId = id === null || id === undefined ? '' : String(id).trim();
   if (normalizedId) url.searchParams.set('request', normalizedId);
   else url.searchParams.delete('request');
@@ -98,11 +120,14 @@ export function replaceStageUrl(href, stage, context = {}) {
     if (url.hash.startsWith('#settings-')) url.hash = '';
   }
   applyQueueContext(url, stage, context);
+  if (stage !== 'operations') applyOperationsContext(url, null);
+  else if (context.operations) applyOperationsContext(url, context.operations);
   return historyPath(url);
 }
 
 export function requestUrl(href, id, stage, context = {}) {
   const url = readUrl(href);
+  applyOperationsContext(url, null);
   url.searchParams.set('request', String(id));
   url.searchParams.set('stage', stage);
   url.searchParams.delete('settingsScope');
