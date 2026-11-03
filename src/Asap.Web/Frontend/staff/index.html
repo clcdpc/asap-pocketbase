@@ -391,7 +391,7 @@
                 <div class="settings-grid">
                   <label class="settings-field wide" data-setting-section="polaris" data-setting-key="host" data-system-only="true"><span>Host</span><input id="polaris-host" type="text"></label>
                   <label class="settings-field" data-setting-section="polaris" data-setting-key="accessId" data-system-only="true"><span>Access ID</span><input id="polaris-access-id" type="text"></label>
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="apiKey" data-secret="true" data-system-only="true"><span id="polaris-api-key-label">API key</span><input id="polaris-api-key" type="password" autocomplete="new-password" aria-labelledby="polaris-api-key-label" aria-describedby="polaris-api-key-status"><small id="polaris-api-key-status" class="field-help"></small></label>
+                  <label class="settings-field" data-setting-section="polaris" data-setting-key="apiKey" data-secret="true" data-system-only="true"><span id="polaris-api-key-label">API key</span><input id="polaris-api-key" type="password" autocomplete="new-password" aria-labelledby="polaris-api-key-label" aria-describedby="polaris-api-key-status"><small id="polaris-api-key-status" class="field-help" role="status" aria-live="polite"></small></label>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset" data-system-only="true">
@@ -399,7 +399,7 @@
                 <div class="settings-grid">
                   <label class="settings-field wide" data-setting-section="polaris" data-setting-key="staffDomain" data-system-only="true"><span>Staff domain</span><input id="polaris-domain" type="text"></label>
                   <label class="settings-field" data-setting-section="polaris" data-setting-key="adminUser" data-system-only="true"><span>System staff username</span><input id="polaris-admin-user" type="text"></label>
-                  <label class="settings-field" data-setting-section="polaris" data-setting-key="adminPassword" data-secret="true" data-system-only="true"><span id="polaris-admin-pass-label">System staff password</span><input id="polaris-admin-pass" type="password" autocomplete="new-password" aria-labelledby="polaris-admin-pass-label" aria-describedby="polaris-admin-pass-status"><small id="polaris-admin-pass-status" class="field-help"></small></label>
+                  <label class="settings-field" data-setting-section="polaris" data-setting-key="adminPassword" data-secret="true" data-system-only="true"><span id="polaris-admin-pass-label">System staff password</span><input id="polaris-admin-pass" type="password" autocomplete="new-password" aria-labelledby="polaris-admin-pass-label" aria-describedby="polaris-admin-pass-status"><small id="polaris-admin-pass-status" class="field-help" role="status" aria-live="polite"></small></label>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset" data-system-only="true">
@@ -437,10 +437,10 @@
               <fieldset class="settings-fieldset" data-system-only="true">
                 <legend>Postmark connection</legend>
                 <div class="settings-grid">
-                  <label class="settings-field wide" data-setting-section="email" data-setting-key="postmarkToken" data-secret="true" data-system-only="true"><span>Postmark server token (system only)</span><input id="email-postmark-token" type="password" autocomplete="new-password"></label>
+                  <label class="settings-field wide" data-setting-section="email" data-setting-key="postmarkToken" data-secret="true" data-system-only="true"><span>Postmark server token (system only)</span><input id="email-postmark-token" type="password" autocomplete="new-password" aria-describedby="email-token-status"></label>
                   <label class="settings-field wide check-field" data-system-only="true"><input id="email-clear-postmark-token" type="checkbox"><span>Clear stored Postmark token</span></label>
                 </div>
-                <p id="email-token-status" class="settings-result"></p>
+                <p id="email-token-status" class="settings-result" role="status" aria-live="polite"></p>
               </fieldset>
               <fieldset id="settings-email-test" class="settings-fieldset" data-settings-ignore="true">
                 <legend>Test email</legend>

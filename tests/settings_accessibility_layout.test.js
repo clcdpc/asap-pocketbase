@@ -84,11 +84,18 @@ const { JSDOM } = require('jsdom');
     const staffUrlCandidate = document.getElementById('system-staff-url-candidate');
     assert.strictEqual(staffUrlCandidate.getAttribute('role'), 'status');
     assert.strictEqual(staffUrlCandidate.getAttribute('aria-live'), 'polite');
+    for (const id of ['polaris-api-key-status', 'polaris-admin-pass-status']) {
+      assert.strictEqual(document.getElementById(id).getAttribute('role'), 'status');
+      assert.strictEqual(document.getElementById(id).getAttribute('aria-live'), 'polite');
+    }
     assert.deepStrictEqual(controls(fieldset('email-from-address')), ['email-from-address', 'email-from-name']);
     assert.strictEqual(legend('email-from-address'), 'Sender identity');
     assert.deepStrictEqual(controls(fieldset('email-postmark-token')), ['email-postmark-token', 'email-clear-postmark-token']);
     assert.strictEqual(legend('email-postmark-token'), 'Postmark connection');
     assert.strictEqual(document.getElementById('email-token-status').closest('fieldset'), fieldset('email-postmark-token'));
+    assert.strictEqual(document.getElementById('email-postmark-token').getAttribute('aria-describedby'), 'email-token-status');
+    assert.strictEqual(document.getElementById('email-token-status').getAttribute('role'), 'status');
+    assert.strictEqual(document.getElementById('email-token-status').getAttribute('aria-live'), 'polite');
     assert.deepStrictEqual(controls(fieldset('staff-add-email')), ['staff-add-email', 'staff-add-role', 'staff-add-organization']);
     assert.deepStrictEqual(controls(fieldset('patron-page-title')).slice(0, 3), ['patron-page-title', 'patron-barcode-label', 'patron-pin-label']);
     assert.strictEqual(legend('auto-promote'), 'Suggestion and eligibility');

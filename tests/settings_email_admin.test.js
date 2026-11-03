@@ -109,6 +109,18 @@ async function flush() {
       'The preview uses the current HTTPS origin and port, without credentials, query, or hash.');
     assert.strictEqual(useCurrentStaffUrl.hidden, false);
     assert.strictEqual(controller.isDirty(), false, 'Displaying a candidate does not create a draft.');
+    const postmarkTokenInput = document.getElementById('email-postmark-token');
+    const clearPostmarkToken = document.getElementById('email-clear-postmark-token');
+    const postmarkTokenStatus = document.getElementById('email-token-status');
+    assert.strictEqual(postmarkTokenInput.value, '');
+    assert.strictEqual(postmarkTokenInput.placeholder, '********');
+    assert.strictEqual(postmarkTokenInput.getAttribute('aria-describedby'), 'email-token-status');
+    assert.strictEqual(postmarkTokenStatus.getAttribute('role'), 'status');
+    assert.strictEqual(postmarkTokenStatus.getAttribute('aria-live'), 'polite');
+    assert.strictEqual(postmarkTokenStatus.textContent,
+      'A system Postmark token is stored. Leave blank to keep it; enter a new token to replace it.');
+    postmarkTokenInput.focus(); postmarkTokenInput.blur();
+    assert.strictEqual(controller.isDirty(), false, 'Focusing and leaving Postmark does not create a draft.');
     staffUrl = '';
     assert.strictEqual(await controller.load({ silent: true }), true);
     assert.strictEqual(staffUrlInput.value, '', 'A blank saved URL remains blank until the action is selected.');
@@ -169,13 +181,27 @@ async function flush() {
       'An unrelated system settings save must omit participation replacement data.');
 
     for (let i = 0; i < 15 && document.getElementById('settings-version').value !== 'v2'; i++) await flush();
-    const clear = document.getElementById('email-clear-postmark-token');
-    clear.checked = true;
-    clear.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    clearPostmarkToken.checked = true;
+    clearPostmarkToken.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.strictEqual(postmarkTokenInput.placeholder, '', 'Selecting Postmark clear hides the retain-current mask.');
+    assert.match(postmarkTokenStatus.textContent, /removal is pending/);
+    clearPostmarkToken.checked = false;
+    clearPostmarkToken.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.strictEqual(postmarkTokenInput.placeholder, '********', 'Canceling Postmark clear restores the accepted mask.');
+    assert.match(postmarkTokenStatus.textContent, /token is stored/);
+    assert.strictEqual(controller.isDirty(), false, 'Canceling clear does not leave a stale draft.');
+    clearPostmarkToken.checked = true;
+    clearPostmarkToken.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     for (let i = 0; i < 15 && saved.length < 2; i++) await flush();
     assert.strictEqual(saved[1].email.clearPostmarkToken, true);
     assert.strictEqual(saved[1].email.postmarkToken, undefined);
+    for (let i = 0; i < 30 && (document.getElementById('settings-version').value !== 'v3' || controller.isDirty() || controller.hasPendingMutation()); i++) await flush();
+    assert.strictEqual(document.getElementById('settings-version').value, 'v3');
+    assert.strictEqual(postmarkTokenInput.value, '');
+    assert.strictEqual(postmarkTokenInput.placeholder, '');
+    assert.strictEqual(postmarkTokenStatus.textContent, 'No system Postmark token is stored.');
+    assert.strictEqual(clearPostmarkToken.checked, false, 'An accepted clear reloads the missing state and unchecks the draft action.');
 
     organizationResponse = { code: 'ok', data: [] };
     assert.strictEqual(await controller.load({ silent: true }), false, 'A noncomplete organization catalog must not load as empty.');

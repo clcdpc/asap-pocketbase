@@ -275,6 +275,9 @@ export function createSettingsController({
     systemStaffUrl: root.querySelector('#system-staff-url'),
     useCurrentStaffUrl: root.querySelector('#use-current-staff-url'),
     staffUrlCandidate: root.querySelector('#system-staff-url-candidate'),
+    postmarkToken: root.querySelector('#email-postmark-token'),
+    clearPostmarkToken: root.querySelector('#email-clear-postmark-token'),
+    postmarkTokenStatus: root.querySelector('#email-token-status'),
     form: root.querySelector('#settings-form'),
     version: root.querySelector('#settings-version'),
     nav: [...root.querySelectorAll('#settings-nav [data-settings-panel]')],
@@ -349,6 +352,7 @@ export function createSettingsController({
     bound: false
   };
   let currentStaffUrlSuggestion = null;
+  let acceptedPostmarkToken = false;
   const reads = createLatestLoad(), events = new window.AbortController();
   let disposed = false, contextGeneration = 0, drafts = createDraftScope(), scopePreparation = null;
   const emailTest = createEmailTestController({ root: root.querySelector('#settings-email-test'),
@@ -981,14 +985,30 @@ export function createSettingsController({
 
   function setPolarisFields(polaris) {
     for (const [key, id] of POLARIS_FIELDS) writeControl(document.getElementById(id), property(polaris, key));
+    const hasApiKey = property(polaris, 'hasApiKey') === true;
+    const hasAdminPassword = property(polaris, 'hasAdminPassword') === true;
     document.getElementById('polaris-api-key').value = '';
+    document.getElementById('polaris-api-key').placeholder = hasApiKey ? '********' : '';
     document.getElementById('polaris-admin-pass').value = '';
-    document.getElementById('polaris-api-key-status').textContent = property(polaris, 'hasApiKey') === true
+    document.getElementById('polaris-admin-pass').placeholder = hasAdminPassword ? '********' : '';
+    document.getElementById('polaris-api-key-status').textContent = hasApiKey
       ? 'API key saved. Leave blank to keep the current key; enter a new key to replace it.'
       : 'No API key saved.';
-    document.getElementById('polaris-admin-pass-status').textContent = property(polaris, 'hasAdminPassword') === true
+    document.getElementById('polaris-admin-pass-status').textContent = hasAdminPassword
       ? 'System staff password saved. Leave blank to keep the current password; enter a new password to replace it.'
       : 'No system staff password saved.';
+  }
+
+  function renderPostmarkTokenStatus() {
+    const clearSelected = dom.clearPostmarkToken.checked;
+    dom.postmarkToken.placeholder = acceptedPostmarkToken && !clearSelected ? '********' : '';
+    dom.postmarkTokenStatus.textContent = clearSelected
+      ? acceptedPostmarkToken
+        ? 'Postmark token removal is pending. Save settings to remove the stored token.'
+        : 'Postmark token clear is selected. No token is currently stored; saving keeps it unconfigured.'
+      : acceptedPostmarkToken
+        ? 'A system Postmark token is stored. Leave blank to keep it; enter a new token to replace it.'
+        : 'No system Postmark token is stored.';
   }
 
   function setSender(email) {
@@ -1327,10 +1347,8 @@ export function createSettingsController({
     for (const [key, id, kind] of WORKFLOW_FIELDS) writeControl(document.getElementById(id), property(workflow, key));
     setScopedFields(patron, PATRON_FIELDS);
     setSender(email);
-    document.getElementById('email-token-status').textContent =
-      property(configuredSystem.email, 'hasPostmarkToken')
-        ? 'A system Postmark token is stored. Leave the token field blank to keep it.'
-        : 'No system Postmark token is stored.';
+    acceptedPostmarkToken = property(configuredSystem.email, 'hasPostmarkToken') === true;
+    renderPostmarkTokenStatus();
     setCollections(data);
     renderPublicLinks(data);
     writeControl(document.getElementById('branding-alt'), property(effective, 'logoAltText'));
@@ -1855,6 +1873,11 @@ export function createSettingsController({
         document.getElementById('polaris-admin-pass-status').textContent =
           'System staff password replacement saved. Reload settings to refresh the credential status.';
       }
+      if (payload.email?.clearPostmarkToken) {
+        dom.postmarkTokenStatus.textContent = 'Postmark token removal saved. Reload settings to refresh credential status.';
+      } else if (payload.email?.postmarkToken) {
+        dom.postmarkTokenStatus.textContent = 'Postmark token replacement saved. Reload settings to refresh credential status.';
+      }
       state.baselineSnapshot = snapshotForm(dom.form);
       domainEditors.setBaseline();
       state.awaitingReload = true;
@@ -1889,6 +1912,11 @@ export function createSettingsController({
         return;
       }
       if (isUnconfirmedMutationFailure(error, mutation)) {
+        if (payload.email?.clearPostmarkToken) {
+          dom.postmarkTokenStatus.textContent = 'Postmark token removal outcome is uncertain. Reload current settings before retrying.';
+        } else if (payload.email?.postmarkToken) {
+          dom.postmarkTokenStatus.textContent = 'Postmark token replacement outcome is uncertain. Reload current settings before retrying.';
+        }
         markUnconfirmedMutation('Settings change outcome is uncertain. Reload current values before retrying.');
         return;
       }
@@ -2410,11 +2438,15 @@ export function createSettingsController({
     });
     listen(dom.saveLogo, 'click', () => saveLogo(false));
     listen(dom.clearLogo, 'click', () => saveLogo(true));
-    listen(document.getElementById('email-postmark-token'), 'input', event => {
-      if (event.target.value) document.getElementById('email-clear-postmark-token').checked = false;
+    listen(dom.postmarkToken, 'input', event => {
+      if (event.target.value) {
+        dom.clearPostmarkToken.checked = false;
+        renderPostmarkTokenStatus();
+      }
     });
-    listen(document.getElementById('email-clear-postmark-token'), 'change', event => {
-      if (event.target.checked) document.getElementById('email-postmark-token').value = '';
+    listen(dom.clearPostmarkToken, 'change', event => {
+      if (event.target.checked) dom.postmarkToken.value = '';
+      renderPostmarkTokenStatus();
     });
     for (const [sourceId, targetId] of [
       ['email-from-address', 'email-template-from-address'],

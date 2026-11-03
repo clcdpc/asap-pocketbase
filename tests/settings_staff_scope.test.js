@@ -173,6 +173,12 @@ async function flush() {
     assert.match(document.querySelector('#settings-smtp .settings-scope-explanation').textContent, /Library Two.*managed centrally/);
     assert.strictEqual(document.getElementById('email-postmark-token').disabled, true);
     assert.strictEqual(document.getElementById('email-clear-postmark-token').disabled, true);
+    assert.strictEqual(document.getElementById('email-postmark-token').value, '');
+    assert.strictEqual(document.getElementById('email-postmark-token').placeholder, '',
+      'A library override flag cannot create the system Postmark saved mask.');
+    assert.strictEqual(document.getElementById('email-token-status').textContent, 'No system Postmark token is stored.');
+    assert.strictEqual(document.getElementById('polaris-api-key').placeholder, '');
+    assert.strictEqual(document.getElementById('polaris-admin-pass').placeholder, '');
     assert.strictEqual(document.querySelector('[data-setting-key="postmarkToken"] .settings-override-toggle'), null);
     const usedTemplate = document.querySelector('#email-templates-editor [data-template-id="9007199254740993"]');
     usedTemplate.querySelector('[aria-label="Delete"]').click();

@@ -26,8 +26,8 @@ the parent Codex session.
 | 2 | #448 | Complete Branding fieldset moved first; focused DOM/logo and SQL/browser presentation PASS | Luna MAX clear, including rendered desktop/mobile | `0c8ccef` |
 | 3 | #445 | Redundant paragraph removed; focused DOM/picker/scope and SQL/browser tests PASS | Luna MAX clear, including desktop/mobile gap check | `35de01e` |
 | 4 | #449 | Explicit validated URL draft action; focused controller/layout/scope PASS, links 2/2 and SQL/browser 1/1 PASS | Luna MAX clear after wait/identity test corrections and rendered checks | `dde686a` |
-| 5 | #409 | Accepted credential help and local outcomes; Node, SQL 3/3 and final browser 1/1 PASS | Luna MAX / Astra HIGH clear after P2 correction | This issue commit; exact SHA in PR |
-| 6 | #437 | Pending | Pending Luna MAX / Astra HIGH | Pending |
+| 5 | #409 | Accepted credential help and local outcomes; Node, SQL 3/3 and final browser 1/1 PASS | Luna MAX / Astra HIGH clear after P2 correction | `2b4068a` |
+| 6 | #437 | Flag-only masks; Node 13 files, initial SQL/browser 4/4 and final affected browser 1/1 PASS | Luna MAX / Astra HIGH clear after P3 wording correction | This issue commit |
 | 7 | #446 | Pending | Pending Luna MAX / Astra HIGH | Pending |
 | 8 | #447 | Pending | Pending Luna MAX / Astra HIGH | Pending |
 | 9 | #444 | Pending | Pending Luna MAX | Pending |
@@ -225,3 +225,46 @@ Existing receipt, configuration/catalog callbacks and recovery ownership remain.
   `staff-presentation-d03961c7ddbd4460b97e071d25a91c88`. Luna final independent
   source/TRX/report and desktop/mobile/200% rendered review is clear, including
   the P2 regression and Queue focus wait. No actionable findings remain.
+
+## #437 — saved-secret placeholders
+
+All three password replacement fields use the same fixed `********` placeholder
+only for a strict accepted saved-secret flag. Their actual values remain empty
+on population. Postmark Clear suppresses its retain-current placeholder, cancel
+restores accepted presentation, and typing a replacement cancels Clear. Accessible
+help stays separate from the visual placeholder. Confirmed and uncertain Postmark
+mutations retain truthful recovery guidance until an authoritative reload.
+
+- Initial focused Node checks and the broader retained Settings sweep PASS all
+  13 current Settings frontend files. Browser and source syntax/diff checks PASS.
+- Initial real-SQL/HTTP/browser checkpoint PASS 4/4, zero failures/skips:
+  full Settings round-trip, cumulative Staff presentation, recording-Postmark
+  delivery/Operations same-reference journey, and protected Postmark blank/clear/
+  secret-omission contract. Raw receipt: `results/i437-checkpoint.trx`.
+- The initial browser reports cover two full-Settings states, six email/Operations
+  states and 130 cumulative presentation states, with no serious/critical axe,
+  missing images, overflow, external requests or page errors. Captures are in
+  ignored `settings-369180b0d32a4362a867520cb565de27`,
+  `saved-email-95c2038b0c9f45f082d2c4c53904ceb5` and
+  `staff-presentation-f2bf0585eb1c4dc09edd3ab69c51469b`.
+- Astra HIGH independent review is clear. Three focused Node files and extra
+  strict-flag, clear/replacement, committed/uncertain failed-refresh and retired-
+  actor probes PASS. No protected-secret, scope or recovery contract changed.
+- Luna MAX found a P3 status-copy defect after the initial checkpoint: Clear with
+  an accepted missing token said a stored token was pending removal. Guidance
+  now branches on accepted presence and explains that saving a missing-token
+  clear keeps it unconfigured. New tests cover missing-token clear/cancel and
+  a first typed draft discarded by Clear, retaining the explicit clear payload.
+  Focused Node reruns PASS; both independent source re-reviews are clear, and
+  Astra independently reran the complete credential-feedback test.
+- Final affected real-SQL Settings journey PASS 1/1, zero failures/skips
+  (`results/i437-settings-final.trx`), after refreshing the corrected assets.
+  It executes the new clear/cancel/first-draft cases and exact unrelated-save
+  secret omissions, followed by existing System/library round-trips. Both final
+  desktop/mobile scans are clear. Actual final captures/report are in ignored
+  `settings-8d532a5cb8604c4f95dd3870d8b46809`. The initial four-case receipt
+  remains pre-copy-fix evidence for unchanged credential, Operations and prior
+  issue behavior; it is not reported as the corrected wording's final run.
+- Final Luna MAX closure independently inspected the corrected source, Node
+  results, final TRX/report and representative actual desktop/mobile renders.
+  Both functional and security reviews are clear; no actionable finding remains.

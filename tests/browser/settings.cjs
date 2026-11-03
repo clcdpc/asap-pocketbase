@@ -1189,6 +1189,74 @@ async function main() {
       }
       return;
     }
+    const systemCredentialFlags = await page.evaluate(async () => {
+      const response = await fetch('/api/asap/staff/settings?orgId=system');
+      if (!response.ok) throw new Error(`Settings credential flags GET ${response.status}`);
+      const data = await response.json();
+      const configured = data.stored?.configuredSystem || {};
+      return {
+        apiKey: configured.polaris?.hasApiKey === true,
+        adminPassword: configured.polaris?.hasAdminPassword === true,
+        postmarkToken: configured.email?.hasPostmarkToken === true
+      };
+    });
+    await page.locator('#settings-nav-polaris').click();
+    for (const [id, saved] of [
+      ['polaris-api-key', systemCredentialFlags.apiKey],
+      ['polaris-admin-pass', systemCredentialFlags.adminPassword]
+    ]) {
+      const input = page.locator(`#${id}`);
+      assert.equal(await input.inputValue(), '', `${id}: the stored secret is never placed in the input value`);
+      assert.equal(await input.getAttribute('placeholder') || '', saved ? '********' : '',
+        `${id}: the fixed mask follows only the accepted saved-credential flag`);
+      await input.focus(); await input.blur();
+    }
+    assert.equal(await page.locator('#settings-save').isDisabled(), true,
+      'Credential focus and blur do not create a settings draft.');
+    assert.equal(await page.locator('#polaris-api-key-status').textContent(), systemCredentialFlags.apiKey
+      ? 'API key saved. Leave blank to keep the current key; enter a new key to replace it.' : 'No API key saved.');
+    assert.equal(await page.locator('#polaris-admin-pass-status').textContent(), systemCredentialFlags.adminPassword
+      ? 'System staff password saved. Leave blank to keep the current password; enter a new password to replace it.'
+      : 'No system staff password saved.');
+
+    await page.locator('#settings-nav-smtp').click();
+    const postmarkInput = page.locator('#email-postmark-token');
+    const clearPostmark = page.locator('#email-clear-postmark-token');
+    const postmarkStatus = page.locator('#email-token-status');
+    assert.equal(await postmarkInput.inputValue(), '', 'The stored Postmark token is never placed in the input value.');
+    assert.equal(await postmarkInput.getAttribute('placeholder') || '', systemCredentialFlags.postmarkToken ? '********' : '',
+      'The Postmark mask follows only the accepted saved-token flag.');
+    assert.equal(await postmarkInput.getAttribute('aria-describedby'), 'email-token-status');
+    assert.equal(await postmarkStatus.getAttribute('role'), 'status');
+    assert.equal(await postmarkStatus.getAttribute('aria-live'), 'polite');
+    assert.equal(await postmarkStatus.textContent(), systemCredentialFlags.postmarkToken
+      ? 'A system Postmark token is stored. Leave blank to keep it; enter a new token to replace it.'
+      : 'No system Postmark token is stored.');
+    await postmarkInput.focus(); await postmarkInput.blur();
+    assert.equal(await page.locator('#settings-save').isDisabled(), true,
+      'Postmark focus and blur do not create a settings draft.');
+    await clearPostmark.check();
+    assert.equal(await postmarkInput.getAttribute('placeholder') || '', '', 'Selecting clear hides the retain-current mask.');
+    assert.equal(await postmarkStatus.textContent(), systemCredentialFlags.postmarkToken
+      ? 'Postmark token removal is pending. Save settings to remove the stored token.'
+      : 'Postmark token clear is selected. No token is currently stored; saving keeps it unconfigured.');
+    if (!systemCredentialFlags.postmarkToken) {
+      await clearPostmark.uncheck();
+      await postmarkInput.fill('unsaved-postmark-draft');
+      await clearPostmark.check();
+      assert.equal(await postmarkInput.inputValue(), '', 'Selecting clear discards a first unsaved replacement draft.');
+      assert.equal(await postmarkStatus.textContent(),
+        'Postmark token clear is selected. No token is currently stored; saving keeps it unconfigured.');
+    }
+    await clearPostmark.uncheck();
+    assert.equal(await postmarkInput.getAttribute('placeholder') || '', systemCredentialFlags.postmarkToken ? '********' : '');
+    assert.equal(await postmarkStatus.textContent(), systemCredentialFlags.postmarkToken
+      ? 'A system Postmark token is stored. Leave blank to keep it; enter a new token to replace it.'
+      : 'No system Postmark token is stored.');
+    assert.equal(await page.locator('#settings-save').isDisabled(), true,
+      'Canceling clear restores the accepted presentation without saving.');
+    assert.equal(postedPayloads.length, 0, 'Placeholder and clear-preview checks send no settings POST.');
+    await page.locator('#settings-nav-start').click();
     const participationRows = page.locator('#enabled-libraries-checkbox-container input[type="checkbox"]');
     const participationIds = await participationRows.evaluateAll(inputs => inputs.map(input => input.value));
     assert.ok(participationIds.includes('2') && participationIds.includes('3') && participationIds.includes('4'),
@@ -1200,6 +1268,12 @@ async function main() {
     const participationPayload = await saveSettings();
     assert.deepEqual([...participationPayload.systemSettings.enabledLibraryOrgIds].sort((left, right) => left - right), [2, 3],
       'The browser must submit the exact numeric native library identities, independently of visible-name order.');
+    assert.equal(Object.hasOwn(participationPayload.polaris, 'apiKey'), false);
+    assert.equal(Object.hasOwn(participationPayload.polaris, 'adminPassword'), false);
+    assert.equal(Object.hasOwn(participationPayload.email, 'postmarkToken'), false);
+    assert.equal(Object.hasOwn(participationPayload.email, 'clearPostmarkToken'), false);
+    assert.equal(JSON.stringify(participationPayload).includes('********'), false,
+      'Unrelated system saves never transmit the visual credential masks.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('system');
     for (const id of ['2', '3', '4']) {
