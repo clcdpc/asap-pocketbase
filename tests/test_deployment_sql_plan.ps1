@@ -22,14 +22,22 @@ function Assert-Failure([scriptblock] $Action, [string] $Pattern) {
 }
 
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('asap-sql-plan-test-' + [guid]::NewGuid().ToString('N'))
-$originalMachine = $env:COMPUTERNAME
 try {
     New-Item -ItemType Directory -Path $fixture | Out-Null
-    $env:COMPUTERNAME = 'fixture-iis'
+    $script:fixtureMachineName = 'DEVWEB'
+    function Get-DeploymentMachineName { return $script:fixtureMachineName }
     $script:nativeCalls = [Collections.Generic.List[object]]::new()
     $script:sqlIdentity = 'ASAP_TARGET|fixture-sql\instance|AsapTest'
-    $script:binding = '*:443:dev.example.invalid'
+    $script:binding = '*:443:devasap.clcohio.org'
     $script:nativeFailure = ''
+    $script:legacyReport = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/deployment/legacy-retirement-report.xml') -Raw
+    foreach ($configuration in @([pscustomobject]@{}, [pscustomobject]@{ AllowSqlDataLoss = $false })) {
+        Assert-True (-not (Get-DevSqlOverrideSettings -Configuration $configuration).Enabled) 'Missing/false host policy must remain protected.'
+    }
+    foreach ($value in @('true', 'false', 'TRUE', '', 0, 1, $null)) {
+        Assert-Failure { Get-DevSqlOverrideSettings -Configuration ([pscustomobject]@{ AllowSqlDataLoss = $value }) } '*JSON boolean*'
+    }
+    Assert-Failure { Get-DevSqlOverrideSettings -Configuration ([pscustomobject]@{ AllowSqlDataLoss = $true }) } '*verified SqlDataLossTarget*'
     function Get-WebBinding {
         [CmdletBinding()] param([string] $Name, [string] $Protocol)
         Assert-True ($Name -eq 'ASAP' -and $Protocol -eq 'https') 'Must inspect the configured HTTPS site.'
@@ -63,7 +71,7 @@ try {
             if ($args -contains '/Action:Script') {
                 [IO.File]::WriteAllText($path, 'ALTER TABLE [asap].[TitleRequest] DROP COLUMN [LegacyId];')
             }
-            else { [IO.File]::WriteAllText($path, '<DeploymentReport><Operations /></DeploymentReport>') }
+            else { [IO.File]::WriteAllText($path, $script:legacyReport) }
         }
         if ($script:nativeFailure -eq 'plan') { $script:LASTEXITCODE = 1 }
     }
@@ -72,15 +80,18 @@ try {
         IisSiteName = 'ASAP'; IisAppPoolName = 'ASAP'; DeploymentPath = Join-Path $fixture 'web'
         BackupRoot = Join-Path $fixture 'backups'; StatePath = Join-Path $fixture 'state.json'
         ExternalApplicationConfigPath = Join-Path $fixture 'application.json'
-        ReadinessUrl = 'https://dev.example.invalid/health/ready'
+        ReadinessUrl = 'https://devasap.clcohio.org/health/ready'
         AsapDatabaseConnectionString = $connection; HangfireDatabaseConnectionString = $connection
         SqlCmdPath = 'Invoke-FixtureSql'; SqlPackagePath = 'Invoke-FixturePackage'
+        AllowSqlDataLoss = $false
         ExternalConfiguration = [pscustomobject]@{
             Environment = [pscustomobject]@{ Name = 'Test'; IsNonProduction = $true }
             ConnectionStrings = [pscustomobject]@{ AsapDatabase = $connection }
         }
     }
-    $pins = [ordered]@{ machineName = 'fixture-iis'; iisHostName = 'dev.example.invalid'; sqlServerName = 'fixture-sql\instance'; databaseName = 'AsapTest' }
+    $pins = [ordered]@{ machineName = 'DEVWEB'; iisHostName = 'devasap.clcohio.org'; sqlServerName = 'fixture-sql\instance'; databaseName = 'AsapTest' }
+    $config | Add-Member -NotePropertyName SqlDataLossTarget -NotePropertyValue ([pscustomobject] $pins)
+    Assert-True (Get-DevSqlOverrideSettings -Configuration ([pscustomobject]@{ AllowSqlDataLoss = $true; SqlDataLossTarget = [pscustomobject] $pins })).Enabled 'The persistent setting must enable without a per-run approval input.'
     $target = Assert-SqlDataLossTarget -Config $config -ExpectedTarget ($pins | ConvertTo-Json)
     Assert-True ($target.sqlServerName -eq $pins.sqlServerName) 'Validated target must bind canonical SQL server, not the connection alias.'
     foreach ($key in @('machineName', 'iisHostName', 'sqlServerName', 'databaseName')) {
@@ -99,9 +110,12 @@ try {
     $config.ExternalConfiguration.Environment.Name = 'Production'
     Assert-Failure { Assert-SqlDataLossTarget -Config $config -ExpectedTarget ($pins | ConvertTo-Json) } '*pinned non-production*'
     $config.ExternalConfiguration.Environment.Name = 'Test'
+    $script:fixtureMachineName = 'PRODWEB'; $pins.machineName = 'PRODWEB'
+    Assert-Failure { Assert-SqlDataLossTarget -Config $config -ExpectedTarget ($pins | ConvertTo-Json) } '*pinned non-production*'
+    $script:fixtureMachineName = 'DEVWEB'; $pins.machineName = 'DEVWEB'
     $script:binding = '*:443:'
     Assert-Failure { Assert-SqlDataLossTarget -Config $config -ExpectedTarget ($pins | ConvertTo-Json) } '*HTTPS IIS binding*'
-    $script:binding = '*:443:dev.example.invalid'
+    $script:binding = '*:443:devasap.clcohio.org'
     $config.ExternalConfiguration.ConnectionStrings.AsapDatabase = 'Server=production;Database=AsapTest;Integrated Security=True'
     Assert-Failure { Assert-SqlDataLossTarget -Config $config -ExpectedTarget ($pins | ConvertTo-Json) } '*runtime and deployment*'
     $config.ExternalConfiguration.ConnectionStrings.AsapDatabase = $connection
@@ -110,9 +124,9 @@ try {
         Assert-Failure { Assert-SqlDataLossTarget -Config $config -ExpectedTarget ($pins | ConvertTo-Json) } '*failover or file-attachment*'
     }
     $config.ExternalConfiguration.ConnectionStrings.AsapDatabase = $connection
-    $config.ReadinessUrl = 'https://dev.example.invalid:4443/health/ready'
+    $config.ReadinessUrl = 'https://devasap.clcohio.org:4443/health/ready'
     Assert-Failure { Assert-SqlDataLossTarget -Config $config -ExpectedTarget ($pins | ConvertTo-Json) } '*pinned non-production*'
-    $config.ReadinessUrl = 'https://dev.example.invalid/health/ready'
+    $config.ReadinessUrl = 'https://devasap.clcohio.org/health/ready'
     $pins.databaseName = 'master'
     Assert-Failure { Assert-SqlDataLossTarget -Config $config -ExpectedTarget ($pins | ConvertTo-Json) } '*pinned non-production*'
     $pins.databaseName = 'AsapTest'
@@ -128,7 +142,12 @@ try {
 
     $dacpacRoot = Join-Path $fixture 'dacpac'
     New-Item -ItemType Directory -Path $dacpacRoot | Out-Null
-    Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'database/Asap.Database/Scripts/PreDeployment.sql') -Destination (Join-Path $dacpacRoot 'predeploy.sql')
+    foreach ($name in @('PreDeployment', 'PostDeployment')) {
+        $source = [IO.File]::ReadAllText((Join-Path (Split-Path -Parent $PSScriptRoot) "database/Asap.Database/Scripts/$name.sql")).Replace("`r`n", "`n")
+        # Microsoft.Build.Sql appends a batch terminator to packaged scripts.
+        $entryName = if ($name -eq 'PreDeployment') { 'predeploy.sql' } else { 'postdeploy.sql' }
+        [IO.File]::WriteAllText((Join-Path $dacpacRoot $entryName), ($source + "GO`n"))
+    }
     $dacpac = Join-Path $fixture 'fixture.dacpac'
     [IO.Compression.ZipFile]::CreateFromDirectory($dacpacRoot, $dacpac)
     $archive = [pscustomobject]@{
@@ -144,39 +163,72 @@ try {
     $script:nativeCalls.Clear()
     $plan = New-DacpacPlan -Config $config -Archive $archive -Target $target -AllowSqlDataLoss -OutputDirectory (Join-Path $fixture 'candidate')
     foreach ($call in $script:nativeCalls) { Assert-True ($call -contains '/p:BlockOnPossibleDataLoss=False' -and $call -notcontains '/Action:Publish') 'Candidate preflight must describe loss without publishing.' }
-    Assert-ReviewedSqlPlan -Plan $plan -ReviewedHash $plan.Hash
-    foreach ($badHash in @('', 'true', ('0' * 64), ($plan.Hash + ' '))) {
-        Assert-Failure { Assert-ReviewedSqlPlan -Plan $plan -ReviewedHash $badHash } '*unreviewed or changed*'
-    }
-    Assert-Failure { Assert-ReviewedSqlPlan -Plan $protected -ReviewedHash $protected.Hash } '*unreviewed or changed*'
+    Assert-DevSqlPlan -Plan $plan
+    Assert-Failure { Assert-DevSqlPlan -Plan $protected } '*invalid or changed*'
     foreach ($path in @($plan.ScriptPath, $plan.ReportPath)) {
         $bytes = [IO.File]::ReadAllBytes($path)
         [IO.File]::AppendAllText($path, 'unreviewed broader drop')
-        Assert-Failure { Assert-ReviewedSqlPlan -Plan $plan -ReviewedHash $plan.Hash } '*unreviewed or changed*'
+        Assert-Failure { Assert-DevSqlPlan -Plan $plan } '*invalid or changed*'
         [IO.File]::WriteAllBytes($path, $bytes)
     }
     foreach ($key in @('commitSha', 'schemaVersion')) {
         $old = $plan.Context[$key]; $plan.Context[$key] = 'changed'
-        Assert-Failure { Assert-ReviewedSqlPlan -Plan $plan -ReviewedHash $plan.Hash } '*unreviewed or changed*'
+        Assert-Failure { Assert-DevSqlPlan -Plan $plan } '*invalid or changed*'
         $plan.Context[$key] = $old
     }
     $plan.Context.target.databaseName = 'Other'
-    Assert-Failure { Assert-ReviewedSqlPlan -Plan $plan -ReviewedHash $plan.Hash } '*unreviewed or changed*'
+    Assert-Failure { Assert-DevSqlPlan -Plan $plan } '*invalid or changed*'
     $plan.Context.target.databaseName = 'AsapTest'
+    $originalHash = $plan.Hash
+    $noLoss = '<DeploymentReport xmlns="http://schemas.microsoft.com/sqlserver/dac/DeployReport/2012/02"><Alerts /><Operations /></DeploymentReport>'
+    foreach ($report in @($noLoss, $noLoss.Replace('<Operations />', '<Operations><Operation Name="Create"><Item Value="[asap].[NewTable]" Type="SqlTable" /></Operation></Operations>'))) {
+        [IO.File]::WriteAllText($plan.ReportPath, $report)
+        $plan.Hash = Get-SqlPlanSha256 -Context $plan.Context -ScriptPath $plan.ScriptPath -ReportPath $plan.ReportPath
+        Assert-DevSqlPlan -Plan $plan
+    }
+    $badReports = @(
+        $script:legacyReport.Replace('The column [asap].[AdditionalCopyRequest].[LegacyId]', 'The column [asap].[AdditionalCopyRequest].[UnreviewedColumn]'),
+        $script:legacyReport.Replace('Name="DataIssue"', 'Name="DataMotion"'),
+        $script:legacyReport.Replace('Name="Alter"', 'Name="TableRebuild"'),
+        $script:legacyReport.Replace('[asap].[AdditionalCopyRequest].[UX_AdditionalCopyRequest_LegacyId]', '[asap].[OtherTable]'),
+        $script:legacyReport.Replace('Type="SqlIndex"', 'Type="SqlTable"'),
+        $script:legacyReport.Replace('<Issue Id="3" />', ''),
+        $script:legacyReport.Replace('Id="3"', 'Id="1"'),
+        $noLoss.Replace('DeployReport/2012/02', 'unknown-report-version'),
+        $noLoss.Replace('<Alerts />', '<Alerts><Alert Name="DataIssue" /></Alerts>'),
+        $noLoss.Replace('<Alerts />', '<Alerts /><Alerts />'),
+        $script:legacyReport.Replace('<Issue Id="3" />', '<Issue xmlns="urn:unknown" Id="3" />'),
+        $noLoss.Replace('<Operations />', '<Operations><Operation Name="Drop"><Item Value="[asap].[LiveTable]" Type="SqlTable" /></Operation></Operations>')
+    )
+    foreach ($report in $badReports) {
+        [IO.File]::WriteAllText($plan.ReportPath, $report)
+        $plan.Hash = Get-SqlPlanSha256 -Context $plan.Context -ScriptPath $plan.ScriptPath -ReportPath $plan.ReportPath
+        Assert-Failure { Assert-DevSqlPlan -Plan $plan } '*DEV override blocked*'
+    }
+    [IO.File]::WriteAllText($plan.ReportPath, $script:legacyReport); $plan.Hash = $originalHash
+    $changedRoot = Join-Path $fixture 'changed-scripts'
+    New-Item -ItemType Directory -Path $changedRoot | Out-Null
+    Copy-Item -Path (Join-Path $dacpacRoot '*') -Destination $changedRoot
+    [IO.File]::AppendAllText((Join-Path $changedRoot 'postdeploy.sql'), 'DROP TABLE [asap].[LiveTable];')
+    $changedDacpac = Join-Path $fixture 'changed.dacpac'
+    [IO.Compression.ZipFile]::CreateFromDirectory($changedRoot, $changedDacpac)
+    $plan.DacpacPath = $changedDacpac
+    Assert-Failure { Assert-DevSqlPlan -Plan $plan } '*postdeploy.sql changed*'
+    $plan.DacpacPath = $dacpac
     $publish = @{ SqlCmdPath = $config.SqlCmdPath; SqlPackagePath = $config.SqlPackagePath; ConnectionString = $connection; DacpacPath = $dacpac }
     $script:nativeCalls.Clear()
     Invoke-DacpacPublish @publish
     Assert-True ($script:nativeCalls.Count -eq 2 -and $script:nativeCalls[1] -contains '/Action:Publish' -and $script:nativeCalls[1] -contains '/p:BlockOnPossibleDataLoss=True') 'Default publication must retain the schema guard and protected SqlPackage publish.'
     $script:nativeCalls.Clear()
-    Invoke-DacpacPublish @publish -AllowSqlDataLoss -Plan $plan -ReviewedPlanSha256 $plan.Hash
+    Invoke-DacpacPublish @publish -AllowSqlDataLoss -Plan $plan
     Assert-True ($script:nativeCalls.Count -eq 2 -and $script:nativeCalls[1][-1] -eq $plan.ScriptPath) 'Opt-in must run the exact reviewed SQL bytes after the DACPAC schema guard.'
     Assert-True (-not @($script:nativeCalls | Where-Object { $_ -contains '/Action:Publish' }).Count) 'Opt-in must never replan with an unprotected Publish action.'
     $script:nativeFailure = 'guard'
     $script:nativeCalls.Clear()
-    Assert-Failure { Invoke-DacpacPublish @publish -AllowSqlDataLoss -Plan $plan -ReviewedPlanSha256 $plan.Hash } '*pre-deployment contract failed*'
+    Assert-Failure { Invoke-DacpacPublish @publish -AllowSqlDataLoss -Plan $plan } '*pre-deployment contract failed*'
     Assert-True ($script:nativeCalls.Count -eq 1) 'Schema rejection must prevent executing the approved plan.'
     $script:nativeFailure = 'execute'
-    Assert-Failure { Invoke-DacpacPublish @publish -AllowSqlDataLoss -Plan $plan -ReviewedPlanSha256 $plan.Hash } '*database state may have changed*'
+    Assert-Failure { Invoke-DacpacPublish @publish -AllowSqlDataLoss -Plan $plan } '*database state may have changed*'
     $script:nativeFailure = 'plan'
     Assert-Failure { New-DacpacPlan -Config $config -Archive $archive -OutputDirectory (Join-Path $fixture 'failed-plan') } '*preflight failed*'
     $script:nativeFailure = ''
@@ -197,7 +249,13 @@ $ast = [Management.Automation.Language.Parser]::ParseFile($ScriptPath, [ref] $to
 foreach ($definition in $ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] }, $false)) { Invoke-Expression $definition.Extent.Text }
 $data = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($EncodedData)) | ConvertFrom-Json
 function Event([string] $Text) { Add-Content -LiteralPath $EventsPath -Value $Text }
-function Read-HostConfiguration { param($Path) Event 'host'; return $data.Config }
+function Read-HostConfiguration {
+    param($Path)
+    Event 'host'
+    $policy = Get-DevSqlOverrideSettings -Configuration $data.Config
+    $data.Config.AllowSqlDataLoss = $policy.Enabled
+    return $data.Config
+}
 function Test-DeploymentArchive { param($ZipPath, $ExpectedHash, $ExpectedCommit, $ExpectedLabel, $StagingPath) Event 'archive'; return $data.Archive }
 function Test-PublishedApplicationConfigPath { param($WebRoot, $ExternalApplicationConfigPath) Event 'pointer' }
 function Test-IisConfiguration { param($Config) Event 'iis' }
@@ -206,33 +264,38 @@ function New-DacpacPlan { param($Config, $Archive, $Target, $OutputDirectory, [s
 function Read-DeploymentState { param($StatePath) Event 'state-read'; return $null }
 function Get-HangfireSchemaVersion { param($SqlCmdPath, $ConnectionString) Event 'hangfire-read'; return 9 }
 function Set-NonProductionDatabaseRecovery { param($ExternalConfiguration, $SqlCmdPath, $ConnectionString) Event 'recovery-write' }
-function Invoke-TestDeployment { param($Config, $Archive, $NeedsDacpac, $NeedsHangfire, [switch] $AllowSqlDataLoss, $SqlPlan, $ReviewedPlanSha256, $TimeoutSeconds, $PollSeconds) Event "activation:$([bool] $AllowSqlDataLoss)" }
+function Invoke-TestDeployment { param($Config, $Archive, $NeedsDacpac, $NeedsHangfire, [switch] $AllowSqlDataLoss, $SqlPlan, $TimeoutSeconds, $PollSeconds) Event "activation:$([bool] $AllowSqlDataLoss)" }
 $data.Config | Add-Member -NotePropertyName StagingRoot -NotePropertyValue ([IO.Path]::GetDirectoryName($EventsPath))
 $ValidateOnly = $Mode -eq 'validate'
-$SqlPlanOnly = $Mode -eq 'candidate'
-$AllowSqlDataLoss = $Mode -in @('approved', 'unreviewed')
-$ReviewedSqlPlanSha256 = if ($Mode -eq 'approved') { $data.Plan.Hash } elseif ($Mode -eq 'unreviewed') { '0' * 64 } else { '' }
-$ExpectedSqlDataLossTarget = '{}'; $SqlPlanOutputDirectory = [IO.Path]::GetDirectoryName($EventsPath)
+$SqlPlanOnly = $Mode -in @('candidate', 'candidate-enabled')
+$data.Config.AllowSqlDataLoss = $Mode -in @('enabled', 'enabled-again', 'candidate-enabled', 'invalid-plan', 'production-tag')
+if ($Mode -eq 'invalid-plan') { $data.Plan.Hash = '0' * 64 }
+if ($Mode -eq 'malformed-setting') { $data.Config.AllowSqlDataLoss = 'true' }
+$SqlPlanOutputDirectory = [IO.Path]::GetDirectoryName($EventsPath)
 $ConfigPath = 'fixture'; $DeploymentZip = 'fixture'; $ExpectedZipSha256 = 'b' * 64
-$ExpectedCommitSha = 'a' * 40; $ExpectedDeploymentLabel = 'fixture'
+$ExpectedCommitSha = 'a' * 40
+$ExpectedDeploymentLabel = if ($Mode -eq 'production-tag') { 'v1.0.0' } else { 'v1.0.0-test.27' }
 $ReadinessTimeoutSeconds = 1; $ReadinessPollSeconds = 1
 '@
     [IO.File]::WriteAllText($harness, $preamble + "`n" + $main)
-    foreach ($mode in @('validate', 'candidate', 'unreviewed', 'approved', 'default')) {
+    foreach ($mode in @('validate', 'candidate', 'candidate-enabled', 'enabled', 'enabled-again', 'invalid-plan', 'default', 'disabled-again', 'production-tag', 'malformed-setting')) {
         $eventsPath = Join-Path $fixture "$mode-events.txt"
         $output = & (Get-Process -Id $PID).Path -NoLogo -NoProfile -File $harness -Mode $mode -ScriptPath $scriptPath -EncodedData $encodedData -EventsPath $eventsPath 2>&1
         $exitCode = $LASTEXITCODE
         $events = @(Get-Content -LiteralPath $eventsPath)
-        if ($mode -eq 'unreviewed') {
-            Assert-True ($exitCode -ne 0 -and "$output" -like '*unreviewed or changed*') 'Changed/unreviewed plans must fail at the entrypoint.'
+        if ($mode -in @('invalid-plan', 'production-tag', 'malformed-setting')) {
+            Assert-True ($exitCode -ne 0) "Entrypoint $mode must fail closed."
         }
         else { Assert-True ($exitCode -eq 0) "Entrypoint $mode failed: $output" }
         switch ($mode) {
             'validate' { Assert-True (($events -join ',') -eq 'archive') 'ValidateOnly must never read host configuration.' }
             'candidate' { Assert-True (($events -join ',') -eq 'host,archive,pointer,iis,target,plan:True') 'PlanOnly must return before state/recovery/activation.' }
-            'unreviewed' { Assert-True (-not ($events -contains 'recovery-write') -and -not ($events -like 'activation:*')) 'Unreviewed plans must fail before any activation or recovery mutation.' }
-            'approved' { Assert-True ($events -contains 'activation:True') 'Only a hash-approved plan may reach opt-in activation.' }
+            'candidate-enabled' { Assert-True (($events -join ',') -eq 'host,archive,pointer,iis,target,plan:True') 'PlanOnly must remain non-mutating even while the persistent setting is true.' }
+            'invalid-plan' { Assert-True (-not ($events -contains 'recovery-write') -and -not ($events -like 'activation:*')) 'Changed plans must fail before any activation or recovery mutation.' }
+            { $_ -in @('enabled', 'enabled-again') } { Assert-True ($events -contains 'activation:True') 'The same persistent true setting must permit successive scoped deployments without per-run input.' }
             'default' { Assert-True ($events -contains 'plan:False' -and $events -contains 'activation:False' -and $events -notcontains 'target') 'The default must remain protected without requiring exception pins.' }
+            'disabled-again' { Assert-True ($events -contains 'plan:False' -and $events -contains 'activation:False') 'Setting false again must restore the protected path.' }
+            { $_ -in @('production-tag', 'malformed-setting') } { Assert-True (($events -join ',') -eq 'host') 'Unsafe labels and malformed settings must fail before archive/IIS/SQL access.' }
         }
     }
 
@@ -250,7 +313,7 @@ $ReadinessTimeoutSeconds = 1; $ReadinessPollSeconds = 1
     }
     function Start-TestAppPool { param($AppPoolName) $script:events.Add('start'); $script:poolState = 'Started' }
     function Invoke-DacpacPublish {
-        param($SqlCmdPath, $SqlPackagePath, $ConnectionString, $DacpacPath, [switch] $AllowSqlDataLoss, $Plan, $ReviewedPlanSha256)
+        param($SqlCmdPath, $SqlPackagePath, $ConnectionString, $DacpacPath, [switch] $AllowSqlDataLoss, $Plan)
         $script:events.Add('dacpac'); if ($script:fault -in @('dacpac', 'cleanup')) { throw 'fixture dacpac failure' }
     }
     function Invoke-HangfireSchemaInstall { param($SqlCmdPath, $ConnectionString, $InstallScriptPath) $script:events.Add('hangfire'); if ($script:fault -eq 'hangfire') { throw 'fixture hangfire failure' } }
@@ -283,14 +346,15 @@ $ReadinessTimeoutSeconds = 1; $ReadinessPollSeconds = 1
     Assert-Failure { Invoke-TestDeployment @activation } '*stably Started or Stopped*'
     Assert-True ($script:events.Count -eq 0) 'A transitional pool must fail before backup/stop/mutation.'
     $script:poolState = 'Started'
-    Assert-Failure { Invoke-TestDeployment @activation -AllowSqlDataLoss -SqlPlan $plan -ReviewedPlanSha256 ('0' * 64) } '*unreviewed or changed*'
-    Assert-True ($script:events.Count -eq 0) 'Opt-in approval must be rechecked before backup or pool mutation.'
-    Invoke-TestDeployment @activation -AllowSqlDataLoss -SqlPlan $plan -ReviewedPlanSha256 $plan.Hash
-    Assert-True ($script:events.Contains('state')) 'A fully reviewed opt-in must retain the same readiness/state success path.'
+    $plan.Hash = '0' * 64
+    Assert-Failure { Invoke-TestDeployment @activation -AllowSqlDataLoss -SqlPlan $plan } '*invalid or changed*'
+    $plan.Hash = $originalHash
+    Assert-True ($script:events.Count -eq 0) 'Plan integrity must be rechecked before backup or pool mutation.'
+    Invoke-TestDeployment @activation -AllowSqlDataLoss -SqlPlan $plan
+    Assert-True ($script:events.Contains('state')) 'A scoped DEV override must retain the same readiness/state success path.'
     Write-Host 'SQL plan identity, opt-in, target guards and activation recovery tests passed (18 activation scenarios).'
 }
 finally {
-    $env:COMPUTERNAME = $originalMachine
     $resolvedFixture = [IO.Path]::GetFullPath($fixture)
     if (-not $resolvedFixture.StartsWith([IO.Path]::GetTempPath(), [StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected fixture cleanup path.' }
     Remove-Item -LiteralPath $resolvedFixture -Recurse -Force -ErrorAction SilentlyContinue

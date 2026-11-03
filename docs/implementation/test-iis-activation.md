@@ -222,6 +222,7 @@ Its final shape is:
 {
   "IisSiteName": "ASAP",
   "IisAppPoolName": "ASAP",
+  "AllowSqlDataLoss": false,
   "DeploymentPath": "D:\\Sites\\ASAP",
   "StagingRoot": "C:\\ProgramData\\clc-asap\\Staging",
   "BackupRoot": "C:\\ProgramData\\clc-asap\\Backups",
@@ -318,98 +319,107 @@ preflights the protected SQL plan before stopping the app pool. It retains the
 previous web payload before stopping IIS, publishes required schema changes, replaces files, starts the
 pool, and polls `/health/ready` with normal TLS validation.
 
-### One-run SQL data-loss exception
+### Persistent DEV SQL data-loss setting
 
-This is a deployment-only operational control, not a system/library application
-setting. `allow_test_sql_data_loss` is a typed boolean, defaults to false, and
-must be deliberately selected on each manual test-IIS run. Ordinary runs and
-test-tag pushes keep `BlockOnPossibleDataLoss=True`. Production-tag dispatches
-cannot use either SQL exception control. Existing full CI, activation and
-environment gates remain mandatory.
-
-An independently reviewed non-production target must first be pinned in the
-`asap-test-iis` environment's GitHub Actions variable named
-`ASAP_TEST_SQL_DATA_LOSS_TARGET`, with this JSON shape:
+This is host-owned deployment policy, not an application/system/library setting
+and not a workflow-dispatch input. In DEVWEB's existing
+`C:\ProgramData\clc-asap\Config\deployment.json`, the operator may set:
 
 ```json
 {
-  "machineName": "VERIFIED-TEST-IIS-MACHINE",
-  "iisHostName": "verified-test-host.example.invalid",
-  "sqlServerName": "VERIFIED-TEST-SQL\\INSTANCE",
-  "databaseName": "VerifiedTestDatabase"
+  "AllowSqlDataLoss": true,
+  "SqlDataLossTarget": {
+    "machineName": "DEVWEB",
+    "iisHostName": "devasap.clcohio.org",
+    "sqlServerName": "OPERATOR-VERIFIED-CANONICAL-SQL-SERVER",
+    "databaseName": "OPERATOR-VERIFIED-DEV-DATABASE"
+  }
 }
 ```
 
-Do not copy these placeholders or infer DEV from `IsNonProduction` alone.
-An operator must independently verify that this exact machine, HTTPS site and
-SQL server/database are the intended disposable target before configuring the
-pins. The script checks the executing machine, the configured readiness host
-and its actual IIS HTTPS binding, runtime/deployment SQL target agreement, and
-the canonical connected `SERVERPROPERTY('ServerName')`/`DB_NAME()` against the
-pins. It also requires a real boolean `Environment.IsNonProduction=true` and
-an environment name of Test, Development or Dev, and rejects system databases.
-An alias resolving to a different SQL instance fails. Missing pins fail closed.
-These checks enforce the operator's reviewed target policy; self-declared
-environment labels do not independently establish that a database is DEV.
+Merge these fields into the existing host file; retain its paths, tools, IIS
+and connection settings. These are illustrative SQL placeholders, not verified
+DEV SQL identities. Before enabling the switch, independently verify the exact
+canonical SQL server/database reached by the deployment identity and confirm
+that they are the intended disposable DEV target. Do not copy connection strings
+or credentials into this policy or into logs.
 
-1. Generate a candidate plan from the new implementation's reviewed branch or
-   test tag. Keep both the source ref and receipt commit SHA for the review:
+`AllowSqlDataLoss` must be a JSON boolean. Missing or `false` keeps
+`BlockOnPossibleDataLoss=True`; malformed values fail before deployment effects.
+Bootstrap writes `false`. **True persists across subsequent test tag deployments
+until an operator changes it to false.** There is no automatic reset, approval
+hash input, or per-run approval prompt. Setting it false restores the protected
+publish path for subsequent deployments. It does not alter an already running
+deployment, so change it between runs.
 
-   ```text
-   gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref <reviewed-branch-or-test-tag> -f deploy_test_iis=true -f test_sql_plan_only=true -f force_full_ci=true
-   ```
+Production safety is independent of remembering to turn the setting off:
 
-   This still requires successful full CI, then reads IIS/SQL and writes only
-   review files. It does not execute the DACPAC pre/post scripts, change SQL
-   recovery, stop/start IIS, replace web files, or write deployment state.
-   Download `asap-test-sql-plan-<run>-<attempt>`: `deployment.sql`,
-   `deployment.xml`, and `review.json`. Review artifacts expire after seven days.
+- the override requires a test-tag label and the fixed DEVWEB machine and
+  `devasap.clcohio.org` hostname, even if another host copies the setting;
+- the actual configured site/pool/path and HTTPS binding must match;
+- the external application configuration must have a real boolean
+  `Environment.IsNonProduction=true` and Name Test, Development or Dev;
+- runtime/deployment SQL connection targets must agree, and the connected
+  `SERVERPROPERTY('ServerName')`/`DB_NAME()` must match the verified policy;
+- system databases, ambiguous aliases and failover/file-attachment routing
+  are rejected. An environment label/boolean alone is never proof of DEV.
 
-2. Review **all** generated SQL and the complete deployment report, including
-   pre/post-deployment SQL, constraints, rebuilds, type changes and removals.
-   The known test.26 failure involved
-   `AdditionalCopyRequest.LegacyId`, `TitleRequest.LegacyId`, and
-   `TitleRequest.LegacyHoldProtected`. Do not assume these are the only
-   destructive operations: SqlPackage's false option covers every possible
-   data-loss change in the plan. If anything broader appears, resolve it or
-   obtain specific authorization for that complete new plan before proceeding.
+Normal `v1.0.0-test.NN` tag pushes use this host setting automatically. Existing
+activation, allowed-tag environment policy, exact-commit full CI and artifact
+verification still apply. No GitHub Actions variable or new permission on
+repository/environment variables is required. This does not change production
+deployment configuration or repository security settings.
+The IIS activation job is serialized for this target and never cancels an
+already running activation when another test tag arrives.
 
-3. Only after explicit authorization of the complete plan, run the same reviewed
-   source with its `review.json` hash:
+### Plans and standing authorized scope
 
-   ```text
-   gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref <same-reviewed-branch-or-test-tag> -f deploy_test_iis=true -f allow_test_sql_data_loss=true -f reviewed_test_sql_plan_sha256=<reviewed-planSha256> -f force_full_ci=true
-   ```
+SqlPackage's false flag permits **all** possible data-loss changes in a plan;
+it is not a three-column SQL switch. Before stopping IIS or changing recovery
+options, the installer generates and retains the complete `deployment.sql`,
+`deployment.xml` and `plan.json`. Logs identify that the persistent override is
+enabled and list authorized removals. The workflow uploads SQL-plan artifacts
+for both tag and manual runs, including blocked runs, for seven days.
 
-   The script regenerates the plan and requires exact hashes of the SQL/report
-   bytes, commit and verified target identity before any activation or
-   SQL recovery change. Any drift, including a broader drop, blocks the run and
-   retains the new candidate artifact for review. It executes those exact SQL
-   bytes through `sqlcmd -b`; it never asks an unprotected Publish action to
-   create a different plan. The DACPAC's schema identity/version preflight
-   remains in force. Archive/manifest identity, readiness, Hangfire checks,
-   protected default publishing, and successful-state recording remain intact.
+The standing DEV policy automatically accepts only removal of
+`AdditionalCopyRequest.LegacyId`, `TitleRequest.LegacyId` and
+`TitleRequest.LegacyHoldProtected`, plus their required
+`UX_AdditionalCopyRequest_LegacyId` index and
+`DF_TitleRequest_LegacyHoldProtected` default constraint. Ordinary creates and
+alters without loss warnings continue without a new approval. The report must
+match the recognized DacFx format and bind each warning to its table operation.
+Other drops, new loss warnings, data motion/table rebuilds and unknown report
+shapes stop before activation; review the retained plan and escalate broader
+destructive scope rather than silently accepting it.
 
-The SQL/report approval hash is deliberately not normalized or automatically
-accepted. Differences in SqlPackage output, source commit or target identity
-require another review, even when they appear harmless. Each receipt records
-that run's binary DACPAC digest for audit. It is outside the approval hash:
-same-source builds change `Origin.xml` packaging metadata. The existing exact
-ZIP/manifest/DACPAC integrity checks still run independently for every artifact;
-approval requires unchanged executable SQL/report bytes from that tested source.
-If a later build cannot reproduce the plan, use the original, fully tested artifact for a separately authorized
-operator invocation of `Deploy-AsapTest.ps1` with `-SqlPlanOnly`, then
-`-AllowSqlDataLoss -ReviewedSqlPlanSha256 <hash>` and the same independently
-pinned `-ExpectedSqlDataLossTarget` JSON. Each invocation requires a new
-`-SqlPlanOutputDirectory` outside the replaceable web path and package staging.
-No deployment/reset is authorized merely by generating a candidate hash.
+The reviewed schema-13 DACPAC pre/post scripts are also fingerprinted, because
+their SQL lies outside the operation report. Changes require review before
+extending this standing policy. Only line endings are normalized for these
+source fingerprints. The SQL/report bytes are hashed and rechecked immediately
+before activation/execution; the installer executes that exact checked script
+with `sqlcmd -b` instead of asking unprotected Publish to replan.
+Schema identity/version guards, Hangfire checks, readiness and successful-state
+recording remain mandatory. No database reset is performed.
 
-`-ValidateOnly` stays package-only and rejects SQL exception controls before
-reading host configuration. The old test.26 ZIP predates this interface; do
-not patch/repackage it or try to pass new switches to its installer. Build and
-qualify a new artifact containing the reviewed implementation first.
+Each plan receipt records source commit, target identity, SQL/report hash and
+binary DACPAC digest. Same-source builds can change `Origin.xml` packaging
+metadata; ZIP/manifest/DACPAC integrity is still checked independently for
+every exact tested artifact.
 
-SqlPackage documents the separate non-executing
+Optional plan-only diagnostics remain available on a permitted test tag:
+
+```text
+gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref <reviewed-test-tag> -f deploy_test_iis=true -f test_sql_plan_only=true -f force_full_ci=true
+```
+
+This reads the target and writes plan files only. It does not execute pre/post
+SQL, change recovery, stop/start IIS, replace web files, or record deployment
+success. It works while the persistent setting is either enabled or disabled.
+`-ValidateOnly` remains package-only and does not read host configuration.
+The test.26 ZIP predates this setting: build/qualify the updated installer;
+do not patch/repackage an old artifact.
+
+SqlPackage documents the non-executing
 [Script action](https://learn.microsoft.com/en-us/sql/tools/sqlpackage/sqlpackage-script?view=sql-server-ver17)
 and the scope of
 [BlockOnPossibleDataLoss](https://learn.microsoft.com/en-us/sql/tools/sqlpackage/sqlpackage-publish?view=sql-server-ver17).

@@ -225,6 +225,7 @@ function New-DeploymentTemplate {
     return [ordered]@{
         IisSiteName = 'ASAP'
         IisAppPoolName = 'ASAP'
+        AllowSqlDataLoss = $false
         DeploymentPath = 'D:\Sites\ASAP'
         StagingRoot = Join-Path $HostRoot 'Staging'
         BackupRoot = Join-Path $HostRoot 'Backups'

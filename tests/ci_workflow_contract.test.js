@@ -219,73 +219,69 @@ async function main() {
     assert.deepEqual(deploy['runs-on'], ['self-hosted', 'windows', 'x64', 'asap-test-iis']);
     assert.equal(deploy.environment, 'asap-test-iis');
   });
-  await check('SQL data-loss inputs default protected and remain scoped to the test activation job', () => {
-    for (const name of ['test_sql_plan_only', 'allow_test_sql_data_loss']) {
-      assert.deepEqual(workflow.on.workflow_dispatch.inputs[name].type, 'boolean');
-      assert.equal(workflow.on.workflow_dispatch.inputs[name].default, false);
-    }
-    assert.equal(workflow.on.workflow_dispatch.inputs.reviewed_test_sql_plan_sha256.default, '');
+  await check('persistent DEV policy is host-owned and tag deployment needs no override input', () => {
+    assert.equal(workflow.on.workflow_dispatch.inputs.allow_test_sql_data_loss, undefined);
+    assert.equal(workflow.on.workflow_dispatch.inputs.reviewed_test_sql_plan_sha256, undefined);
+    assert.equal(workflow.on.workflow_dispatch.inputs.test_sql_plan_only.type, 'boolean');
+    assert.equal(workflow.on.workflow_dispatch.inputs.test_sql_plan_only.default, false);
     const activation = step(deploy, 'Deploy exact tested artifact');
-    assert.equal(activation.env.ALLOW_SQL_DATA_LOSS, '${{ toJSON(inputs.allow_test_sql_data_loss) }}');
-    assert.equal(activation.env.SQL_DATA_LOSS_TARGET, '${{ vars.ASAP_TEST_SQL_DATA_LOSS_TARGET }}');
+    assert.equal(activation.env.ALLOW_SQL_DATA_LOSS, undefined);
+    assert.equal(activation.env.SQL_DATA_LOSS_TARGET, undefined);
+    assert.doesNotMatch(activation.run, /AllowSqlDataLoss|ReviewedSqlPlan|ExpectedSqlDataLossTarget/);
+    assert.match(activation.run, /SqlPlanOnly = \$planOnly/);
+    assert.match(activation.run, /SqlPlanOutputDirectory = Join-Path/);
+    const installer = fs.readFileSync(path.join(root, 'scripts/deployment/Deploy-AsapTest.ps1'), 'utf8');
+    assert.match(installer, /Get-DevSqlOverrideSettings -Configuration \$config/);
+    assert.match(installer, /\$allowSqlDataLoss = \$hostConfig\.AllowSqlDataLoss/);
+    assert.match(installer, /remains enabled across test tags until the environment setting is disabled/);
+    assert.match(installer, /Equals\('DEVWEB'/);
+    assert.match(installer, /Equals\('devasap\.clcohio\.org'/);
     for (const job of [full, draft]) {
-      assert.doesNotMatch(JSON.stringify(job), /allow_test_sql_data_loss|SqlDataLossTarget|AllowSqlDataLoss|reviewed_test_sql_plan/);
+      assert.doesNotMatch(JSON.stringify(job), /AllowSqlDataLoss|SqlDataLossTarget|reviewed_test_sql_plan/);
     }
-    const plans = step(deploy, 'Upload candidate or approved SQL plan');
-    assert.match(plans.if, /always\(\)/, 'Rejected changed plans must still be reviewable');
+    const plans = step(deploy, 'Upload deployment SQL plan');
+    assert.equal(plans.if, '$' + '{{ always() }}', 'Tag plans and rejected plans must both be retained');
     assert.equal(plans.uses, 'actions/upload-artifact@v4');
     assert.ok(activation.run.indexOf('Read-RunBoolean') < activation.run.indexOf('Resolve-Path .artifacts'));
   });
-  await check('actual PowerShell input guards reject strings, pushes, production tags and missing plan review before artifact or host access', () => {
+  await check('actual PowerShell tag routing is input-free and malformed or non-test plan diagnostics fail before host access', () => {
     const activation = step(deploy, 'Deploy exact tested artifact');
-    const guards = activation.run.slice(0, activation.run.indexOf('  $zipPath =') >= 0
-      ? activation.run.indexOf('  $zipPath =') : activation.run.indexOf('$zipPath ='));
-    assert.ok(guards.includes('$sqlOptions = @{}'));
+    const guards = activation.run.slice(0, activation.run.indexOf('$zipPath ='));
     function controls(event, ref, changes = {}) {
       const defaults = Object.fromEntries(Object.entries(workflow.on.workflow_dispatch.inputs).map(([key, input]) => [key, input.default]));
       const context = nonPr(event, 201, ref, { ...(event === 'workflow_dispatch' ? defaults : {}), ...changes });
-      context.vars.ASAP_TEST_SQL_DATA_LOSS_TARGET = '{"machineName":"verified-test-host"}';
       const env = Object.fromEntries(Object.entries(activation.env).map(([key, value]) => [key, template(value, {
-        ...context, needs: { 'build-test-package': { outputs: { zip_sha256: 'b'.repeat(64), deployment_label: 'manual-main' } } }
+        ...context, needs: { 'build-test-package': { outputs: { zip_sha256: 'b'.repeat(64), deployment_label: 'v1.0.0-test.27' } } }
       })]));
       const run = cp.spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-EncodedCommand', Buffer.from(
-        `${guards}\n$sqlOptions | ConvertTo-Json -Compress`, 'utf16le').toString('base64')], {
+        guards + '\n$sqlOptions | ConvertTo-Json -Compress', 'utf16le').toString('base64')], {
         encoding: 'utf8', env: { ...process.env, ...env, GITHUB_EVENT_NAME: event, GITHUB_REF: ref,
           GITHUB_RUN_ID: '201', GITHUB_RUN_ATTEMPT: '1', RUNNER_TEMP: require('node:os').tmpdir() }
       });
       assert.ifError(run.error);
       return run;
     }
-    const hash = 'a'.repeat(64);
-    for (const event of ['push', 'workflow_dispatch']) {
-      const protectedRun = controls(event, event === 'push' ? 'refs/tags/v1.0.0-test.26' : 'refs/heads/main');
-      assert.equal(protectedRun.status, 0, protectedRun.stderr);
-      assert.deepEqual(JSON.parse(protectedRun.stdout), {}, 'Default runs must pass no opt-in switches');
-    }
-    for (const ref of ['refs/heads/main', 'refs/tags/v1.0.0-test.27']) {
+    for (const ref of ['refs/tags/v1.0.0-test.27', 'refs/tags/v1.0.0-test.28']) {
+      const tag = controls('push', ref);
+      assert.equal(tag.status, 0, tag.stderr);
+      const options = JSON.parse(tag.stdout);
+      assert.equal(options.SqlPlanOnly, false);
+      assert.equal(Object.hasOwn(options, 'AllowSqlDataLoss'), false, 'Persistent policy must come only from host deployment.json');
+      assert.ok(options.SqlPlanOutputDirectory);
       const candidate = controls('workflow_dispatch', ref, { deploy_test_iis: true, test_sql_plan_only: true });
       assert.equal(candidate.status, 0, candidate.stderr);
       assert.equal(JSON.parse(candidate.stdout).SqlPlanOnly, true);
-      assert.equal(JSON.parse(candidate.stdout).AllowSqlDataLoss, false);
-      const approved = controls('workflow_dispatch', ref, { deploy_test_iis: true, allow_test_sql_data_loss: true, reviewed_test_sql_plan_sha256: hash });
-      assert.equal(approved.status, 0, approved.stderr);
-      assert.equal(JSON.parse(approved.stdout).AllowSqlDataLoss, true);
-      assert.equal(JSON.parse(approved.stdout).ReviewedSqlPlanSha256, hash);
     }
     for (const bad of ['true', 'false', 'FALSE', '', 0, 1, null, 'false; Write-Output injected']) {
-      assert.notEqual(controls('workflow_dispatch', 'refs/heads/main', { allow_test_sql_data_loss: bad }).status, 0, String(bad));
+      assert.notEqual(controls('workflow_dispatch', 'refs/tags/v1.0.0-test.27', { test_sql_plan_only: bad }).status, 0, String(bad));
     }
-    for (const [event, ref, changes] of [
-      ['push', 'refs/tags/v1.0.0-test.26', { deploy_test_iis: true, allow_test_sql_data_loss: true, reviewed_test_sql_plan_sha256: hash }],
-      ['workflow_dispatch', 'refs/tags/v1.0.0', { deploy_test_iis: true, allow_test_sql_data_loss: true, reviewed_test_sql_plan_sha256: hash }],
-      ['workflow_dispatch', 'refs/pull/1/merge', { deploy_test_iis: true, test_sql_plan_only: true }],
-      ['workflow_dispatch', 'refs/heads/main', { test_sql_plan_only: true }],
-      ['workflow_dispatch', 'refs/heads/main', { deploy_test_iis: true, allow_test_sql_data_loss: true }],
-      ['workflow_dispatch', 'refs/heads/main', { deploy_test_iis: true, test_sql_plan_only: true, allow_test_sql_data_loss: true, reviewed_test_sql_plan_sha256: hash }],
-      ['workflow_dispatch', 'refs/heads/main', { reviewed_test_sql_plan_sha256: hash }],
-      ['workflow_dispatch', 'refs/heads/main', { deploy_test_iis: true, allow_test_sql_data_loss: true, reviewed_test_sql_plan_sha256: `${hash} ` }]
+    for (const [event, ref, inputs] of [
+      ['push', 'refs/tags/v1.0.0-test.27', { test_sql_plan_only: true }],
+      ['workflow_dispatch', 'refs/heads/main', { deploy_test_iis: true, test_sql_plan_only: true }],
+      ['workflow_dispatch', 'refs/tags/v1.0.0', { deploy_test_iis: true, test_sql_plan_only: true }],
+      ['workflow_dispatch', 'refs/tags/v1.0.0-test.27', { test_sql_plan_only: true }]
     ]) {
-      assert.notEqual(controls(event, ref, changes).status, 0, `${event}/${ref}/${JSON.stringify(changes)}`);
+      assert.notEqual(controls(event, ref, inputs).status, 0, event + '/' + ref);
     }
   });
   await check('tag and requested manual deployment tolerate skipped draft but fail closed on bad prerequisites', async () => {

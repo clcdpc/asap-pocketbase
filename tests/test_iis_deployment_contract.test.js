@@ -40,7 +40,8 @@ assert.ok(
   ),
   'workflow concurrency should cancel superseded PR runs and isolate non-PR executions'
 );
-assert.ok(!workflow.includes('\n    concurrency:'), 'build-test-package must not retain job-level concurrency');
+assert.equal(YAML.parse(workflow, { uniqueKeys: true }).jobs['build-test-package'].concurrency, undefined,
+  'build-test-package must not retain job-level concurrency');
 assert.ok(workflow.includes('Generate ephemeral SQL test credentials'), 'CI SQL credentials should be generated per run');
 assert.ok(!workflow.includes('Asap_Slice0_SQL_2026'), 'CI must not retain the historical hard-coded SQL password');
 assert.ok(workflow.includes('ref: ${{ github.sha }}'), 'the hosted job should check out the exact event SHA');
@@ -88,6 +89,8 @@ assert.match(
   'manual workflow dispatch must default to no test-IIS deployment'
 );
 const deployWorkflow = YAML.parse(workflow, { uniqueKeys: true }).jobs['deploy-test-iis'];
+assert.deepEqual(deployWorkflow.concurrency, { group: 'asap-test-iis', 'cancel-in-progress': false },
+  'IIS activation must be serialized without interrupting a running SQL deployment');
 const deployCondition = deployWorkflow.if;
 assert.match(deployCondition, /!\s*cancelled\(\)/,
   'the deployment gate must not inherit skipped draft-validation status');
