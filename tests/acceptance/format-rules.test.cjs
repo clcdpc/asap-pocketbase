@@ -163,6 +163,14 @@ test('format cards retain complete drafts and use the actual container width at 
     `Delete Configured Book (${draftCode}) format rule`]) {
     assert.equal(await customCard.getByRole('button', { name, exact: true }).getAttribute('title'), name);
   }
+  await code.fill('book'); await code.press('Tab');
+  await customMaterial.getByRole('button', { name: 'Move up', exact: true }).click();
+  const redrawnCode = page.locator('#material-formats-editor [data-format-id=""] input[type="text"]').first();
+  await redrawnCode.fill('recovered_after_reorder'); await redrawnCode.press('Tab');
+  assert.equal(await retainedCustom.evaluate(node => node.isConnected && node.dataset.ruleCode), 'recovered_after_reorder');
+  assert.equal(await customCard.locator('[data-rule-toggle]').getAttribute('aria-controls'), panelId);
+  assert.equal(await customTitle.inputValue(), 'Unsaved custom title');
+  assert.equal(await page.evaluate(() => window.editors.collect().values.rules.some(rule => rule.code === 'book')), true);
   await retainedCustom.dispose();
   assert.deepEqual(errors, []);
   assert.deepEqual(external, []);

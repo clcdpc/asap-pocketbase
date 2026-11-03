@@ -664,6 +664,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   // Disclosure state never participates in the settings snapshot or payload.
   const expandedRuleCodes = new Set();
   const rulePanelIds = new Map();
+  const formatRuleDraftCodes = new WeakMap();
 
   function currentOrganizationId() {
     const value = property(state.data, 'orgId');
@@ -1065,7 +1066,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         'data-format-id': value.id || '',
         'data-format-owner': value.ownerOrganizationId,
         'data-format-version': value.version || '',
-        'data-format-sort-order': value.sortOrder
+        'data-format-sort-order': value.sortOrder,
+        'data-format-rule-code': formatRuleDraftCodes.get(value) ?? value.code
       }, [
         field('Code', code),
         field('Label', label),
@@ -1083,7 +1085,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       };
       listen(label, 'input', refreshNames);
       listen(label, 'change', refreshNames);
-      let ruleCode = value.code;
+      let ruleCode = row.dataset.formatRuleCode;
       listen(code, 'change', () => {
         const nextCode = clean(code.value);
         const formats = readFormats();
@@ -1113,6 +1115,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
           refreshRuleFormatName(rule);
         }
         ruleCode = nextCode;
+        row.dataset.formatRuleCode = nextCode;
       });
       if (!state.system && !custom) {
         listen(override.input, 'change', () => {
@@ -1152,6 +1155,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         overridden: state.system || owner === currentOrganizationId() || Boolean(override?.checked),
         reset: !state.system && owner !== currentOrganizationId() && Boolean(override) && !override.checked
       };
+      // Carry the rule association through intentional Material formats
+      // redraws without adding presentation metadata to snapshots or payloads.
+      formatRuleDraftCodes.set(result, row.dataset.formatRuleCode);
       return result;
     });
   }

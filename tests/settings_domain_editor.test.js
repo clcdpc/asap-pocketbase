@@ -545,6 +545,16 @@ const axe = require('axe-core');
     assert.deepStrictEqual([...customCard.querySelectorAll('.settings-row-actions button')].map(button => [button.title, button.getAttribute('aria-label')]),
       ['Move Book (unique_draft) up', 'Move Book (unique_draft) down', 'Delete Book (unique_draft) format rule'].map(name => [name, name]));
     assert.strictEqual(root.querySelector('#material-formats-editor input').readOnly, true);
+    const bookBeforeRedraw = card('book');
+    change(customCode, 'book');
+    customFormat.querySelector('[aria-label="Move up"]').click();
+    const redrawnCode = root.querySelector('#material-formats-editor [data-format-id=""] input');
+    change(redrawnCode, 'recovered_after_reorder');
+    assert.strictEqual(card('book'), bookBeforeRedraw);
+    assert.strictEqual(card('recovered_after_reorder'), customCard,
+      'A draft format retains its own rule identity across an invalid code and a Material formats redraw.');
+    assert.strictEqual(customCard.querySelector('[data-format-label="title"]').value, 'Custom unsaved title');
+    assert.ok(!draftIdentity.collect().values.rules.some(rule => rule.code === 'unique_draft'));
     draftIdentity.populate(accordionData, false);
     assert.strictEqual(draftIdentity.collect().changed, false);
     draftIdentity.dispose();
