@@ -35,7 +35,7 @@ the parent Codex session.
 | 11 | #435 | SQL 18/18 and complete Staff 74 states/16 roster flags/eight native proofs PASS; final owned-fixture correction passes five-case SQL regression below | Luna MAX / Astra HIGH clear; Terra actual desktop/mobile/dark/native renders clear; final fixture delta independently reviewed | `3054851`, corrections in #406/#436 and final SQL audit below |
 | 12 | #406 | Filter/counts/preserved drafts; complete Staff PASS; final shared notice/pointer/focus checks PASS in #436 | Luna MAX / Astra HIGH clear; Terra actual major and eight native renders clear | `a8c0e7d`, corrections in #436 |
 | 13 | #433 | SQL/browser 2/2 PASS, 14 states; Library summary contrast corrected and rechecked in #436 R1 | Luna MAX / Astra HIGH clear; Terra actual groups and both summaries clear | `99469b7`, contrast correction in #436 |
-| 14 | #436 | Focused R3 and Node checks PASS; carried 436-6 independently reproduced and corrected as C438-1 in the final integrated audit below | Luna MAX / Astra HIGH / Terra MAX issue reviews clear; fresh Astra XHIGH verifies final keyboard correction | `7d1b247`, `ba2cb6f` |
+| 14 | #436 | Focused native history/focus PASS; final C438-1 keyboard and C438-4 reopened-picker corrections have actual passing application receipts below | Luna MAX / Astra HIGH / Terra MAX issue reviews clear; fresh Astra XHIGH independently verifies final corrections | `7d1b247`, `ba2cb6f`, final picker correction below |
 | 15 | #391 | Actual before/after spacing; seven Node files, Settings/native R2 and final Presentation R3 PASS; supplemental visible-logo/Library-roster results tracked in PR #454 | Luna MAX source and Terra MAX actual matrix clear; integrated results remain separately identified | `406b0ca` |
 
 ## Environment and integration
@@ -1239,3 +1239,60 @@ Final C438-2 disposition requires successful execution of the complete same
 population; its final-revision receipt, remaining integrated gates and independent
 closure review are maintained in PR #454. Final results are recorded there so
 result-only documentation edits do not change the tested source revision.
+
+## Final Browser audit — reopened picker scroll
+
+The complete Browser run at `8f9a8aa` executes all 46 exact selected UIDs once:
+**44 PASS / two FAIL / zero skipped**, 956.294s wall. Its failed receipt remains
+`results/i438-final-r2-browser-failed.trx`, with log and parsed summary. One
+failure is the separate Staff cleanup-feedback gap; **C438-4 P3** is Campaign2's
+library editor restoring textarea scroll to 989px instead of its current 80px.
+Its page position, 1087px, remains unchanged. Source-component passes did not
+convert that failed application journey into a pass.
+
+Independent source traces and real-source Chromium probes reproduce the stale
+pre-blur cache. Scrolling an unfocused editor dismisses the picker; reopening it
+with unchanged text/selection could reuse its older field view. The before probe
+observes the application choosing Body 988 after current 80, and Subject 47 after
+a deliberate horizontal move to 100, still wrong after two frames. The one-pixel
+Body difference from Kestrel reflects the component geometry, not a tolerance
+change. Ordinary Subject blur 47-to-0 recovery and page-scroll reopening already
+pass. Actual before/after traces and PNGs are retained in `c438-4-before` and
+`c438-4-after` outside Git.
+
+The two-line production correction limits pre-blur caching to single-line inputs
+and retires the saved view on genuine control scrolling after the existing
+equal-anchor queued-event return. Native editing, RAF behavior, ownership/context,
+selection checks and page handling remain unchanged. Existing Node and component
+tests add the observed dismiss/reopen paths without weakening Campaign2's strict
+scroll assertion. Focused Node RED-to-GREEN and template-editor checks PASS.
+Four isolated profiles pass 32 existing history paths, eight existing scroll
+paths, 16 new reopen cases with Undo/Redo and exact settled state, 74 focus proofs,
+zero serious/critical axe findings, valid images and no overflow. Luna MAX and
+Astra XHIGH independently clear the actual source and before/after evidence.
+
+Actual real-SQL application qualification preserves each invocation's outcome:
+
+- `c438-4-browser-r1`: both Campaign2 variants PASS (52.920s and 51.301s), with
+  the original scroll assertion unchanged. Presentation FAILS before pointerdown
+  while arranging its existing edge-click fixture. The three-case report remains
+  **two PASS / one FAIL / zero skipped**, 393.820s wall.
+- The setup probe records the actual queued checkbox-focus reveal undoing the
+  deliberate Cancel-edge arrangement, reproducing the exact failed y1059.4375.
+  A test-only two-frame settle before that arrangement fixes its ordering. All
+  post-arrangement bounds, stationary pointerdown/up and single-click checks
+  remain unchanged; no focus or scroll is repaired after the action. Both
+  independent reviewers clear this narrow fixture correction and actual trace.
+- `c438-4-presentation-r2`: PASS **1/1, zero failures/skips**, 294.166s wall
+  (292.314s case). Actual folder:
+  `staff-presentation-0efd4a4a036243a78bee577293d6e83d`. This gives passing actual
+  receipts for all three unique owners across the recorded invocations; it does
+  not relabel the earlier failed report.
+
+Production module SHA-256 is
+`607fab0db96243124db59cf5fb4387b76a2e5c3bb769b6ab3accb490ff5a0efd`;
+the final component helper is
+`e4fe624041e6f25f9f9c19ec701dd0cfaa5b4c66ec6a1ba2d721b4d71e69cddc`.
+The cleanup-feedback CSS remains unchanged for the separate final spacing fix.
+Complete final-revision Browser/acceptance/CI results and final C438-4 disposition
+remain bound to the tested revision in PR #454.

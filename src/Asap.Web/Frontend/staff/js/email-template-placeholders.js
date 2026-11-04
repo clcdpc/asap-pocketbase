@@ -217,7 +217,7 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
     listen(control, 'blur', () => {
       // blur runs before Chromium resets a single-line input's scrollLeft;
       // focusout runs after that reset. Keep this view owned by the same draft.
-      entry.scrollBeforeBlur = editable(entry) ? { context: captureContext(), value: control.value,
+      entry.scrollBeforeBlur = control.localName === 'input' && editable(entry) ? { context: captureContext(), value: control.value,
         start: control.selectionStart, end: control.selectionEnd, scrollTop: control.scrollTop, scrollLeft: control.scrollLeft } : null;
     });
     listen(control, 'input', () => { entry.scrollBeforeBlur = null; });
@@ -422,6 +422,7 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
         view.scrollX === saved.pageX && view.scrollY === saved.pageY) return;
     if (event.target === saved.entry.control && saved.entry.control.scrollTop === saved.anchorScrollTop &&
         saved.entry.control.scrollLeft === saved.anchorScrollLeft) return;
+    if (event.target === saved.entry.control) saved.entry.scrollBeforeBlur = null;
     const pickerHadFocus = saved.entry.popup.contains(document.activeElement);
     clear();
     if (pickerHadFocus && editable(saved.entry)) saved.entry.trigger.focus({ preventScroll: true });

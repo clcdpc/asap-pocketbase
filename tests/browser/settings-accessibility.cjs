@@ -76,6 +76,90 @@ async function clampedHorizontalMaximum(control) {
   });
 }
 
+async function pickerScrollReopen(page, captureView) {
+  const receipts = [];
+  const body = page.locator('#email-purchase-approved-body'), subject = page.locator('#email-purchase-approved-subject');
+  const trigger = control => control.locator('xpath=..').locator('.template-placeholder-trigger');
+  const snapshot = control => control.evaluate(node => ({ value: node.value, selection: [node.selectionStart, node.selectionEnd],
+    page: [scrollX, scrollY], field: [node.scrollTop, node.scrollLeft], active: document.activeElement === node }));
+  const frames = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const open = async control => {
+    await trigger(control).click();
+    assert.equal(await trigger(control).getAttribute('aria-expanded'), 'true');
+  };
+  const dismissed = async control => {
+    await page.waitForFunction(id => document.querySelector(`[aria-controls="${id}-placeholders"]`).getAttribute('aria-expanded') === 'false',
+      await control.getAttribute('id'));
+    assert.equal(await trigger(control).evaluate(node => node === document.activeElement), true);
+  };
+  const insert = async (control, name, expectedField = null) => {
+    const id = await control.getAttribute('id');
+    await page.locator(`#${id}-placeholders [data-placeholder-key="title"]`).focus();
+    const before = await snapshot(control);
+    const value = `${before.value.slice(0, before.selection[0])}{{title}}${before.value.slice(before.selection[1])}`;
+    await page.keyboard.press('Enter');
+    const after = await snapshot(control);
+    assert.equal(after.value, value);
+    assert.deepEqual(after.selection, [before.selection[0] + 9, before.selection[0] + 9]);
+    assert.equal(after.active, true);
+    assert.deepEqual(after.page, before.page, `${name}: retain the post-opening page view`);
+    assert.deepEqual(after.field, expectedField || before.field, `${name}: retain the current owned field view`);
+    // Observe the natural settled result before any other editing action.
+    await frames();
+    const settled = await snapshot(control);
+    assert.deepEqual(settled, after, `${name}: the restored view remains settled without test repair`);
+    const screenshot = await captureView(name);
+    await page.keyboard.press('Control+Z'); assert.equal(await control.inputValue(), before.value);
+    assert.deepEqual(await control.evaluate(node => [node.selectionStart, node.selectionEnd]), before.selection);
+    await page.keyboard.press('Control+Shift+Z'); assert.equal(await control.inputValue(), value);
+    receipts.push({ name, before, after, settled, screenshot, nativeHistory: true });
+  };
+  await page.locator('[data-template-key="purchase_approved"] [data-template-toggle]').click();
+  await body.fill(Array.from({ length: 50 }, (_, index) => `Line ${index} & é`).join('\n'));
+  await body.evaluate(node => node.setSelectionRange(0, 0));
+  assert.ok((await snapshot(body)).field[0] > 80, 'The Body starts with a distinct pre-blur scroll position.');
+  await open(body);
+  const bodyBeforeScroll = await snapshot(body);
+  await body.evaluate(node => { node.scrollTop = 80; });
+  await dismissed(body);
+  assert.equal(await body.inputValue(), bodyBeforeScroll.value, 'Field scrolling never changes the Body draft.');
+  await open(body);
+  assert.equal((await snapshot(body)).field[0], 80);
+  await insert(body, 'body-scroll-reopen');
+
+  const prepareSubject = async () => {
+    await subject.fill('Long subject '.repeat(60)); await subject.press('Home');
+    await subject.evaluate(node => { node.setSelectionRange(8, 16); node.scrollLeft = 47; });
+    assert.equal((await snapshot(subject)).field[1], 47);
+    await trigger(subject).focus();
+    assert.equal((await snapshot(subject)).field[1], 0, 'The native single-line blur really resets its horizontal view.');
+    await open(subject);
+  };
+  await prepareSubject();
+  await subject.evaluate(node => node.dispatchEvent(new Event('scroll')));
+  await frames();
+  assert.equal(await trigger(subject).getAttribute('aria-expanded'), 'true', 'A queued blur reset still matches the picker anchor.');
+  await insert(subject, 'subject-blur-reopen', [0, 47]);
+
+  await prepareSubject();
+  const subjectBeforeScroll = await snapshot(subject);
+  await subject.evaluate(node => { node.scrollLeft = 100; });
+  await dismissed(subject);
+  assert.equal(await subject.inputValue(), subjectBeforeScroll.value, 'Field scrolling never changes the Subject draft.');
+  await open(subject);
+  assert.equal((await snapshot(subject)).field[1], 100);
+  await insert(subject, 'subject-field-scroll-reopen');
+
+  await prepareSubject();
+  const pageBeforeScroll = await snapshot(subject);
+  await page.evaluate(() => scrollBy(0, scrollY > 0 ? -Math.min(60, scrollY) : 60));
+  await dismissed(subject);
+  assert.notDeepEqual((await snapshot(subject)).page, pageBeforeScroll.page, 'The page really moves before reopening.');
+  await open(subject);
+  await insert(subject, 'subject-page-scroll-reopen', [0, 47]);
+  return receipts;
+}
+
 async function nativeHistory(page, { panel, id, trigger, option }, selection) {
   await page.locator(`#settings-nav-${panel}`).click();
   if (panel === 'templates') await page.locator('[data-template-key="suggestion_submitted"] [data-template-toggle]').click();
@@ -393,6 +477,7 @@ async function runSourceComponents(artifacts) {
         if (id.endsWith('body')) assert.deepEqual(after, before, `${id}: preserve nonzero field and page scroll`);
         receipt.scrollCases.push({ id, before, after, horizontal });
       }
+      receipt.pickerScrollReopen = await pickerScrollReopen(page, captureView);
       await page.evaluate(() => window.accessibilitySettings.discardDraft());
       await page.locator('[data-template-key="suggestion_submitted"] [data-template-toggle]').press('Enter');
       await page.locator('#email-submit-subject').focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
@@ -444,6 +529,8 @@ async function runSourceComponents(artifacts) {
       await page.locator('#staff-add-toggle').click(); // Give the edge-click setup page scroll room at desktop height too.
       await email.fill('pointer-draft@example.org');
       await page.evaluate(() => document.getElementById('staff-show-inactive').focus({ preventScroll: true }));
+      // Settle the setup focus reveal before arranging the pointer target.
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       // Arrange a visible lower edge before pointerdown. Nothing scrolls or
       // refocuses the target between the real pointerdown and pointerup.
       await rowCancel.evaluate(node => scrollBy(0, node.getBoundingClientRect().bottom - innerHeight));
