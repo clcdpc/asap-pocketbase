@@ -77,6 +77,33 @@ async function main() {
     assert.equal(matches.length, 1, name);
     return matches[0];
   }
+  async function currentMain(context, headSha = context.github.sha) {
+    const current = step(gate, 'Check automatic main deployment before queuing');
+    const outputs = {};
+    let summary = '';
+    const [owner, repo] = context.github.repository.split('/');
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    await new AsyncFunction('context', 'github', 'core', current.with.script)(
+      { sha: context.github.sha, repo: { owner, repo } },
+      { rest: { git: { getRef: async (parameters) => {
+        assert.deepEqual(parameters, { owner, repo, ref: 'heads/main' });
+        if (headSha instanceof Error) { throw headSha; }
+        return { data: { object: { sha: headSha } } };
+      } } } },
+      { setOutput: (key, value) => { outputs[key] = value; }, notice: () => {},
+        summary: { addRaw: (value) => { summary += value; return { write: async () => {} }; } } }
+    );
+    context.needs.validation = { result: 'success', outputs };
+    return summary;
+  }
+  function validateConcurrency(candidate) {
+    assert.deepEqual(candidate.jobs['deploy-test-iis'].concurrency,
+      { group: 'asap-test-iis', 'cancel-in-progress': false, queue: 'max' });
+    assert.equal(candidate.concurrency.queue, undefined, 'Native queue is authorized only for IIS activation');
+    for (const [name, job] of Object.entries(candidate.jobs)) {
+      if (name !== 'deploy-test-iis') { assert.equal(job.concurrency?.queue, undefined, `Unexpected queue in ${name}`); }
+    }
+  }
   const bash = process.platform === 'win32'
     ? path.resolve(cp.execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(), '../../../bin/bash.exe')
     : 'bash';
@@ -189,7 +216,7 @@ async function main() {
     context.inputs.deploy_test_iis = false;
     assert.equal(enabled(deploy, context), false);
   });
-  await check('main pushes validate; test tags retain gated deployment eligibility', async () => {
+  await check('successful current main pushes and test tags retain gated deployment eligibility', async () => {
     const push = nonPr('push', 106);
     const tag = nonPr('push', 107, 'refs/tags/v1.2.3-test.1');
     for (const context of [push, tag]) {
@@ -198,9 +225,10 @@ async function main() {
       context.needs['build-test-package'] = { result: 'success' };
       context.needs['draft-validation'] = { result: 'skipped' };
       context.needs.validation = { result: 'success' };
+      if (context === push) { await currentMain(context); }
       assert.equal(enabled(full, context), true);
     }
-    assert.equal(enabled(deploy, push), false);
+    assert.equal(enabled(deploy, push), true);
     assert.equal(enabled(deploy, tag), true);
     const release = await routed(nonPr('push', 112, 'refs/tags/v1.2.3'));
     release.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
@@ -217,7 +245,142 @@ async function main() {
     assert.doesNotMatch(deploy.if, /\balways\(\)/);
     assert.equal(deploy['continue-on-error'], undefined);
     assert.deepEqual(deploy['runs-on'], ['self-hosted', 'windows', 'x64', 'asap-test-iis']);
-    assert.equal(deploy.environment, 'asap-test-iis');
+    assert.deepEqual(deploy.environment, { name: 'asap-test-iis', deployment: false });
+    assert.equal(template(full.env.ASAP_DEPLOY_TEST_IIS, push), 'false', 'Automatic deployment must preserve trusted test reuse rather than force fresh tests');
+  });
+  await check('automatic authorization rejects arbitrary branches, PRs and unsuccessful or absent main freshness', async () => {
+    for (const context of [
+      await routed(nonPr('push', 140, 'refs/heads/other')),
+      await routed(pr('ready_for_review', false)),
+      await routed(nonPr('pull_request_target', 141))
+    ]) {
+      context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
+      context.inputs.deploy_test_iis = true;
+      context.needs['build-test-package'] = { result: 'success' };
+      context.needs.validation = { result: 'success', outputs: { automatic_current: 'true' } };
+      assert.equal(enabled(deploy, context), false);
+    }
+    const context = await routed(nonPr('push', 142));
+    context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
+    context.needs['build-test-package'] = { result: 'success' };
+    for (const value of [undefined, '', 'false', 'unknown']) {
+      context.needs.validation = { result: 'success', outputs: { automatic_current: value } };
+      assert.equal(enabled(deploy, context), false, `main freshness ${value}`);
+    }
+  });
+  await check('actual hosted main-head check skips superseded artifacts before allocating IIS and fails closed on API errors', async () => {
+    const context = await routed(nonPr('push', 143));
+    context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
+    context.needs['build-test-package'] = { result: 'success' };
+    const current = step(gate, 'Check automatic main deployment before queuing');
+    assert.equal(enabled(current, context), true);
+    assert.equal(await currentMain(context), '');
+    assert.equal(enabled(deploy, context), true);
+    const summary = await currentMain(context, 'b'.repeat(40));
+    assert.equal(enabled(deploy, context), false);
+    assert.match(summary, /Status: Skipped.*no activation/);
+    assert.match(summary, /test-aaaaaaaaaaaa/);
+    await assert.rejects(currentMain(context, new Error('API unavailable')), /API unavailable/);
+    await assert.rejects(currentMain(context, 'short-sha'), /full commit SHA/);
+    for (const other of [nonPr('workflow_dispatch', 144), nonPr('push', 145, 'refs/tags/v1.0.0-test.1'), pr('opened', false)]) {
+      other.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
+      assert.equal(enabled(current, other), false, 'Intentional manual/tag and PR work must not inherit automatic freshness');
+    }
+    context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'false';
+    assert.equal(enabled(current, context), false);
+  });
+  await check('bounded native deployment queue retains rapid merges and never cancels active activation', () => {
+    validateConcurrency(workflow);
+    for (const value of ['invalid', true, false, 0, 100, null, undefined]) {
+      const changed = structuredClone(workflow);
+      changed.jobs['deploy-test-iis'].concurrency.queue = value;
+      assert.throws(() => validateConcurrency(changed));
+    }
+    for (const location of ['workflow', 'full']) {
+      const changed = structuredClone(workflow);
+      const owner = location === 'workflow' ? changed : changed.jobs['build-test-package'];
+      owner.concurrency = { ...(owner.concurrency || {}), queue: 'max' };
+      assert.throws(() => validateConcurrency(changed));
+    }
+    const changed = structuredClone(workflow);
+    changed.jobs['deploy-test-iis'].concurrency['cancel-in-progress'] = true;
+    assert.throws(() => validateConcurrency(changed));
+    const lint = fs.readFileSync(path.join(root, 'scripts/ci/check-workflows.sh'), 'utf8');
+    assert.match(lint, /-ignore '\^unexpected key "queue" for "concurrency" section/);
+    assert.equal((lint.match(/-ignore /g) || []).length, 1, 'Only the pinned linter missing queue key may be suppressed');
+  });
+  await check('actual PowerShell identity derives deterministic lowercase main labels and preserves explicit tags', () => {
+    const identity = step(full, 'Determine exact artifact identity');
+    const temporary = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'asap-workflow-identity-'));
+    const commit = '8f3c2a1d92b456789012345678901234567890ab';
+    function identify(event, ref, refType, checkedOut = commit, expected = commit) {
+      const output = path.join(temporary, `output-${Math.random()}`);
+      const run = cp.spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-EncodedCommand', Buffer.from(
+        `function git { if (($args -join ' ') -cne 'rev-parse HEAD') { throw 'Unexpected git command' }; $env:FIXTURE_COMMIT }\n${identity.run}\nGet-Content -LiteralPath $env:GITHUB_OUTPUT -Raw`, 'utf16le').toString('base64')], {
+        encoding: 'utf8', env: { ...process.env, GITHUB_OUTPUT: output, GITHUB_SHA: expected, FIXTURE_COMMIT: checkedOut,
+          GITHUB_EVENT_NAME: event, GITHUB_REF: ref, GITHUB_REF_TYPE: refType, GITHUB_REF_NAME: ref.replace(/^refs\/(heads|tags)\//, '') }
+      });
+      assert.ifError(run.error);
+      return { run, values: Object.fromEntries(run.stdout.trim().split(/\r?\n/).map((line) => line.split('='))) };
+    }
+    try {
+      for (const event of ['push', 'workflow_dispatch']) {
+        for (const checkedOut of [commit, commit.toUpperCase()]) {
+          const { run, values } = identify(event, 'refs/heads/main', 'branch', checkedOut);
+          assert.equal(run.status, 0, run.stderr);
+          assert.equal(values.deployment_label, 'test-8f3c2a1d92b4');
+          assert.equal(values.commit, commit);
+        }
+      }
+      for (const tag of ['v1.2.0-test.28', 'v1.2.0']) {
+        const { run, values } = identify('push', `refs/tags/${tag}`, 'tag');
+        assert.equal(run.status, 0, run.stderr);
+        assert.equal(values.deployment_label, tag);
+        assert.equal(values.commit, commit);
+      }
+      assert.equal(identify('workflow_dispatch', 'refs/heads/other', 'branch').values.deployment_label, 'manual-other');
+      assert.notEqual(identify('push', 'refs/heads/main', 'branch', 'c'.repeat(40)).run.status, 0, 'Mismatched checked-out commit must fail');
+      assert.equal(full.outputs.commit, '${{ steps.identity.outputs.commit }}');
+      const packaging = step(full, 'Create exact test-IIS deployment ZIP');
+      assert.equal(packaging.env.TESTED_COMMIT, '${{ steps.identity.outputs.commit }}');
+      assert.match(packaging.run, /commitSha = \$env:TESTED_COMMIT/);
+      assert.equal(step(deploy, 'Deploy exact tested artifact').env.EXPECTED_COMMIT_SHA, '${{ needs.build-test-package.outputs.commit }}');
+      assert.doesNotMatch(full.steps.map((candidate) => candidate.run || '').join('\n'), /git tag|AssemblyVersion|InformationalVersion|\/p:Version/);
+    } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+  });
+  await check('actual deployment summary distinguishes new activation, idempotency, skips, diagnostics and failures', () => {
+    const summary = step(deploy, 'Summarize test-IIS deployment');
+    assert.equal(summary.if, '${{ always() }}');
+    assert.deepEqual(deploy.environment, { name: 'asap-test-iis', deployment: false },
+      'Environment protections remain while implicit green deployment records cannot misreport a skipped activation');
+    const temporary = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'asap-deployment-summary-'));
+    try {
+      for (const [outcome, status, expected] of [
+        ['success', 'deployed', 'Success'],
+        ['success', 'already-deployed', 'Already deployed and healthy (no new activation)'],
+        ['success', 'skipped', 'Skipped (superseded; no activation)'],
+        ['success', 'plan-only', 'SQL plan only (no activation)'],
+        ['failure', 'deployed', 'Failure'],
+        ['cancelled', '', 'Failure'],
+        ['skipped', '', 'Failure']
+      ]) {
+        const output = path.join(temporary, `${outcome}-${status}.md`);
+        const context = nonPr('push', 157);
+        context.needs = { 'build-test-package': { outputs: { commit: context.github.sha, deployment_label: 'test-aaaaaaaaaaaa' } } };
+        context.steps = { activate: { outcome, outputs: { deployment_status: status, deployment_reason: 'fixture reason', deployment_source: 'automatic' } } };
+        const env = Object.fromEntries(Object.entries(summary.env).map(([key, value]) => [key, template(value, context)]));
+        const run = cp.spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-EncodedCommand', Buffer.from(summary.run, 'utf16le').toString('base64')], {
+          encoding: 'utf8', env: { ...process.env, ...env, GITHUB_STEP_SUMMARY: output, GITHUB_RUN_ID: '157' }
+        });
+        assert.ifError(run.error);
+        assert.equal(run.status, 0, run.stderr);
+        const markdown = fs.readFileSync(output, 'utf8');
+        for (const text of ['Environment: DEVWEB', 'Deployment: test-aaaaaaaaaaaa', 'Source: Automatic main deployment', `Status: ${expected}`, 'Reason: fixture reason', '/actions/runs/157', `/commit/${context.github.sha}`]) {
+          assert.ok(markdown.includes(text), text);
+        }
+        assert.match(markdown, /Environment: DEVWEB\r?\n\r?\nDeployment:/, 'Summary fields must render as separate paragraphs');
+      }
+    } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
   });
   await check('persistent DEV policy is host-owned and tag deployment needs no override input', () => {
     assert.equal(workflow.on.workflow_dispatch.inputs.allow_test_sql_data_loss, undefined);
@@ -233,7 +396,7 @@ async function main() {
     const installer = fs.readFileSync(path.join(root, 'scripts/deployment/Deploy-AsapTest.ps1'), 'utf8');
     assert.match(installer, /Get-DevSqlOverrideSettings -Configuration \$config/);
     assert.match(installer, /\$allowSqlDataLoss = \$hostConfig\.AllowSqlDataLoss/);
-    assert.match(installer, /remains enabled across test tags until the environment setting is disabled/);
+    assert.match(installer, /remains enabled across authorized test deployments until the environment setting is disabled/);
     assert.match(installer, /Equals\('DEVWEB'/);
     assert.match(installer, /Equals\('devasap\.clcohio\.org'/);
     for (const job of [full, draft]) {
@@ -286,6 +449,7 @@ async function main() {
   });
   await check('tag and requested manual deployment tolerate skipped draft but fail closed on bad prerequisites', async () => {
     for (const context of [
+      nonPr('push', 109),
       nonPr('push', 110, 'refs/tags/v1.0.0-test.23'),
       nonPr('workflow_dispatch', 111, 'refs/heads/codex/wave2-s1-workflow-settings', { deploy_test_iis: true })
     ]) {
@@ -294,6 +458,7 @@ async function main() {
       context.needs['build-test-package'] = { result: 'success' };
       context.needs['draft-validation'] = { result: 'skipped' };
       context.needs.validation = { result: 'success' };
+      if (context.github.ref === 'refs/heads/main') { await currentMain(context); }
       assert.equal(report(context), 0, 'The reporting gate passes with the expected skipped draft branch');
       assert.equal(enabled(deploy, context), true, 'Full CI can deploy despite the skipped draft ancestor');
 
@@ -455,12 +620,13 @@ async function main() {
   });
   await check('the reporter always inspects selected execution and runs no PR code', () => {
     assert.equal(gate.if, '${{ always() }}');
-    assert.deepEqual(gate.permissions, {});
+    assert.deepEqual(gate.permissions, { contents: 'read' });
     assert.deepEqual(gate.needs, ['validation-policy', 'build-test-package', 'draft-validation']);
     assert.equal(gate['runs-on'], 'ubuntu-latest');
-    assert.ok(gate.steps.every((candidate) => !candidate.uses));
+    assert.ok(!gate.steps.some((candidate) => candidate.uses?.startsWith('actions/checkout')));
     assert.equal(gate['continue-on-error'], undefined);
-    assert.equal(gate.steps.length, 1);
+    assert.equal(gate.steps.length, 2);
+    assert.equal(step(gate, 'Check automatic main deployment before queuing').uses, 'actions/github-script@v8');
     const selected = step(gate, 'Require successful selected validation');
     assert.equal(selected.if, undefined);
     assert.equal(selected['continue-on-error'], undefined);

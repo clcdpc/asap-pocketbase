@@ -92,6 +92,7 @@ jobs:
     outputs:
       artifact_name: ${{ steps.identity.outputs.artifact_name }}
       deployment_label: ${{ steps.identity.outputs.deployment_label }}
+      commit: ${{ steps.identity.outputs.commit }}
       zip_sha256: ${{ steps.package.outputs.zip_sha256 }}
 
     steps:
@@ -355,12 +356,19 @@ jobs:
         id: identity
         shell: pwsh
         run: |
-          $commit = (git rev-parse HEAD).Trim()
+          $commit = (git rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($commit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Checked out commit must be a full lowercase SHA.'
+          }
           if ($commit -ne $env:GITHUB_SHA) {
             throw "Checked out commit $commit does not match GITHUB_SHA $env:GITHUB_SHA."
           }
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
             $label = $env:GITHUB_REF_NAME
+          }
+          elseif ($env:GITHUB_REF -ceq 'refs/heads/main' -and $env:GITHUB_EVENT_NAME -cin @('push', 'workflow_dispatch')) {
+            # Test snapshot identity only; application/release versions remain tag-owned.
+            $label = "test-$($commit.Substring(0, 12))"
           }
           else {
             $label = "manual-$($env:GITHUB_REF_NAME)"
@@ -375,6 +383,7 @@ jobs:
         shell: pwsh
         env:
           DEPLOYMENT_LABEL: ${{ steps.identity.outputs.deployment_label }}
+          TESTED_COMMIT: ${{ steps.identity.outputs.commit }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
@@ -429,7 +438,7 @@ jobs:
             schemaVersion = 1
             deploymentKind = 'asap-test-iis'
             versionOrLabel = $env:DEPLOYMENT_LABEL
-            commitSha = $env:GITHUB_SHA
+            commitSha = $env:TESTED_COMMIT
             buildUtc = $buildUtc
             applicationSchemaVersion = 13
             hangfireSchemaVersion = 9
@@ -544,9 +553,12 @@ jobs:
     name: ${{ needs.validation-policy.outputs.mode == 'draft' && 'Draft CI result' || 'Build, test and package' }}
     needs: [validation-policy, build-test-package, draft-validation]
     if: ${{ always() }}
-    permissions: {}
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      automatic_current: ${{ steps.current.outputs.automatic_current }}
     steps:
       # No checkout or PR code executes in this reporting-only hosted job.
       - name: Require successful selected validation
@@ -580,6 +592,31 @@ jobs:
               ;;
           esac
 
+      # Avoid allocating IIS for an already superseded merge. The installer
+      # checks again under deployment concurrency, after downloading the ZIP.
+      - name: Check automatic main deployment before queuing
+        id: current
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { data: head } = await github.rest.git.getRef({ ...context.repo, ref: 'heads/main' });
+            if (!/^[0-9a-f]{40}$/.test(head.object.sha)) {
+              throw new Error('GitHub main head did not contain a full commit SHA.');
+            }
+            const current = head.object.sha === context.sha;
+            core.setOutput('automatic_current', String(current));
+            if (!current) {
+              const reason = `Superseded: current main is ${head.object.sha}; artifact is ${context.sha}.`;
+              core.notice(reason);
+              await core.summary.addRaw([
+                '## Test IIS deployment', '', 'Environment: DEVWEB',
+                `Deployment: test-${context.sha.slice(0, 12)}`,
+                `Commit: [${context.sha}](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${context.sha})`,
+                'Source: Automatic main deployment', 'Status: Skipped (superseded; no activation)', reason, ''
+              ].join('\n\n')).write();
+            }
+
   deploy-test-iis:
     name: Deploy exact artifact to test IIS
     needs: [validation-policy, build-test-package, validation]
@@ -594,14 +631,24 @@ jobs:
         vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' &&
         (
           (github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis) ||
-          (github.event_name == 'push' && needs.validation-policy.outputs.test_tag == 'true')
+          (github.event_name == 'push' && (
+            (github.ref == 'refs/heads/main' && needs.validation.outputs.automatic_current == 'true') ||
+            needs.validation-policy.outputs.test_tag == 'true'
+          ))
         )
       }}
     runs-on: [self-hosted, windows, x64, asap-test-iis]
-    environment: asap-test-iis
+    environment:
+      name: asap-test-iis
+      # Keep environment policy/variables, but report actual installer outcomes
+      # in state + summary: a safe superseded skip is not a new deployment.
+      deployment: false
     concurrency:
       group: asap-test-iis
       cancel-in-progress: false
+      # Keep eligible pending jobs: GitHub's default single pending slot can
+      # replace a newer artifact with a late older workflow before it skips.
+      queue: max
     timeout-minutes: 20
 
     steps:
@@ -612,13 +659,16 @@ jobs:
           path: .artifacts/incoming
 
       - name: Deploy exact tested artifact
+        id: activate
         shell: pwsh
         env:
           EXPECTED_ZIP_SHA256: ${{ needs.build-test-package.outputs.zip_sha256 }}
-          EXPECTED_COMMIT_SHA: ${{ github.sha }}
+          EXPECTED_COMMIT_SHA: ${{ needs.build-test-package.outputs.commit }}
           EXPECTED_DEPLOYMENT_LABEL: ${{ needs.build-test-package.outputs.deployment_label }}
           SQL_PLAN_ONLY: ${{ toJSON(inputs.test_sql_plan_only) }}
           EXPLICIT_TEST_DEPLOYMENT: ${{ toJSON(inputs.deploy_test_iis) }}
+          ASAP_TEST_DEPLOYMENT_ENABLED: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
@@ -635,7 +685,7 @@ jobs:
             throw 'SQL plan-only diagnostics require an explicit manual test-IIS dispatch on a test tag.'
           }
           # The installer reads the persistent, default-off policy from the
-          # DEV host's deployment.json. Tag pushes need no dispatch inputs.
+          # DEV host's deployment.json. Main/tag pushes need no dispatch inputs.
           $sqlOptions = @{
             SqlPlanOnly = $planOnly
             SqlPlanOutputDirectory = Join-Path $env:RUNNER_TEMP "asap-sql-plan-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
@@ -671,3 +721,41 @@ jobs:
           path: ${{ runner.temp }}/asap-sql-plan-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Summarize test-IIS deployment
+        if: ${{ always() }}
+        shell: pwsh
+        env:
+          DEPLOYMENT_LABEL: ${{ needs.build-test-package.outputs.deployment_label }}
+          TESTED_COMMIT: ${{ needs.build-test-package.outputs.commit }}
+          ACTIVATION_OUTCOME: ${{ steps.activate.outcome }}
+          DEPLOYMENT_STATUS: ${{ steps.activate.outputs.deployment_status }}
+          DEPLOYMENT_REASON: ${{ steps.activate.outputs.deployment_reason }}
+          DEPLOYMENT_SOURCE: ${{ steps.activate.outputs.deployment_source }}
+        run: |
+          $source = switch ($env:DEPLOYMENT_SOURCE) {
+            'automatic' { 'Automatic main deployment' }
+            'tagged' { 'Tagged test release' }
+            'manual' { 'Manual deployment' }
+            default { "$($env:GITHUB_EVENT_NAME) on $($env:GITHUB_REF)" }
+          }
+          $status = if ($env:ACTIVATION_OUTCOME -ne 'success') { 'Failure' } else {
+            switch ($env:DEPLOYMENT_STATUS) {
+              'deployed' { 'Success' }
+              'already-deployed' { 'Already deployed and healthy (no new activation)' }
+              'skipped' { 'Skipped (superseded; no activation)' }
+              'plan-only' { 'SQL plan only (no activation)' }
+              default { throw 'Installer did not report a deployment outcome.' }
+            }
+          }
+          @(
+            '## Test IIS deployment'
+            ''
+            'Environment: DEVWEB'
+            "Deployment: $($env:DEPLOYMENT_LABEL)"
+            "Commit: [$($env:TESTED_COMMIT)](https://github.com/clcdpc/asap-pocketbase/commit/$($env:TESTED_COMMIT))"
+            "Source: $source"
+            "Status: $status"
+            "Reason: $($env:DEPLOYMENT_REASON)"
+            "Run: https://github.com/clcdpc/asap-pocketbase/actions/runs/$($env:GITHUB_RUN_ID)"
+          ) -join "`n`n" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY

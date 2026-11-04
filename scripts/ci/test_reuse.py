@@ -953,7 +953,10 @@ class WorkflowTests(unittest.TestCase):
                       "npm run test:browser", "python3 -B scripts/ci/selection.py run-draft", "bash scripts/ci/run-with-performance.sh",
                       "name: Summarize .NET/SQL diagnostic evidence", "name: Upload .NET/SQL performance telemetry",
                       "dotnet publish src/Asap.Web/Asap.Web.csproj",
-                      "commitSha = $env:GITHUB_SHA", "-ValidateOnly", "ExpectedZipSha256", "zip_sha256=$zipHash",
+                      "$commit = (git rev-parse HEAD).Trim().ToLowerInvariant()", "if ($commit -ne $env:GITHUB_SHA)",
+                      '"commit=$commit" >> $env:GITHUB_OUTPUT',
+                      "commit: ${{ steps.identity.outputs.commit }}", "TESTED_COMMIT: ${{ steps.identity.outputs.commit }}",
+                      "commitSha = $env:TESTED_COMMIT", "-ValidateOnly", "ExpectedZipSha256", "zip_sha256=$zipHash",
                       "name: Remove SQL Server test container\n        if: ${{ always() }}"):
             self.assertIn(token, workflow)
         self.assertNotIn("pull_request_target", workflow)
