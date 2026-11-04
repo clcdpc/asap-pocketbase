@@ -29,27 +29,58 @@ function sameOrigin(url, origin) {
   try { return new URL(url).origin === origin; } catch { return false; }
 }
 
-async function scan(page, axeSource, artifactRoot, report, viewport) {
+async function scan(page, axeSource, artifactRoot, report, viewport, checkTimeoutGeometry = false) {
   await page.evaluate(axeSource);
   const accessibility = await page.evaluate(async () => {
     const result = await axe.run();
     return result.violations.filter(item => ['serious', 'critical'].includes(item.impact));
   });
-  const layout = await page.evaluate(() => ({
-    width: innerWidth,
-    scrollWidth: document.documentElement.scrollWidth,
-    imagesLoaded: [...document.images]
-      .filter(image => {
-        const bounds = image.getBoundingClientRect();
-        return bounds.width > 0 && bounds.height > 0;
-      })
-      .every(image => image.complete && image.naturalWidth > 0)
-  }));
+  const layout = await page.evaluate(checkTimeoutGeometry => {
+    const timeoutControls = checkTimeoutGeometry
+      ? [...document.querySelectorAll('.settings-timeout-rule input[type="number"], .settings-timeout-rule select')]
+        .map(control => {
+          const field = control.closest('.settings-field');
+          const rule = control.closest('.settings-timeout-rule');
+          const rect = element => {
+            const bounds = element.getBoundingClientRect();
+            return { left: bounds.left, right: bounds.right, width: bounds.width, height: bounds.height };
+          };
+          return { id: control.id, control: rect(control), field: rect(field), rule: rect(rule) };
+        })
+      : [];
+    return {
+      width: innerWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+      imagesLoaded: [...document.images]
+        .filter(image => {
+          const bounds = image.getBoundingClientRect();
+          return bounds.width > 0 && bounds.height > 0;
+        })
+        .every(image => image.complete && image.naturalWidth > 0),
+      timeoutControls
+    };
+  }, checkTimeoutGeometry);
   await page.screenshot({ path: path.join(artifactRoot, `${viewport}-settings.png`), fullPage: true });
   report.states.push({ viewport, accessibility, layout });
   assert.deepEqual(accessibility, [], `Serious or critical accessibility violation in ${viewport} settings`);
   assert.ok(layout.scrollWidth <= layout.width, `Horizontal overflow in ${viewport} settings`);
   assert.equal(layout.imagesLoaded, true, `Visible image failed to load in ${viewport} settings`);
+  if (checkTimeoutGeometry) {
+    assert.deepEqual(layout.timeoutControls.map(control => control.id), [
+      'outstanding-timeout-days', 'outstanding-timeout-rejection-template-id',
+      'hold-pickup-timeout-days', 'pending-hold-timeout-days', 'additional-copy-timeout-days'
+    ], `All timeout number/select controls are visible in ${viewport}.`);
+    const fitsInside = (inner, outer) => inner.left >= outer.left - 1 && inner.right <= outer.right + 1;
+    for (const control of layout.timeoutControls) {
+      assert.ok(control.control.width > 0 && control.control.height > 0, `${control.id} is visible in ${viewport}.`);
+      assert.ok(fitsInside(control.control, control.field),
+        `${control.id} fits its label in ${viewport}: ${JSON.stringify(control)}`);
+      assert.ok(fitsInside(control.control, control.rule),
+        `${control.id} fits its timeout rule in ${viewport}: ${JSON.stringify(control)}`);
+      assert.ok(control.control.left >= -1 && control.control.right <= layout.width + 1,
+        `${control.id} fits the viewport in ${viewport}: ${JSON.stringify(control)}`);
+    }
+  }
 }
 
 async function verifyFormatRuleDraftNames(page) {
@@ -1018,6 +1049,7 @@ async function main() {
     libraryAutoClaimRuleBigintRoundTrip: false, libraryUnrelatedSavePreservedAutoClaimRules: false,
     libraryInitialScalarSavePreservedAutoClaimRules: false,
     libraryEmptyPatronCodeReplacementRoundTrip: false, libraryPatronCodeResetRoundTrip: false,
+    systemTimeoutDependenciesRoundTrip: false, libraryTimeoutDependenciesRoundTrip: false,
     wildcardOriginNormalized: false, systemFormatRuleRoundTrip: false, systemFormatRulePost: null,
     systemFormatRulePostCount: 0,
     libraryFormatRuleWitness: {
@@ -1111,12 +1143,14 @@ async function main() {
     };
 
     const waitForSettingsReady = async expectedScope => {
-      await page.waitForFunction(() => {
+      await page.waitForFunction(expectedScope => {
         const form = document.getElementById('settings-form');
         const message = document.getElementById('settings-message');
-        return Boolean(form && !form.hidden) ||
+        const scope = document.getElementById('settings-scope');
+        const acceptedScope = Boolean(form && !form.hidden && scope?.value === expectedScope);
+        return acceptedScope ||
           Boolean(message?.classList.contains('error') && message.textContent.trim());
-      });
+      }, expectedScope);
       const message = page.locator('#settings-message');
       if (await message.evaluate(element => element.classList.contains('error'))) {
         throw new Error(`Settings load failed: ${await message.textContent()}`);
@@ -1256,6 +1290,173 @@ async function main() {
     assert.equal(await page.locator('#settings-save').isDisabled(), true,
       'Canceling clear restores the accepted presentation without saving.');
     assert.equal(postedPayloads.length, 0, 'Placeholder and clear-preview checks send no settings POST.');
+
+    const timeoutFieldDefinitions = [
+      { key: 'outstandingTimeoutEnabled', id: 'outstanding-timeout-enabled', kind: 'checkbox' },
+      { key: 'outstandingTimeoutDays', id: 'outstanding-timeout-days', kind: 'number' },
+      { key: 'outstandingTimeoutSendEmail', id: 'outstanding-timeout-send-email', kind: 'checkbox' },
+      { key: 'outstandingTimeoutRejectionTemplateId', id: 'outstanding-timeout-rejection-template-id', kind: 'select' },
+      { key: 'holdPickupTimeoutEnabled', id: 'hold-pickup-timeout-enabled', kind: 'checkbox' },
+      { key: 'holdPickupTimeoutDays', id: 'hold-pickup-timeout-days', kind: 'number' },
+      { key: 'pendingHoldTimeoutEnabled', id: 'pending-hold-timeout-enabled', kind: 'checkbox' },
+      { key: 'pendingHoldTimeoutDays', id: 'pending-hold-timeout-days', kind: 'number' },
+      { key: 'additionalCopyTimeoutEnabled', id: 'additional-copy-timeout-enabled', kind: 'checkbox' },
+      { key: 'additionalCopyTimeoutDays', id: 'additional-copy-timeout-days', kind: 'number' }
+    ];
+    const timeoutParentIds = [
+      'outstanding-timeout-enabled', 'hold-pickup-timeout-enabled',
+      'pending-hold-timeout-enabled', 'additional-copy-timeout-enabled'
+    ];
+    const timeoutSnapshot = async () => page.evaluate(definitions => Object.fromEntries(definitions.map(({ key, id, kind }) => {
+      const control = document.getElementById(id);
+      return [key, kind === 'checkbox' ? control.checked : control.value];
+    })), timeoutFieldDefinitions);
+    const setTimeoutSnapshot = async values => {
+      for (const id of timeoutParentIds) await page.locator(`#${id}`).check();
+      await page.locator('#outstanding-timeout-send-email').check();
+      for (const { key, id, kind } of timeoutFieldDefinitions) {
+        if (kind === 'checkbox') continue;
+        const control = page.locator(`#${id}`);
+        const value = values[key] ?? '';
+        if (kind === 'select') await control.selectOption(String(value));
+        else await control.fill(String(value));
+      }
+      await page.locator('#outstanding-timeout-send-email').setChecked(Boolean(values.outstandingTimeoutSendEmail));
+      for (const { key, id } of timeoutFieldDefinitions.filter(field => timeoutParentIds.includes(field.id))) {
+        await page.locator(`#${id}`).setChecked(Boolean(values[key]));
+      }
+    };
+    const systemTimeoutSnapshot = await timeoutSnapshot();
+    await page.locator('#settings-nav-workflow').click();
+    const testTemplateId = await page.locator('#outstanding-timeout-rejection-template-id option')
+      .evaluateAll(options => options.find(option => option.textContent.trim() === 'Timeout dependency browser template')?.value || '');
+    assert.notEqual(testTemplateId, '', 'The SQL fixture must seed a selectable rejection template for timeout retention.');
+    const testTimeouts = {
+      outstandingTimeoutEnabled: true,
+      outstandingTimeoutDays: '43',
+      outstandingTimeoutSendEmail: true,
+      outstandingTimeoutRejectionTemplateId: testTemplateId,
+      holdPickupTimeoutEnabled: true,
+      holdPickupTimeoutDays: '9',
+      pendingHoldTimeoutEnabled: true,
+      pendingHoldTimeoutDays: '17',
+      additionalCopyTimeoutEnabled: true,
+      additionalCopyTimeoutDays: '24'
+    };
+    await setTimeoutSnapshot(testTimeouts);
+    const configuredTimeoutPayload = await saveSettings();
+    for (const { key, kind } of timeoutFieldDefinitions) {
+      const expected = kind === 'checkbox' ? testTimeouts[key] : kind === 'number'
+        ? Number(testTimeouts[key]) : testTimeouts[key] || null;
+      assert.equal(configuredTimeoutPayload.workflow[key], expected, `${key} test value was submitted.`);
+    }
+    assert.equal(await page.getByRole('group', { name: 'Auto-reject unreviewed suggestions' }).count(), 1);
+    assert.equal(await page.getByRole('group', { name: 'Send auto-rejection email' }).count(), 1);
+    const outstandingDaysInput = page.locator('#outstanding-timeout-days');
+    const outstandingEmailInput = page.locator('#outstanding-timeout-send-email');
+    const rejectionTemplateInput = page.locator('#outstanding-timeout-rejection-template-id');
+    const holdDaysInput = page.locator('#hold-pickup-timeout-days');
+    const pendingDaysInput = page.locator('#pending-hold-timeout-days');
+    const additionalDaysInput = page.locator('#additional-copy-timeout-days');
+    const keyboardToggle = async locator => { await locator.focus(); await locator.press('Space'); };
+    await keyboardToggle(page.locator('#outstanding-timeout-enabled'));
+    assert.equal(await page.locator('#outstanding-timeout-enabled').isChecked(), false);
+    assert.equal(await outstandingDaysInput.isDisabled(), true);
+    assert.equal(await outstandingEmailInput.isDisabled(), true);
+    assert.equal(await rejectionTemplateInput.isDisabled(), true);
+    assert.equal(await outstandingDaysInput.inputValue(), '43');
+    assert.equal(await outstandingEmailInput.isChecked(), true);
+    assert.equal(await rejectionTemplateInput.inputValue(), testTemplateId);
+    await keyboardToggle(page.locator('#outstanding-timeout-enabled'));
+    assert.equal(await outstandingDaysInput.isDisabled(), false);
+    assert.equal(await outstandingEmailInput.isDisabled(), false);
+    await keyboardToggle(outstandingEmailInput);
+    assert.equal(await rejectionTemplateInput.isDisabled(), true);
+    assert.equal(await rejectionTemplateInput.inputValue(), testTemplateId);
+    const emailOffTimeoutPayload = await saveSettings();
+    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutEnabled, true);
+    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutSendEmail, false);
+    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, testTemplateId,
+      'Saving with only the email option off retains the nonblank template choice.');
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForSettingsReady('system');
+    await page.locator('#settings-nav-workflow').click();
+    assert.equal(await page.locator('#outstanding-timeout-enabled').isChecked(), true);
+    assert.equal(await outstandingDaysInput.isDisabled(), false,
+      'Days stay enabled while the main rule is on, independent of the email option.');
+    assert.equal(await outstandingEmailInput.isChecked(), false);
+    assert.equal(await outstandingEmailInput.isDisabled(), false);
+    assert.equal(await rejectionTemplateInput.inputValue(), testTemplateId,
+      'The nonblank template selection survives an accepted save and full page reload.');
+    assert.equal(await rejectionTemplateInput.isDisabled(), true,
+      'The template remains disabled while its email option is off.');
+    await keyboardToggle(outstandingEmailInput);
+    assert.equal(await rejectionTemplateInput.isDisabled(), false);
+    for (const [parentId, daysInput, expected] of [
+      ['hold-pickup-timeout-enabled', holdDaysInput, '9'],
+      ['pending-hold-timeout-enabled', pendingDaysInput, '17'],
+      ['additional-copy-timeout-enabled', additionalDaysInput, '24']
+    ]) {
+      await keyboardToggle(page.locator(`#${parentId}`));
+      assert.equal(await daysInput.isDisabled(), true, `${parentId} disables its days input.`);
+      assert.equal(await daysInput.inputValue(), expected, `${parentId} retains its disabled days value.`);
+      await keyboardToggle(page.locator(`#${parentId}`));
+      assert.equal(await daysInput.isDisabled(), false, `${parentId} re-enables its days input.`);
+    }
+    for (const id of timeoutParentIds) await page.locator(`#${id}`).uncheck();
+    assert.equal(await outstandingDaysInput.isDisabled(), true);
+    assert.equal(await outstandingEmailInput.isDisabled(), true);
+    assert.equal(await rejectionTemplateInput.isDisabled(), true);
+    assert.equal(await holdDaysInput.isDisabled(), true);
+    assert.equal(await pendingDaysInput.isDisabled(), true);
+    assert.equal(await additionalDaysInput.isDisabled(), true);
+    const disabledTimeoutPayload = await saveSettings();
+    for (const [key, expected] of Object.entries({
+      outstandingTimeoutEnabled: false,
+      outstandingTimeoutDays: 43,
+      outstandingTimeoutSendEmail: true,
+      outstandingTimeoutRejectionTemplateId: testTemplateId || null,
+      holdPickupTimeoutEnabled: false,
+      holdPickupTimeoutDays: 9,
+      pendingHoldTimeoutEnabled: false,
+      pendingHoldTimeoutDays: 17,
+      additionalCopyTimeoutEnabled: false,
+      additionalCopyTimeoutDays: 24
+    })) assert.equal(disabledTimeoutPayload.workflow[key], expected, `${key} remains in the save payload while disabled.`);
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForSettingsReady('system');
+    await page.locator('#settings-nav-workflow').click();
+    for (const [id, value] of [
+      ['outstanding-timeout-days', '43'], ['outstanding-timeout-send-email', true],
+      ['outstanding-timeout-rejection-template-id', testTemplateId], ['hold-pickup-timeout-days', '9'],
+      ['pending-hold-timeout-days', '17'], ['additional-copy-timeout-days', '24']
+    ]) {
+      const input = page.locator(`#${id}`);
+      assert.equal(id === 'outstanding-timeout-send-email' ? await input.isChecked() : await input.inputValue(), value,
+        `${id} round-trips while its parent is off.`);
+    }
+    assert.equal(await outstandingDaysInput.isDisabled(), true);
+    assert.equal(await outstandingEmailInput.isDisabled(), true);
+    assert.equal(await rejectionTemplateInput.isDisabled(), true);
+    assert.equal(await holdDaysInput.isDisabled(), true);
+    assert.equal(await pendingDaysInput.isDisabled(), true);
+    assert.equal(await additionalDaysInput.isDisabled(), true);
+    report.systemTimeoutDependenciesRoundTrip = true;
+    const preservedSystemTimeouts = {
+      ...systemTimeoutSnapshot,
+      outstandingTimeoutEnabled: true,
+      holdPickupTimeoutEnabled: true,
+      pendingHoldTimeoutEnabled: true,
+      additionalCopyTimeoutEnabled: true
+    };
+    await setTimeoutSnapshot(preservedSystemTimeouts);
+    await saveSettings();
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await scan(page, axeSource, args.artifactRoot, report, 'system-desktop', true);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scan(page, axeSource, args.artifactRoot, report, 'system-mobile', true);
+    await page.setViewportSize({ width: 1280, height: 900 });
+
     await page.locator('#settings-nav-start').click();
     const participationRows = page.locator('#enabled-libraries-checkbox-container input[type="checkbox"]');
     const participationIds = await participationRows.evaluateAll(inputs => inputs.map(input => input.value));
@@ -1550,9 +1751,171 @@ async function main() {
       .evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2', '3']);
     report.libraryPatronCodeResetRoundTrip = true;
 
-    await scan(page, axeSource, args.artifactRoot, report, 'desktop');
+    const libraryTimeoutSnapshot = await page.evaluate(definitions => Object.fromEntries(definitions.map(({ key, id, kind }) => {
+      const control = document.getElementById(id);
+      const override = control.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-override-toggle');
+      return [key, { overridden: override?.checked === true, value: kind === 'checkbox' ? control.checked : control.value }];
+    })), timeoutFieldDefinitions);
+    const libraryTimeoutOverride = key => page.locator(
+      `[data-setting-section="workflow"][data-setting-key="${key}"] .settings-override-toggle`);
+    const libraryTimeoutControl = key => page.locator(`#${timeoutFieldDefinitions.find(field => field.key === key).id}`);
+    const setLibraryTimeoutOverride = async (key, checked) => {
+      const toggle = libraryTimeoutOverride(key);
+      if (await toggle.isChecked() !== checked) await toggle.setChecked(checked);
+    };
+    const setLibraryTimeoutValue = async (key, value) => {
+      const definition = timeoutFieldDefinitions.find(field => field.key === key);
+      const control = libraryTimeoutControl(key);
+      const normalized = value ?? '';
+      if (definition.kind === 'checkbox') await control.setChecked(Boolean(normalized));
+      else if (definition.kind === 'select') await control.selectOption(String(normalized));
+      else await control.fill(String(normalized));
+    };
+    assert.equal(await page.getByRole('group', { name: 'Auto-reject unreviewed suggestions' }).count(), 1);
+    assert.equal(await page.getByRole('group', { name: 'Send auto-rejection email' }).count(), 1);
+    await setLibraryTimeoutOverride('outstandingTimeoutEnabled', true);
+    await setLibraryTimeoutValue('outstandingTimeoutEnabled', true);
+    await setLibraryTimeoutOverride('outstandingTimeoutDays', true);
+    await setLibraryTimeoutValue('outstandingTimeoutDays', '47');
+    await setLibraryTimeoutOverride('outstandingTimeoutSendEmail', true);
+    await setLibraryTimeoutValue('outstandingTimeoutSendEmail', true);
+    await setLibraryTimeoutOverride('outstandingTimeoutRejectionTemplateId', true);
+    await setLibraryTimeoutValue('outstandingTimeoutRejectionTemplateId', testTemplateId);
+    await setLibraryTimeoutValue('outstandingTimeoutEnabled', false);
+    await setLibraryTimeoutOverride('holdPickupTimeoutEnabled', false);
+    await setLibraryTimeoutOverride('holdPickupTimeoutDays', false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), false);
+    assert.equal(await libraryTimeoutOverride('outstandingTimeoutEnabled').isChecked(), true,
+      'The test begins from an explicit false Library override over a true System parent.');
+    assert.equal(await libraryTimeoutControl('holdPickupTimeoutEnabled').isChecked(), true);
+    assert.equal(await libraryTimeoutOverride('holdPickupTimeoutDays').isChecked(), false);
+    assert.equal(await libraryTimeoutControl('holdPickupTimeoutDays').isDisabled(), true,
+      'An inherited true parent cannot unlock a dependent without its own Library override.');
+    const explicitLibraryTimeoutPayload = await saveSettings();
+    assert.equal(explicitLibraryTimeoutPayload.workflow.outstandingTimeoutEnabled, false);
+    assert.equal(explicitLibraryTimeoutPayload.workflow.outstandingTimeoutDays, 47);
+    assert.equal(explicitLibraryTimeoutPayload.workflow.outstandingTimeoutSendEmail, true);
+    assert.equal(explicitLibraryTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, testTemplateId);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isChecked(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').inputValue(), testTemplateId);
+
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true,
+      'Removing the explicit false override displays the inherited true System parent.');
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').isDisabled(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isDisabled(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').isDisabled(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').inputValue(), testTemplateId);
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').check();
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), false,
+      'Re-enabling Override restores the saved Library draft value.');
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
+    const resetLibraryTimeoutPayload = await saveSettings();
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutEnabled, null,
+      'The explicit false parent reset is saved as inheritance.');
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutDays, 47,
+      'Resetting the parent keeps the independently owned days override.');
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutSendEmail, true);
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, testTemplateId,
+      'Resetting the parent keeps the independently owned nonblank template choice.');
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForSettingsReady('2');
+    await page.locator('#settings-nav-workflow').click();
+    assert.equal(await libraryTimeoutOverride('outstandingTimeoutEnabled').isChecked(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').isDisabled(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isChecked(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isDisabled(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').inputValue(), testTemplateId);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').isDisabled(), false);
+
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').check();
+    await libraryTimeoutControl('outstandingTimeoutEnabled').uncheck();
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
+    await page.locator('#settings-scope').selectOption('system');
+    await waitForSettingsReady('system');
+    await page.locator('#settings-scope').selectOption('2');
+    await waitForSettingsReady('2');
+    await page.locator('#settings-nav-workflow').click();
+    assert.equal(await libraryTimeoutOverride('outstandingTimeoutEnabled').isChecked(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').check();
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true,
+      'Scope population retires the previous unsaved timeout override draft.');
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await scan(page, axeSource, args.artifactRoot, report, 'library-desktop', true);
     await page.setViewportSize({ width: 390, height: 844 });
-    await scan(page, axeSource, args.artifactRoot, report, 'mobile');
+    await scan(page, axeSource, args.artifactRoot, report, 'library-mobile', true);
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    for (const key of timeoutParentIds.map(id => timeoutFieldDefinitions.find(field => field.id === id).key)) {
+      await setLibraryTimeoutOverride(key, true);
+      await setLibraryTimeoutValue(key, true);
+    }
+    await setLibraryTimeoutOverride('outstandingTimeoutSendEmail', true);
+    await setLibraryTimeoutValue('outstandingTimeoutSendEmail', true);
+    for (const field of timeoutFieldDefinitions.filter(item =>
+      !timeoutParentIds.includes(item.id) && item.key !== 'outstandingTimeoutSendEmail')) {
+      await setLibraryTimeoutOverride(field.key, libraryTimeoutSnapshot[field.key].overridden);
+      if (libraryTimeoutSnapshot[field.key].overridden) {
+        await setLibraryTimeoutValue(field.key, libraryTimeoutSnapshot[field.key].value);
+      }
+    }
+    await setLibraryTimeoutOverride('outstandingTimeoutSendEmail', libraryTimeoutSnapshot.outstandingTimeoutSendEmail.overridden);
+    if (libraryTimeoutSnapshot.outstandingTimeoutSendEmail.overridden) {
+      await setLibraryTimeoutValue('outstandingTimeoutSendEmail', libraryTimeoutSnapshot.outstandingTimeoutSendEmail.value);
+    }
+    for (const id of timeoutParentIds) {
+      const key = timeoutFieldDefinitions.find(field => field.id === id).key;
+      if (libraryTimeoutSnapshot[key].overridden) {
+        await setLibraryTimeoutValue(key, libraryTimeoutSnapshot[key].value);
+      } else {
+        await setLibraryTimeoutOverride(key, false);
+      }
+    }
+    if (!await page.locator('#settings-save').isDisabled()) await saveSettings();
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForSettingsReady('2');
+    await page.locator('#settings-nav-workflow').click();
+    const libraryTimeoutAfterRestore = await page.evaluate(definitions => Object.fromEntries(definitions.map(({ key, id, kind }) => {
+      const control = document.getElementById(id);
+      const override = control.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-override-toggle');
+      return [key, { overridden: override?.checked === true, value: kind === 'checkbox' ? control.checked : control.value }];
+    })), timeoutFieldDefinitions);
+    for (const { key } of timeoutFieldDefinitions) {
+      assert.equal(libraryTimeoutAfterRestore[key].overridden, libraryTimeoutSnapshot[key].overridden,
+        `${key} Library override ownership is restored after the browser journey.`);
+      if (libraryTimeoutSnapshot[key].overridden) {
+        assert.equal(libraryTimeoutAfterRestore[key].value, libraryTimeoutSnapshot[key].value,
+          `${key} Library value is restored after the browser journey.`);
+      }
+    }
+
+    await page.locator('#settings-scope').selectOption('system');
+    await waitForSettingsReady('system');
+    await page.locator('#settings-nav-workflow').click();
+    await setTimeoutSnapshot(systemTimeoutSnapshot);
+    if (!await page.locator('#settings-save').isDisabled()) await saveSettings();
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForSettingsReady('system');
+    await page.locator('#settings-scope').selectOption('2');
+    await waitForSettingsReady('2');
+    await page.locator('#settings-nav-workflow').click();
+    report.libraryTimeoutDependenciesRoundTrip = true;
+
     await page.close();
     await context.close();
   } finally {
@@ -1575,6 +1938,8 @@ async function main() {
   assert.equal(report.libraryInitialScalarSavePreservedAutoClaimRules, true);
   assert.equal(report.libraryEmptyPatronCodeReplacementRoundTrip, true);
   assert.equal(report.libraryPatronCodeResetRoundTrip, true);
+  assert.equal(report.systemTimeoutDependenciesRoundTrip, true);
+  assert.equal(report.libraryTimeoutDependenciesRoundTrip, true);
   assert.equal(report.wildcardOriginNormalized, true);
   console.log('Settings editor browser journey passed.');
 }

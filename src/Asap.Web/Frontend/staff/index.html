@@ -531,16 +531,26 @@
               <fieldset class="settings-fieldset">
                 <legend>Timeouts</legend>
                 <div class="settings-grid">
-                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="outstandingTimeoutEnabled"><input id="outstanding-timeout-enabled" type="checkbox"><span>Auto-reject unreviewed suggestions</span></label>
-                  <label class="settings-field" data-setting-section="workflow" data-setting-key="outstandingTimeoutDays"><span>Unreviewed suggestion days</span><input id="outstanding-timeout-days" type="number" min="1" max="3650"></label>
-                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="outstandingTimeoutSendEmail"><input id="outstanding-timeout-send-email" type="checkbox"><span>Send auto-rejection email</span></label>
-                  <label class="settings-field" data-setting-section="workflow" data-setting-key="outstandingTimeoutRejectionTemplateId"><span>Rejection template</span><select id="outstanding-timeout-rejection-template-id"><option value="">Use no rejection template</option></select></label>
-                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="holdPickupTimeoutEnabled"><input id="hold-pickup-timeout-enabled" type="checkbox"><span>Close unpicked holds automatically</span></label>
-                  <label class="settings-field" data-setting-section="workflow" data-setting-key="holdPickupTimeoutDays"><span>Unpicked hold days</span><input id="hold-pickup-timeout-days" type="number" min="1" max="3650"></label>
-                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="pendingHoldTimeoutEnabled"><input id="pending-hold-timeout-enabled" type="checkbox"><span>Close pending holds automatically</span></label>
-                  <label class="settings-field" data-setting-section="workflow" data-setting-key="pendingHoldTimeoutDays"><span>Pending hold days</span><input id="pending-hold-timeout-days" type="number" min="1" max="3650"></label>
-                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="additionalCopyTimeoutEnabled"><input id="additional-copy-timeout-enabled" type="checkbox"><span>Close open additional-copy tasks automatically</span></label>
-                  <label class="settings-field" data-setting-section="workflow" data-setting-key="additionalCopyTimeoutDays"><span>Additional-copy days</span><input id="additional-copy-timeout-days" type="number" min="1" max="3650"></label>
+                  <div class="settings-timeout-rule" data-timeout-rule="outstanding" role="group" aria-labelledby="outstanding-timeout-rule-label">
+                    <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="outstandingTimeoutEnabled"><input id="outstanding-timeout-enabled" type="checkbox"><span id="outstanding-timeout-rule-label">Auto-reject unreviewed suggestions</span></label>
+                    <label class="settings-field" data-setting-section="workflow" data-setting-key="outstandingTimeoutDays"><span>Unreviewed suggestion days</span><input id="outstanding-timeout-days" type="number" min="1" max="3650"></label>
+                    <div class="settings-timeout-subgroup" role="group" aria-labelledby="outstanding-timeout-email-label">
+                      <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="outstandingTimeoutSendEmail"><input id="outstanding-timeout-send-email" type="checkbox"><span id="outstanding-timeout-email-label">Send auto-rejection email</span></label>
+                      <label class="settings-field" data-setting-section="workflow" data-setting-key="outstandingTimeoutRejectionTemplateId"><span>Rejection template</span><select id="outstanding-timeout-rejection-template-id"><option value="">Use no rejection template</option></select></label>
+                    </div>
+                  </div>
+                  <div class="settings-timeout-rule" data-timeout-rule="hold-pickup" role="group" aria-labelledby="hold-pickup-timeout-rule-label">
+                    <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="holdPickupTimeoutEnabled"><input id="hold-pickup-timeout-enabled" type="checkbox"><span id="hold-pickup-timeout-rule-label">Close unpicked holds automatically</span></label>
+                    <label class="settings-field" data-setting-section="workflow" data-setting-key="holdPickupTimeoutDays"><span>Unpicked hold days</span><input id="hold-pickup-timeout-days" type="number" min="1" max="3650"></label>
+                  </div>
+                  <div class="settings-timeout-rule" data-timeout-rule="pending-hold" role="group" aria-labelledby="pending-hold-timeout-rule-label">
+                    <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="pendingHoldTimeoutEnabled"><input id="pending-hold-timeout-enabled" type="checkbox"><span id="pending-hold-timeout-rule-label">Close pending holds automatically</span></label>
+                    <label class="settings-field" data-setting-section="workflow" data-setting-key="pendingHoldTimeoutDays"><span>Pending hold days</span><input id="pending-hold-timeout-days" type="number" min="1" max="3650"></label>
+                  </div>
+                  <div class="settings-timeout-rule" data-timeout-rule="additional-copy" role="group" aria-labelledby="additional-copy-timeout-rule-label">
+                    <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="additionalCopyTimeoutEnabled"><input id="additional-copy-timeout-enabled" type="checkbox"><span id="additional-copy-timeout-rule-label">Close open additional-copy tasks automatically</span></label>
+                    <label class="settings-field" data-setting-section="workflow" data-setting-key="additionalCopyTimeoutDays"><span>Additional-copy days</span><input id="additional-copy-timeout-days" type="number" min="1" max="3650"></label>
+                  </div>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset">

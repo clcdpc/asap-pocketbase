@@ -34,6 +34,13 @@ const WORKFLOW_FIELDS = [
   ['patronCodeEligibilityMessage', 'patron-code-eligibility-message', 'text']
 ];
 
+const TIMEOUT_OVERRIDE_KEYS = new Set([
+  'outstandingTimeoutEnabled', 'outstandingTimeoutDays', 'outstandingTimeoutSendEmail',
+  'outstandingTimeoutRejectionTemplateId', 'holdPickupTimeoutEnabled', 'holdPickupTimeoutDays',
+  'pendingHoldTimeoutEnabled', 'pendingHoldTimeoutDays', 'additionalCopyTimeoutEnabled',
+  'additionalCopyTimeoutDays'
+]);
+
 const PATRON_FIELDS = [
   ['pageTitle', 'patron-page-title'],
   ['barcodeLabel', 'patron-barcode-label'],
@@ -353,6 +360,7 @@ export function createSettingsController({
   };
   let currentStaffUrlSuggestion = null;
   let acceptedPostmarkToken = false;
+  const timeoutOverrideDrafts = new Map();
   const reads = createLatestLoad(), events = new window.AbortController();
   let disposed = false, contextGeneration = 0, drafts = createDraftScope(), scopePreparation = null;
   const emailTest = createEmailTestController({ root: root.querySelector('#settings-email-test'),
@@ -891,15 +899,48 @@ export function createSettingsController({
     return field.querySelector('input:not(.settings-override-toggle), textarea, select');
   }
 
+  function applyTimeoutDependencies() {
+    const outstandingEnabled = document.getElementById('outstanding-timeout-enabled').checked;
+    const sendEmailEnabled = document.getElementById('outstanding-timeout-send-email').checked;
+    const dependents = [
+      ['outstanding-timeout-days', outstandingEnabled],
+      ['outstanding-timeout-send-email', outstandingEnabled],
+      ['outstanding-timeout-rejection-template-id', outstandingEnabled && sendEmailEnabled],
+      ['hold-pickup-timeout-days', document.getElementById('hold-pickup-timeout-enabled').checked],
+      ['pending-hold-timeout-days', document.getElementById('pending-hold-timeout-enabled').checked],
+      ['additional-copy-timeout-days', document.getElementById('additional-copy-timeout-enabled').checked]
+    ];
+    for (const [id, ruleEnabled] of dependents) {
+      const control = document.getElementById(id);
+      const field = control.closest('[data-setting-section][data-setting-key]');
+      const override = field?.querySelector('.settings-override-toggle');
+      const editable = isSystem() || override?.checked === true;
+      control.disabled = !editable || !ruleEnabled;
+    }
+  }
+
   function syncOverrideToggles(section, key, checked) {
     for (const field of root.querySelectorAll(
       `[data-setting-section="${section}"][data-setting-key="${key}"]`
     )) {
       const toggle = field.querySelector('.settings-override-toggle');
       const input = fieldInput(field);
+      if (section === 'workflow' && TIMEOUT_OVERRIDE_KEYS.has(key) && input) {
+        const draftKey = `${section}.${key}`;
+        if (checked) {
+          if (timeoutOverrideDrafts.has(draftKey)) {
+            writeControl(input, timeoutOverrideDrafts.get(draftKey));
+          }
+        } else {
+          timeoutOverrideDrafts.set(draftKey, input.type === 'checkbox' ? input.checked : input.value);
+          const configuredSystem = object(object(state.data?.stored).configuredSystem);
+          writeControl(input, property(configuredSystem.workflow, key));
+        }
+      }
       if (toggle) toggle.checked = checked;
       if (input) input.disabled = !checked;
     }
+    applyTimeoutDependencies();
   }
 
   function createOverrideToggle(field, section, key) {
@@ -969,6 +1010,7 @@ export function createSettingsController({
       }
       badge.hidden = system;
     }
+    applyTimeoutDependencies();
   }
 
   function setScopedFields(section, fields) {
@@ -1316,6 +1358,7 @@ export function createSettingsController({
 
   function populate(data) {
     clearPolarisFeedback();
+    timeoutOverrideDrafts.clear();
     releaseLogoDraft();
     dom.logo.value = '';
     dom.discardLogoDraft.hidden = true;
@@ -1328,7 +1371,7 @@ export function createSettingsController({
     renderCurrentStaffUrlSuggestion();
     const effective = object(data.effective);
     const effectivePatron = object(data.ui_text || effective);
-    const systemWorkflow = mergeConfigured(configuredSystem.workflow, null, stored.workflow);
+    const systemWorkflow = mergeConfigured(configuredSystem.workflow, null);
     const workflow = isSystem()
       ? systemWorkflow
       : mergeConfigured(systemWorkflow, libraryOverride.workflow, data.workflow);
@@ -2356,6 +2399,12 @@ export function createSettingsController({
     listen(dom.form, 'submit', saveSettings);
     listen(dom.form, 'input', draftChanged);
     listen(dom.form, 'change', draftChanged);
+    for (const id of [
+      'outstanding-timeout-enabled', 'outstanding-timeout-send-email',
+      'hold-pickup-timeout-enabled', 'pending-hold-timeout-enabled', 'additional-copy-timeout-enabled'
+    ]) {
+      listen(document.getElementById(id), 'change', applyTimeoutDependencies);
+    }
     listen(dom.useCurrentStaffUrl, 'click', () => {
       if (!currentStaffUrlSuggestion || disposed || !state.visible || state.staff?.role !== 'super_admin' ||
           !isSystem() || state.activePanel !== 'start' || !state.data || state.loading || state.saving ||

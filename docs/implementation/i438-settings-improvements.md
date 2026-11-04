@@ -26,9 +26,9 @@ the parent Codex session.
 | 2 | #448 | Complete Branding fieldset moved first; focused DOM/logo and SQL/browser presentation PASS | Luna MAX clear, including rendered desktop/mobile | `0c8ccef` |
 | 3 | #445 | Redundant paragraph removed; focused DOM/picker/scope and SQL/browser tests PASS | Luna MAX clear, including desktop/mobile gap check | `35de01e` |
 | 4 | #449 | Explicit validated URL draft action; focused controller/layout/scope PASS, links 2/2 and SQL/browser 1/1 PASS | Luna MAX clear after wait/identity test corrections and rendered checks | `dde686a` |
-| 5 | #409 | Accepted credential help and local outcomes; Node, SQL 3/3 and final browser 1/1 PASS | Luna MAX / Astra HIGH clear after P2 correction | `2b4068a` |
+| 5 | #409 | Credential help/local outcomes; Node, SQL 3/3, browser 1/1 and checkpoint navigation 271/271 PASS | Luna MAX / Astra HIGH clear after P2 and recovery-title corrections | `2b4068a`, `33288f3` |
 | 6 | #437 | Flag-only masks; Node 13 files, initial SQL/browser 4/4 and final affected browser 1/1 PASS | Luna MAX / Astra HIGH clear after P3 wording correction | `8b3e76e` |
-| 7 | #446 | In progress | Luna MAX / Astra HIGH preparing | Pending |
+| 7 | #446 | Named groups/native gates; Node 13/13, Release build and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after coverage/wait/width corrections | This issue commit |
 | 8 | #447 | Pending | Pending Luna MAX / Astra HIGH | Pending |
 | 9 | #444 | Pending | Pending Luna MAX | Pending |
 | 10 | #399 | Pending | Pending Luna MAX / Terra MAX | Pending |
@@ -47,6 +47,10 @@ the parent Codex session.
 - Node dependencies and Chromium installed; .NET SDK 10.0.303 / Node 24.19.0.
 - Acceptance runtime preflight: WSLC 3.0.3 and disposable `hello-world` PASS.
   This verifies the local container prerequisite; it does not qualify a suite.
+- Before backend changes, authoritative native discovery at `33288f3` verifies
+  the exact disjoint union: 1,423 non-browser + 46 Browser = 1,469 cases.
+  These are discovery counts, not a full execution result. The external
+  baseline catalog supports comparison with the final population.
 - Real SQL Server 2022 Developer 16.0.1210.3 (metadata explicitly verified) and deterministic provider boundaries are used for
   mutation and browser journeys. No live Polaris/Postmark actions are part of
   ordinary qualification.
@@ -303,3 +307,66 @@ matches the staged source (`cc8ad988aa635a321afbd0ff7fcc17c891899e44`);
 the Windows export uses CRLF while the index stores LF. Final Luna MAX source
 and raw-receipt inspection is clear, including all six malformed-ack cases.
 No actionable finding remains. The timeout draft is excluded from this commit.
+
+The correction's [fresh draft run](https://github.com/clcdpc/asap-pocketbase/actions/runs/41744104122)
+initially stopped before application tests in the unchanged Linux collector
+contract `test_stalled_sql_does_not_stall_host_or_leave_client_after_failure`:
+it observed three host samples during its fixed 0.4-second workload where it
+expected four. The failed jobs were retried without changing application,
+collector, timing assertions, or runner resources. Retry PASS: 141 Python checks
+with one pre-build population-discovery class skipped, Release build with zero
+warnings/errors, 107 SQL-independent native cases with zero failures/skips,
+and all 69 frontend files, including all 271 navigation journeys. Full CI and
+test-IIS activation remain skipped for this draft checkpoint. This does not
+replace final full-population qualification.
+
+## #446 — timeout groups and native dependencies
+
+Four named rule groups retain their dependent controls; auto-rejection contains
+a nested email/template group. Native disabled states compose each rule with
+the dependent field's own override permission. Checked inherited parents remain
+effective. Turning a rule off preserves its values and subordinate selections.
+For timeout fields, removing Override displays the authoritative System value;
+re-enabling it restores the local draft. Accepted population retires that cache.
+System workflow population no longer falls back to the raw Library row, including
+when the actual System value is null. Server timeout policy and schema are unchanged.
+
+- Focused scope/layout Node tests PASS; parent broader Settings sweep PASS 13/13,
+  zero failures/skips (`results/i446-settings-frontend.json`). Independent Luna
+  reran both focused files successfully. Astra's extra null/inherited/nested-
+  email/ownership/rejected-save/cache/pending-state probes PASS.
+- Initial build failed on an undefined test-fixture context factory. It now
+  resolves a local factory through the existing application services pattern.
+  Build R2 PASS, zero warnings/errors (`results/i446-build-r2.log`).
+- The retained real-SQL Settings browser uses an owned nonblank rejection
+  template and restores initial timeout values/references in its fixture cleanup.
+  It checks every dependency, System off/save/reload, nested email false/save/
+  reload with the selected template retained, Library false/true/null reset,
+  independently owned dependents, draft restoration/retirement and keyboard use.
+- Browser R1 failed an early scope-ready wait that accepted the still-visible
+  old scope. The waiter now requires the requested accepted scope as well as
+  visibility, preserving its error and final scope assertions. No sleep is added.
+- Luna's review found missing persisted email-off evidence; the actual SQL
+  save/reload assertion above closes it. Browser R2 then PASS 1/1 with four
+  System/library desktop/mobile scans and all existing full-journey flags.
+- Actual rendered review exposed a P2 select-width defect despite the R2 page
+  overflow guard: a long template name pushed its select outside the timeout
+  card and clipped it on mobile. Parent and Luna independently confirmed it.
+  Scoped control sizing now constrains only non-checkbox inputs/selects. Each
+  final scan also checks all five visible controls inside their label, rule and
+  viewport, preventing global `overflow-x: clip` from masking this regression.
+  The focused layout rerun, browser syntax and diff checks PASS.
+- Raw R1/R2 receipts remain distinct under `results/i446-settings-browser*`.
+  R2 captures/report are in ignored `settings-c32f1d4079254ca49cc85ab71789b7dc`;
+  they document pre-width-fix behavior and are not the final visual qualification.
+- Final R3 PASS 1/1, zero failures/skips, in
+  `results/i446-settings-browser-r3.trx`/`.log`. Four final states have zero
+  serious/critical axe findings, missing images, page overflow, external requests
+  or page errors. All five controls fit their labels, rules and viewport in each
+  state (20 containment checks); both timeout round-trip flags are true.
+  Actual final captures/report: ignored
+  `settings-3b50a6125c4c45e2a9fab81eb06ded46`.
+- Final independent Luna MAX inspection of the source, raw receipt and all four
+  actual renders confirms the P2 width defect is resolved. Astra HIGH inspected
+  the final receipt and containment data; prior inheritance/ownership/probe and
+  fixture conclusions remain clear. Both reviews have no actionable findings.

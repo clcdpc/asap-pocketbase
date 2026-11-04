@@ -14,6 +14,30 @@ function response(status, body) {
   };
 }
 
+const systemTimeoutValues = {
+  outstandingTimeoutEnabled: true,
+  outstandingTimeoutDays: 30,
+  outstandingTimeoutSendEmail: true,
+  outstandingTimeoutRejectionTemplateId: null,
+  holdPickupTimeoutEnabled: true,
+  holdPickupTimeoutDays: 7,
+  pendingHoldTimeoutEnabled: null,
+  pendingHoldTimeoutDays: 15,
+  additionalCopyTimeoutEnabled: false,
+  additionalCopyTimeoutDays: 21
+};
+const libraryTimeoutOverrides = {
+  outstandingTimeoutEnabled: false,
+  outstandingTimeoutDays: 45,
+  outstandingTimeoutSendEmail: true,
+  outstandingTimeoutRejectionTemplateId: '9007199254740993',
+  holdPickupTimeoutDays: 9,
+  pendingHoldTimeoutEnabled: true,
+  pendingHoldTimeoutDays: 18,
+  additionalCopyTimeoutDays: 33
+};
+const timeoutKeys = new Set(Object.keys(systemTimeoutValues));
+
 function settingsData(librarySetsExist = false) {
   const emptySet = { exists: false, values: [] };
   const librarySet = { exists: librarySetsExist, values: [] };
@@ -25,7 +49,7 @@ function settingsData(librarySetsExist = false) {
       systemSettings: {},
       polaris: {},
       configuredSystem: {
-        workflow: {},
+        workflow: { ...systemTimeoutValues },
         patron: {},
         email: { fromAddress: 'system@example.org', fromName: 'System' },
         publicationOptions: emptySet,
@@ -37,7 +61,7 @@ function settingsData(librarySetsExist = false) {
         branding: { hasLogo: false, altText: 'System alt' }
       },
       libraryOverride: {
-        workflow: { outstandingTimeoutRejectionTemplateId: '9007199254740993' },
+        workflow: { ...libraryTimeoutOverrides },
         patron: { loginNote: 'Existing library note' },
         email: { hasPostmarkToken: true },
         publicationOptions: librarySet,
@@ -48,7 +72,7 @@ function settingsData(librarySetsExist = false) {
         templates: [],
         branding: { hasLogo: false, altText: null }
       },
-      workflow: {},
+      workflow: { ...libraryTimeoutOverrides },
       patron: {},
       email: {},
       origins: [],
@@ -57,6 +81,7 @@ function settingsData(librarySetsExist = false) {
       allowedPatronCodeIds: [],
       providers: [],
       formats: [],
+      formatRules: [],
       customFields: [],
       templates: [{ id: '9007199254740993', organizationId: '2', templateKey: 'rejection:used',
         displayName: 'Used rejection', subject: 'Subject', body: 'Body', enabled: true, isCustom: true }],
@@ -73,9 +98,10 @@ function settingsData(librarySetsExist = false) {
       email: { fromAddress: 'system@example.org', fromName: 'System' },
       logoAltText: 'System alt'
     },
-    workflow: {},
+    workflow: { ...systemTimeoutValues, ...libraryTimeoutOverrides },
     ui_text: {},
-    emails: { fromAddress: 'system@example.org', fromName: 'System', templates: [] }
+    emails: { fromAddress: 'system@example.org', fromName: 'System', templates: [] },
+    autoClaimStaff: []
   };
 }
 
@@ -133,6 +159,11 @@ async function flush() {
         saveBody = JSON.parse(options.body);
         saveBodies.push(saveBody);
         librarySetsExist = saveBodies.length === 1;
+        for (const [key, value] of Object.entries(saveBody.workflow || {})) {
+          if (!timeoutKeys.has(key)) continue;
+          if (value === null) delete libraryTimeoutOverrides[key];
+          else libraryTimeoutOverrides[key] = value;
+        }
         if (saveBodies.length === 1) saveCompleted();
         return response(200, { code: 'saved', data: { orgId: '2', version: 'library-2-saved' } });
       }
@@ -156,6 +187,87 @@ async function flush() {
     await controller.activate();
 
     assert.deepStrictEqual(settingsRequests, ['/api/asap/staff/settings?orgId=2']);
+    const timeout = id => document.getElementById(id);
+    const timeoutOverride = key => document.querySelector(
+      `[data-setting-section="workflow"][data-setting-key="${key}"] .settings-override-toggle`);
+    const change = control => control.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    const setChecked = (control, checked) => { control.checked = checked; change(control); };
+    const outstandingEnabled = timeout('outstanding-timeout-enabled');
+    const outstandingDays = timeout('outstanding-timeout-days');
+    const sendRejectionEmail = timeout('outstanding-timeout-send-email');
+    const rejectionTemplate = timeout('outstanding-timeout-rejection-template-id');
+    assert.equal(outstandingEnabled.checked, false);
+    assert.equal(outstandingDays.value, '45');
+    assert.equal(outstandingDays.disabled, true);
+    assert.equal(sendRejectionEmail.checked, true);
+    assert.equal(sendRejectionEmail.disabled, true);
+    assert.equal(rejectionTemplate.value, '9007199254740993');
+    assert.equal(rejectionTemplate.disabled, true);
+
+    setChecked(timeoutOverride('outstandingTimeoutEnabled'), false);
+    assert.equal(outstandingEnabled.checked, true, 'Reset displays the configured System value, not the raw Library row.');
+    assert.equal(outstandingEnabled.disabled, true);
+    assert.equal(outstandingDays.disabled, false, 'An inherited true parent enables its explicit Library dependent.');
+    assert.equal(sendRejectionEmail.disabled, false);
+    assert.equal(rejectionTemplate.disabled, false);
+    setChecked(sendRejectionEmail, false);
+    assert.equal(rejectionTemplate.disabled, true, 'The email checkbox independently gates its template.');
+    assert.equal(rejectionTemplate.value, '9007199254740993', 'Email gating retains the selected template.');
+    setChecked(sendRejectionEmail, true);
+    assert.equal(rejectionTemplate.disabled, false);
+    setChecked(timeoutOverride('outstandingTimeoutEnabled'), true);
+    assert.equal(outstandingEnabled.checked, false, 'Re-enabling Override restores the local checkbox draft.');
+    assert.equal(outstandingDays.value, '45');
+    assert.equal(outstandingDays.disabled, true);
+    assert.equal(rejectionTemplate.value, '9007199254740993');
+    setChecked(timeoutOverride('outstandingTimeoutEnabled'), false);
+    assert.equal(outstandingEnabled.checked, true);
+    assert.equal(outstandingDays.disabled, false);
+
+    const holdEnabled = timeout('hold-pickup-timeout-enabled');
+    const holdDays = timeout('hold-pickup-timeout-days');
+    assert.equal(holdEnabled.checked, true);
+    assert.equal(holdEnabled.disabled, true, 'The inherited parent remains read-only.');
+    assert.equal(holdDays.value, '9');
+    assert.equal(holdDays.disabled, false);
+    setChecked(timeoutOverride('holdPickupTimeoutDays'), false);
+    assert.equal(holdDays.value, '7');
+    assert.equal(holdDays.disabled, true, 'An inherited true parent does not unlock an inherited dependent.');
+    setChecked(timeoutOverride('holdPickupTimeoutDays'), true);
+    assert.equal(holdDays.value, '9', 'Re-enabling the dependent override restores its draft.');
+    assert.equal(holdDays.disabled, false);
+    setChecked(timeoutOverride('holdPickupTimeoutEnabled'), true);
+    setChecked(holdEnabled, false);
+    assert.equal(holdDays.disabled, true);
+    assert.equal(holdDays.value, '9');
+    setChecked(holdEnabled, true);
+    assert.equal(holdDays.disabled, false);
+    setChecked(timeoutOverride('holdPickupTimeoutEnabled'), false);
+
+    const pendingEnabled = timeout('pending-hold-timeout-enabled');
+    const pendingDays = timeout('pending-hold-timeout-days');
+    assert.equal(pendingEnabled.checked, true);
+    assert.equal(pendingDays.disabled, false);
+    setChecked(timeoutOverride('pendingHoldTimeoutEnabled'), false);
+    assert.equal(pendingEnabled.checked, false,
+      'A null configured System value resets a true Library override to the accepted false presentation.');
+    assert.equal(pendingDays.value, '18');
+    assert.equal(pendingDays.disabled, true);
+
+    const additionalEnabled = timeout('additional-copy-timeout-enabled');
+    const additionalDays = timeout('additional-copy-timeout-days');
+    assert.equal(additionalEnabled.checked, false);
+    assert.equal(additionalEnabled.disabled, true);
+    assert.equal(additionalDays.value, '33');
+    assert.equal(additionalDays.disabled, true);
+    setChecked(timeoutOverride('additionalCopyTimeoutEnabled'), true);
+    setChecked(additionalEnabled, true);
+    assert.equal(additionalDays.disabled, false);
+    setChecked(additionalEnabled, false);
+    assert.equal(additionalDays.disabled, true);
+    assert.equal(additionalDays.value, '33');
+    setChecked(timeoutOverride('additionalCopyTimeoutEnabled'), false);
+
     assert.strictEqual(document.getElementById('settings-scope').value, '2');
     assert.strictEqual(document.getElementById('settings-scope-field').hidden, true);
     const currentAddressButton = document.getElementById('use-current-staff-url');
@@ -211,6 +323,19 @@ async function flush() {
     assert.strictEqual(saveBody.orgId, '2');
     assert.strictEqual(saveBody.patron.loginNote, 'Own library edit');
     assert.strictEqual(saveBody.email.fromAddress, 'library@example.org');
+    assert.strictEqual(saveBody.workflow.outstandingTimeoutEnabled, null,
+      'Resetting an enabled override submits an explicit inherited reset.');
+    assert.strictEqual(saveBody.workflow.outstandingTimeoutDays, 45,
+      'Saving with the parent off retains its dependent day override.');
+    assert.strictEqual(saveBody.workflow.outstandingTimeoutSendEmail, true);
+    assert.strictEqual(saveBody.workflow.outstandingTimeoutRejectionTemplateId, '9007199254740993',
+      'Saving with the email parent off retains the selected template override.');
+    assert.strictEqual(saveBody.workflow.pendingHoldTimeoutEnabled, null,
+      'A Library true override can reset to the null System value.');
+    assert.strictEqual(saveBody.workflow.pendingHoldTimeoutDays, 18,
+      'Resetting a parent does not transfer or delete its dependent override.');
+    assert.strictEqual(saveBody.workflow.holdPickupTimeoutDays, 9);
+    assert.strictEqual(saveBody.workflow.additionalCopyTimeoutDays, 33);
     assert.deepStrictEqual(saveBody.patron.publicationOptions, []);
     assert.deepStrictEqual(saveBody.workflow.commonAuthorsList, []);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody.email, 'postmarkToken'), false);
@@ -221,6 +346,20 @@ async function flush() {
 
     for (let attempt = 0; attempt < 20 &&
       document.getElementById('settings-save-title').textContent !== 'No changes'; attempt++) await flush();
+    assert.strictEqual(timeoutOverride('outstandingTimeoutEnabled').checked, false);
+    assert.strictEqual(outstandingEnabled.checked, true);
+    assert.strictEqual(outstandingEnabled.disabled, true);
+    assert.strictEqual(outstandingDays.value, '45');
+    assert.strictEqual(outstandingDays.disabled, false);
+    assert.strictEqual(sendRejectionEmail.checked, true);
+    assert.strictEqual(sendRejectionEmail.disabled, false);
+    assert.strictEqual(rejectionTemplate.value, '9007199254740993');
+    assert.strictEqual(rejectionTemplate.disabled, false);
+    assert.strictEqual(timeoutOverride('pendingHoldTimeoutEnabled').checked, false);
+    assert.strictEqual(pendingEnabled.checked, false);
+    assert.strictEqual(pendingEnabled.disabled, true);
+    assert.strictEqual(pendingDays.value, '18');
+    assert.strictEqual(pendingDays.disabled, true);
     for (const id of ['publication-options-use-system', 'common-creators-use-system']) {
       const toggle = document.getElementById(id);
       assert.strictEqual(toggle.checked, false);
@@ -235,6 +374,23 @@ async function flush() {
     assert.strictEqual(saveBodies.length, 2);
     assert.strictEqual(saveBodies[1].patron.publicationOptions, null);
     assert.strictEqual(saveBodies[1].workflow.commonAuthorsList, null);
+
+    for (let attempt = 0; attempt < 20 &&
+      document.getElementById('settings-save-title').textContent !== 'No changes'; attempt++) await flush();
+    setChecked(timeoutOverride('outstandingTimeoutEnabled'), true);
+    setChecked(outstandingEnabled, false);
+    setChecked(timeoutOverride('outstandingTimeoutEnabled'), false);
+    assert.strictEqual(outstandingEnabled.checked, true);
+    controller.setStaff({
+      id: '3', tenantId: 'tenant-1', objectId: 'object-3', role: 'admin', organizationId: 2
+    });
+    await controller.activate();
+    assert.strictEqual(timeoutOverride('outstandingTimeoutEnabled').checked, false);
+    assert.strictEqual(outstandingEnabled.checked, true,
+      'A replacement staff identity reloads the accepted System value rather than restoring a retired local override draft.');
+    setChecked(timeoutOverride('outstandingTimeoutEnabled'), true);
+    assert.strictEqual(outstandingEnabled.checked, true,
+      'Accepted context population clears the previous identity’s timeout draft cache.');
 
     dom.window.close();
     console.log('Non-super-admin settings scope survives initial option population and save');

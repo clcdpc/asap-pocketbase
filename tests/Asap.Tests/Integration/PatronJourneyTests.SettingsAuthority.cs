@@ -2622,12 +2622,57 @@ public sealed partial class PatronJourneyTests
     public async Task SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp()
     {
         factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         const string retiredKey = "authority_retired";
         const string dynamicKey = "browser_select";
+        var timeoutTemplateKey = $"rejection:settings_timeout_browser_{Guid.NewGuid():N}";
         const long autoClaimStaffId = 9_007_199_254_740_993L;
         long originalStaffUserIdentity = 0;
+        long timeoutTemplateId = 0;
         var autoClaimFormatCode = string.Empty;
         var restoreStaffIdentitySql = string.Empty;
+
+        static WorkflowSettings CopyTimeoutSettings(WorkflowSettings value) => new()
+        {
+            OrganizationId = value.OrganizationId,
+            OutstandingTimeoutEnabled = value.OutstandingTimeoutEnabled,
+            OutstandingTimeoutDays = value.OutstandingTimeoutDays,
+            OutstandingTimeoutSendEmail = value.OutstandingTimeoutSendEmail,
+            OutstandingTimeoutRejectionTemplateId = value.OutstandingTimeoutRejectionTemplateId,
+            HoldPickupTimeoutEnabled = value.HoldPickupTimeoutEnabled,
+            HoldPickupTimeoutDays = value.HoldPickupTimeoutDays,
+            PendingHoldTimeoutEnabled = value.PendingHoldTimeoutEnabled,
+            PendingHoldTimeoutDays = value.PendingHoldTimeoutDays,
+            AdditionalCopyTimeoutEnabled = value.AdditionalCopyTimeoutEnabled,
+            AdditionalCopyTimeoutDays = value.AdditionalCopyTimeoutDays,
+            UpdatedUtc = value.UpdatedUtc
+        };
+        static void RestoreTimeoutSettings(WorkflowSettings target, WorkflowSettings source)
+        {
+            target.OutstandingTimeoutEnabled = source.OutstandingTimeoutEnabled;
+            target.OutstandingTimeoutDays = source.OutstandingTimeoutDays;
+            target.OutstandingTimeoutSendEmail = source.OutstandingTimeoutSendEmail;
+            target.OutstandingTimeoutRejectionTemplateId = source.OutstandingTimeoutRejectionTemplateId;
+            target.HoldPickupTimeoutEnabled = source.HoldPickupTimeoutEnabled;
+            target.HoldPickupTimeoutDays = source.HoldPickupTimeoutDays;
+            target.PendingHoldTimeoutEnabled = source.PendingHoldTimeoutEnabled;
+            target.PendingHoldTimeoutDays = source.PendingHoldTimeoutDays;
+            target.AdditionalCopyTimeoutEnabled = source.AdditionalCopyTimeoutEnabled;
+            target.AdditionalCopyTimeoutDays = source.AdditionalCopyTimeoutDays;
+            target.UpdatedUtc = source.UpdatedUtc;
+        }
+
+        WorkflowSettings originalSystemTimeouts;
+        WorkflowSettings? originalLibraryTimeouts;
+        await using (var snapshot = await contextFactory.CreateDbContextAsync())
+        {
+            originalSystemTimeouts = CopyTimeoutSettings(await snapshot.WorkflowSettings.AsNoTracking()
+                .SingleAsync(item => item.OrganizationId == 1));
+            var libraryTimeouts = await snapshot.WorkflowSettings.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.OrganizationId == 2);
+            originalLibraryTimeouts = libraryTimeouts is null ? null : CopyTimeoutSettings(libraryTimeouts);
+        }
+
         var originalSystemCodes = await ReadPatronCodeRowsAsync(1);
         var originalCodes = await ReadPatronCodeRowsAsync(2);
         var originalOrganizationActive = await ReadCountAsync("SELECT CONVERT(int, [IsActive]) FROM [asap].[Organization] WHERE [Id] = 2;");
@@ -2673,6 +2718,24 @@ public sealed partial class PatronJourneyTests
 
         try
         {
+            await using (var seed = await contextFactory.CreateDbContextAsync())
+            {
+                var timeoutTemplate = new EmailTemplate
+                {
+                    OrganizationId = 1,
+                    TemplateKey = timeoutTemplateKey,
+                    DisplayName = "Timeout dependency browser template",
+                    SubjectTemplate = "Timeout dependency subject",
+                    BodyTemplate = "Timeout dependency body",
+                    IsHidden = false,
+                    IsCustom = false,
+                    SortOrder = 9901
+                };
+                seed.EmailTemplates.Add(timeoutTemplate);
+                await seed.SaveChangesAsync();
+                timeoutTemplateId = timeoutTemplate.Id;
+            }
+
             using var bootstrapClient = factory.CreateClient();
             using var bootstrapResponse = await bootstrapClient.GetAsync("/");
             await using (var identity = new SqlConnection(databaseConnectionString))
@@ -2775,8 +2838,13 @@ public sealed partial class PatronJourneyTests
                     "The browser journey must report the exact selected unused format for SQL verification.");
                 Assert.IsTrue(report.RootElement.GetProperty("libraryEmptyPatronCodeReplacementRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("libraryPatronCodeResetRoundTrip").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("systemTimeoutDependenciesRoundTrip").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("libraryTimeoutDependenciesRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("wildcardOriginNormalized").GetBoolean());
-                Assert.HasCount(2, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+                var states = report.RootElement.GetProperty("states").EnumerateArray().ToArray();
+                Assert.HasCount(4, states);
+                CollectionAssert.AreEquivalent(new[] { "system-desktop", "system-mobile", "library-desktop", "library-mobile" },
+                    states.Select(item => item.GetProperty("viewport").GetString()!).ToArray());
             }
 
             await using (var connection = new SqlConnection(databaseConnectionString))
@@ -2876,6 +2944,30 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
+            await using (var restore = await contextFactory.CreateDbContextAsync())
+            {
+                var system = await restore.WorkflowSettings.SingleAsync(item => item.OrganizationId == 1);
+                RestoreTimeoutSettings(system, originalSystemTimeouts);
+                var library = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
+                if (originalLibraryTimeouts is null)
+                {
+                    if (library is not null)
+                    {
+                        restore.WorkflowSettings.Remove(library);
+                    }
+                }
+                else
+                {
+                    library ??= new WorkflowSettings { OrganizationId = 2, UpdatedUtc = DateTime.UtcNow };
+                    RestoreTimeoutSettings(library, originalLibraryTimeouts);
+                    if (restore.Entry(library).State == EntityState.Detached)
+                    {
+                        restore.WorkflowSettings.Add(library);
+                    }
+                }
+                await restore.SaveChangesAsync();
+            }
+
             await ExecuteNonQueryAsync($"""
                 DELETE FROM [asap].[FormatAutoClaimRule]
                 WHERE [LibraryOrganizationId] = 2 AND [StaffUserId] = @staffId;
@@ -2892,10 +2984,11 @@ public sealed partial class PatronJourneyTests
                 WHERE [LibraryOrganizationId] = 2 AND [FieldKey] IN (N'authority_retired', N'browser_select');
                 UPDATE [asap].[Organization] SET [IsActive] = @organizationActive WHERE [Id] = 2;
                 DELETE FROM [asap].[Organization] WHERE [Id] IN (3, 4);
+                DELETE FROM [asap].[EmailTemplate] WHERE [Id] = @timeoutTemplateId;
                 DELETE FROM [asap].[AdministrativeAudit] WHERE [Id] > @auditBefore;
                 {restoreStaffIdentitySql}
                 """, ("@organizationActive", originalOrganizationActive), ("@auditBefore", auditBefore),
-                ("@staffId", autoClaimStaffId));
+                ("@staffId", autoClaimStaffId), ("@timeoutTemplateId", timeoutTemplateId));
             await RestoreSystemOriginRowsAsync(originalOrigins);
             await RestorePatronCodeRowsAsync(1, originalSystemCodes);
             await RestorePatronCodeRowsAsync(2, originalCodes);

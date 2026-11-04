@@ -130,6 +130,22 @@ const { JSDOM } = require('jsdom');
       'pending-hold-timeout-enabled', 'pending-hold-timeout-days',
       'additional-copy-timeout-enabled', 'additional-copy-timeout-days'
     ]);
+    const timeoutRules = [...document.querySelectorAll('.settings-timeout-rule')];
+    assert.deepStrictEqual(timeoutRules.map(rule => rule.dataset.timeoutRule), [
+      'outstanding', 'hold-pickup', 'pending-hold', 'additional-copy'
+    ]);
+    for (const rule of timeoutRules) {
+      const groupName = document.getElementById(rule.getAttribute('aria-labelledby'));
+      assert.ok(groupName && rule.contains(groupName), `${rule.dataset.timeoutRule} has a programmatic rule name`);
+    }
+    const outstandingRule = timeoutRules[0];
+    assert.deepStrictEqual([...outstandingRule.querySelectorAll(':scope > .settings-field')]
+      .map(field => field.querySelector('input, select').id), ['outstanding-timeout-enabled', 'outstanding-timeout-days']);
+    const timeoutSubgroup = outstandingRule.querySelector('.settings-timeout-subgroup');
+    assert.strictEqual(document.getElementById(timeoutSubgroup.getAttribute('aria-labelledby')).textContent,
+      'Send auto-rejection email', 'The email/template subgroup is named by its existing checkbox label.');
+    assert.deepStrictEqual([...timeoutSubgroup.querySelectorAll('.settings-field input, .settings-field select')]
+      .map(control => control.id), ['outstanding-timeout-send-email', 'outstanding-timeout-rejection-template-id']);
     ['polaris-host', 'polaris-domain', 'format-icon-url-pattern',
       'email-postmark-token', 'email-clear-postmark-token', 'staff-add-email', 'patron-page-title'].forEach(wide);
     const ids = [...document.querySelectorAll('[id]')].map(element => element.id);
@@ -141,6 +157,8 @@ const { JSDOM } = require('jsdom');
     assert.match(css, /\.settings-save-bar\s*\{\s*position:\s*static;/);
     assert.match(css, /\.settings-save-bar\.attention\s*\{\s*position:\s*sticky;\s*bottom:\s*0;/);
     assert.match(css, /@media[^{}]*max-width:\s*760px[^]*?\.settings-grid\s*\{\s*grid-template-columns:\s*1fr;/);
+    assert.match(css, /\.settings-timeout-rule,\s*\.settings-timeout-subgroup\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\);/);
+    assert.match(css, /\.settings-timeout-rule\s+\.settings-field:not\(\.check-field\)\s*>\s*:is\(input,\s*select\)\s*\{\s*box-sizing:\s*border-box;\s*min-width:\s*0;\s*width:\s*100%;\s*max-width:\s*100%;/);
 
     const formats = Array.from({ length: 6 }, (_, index) => ({
       id: String(index + 10),
