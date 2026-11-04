@@ -3080,12 +3080,15 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await page.locator('#settings-nav-patron').click();
     await page.locator('#branding-logo').setInputFiles({
       name: 'preview.gif', mimeType: 'image/gif',
-      buffer: Buffer.from('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 'base64')
+      // An opaque 160×48 two-color GIF makes the preview visibly reviewable.
+      buffer: Buffer.from('R0lGODlhoAAwAPAAAAddh/O8SCwAAAAAoAAwAAAIxgABCBxIsKDBgwgTKlzIsKHDhxAjSpxIsaLFixgzatzIsaPHjyBDihxJsqTJkyhTqlzJsqXLlzBjypxJs6bNmzhz6tzJs6fPn0CDCh1KtKjRowQDKF3KtKnTp1CjSp1KtarVq1izat3KtavXr2DDih1LtqzZs2jTql3Ltq3bt3Djyp1Lt67du3jz6t3Lt6/fv4ADCx5MuLDhw4gTK17MuLHjx0yRSp5MubLly5gza97MubPnz6BDix5NurTp06hTq17NurXQgAA7', 'base64')
     });
     await page.locator('#branding-preview-source').filter({ hasText: /Unsaved image preview/ }).waitFor();
     await page.waitForFunction(() => {
       const image = document.getElementById('branding-preview');
-      return !image.hidden && image.complete && image.naturalWidth > 0 && image.getBoundingClientRect().height > 0;
+      const bounds = image.getBoundingClientRect();
+      return !image.hidden && image.complete && image.naturalWidth === 160 && image.naturalHeight === 48 &&
+        bounds.width >= 128 && bounds.height >= 38;
     });
     const writesBeforePreview = navigationWrites;
     const selectedLogo = await page.locator('#branding-logo').inputValue();
@@ -3110,7 +3113,8 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await fs.writeFile(path.join(brandingSpacingRoot, 'visible-preview.json'), JSON.stringify(report.brandingVisiblePreview, null, 2));
     assert.equal(previewSpacing.scope, '2');
     assert.equal(visiblePreview.loaded, true); assert.equal(visiblePreview.sourceProtocol, 'blob:');
-    assert.equal(visiblePreview.naturalWidth, 1); assert.equal(visiblePreview.naturalHeight, 1);
+    assert.equal(visiblePreview.naturalWidth, 160); assert.equal(visiblePreview.naturalHeight, 48);
+    assert.ok(visiblePreview.image.width >= 128 && visiblePreview.image.height >= 38, 'The loaded Branding preview is visibly sized.');
     assert.equal(visiblePreview.followingGrid, true);
     for (const gap of [visiblePreview.sourceToPreviewGap, visiblePreview.previewToGridGap]) {
       assert.ok(gap >= 11.8 && gap <= 12.2, `Visible Branding preview keeps its 12px gaps: ${JSON.stringify(visiblePreview)}`);

@@ -36,7 +36,7 @@ the parent Codex session.
 | 12 | #406 | Filter/counts/preserved drafts; complete Staff PASS; final shared notice/pointer/focus checks PASS in #436 | Luna MAX / Astra HIGH clear; Terra actual major and eight native renders clear | `a8c0e7d`, corrections in #436 |
 | 13 | #433 | SQL/browser 2/2 PASS, 14 states; Library summary contrast corrected and rechecked in #436 R1 | Luna MAX / Astra HIGH clear; Terra actual groups and both summaries clear | `99469b7`, contrast correction in #436 |
 | 14 | #436 | Focused native history/focus PASS; final C438-1 keyboard and C438-4 reopened-picker corrections have actual passing application receipts below | Luna MAX / Astra HIGH / Terra MAX issue reviews clear; fresh Astra XHIGH independently verifies final corrections | `7d1b247`, `ba2cb6f`, final picker correction below |
-| 15 | #391 | Actual before/after spacing; seven Node files, Settings/native R2 and final Presentation R3 PASS; supplemental visible-logo/Library-roster results tracked in PR #454 | Luna MAX source and Terra MAX actual matrix clear; integrated results remain separately identified | `406b0ca` |
+| 15 | #391 | Actual before/after matrix and final Staff PASS; cleanup feedback 10px, visible 160x48 preview 12px/12px, expanded Library 82 capture verified below | Luna MAX / Astra XHIGH source and receipts clear; Terra MAX actual matrix and three final views clear | `406b0ca`, final spacing correction below |
 
 ## Environment and integration
 
@@ -1296,3 +1296,54 @@ the final component helper is
 The cleanup-feedback CSS remains unchanged for the separate final spacing fix.
 Complete final-revision Browser/acceptance/CI results and final C438-4 disposition
 remain bound to the tested revision in PR #454.
+
+## Final spacing closure — Staff feedback and representative preview
+
+**C438-3 P3** is the other failed complete Browser case at `8f9a8aa`. The Staff
+independent-drafts state renders a nonempty successful-cleanup summary directly
+against its action footer: footer bottom 98.95px equals cleanup top 98.95px.
+The actual saved geometry and matching served/source stylesheet establish 0px;
+the spacing guard throws before screenshot capture, so no exact before PNG is
+claimed. The shared `.settings-cleanup-result` margin is the root cause.
+
+The one-line CSS change adds a 10px top margin. Hidden feedback still occupies
+no space; colors, fonts, action/heading gaps and all behavior remain unchanged.
+The existing strict browser assertion is retained. Existing layout Node checks
+PASS, and Luna MAX / Astra XHIGH independently clear the narrow source change.
+
+Actual full Staff R1 passes **1/1, zero failures/skips**, 208.434s wall, with 74
+states, all 16 roster flags and eight native-200 proofs. Its accepted cleanup
+states measure exactly 10px, and the expanded authorized Library 82 view is clear.
+Terra identifies a separate evidence gap: the existing loaded 1x1 GIF proves the
+two 12px margins but cannot represent a discernible preview. This is not a product
+defect, and the one-pixel image is not claimed as visual acceptance.
+
+The existing first `preview.gif` test payload becomes a compact, opaque 160x48
+blue/gold GIF. Filename, MIME, upload/draft paths, delayed-conflict behavior,
+mutation counters, scope, state counts and 12px assertions stay unchanged. The
+wait and assertions now require exact natural dimensions and useful rendered
+bounds. The separate `pending.gif` fixture remains unchanged. The 231-byte
+deterministic fixture is decoded independently; it adds no runtime dependency or
+production asset. Both independent source reviewers clear the test-only delta.
+
+Full Staff R2 passes **1/1, zero failures/skips**, 199.413s wall (197.562s case).
+Raw receipt: `results/c438-3-staff-r2.trx` and its log/summary. Actual artifact root:
+`staff-95f2d4b0dc7e45c1a62168224e7c45e5`, with `staff-browser-results.json`:
+
+- 74 states, all 16 behavior flags, eight native zoom/CDP-2 focus proofs and
+  retained axe/image/overflow/error/request guards.
+- Visible loaded blob preview: natural/rendered 160x48, 12px above and below,
+  selected file and draft preserved, measurement adds no API mutation.
+- Nonempty cleanup feedback: 10px footer gap across recorded desktop, recovery,
+  dark and narrow states; neighboring heading/actions remain 14px/8px.
+- Expanded Library 82: authorized row/draft preserved, joined summary/editor
+  boundary 0px, 14px heading and 8px action gaps, no hidden leaks or overflow.
+
+Terra MAX independently views the actual three final PNGs and JSON; the visible
+preview, cleanup feedback and expanded Library view are clear. The served
+stylesheet returns HTTP 200 and matches source SHA-256
+`2caf3b0e3632ad535a06182a8efa0a40a1767a91816c6633f33f225d2f615abe`.
+The original failure and one-pixel evidence remain retained with their actual
+scope. Human screen-reader acceptance remains #398. Final exact-revision full
+suite, acceptance, CI and fresh independent closure results belong in PR #454;
+no result-only source commit is required after that final qualification.
