@@ -29,7 +29,7 @@ function sameOrigin(url, origin) {
   try { return new URL(url).origin === origin; } catch { return false; }
 }
 
-async function scan(page, axeSource, artifactRoot, report, viewport, checkTimeoutGeometry = false) {
+async function scan(page, axeSource, artifactRoot, report, viewport, checkTimeoutGeometry = false, fullPage = true) {
   await page.evaluate(axeSource);
   const accessibility = await page.evaluate(async () => {
     const result = await axe.run();
@@ -60,7 +60,7 @@ async function scan(page, axeSource, artifactRoot, report, viewport, checkTimeou
       timeoutControls
     };
   }, checkTimeoutGeometry);
-  await page.screenshot({ path: path.join(artifactRoot, `${viewport}-settings.png`), fullPage: true });
+  await page.screenshot({ path: path.join(artifactRoot, `${viewport}-settings.png`), fullPage });
   report.states.push({ viewport, accessibility, layout });
   assert.deepEqual(accessibility, [], `Serious or critical accessibility violation in ${viewport} settings`);
   assert.ok(layout.scrollWidth <= layout.width, `Horizontal overflow in ${viewport} settings`);
@@ -1264,6 +1264,354 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
   }
 }
 
+async function runSuggestionLimitPlaceholder(page, axeSource, args, report, saveSettings, ready, postedPayloads) {
+  const message = page.locator('#suggestion-limit-message');
+  const trigger = page.locator('#suggestion-limit-placeholder-trigger');
+  const picker = page.locator('#suggestion-limit-placeholder-picker');
+  const option = page.getByRole('button', {
+    name: 'Insert Next available submission date/time — {{next_available_date}}', exact: true
+  });
+  const retainedOption = picker.locator('[data-suggestion-placeholder="next_available_date"]');
+  const override = page.locator(
+    '[data-setting-section="workflow"][data-setting-key="suggestionLimitMessage"] .settings-override-toggle');
+  const scope = page.locator('#settings-scope');
+  let librarySnapshot = null;
+  const readEditor = async () => ({
+    value: await message.inputValue(),
+    overridden: await override.count() ? await override.isChecked() : null
+  });
+  const switchScope = async target => {
+    if (await scope.inputValue() !== target) {
+      if (await page.locator('#settings-save').isEnabled()) {
+        await decideConfirmation(page, () => scope.selectOption(target), dialog => dialog.accept());
+      } else {
+        await scope.selectOption(target);
+      }
+      await ready(target);
+    }
+    await page.locator('#settings-nav-workflow').click();
+    await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+  };
+  const reloadScope = async target => {
+    await page.reload({ waitUntil: 'networkidle' });
+    await ready(target);
+    await page.locator('#settings-nav-workflow').click();
+    await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+  };
+  const saveMessage = async value => {
+    await message.fill(value);
+    const payload = await saveSettings();
+    assert.equal(payload.workflow.suggestionLimitMessage, value,
+      'The current scoped Workflow message is submitted through the ordinary settings payload.');
+    await reloadScope(await scope.inputValue());
+    assert.equal(await message.inputValue(), value, 'The accepted Workflow message survives a full reload.');
+  };
+  const trackInputEvents = () => message.evaluate(node => {
+    window.__suggestionLimitInputTypes = [];
+    node.addEventListener('input', event => window.__suggestionLimitInputTypes.push(event.inputType));
+  });
+
+  await switchScope('system');
+  const systemSnapshot = await readEditor();
+  await switchScope('2');
+  librarySnapshot = await readEditor();
+  await switchScope('system');
+  const postsBeforeOpen = postedPayloads.length;
+  let testError = null;
+  try {
+    assert.equal(await page.locator('#settings-save').isDisabled(), true,
+      'The accepted System message starts with a clean save bar.');
+    await trigger.focus();
+    await trigger.press('Enter');
+    await option.waitFor({ state: 'visible' });
+    assert.equal(await trigger.getAttribute('aria-expanded'), 'true');
+    assert.equal(await picker.locator('[data-suggestion-placeholder]').count(), 1);
+    assert.equal(await page.locator('#settings-save').isDisabled(), true,
+      'Opening the placeholder picker does not dirty the Workflow setting.');
+    assert.equal(postedPayloads.length, postsBeforeOpen, 'Opening the picker does not submit a POST.');
+    await page.keyboard.press('Escape');
+    assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
+    assert.equal(await trigger.evaluate(node => document.activeElement === node), true,
+      'Escape closes the picker and returns focus to its trigger.');
+
+    await trackInputEvents();
+    const systemSource = `Prefix selected suffix ${args.identity.staffId}`;
+    const inserted = `Prefix {{next_available_date}} suffix ${args.identity.staffId}`;
+    assert.notEqual(inserted, systemSnapshot.value, 'The System round trip uses a distinct message draft.');
+    await message.fill(systemSource);
+    await message.evaluate(node => node.setSelectionRange(7, 15));
+    await trigger.focus();
+    await trigger.press('Enter');
+    await option.waitFor({ state: 'visible' });
+    await option.press('Enter');
+    assert.equal(await message.inputValue(), inserted,
+      'Keyboard insertion replaces only the remembered selection and preserves adjacent text.');
+    assert.equal(await message.evaluate(node => document.activeElement === node), true,
+      'Insertion returns focus to the message editor.');
+    const adjacentText = ' adjacent';
+    const adjacentSuffix = ` suffix ${args.identity.staffId}`;
+    const adjacentPrefix = inserted.slice(0, -adjacentSuffix.length);
+    const withAdjacentText = `${adjacentPrefix}${adjacentText}${adjacentSuffix}`;
+    const readRemainingAdjacentText = async () => {
+      const current = await message.inputValue();
+      assert.ok(current.startsWith(adjacentPrefix) && current.endsWith(adjacentSuffix),
+        `Native history preserves the inserted token and surrounding text: ${current}`);
+      const remaining = current.slice(adjacentPrefix.length, current.length - adjacentSuffix.length);
+      assert.ok(adjacentText.startsWith(remaining),
+        `Native history retains only a leading prefix of adjacent typing: ${current}`);
+      return remaining;
+    };
+    await page.keyboard.type(adjacentText);
+    assert.equal(await message.inputValue(), withAdjacentText);
+    let remainingAdjacent = await readRemainingAdjacentText();
+    let undoSteps = 0;
+    while (remainingAdjacent.length > 0) {
+      assert.ok(undoSteps < adjacentText.length, 'Native Undo converges within the adjacent typing length.');
+      await page.keyboard.press('Control+Z');
+      const previousAdjacent = await readRemainingAdjacentText();
+      assert.ok(previousAdjacent.length < remainingAdjacent.length,
+        'Each native Undo removes adjacent text without removing or altering the token.');
+      remainingAdjacent = previousAdjacent;
+      undoSteps++;
+    }
+    assert.equal(await message.inputValue(), inserted,
+      'Native Undo removes all adjacent typing before undoing the placeholder insertion.');
+    await page.keyboard.press('Control+Z');
+    assert.equal(await message.inputValue(), systemSource, 'Native Undo restores the replaced selection.');
+    assert.deepEqual(await message.evaluate(node => [node.selectionStart, node.selectionEnd]), [7, 15],
+      'Undo restores the exact selection replaced by the token.');
+    await page.keyboard.press('Control+Shift+Z');
+    assert.equal(await message.inputValue(), inserted, 'Native Redo restores the token and surrounding text.');
+    remainingAdjacent = await readRemainingAdjacentText();
+    let redoSteps = 0;
+    while (remainingAdjacent.length < adjacentText.length) {
+      assert.ok(redoSteps < adjacentText.length, 'Native Redo converges within the adjacent typing length.');
+      await page.keyboard.press('Control+Shift+Z');
+      const nextAdjacent = await readRemainingAdjacentText();
+      assert.ok(nextAdjacent.length > remainingAdjacent.length,
+        'Each native Redo restores adjacent text without altering the token.');
+      remainingAdjacent = nextAdjacent;
+      redoSteps++;
+    }
+    assert.equal(await message.inputValue(), withAdjacentText,
+      'Native Redo restores all adjacent typing after restoring the placeholder insertion.');
+    const historyInputTypes = await message.evaluate(() => window.__suggestionLimitInputTypes);
+    assert.ok(historyInputTypes.includes('historyUndo') && historyInputTypes.includes('historyRedo'),
+      `Native history events were observed: ${JSON.stringify(historyInputTypes)}`);
+    assert.equal(postedPayloads.length, postsBeforeOpen, 'Editing, Undo and Redo do not autosave.');
+    await saveMessage(inserted);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => new Promise(resolve => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
+    const mobileTriggerBeforeOpen = await trigger.evaluate(node => ({
+      disabled: node.disabled,
+      ariaExpanded: node.getAttribute('aria-expanded'),
+      activeElement: document.activeElement?.id || document.activeElement?.localName || null,
+      viewport: { width: innerWidth, height: innerHeight }
+    }));
+    assert.equal(mobileTriggerBeforeOpen.viewport.width, 390,
+      `The mobile viewport is ready before opening the picker: ${JSON.stringify(mobileTriggerBeforeOpen)}`);
+    assert.equal(mobileTriggerBeforeOpen.disabled, false,
+      `The placeholder trigger remains enabled after the mobile resize: ${JSON.stringify(mobileTriggerBeforeOpen)}`);
+    await trigger.focus();
+    await trigger.press('Enter');
+    try {
+      await page.waitForFunction(() => {
+        const triggerNode = document.getElementById('suggestion-limit-placeholder-trigger');
+        const popupNode = document.getElementById('suggestion-limit-placeholder-picker');
+        return triggerNode?.getAttribute('aria-expanded') === 'true' &&
+          (popupNode?.matches(':popover-open') || popupNode?.hidden === false);
+      }, undefined, { timeout: 5000 });
+    } catch (error) {
+      const mobileOpenDiagnostic = await page.evaluate(() => {
+        const triggerNode = document.getElementById('suggestion-limit-placeholder-trigger');
+        const popupNode = document.getElementById('suggestion-limit-placeholder-picker');
+        return {
+          triggerDisabled: triggerNode?.disabled ?? null,
+          ariaExpanded: triggerNode?.getAttribute('aria-expanded') ?? null,
+          popoverOpen: popupNode?.matches(':popover-open') ?? false,
+          popupHidden: popupNode?.hidden ?? null,
+          activeElement: document.activeElement?.id || document.activeElement?.localName || null,
+          viewport: { width: innerWidth, height: innerHeight }
+        };
+      });
+      throw new Error(`The mobile placeholder popup did not open: ${JSON.stringify(mobileOpenDiagnostic)}`, { cause: error });
+    }
+    await option.waitFor({ state: 'visible' });
+    const popupGeometry = await page.evaluate(() => {
+      const picker = document.getElementById('suggestion-limit-placeholder-picker').getBoundingClientRect();
+      const button = document.querySelector('#suggestion-limit-placeholder-picker [data-suggestion-placeholder]').getBoundingClientRect();
+      return { width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
+        picker: { left: picker.left, right: picker.right, width: picker.width },
+        option: { left: button.left, right: button.right, width: button.width } };
+    });
+    assert.ok(popupGeometry.picker.width > 0 && popupGeometry.picker.left >= -1 &&
+      popupGeometry.picker.right <= popupGeometry.width + 1,
+    `The mobile picker fits inside the viewport: ${JSON.stringify(popupGeometry)}`);
+    assert.ok(popupGeometry.option.left >= popupGeometry.picker.left - 1 &&
+      popupGeometry.option.right <= popupGeometry.picker.right + 1,
+    `The mobile option fits inside the picker: ${JSON.stringify(popupGeometry)}`);
+    assert.ok(popupGeometry.scrollWidth <= popupGeometry.width);
+    const assertMobilePickerOpen = async phase => {
+      const state = await page.evaluate(() => {
+        const triggerNode = document.getElementById('suggestion-limit-placeholder-trigger');
+        const popupNode = document.getElementById('suggestion-limit-placeholder-picker');
+        const optionNode = popupNode?.querySelector('[data-suggestion-placeholder]');
+        const bounds = optionNode?.getBoundingClientRect();
+        return {
+          ariaExpanded: triggerNode?.getAttribute('aria-expanded') ?? null,
+          popoverOpen: popupNode?.matches(':popover-open') ?? false,
+          popupHidden: popupNode?.hidden ?? null,
+          optionVisible: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
+          viewport: { width: innerWidth, height: innerHeight }
+        };
+      });
+      assert.equal(state.ariaExpanded, 'true', `The mobile picker trigger remains expanded ${phase}: ${JSON.stringify(state)}`);
+      assert.equal(state.popoverOpen, true, `The native mobile popover remains open ${phase}: ${JSON.stringify(state)}`);
+      assert.equal(state.optionVisible, true, `The mobile option remains rendered ${phase}: ${JSON.stringify(state)}`);
+    };
+    report.suggestionLimitPlaceholderGeometry = popupGeometry;
+    await assertMobilePickerOpen('before screenshot capture');
+    await scan(page, axeSource, args.artifactRoot, report, 'suggestion-placeholder-mobile', false, false);
+    await assertMobilePickerOpen('after screenshot capture');
+    await page.keyboard.press('Escape');
+    assert.equal(await trigger.evaluate(node => document.activeElement === node), true);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    if ((await message.inputValue()) !== systemSnapshot.value) await saveMessage(systemSnapshot.value);
+    else await reloadScope('system');
+
+    await switchScope('2');
+    assert.deepEqual(await readEditor(), librarySnapshot,
+      'The accepted Library message still reflects the initial System fallback before Library editing.');
+    await trackInputEvents();
+    assert.equal(await override.count(), 1);
+    if (!await override.isChecked()) await override.check();
+    const librarySource = `Library selected suffix ${args.identity.staffId}`;
+    const libraryInserted = `Library {{next_available_date}} suffix ${args.identity.staffId}`;
+    assert.notEqual(libraryInserted, librarySnapshot.value, 'The Library round trip uses a distinct message draft.');
+    await message.fill(librarySource);
+    await message.evaluate(node => node.setSelectionRange(8, 16));
+    await trigger.focus();
+    await trigger.press('Enter');
+    await option.waitFor({ state: 'visible' });
+    await option.press('Enter');
+    assert.equal(await message.inputValue(), libraryInserted,
+      'The Library picker inserts the token into the local override message.');
+    const libraryPayload = await saveSettings();
+    assert.equal(libraryPayload.workflow.suggestionLimitMessage, libraryInserted,
+      'The Library token is saved through the existing Workflow override payload.');
+    await reloadScope('2');
+    assert.equal(await override.isChecked(), true);
+    assert.equal(await message.inputValue(), libraryInserted,
+      'The explicit Library message survives an accepted save and reload.');
+    if (librarySnapshot.overridden) {
+      await message.fill(librarySnapshot.value);
+      const restoreLibraryValue = await saveSettings();
+      assert.equal(restoreLibraryValue.workflow.suggestionLimitMessage, librarySnapshot.value);
+    } else {
+      await override.uncheck();
+      const resetLibraryOverride = await saveSettings();
+      assert.equal(resetLibraryOverride.workflow.suggestionLimitMessage, null,
+        'Restoring an initially inherited message removes only the temporary Library override.');
+    }
+    await reloadScope('2');
+    assert.deepEqual(await readEditor(), librarySnapshot,
+      'The Library message and Override ownership are restored after the insertion round trip.');
+
+    await trackInputEvents();
+    if (!await override.isChecked()) await override.check();
+    await message.fill('Library override draft for stale picker');
+    await message.evaluate(node => node.setSelectionRange(8, 20));
+    await trigger.focus();
+    await trigger.press('Enter');
+    await option.waitFor({ state: 'visible' });
+    await override.evaluate(node => {
+      node.checked = false;
+      node.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    assert.equal(await trigger.isDisabled(), true, 'The inherited Library editor disables its picker.');
+    const overrideDraft = await message.inputValue();
+    const inputEventsBeforeOverrideClick = await message.evaluate(node => window.__suggestionLimitInputTypes.length);
+    await retainedOption.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    assert.equal(await message.inputValue(), overrideDraft, 'A stale Override-value option cannot insert text.');
+    assert.equal(await message.evaluate(node => window.__suggestionLimitInputTypes.length), inputEventsBeforeOverrideClick,
+      'Rejecting an Override-stale action dispatches no editor input.');
+    await reloadScope('2');
+    assert.deepEqual(await readEditor(), librarySnapshot,
+      'The Library message and Override ownership are restored after the stale-value check.');
+
+    await trackInputEvents();
+    if (!await override.isChecked()) await override.check();
+    await message.fill('Library scope draft before switch');
+    await message.evaluate(node => node.setSelectionRange(0, 7));
+    await trigger.focus();
+    await trigger.press('Enter');
+    await option.waitFor({ state: 'visible' });
+    const inputEventsBeforeScopeSwitch = await message.evaluate(node => window.__suggestionLimitInputTypes.length);
+    await switchScope('system');
+    const systemValueAfterSwitch = await message.inputValue();
+    const inputEventsAfterScopeSwitch = await message.evaluate(node => window.__suggestionLimitInputTypes.length);
+    assert.equal(systemValueAfterSwitch, systemSnapshot.value,
+      'The accepted System context replaces the pending Library message.');
+    await retainedOption.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    assert.equal(await message.inputValue(), systemSnapshot.value,
+      'A retained Library option cannot insert into the accepted System context.');
+    assert.equal(await message.evaluate(node => window.__suggestionLimitInputTypes.length), inputEventsAfterScopeSwitch,
+      'A scope-retired picker dispatches no editor input.');
+    assert.ok(inputEventsAfterScopeSwitch >= inputEventsBeforeScopeSwitch);
+    await switchScope('2');
+    assert.deepEqual(await readEditor(), librarySnapshot,
+      'The Library scope switch leaves its persisted message and ownership unchanged.');
+    report.suggestionLimitPlaceholderRoundTrip = true;
+  } catch (error) {
+    testError = error;
+  }
+
+  let cleanupError = null;
+  try {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await switchScope('system');
+    if ((await message.inputValue()) !== systemSnapshot.value) {
+      await message.fill(systemSnapshot.value);
+    }
+    if (await page.locator('#settings-save').isEnabled()) {
+      const payload = await saveSettings();
+      assert.equal(payload.workflow.suggestionLimitMessage, systemSnapshot.value,
+        'Only a dirty, accepted System replacement is saved during restoration.');
+    }
+    await reloadScope('system');
+    assert.equal(await message.inputValue(), systemSnapshot.value,
+      'The accepted System message is restored after the placeholder journey.');
+    await switchScope('2');
+    const currentLibrary = await readEditor();
+    if (librarySnapshot.overridden) {
+      if (!currentLibrary.overridden) await override.check();
+      if (currentLibrary.value !== librarySnapshot.value) await message.fill(librarySnapshot.value);
+    } else if (currentLibrary.overridden) {
+      await override.uncheck();
+    }
+    if (await page.locator('#settings-save').isEnabled()) {
+      const payload = await saveSettings();
+      assert.equal(payload.workflow.suggestionLimitMessage,
+        librarySnapshot.overridden ? librarySnapshot.value : null);
+    }
+    await reloadScope('2');
+    if (librarySnapshot) {
+      assert.deepEqual(await readEditor(), librarySnapshot, 'The final Library state matches its accepted snapshot.');
+    }
+  } catch (error) {
+    cleanupError = error;
+  }
+  if (testError && cleanupError) {
+    throw new AggregateError([testError, cleanupError],
+      'The suggestion placeholder journey failed and its settings snapshots could not both be restored.');
+  }
+  if (testError) throw testError;
+  if (cleanupError) throw cleanupError;
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
   if (!['full', 'system-format-rule', 'library-rule-partial-snapshot', 'library-rule-missing-row', 'library-format-rule-drafts', 'library-metadata', 'campaign2', 'campaign2-library-admin'].includes(args.mode)) {
@@ -1294,6 +1642,7 @@ async function main() {
     libraryEmptyPatronCodeReplacementRoundTrip: false, libraryPatronCodeResetRoundTrip: false,
     systemTimeoutDependenciesRoundTrip: false, libraryTimeoutDependenciesRoundTrip: false,
     systemCommonAuthorsRoundTrip: false, libraryCommonAuthorsRoundTrip: false,
+    suggestionLimitPlaceholderRoundTrip: false,
     wildcardOriginNormalized: false, systemFormatRuleRoundTrip: false, systemFormatRulePost: null,
     systemFormatRulePostCount: 0,
     libraryFormatRuleWitness: {
@@ -2160,6 +2509,7 @@ async function main() {
     await page.locator('#settings-nav-workflow').click();
     report.libraryTimeoutDependenciesRoundTrip = true;
     await runCommonAuthorsOptions(page, axeSource, args, report, saveSettings, waitForSettingsReady);
+    await runSuggestionLimitPlaceholder(page, axeSource, args, report, saveSettings, waitForSettingsReady, postedPayloads);
 
     await page.close();
     await context.close();
@@ -2187,6 +2537,7 @@ async function main() {
   assert.equal(report.libraryTimeoutDependenciesRoundTrip, true);
   assert.equal(report.systemCommonAuthorsRoundTrip, true);
   assert.equal(report.libraryCommonAuthorsRoundTrip, true);
+  assert.equal(report.suggestionLimitPlaceholderRoundTrip, true);
   assert.equal(report.wildcardOriginNormalized, true);
   console.log('Settings editor browser journey passed.');
 }

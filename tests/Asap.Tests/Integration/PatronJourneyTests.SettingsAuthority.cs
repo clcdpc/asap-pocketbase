@@ -2842,14 +2842,16 @@ public sealed partial class PatronJourneyTests
                 Assert.IsTrue(report.RootElement.GetProperty("libraryTimeoutDependenciesRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("systemCommonAuthorsRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("libraryCommonAuthorsRoundTrip").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("suggestionLimitPlaceholderRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("wildcardOriginNormalized").GetBoolean());
                 var states = report.RootElement.GetProperty("states").EnumerateArray().ToArray();
-                Assert.HasCount(8, states);
+                Assert.HasCount(9, states);
                 CollectionAssert.AreEquivalent(new[]
                 {
                     "system-desktop", "system-mobile", "library-desktop", "library-mobile",
                     "common-creators-system-mobile-off", "common-creators-system-mobile-on",
-                    "common-creators-library-mobile-off", "common-creators-library-mobile-on"
+                    "common-creators-library-mobile-off", "common-creators-library-mobile-on",
+                    "suggestion-placeholder-mobile"
                 },
                     states.Select(item => item.GetProperty("viewport").GetString()!).ToArray());
             }

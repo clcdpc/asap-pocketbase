@@ -109,6 +109,37 @@ const { JSDOM } = require('jsdom');
       .some(paragraph => paragraph.textContent.trim() === 'The patron-code eligibility message is displayed as written.'), false);
     const eligibilityMessage = document.getElementById('patron-code-eligibility-message');
     assert.equal(eligibilityMessage.closest('label').querySelector('span').textContent, 'Patron-code eligibility message');
+    const suggestionMessage = document.getElementById('suggestion-limit-message');
+    const suggestionMessageField = suggestionMessage.closest('[data-setting-section="workflow"][data-setting-key="suggestionLimitMessage"]');
+    assert.equal(suggestionMessageField.tagName, 'DIV');
+    assert.equal(document.querySelector('label[for="suggestion-limit-message"] span').textContent, 'Suggestion limit message');
+    const suggestionTools = document.querySelector('.suggestion-message-placeholder-tools');
+    const suggestionTrigger = document.getElementById('suggestion-limit-placeholder-trigger');
+    const suggestionPicker = document.getElementById('suggestion-limit-placeholder-picker');
+    assert.equal(suggestionTools.getAttribute('data-settings-ignore'), 'true',
+      'The insertion presentation controls do not enter the settings draft snapshot.');
+    assert.equal(suggestionTools.contains(suggestionTrigger), true);
+    assert.equal(suggestionTools.contains(suggestionPicker), true);
+    assert.equal(suggestionMessage.closest('[data-settings-ignore="true"]'), null,
+      'The actual workflow editor remains part of normal save/dirty handling.');
+    assert.equal(suggestionTrigger.type, 'button');
+    assert.equal(suggestionTrigger.textContent, 'Insert placeholder');
+    assert.equal(suggestionTrigger.getAttribute('aria-label'), 'Insert placeholder into Suggestion limit message');
+    assert.equal(suggestionTrigger.getAttribute('aria-controls'), suggestionPicker.id);
+    assert.equal(suggestionTrigger.getAttribute('aria-expanded'), 'false');
+    assert.equal(suggestionPicker.getAttribute('role'), 'group');
+    assert.equal(suggestionPicker.getAttribute('aria-label'), 'Placeholders for Suggestion limit message');
+    const suggestionOptions = suggestionPicker.querySelectorAll('[data-suggestion-placeholder]');
+    assert.equal(suggestionOptions.length, 1, 'Only the runtime-supported workflow token is offered.');
+    assert.equal(suggestionOptions[0].dataset.suggestionPlaceholder, 'next_available_date');
+    assert.equal(suggestionOptions[0].getAttribute('aria-label'),
+      'Insert Next available submission date/time — {{next_available_date}}');
+    assert.equal(suggestionOptions[0].querySelector('code').textContent, '{{next_available_date}}');
+    assert.equal(document.getElementById('suggestion-limit-placeholder-status').getAttribute('role'), 'status');
+    assert.equal(document.getElementById('suggestion-limit-placeholder-status').getAttribute('aria-live'), 'polite');
+    assert.equal([...document.querySelectorAll('#settings-workflow .settings-callout')].some(callout =>
+      callout.textContent.includes('The suggestion limit message supports')), false,
+    'The detached suggestion-limit callout is removed.');
     assert.strictEqual(document.querySelector('label[for="patron-code-picker"]').textContent, 'Allowed patron-code IDs');
     assert.strictEqual(document.getElementById('patron-code-picker').getAttribute('role'), 'combobox');
     assert.strictEqual(document.getElementById('patron-code-picker').getAttribute('aria-controls'), 'patron-code-options');
@@ -182,6 +213,9 @@ const { JSDOM } = require('jsdom');
     assert.match(css, /\.settings-timeout-rule,\s*\.settings-timeout-subgroup\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\);/);
     assert.match(css, /\.settings-timeout-rule\s+\.settings-field:not\(\.check-field\)\s*>\s*:is\(input,\s*select\)\s*\{\s*box-sizing:\s*border-box;\s*min-width:\s*0;\s*width:\s*100%;\s*max-width:\s*100%;/);
     assert.match(css, /\.settings-common-authors-options\s*\{\s*min-width:\s*0;\s*margin:\s*0;\s*padding:\s*0;\s*border:\s*0;/);
+    assert.match(css, /\.suggestion-message-editor\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;/);
+    assert.match(css, /\.suggestion-message-placeholder-picker\s*\{[^}]*position:\s*fixed;[^}]*max-width:\s*calc\(100vw\s*-\s*24px\)/);
+    assert.match(css, /@media\s*\(max-width:\s*760px\)[^]*?\.suggestion-message-editor\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\);/);
 
     const formats = Array.from({ length: 6 }, (_, index) => ({
       id: String(index + 10),

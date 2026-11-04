@@ -29,8 +29,8 @@ the parent Codex session.
 | 5 | #409 | Credential help/local outcomes; Node, SQL 3/3, browser 1/1 and checkpoint navigation 271/271 PASS | Luna MAX / Astra HIGH clear after P2 and recovery-title corrections | `2b4068a`, `33288f3` |
 | 6 | #437 | Flag-only masks; Node 13 files, initial SQL/browser 4/4 and final affected browser 1/1 PASS | Luna MAX / Astra HIGH clear after P3 wording correction | `8b3e76e` |
 | 7 | #446 | Named groups/native gates; Node 13/13, Release build and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after coverage/wait/width corrections | `1f40c91` |
-| 8 | #447 | Effective conditional options; Node 13/13, Release build, checkpoint 4/4 unaffected and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after focus/test-wrapper corrections | This commit |
-| 9 | #444 | Pending | Pending Luna MAX | Pending |
+| 8 | #447 | Effective conditional options; Node 13/13, Release build, checkpoint 4/4 unaffected and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after focus/test-wrapper corrections | `3ec9a0d` |
+| 9 | #444 | Nearby single-token picker; focused Node, Settings 13/13, Release and final SQL/browser 1/1 PASS | Luna MAX clear, including actual open-popup and inherited renders | This commit |
 | 10 | #399 | Pending | Pending Luna MAX / Terra MAX | Pending |
 | 11 | #435 | Pending | Pending Luna MAX / Astra HIGH / Terra MAX | Pending |
 | 12 | #406 | Pending | Pending Luna MAX / Astra HIGH / Terra MAX | Pending |
@@ -417,3 +417,53 @@ cannot add, reorder, delete or change Use system list ownership.
   source, three focused Node results, raw receipts, cumulative presentation
   and all four actual mobile on/off renders. Functional closure is clear;
   no actionable finding remains in either review.
+
+The pushed Workflow checkpoint at `3ec9a0d` also passed
+[draft CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/41755614480):
+Release build with zero warnings/errors, 107 SQL-independent native cases with
+zero failures/skips, and all 69 discovered frontend files. Its 141 Python
+contract checks include the expected pre-build native-population class skip;
+this is distinct from native execution, which has no skips. Full CI and IIS
+activation are skipped for this draft checkpoint. `main` was re-fetched and
+remains `7aa0865`; a fresh search still found no new #439 implementation PR.
+
+## #444 — suggestion-limit placeholder picker
+
+The message has one nearby Insert placeholder control, offering only
+“Next available submission date/time — {{next_available_date}}”. The detached
+bottom callout is removed. The textarea retains its Workflow metadata, default/
+override and global save path; only presentation controls are excluded from
+dirty serialization. Activation rechecks the remembered range, text, scope,
+actor, Override, connectedness and editability. Native insertion participates
+in browser history; the existing selection fallback still dispatches input.
+Runtime date substitution and business-time-zone policy are unchanged.
+
+- Four focused Node files PASS, including independent Luna reruns: scope,
+  layout and existing Patron/email placeholder helpers. Parent broader Settings
+  sweep PASS 13/13 (`results/i444-settings-frontend.json`). Release build PASS
+  with zero warnings/errors (`results/i444-build.log`).
+- The retained SQL/browser flow checks clean open/Escape/no POST, exact selected
+  replacement, focus, native token Undo/Redo and restored selection, every
+  adjacent-typing Undo/Redo step, System and Library save/full reload, temporary
+  override reset, hidden stale options and final snapshot restoration.
+- Initial browser receipts remain distinct. R1 failed in unconditional cleanup
+  saving an already-clean restored value and masked the primary error. Cleanup
+  now saves only when dirty and preserves both primary and cleanup failures.
+  R2 exposed an overly specific single-step typing Undo expectation; the bounded
+  native checks pin every intermediate prefix, token, suffix and selection.
+  R3 exposed immediate reopening before the queued resize-close settled; two
+  animation frames and explicit enabled/open checks replace that ordering race.
+  These corrections did not change production source or weaken preservation.
+- R4 PASS 1/1 behaviorally, but actual image review found its full-page capture
+  had closed the native popup through resize. The popup scan now uses viewport
+  capture and requires it to remain open before and after; other scans retain
+  full-page capture. This is recorded separately from visual qualification.
+- Final R5 PASS 1/1, zero failures/skips, 81.309 seconds
+  (`results/i444-settings-browser-r5.trx`). Nine states have zero serious/critical
+  axe findings, missing images, page overflow, external requests or page errors.
+  Timeout and Common creators round-trip flags remain true. The mobile picker
+  fits x=12..378 within 390px; its option fits x=21..369 inside it.
+  Final actual captures/report: `settings-4c2377b869094a3fadae72e82fb63b36`.
+- Final Luna MAX closure independently inspected source, contract, corrected
+  tests, raw R5 receipt, report, actual open-popup PNG and System/Library scope
+  renders. All reviews are clear; no actionable finding remains.

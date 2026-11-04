@@ -544,6 +544,140 @@ export function createSettingsController({
     return !disposed && context && context.generation === contextGeneration && context.scope === String(state.scope) && context.staff === actorKey(state.staff);
   }
 
+  function createSuggestionLimitPlaceholderPicker() {
+    const field = root.querySelector('[data-setting-section="workflow"][data-setting-key="suggestionLimitMessage"]');
+    const control = field?.querySelector('#suggestion-limit-message');
+    const trigger = field?.querySelector('#suggestion-limit-placeholder-trigger');
+    const popup = field?.querySelector('#suggestion-limit-placeholder-picker');
+    const status = field?.querySelector('#suggestion-limit-placeholder-status');
+    const view = root.ownerDocument.defaultView;
+    let opened = null;
+
+    if (!field || !control || !trigger || !popup || !status) return { clear() {}, refresh() {} };
+    if (!popup.showPopover) popup.hidden = true;
+
+    function overrideValue() {
+      return field.querySelector('.settings-override-toggle')?.checked ?? null;
+    }
+
+    function editable() {
+      if (!state.visible || state.activePanel !== 'workflow' || !state.data || state.pendingMutation ||
+          state.loading || state.saving || state.awaitingReload || state.outcomeUncertain || dom.form.inert ||
+          dom.form.hidden || !root.contains(field) || !field.isConnected || !control.isConnected ||
+          !field.contains(control) || control.disabled ||
+          control.readOnly || control.matches(':disabled') || control.closest('[hidden], [inert]')) return false;
+      for (let ancestor = control; ancestor; ancestor = ancestor.parentElement) {
+        const style = view.getComputedStyle(ancestor);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+      }
+      return true;
+    }
+
+    function clear() {
+      const prior = opened;
+      opened = null;
+      trigger.setAttribute('aria-expanded', 'false');
+      status.textContent = '';
+      if (popup.showPopover && popup.matches(':popover-open')) popup.hidePopover();
+      else if (!popup.showPopover) popup.hidden = true;
+      return prior;
+    }
+
+    function refresh() {
+      clear();
+      trigger.disabled = !editable();
+    }
+
+    listen(trigger, 'click', () => {
+      if (opened) {
+        clear();
+        return;
+      }
+      if (!editable()) {
+        refresh();
+        return;
+      }
+      const start = control.selectionStart ?? control.value.length;
+      const end = control.selectionEnd ?? control.value.length;
+      opened = {
+        context: captureSettingsContext(), value: control.value, start, end,
+        override: overrideValue()
+      };
+      trigger.setAttribute('aria-expanded', 'true');
+      if (popup.showPopover) popup.showPopover();
+      else popup.hidden = false;
+      const bounds = trigger.getBoundingClientRect();
+      const width = Math.min(384, Math.max(160, view.innerWidth - 24));
+      popup.style.width = `${width}px`;
+      popup.style.maxHeight = `${Math.max(120, view.innerHeight - 24)}px`;
+      popup.style.left = `${Math.max(12, Math.min(bounds.left, view.innerWidth - width - 12))}px`;
+      const height = popup.getBoundingClientRect().height || popup.offsetHeight;
+      popup.style.top = `${Math.max(12, Math.min(bounds.bottom + 4, view.innerHeight - height - 12))}px`;
+      popup.querySelector('button[data-suggestion-placeholder]')?.focus({ preventScroll: true });
+    });
+
+    listen(popup, 'click', event => {
+      const button = event.target.closest('[data-suggestion-placeholder]');
+      const saved = opened;
+      if (!button || !popup.contains(button) || !saved) return;
+      if (button.dataset.suggestionPlaceholder !== 'next_available_date' ||
+          !isSettingsContextCurrent(saved.context) || !editable() || control.value !== saved.value ||
+          overrideValue() !== saved.override || !popup.contains(root.ownerDocument.activeElement)) {
+        clear();
+        return;
+      }
+
+      const token = '{{next_available_date}}';
+      const before = saved.value;
+      const expected = `${before.slice(0, saved.start)}${token}${before.slice(saved.end)}`;
+      const { scrollTop, scrollLeft } = control;
+      clear();
+      control.focus({ preventScroll: true });
+      control.setSelectionRange(saved.start, saved.end);
+
+      let inputObserved = false;
+      const observeInput = () => { inputObserved = true; };
+      control.addEventListener('input', observeInput);
+      try {
+        if (typeof view.document.execCommand === 'function') view.document.execCommand('insertText', false, token);
+      } catch {
+        // Use the selection-based fallback below when native editing is unavailable.
+      }
+      control.removeEventListener('input', observeInput);
+      if (control.value !== expected) {
+        control.value = before;
+        control.setRangeText(token, saved.start, saved.end, 'end');
+        control.dispatchEvent(new view.Event('input', { bubbles: true }));
+      } else {
+        if (!inputObserved) control.dispatchEvent(new view.Event('input', { bubbles: true }));
+        const caret = saved.start + token.length;
+        control.setSelectionRange(caret, caret);
+      }
+      control.scrollTop = scrollTop;
+      control.scrollLeft = scrollLeft;
+      status.textContent = `Inserted ${token}.`;
+    });
+
+    listen(field, 'change', refresh);
+    listen(control, 'input', () => { if (opened) clear(); });
+    listen(popup, 'toggle', event => { if (event.newState === 'closed' && opened) clear(); });
+    listen(root.ownerDocument, 'focusin', event => {
+      if (opened && event.target !== trigger && !popup.contains(event.target)) clear();
+    });
+    listen(root.ownerDocument, 'keydown', event => {
+      if (event.key !== 'Escape' || !opened) return;
+      event.preventDefault();
+      event.stopPropagation();
+      clear();
+      trigger.focus({ preventScroll: true });
+    });
+    listen(view, 'resize', clear);
+    listen(view, 'blur', clear);
+    return { clear, refresh };
+  }
+
+  const suggestionLimitPlaceholders = createSuggestionLimitPlaceholderPicker();
+
   async function confirmSettings(title, message, confirmLabel, tone = 'normal') {
     const context = captureSettingsContext(), data = state.data, version = state.data?.version;
     const scope = drafts, stamp = drafts.stamp(), panel = state.activePanel;
@@ -610,6 +744,7 @@ export function createSettingsController({
     reads.begin('administration-settings').abort();
     reads.begin('administration-staff-access').abort();
     reads.begin('administration-patron-codes').abort();
+    suggestionLimitPlaceholders.clear();
     state.pendingMutation = operation;
     dom.form.inert = true;
     dom.form.setAttribute('aria-busy', 'true');
@@ -624,12 +759,13 @@ export function createSettingsController({
     dom.form.removeAttribute('aria-busy');
     dom.refresh.disabled = false;
     restoreCommonAuthorsFocus();
+    suggestionLimitPlaceholders.refresh();
   }
 
   function cancelSettingsOperations() {
     emailTest.invalidate();
     state.loading = false;
-    placeholders.clear(); patronPlaceholders.clear();
+    placeholders.clear(); patronPlaceholders.clear(); suggestionLimitPlaceholders.clear();
     scopePreparation = null;
     cancelPolarisTest();
     dom.syncOrganizations.disabled = false;
@@ -1454,6 +1590,7 @@ export function createSettingsController({
     configureScopedFields();
     syncCommonAuthorsOptions(commonAuthorsOptionsHadFocus);
     patronPlaceholders.refresh();
+    suggestionLimitPlaceholders.refresh();
     dom.systemContext.hidden = isSystem();
     root.querySelector('#settings-library-context-title').textContent = `Editing ${data.organization?.name || 'this library'} settings`;
     root.querySelector('#settings-library-context-guidance').textContent =
@@ -1503,7 +1640,7 @@ export function createSettingsController({
     const context = captureSettingsContext();
     state.loading = true;
     emailTest.invalidate();
-    placeholders.clear(); patronPlaceholders.clear();
+    placeholders.clear(); patronPlaceholders.clear(); suggestionLimitPlaceholders.refresh();
     const snapshot = snapshotDrafts();
     const loadState = reads.begin('administration-settings');
     state.organizationsReady = false;
@@ -1573,7 +1710,7 @@ export function createSettingsController({
     } finally {
       clearLoading?.();
       if (loadState.isCurrent() && isSettingsContextCurrent(context)) {
-        state.loading = false; dom.refresh.disabled = false; emailTest.sync();
+        state.loading = false; dom.refresh.disabled = false; emailTest.sync(); suggestionLimitPlaceholders.refresh();
       }
       reads.finish('administration-settings', loadState.token);
     }
@@ -2346,7 +2483,7 @@ export function createSettingsController({
   function activatePanel(name, updateUrl = false) {
     if (disposed || !dom.nav.some(button => button.dataset.settingsPanel === name) ||
         !state.staff || state.staff.role === 'staff') return false;
-    if (name !== state.activePanel) { placeholders.clear(); patronPlaceholders.clear(); }
+    if (name !== state.activePanel) { placeholders.clear(); patronPlaceholders.clear(); suggestionLimitPlaceholders.clear(); }
     state.activePanel = name;
     for (const button of dom.nav) {
       const active = button.dataset.settingsPanel === name;
@@ -2356,6 +2493,7 @@ export function createSettingsController({
     }
     for (const panel of dom.panels) panel.hidden = panel.dataset.settingsPanelContent !== name;
     if (name === 'patron') patronPlaceholders.refresh();
+    if (name === 'workflow') suggestionLimitPlaceholders.refresh();
     const panel = dom.panels.find(item => item.dataset.settingsPanelContent === name);
     panel?.focus({ preventScroll: true });
     if (name === 'staff') void loadStaffAccess();
@@ -2596,7 +2734,7 @@ export function createSettingsController({
     if (state.pendingMutation || state.outcomeUncertain) return false;
     state.visible = false;
     emailTest.invalidate();
-    placeholders.clear(); patronPlaceholders.clear();
+    placeholders.clear(); patronPlaceholders.clear(); suggestionLimitPlaceholders.refresh();
     cancelPolarisTest();
     releaseLogoDraft();
     dom.logo.value = '';

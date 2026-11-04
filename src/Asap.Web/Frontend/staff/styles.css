@@ -377,7 +377,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-domain-field[hidden] { display: none; }
 @media (forced-colors: active) {
   .brand small { color: CanvasText; }
-  .template-placeholder-help, .settings-scope-explanation { border: 1px solid CanvasText; }
+  .template-placeholder-help, .settings-scope-explanation, .suggestion-message-placeholder-picker { border: 1px solid CanvasText; }
   .template-placeholder-button[aria-disabled="true"] { color: GrayText; }
 }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
@@ -397,6 +397,14 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-field[data-setting-section="polaris"] .field-help { font-weight: 400; }
 .settings-grid > .wide { grid-column: 1 / -1; }
 .settings-field textarea { width: 100%; }
+.suggestion-message-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; min-width: 0; }
+.suggestion-message-editor textarea { box-sizing: border-box; min-width: 0; width: 100%; }
+.suggestion-message-placeholder-tools { min-width: 0; }
+.suggestion-message-placeholder-trigger { min-height: 40px; max-width: 100%; }
+.suggestion-message-placeholder-picker { box-sizing: border-box; position: fixed; inset: auto; margin: 0; padding: 8px; max-width: calc(100vw - 24px); overflow: auto; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.suggestion-message-placeholder-picker > button { box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 10px; width: 100%; min-height: 44px; padding: 8px; text-align: left; color: var(--ink); background: transparent; border: 0; border-radius: 3px; cursor: pointer; }
+.suggestion-message-placeholder-picker > button:hover { background: var(--soft); }
+.suggestion-message-placeholder-picker code { overflow-wrap: anywhere; }
 .patron-text-label { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; }
 .patron-placeholder-trigger { min-height: 32px; padding: 4px 8px; font-size: .8rem; }
 .patron-placeholder-picker { position: fixed; inset: auto; margin: 0; padding: 8px; max-width: calc(100vw - 24px); overflow: auto; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
@@ -737,6 +745,7 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
   .settings-timeout-rule, .settings-timeout-subgroup { grid-template-columns: minmax(0, 1fr); }
   .settings-staff-url-control { grid-template-columns: minmax(0, 1fr); }
   .settings-staff-url-control > button { justify-self: start; }
+  .suggestion-message-editor { grid-template-columns: minmax(0, 1fr); }
   .settings-editor-row, .settings-option-row, .settings-format-row, .settings-provider-row, .settings-template-row { grid-template-columns: 1fr; }
   .settings-editor-row > .settings-row-actions, .settings-template-row > .settings-row-actions { grid-column: 1; justify-content: flex-start; }
   .settings-custom-options, .settings-rule-fields, .settings-rule-custom-fields, .settings-template-row > .settings-domain-field:nth-child(4) { grid-column: 1; }

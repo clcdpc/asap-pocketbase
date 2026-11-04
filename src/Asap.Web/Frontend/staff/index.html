@@ -494,12 +494,29 @@
                 <legend>Suggestion and eligibility</legend>
                 <div class="settings-grid">
                   <label class="settings-field" data-setting-section="workflow" data-setting-key="suggestionLimit"><span>Weekly suggestion limit</span><input id="suggestion-limit" type="number" min="1" max="1000"></label>
-                  <label class="settings-field wide" data-setting-section="workflow" data-setting-key="suggestionLimitMessage"><span>Suggestion limit message</span><textarea id="suggestion-limit-message" rows="3"></textarea></label>
+                  <div class="settings-field wide" data-setting-section="workflow" data-setting-key="suggestionLimitMessage">
+                    <label for="suggestion-limit-message"><span>Suggestion limit message</span></label>
+                    <div class="suggestion-message-editor">
+                      <textarea id="suggestion-limit-message" rows="3"></textarea>
+                      <div class="suggestion-message-placeholder-tools" data-settings-ignore="true">
+                        <button id="suggestion-limit-placeholder-trigger" class="secondary-button suggestion-message-placeholder-trigger"
+                          type="button" aria-label="Insert placeholder into Suggestion limit message"
+                          aria-controls="suggestion-limit-placeholder-picker" aria-expanded="false">Insert placeholder</button>
+                        <div id="suggestion-limit-placeholder-picker" class="suggestion-message-placeholder-picker"
+                          popover="auto" role="group" aria-label="Placeholders for Suggestion limit message">
+                          <button type="button" data-suggestion-placeholder="next_available_date"
+                            aria-label="Insert Next available submission date/time — {{next_available_date}}">
+                            <span>Next available submission date/time —</span><code>{{next_available_date}}</code>
+                          </button>
+                        </div>
+                        <span id="suggestion-limit-placeholder-status" class="sr-only" role="status" aria-live="polite"></span>
+                      </div>
+                    </div>
+                  </div>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="allowAnyRegisteredCardLogin"><input id="allow-any-registered-card-login" type="checkbox"><span>Allow any registered card login</span></label>
                   <p class="settings-callout wide">When enabled, an eligible patron from another library can use this portal. Their suggestion follows this portal library's settings and workflow, not their home library's. <a id="cross-library-public-url" href="#" hidden>Open this library's patron portal</a></p>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="allowPatronAutoholdOptOut"><input id="allow-patron-autohold-opt-out" type="checkbox"><span>Allow patron auto-hold opt out</span></label>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="autoPromote"><input id="auto-promote" type="checkbox"><span>Automatically promote approved purchases</span></label>
-                  <p class="settings-callout wide">The suggestion limit message supports <code>{{next_available_date}}</code>.</p>
                 </div>
               </fieldset>
               <fieldset id="patron-code-eligibility" class="settings-fieldset">

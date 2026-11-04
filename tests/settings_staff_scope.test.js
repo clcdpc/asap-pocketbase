@@ -37,6 +37,8 @@ const libraryTimeoutOverrides = {
   additionalCopyTimeoutDays: 33
 };
 const timeoutKeys = new Set(Object.keys(systemTimeoutValues));
+const systemSuggestionLimitMessage = 'System suggestion message';
+let librarySuggestionLimitMessage = 'Library suggestion message';
 let systemCommonAuthorsEnabled = true;
 let libraryCommonAuthorsEnabled = false;
 let libraryCommonAuthorsEnabledOverridden = true;
@@ -65,7 +67,8 @@ function settingsData(librarySetsExist = false) {
       systemSettings: {},
       polaris: {},
       configuredSystem: {
-        workflow: { ...systemTimeoutValues, commonAuthorsEnabled: systemCommonAuthorsEnabled, ...systemCommonAuthorText },
+        workflow: { ...systemTimeoutValues, suggestionLimitMessage: systemSuggestionLimitMessage,
+          commonAuthorsEnabled: systemCommonAuthorsEnabled, ...systemCommonAuthorText },
         patron: {},
         email: { fromAddress: 'system@example.org', fromName: 'System' },
         publicationOptions: emptySet,
@@ -79,6 +82,7 @@ function settingsData(librarySetsExist = false) {
       libraryOverride: {
         workflow: {
           ...libraryTimeoutOverrides,
+          suggestionLimitMessage: librarySuggestionLimitMessage,
           ...(libraryCommonAuthorsEnabledOverridden ? { commonAuthorsEnabled: libraryCommonAuthorsEnabled } : {}),
           ...libraryCommonAuthorText
         },
@@ -94,6 +98,7 @@ function settingsData(librarySetsExist = false) {
       },
       workflow: {
         ...libraryTimeoutOverrides,
+        suggestionLimitMessage: librarySuggestionLimitMessage,
         commonAuthorsEnabled: libraryCommonAuthorsEnabledOverridden ? libraryCommonAuthorsEnabled : systemCommonAuthorsEnabled,
         ...libraryCommonAuthorText
       },
@@ -125,6 +130,7 @@ function settingsData(librarySetsExist = false) {
     workflow: {
       ...systemTimeoutValues,
       ...libraryTimeoutOverrides,
+      suggestionLimitMessage: librarySuggestionLimitMessage ?? systemSuggestionLimitMessage,
       commonAuthorsEnabled: libraryCommonAuthorsEnabledOverridden ? libraryCommonAuthorsEnabled : systemCommonAuthorsEnabled,
       ...libraryCommonAuthorText
     },
@@ -157,6 +163,8 @@ async function flush() {
     global.FormData = dom.window.FormData;
     global.Node = dom.window.Node;
     global.Event = dom.window.Event;
+    document.getElementById('workspace').hidden = false;
+    document.getElementById('settings-view').hidden = false;
     require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
 
     const settingsRequests = [];
@@ -192,6 +200,9 @@ async function flush() {
           if (!timeoutKeys.has(key)) continue;
           if (value === null) delete libraryTimeoutOverrides[key];
           else libraryTimeoutOverrides[key] = value;
+        }
+        if (Object.hasOwn(saveBody.workflow || {}, 'suggestionLimitMessage')) {
+          librarySuggestionLimitMessage = saveBody.workflow.suggestionLimitMessage;
         }
         if (Object.hasOwn(saveBody.workflow || {}, 'commonAuthorsEnabled')) {
           const value = saveBody.workflow.commonAuthorsEnabled;
@@ -234,6 +245,81 @@ async function flush() {
       `[data-setting-section="workflow"][data-setting-key="${key}"] .settings-override-toggle`);
     const change = control => control.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     const setChecked = (control, checked) => { control.checked = checked; change(control); };
+    controller.activatePanel('workflow');
+    const suggestionMessage = timeout('suggestion-limit-message');
+    const suggestionTrigger = timeout('suggestion-limit-placeholder-trigger');
+    const suggestionPicker = timeout('suggestion-limit-placeholder-picker');
+    const suggestionOption = suggestionPicker.querySelector('[data-suggestion-placeholder="next_available_date"]');
+    const suggestionOverride = timeoutOverride('suggestionLimitMessage');
+    let suggestionInputEvents = 0;
+    suggestionMessage.addEventListener('input', () => suggestionInputEvents++);
+    assert.equal(suggestionMessage.value, librarySuggestionLimitMessage);
+    assert.equal(suggestionTrigger.disabled, false, 'An explicitly overridden Library message has an available picker.');
+    assert.equal(controller.isDirty(), false);
+    suggestionTrigger.click();
+    assert.equal(suggestionPicker.hidden, false);
+    assert.equal(suggestionPicker.querySelectorAll('[data-suggestion-placeholder]').length, 1);
+    assert.equal(document.activeElement, suggestionOption);
+    assert.equal(controller.isDirty(), false, 'Opening the picker does not dirty presentation controls.');
+    assert.equal(saveBodies.length, 0, 'Opening the picker never submits settings.');
+    suggestionOption.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    assert.equal(suggestionPicker.hidden, true);
+    assert.equal(document.activeElement, suggestionTrigger, 'Escape returns focus to Insert placeholder.');
+    assert.equal(controller.isDirty(), false);
+
+    suggestionTrigger.click();
+    assert.equal(suggestionPicker.hidden, false, 'The refresh check starts with an open picker.');
+    await controller.load({ silent: true });
+    assert.equal(suggestionPicker.hidden, true, 'An accepted refresh retires an open picker context.');
+    assert.equal(suggestionTrigger.disabled, false, 'The current Library editor is available after refresh.');
+    assert.equal(controller.isDirty(), false);
+
+    suggestionMessage.value = 'Transient selection draft';
+    suggestionMessage.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    suggestionMessage.focus();
+    suggestionMessage.setSelectionRange(11, 20);
+    suggestionTrigger.click();
+    assert.equal(document.activeElement, suggestionOption);
+    const staleOverrideDraft = suggestionMessage.value;
+    setChecked(suggestionOverride, false);
+    assert.equal(suggestionTrigger.disabled, true, 'Resetting to inherited content disables the insertion control.');
+    suggestionOption.click();
+    assert.equal(suggestionMessage.value, staleOverrideDraft,
+      'A retained picker option cannot insert after the Library Override value changes.');
+    assert.equal(suggestionInputEvents, 1, 'Rejected stale options do not dispatch editor input.');
+    setChecked(suggestionOverride, true);
+    suggestionMessage.value = librarySuggestionLimitMessage;
+    suggestionMessage.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    assert.equal(controller.isDirty(), false, 'Restoring the accepted message and Override state leaves a clean draft.');
+
+    suggestionMessage.focus();
+    suggestionMessage.setSelectionRange(0, 0);
+    suggestionTrigger.click();
+    const editor = suggestionMessage.closest('.suggestion-message-editor');
+    const tools = editor.querySelector('.suggestion-message-placeholder-tools');
+    suggestionMessage.remove();
+    suggestionOption.focus();
+    suggestionOption.click();
+    editor.insertBefore(suggestionMessage, tools);
+    assert.equal(suggestionMessage.value, librarySuggestionLimitMessage,
+      'A detached editor cannot receive a retained placeholder insertion.');
+    assert.equal(suggestionInputEvents, 2, 'Detached targets receive no input event.');
+    assert.equal(suggestionPicker.hidden, true);
+
+    const messageDraft = 'left selected right';
+    suggestionMessage.value = messageDraft;
+    suggestionMessage.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    suggestionMessage.focus();
+    suggestionMessage.setSelectionRange(5, 13);
+    suggestionTrigger.click();
+    suggestionOption.click();
+    const insertedMessage = 'left {{next_available_date}} right';
+    assert.equal(suggestionMessage.value, insertedMessage, 'The token replaces only the remembered selection.');
+    assert.equal(document.activeElement, suggestionMessage, 'Insertion returns focus to the message editor.');
+    assert.equal(suggestionMessage.selectionStart, 5 + '{{next_available_date}}'.length);
+    assert.equal(suggestionInputEvents, 4, 'Insertion uses the normal input path exactly once.');
+    assert.equal(controller.isDirty(), true);
+    assert.equal(saveBodies.length, 0, 'Editing with the picker does not autosave.');
     const outstandingEnabled = timeout('outstanding-timeout-enabled');
     const outstandingDays = timeout('outstanding-timeout-days');
     const sendRejectionEmail = timeout('outstanding-timeout-send-email');
@@ -435,6 +521,8 @@ async function flush() {
     assert.strictEqual(saveBody.workflow.commonAuthorsLabel, 'Draft creator label');
     assert.strictEqual(saveBody.workflow.commonAuthorsHelp, 'Draft creator help');
     assert.strictEqual(saveBody.workflow.commonAuthorsMessage, 'Draft creator message');
+    assert.strictEqual(saveBody.workflow.suggestionLimitMessage, insertedMessage,
+      'The inserted token remains part of the existing scoped Workflow payload.');
     assert.deepStrictEqual(saveBody.patron.publicationOptions, []);
     assert.deepStrictEqual(saveBody.workflow.commonAuthorsList, ['Draft library creator'],
       'Saving while collapsed preserves the edited Library creator list and its ownership.');
@@ -461,6 +549,8 @@ async function flush() {
     assert.strictEqual(timeout('common-authors-label').value, 'Draft creator label');
     assert.strictEqual(timeout('common-authors-help').value, 'Draft creator help');
     assert.strictEqual(timeout('common-authors-message').value, 'Draft creator message');
+    assert.strictEqual(suggestionMessage.value, insertedMessage,
+      'The accepted Library setting reload retains the inserted workflow message.');
     assert.strictEqual(commonCreatorsUseSystem.checked, false);
     assert.deepStrictEqual([...commonCreatorsEditor.querySelectorAll('[data-domain-row] input')]
       .map(input => input.value), ['Draft library creator'],
@@ -561,6 +651,29 @@ async function flush() {
     setChecked(timeoutOverride('outstandingTimeoutEnabled'), true);
     assert.strictEqual(outstandingEnabled.checked, true,
       'Accepted context population clears the previous identity’s timeout draft cache.');
+
+    controller.activatePanel('workflow');
+    const retiredActorDraft = 'Retired actor suggestion message';
+    suggestionMessage.value = retiredActorDraft;
+    suggestionMessage.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    suggestionMessage.focus();
+    suggestionMessage.setSelectionRange(8, 13);
+    suggestionTrigger.click();
+    assert.equal(document.activeElement, suggestionOption);
+    controller.setStaff({
+      id: '4', tenantId: 'tenant-1', objectId: 'object-4', role: 'admin', organizationId: 2
+    });
+    await controller.activate();
+    assert.equal(suggestionMessage.value, insertedMessage,
+      'The replacement actor sees the last accepted Library message, not the retired draft.');
+    const replacementActorValue = suggestionMessage.value;
+    const eventsBeforeRetiredClick = suggestionInputEvents;
+    assert.notEqual(replacementActorValue, retiredActorDraft, 'The stale picker test uses a different accepted value.');
+    suggestionOption.click();
+    assert.equal(suggestionMessage.value, replacementActorValue);
+    assert.equal(suggestionInputEvents, eventsBeforeRetiredClick,
+      'A retained placeholder option cannot mutate a retired account context.');
+    assert.equal(controller.isDirty(), false);
 
     dom.window.close();
     console.log('Non-super-admin settings scope survives initial option population and save');
