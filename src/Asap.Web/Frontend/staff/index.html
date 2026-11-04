@@ -457,25 +457,32 @@
             <section id="settings-staff" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="staff" aria-labelledby="settings-nav-staff" hidden>
               <div class="settings-panel-heading">
                 <h2>Staff access</h2>
-                <p>Manage staff accounts, library roles, and scoped administration history.</p>
+                <p>Manage staff profiles, library roles, and account access.</p>
               </div>
-              <fieldset class="settings-fieldset" data-settings-ignore="true">
-                <legend>Add staff user</legend>
+              <div class="settings-staff-roster" data-settings-ignore="true">
+                <div class="settings-staff-toolbar">
+                  <h3>Staff roster</h3>
+                  <div class="form-actions">
+                    <button id="staff-add-toggle" class="primary-button" type="button" aria-expanded="false" aria-controls="staff-add-form"><i class="fa fa-user-plus" aria-hidden="true"></i> Add staff</button>
+                    <button id="staff-refresh" class="secondary-button" type="button"><i class="fa fa-refresh" aria-hidden="true"></i> Refresh roster</button>
+                  </div>
+                </div>
+                <fieldset id="staff-add-form" class="settings-staff-create" aria-labelledby="staff-add-heading" hidden disabled>
+                <h4 id="staff-add-heading">Add staff user</h4>
                 <div class="settings-grid staff-access-form">
-                  <label class="settings-field wide"><span>Email</span><input id="staff-add-email" type="email" autocomplete="username"></label>
+                  <label class="settings-field wide"><span>Email address</span><input id="staff-add-email" type="email" maxlength="320" autocomplete="username" aria-describedby="staff-add-email-help"><small id="staff-add-email-help">Used for sign-in and notifications.</small></label>
                   <label class="settings-field"><span>Role</span><select id="staff-add-role"></select></label>
                   <label class="settings-field"><span>Library</span><select id="staff-add-organization"></select></label>
                 </div>
                 <div class="form-actions settings-inline-actions">
                   <button id="staff-add-submit" class="primary-button" type="button"><i class="fa fa-user-plus" aria-hidden="true"></i> Add staff</button>
-                  <button id="staff-refresh" class="secondary-button" type="button"><i class="fa fa-refresh" aria-hidden="true"></i> Refresh roster</button>
+                  <button id="staff-add-cancel" class="secondary-button" type="button">Cancel</button>
                 </div>
+                </fieldset>
                 <p id="staff-access-status" class="settings-result" role="status" aria-live="polite"></p>
-              </fieldset>
-              <fieldset class="settings-fieldset" data-settings-ignore="true">
-                <legend>Staff roster</legend>
-                <div id="settings-staff-users-list" class="settings-staff-list" aria-live="polite"></div>
-              </fieldset>
+                <div class="settings-staff-columns settings-staff-column-headings" aria-hidden="true"><span>Staff member</span><span>Role</span><span>Library</span><span>Status</span><span></span></div>
+                <div id="settings-staff-users-list" class="settings-staff-list"></div>
+              </div>
               <div class="form-actions settings-inline-actions" data-settings-ignore="true">
                 <button id="staff-audit-history" class="secondary-button" type="button"><i class="fa fa-history" aria-hidden="true"></i> View staff audit history</button>
               </div>

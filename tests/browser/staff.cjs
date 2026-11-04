@@ -3413,6 +3413,205 @@ async function runSettingsUnconfirmedSessionCase(browser, args) {
   }
 }
 
+async function runStaffRoster(browser, args, axeSource, report) {
+  const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const page = await context.newPage(), errors = [], writes = [];
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
+  page.on('request', request => {
+    if (/\/api\/asap\/staff\/users(?:\/|$)/.test(new URL(request.url()).pathname) && request.method() !== 'GET') {
+      writes.push({ path: new URL(request.url()).pathname, method: request.method(), body: request.postDataJSON() });
+    }
+  });
+  const token = (await session(context, args.baseOrigin)).antiforgeryToken;
+  const headers = { 'X-ASAP-Antiforgery': token };
+  const readUsers = async () => {
+    const result = await context.request.get(`${args.baseOrigin}/api/asap/staff/users`);
+    assert.equal(result.status(), 200, await result.text()); return (await result.json()).users;
+  };
+  const seed = async (email, displayName, notificationEmail = email) => {
+    const created = await context.request.post(`${args.baseOrigin}/api/asap/staff/users`, { headers,
+      data: { email, role: 'staff', organizationId: 2 } });
+    assert.equal(created.status(), 201, await created.text());
+    const user = (await created.json()).user;
+    const named = await context.request.patch(`${args.baseOrigin}/api/asap/staff/users/${user.id}`, { headers,
+      data: { version: user.version, email, displayName, notificationEmail } });
+    assert.equal(named.status(), 200, await named.text()); return (await named.json()).user;
+  };
+  const rowFor = id => page.locator(`.settings-staff-row[data-staff-id="${id}"]`);
+  const settled = () => page.waitForFunction(() => !document.getElementById('settings-form').inert &&
+    !document.getElementById('settings-form').hasAttribute('aria-busy') && !document.getElementById('staff-refresh').disabled);
+  const save = async (row, id, status = 200) => {
+    const receipt = page.waitForResponse(response => response.request().method() === 'PUT' &&
+      new URL(response.url()).pathname === `/api/asap/staff/users/${id}`);
+    await row.getByRole('button', { name: 'Save changes', exact: true }).click();
+    const result = await receipt; assert.equal(result.status(), status, await result.text()); await settled(); return result.json();
+  };
+  const capture = async (viewport, state) => {
+    await scan(page, axeSource, args.artifactRoot, report, viewport, state);
+    const containment = await page.evaluate(() => [...document.querySelectorAll(
+      '.settings-staff-row input, .settings-staff-row select, .settings-staff-row button, .settings-staff-toolbar button, #staff-add-form input, #staff-add-form select, #staff-add-form button')]
+      .filter(control => control.getBoundingClientRect().height > 0).map(control => {
+        const bounds = control.getBoundingClientRect(), owner = control.closest('.settings-staff-row, .settings-staff-toolbar, #staff-add-form').getBoundingClientRect();
+        return { name: control.getAttribute('aria-label') || control.id || control.textContent.trim(),
+          contained: bounds.left >= owner.left - 1 && bounds.right <= owner.right + 1 && bounds.left >= -1 && bounds.right <= innerWidth + 1 };
+      }));
+    assert.ok(containment.length > 0); assert.deepEqual(containment.filter(item => !item.contained), [], `${state}: clipped roster controls`);
+    report.states.at(-1).staffContainment = containment;
+  };
+  try {
+    const first = await seed('roster.adams@example.org', 'Rosa Adams <roster>', 'roster.primary@example.org');
+    const second = await seed('roster.zimmer@example.org', 'Beth Zimmer');
+    const inactive = await seed('roster.inactive@example.org', 'Quinn Aardvark', 'inactive.primary@example.org');
+    const deactivated = await context.request.delete(`${args.baseOrigin}/api/asap/staff/users/${inactive.id}`, { headers,
+      data: { version: inactive.version } });
+    assert.equal(deactivated.status(), 200, await deactivated.text());
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=system#settings-staff`, { waitUntil: 'networkidle' });
+    await rowFor(first.id).waitFor(); await settled();
+    assert.equal(await page.locator('.settings-staff-summary[aria-expanded="true"]').count(), 0);
+    assert.equal(await page.locator('#staff-add-form').isHidden(), true);
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'No changes');
+    assert.equal(writes.length, 0);
+    const firstRow = rowFor(first.id), secondRow = rowFor(second.id), inactiveRow = rowFor(inactive.id);
+    const disclosure = firstRow.locator('.settings-staff-summary');
+    assert.equal(await firstRow.locator('.settings-staff-heading strong').textContent(), 'Rosa Adams <roster>');
+    assert.equal(await firstRow.locator('roster').count(), 0, 'runtime display names remain text');
+    await capture('desktop', 'staff-roster-collapsed');
+    await disclosure.focus(); await page.keyboard.press('Enter');
+    assert.equal(await disclosure.getAttribute('aria-expanded'), 'true');
+    assert.equal(await firstRow.getByLabel(/^Email address/).inputValue(), first.userPrincipalName);
+    assert.equal(await firstRow.locator('input[type="email"]').count(), 1);
+    assert.equal(await firstRow.getByText('Used for sign-in and notifications.', { exact: true }).count(), 1);
+    assert.equal(await firstRow.getByRole('button', { name: 'Save changes', exact: true }).isEnabled(), true);
+    await capture('desktop', 'staff-roster-expanded-mismatch');
+    await page.keyboard.press('Space');
+    assert.equal(await disclosure.getAttribute('aria-expanded'), 'false');
+    assert.equal(await firstRow.locator('fieldset').evaluate(fieldset => fieldset.disabled && fieldset.matches(':disabled')), true);
+    await page.keyboard.press('Enter');
+    await secondRow.locator('.settings-staff-summary').click();
+    await firstRow.getByLabel(/^Email address/).fill('invalid-email');
+    await page.keyboard.press('Escape');
+    assert.equal(await disclosure.evaluate(button => document.activeElement === button), true);
+    assert.equal(await firstRow.getByText('Unsaved changes', { exact: true }).isVisible(), true);
+    assert.equal(await firstRow.getByLabel(/^Email address/).isDisabled(), true);
+    await disclosure.click();
+    await page.locator('#settings-nav-patron').click();
+    assert.equal(await firstRow.locator('fieldset').evaluate(fieldset => fieldset.disabled), true);
+    assert.equal(await firstRow.getByLabel(/^Email address/).evaluate(input => input.willValidate), false);
+    const note = page.locator('#patron-login-note'), originalNote = await note.inputValue();
+    await note.fill('Roster native validation ownership probe');
+    await page.locator('#settings-save').click();
+    await page.locator('#settings-message').filter({ hasText: 'competing Settings draft' }).waitFor();
+    assert.equal(writes.length, 0);
+    await note.fill(originalNote);
+    await page.locator('#settings-nav-staff').click();
+    await firstRow.getByRole('button', { name: 'Cancel', exact: true }).click();
+    assert.equal((await readUsers()).find(user => user.id === first.id).notificationEmail, 'roster.primary@example.org', 'pure UI lifecycle never rewrites mismatched accepted emails');
+    const synchronized = await save(firstRow, first.id);
+    assert.equal(synchronized.user.userPrincipalName, first.userPrincipalName);
+    assert.equal(synchronized.user.notificationEmail, first.userPrincipalName);
+    assert.equal(writes.length, 1);
+
+    await firstRow.getByLabel(/^Display name/).fill('Rosa Zulu');
+    await firstRow.getByLabel(/^Email address/).fill('roster.saved@example.org');
+    await firstRow.getByLabel(/^Role/).selectOption('admin');
+    await firstRow.getByLabel(/^Library/).selectOption('82');
+    await secondRow.getByLabel(/^Display name/).fill('Independent draft');
+    await secondRow.getByLabel(/^Role/).selectOption('admin');
+    await firstRow.getByRole('button', { name: 'Save changes', exact: true }).click();
+    await page.locator('#settings-message').filter({ hasText: 'competing Settings draft' }).waitFor();
+    assert.equal(writes.length, 1);
+    await disclosure.click(); await disclosure.click();
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
+    assert.equal(await secondRow.getByLabel(/^Display name/).inputValue(), 'Independent draft');
+    await capture('desktop', 'staff-roster-independent-drafts');
+    await secondRow.getByRole('button', { name: 'Cancel', exact: true }).click();
+    assert.equal(await secondRow.getByLabel(/^Display name/).inputValue(), second.displayName);
+    assert.equal(await secondRow.getByLabel(/^Role/).inputValue(), second.role);
+    await firstRow.getByLabel(/^Email address/).fill(second.userPrincipalName);
+    await save(firstRow, first.id, 409);
+    const unchanged = (await readUsers()).find(user => user.id === first.id);
+    assert.equal(unchanged.displayName, first.displayName); assert.equal(unchanged.role, first.role); assert.equal(unchanged.organizationId, 2);
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
+    const external = await context.request.patch(`${args.baseOrigin}/api/asap/staff/users/${first.id}`, { headers,
+      data: { version: unchanged.version, email: first.userPrincipalName, displayName: 'External Adams', notificationEmail: first.userPrincipalName } });
+    assert.equal(external.status(), 200, await external.text());
+    await firstRow.getByLabel(/^Email address/).fill('roster.saved@example.org');
+    await save(firstRow, first.id, 409);
+    await firstRow.getByText(/Saved values changed elsewhere/).waitFor();
+    assert.equal(await firstRow.getByRole('button', { name: 'Save changes', exact: true }).isDisabled(), true);
+    await capture('desktop', 'staff-roster-conflict');
+    await firstRow.getByRole('button', { name: 'Cancel', exact: true }).click();
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'External Adams');
+    const mountedEmail = await firstRow.getByLabel(/^Email address/).elementHandle();
+    await firstRow.getByLabel(/^Email address/).fill('roster.saved@example.org');
+    await firstRow.getByLabel(/^Display name/).fill('Rosa Zulu');
+    await firstRow.getByLabel(/^Role/).selectOption('admin'); await firstRow.getByLabel(/^Library/).selectOption('82');
+    const beforeSave = writes.length;
+    const accepted = await save(firstRow, first.id);
+    assert.equal(writes.length, beforeSave + 1, 'unified Save dispatches exactly one mutation');
+    assert.equal(writes.at(-1).method, 'PUT');
+    assert.deepEqual(writes.at(-1).body, { version: (await external.json()).user.version, email: 'roster.saved@example.org',
+      displayName: 'Rosa Zulu', role: 'admin', organizationId: 82 });
+    assert.equal(accepted.user.notificationEmail, 'roster.saved@example.org');
+    assert.equal(await mountedEmail.evaluate(input => input === document.querySelector(`[data-staff-id="${input.closest('article').dataset.staffId}"] input[type="email"]`)), true);
+    assert.equal(await disclosure.evaluate(button => document.activeElement === button), true);
+    const order = await page.locator('.settings-staff-row').evaluateAll(rows => rows.map(row => ({ id: row.dataset.staffId, inactive: row.classList.contains('inactive') })));
+    assert.ok(order.findIndex(row => row.id === second.id) < order.findIndex(row => row.id === first.id));
+    assert.ok(order.findIndex(row => row.id === first.id) < order.findIndex(row => row.id === inactive.id));
+    assert.equal(order.some((row, index) => row.inactive && order.slice(index + 1).some(next => !next.inactive)), false);
+    await capture('desktop', 'staff-roster-saved-reordered');
+
+    await firstRow.getByLabel(/^Display name/).fill('Lifecycle draft');
+    const beforeLifecycle = writes.length;
+    await decideConfirmation(page, () => firstRow.getByRole('button', { name: 'Deactivate', exact: true }).click(), dialog => dialog.accept());
+    await page.locator('#settings-message').filter({ hasText: 'competing Settings draft' }).waitFor();
+    assert.equal(writes.length, beforeLifecycle); assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Lifecycle draft');
+    await decideConfirmation(page, () => page.locator('#staff-refresh').click(), dialog => dialog.dismiss());
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Lifecycle draft');
+    await decideConfirmation(page, () => page.locator('#staff-refresh').click(), dialog => dialog.accept()); await settled();
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
+    await inactiveRow.locator('.settings-staff-summary').click();
+    await decideConfirmation(page, () => inactiveRow.getByRole('button', { name: 'Reactivate', exact: true }).click(), dialog => dialog.dismiss());
+    assert.equal(writes.length, beforeLifecycle);
+    const reactivate = page.waitForResponse(response => new URL(response.url()).pathname === `/api/asap/staff/users/${inactive.id}/reactivate`);
+    await decideConfirmation(page, () => inactiveRow.getByRole('button', { name: 'Reactivate', exact: true }).click(), dialog => dialog.accept());
+    assert.equal((await reactivate).status(), 200); await settled();
+    assert.deepEqual(Object.keys(writes.at(-1).body), ['version']);
+    assert.equal((await readUsers()).find(user => user.id === inactive.id).notificationEmail, 'inactive.primary@example.org');
+
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await capture('desktop-dark', 'staff-roster-expanded');
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.setViewportSize({ width: 760, height: 900 });
+    await capture('tablet', 'staff-roster-expanded');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await capture('mobile', 'staff-roster-expanded');
+    await page.locator('#staff-add-toggle').click();
+    assert.equal(await page.locator('#staff-add-email').evaluate(input => input === document.activeElement), true);
+    const beforeCreate = writes.length;
+    await page.locator('#staff-add-submit').click();
+    await page.locator('#staff-access-status').filter({ hasText: 'Email address is required.' }).waitFor();
+    assert.equal(writes.length, beforeCreate);
+    await page.locator('#staff-add-email').fill('roster.ui@example.org');
+    await page.locator('#staff-add-role').selectOption('staff'); await page.locator('#staff-add-organization').selectOption('2');
+    await capture('mobile', 'staff-roster-add');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#staff-add-form').isHidden(), true);
+    await page.locator('#staff-add-toggle').click();
+    assert.equal(await page.locator('#staff-add-email').inputValue(), 'roster.ui@example.org');
+    const created = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/asap/staff/users');
+    await page.locator('#staff-add-submit').click(); const result = await created;
+    assert.equal(result.status(), 201, await result.text()); await settled();
+    const newUser = (await result.json()).user;
+    assert.equal(newUser.userPrincipalName, newUser.notificationEmail); assert.equal(newUser.displayName, null);
+    assert.equal(await page.locator('#staff-add-form').isHidden(), true);
+    assert.equal(await page.locator('#staff-add-toggle').evaluate(button => button === document.activeElement), true);
+    assert.deepEqual(errors, []); assert.equal(traffic.externalRequests, 0);
+    report.staffRoster = { disclosures: true, independentDrafts: true, singleEmail: true, atomicSave: true,
+      conflictRecovery: true, lifecycle: true, create: true, nativeValidationOwner: true, keyboardFocus: true, responsiveContainment: true };
+  } finally { await context.close(); }
+}
+
 async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, report) {
   const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const external = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
@@ -3432,19 +3631,23 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
     await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=system#settings-staff`, { waitUntil: 'networkidle' });
     await page.locator('#settings-form').waitFor({ state: 'visible' });
     await page.locator('#settings-nav-staff').click();
-    const row = page.locator('.settings-staff-row').filter({ has: page.getByLabel(`Authentication email for ${original.displayName || original.userPrincipalName}`, { exact: true }) });
+    const row = page.locator(`.settings-staff-row[data-staff-id="${original.id}"]`);
     await row.waitFor();
+    await row.locator('.settings-staff-summary').click();
     await row.getByLabel(/^Display name/).fill('Authoritative browser actor');
-    await row.getByLabel(/^Notification email/).fill('actor-revision@example.org');
-    const profileSaved = page.waitForResponse(response => response.request().method() === 'PATCH' &&
+    assert.equal(await row.getByLabel(/^Email address/).inputValue(), original.userPrincipalName,
+      'The editor displays the stored authentication email; session authenticationEmail is its normalized identity key.');
+    const profileSaved = page.waitForResponse(response => response.request().method() === 'PUT' &&
       new URL(response.url()).pathname === `/api/asap/staff/users/${original.id}`);
-    await row.getByRole('button', { name: 'Save profile', exact: true }).click();
+    await row.getByRole('button', { name: 'Save changes', exact: true }).click();
     const profileResponse = await profileSaved;
     assert.equal(profileResponse.status(), 200, await profileResponse.text());
-    await page.locator('#staff-access-status').filter({ hasText: /Staff profile saved/ }).waitFor();
+    await page.locator('#staff-access-status').filter({ hasText: /Staff changes saved/ }).waitFor();
     await page.waitForFunction(() => !document.getElementById('settings-form').inert);
     const revised = (await session(context, args.baseOrigin)).staff;
     assert.notEqual(revised.version, original.version, 'real SQL Staff Access metadata write advances rowversion');
+    assert.equal(revised.userPrincipalName, original.userPrincipalName);
+    assert.equal(revised.notificationEmail, revised.userPrincipalName);
     for (const key of ['id', 'tenantId', 'authenticationEmail', 'role', 'organizationId']) assert.equal(revised[key], original[key]);
     assert.equal(await page.locator('#staff-identity').textContent(), revised.displayName);
     await page.getByRole('button', { name: 'Profile', exact: true }).click();
@@ -3552,6 +3755,7 @@ async function runSettingsLayout(browser, args, axeSource, report) {
           { waitUntil: 'networkidle' });
         await page.locator(`#settings-${section.name}`).waitFor({ state: 'visible' });
         await page.waitForFunction(() => !document.getElementById('settings-form').hidden);
+        if (section.name === 'staff') await page.locator('#staff-add-toggle').click();
         assert.equal(await page.locator('.settings-save-bar.attention').count(), 0);
         assert.equal(await page.locator('.settings-save-bar').evaluate(bar => getComputedStyle(bar).position), 'static');
         assert.equal(await page.locator('#settings-save').isDisabled(), true);
@@ -3872,10 +4076,11 @@ async function main() {
     await runStaffSuggestion(browser, args, axeSource, report);
     await runClosedDeletionControls(browser, args, axeSource, report);
     await runCurrentStaffPreferenceRevisions(browser, args, axeSource, report);
+    await runStaffRoster(browser, args, axeSource, report);
     await runSettingsLayout(browser, args, axeSource, report);
     await runOperationalCatalogCommits(browser, args, axeSource, report);
     await runRejectionNotificationAndReopen(browser, args, axeSource, report);
-    assert.equal(report.states.length, 61, 'Expected sixty-one major staff browser states');
+    assert.equal(report.states.length, 70, 'Expected seventy major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),

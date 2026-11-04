@@ -499,6 +499,7 @@ for (const [role, scope, expected] of [['super_admin', 'system', 'all'], ['super
     fixture(`?stage=settings&settingsScope=${scope}#settings-staff`, async ui => {
       const link = ui.get('#staff-audit-history');
       assert.ok(link); assert.equal(ui.get('#settings-staff-audit-list'), null); assert.equal(ui.get('#staff-audit-refresh'), null);
+      ui.get('#staff-add-toggle').click();
       ui.edit('#staff-add-email', 'unsaved-person@example.org');
       const before = ui.dom.window.location.href;
       link.click(); await settle();
@@ -520,6 +521,7 @@ for (const [role, scope, expected] of [['super_admin', 'system', 'all'], ['super
       await ui.forward(); assert.equal(ui.get('#operations-email-panel').hidden, false);
       await ui.back(); await ui.back();
       assert.equal(ui.get('#settings-view').hidden, false, 'the Staff entry is one navigation step from Settings');
+      if (ui.get('#staff-add-form').hidden) ui.get('#staff-add-toggle').click();
       ui.denyDiscard(); ui.edit('#staff-add-email', 'keep-forward-draft@example.org');
       await ui.forward();
       assert.equal(ui.get('#settings-view').hidden, false); assert.equal(ui.get('#staff-add-email').value, 'keep-forward-draft@example.org');
@@ -2184,11 +2186,11 @@ for (const kind of ['Title', 'Additional Copy']) {
         const current = ui.readStaff();
         if (pathname.endsWith('/users') && init.method === 'GET') return response(200, { users: [{ ...current, active: true, userPrincipalName: current.authenticationEmail }] });
         if (pathname.endsWith('/audit')) return response(200, { data: [] });
-        if (pathname.endsWith('/users/20') && init.method === 'PATCH') {
+        if (pathname.endsWith('/users/20') && init.method === 'PUT') {
           const body = JSON.parse(init.body);
           assert.equal(body.email, current.authenticationEmail); assert.equal(body.version, 'actor-v1');
-          ui.setStaff({ displayName: body.displayName, notificationEmail: body.notificationEmail, version: 'actor-v2' });
-          saved = true; return response(200, { user: { ...ui.readStaff(), active: true },
+          ui.setStaff({ displayName: body.displayName, notificationEmail: body.email, version: 'actor-v2' });
+          saved = true; return response(200, { user: { ...ui.readStaff(), userPrincipalName: body.email, active: true },
             cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 } });
         }
         if (pathname === '/api/asap/config') { configurationReads++; return response(200, { availableFormats: ['book'], formatLabels: { book: 'Cached configuration' } }); }
@@ -2202,14 +2204,14 @@ for (const kind of ['Title', 'Additional Copy']) {
       ui.get('[data-view="settings"]').click(); await settle();
       ui.get('[data-settings-panel="staff"]').click();
       await until(() => ui.get('.settings-staff-row'), 'own admin roster row');
+      ui.get('.settings-staff-summary').click();
       ui.edit('.settings-staff-row input[aria-label^="Display name"]', 'New authoritative name');
-      ui.edit('.settings-staff-row input[aria-label^="Notification email"]', 'new-notification@example.org');
-      [...ui.get('.settings-staff-row').querySelectorAll('button')].find(button => button.textContent === 'Save profile').click();
-      await until(() => saved && /Staff profile saved/.test(ui.get('#staff-access-status').textContent) && !ui.get('#settings-form').inert, 'metadata committed and authoritative session/roster accepted');
+      [...ui.get('.settings-staff-row').querySelectorAll('button')].find(button => button.textContent === 'Save changes').click();
+      await until(() => saved && /Staff changes saved/.test(ui.get('#staff-access-status').textContent) && !ui.get('#settings-form').inert, 'metadata committed and authoritative session/roster accepted');
       assert.equal(ui.get('#workspace').hidden, false); assert.equal(ui.get('#staff-identity').textContent, 'New authoritative name');
-      assert.equal(ui.get('#notification-email').value, 'new-notification@example.org');
+      assert.equal(ui.get('#notification-email').value, 'admin@example.org', 'explicit save synchronizes the primary email without changing sign-in identity');
       ui.get('[data-view="profile"]').click(); await settle();
-      assert.equal(ui.get('#notification-email').value, 'new-notification@example.org');
+      assert.equal(ui.get('#notification-email').value, 'admin@example.org');
       ui.get('[data-view="queue"]').click(); await settle(); await ui.open();
       assert.equal(configurationReads, 1, 'staff roster mutation preserves the Title configuration cache');
       if (kind === 'Additional Copy') {
@@ -2257,22 +2259,25 @@ for (const boundary of ['authenticationEmail', 'role', 'organizationId']) {
         const current = ui.readStaff();
         if (pathname.endsWith('/users') && init.method === 'GET') return response(200, { users: [{ ...current, active: true, userPrincipalName: current.authenticationEmail }] });
         if (pathname.endsWith('/audit')) return response(200, { data: [] });
-        if (pathname.endsWith(boundary === 'authenticationEmail' ? '/users/20' : '/users/20/role') && ['PATCH', 'POST'].includes(init.method)) {
+        if (pathname.endsWith('/users/20') && init.method === 'PUT') {
+          const body = JSON.parse(init.body);
           ui.setStaff(boundary === 'authenticationEmail' ? { authenticationEmail: 'changed@example.org', version: 'access-v2' }
             : boundary === 'role' ? { role: 'staff', version: 'access-v2' } : { organizationId: 2, version: 'access-v2' });
-          return response(200, { user: ui.readStaff(),
+          return response(200, { user: { ...ui.readStaff(), userPrincipalName: body.email, notificationEmail: body.email,
+            displayName: body.displayName, role: body.role, organizationId: body.organizationId },
             cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 } });
         }
       });
       ui.get('[data-settings-panel="staff"]').click(); await until(() => ui.get('.settings-staff-row'), 'own roster');
-      if (boundary === 'authenticationEmail') ui.edit('.settings-staff-row input[aria-label^="Authentication email"]', 'changed@example.org');
+      ui.get('.settings-staff-summary').click();
+      if (boundary === 'authenticationEmail') ui.edit('.settings-staff-row input[aria-label^="Email address"]', 'changed@example.org');
       else {
         const role = ui.get('.settings-staff-row select[aria-label^="Role"]'); role.value = 'staff';
         role.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
       }
-      [...ui.get('.settings-staff-row').querySelectorAll('button')].find(button => button.textContent === (boundary === 'authenticationEmail' ? 'Save profile' : 'Update access')).click();
+      [...ui.get('.settings-staff-row').querySelectorAll('button')].find(button => button.textContent === 'Save changes').click();
       await until(() => ui.get('#workspace').hidden, 'identity boundary revokes the workspace');
-      assert.match(ui.get('#signed-out-message').textContent, /Staff (profile saved|access updated)/, 'confirmed commit receipt survives access loss');
+      assert.match(ui.get('#signed-out-message').textContent, /Staff changes saved/, 'confirmed commit receipt survives access loss');
     }, { staff: { tenantId: 'access-boundary', authenticationEmail: 'admin@example.org' } }));
 }
 
@@ -2510,10 +2515,13 @@ for (const copy of [false, true]) {
             return response(200, { users: [{ ...staffB, active: !committed || change === 'profile' }] });
           }
           if (pathname.endsWith('/audit')) return response(200, { data: [] });
-          if (pathname.endsWith('/users/21') && ['DELETE', 'PATCH'].includes(init.method)) {
+          if (pathname.endsWith('/users/21') && ['DELETE', 'PUT'].includes(init.method)) {
             committed = true;
             if (change === 'unconfirmed cleanup review') return response(503, { message: 'Committed response lost' });
-            return response(200, { user: { ...staffB, active: init.method !== 'DELETE' },
+            const body = JSON.parse(init.body);
+            return response(200, { user: { ...staffB, active: init.method !== 'DELETE',
+              ...(init.method === 'PUT' ? { userPrincipalName: body.email, notificationEmail: body.email,
+                displayName: body.displayName, role: body.role, organizationId: body.organizationId } : {}) },
               cleanup: init.method === 'DELETE'
                 ? { rulesDeactivated: 0, openTitleClaimsCleared: 1, openAdditionalCopyClaimsCleared: 1 }
                 : { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 } });
@@ -2533,13 +2541,14 @@ for (const copy of [false, true]) {
         await until(() => !ui.get('#settings-form').hidden, 'Settings loaded');
         ui.get('[data-settings-panel="staff"]').click();
         await until(() => ui.get('.settings-staff-row'), 'Staff B roster loaded');
+        ui.get('.settings-staff-summary').click();
         if (change !== 'roster only') {
           ui.allowDiscard();
           if (change === 'profile') ui.edit('.settings-staff-row input[aria-label^="Display name"]', 'Renamed Staff B');
           [...ui.get('.settings-staff-row').querySelectorAll('button')]
-            .find(button => button.textContent === (change === 'profile' ? 'Save profile' : 'Deactivate')).click();
+            .find(button => button.textContent === (change === 'profile' ? 'Save changes' : 'Deactivate')).click();
           await until(() => committed && !ui.get('#settings-form').hasAttribute('aria-busy') &&
-            /deactivated|profile saved|uncertain/.test(ui.get('#staff-access-status').textContent + ui.get('#settings-message').textContent), 'Staff Access committed and review settled');
+            /deactivated|changes saved|uncertain/.test(ui.get('#staff-access-status').textContent + ui.get('#settings-message').textContent), 'Staff Access committed and review settled');
           if (change === 'unconfirmed cleanup review') {
             ui.get('#staff-refresh').click();
             await until(() => !ui.get('#staff-refresh').disabled && !ui.get('#settings-form').inert &&

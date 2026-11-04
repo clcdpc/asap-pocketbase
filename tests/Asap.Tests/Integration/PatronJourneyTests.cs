@@ -566,7 +566,11 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(61, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(70, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            foreach (var flag in new[] { "disclosures", "independentDrafts", "singleEmail", "atomicSave", "conflictRecovery", "lifecycle", "create", "nativeValidationOwner", "keyboardFocus", "responsiveContainment" })
+            {
+                Assert.IsTrue(report.RootElement.GetProperty("staffRoster").GetProperty(flag).GetBoolean(), flag);
+            }
             Assert.IsTrue(report.RootElement.GetProperty("rejectionNotificationAndReopen").GetBoolean());
             var analytics = report.RootElement.GetProperty("analytics");
             Assert.AreEqual("all", analytics.GetProperty("desktopSuperAdminScope").GetString());
@@ -2731,7 +2735,9 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
     }
 
     [TestMethod]
-    public async Task StaffRoleContractionRetainsInScopeWorkAndClearsOnlyOutOfScopeOperations()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task StaffRoleContractionRetainsInScopeWorkAndClearsOnlyOutOfScopeOperations(bool unified)
     {
         var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
         using var client = factory!.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
@@ -2758,7 +2764,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 INSERT INTO [asap].[StaffUser]
                     ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
                      [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive])
-                VALUES (@tenantId, @targetObjectId, N'contracting.admin@example.org', N'CONTRACTING.ADMIN@EXAMPLE.ORG',
+                VALUES (@tenantId, @targetObjectId, @targetEmail, UPPER(@targetEmail),
                         N'Contracting Administrator', N'contracting.admin@example.org', N'super_admin', 1, 1);
                 DECLARE @targetId bigint = SCOPE_IDENTITY();
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
@@ -2791,6 +2797,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             seed.Parameters.AddWithValue("@actorObjectId", Guid.Parse(identity.ObjectId!));
             seed.Parameters.AddWithValue("@tenantId", Guid.Parse(identity.TenantId!));
             seed.Parameters.AddWithValue("@targetObjectId", targetObjectId);
+            seed.Parameters.AddWithValue("@targetEmail", unified ? "contracting.unified@example.org" : "contracting.admin@example.org");
             await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
@@ -2805,11 +2812,28 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
-        using var change = await client.PostAsJsonAsync(
-            $"/api/asap/staff/users/{targetId}/role",
-            new { version = targetVersion, role = "admin", organizationId = 2 });
+        using var rejectedDraft = await client.PutAsJsonAsync(
+            $"/api/asap/staff/users/{targetId}",
+            new { version = targetVersion, email = identity.UserPrincipalName, displayName = "Must not persist", role = "admin", organizationId = 2 });
+        Assert.AreEqual(HttpStatusCode.Conflict, rejectedDraft.StatusCode, await rejectedDraft.Content.ReadAsStringAsync());
+        await using (var rejectedContext = await UnifiedStaffContextAsync())
+        {
+            Assert.AreEqual(2, await rejectedContext.FormatAutoClaimRules.CountAsync(item => item.StaffUserId == targetId && item.IsActive));
+            Assert.AreEqual(targetId, await rejectedContext.TitleRequests.Where(item => item.Id == outOfScopeRequestId).Select(item => item.ClaimedByStaffUserId).SingleAsync());
+        }
+        using var change = unified ? await client.PutAsJsonAsync(
+            $"/api/asap/staff/users/{targetId}",
+            new { version = targetVersion, email = "contraction.saved@example.org", displayName = "Saved Contracted Staff", role = "admin", organizationId = 2 })
+            : await client.PostAsJsonAsync($"/api/asap/staff/users/{targetId}/role", new { version = targetVersion, role = "admin", organizationId = 2 });
         Assert.AreEqual(HttpStatusCode.OK, change.StatusCode, await change.Content.ReadAsStringAsync());
         using var changeBody = JsonDocument.Parse(await change.Content.ReadAsStringAsync());
+        if (unified)
+        {
+            Assert.AreEqual("contraction.saved@example.org", changeBody.RootElement.GetProperty("user").GetProperty("userPrincipalName").GetString());
+            Assert.AreEqual("contraction.saved@example.org", changeBody.RootElement.GetProperty("user").GetProperty("notificationEmail").GetString());
+            Assert.AreEqual("Saved Contracted Staff", changeBody.RootElement.GetProperty("user").GetProperty("displayName").GetString());
+            CollectionAssert.AreEquivalent(new[] { "staff_metadata_updated", "staff_lifecycle_updated" }, await UnifiedStaffAuditsAsync(targetId));
+        }
         Assert.AreEqual(1, changeBody.RootElement.GetProperty("cleanup").GetProperty("rulesDeactivated").GetInt32());
         Assert.AreEqual(1, changeBody.RootElement.GetProperty("cleanup").GetProperty("openTitleClaimsCleared").GetInt32());
 

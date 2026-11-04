@@ -31,8 +31,8 @@ the parent Codex session.
 | 7 | #446 | Named groups/native gates; Node 13/13, Release build and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after coverage/wait/width corrections | `1f40c91` |
 | 8 | #447 | Effective conditional options; Node 13/13, Release build, checkpoint 4/4 unaffected and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after focus/test-wrapper corrections | `3ec9a0d` |
 | 9 | #444 | Nearby single-token picker; focused Node, Settings 13/13, Release and final SQL/browser 1/1 PASS | Luna MAX clear, including actual open-popup and inherited renders | `d70170e` |
-| 10 | #399 | Cards/previews/contextual insertion; Node, eight unique checkpoint owners, final Staff/Campaign 3/3 and native-focus 1/1 PASS | Luna MAX / Astra HIGH / Terra MAX clear after recorded persistence, feedback and focus corrections | Pending |
-| 11 | #435 | Pending | Pending Luna MAX / Astra HIGH / Terra MAX | Pending |
+| 10 | #399 | Cards/previews/contextual insertion; Node, eight unique checkpoint owners, final Staff/Campaign 3/3 and native-focus 1/1 PASS | Luna MAX / Astra HIGH / Terra MAX clear after recorded persistence, feedback and focus corrections | `43efa9b` |
+| 11 | #435 | Implemented; SQL 18/18 PASS; browser dark-feedback contrast and remaining renders pending at roster checkpoint | Luna MAX / Astra HIGH source and SQL clear; Terra partial renders pending | This commit |
 | 12 | #406 | Pending | Pending Luna MAX / Astra HIGH / Terra MAX | Pending |
 | 13 | #433 | Pending | Pending Luna MAX / Astra HIGH / Terra MAX | Pending |
 | 14 | #436 | Pending | Pending Luna MAX / Terra MAX | Pending |
@@ -575,3 +575,87 @@ sibling versions; no schema, renderer or delivery policy changes were made.
   implementation findings are resolved with evidence. Full combined-revision
   qualification, human acceptance and the final fresh closure audit remain
   separate from this issue checkpoint.
+
+The pushed `43efa9b` template checkpoint passed
+[draft CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/41773132351):
+zero-warning/error Release build, all 107 SQL-independent native cases with
+zero failures/skips, and all 69 unique discovered frontend files. Its 141 Python
+checks have the expected pre-build population-discovery class skip; native
+execution has no skips. Full CI and test-IIS activation were skipped. Raw job
+`126387233567` and the compact count summary are retained outside Git.
+
+## #435 — compact staff roster and coherent account save
+
+- The pinned `e515d2619ec5887b20acffbb8d514df7ac815ddc` roster reference
+  governs the compact rows, one email input and bottom action footer. The
+  roster keeps mounted account editors and draft handles keyed by account ID,
+  initially collapsed disclosures, accepted-value surname ordering and
+  separate lifecycle actions. Operations retains Administration audit.
+- A versioned PUT uses the existing lifecycle transaction and authorization
+  boundary for profile, synchronized primary email and role/library changes.
+  Versioned Reactivate keeps accepted profile/access values separate from
+  unsaved drafts. Explicit Create synchronizes the primary notification email
+  when reactivating an existing inactive account; weekly overrides stay owned
+  by their existing contract.
+- Release R2 passed with zero warnings/errors. The first build's two
+  MSTEST0044 failures were corrected to current TestMethod data-row syntax.
+  Focused discovery identifies 18 SQL cases, including both retained POST and
+  new PUT contraction behavior. `i435-sql.trx` passed 18/18 with zero
+  failures/skips in 40.586s.
+- Initial browser receipt `i435-browser.trx`: Administration audit passed;
+  Staff failed before the new roster helper because its pre-save input
+  assertion compared stored UserPrincipalName with the separately normalized
+  uppercase CurrentStaff.AuthenticationEmail. The correction uses the stored
+  input value and retains strict post-save identity/version assertions. This
+  receipt is retained as 1 passed / 1 failed / 0 skipped,
+  202.395s. The roster screenshots and rendered review remain pending.
+- Independent Luna cycle 1 identified three corrections, now in one batch:
+  **435-1 P2** preserve the distinct Reactivate audit category;
+  **435-2 P2** reject Create emails over the SQL 320-character bound before
+  mutation; **435-3 P2/P3** retire the previous account's super-admin-assignment
+  capability before populating creation choices in a replacement session.
+  Immediate SQL audit/failure assertions and account-transition coverage are
+  present. Luna and Astra independently verified these corrections and each
+  passed the affected Staff Access Node test. Release R3 passed with zero
+  warnings/errors; `i435-sql-r2.trx` passed 18/18, zero failures/skips, 31.590s.
+- Luna's narrow cycle 2 found **435-4 P2**: Reactivate accepted an already-active
+  account with its current version and could append repeat false reactivation
+  audit entries without changing the account. The final necessary correction
+  adds a locked-state precondition and service/HTTP replay/no-write assertions
+  before the qualifying browser run. No comprehensive review was restarted.
+- The user's bounded review direction applies: finish necessary fixes after
+  two or three cycles, preserve any pending findings/failed receipts, and defer
+  further comprehensive review to the final combined audit. This issue has
+  not yet reached its qualifying browser or visual result.
+- The final locked-state precondition preserves stale-version precedence and
+  returns the existing `identity_already_exists`/409 for an already-active
+  Reactivate. Luna and Astra independently verified the narrow correction.
+  Final Release R4 passed with zero warnings/errors (29.43s), and final SQL R3
+  passed 18/18, zero failures/skips, 31.861s (`i435-sql-r3.trx`). Both reviewers
+  inspected the actual receipt; all four source/integrity findings are fixed.
+- The focused nine-file Node sweep and separate 271-case navigation suite
+  passed. Updated Staff Access and inert-focus regressions pass; both reviewers
+  independently reran Staff Access after the capability correction.
+- Staff browser R2 reached the new desktop roster checks, including explicit
+  single-email save, drafts, conflict, reordering and lifecycle, then failed
+  on serious dark-mode contrast: success text `#236b42` on `#202c36` is 2.2:1.
+  This is **435-5 P2, unresolved**. Receipt `i435-staff-browser-r2.trx` is
+  0 passed / 1 failed / 0 skipped, 139.345s (case 128.703s), retained honestly.
+  Six actual desktop PNGs are in
+  `staff-9d3f6d8998f244fe88e1be278cb6a893`; tablet/mobile/Add captures, the final
+  report's ten flags and the complete 70-state pass were not reached.
+- Following the bounded direction, commit this implementation checkpoint and
+  continue #406. Carry 435-5 and the missing browser/visual states into the
+  roster integration checkpoint and final audit; do not describe #435 as fully
+  qualified until passing evidence exists. No serious axe finding is waived.
+- Terra inspected the six actual desktop states. **435-6 P3, unresolved**:
+  the saved/reordered image retains the earlier competing-draft warning in
+  both global notices after Cancel and successful Save, while the bottom bar
+  says No changes. Carry this owned-feedback recovery defect into the roster
+  checkpoint as well. The warning was correct in the earlier competing-drafts
+  state; recovery must clear its own notices without erasing newer feedback.
+- Discovery intentionally replaces the prior single contraction test UID
+  `1881d8b7-150c-80c5-8046-afd3585ce756` with retained legacy-POST false row
+  `1e734a89-07a8-8807-8a18-55c622bbbeeb` and new unified-PUT true row
+  `17aef5ff-92b9-8837-9fde-aeb02e695aad`. Final population comparison must
+  account for this retained-behavior replacement and discover current counts.

@@ -307,6 +307,9 @@ export function createSettingsController({
     staffStatus: root.querySelector('#staff-access-status'),
     staffRefresh: root.querySelector('#staff-refresh'),
     staffCreate: root.querySelector('#staff-add-submit'),
+    staffCreateToggle: root.querySelector('#staff-add-toggle'),
+    staffCreateForm: root.querySelector('#staff-add-form'),
+    staffCreateCancel: root.querySelector('#staff-add-cancel'),
     staffEmail: root.querySelector('#staff-add-email'),
     staffRole: root.querySelector('#staff-add-role'),
     staffOrganization: root.querySelector('#staff-add-organization'),
@@ -376,7 +379,7 @@ export function createSettingsController({
   let settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
   let staffCreateDraft = null;
   let polarisTest = null;
-  const staffDrafts = new Map(), rosterDrafts = new Set();
+  const staffDrafts = new Map(), rosterDrafts = new Set(), staffRows = new Map();
   function listen(target, name, handler, capture = false) {
     target?.addEventListener(name, event => { if (!disposed && target.isConnected !== false) return handler(event); }, { signal: events.signal, capture });
   }
@@ -781,7 +784,10 @@ export function createSettingsController({
     dom.syncOrganizations.disabled = false;
     contextGeneration += 1; drafts.dispose(); drafts = createDraftScope();
     settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
-    staffDrafts.clear(); rosterDrafts.clear(); staffCreateDraft = null;
+    staffDrafts.clear(); rosterDrafts.clear(); staffRows.clear(); staffCreateDraft = null;
+    state.staffCanAssignSuperAdmin = false;
+    dom.staffUsers.replaceChildren();
+    setStaffCreateOpen(false);
     for (const slot of SETTINGS_OPERATION_SLOTS) reads.begin(slot).abort();
   }
 
@@ -945,7 +951,7 @@ export function createSettingsController({
       (expectedStaffId === null || user.id === String(expectedStaffId)) &&
       cleanup !== null && typeof cleanup === 'object' && !Array.isArray(cleanup) &&
       cleanupCounts.every(key => Number.isSafeInteger(cleanup[key]) && cleanup[key] >= 0) &&
-      (method !== 'DELETE' || user.active === false);
+      (method !== 'DELETE' || user.active === false) && (method !== 'POST' || user.active === true);
   }
 
   function setStaffStatus(message, kind = '') {
@@ -1023,10 +1029,11 @@ export function createSettingsController({
       : isSystem() && !state.organizationsReady
       ? 'The organization list is unavailable or incomplete. Reload settings before saving.'
       : dirty
-      ? settingsDirty ? 'Changes are local until you save this settings context.' : 'Save each staff profile or access change, or discard the edits.'
+      ? settingsDirty ? 'Changes are local until you save this settings context.' : 'Save changes in each staff editor, or cancel the edits.'
       : 'Everything in this settings context is saved.';
     dom.reset.hidden = isSystem();
     dom.reset.disabled = state.awaitingReload || Boolean(state.pendingMutation);
+    for (const row of staffRows.values()) row.sync();
     emailTest.sync();
   }
 
@@ -1452,115 +1459,201 @@ export function createSettingsController({
     return choices;
   }
 
-  function renderStaffUsers() {
+  // DisplayName is unstructured: use its final nonempty component, then the
+  // complete name/email/opaque ID. This is a sort convention, not a name parser.
+  function staffRosterOrder(first, second) {
+    const key = user => {
+      const name = clean(property(user, 'displayName')) || '';
+      const email = clean(property(user, 'userPrincipalName')) || '';
+      return [name.split(/\s+/).at(-1) || email, name || email, email, stringValue(property(user, 'id'))];
+    };
+    const activeOrder = Number(property(first, 'active') === false) - Number(property(second, 'active') === false);
+    if (activeOrder) return activeOrder;
+    const firstKey = key(first), secondKey = key(second);
+    for (let index = 0; index < firstKey.length; index += 1) {
+      const order = firstKey[index].localeCompare(secondKey[index], 'en', { sensitivity: 'base' }) ||
+        firstKey[index].localeCompare(secondKey[index], 'en', { sensitivity: 'variant' });
+      if (order) return order;
+    }
+    return 0;
+  }
+
+  function setStaffCreateOpen(open, focus = false) {
+    dom.staffCreateForm.hidden = !open;
+    dom.staffCreateForm.disabled = !open || state.activePanel !== 'staff';
+    dom.staffCreateToggle.setAttribute('aria-expanded', String(open));
+    if (focus) (open ? dom.staffEmail : dom.staffCreateToggle).focus({ preventScroll: true });
+  }
+
+  function createStaffRow(user) {
+    const id = stringValue(property(user, 'id'));
+    const row = node('article', { className: 'settings-staff-row', 'data-staff-id': id });
+    const name = node('strong'), emailLabel = node('span', { className: 'settings-staff-email' });
+    const unsaved = node('span', { className: 'settings-staff-unsaved', text: 'Unsaved changes' });
+    const roleLabelNode = node('span', { className: 'settings-staff-role' });
+    const libraryLabel = node('span', { className: 'settings-staff-library' });
+    const status = node('span');
+    const summary = node('button', { type: 'button', className: 'settings-staff-summary settings-staff-columns',
+      'aria-expanded': 'false', 'aria-controls': `staff-editor-${id}` }, [
+      node('span', { className: 'settings-staff-heading' }, [name, emailLabel, unsaved]),
+      roleLabelNode, libraryLabel, status,
+      node('span', { className: 'settings-staff-chevron', 'aria-hidden': 'true', text: '⌄' })
+    ]);
+    const editor = node('fieldset', { className: 'settings-staff-editor', id: `staff-editor-${id}`, 'aria-label': 'Staff editor' });
+    editor.hidden = true;
+    editor.disabled = true;
+    const email = node('input', { type: 'email', maxlength: '320', 'aria-describedby': `staff-email-help-${id}` });
+    const displayName = node('input', { type: 'text', maxlength: '256' });
+    const role = node('select'), organization = node('select');
+    const controls = [email, displayName, role, organization];
+    const cancel = node('button', { type: 'button', className: 'secondary-button', text: 'Cancel' });
+    const save = node('button', { type: 'button', className: 'primary-button', text: 'Save changes' });
+    const lifecycle = node('button', { type: 'button' });
+    const notice = node('p', { className: 'settings-result', role: 'status', 'aria-live': 'polite' });
+    const syncHelp = node('p', { className: 'settings-staff-sync-help',
+      text: 'Save changes to also use this email for primary notifications.' });
+    const cleanup = node('p', { className: 'settings-cleanup-result' });
+    const field = (label, input, help = null) => node('label', { className: 'settings-field' },
+      [node('span', { text: label }), input, help]);
+    editor.append(node('h4', { text: 'Profile' }), node('div', { className: 'settings-staff-controls' }, [
+      field('Email address', email, node('small', { id: `staff-email-help-${id}`, text: 'Used for sign-in and notifications.' })),
+      field('Display name', displayName), field('Role', role), field('Library', organization)
+    ]), syncHelp, node('div', { className: 'settings-staff-footer' }, [lifecycle,
+      node('div', { className: 'settings-staff-actions' }, [cancel, save])]), notice, cleanup);
+    row.append(summary, editor);
+    const record = { id, row, summary, user, version: '', baseline: [], conflict: false,
+      dirty: () => controls.some((control, index) => control.value !== record.baseline[index]),
+      sync() {
+        const dirty = record.dirty();
+        editor.disabled = editor.hidden || state.activePanel !== 'staff';
+        unsaved.hidden = !dirty;
+        syncHelp.hidden = clean(property(record.user, 'userPrincipalName')) === clean(property(record.user, 'notificationEmail'));
+        save.disabled = (!dirty && syncHelp.hidden) || record.conflict || state.awaitingReload || Boolean(state.pendingMutation);
+        cancel.disabled = !dirty && !record.conflict;
+      },
+      reset() {
+        email.value = property(record.user, 'userPrincipalName') || '';
+        displayName.value = property(record.user, 'displayName') || '';
+        replaceSelectOptions(role, userRoleChoices(record.user), property(record.user, 'role') || 'staff');
+        replaceSelectOptions(organization, organizationChoices(role.value), property(record.user, 'organizationId'));
+        organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
+        record.version = stringValue(property(record.user, 'version'));
+        record.baseline = controls.map(control => control.value);
+        record.conflict = false;
+        notice.textContent = '';
+        record.sync();
+      },
+      accept(next, discard = false) {
+        const dirty = record.dirty();
+        record.unavailable = false;
+        record.user = next;
+        const active = property(next, 'active') !== false;
+        row.classList.toggle('inactive', !active);
+        name.textContent = staffUserDisplay(next);
+        emailLabel.textContent = stringValue(property(next, 'userPrincipalName'));
+        roleLabelNode.textContent = roleLabel(property(next, 'role'));
+        libraryLabel.textContent = staffUserOrganizationName(next);
+        status.textContent = active ? 'Active' : 'Inactive';
+        status.className = `status-badge${active ? '' : ' blocked'}`;
+        lifecycle.textContent = active ? 'Deactivate' : 'Reactivate';
+        lifecycle.className = active ? 'danger-button' : 'secondary-button';
+        for (const [input, label] of [[email, 'Email address'], [displayName, 'Display name'], [role, 'Role'], [organization, 'Library']]) {
+          input.setAttribute('aria-label', `${label} for ${staffUserDisplay(next)}`);
+        }
+        if (!dirty || discard) record.reset();
+        else if (record.version !== stringValue(property(next, 'version'))) {
+          record.conflict = true;
+          notice.textContent = 'Saved values changed elsewhere. Your draft is retained. Cancel to load the saved values before editing again.';
+        }
+        cleanup.hidden = state.lastStaffCleanup?.staffId !== id;
+        cleanup.textContent = cleanup.hidden ? '' : cleanupSummary(state.lastStaffCleanup.cleanup);
+        record.sync();
+      },
+      unavailable: false,
+      markUnavailable() {
+        record.unavailable = true;
+        record.conflict = true;
+        notice.textContent = 'This account is no longer in the current roster. Your draft is retained. Cancel to discard this draft.';
+        record.sync();
+      }
+    };
+    const setOpen = open => {
+      if (!open && editor.contains(document.activeElement)) summary.focus({ preventScroll: true });
+      editor.hidden = !open;
+      editor.disabled = !open || state.activePanel !== 'staff';
+      summary.setAttribute('aria-expanded', String(open));
+    };
+    listen(summary, 'click', () => setOpen(editor.hidden));
+    listen(editor, 'keydown', event => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault(); event.stopPropagation(); setOpen(false);
+    });
+    listen(role, 'change', () => {
+      replaceSelectOptions(organization, organizationChoices(role.value), organization.value);
+      organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
+      record.sync();
+    });
+    listen(cancel, 'click', () => {
+      if (record.unavailable) {
+        drafts.release(record.draft); staffDrafts.delete(record.draft); rosterDrafts.delete(record.draft);
+        staffRows.delete(id); row.remove();
+        drafts.touch(); updateDirtyState(); dom.staffRefresh.focus({ preventScroll: true });
+        setStaffStatus('Draft discarded. The account is no longer in the current roster.');
+        return;
+      }
+      record.reset(); drafts.touch(); updateDirtyState();
+      notice.textContent = 'Unsaved edits discarded.';
+      email.focus({ preventScroll: true });
+    });
+    listen(save, 'click', () => {
+      if (record.conflict || !validateStaffValues(email, role, organization)) return;
+      void updateStaffUser(id, record.version, { email: clean(email.value), displayName: clean(displayName.value),
+        role: role.value, organizationId: role.value === 'super_admin' ? 1 : Number(organization.value) }, record.draft);
+    });
+    listen(lifecycle, 'click', () => {
+      if (property(record.user, 'active') !== false) void deactivateStaffUser(id, record.version, staffUserDisplay(record.user));
+      else void reactivateStaffUser(record.user, record.version);
+    });
+    record.reset();
+    // The baseline changes only after this account's accepted save/cancel/reload.
+    record.draft = drafts.register({ root: row, kind: 'staff editor', isDirty: () =>
+      row.isConnected && state.staff !== null && !state.awaitingReloadMutation && record.dirty() });
+    staffDrafts.set(record.draft, () => row.isConnected && !state.awaitingReloadMutation && record.dirty());
+    rosterDrafts.add(record.draft);
+    record.accept(user, true);
+    return record;
+  }
+
+  function renderStaffUsers({ discard = false } = {}) {
     if (!dom.staffUsers) return;
-    for (const handle of rosterDrafts) { drafts.release(handle); staffDrafts.delete(handle); }
-    rosterDrafts.clear();
-    dom.staffUsers.replaceChildren();
+    const focused = dom.staffUsers.contains(document.activeElement) ? document.activeElement : null;
+    const ids = new Set(state.staffUsers.map(user => stringValue(property(user, 'id'))));
+    for (const [id, record] of staffRows) {
+      if (ids.has(id)) continue;
+      if (!discard && record.dirty()) {
+        record.markUnavailable();
+        continue;
+      }
+      drafts.release(record.draft); staffDrafts.delete(record.draft); rosterDrafts.delete(record.draft);
+      record.row.remove(); staffRows.delete(id);
+    }
     populateStaffCreateControls();
     if (!staffCreateDraft) resetStaffCreateDraft();
-    if (state.staffUsers.length === 0) {
-      const message = state.staffAccessLoaded
-        ? `No staff users found for ${scopedStaffLabel()}.`
-        : 'Open or refresh the roster to load staff users.';
-      dom.staffUsers.append(node('p', { className: 'settings-empty', text: message }));
-      return;
-    }
-
-    for (const user of byDisplayLabel(state.staffUsers, staffUserDisplay)) {
+    dom.staffUsers.querySelector('.settings-empty')?.remove();
+    for (const user of [...state.staffUsers].sort(staffRosterOrder)) {
       const id = stringValue(property(user, 'id'));
-      const version = stringValue(property(user, 'version'));
-      const active = property(user, 'active') !== false;
-      const row = node('article', { className: `settings-staff-row${active ? '' : ' inactive'}` });
-      const upn = node('input', {
-        type: 'email',
-        value: property(user, 'userPrincipalName') || '',
-        'aria-label': `Authentication email for ${staffUserDisplay(user)}`
-      });
-      const displayName = node('input', {
-        type: 'text',
-        value: property(user, 'displayName') || '',
-        'aria-label': `Display name for ${staffUserDisplay(user)}`
-      });
-      const notificationEmail = node('input', {
-        type: 'email',
-        value: property(user, 'notificationEmail') || '',
-        'aria-label': `Notification email for ${staffUserDisplay(user)}`
-      });
-      const role = node('select', { 'aria-label': `Role for ${staffUserDisplay(user)}` });
-      replaceSelectOptions(role, userRoleChoices(user), property(user, 'role') || 'staff');
-      const organization = node('select', { 'aria-label': `Library for ${staffUserDisplay(user)}` });
-      replaceSelectOptions(organization, organizationChoices(role.value), property(user, 'organizationId'));
-      organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
-      const metadataDraft = registerStaffDraft(row, [upn, displayName, notificationEmail], 'staff profile');
-      const accessDraft = registerStaffDraft(row, [role, organization], 'staff access');
-      rosterDrafts.add(metadataDraft); rosterDrafts.add(accessDraft);
-      listen(role, 'change', () => {
-        replaceSelectOptions(organization, organizationChoices(role.value), organization.value);
-        organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
-      });
-
-      const saveMetadata = node('button', {
-        type: 'button',
-        className: 'secondary-button',
-        text: 'Save profile'
-      });
-      listen(saveMetadata, 'click', () => updateStaffMetadata(id, version, {
-        email: clean(upn.value),
-        displayName: clean(displayName.value),
-        notificationEmail: clean(notificationEmail.value)
-      }, metadataDraft));
-
-      const saveRole = node('button', {
-        type: 'button',
-        className: 'secondary-button',
-        text: 'Update access'
-      });
-      listen(saveRole, 'click', () => changeStaffRole(id, version, {
-        role: role.value,
-        organizationId: role.value === 'super_admin' ? 1 : Number(organization.value)
-      }, accessDraft));
-
-      const lifecycle = node('button', {
-        type: 'button',
-        className: active ? 'danger-button' : 'secondary-button',
-        text: active ? 'Deactivate' : 'Reactivate'
-      });
-      listen(lifecycle, 'click', () => {
-        if (active) deactivateStaffUser(id, version, staffUserDisplay(user));
-        else reactivateStaffUser(user, role.value, organization.value, accessDraft);
-      });
-
-      const actions = [saveMetadata, saveRole, lifecycle];
-
-      row.replaceChildren(
-        node('div', { className: 'settings-staff-heading' }, [
-          node('strong', { text: staffUserDisplay(user) }),
-          node('span', { className: `status-badge${active ? '' : ' blocked'}`, text: active ? 'Active' : 'Inactive' })
-        ]),
-        node('p', { className: 'settings-staff-meta' }, [
-          node('span', { text: `ID ${id}` }),
-          node('span', { text: roleLabel(property(user, 'role')) }),
-          node('span', { text: staffUserOrganizationName(user) }),
-          node('span', { text: `Version ${version}` })
-        ]),
-        node('div', { className: 'settings-staff-controls' }, [
-          node('label', { className: 'settings-field' }, [node('span', { text: 'Authentication email' }), upn]),
-          node('label', { className: 'settings-field' }, [node('span', { text: 'Display name' }), displayName]),
-          node('label', { className: 'settings-field' }, [node('span', { text: 'Notification email' }), notificationEmail]),
-          node('label', { className: 'settings-field' }, [node('span', { text: 'Role' }), role]),
-          node('label', { className: 'settings-field' }, [node('span', { text: 'Library' }), organization])
-        ]),
-        node('div', { className: 'settings-staff-actions' }, actions)
-      );
-      if (state.lastStaffCleanup?.staffId === id) {
-        row.append(node('p', {
-          className: 'settings-cleanup-result',
-          text: cleanupSummary(state.lastStaffCleanup.cleanup)
-        }));
-      }
-      dom.staffUsers.append(row);
+      const record = staffRows.get(id) || createStaffRow(user);
+      staffRows.set(id, record);
+      record.accept(user, discard);
     }
+    const ordered = [...staffRows.values()].sort((first, second) => staffRosterOrder(first.user, second.user));
+    ordered.forEach((record, index) => {
+      if (dom.staffUsers.children[index] !== record.row) dom.staffUsers.insertBefore(record.row, dom.staffUsers.children[index] || null);
+    });
+    if (ordered.length === 0) dom.staffUsers.append(node('p', { className: 'settings-empty', text: state.staffAccessLoaded
+      ? `No staff users found for ${scopedStaffLabel()}.` : 'Open or refresh the roster to load staff users.' }));
+    if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+    else if (focused && !focused.isConnected) dom.staffRefresh.focus({ preventScroll: true });
   }
 
   function populate(data) {
@@ -1628,7 +1721,7 @@ export function createSettingsController({
     populateParticipation();
     renderOrganizations();
     resetStaffCreateDraft();
-    renderStaffUsers();
+    renderStaffUsers({ discard: true });
     dom.scope.value = state.scope;
     state.baselineSnapshot = snapshotForm(dom.form);
     updateDirtyState();
@@ -1750,7 +1843,7 @@ export function createSettingsController({
   async function loadStaffAccess(options = {}) {
     if (disposed || !state.staff || state.staff.role === 'staff') return false;
     if (state.pendingMutation && state.pendingMutation !== options.owner) return false;
-    if (hasStaffDraft() && !options.discard) return false;
+    if (hasStaffDraft() && !options.discard && !options.preserve) return false;
     const snapshot = snapshotDrafts();
     const loadState = beginSettingsOperation('administration-staff-access');
     const clearLoading = !options.silent ? setStaffStatus(`Loading staff access for ${scopedStaffLabel()}...`) : null;
@@ -1774,7 +1867,8 @@ export function createSettingsController({
         state.unconfirmedMutation = null; state.outcomeUncertain = false; state.awaitingReload = false; state.awaitingReloadMutation = null;
       }
       dom.form.inert = Boolean(state.pendingMutation || state.awaitingReload);
-      renderStaffUsers();
+      if (options.discard) resetStaffCreateDraft();
+      renderStaffUsers({ discard: options.discard === true });
       updateDirtyState();
       onRefreshed(loadState.context.owner, { kind: 'staff', scope: loadState.context.scope,
         changed: review?.slot === 'administration-staff-mutation' });
@@ -1794,6 +1888,7 @@ export function createSettingsController({
   }
 
   async function mutateStaffUser(path, options, successMessage, staffId, consumes) {
+    const focused = document.activeElement;
     const mutation = beginSettingsMutation('administration-staff-mutation', consumes);
     if (!mutation) return;
     mutation.staffId = staffId;
@@ -1801,14 +1896,19 @@ export function createSettingsController({
     try {
       const response = await authorizedJson(path, options);
       if (!validStaffLifecycleResponse(response, options.method, staffId)) throw unconfirmedResponseError();
+      if (options.method === 'PUT' && !validStaffUpdateResponse(response.user, options.body)) throw unconfirmedResponseError();
       const cleanup = response.cleanup;
       const committedMessage = `${successMessage} ${cleanupSummary(cleanup)}`;
       recordCommitted(mutation, committedMessage);
       onStaffAccessCommitted(mutation.owner);
       if (!isSettingsOperationCurrent(mutation)) return null;
-      if (consumes === staffCreateDraft) resetStaffCreateDraft();
+      if (consumes === staffCreateDraft) {
+        resetStaffCreateDraft(); setStaffCreateOpen(false, true);
+      }
       state.lastStaffCleanup = { staffId: stringValue(property(response?.user ?? response?.data?.user, 'id') || staffId), cleanup };
-      const refreshed = await loadStaffAccess({ silent: true, owner: mutation, discard: true });
+      const record = staffRows.get(String(staffId));
+      if (record) record.accept(response.user, true);
+      const refreshed = await loadStaffAccess({ silent: true, owner: mutation, preserve: true });
       if (isSettingsOperationCurrent(mutation)) setStaffStatus(refreshed
         ? committedMessage : `${committedMessage} Staff access could not be refreshed.`,
       refreshed ? 'success' : 'error');
@@ -1821,7 +1921,7 @@ export function createSettingsController({
         return null;
       }
       if (error.status === 409) {
-        await loadStaffAccess({ silent: true, owner: mutation, discard: true });
+        await loadStaffAccess({ silent: true, owner: mutation, preserve: true });
         if (!isSettingsOperationCurrent(mutation)) return null;
         setStaffStatus(error.message || 'Staff access changed elsewhere. Review the refreshed roster.', 'error');
       } else if (error.status !== 401 && !isAbortError(error)) {
@@ -1830,11 +1930,20 @@ export function createSettingsController({
       return null;
     } finally {
       finishSettingsMutation(mutation);
-      if (isSettingsOperationCurrent(mutation)) updateDirtyState();
+      if (isSettingsOperationCurrent(mutation)) {
+        updateDirtyState();
+        if (mutation.outcome === 'committed' && !state.awaitingReload && state.activePanel === 'staff' &&
+            (document.activeElement === document.body || document.activeElement === focused)) {
+          const fallback = staffId === null ? dom.staffCreateToggle : staffRows.get(String(staffId))?.summary;
+          const target = focused?.isConnected && !focused.matches(':disabled') ? focused : fallback;
+          target?.focus({ preventScroll: true });
+        }
+      }
     }
   }
 
   async function createStaffUser() {
+    if (!validateStaffValues(dom.staffEmail, dom.staffRole, dom.staffOrganization)) return;
     const role = dom.staffRole.value || 'staff';
     const body = {
       email: clean(dom.staffEmail.value),
@@ -1847,27 +1956,34 @@ export function createSettingsController({
     }, 'Staff user saved.', null, staffCreateDraft);
   }
 
-  async function updateStaffMetadata(id, version, values, draft) {
+  function validateStaffValues(email, role, organization) {
+    if (!clean(email.value)) {
+      setStaffStatus('Email address is required.', 'error'); email.focus(); return false;
+    }
+    if (!email.reportValidity()) return false;
+    if (!role.value || role.value !== 'super_admin' && (!organization.value || Number(organization.value) <= 1)) {
+      setStaffStatus('Select a role and library.', 'error'); (role.value ? organization : role).focus(); return false;
+    }
+    return true;
+  }
+
+  function validStaffUpdateResponse(user, values) {
+    return clean(user.userPrincipalName)?.toLowerCase() === values.email?.toLowerCase() &&
+      user.notificationEmail === user.userPrincipalName && clean(user.displayName) === values.displayName &&
+      user.role === values.role && Number(user.organizationId) === values.organizationId;
+  }
+
+  async function updateStaffUser(id, version, values, draft) {
     await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
+      method: 'PUT',
       body: {
         version: stringValue(version),
         email: values.email,
         displayName: values.displayName,
-        notificationEmail: values.notificationEmail
-      }
-    }, 'Staff profile saved.', id, draft);
-  }
-
-  async function changeStaffRole(id, version, values, draft) {
-    await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}/role`, {
-      method: 'POST',
-      body: {
-        version: stringValue(version),
         role: values.role,
         organizationId: values.organizationId
       }
-    }, 'Staff access updated.', id, draft);
+    }, 'Staff changes saved.', id, draft);
   }
 
   async function deactivateStaffUser(id, version, displayName) {
@@ -1879,15 +1995,14 @@ export function createSettingsController({
     }, 'Staff user deactivated.', id, null);
   }
 
-  async function reactivateStaffUser(user, role, organizationId, draft) {
-    await mutateStaffUser('/api/asap/staff/users', {
+  async function reactivateStaffUser(user, version) {
+    const displayName = staffUserDisplay(user);
+    if (!await confirmSettings(`Reactivate ${displayName}?`,
+      `${displayName} will regain their saved staff access. Save or cancel unsaved edits separately.`, 'Reactivate staff')) return;
+    await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(property(user, 'id'))}/reactivate`, {
       method: 'POST',
-      body: {
-        email: clean(property(user, 'userPrincipalName')),
-        role,
-        organizationId: role === 'super_admin' ? 1 : Number(organizationId)
-      }
-    }, 'Staff user reactivated.', property(user, 'id'), draft);
+      body: { version: stringValue(version) }
+    }, 'Staff user reactivated.', property(user, 'id'), null);
   }
 
   function collectScoped(section, fields) {
@@ -2533,6 +2648,8 @@ export function createSettingsController({
       button.tabIndex = active ? 0 : -1;
     }
     for (const panel of dom.panels) panel.hidden = panel.dataset.settingsPanelContent !== name;
+    dom.staffCreateForm.disabled = dom.staffCreateForm.hidden || name !== 'staff';
+    for (const record of staffRows.values()) record.sync();
     if (name === 'patron') patronPlaceholders.refresh();
     if (name === 'templates') placeholders.refresh();
     if (name === 'workflow') suggestionLimitPlaceholders.refresh();
@@ -2712,6 +2829,14 @@ export function createSettingsController({
     listen(dom.syncOrganizations, 'click', syncOrganizations);
     listen(dom.staffRole, 'change', populateStaffCreateControls);
     listen(dom.staffCreate, 'click', createStaffUser);
+    listen(dom.staffCreateToggle, 'click', () => setStaffCreateOpen(dom.staffCreateForm.hidden, true));
+    listen(dom.staffCreateCancel, 'click', () => {
+      resetStaffCreateDraft(); setStaffCreateOpen(false, true); drafts.touch(); updateDirtyState();
+    });
+    listen(dom.staffCreateForm, 'keydown', event => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault(); event.stopPropagation(); setStaffCreateOpen(false, true);
+    });
     const refreshStaff = async () => {
       if (state.pendingMutation) return;
       if (hasStaffDraft() && !await confirmSettings('Refresh staff roster?', 'Discard unsaved staff edits and refresh the roster?', 'Discard edits and refresh', 'danger')) return;

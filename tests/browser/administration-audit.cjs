@@ -336,6 +336,7 @@ async function main() {
     await scan(race, 'scope-race-system');
 
     await race.goto(`${origin}/staff/?stage=settings&settingsScope=system#settings-staff`, { waitUntil: 'networkidle' });
+    await race.locator('#staff-add-toggle').click();
     await race.locator('#staff-add-email').fill('unsaved-person@example.org');
     await decideConfirmation(race, () => race.locator('#staff-audit-history').press('Enter'), dialog => dialog.dismiss());
     assert.equal(await race.locator('#settings-view').isVisible(), true);

@@ -116,6 +116,7 @@ async function until(predicate, message) {
       .some(row => row.textContent.includes('Ada')), 'own staff row must load');
     const ownRow = [...document.querySelectorAll('.settings-staff-row')]
       .find(row => row.textContent.includes('Ada'));
+    ownRow.querySelector('.settings-staff-summary').click();
     [...ownRow.querySelectorAll('button')].find(button => button.textContent === 'Deactivate').click();
 
     await until(() => document.getElementById('workspace').hidden,
