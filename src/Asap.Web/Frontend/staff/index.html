@@ -555,19 +555,21 @@
                       <input id="patron-code-picker" type="text" role="combobox" autocomplete="off" aria-autocomplete="list" aria-expanded="false" aria-controls="patron-code-options" aria-describedby="patron-code-picker-help patron-code-availability" placeholder="Search or select patron codes…">
                       <div id="patron-code-options" role="listbox" aria-label="Available patron codes" hidden></div>
                     </div>
-                    <div class="settings-inline-actions" data-settings-ignore="true">
-                      <p id="patron-code-availability" class="field-help" role="status"></p>
-                      <button id="patron-code-retry" class="secondary-button" type="button" hidden>Retry patron-code lookup</button>
+                    <div class="patron-code-summary">
+                      <div class="settings-inline-actions" data-settings-ignore="true">
+                        <p id="patron-code-availability" class="field-help" role="status"></p>
+                        <button id="patron-code-retry" class="secondary-button" type="button" hidden>Retry patron-code lookup</button>
+                      </div>
+                      <input id="patron-code-selection" type="hidden">
+                      <ul id="patron-codes-editor" class="patron-code-chips" aria-label="Selected patron codes"></ul>
+                      <p id="patron-code-count" class="field-help" role="status"></p>
                     </div>
-                    <input id="patron-code-selection" type="hidden">
-                    <ul id="patron-codes-editor" class="patron-code-chips" aria-label="Selected patron codes"></ul>
-                    <p id="patron-code-count" class="field-help" role="status"></p>
                     <p id="patron-code-warning" class="settings-callout" role="status" hidden></p>
                   </div>
                   <label class="settings-field wide" data-setting-section="workflow" data-setting-key="patronCodeEligibilityMessage"><span>Patron-code eligibility message</span><textarea id="patron-code-eligibility-message" rows="3"></textarea></label>
                 </div>
               </fieldset>
-              <fieldset class="settings-fieldset">
+              <fieldset class="settings-fieldset settings-timeouts">
                 <legend>Timeouts</legend>
                 <div class="settings-grid">
                   <div class="settings-timeout-rule" data-timeout-rule="outstanding" role="group" aria-labelledby="outstanding-timeout-rule-label">
@@ -647,8 +649,10 @@
                   <button id="copy-patron-iframe" class="secondary-button" type="button">Copy iframe</button>
                   <label class="settings-field"><span>Auto-resizing loader markup</span><textarea id="patron-loader-markup" rows="4" readonly></textarea></label>
                   <button id="copy-patron-loader" class="secondary-button" type="button">Copy loader</button>
-                  <p>External embedding works only when the embedding site's origin is in the system allowed-origin policy.</p>
-                  <p id="patron-copy-status" class="settings-result" role="status" aria-live="polite"></p>
+                  <div class="patron-public-notes">
+                    <p>External embedding works only when the embedding site's origin is in the system allowed-origin policy.</p>
+                    <p id="patron-copy-status" class="settings-result" role="status" aria-live="polite"></p>
+                  </div>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset">

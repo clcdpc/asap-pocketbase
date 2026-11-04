@@ -6,6 +6,7 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
 const { runSourceComponents } = require('./settings-accessibility.cjs');
+const settingsSpacingRecorder = require('./settings-spacing.cjs');
 const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
 
 async function verifyPolarisSettings(page, width, scope, scan, report) {
@@ -187,10 +188,37 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
 
 (async () => {
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
-  const report = { externalRequests: [], pageErrors: [], states: [], settingsHeaders: [], brandingPlacements: [], staffUrlSuggestions: [], polarisSettings: [] };
+  const report = { externalRequests: [], pageErrors: [], states: [], settingsHeaders: [], brandingPlacements: [], staffUrlSuggestions: [], polarisSettings: [], publicLinks: [], spacingAudits: [] };
   for (const persistent of [false, true]) {
     const browser = await chromium.launch({ headless: true, ...(persistent ? { ignoreDefaultArgs: ['--hide-scrollbars'] } : {}) });
+    let restoreStaffUrl;
     try {
+      // Own a valid persisted URL so the real API builds the library's portal
+      // links. This fixture mutation is separate from the read-only geometry.
+      const fixture = await browser.newContext({ extraHTTPHeaders: {
+        'X-ASAP-Test-Staff-Id': staffId, 'X-ASAP-Test-Tenant-Id': tenantId, 'X-ASAP-Test-Staff-Email': email
+      } });
+      const readSystem = async () => {
+        const response = await fixture.request.get(`${baseURL}/api/asap/staff/settings?orgId=system`);
+        assert.equal(response.status(), 200, await response.text());
+        return response.json();
+      };
+      const originalStaffUrl = (await readSystem()).stored.systemSettings.staffUrl ?? null;
+      const setStaffUrl = async value => {
+        const session = await fixture.request.get(`${baseURL}/api/asap/staff/session`);
+        assert.equal(session.status(), 200, await session.text());
+        const current = await readSystem();
+        const response = await fixture.request.post(`${baseURL}/api/asap/staff/settings`, {
+          headers: { 'X-ASAP-Antiforgery': (await session.json()).antiforgeryToken },
+          data: { orgId: 'system', version: current.version, systemSettings: { staffUrl: value } }
+        });
+        assert.equal(response.status(), 200, await response.text());
+        assert.equal((await readSystem()).stored.systemSettings.staffUrl, value);
+      };
+      restoreStaffUrl = async () => {
+        try { await setStaffUrl(originalStaffUrl); } finally { await fixture.close(); }
+      };
+      await setStaffUrl('https://presentation.example.test/staff/');
       for (const width of [1440, 1280, 390]) {
         const context = await browser.newContext({ viewport: { width, height: 900 },
           extraHTTPHeaders: { 'X-ASAP-Test-Staff-Id': staffId, 'X-ASAP-Test-Tenant-Id': tenantId, 'X-ASAP-Test-Staff-Email': email } });
@@ -199,11 +227,14 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
           report.externalRequests.push(route.request().url()); return route.abort();
         });
         const page = await context.newPage();
+        const recordSpacing = settingsSpacingRecorder(page, path.join(artifacts, `${persistent ? 'persistent' : 'overlay'}-${width}-spacing`));
+        await fs.mkdir(path.join(artifacts, `${persistent ? 'persistent' : 'overlay'}-${width}-spacing`), { recursive: true });
         page.on('pageerror', error => report.pageErrors.push(error.message)); rejectNativeDialogs(page, report.pageErrors);
-        const staffSettingsPosts = [];
+        const staffSettingsPosts = [], apiWrites = [];
         page.on('request', request => {
           const url = new URL(request.url());
           if (request.method() === 'POST' && url.pathname === '/api/asap/staff/settings') staffSettingsPosts.push(url.pathname);
+          if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method()) && url.pathname.startsWith('/api/asap/staff/')) apiWrites.push(url.pathname);
         });
         const quietFeedback = async () => {
           await page.waitForFunction(() => document.querySelector('#app-status').textContent === '');
@@ -215,6 +246,7 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
           assert.deepEqual(feedback, { height: 0, top: '0px', bottom: '0px', role: 'status', live: 'polite' });
         };
         const scan = async state => {
+          await recordSpacing(state);
           await page.evaluate(axe);
           const result = await page.evaluate(async () => {
             const accessibility = (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact));
@@ -322,6 +354,63 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
               : current.top - previous.bottom;
           });
         });
+        const draftStatus = () => page.locator('#settings-form').evaluate(form => ({
+          dirty: !document.getElementById('settings-discard').hidden,
+          title: document.getElementById('settings-save-title').textContent,
+          attention: form.querySelector('.settings-save-bar').classList.contains('attention'),
+          saveDisabled: document.getElementById('settings-save').disabled, inert: form.inert
+        }));
+        const auditSpacing = async state => {
+          const before = await draftStatus(), writesBefore = apiWrites.length;
+          let geometry;
+          try { geometry = await recordSpacing(state); }
+          finally { await page.screenshot({ path: path.join(artifacts, `${state}.png`), fullPage: true }); }
+          await page.evaluate(axe);
+          const result = await page.evaluate(async () => ({
+            accessibility: (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact)),
+            images: [...document.images].filter(node => node.getClientRects().length).every(node => node.complete && node.naturalWidth > 0)
+          }));
+          report.spacingAudits.push({ state, scope: geometry.scope, panel: geometry.panel, viewport: geometry.viewport, ...result });
+          await fs.writeFile(path.join(artifacts, 'settings-spacing-audits.json'), JSON.stringify(report.spacingAudits, null, 2));
+          assert.deepEqual(result.accessibility, [], `${state}: axe`);
+          assert.equal(result.images, true, `${state}: visible images`);
+          assert.deepEqual(report.pageErrors, [], `${state}: page errors`);
+          assert.deepEqual(report.externalRequests, [], `${state}: external requests`);
+          assert.deepEqual(await draftStatus(), before, `${state}: measuring layout preserves all draft owners`);
+          assert.equal(apiWrites.length, writesBefore, `${state}: measuring layout never writes an API`);
+        };
+        const discardSpacingDraft = async () => {
+          if (await page.locator('#settings-discard').isVisible()) {
+            await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
+          }
+          await page.waitForFunction(() => !document.getElementById('settings-form').inert &&
+            !document.getElementById('settings-refresh').disabled && document.getElementById('settings-save-title').textContent === 'No changes');
+        };
+        const auditPickerVariants = async state => {
+          const inherit = page.locator('#patron-codes-use-system');
+          if (await inherit.isVisible() && await inherit.isChecked()) await inherit.uncheck();
+          const override = page.locator('[data-setting-key="patronCodeEligibilityEnabled"] .settings-override-toggle');
+          if (await override.count() && !await override.isChecked()) await override.check();
+          while (await page.locator('#patron-codes-editor button').count()) await page.locator('#patron-codes-editor button').first().click();
+          await page.locator('#patron-code-eligibility-enabled').check();
+          assert.equal(await page.locator('#patron-code-warning').isVisible(), true);
+          await auditSpacing(`${state}-warning-empty`);
+          const picker = page.locator('#patron-code-picker');
+          await picker.fill('Adult'); await picker.press('ArrowDown');
+          assert.equal(await page.locator('#patron-code-options').isVisible(), true);
+          await auditSpacing(`${state}-filtered-picker`);
+          // A full axe scan can scroll an anchored list out of view. Reopen
+          // through the real keyboard path before performing the selection.
+          await picker.fill('Adult'); await picker.press('ArrowDown'); await picker.press('Enter');
+          assert.equal(await page.locator('#patron-codes-editor [data-code-id]').count(), 1);
+          assert.equal(await page.locator('#patron-code-warning').isHidden(), true);
+          await auditSpacing(`${state}-populated`);
+          await page.locator('#patron-codes-editor button').first().click();
+          await page.locator('#patron-code-eligibility-enabled').uncheck();
+          assert.equal(await page.locator('#patron-code-warning').isHidden(), true);
+          await auditSpacing(`${state}-empty-warning-hidden`);
+          await discardSpacingDraft();
+        };
         const measureSettingsHeader = async scope => {
           const message = page.locator('#settings-message');
           const originalMessage = await message.evaluate(node => ({ text: node.textContent, className: node.className }));
@@ -440,6 +529,114 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
             document.getElementById('settings-version').value && !document.getElementById('settings-form').inert &&
             !document.getElementById('settings-refresh').disabled, scope);
           await measureSettingsHeader(scope);
+          if (!persistent && width === 1280) {
+            const writesBefore = apiWrites.length;
+            const draftBefore = await draftStatus();
+            for (const config of [
+              { name: 'desktop', width: 1280, zoom: '', theme: 'light' },
+              { name: '760', width: 760, zoom: '', theme: 'light' },
+              { name: '390', width: 390, zoom: '', theme: 'light' },
+              { name: 'css-200', width: 1280, zoom: '2', theme: 'light' },
+              { name: 'desktop-dark', width: 1280, zoom: '', theme: 'dark' },
+              { name: '390-dark', width: 390, zoom: '', theme: 'dark' }
+            ]) {
+              await page.setViewportSize({ width: config.width, height: 900 });
+              await page.emulateMedia({ colorScheme: config.theme });
+              await page.evaluate(zoom => { document.documentElement.style.zoom = zoom; }, config.zoom);
+              for (const panel of ['workflow', 'start', 'polaris', 'smtp', 'staff', 'patron', 'templates']) {
+                await page.locator(`#settings-nav-${panel}`).click();
+                if (panel === 'staff') await page.locator('#staff-refresh:not([disabled])').waitFor();
+                const state = `audit-${scope}-${config.name}-${panel}`;
+                await auditSpacing(state);
+                if (panel === 'workflow' && ['desktop', '390', 'css-200'].includes(config.name)) {
+                  await auditPickerVariants(state);
+                  if (scope === 'system') {
+                    while (await page.locator('#external-search-provider-editor [data-domain-row]').count()) {
+                      await page.locator('#external-search-provider-editor [data-domain-row]').last().getByRole('button', { name: 'Delete', exact: true }).click();
+                    }
+                    await auditSpacing(`${state}-providers-empty`);
+                    await page.locator('#add-provider').click();
+                    await auditSpacing(`${state}-providers-added`);
+                    await discardSpacingDraft();
+                  }
+                  if (config.name === 'desktop') {
+                    const unavailable = route => route.fulfill({ status: 503, json: { message: 'Fixture patron-code catalog unavailable.' } });
+                    await page.route('**/api/asap/staff/polaris/patron-codes?*', unavailable);
+                    try {
+                      await page.locator('#settings-refresh').click();
+                      await page.locator('#patron-code-retry').waitFor({ state: 'visible' });
+                      await page.locator('#settings-refresh:not([disabled])').waitFor();
+                      await auditSpacing(`${state}-lookup-unavailable`);
+                    } finally { await page.unroute('**/api/asap/staff/polaris/patron-codes?*', unavailable); }
+                    await page.locator('#patron-code-retry').click();
+                    await page.locator('#patron-code-retry').waitFor({ state: 'hidden' });
+                    await auditSpacing(`${state}-lookup-recovered`);
+                  }
+                }
+                if (panel === 'staff') {
+                  const summary = page.locator('.settings-staff-summary').first();
+                  if (await summary.count()) {
+                    await summary.click(); await auditSpacing(`${state}-expanded`); await summary.click();
+                  }
+                  await page.locator('#staff-add-toggle').click();
+                  await auditSpacing(`${state}-add`);
+                  await page.locator('#staff-add-submit').click();
+                  await page.locator('#staff-access-status').filter({ hasText: 'Email address is required.' }).waitFor();
+                  await auditSpacing(`${state}-required`);
+                  await page.locator('#staff-add-cancel').click();
+                }
+                if (panel === 'patron') {
+                  assert.equal(await page.locator('#patron-public-links').isVisible(), scope !== 'system',
+                    `${state}: only the active library has authoritative public links`);
+                  if (scope !== 'system' && config.name === 'desktop') {
+                    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(baseURL).origin });
+                    const expectedUrl = 'https://presentation.example.test/patron/?libraryOrgId=383091';
+                    assert.equal(await page.locator('#patron-public-url').inputValue(), expectedUrl);
+                    for (const [button, field, label] of [
+                      ['copy-patron-public-url', 'patron-public-url', 'Patron URL'],
+                      ['copy-patron-iframe', 'patron-iframe-markup', 'Iframe markup'],
+                      ['copy-patron-loader', 'patron-loader-markup', 'Auto-resizing loader markup']
+                    ]) {
+                      const expected = await page.locator(`#${field}`).inputValue();
+                      await page.locator(`#${button}`).click();
+                      await page.locator('#patron-copy-status').filter({ hasText: `${label} copied.` }).waitFor();
+                      assert.equal((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n'),
+                        expected.replace(/\r\n/g, '\n'), 'Clipboard preserves the exact markup apart from native line endings.');
+                      await auditSpacing(`${state}-${button}`);
+                      report.publicLinks.push({ scope, button, copied: true });
+                    }
+                  }
+                  const rule = page.locator('#format-rules-editor [data-rule-toggle]').first();
+                  if (await rule.count()) { await rule.click(); await auditSpacing(`${state}-format-expanded`); await rule.click(); }
+                  if (scope !== 'system' && ['desktop', '390', 'css-200'].includes(config.name)) {
+                    const inherit = page.locator('#publication-options-use-system');
+                    if (await inherit.isChecked()) await inherit.uncheck();
+                    for (const button of ['#add-publication-option', '#add-material-format', '#add-custom-field', '#add-auto-claim-rule']) {
+                      await page.locator(button).click();
+                    }
+                    await auditSpacing(`${state}-rows-added`);
+                    const move = page.locator('#publication-options-editor [data-domain-row]').last().getByRole('button', { name: 'Move up', exact: true });
+                    if (await move.isEnabled()) { await move.click(); await auditSpacing(`${state}-rows-reordered`); }
+                    await discardSpacingDraft();
+                  }
+                }
+                if (panel === 'templates') {
+                  const template = page.locator('#settings-template-editor [data-template-toggle]').first();
+                  await template.click(); await auditSpacing(`${state}-expanded`); await template.click();
+                  if (['desktop', '390', 'css-200'].includes(config.name)) {
+                    await page.locator('#add-email-template').click();
+                    await auditSpacing(`${state}-additional-added`);
+                    await discardSpacingDraft();
+                  }
+                }
+              }
+            }
+            await page.setViewportSize({ width, height: 900 });
+            await page.emulateMedia({ colorScheme: 'light' });
+            await page.evaluate(() => { document.documentElement.style.zoom = ''; });
+            assert.deepEqual(await draftStatus(), draftBefore, 'The audit restores each deliberate draft through its normal owner.');
+            assert.equal(apiWrites.length, writesBefore, 'Spacing, copy and deliberate discarded drafts never write an API.');
+          }
           await page.locator('#settings-nav-start').click();
           const staffUrlInput = page.locator('#system-staff-url');
           const useCurrentAddress = page.getByRole('button', { name: 'Use current address', exact: true });
@@ -667,7 +864,9 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
         }
         await context.close();
       }
-    } finally { await browser.close(); }
+    } finally {
+      try { await restoreStaffUrl?.(); } finally { await browser.close(); }
+    }
   }
   report.settingsAccessibility = await runSourceComponents(path.join(artifacts, 'settings-accessibility'));
   assert.deepEqual(report.externalRequests, []); assert.deepEqual(report.pageErrors, []);

@@ -7,6 +7,7 @@ const path = require('node:path');
 const { URL } = require('node:url');
 const { verifyEmailTemplateCards } = require('./email-template-cards.cjs');
 const { contrast } = require('./settings-accessibility.cjs');
+const settingsSpacingRecorder = require('./settings-spacing.cjs');
 
 function parseArguments(argv) {
   if (![5, 6, 8].includes(argv.length)) {
@@ -32,6 +33,7 @@ function sameOrigin(url, origin) {
 }
 
 async function scan(page, axeSource, artifactRoot, report, viewport, checkTimeoutGeometry = false, fullPage = true) {
+  await report.recordSpacing?.(viewport);
   for (const selector of ['#organizations-status-message', '#polaris-api-key-status', '#polaris-admin-pass-status']) {
     if (!await page.locator(selector).isVisible()) continue;
     const result = await contrast(page, selector);
@@ -2085,6 +2087,7 @@ async function main() {
       return route.abort('blockedbyclient');
     });
     const page = await context.newPage();
+    report.recordSpacing = settingsSpacingRecorder(page, args.artifactRoot);
     page.on('pageerror', error => pageErrors.push(error.message)); rejectNativeDialogs(page, pageErrors);
     page.on('request', request => {
       if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/settings') {

@@ -166,6 +166,22 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(document.getElementById('patron-code-picker').getAttribute('role'), 'combobox');
     assert.strictEqual(document.getElementById('patron-code-picker').getAttribute('aria-controls'), 'patron-code-options');
     assert.strictEqual(document.getElementById('patron-code-options').getAttribute('role'), 'listbox');
+    const codeSummary = document.querySelector('.patron-code-summary');
+    for (const id of ['patron-code-availability', 'patron-code-retry', 'patron-code-selection', 'patron-codes-editor', 'patron-code-count']) {
+      assert.ok(codeSummary.contains(document.getElementById(id)), `${id} shares the selection summary`);
+    }
+    assert.equal(document.getElementById('patron-code-availability').getAttribute('role'), 'status');
+    assert.equal(document.getElementById('patron-code-availability').hidden, false,
+      'The empty availability live region remains mounted and exposed.');
+    assert.equal(document.getElementById('patron-code-selection').closest('[data-settings-ignore="true"]'), null,
+      'The selected IDs remain owned by the settings draft.');
+    assert.equal(codeSummary.contains(document.getElementById('patron-code-warning')), false,
+      'The conditional warning keeps its own separated stack position.');
+    const publicNotes = document.querySelector('.patron-public-notes');
+    assert.ok(publicNotes.contains(document.getElementById('patron-copy-status')));
+    assert.equal(document.getElementById('patron-copy-status').getAttribute('aria-live'), 'polite');
+    assert.equal(document.getElementById('patron-public-links').hidden, true,
+      'Public links stay hidden until an active library has an authoritative URL.');
     assert.strictEqual(document.getElementById('common-creators-editor').closest('fieldset').querySelector('[id^="patron-code"]'), null);
     const commonCreators = fieldset('common-authors-enabled');
     const commonAuthorsEnabled = document.getElementById('common-authors-enabled');
@@ -229,6 +245,21 @@ const { JSDOM } = require('jsdom');
       assert.ok(control.closest('label') || document.querySelector(`label[for="${control.id}"]`), control.id);
     }
     const css = fs.readFileSync(path.join(frontendRoot, 'staff', 'styles.css'), 'utf8');
+    assert.match(css, /\.settings-callout\.settings-scope-explanation\s*\{\s*margin-bottom:\s*10px;/,
+      'Library explanations keep their visible gap despite the shared callout margin reset.');
+    assert.match(css, /\.settings-domain-block\s*\{\s*display:\s*grid;\s*gap:\s*10px;\s*min-width:\s*0;/);
+    assert.match(css, /\.settings-fieldset\s*>\s*\.settings-domain-block\s*\+\s*\.settings-domain-block,/,
+      'Between-domain margins apply outside the existing Settings grid.');
+    assert.match(css, /#patron-public-links:not\(\[hidden\]\)\s*\{[^}]*display:\s*grid;[^}]*gap:\s*10px/);
+    assert.match(css, /#patron-public-links\s*>\s*button\s*\{\s*justify-self:\s*start;/,
+      'Copy actions remain content-sized.');
+    assert.match(css, /#patron-public-links\s+\.patron-public-notes\s*>\s*\.settings-result:not\(:empty\)\s*\{\s*margin-top:\s*10px;/,
+      'A successful copy notice outranks the Public links paragraph margin reset.');
+    assert.doesNotMatch(css, /#patron-code-availability[^{}]*\{[^}]*display:\s*none/,
+      'Empty picker announcements do not rely on hiding the live region.');
+    assert.match(css, /\.settings-timeouts\s*\{\s*container-type:\s*inline-size;/);
+    assert.match(css, /@container\s*\(max-width:\s*40rem\)[^]*?\.settings-timeouts\s*>\s*\.settings-grid,/,
+      'Timeouts respond to their actual available width at CSS zoom.');
     assert.match(css, /\.settings-save-bar\s*\{\s*position:\s*static;/);
     assert.match(css, /\.settings-save-bar\.attention\s*\{\s*position:\s*sticky;\s*bottom:\s*0;/);
     assert.match(css, /@media[^{}]*max-width:\s*760px[^]*?\.settings-grid\s*\{\s*grid-template-columns:\s*1fr;/);

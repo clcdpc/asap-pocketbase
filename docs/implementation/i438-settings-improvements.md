@@ -35,8 +35,8 @@ the parent Codex session.
 | 11 | #435 | SQL 18/18 and complete Staff 74 states/16 roster flags/eight native proofs PASS; shared accessibility corrections verified in #436 | Luna MAX / Astra HIGH clear; Terra actual desktop/mobile/dark/native renders clear | `3054851`, corrections in #406/#436 |
 | 12 | #406 | Filter/counts/preserved drafts; complete Staff PASS; final shared notice/pointer/focus checks PASS in #436 | Luna MAX / Astra HIGH clear; Terra actual major and eight native renders clear | `a8c0e7d`, corrections in #436 |
 | 13 | #433 | SQL/browser 2/2 PASS, 14 states; Library summary contrast corrected and rechecked in #436 R1 | Luna MAX / Astra HIGH clear; Terra actual groups and both summaries clear | `99469b7`, contrast correction in #436 |
-| 14 | #436 | Seven Node files, actual Settings/queue/Staff and final presentation PASS; native 200%/400% history/focus/contrast checks PASS | Luna MAX / Astra HIGH / Terra MAX final narrow verification clear | This commit |
-| 15 | #391 | Pending | Pending Luna MAX / Terra MAX | Pending |
+| 14 | #436 | Focused R3 and Node checks PASS; later #391 baseline exposes 436-6 P3 fractional focus edge, open for final integrated audit | Luna MAX / Astra HIGH / Terra MAX reviewed delta clear; new P3 explicitly carried under cycle cap | `7d1b247` |
+| 15 | #391 | Actual before/after spacing; seven Node files, Settings/native R2 and final Presentation R3 PASS; supplemental visible-logo/Library-roster captures await combined run | Luna MAX source and Terra MAX actual matrix clear; explicit integrated limits retained | This commit |
 
 ## Environment and integration
 
@@ -54,8 +54,11 @@ the parent Codex session.
 - Real SQL Server 2022 Developer 16.0.1210.3 (metadata explicitly verified) and deterministic provider boundaries are used for
   mutation and browser journeys. No live Polaris/Postmark actions are part of
   ordinary qualification.
-- Full frontend, exact discovered .NET/SQL and browser populations, sequential
-  acceptance suites and final CI remain pending until the combined implementation.
+- Final combined qualification and its current status are maintained in
+  [PR #454](https://github.com/clcdpc/asap-pocketbase/pull/454), bound to the final
+  source revision: complete frontend, authoritative .NET/SQL and browser
+  populations, sequential acceptance suites, final independent audit and CI.
+  Counts below describe focused checkpoints and do not substitute for that gate.
 - Human assistive-technology acceptance remains #398; local automation and
   visual review do not claim NVDA/JAWS/VoiceOver acceptance. Live-provider and
   deployment qualification remain separate.
@@ -992,9 +995,162 @@ skipped; the visual contrast finding remains assigned to #436.
 - Luna MAX independently verifies the final small source/test/receipt delta;
   Astra HIGH closes notice and scroll/context integrity; Terra MAX personally
   compares actual pointer baseline/fix and keyboard/native images. No actionable
-  finding remains in this issue's reviewed delta. R1/R2 failures remain recorded,
+  finding remained in this issue's reviewed delta at its commit. R1/R2 failures remain recorded,
   and component passes have not been substituted for either failed journey.
   The user's review-cycle cap is honored: finish this in-flight qualification,
   then move to #391, reserving the comprehensive review for the combined audit.
   Human assistive technology, live providers and deployed-SHA verification stay
   separately tracked and are not claimed by these local automated results.
+
+## #391 — measured Settings spacing
+
+- Phase 1 changes only retained browser instrumentation. Production source is
+  unchanged from `7d1b247`; the baseline Release build passes with zero warnings
+  or errors (71.39s). Structured discovery selects exactly the existing Settings,
+  presentation and queue/native owners; no compiled cases are added or removed.
+- The actual local Settings baseline serves `/staff/styles.css` with HTTP 200.
+  Its SHA-256 `cc6600d5f0f5bc5e26968d9123d61bcd78bbce4645af036834e6ea6617e66d11`
+  matches tracked source. The versioned stylesheet response and geometry are
+  recorded together; this is local Kestrel evidence, not a deployed-host claim.
+- System Common creators heading to populated editor measures **0px**; Library
+  heading to Use system list and inheritance control to editor also measure
+  **0px** in the actual mobile-on states. Implementer and independent Terra
+  inspect the same raw geometry; Terra confirms touching borders in both PNGs.
+  The existing patron-code picker normally has 10px; one System empty live-status
+  track yields 20px to chips, which needs judgment rather than blind restyling.
+- Baseline `i391-baseline.trx`: **2 passed / 1 failed / 0 skipped**, 409.710s.
+  Settings passes 82.125s; queue/native passes 116.125s. Presentation fails
+  186.775s in the unchanged #436 component, after recording the 84 actual
+  spacing audit states. **436-6 P3, open for final audit:** after pointer use and
+  summary Enter, native-200 summary bounds end at y=402.640625 against innerHeight
+  402 / visualViewport height 402.5. Focus, hit, accessible content and the inset
+  outline remain visible; this fractional full-bounds proof fails. Retain the
+  exact failure in `staff-presentation-c906fa16563d4ed593b5ac1b52983dd7` and do
+  not substitute prior component successes for the failed application journey.
+  Under the user's explicit cycle cap, continue #391 and revisit this P3 in the
+  final integrated audit; no new dedicated #436 review/fix cycle is started.
+- Actual CSS-200 Workflow captures show a separate **P2 child-containment
+  defect** for #391: timeout controls overlap narrow card labels even though
+  document scrollWidth equals viewport width. Outstanding days ends at x=903.66
+  while its owner ends at 830; additional-copy days ends at 1209.94 while its
+  owner ends at 1144. Native-200 widths 632/712 confirm the zero vertical section
+  gaps with CSS zoom 1, separate from that CSS-zoom collision.
+- Measured 0px boundaries also include Branding source to first grid, Patron
+  main grid to status-label grid, all five format/domain heading/editor and
+  section transitions, and Additional templates heading to empty editor.
+  Standalone provider help retains 12px; approved roster and organization
+  spacing remain intentional. Empty patron-code availability/chips tracks
+  reserve 30px from picker to zero count, requiring a presentation correction
+  that retains the live status node and normal selection behavior.
+- Both scopes' initial Public links blocks are hidden, so those screenshots do
+  not establish the available-link/copy case. Production CSS stays frozen while
+  an owned valid-Staff-URL fixture supplies authoritative scoped portal links
+  for a test-only before-state supplement. No hidden case is counted as proof
+  of the available controls.
+- The available-links supplement `i391-links-before.trx` remains **failed 1/1**,
+  zero skips, 66.188s wall / 50.094s case. It captures the actual Library desktop
+  links before a Windows CRLF-versus-LF clipboard comparison fails for loader
+  markup. All three field/textarea-to-Copy-button gaps measure **0px**; the buttons
+  remain content-sized (100.91/117.55/117.56px). Terra inspects the same actual
+  image/geometry. Only desktop available links are reached; no full supplement
+  success is claimed. The fixture restores the original persisted Staff URL.
+  Normalize only platform clipboard line endings in the assertion, retain the
+  failed receipt, and proceed with these measured production spacing fixes.
+
+The `7d1b247` checkpoint passes
+[draft CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/41800619652):
+clean Release, 107 native cases with zero failures/skips and all 70 frontend
+files. The 141 Python checks include the expected pre-build native-discovery
+class skip. Full CI and test-IIS activation are skipped; this draft result does
+not close 436-6 or replace final combined qualification. Raw job `126475231654`
+and its summary remain outside Git.
+
+- The first after-build passes with zero warnings/errors (6.61s), but
+  **`i391-after-r1.trx` fails 3/3**, zero skips, 129.460s. Settings fails 19.765s:
+  the Library scope explanation still has 0px before System links because a
+  later `.settings-callout { margin:0 }` overrides its earlier bottom margin.
+  Presentation fails 11.834s because the new flow-gap assertion treats a sticky
+  attention footer's viewport rectangle as a static sibling (-373.36px).
+  Queue/native fails 79.726s because it requires every unfocused item in a
+  normally scrollable popover to fit its visible scrollport. These failed runs
+  are not qualification. Correct the actual explanation gap and make measures
+  position/scrollport/focus-aware, retaining static gaps, horizontal containment,
+  popup bounds and strict focused-control visibility; do not change the footer
+  or picker policy to satisfy an overbroad assertion.
+- Independent Terra sees the same real explanation collision in actual images
+  and confirms the two intentional layout cases. Partial R1 native captures
+  show readable stacked timeout/picker controls, expanded format rules and
+  template Body; both native widths and the full matrix remain uncompleted.
+- Cycle 1 corrects the scope-explanation selector's specificity and records
+  positioned sibling rectangles separately from normal flow. Sticky raw gaps
+  remain in receipts; static footers still require 18px. Popover checks use real
+  scrollport geometry: unfocused off-port options may scroll, while horizontal,
+  popup-viewport and fully visible/unobscured focused-option checks remain.
+  Native checks traverse first/last/first without inserting or removing states.
+- R2 Release passes with zero warnings/errors (4.99s).
+  **`i391-after-r2.trx`: 2 passed / 1 failed / 0 skipped**, 302.177s. Settings
+  passes 67.156s with all 14 states/eight contrast checks; queue/native passes
+  112.253s with all 22 native states, both widths and keyboard picker traversal.
+  Actual Library callout gaps are 10px, timeout controls are contained at CSS
+  zoom, and common-creator/picker states have separate visible groups.
+- Presentation fails 105.856s at the existing mandatory Copy-notice gap check:
+  the embedding-policy note touches `Patron URL copied.` (0px). The field/Copy
+  gaps are already 10px and copying succeeds. The ID paragraph reset outranks
+  the class-only notice margin. R2 completes all 42 System base panel/config
+  states but only the first Library desktop panels before that failure; do not
+  count the full matrix as passed.
+- The final small selector correction gives nonempty copied status 10px while
+  retaining empty/cleared live-region normal flow at 0px. The mandatory browser
+  assertion is unchanged; focused layout and actual-markup cascade checks pass.
+  Final stylesheet SHA-256 is
+  `3250025e2ddc5765234166f6a06a719268b84c602afd9a2b1a6710de134f6589`.
+  After frontend refresh the existing Presentation owner alone is running as
+  `i391-presentation-r3`; previously passing Settings/native paths are unaffected
+  by this Copy-only margin. Actual full completion and final visual closure are
+  pending, and 436-6 remains explicitly carried for the final integrated audit.
+- **Final `i391-presentation-r3.trx` PASS 1/1**, zero failures/skips,
+  372.095s wall / 353.692s case. The actual run completes 130 existing presentation
+  states, 187 spacing-audit entries (including all 84 main panel/scope/config
+  combinations) and four existing accessibility component profiles. All audited
+  states have zero serious/critical axe findings, missing visible images or
+  unexpected external requests/page errors, with required owner/viewport checks.
+  Final actual folder: `staff-presentation-654a0e51aea3430298ad02d567a31ed4`.
+- Luna MAX clears the final source/cascade correction and retained guard semantics.
+  Terra MAX compares actual before/after System/Library, narrow, CSS/native zoom,
+  dark, picker, Copy, editor and joined-roster views; no further actionable #391
+  spacing finding remains in the reviewed captures. R2 Settings/native passes
+  precede the last Copy-notice-only selector correction; final R3 verifies that
+  correction across the full matrix. The earlier 436-6 fractional edge is not
+  declared fixed merely because this invocation passes; its final disposition
+  remains part of the fresh integrated audit.
+
+| Inspected area | Before | Verified spacing or behavior after |
+| --- | --- | --- |
+| Patron-code empty availability/chips/count | 30px System / 20px Library phantom tracks | 10px meaningful group gap; live nodes retained in normal flow |
+| Common creators | 0px heading/editor; Library 0px around inheritance | 10px internal groups; hidden controls reserve no tracks |
+| Five Patron format/domain sections | 0px internal and between sections | 10px internal / 16px direct section boundaries; parent grids retain 14px |
+| Patron text grids | 0px | 14px |
+| Provider definitions/help/editor | 12px / 12px | Retained |
+| Additional templates | 0px before heading and before editor | 16px preceding boundary / 10px internal |
+| Branding, hidden preview | 0px source/grid | 12px; image-visible margins remain 12px, capture pending combined run |
+| Public links and Copy feedback | 0px field/Copy; R2 copied-note 0px | 10px field/action/notes; content-sized buttons; 12px status/block |
+| Library-only explanations | 0px | 10px |
+| CSS-200 Timeout and override controls | Controls spill 56–104px beyond owners | Container-width stacking and contained controls in both scopes |
+| Staff feedback and controls | Message/table 0px; Add Role spills 9px | 10px message gap / contained fields; joined table boundary stays 0px |
+| Polaris/organization groups | 10px / 20px; action gaps 8px | Retained |
+| Heading/actions and footer | 14px headings / 8px actions; 18px static footer/mobile stack | Retained, including wrapped actions and focus/scroll guards |
+
+Visible-logo preview and expanded Library roster are explicitly pending rendered
+spacing checks for the final integrated Staff journey. Its existing real GIF and
+authorized Library-row flows receive supplemental capture/spacing hooks, without
+changing 74 main states, 16 roster flags, eight native states or discovered MTP
+methods. No success is claimed for those future captures. Human screen-reader,
+live-provider and deployed-host validation remain separately owned.
+
+The two final test-only Staff hooks pass syntax/layout checks and independent
+Luna MAX read-only verification: stylesheet listeners precede navigation,
+loaded-image/selection and mutation guards remain, and the Library 82 disclosure
+adds only supplemental artifacts. Existing axe/image/overflow/page-error/external
+guards and the 74/16/eight-state contracts remain. These checks verify the hooks,
+not the future rendered results. The final combined evidence belongs in PR #454
+at its tested source revision.

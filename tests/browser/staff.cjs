@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { URL } = require('node:url');
 const { verifyRoster: verifyStaffRosterNativeZoom } = require('./staff-native-zoom.cjs');
+const settingsSpacingRecorder = require('./settings-spacing.cjs');
 
 async function revealRequestActions(page) {
   await page.locator('#request-dialog[open] .action-bar').waitFor();
@@ -2879,6 +2880,14 @@ async function runNavigationSupport(browser, args, axeSource, report) {
   const { context, traffic } = await createContext(
     browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const page = await context.newPage();
+  const brandingSpacingRoot = path.join(args.artifactRoot, 'branding-preview-spacing');
+  await fs.mkdir(brandingSpacingRoot, { recursive: true });
+  const recordBrandingSpacing = settingsSpacingRecorder(page, brandingSpacingRoot);
+  let navigationWrites = 0;
+  page.on('request', request => {
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method()) &&
+        new URL(request.url()).pathname.startsWith('/api/asap/staff/')) navigationWrites += 1;
+  });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   try {
@@ -3074,6 +3083,40 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       buffer: Buffer.from('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 'base64')
     });
     await page.locator('#branding-preview-source').filter({ hasText: /Unsaved image preview/ }).waitFor();
+    await page.waitForFunction(() => {
+      const image = document.getElementById('branding-preview');
+      return !image.hidden && image.complete && image.naturalWidth > 0 && image.getBoundingClientRect().height > 0;
+    });
+    const writesBeforePreview = navigationWrites;
+    const selectedLogo = await page.locator('#branding-logo').inputValue();
+    const previewSpacing = await recordBrandingSpacing('supplemental-branding-visible-preview');
+    const visiblePreview = await page.locator('#branding-preview').evaluate(image => {
+      const source = document.getElementById('branding-preview-source'), grid = image.nextElementSibling;
+      const bounds = element => {
+        const box = element.getBoundingClientRect();
+        return { top: box.top, bottom: box.bottom, left: box.left, right: box.right, width: box.width, height: box.height };
+      };
+      const scale = parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+      return { source: bounds(source), image: bounds(image), grid: bounds(grid),
+        sourceToPreviewGap: (bounds(image).top - bounds(source).bottom) / scale,
+        previewToGridGap: (bounds(grid).top - bounds(image).bottom) / scale,
+        sourceLabel: source.textContent, sourceProtocol: new URL(image.currentSrc).protocol,
+        loaded: image.complete, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight,
+        followingGrid: grid.classList.contains('settings-grid') };
+    });
+    report.brandingVisiblePreview = { scope: previewSpacing.scope, ...visiblePreview,
+      screenshot: 'branding-unsaved-visible-preview.png', spacingReceipt: 'branding-preview-spacing/settings-spacing.json' };
+    await page.screenshot({ path: path.join(args.artifactRoot, report.brandingVisiblePreview.screenshot), fullPage: true });
+    await fs.writeFile(path.join(brandingSpacingRoot, 'visible-preview.json'), JSON.stringify(report.brandingVisiblePreview, null, 2));
+    assert.equal(previewSpacing.scope, '2');
+    assert.equal(visiblePreview.loaded, true); assert.equal(visiblePreview.sourceProtocol, 'blob:');
+    assert.equal(visiblePreview.naturalWidth, 1); assert.equal(visiblePreview.naturalHeight, 1);
+    assert.equal(visiblePreview.followingGrid, true);
+    for (const gap of [visiblePreview.sourceToPreviewGap, visiblePreview.previewToGridGap]) {
+      assert.ok(gap >= 11.8 && gap <= 12.2, `Visible Branding preview keeps its 12px gaps: ${JSON.stringify(visiblePreview)}`);
+    }
+    assert.equal(await page.locator('#branding-logo').inputValue(), selectedLogo);
+    assert.equal(navigationWrites, writesBeforePreview, 'Capturing the visible preview never writes an API.');
     let prematureSettingsSaves = 0;
     const unexpectedSettingsSave = route => {
       prematureSettingsSaves += 1;
@@ -3419,6 +3462,9 @@ async function runSettingsUnconfirmedSessionCase(browser, args) {
 async function runStaffRoster(browser, args, axeSource, report) {
   const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const page = await context.newPage(), errors = [], writes = [];
+  const spacingRoot = path.join(args.artifactRoot, 'staff-roster-spacing');
+  await fs.mkdir(spacingRoot, { recursive: true });
+  const recordSpacing = settingsSpacingRecorder(page, spacingRoot);
   page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   page.on('request', request => {
     if (/\/api\/asap\/staff\/users(?:\/|$)/.test(new URL(request.url()).pathname) && request.method() !== 'GET') {
@@ -3450,6 +3496,7 @@ async function runStaffRoster(browser, args, axeSource, report) {
     const result = await receipt; assert.equal(result.status(), status, await result.text()); await settled(); return result.json();
   };
   const capture = async (viewport, state) => {
+    await recordSpacing(`roster-${viewport}-${state}`);
     await scan(page, axeSource, args.artifactRoot, report, viewport, state);
     const containment = await page.evaluate(() => [...document.querySelectorAll(
       '.settings-staff-row input, .settings-staff-row select, .settings-staff-row button, .settings-staff-toolbar button, .settings-staff-filter input, #staff-add-form input, #staff-add-form select, #staff-add-form button')]
@@ -3697,6 +3744,22 @@ async function runStaffRoster(browser, args, axeSource, report) {
     assert.equal(await page.locator('#staff-roster-counts').textContent(), countsFor(scopedUsers, true));
     await page.setViewportSize({ width: 1280, height: 900 });
     await capture('desktop', 'staff-roster-library-scope');
+    const librarySummary = rowFor(first.id).locator('.settings-staff-summary');
+    const writesBeforeDisclosure = writes.length;
+    const draftTitleBeforeDisclosure = await page.locator('#settings-save-title').textContent();
+    assert.equal(await librarySummary.getAttribute('aria-expanded'), 'false');
+    await librarySummary.click();
+    const librarySpacing = await recordSpacing('supplemental-staff-roster-library-expanded');
+    report.staffRosterLibraryExpanded = { scope: librarySpacing.scope, staffId: first.id,
+      screenshot: 'staff-roster-library-expanded.png', spacingReceipt: 'staff-roster-spacing/settings-spacing.json' };
+    await page.screenshot({ path: path.join(args.artifactRoot, report.staffRosterLibraryExpanded.screenshot), fullPage: true });
+    await fs.writeFile(path.join(spacingRoot, 'library-expanded.json'), JSON.stringify(report.staffRosterLibraryExpanded, null, 2));
+    assert.equal(librarySpacing.scope, '82');
+    assert.equal(await librarySummary.getAttribute('aria-expanded'), 'true');
+    assert.equal(await rowFor(first.id).getByLabel(/^Email address/).isVisible(), true);
+    await librarySummary.click();
+    assert.equal(await page.locator('#settings-save-title').textContent(), draftTitleBeforeDisclosure);
+    assert.equal(writes.length, writesBeforeDisclosure, 'Expanding the scoped roster never writes a staff record.');
     const nativeInactive = await seed('roster.native.inactive@example.org', 'Native Inactive');
     const nativeDisabled = await context.request.delete(`${args.baseOrigin}/api/asap/staff/users/${nativeInactive.id}`, { headers,
       data: { version: nativeInactive.version } });

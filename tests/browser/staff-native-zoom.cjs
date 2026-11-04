@@ -9,6 +9,7 @@ const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cj
 const { actionGeometry, activateRowAction } = require('../acceptance/helpers/request-actions.cjs');
 const { formatRuleGeometry } = require('../acceptance/helpers/format-rules.cjs');
 const { geometry: emailTemplateGeometry } = require('./email-template-cards.cjs');
+const settingsSpacingRecorder = require('./settings-spacing.cjs');
 
 // Chromium's tab API changes actual browser zoom. CSS zoom and pinch scaling
 // do not exercise the same viewport, native controls or top-layer geometry.
@@ -28,6 +29,9 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       });
       const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
       const page = context.pages()[0] || await context.newPage();
+      const spacingRoot = path.join(artifacts, `native-zoom-${width}-spacing`);
+      await fs.mkdir(spacingRoot, { recursive: true });
+      const recordSpacing = settingsSpacingRecorder(page, spacingRoot);
       page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
       await page.goto(`${baseURL}/staff/?scope=${library}`, { waitUntil: 'networkidle' });
       const ratio = await page.evaluate(() => devicePixelRatio);
@@ -45,6 +49,7 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       };
       const zoom = await applyNativeZoom();
       const scan = async (name, visible = null, viewportOnly = false) => {
+        await recordSpacing(`native-200-${width}-${name}`);
         await page.evaluate(axe);
         const result = await page.evaluate(async () => ({
           violations: (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact)),
@@ -292,6 +297,15 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
         'Scrolling inside the real narrow picker preserves its open state.');
       await emailPopup.evaluate(node => { node.scrollTop = 0; });
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const popupOptions = emailPopup.locator('[data-placeholder-key]');
+      const optionCount = await popupOptions.count();
+      assert.ok(optionCount > 1, 'The native-zoom placeholder list exercises keyboard scrolling.');
+      for (let index = 1; index < optionCount; index += 1) await page.keyboard.press('Tab');
+      assert.equal(await popupOptions.last().evaluate(node => node === document.activeElement), true);
+      await recordSpacing(`native-200-${width}-picker-keyboard-last`);
+      for (let index = 1; index < optionCount; index += 1) await page.keyboard.press('Shift+Tab');
+      assert.equal(await popupOptions.first().evaluate(node => node === document.activeElement), true);
+      await recordSpacing(`native-200-${width}-picker-keyboard-first`);
       const emailBounds = await emailPopup.boundingBox();
       const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
       assert.ok(emailBounds && emailBounds.x >= 0 && emailBounds.y >= 0 &&
@@ -326,6 +340,9 @@ module.exports.verifyRoster = async function verifyStaffRosterNativeZoom({ baseU
       const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
       const page = context.pages()[0] || await context.newPage();
       page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
+      const spacingRoot = path.join(artifacts, `roster-native-zoom-${width}-spacing`);
+      await fs.mkdir(spacingRoot, { recursive: true });
+      const recordSpacing = settingsSpacingRecorder(page, spacingRoot);
       await page.goto(`${baseURL}/staff/?stage=settings&settingsScope=system#settings-staff`, { waitUntil: 'networkidle' });
       await page.waitForFunction(() => document.getElementById('settings-version').value && !document.getElementById('staff-refresh').disabled);
       const ratio = await page.evaluate(() => devicePixelRatio);
@@ -361,6 +378,7 @@ module.exports.verifyRoster = async function verifyStaffRosterNativeZoom({ baseU
         const capture = await session.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
         await fs.writeFile(path.join(artifacts, `native-zoom-${width}-${name}.png`), Buffer.from(capture.data, 'base64'));
         await session.detach();
+        await recordSpacing(`roster-native-200-${width}-${name}`);
         await page.evaluate(axe);
         const violations = await page.evaluate(async () => (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact)));
         const geometry = await page.evaluate(() => {
