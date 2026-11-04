@@ -32,10 +32,10 @@ the parent Codex session.
 | 8 | #447 | Effective conditional options; Node 13/13, Release build, checkpoint 4/4 unaffected and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after focus/test-wrapper corrections | `3ec9a0d` |
 | 9 | #444 | Nearby single-token picker; focused Node, Settings 13/13, Release and final SQL/browser 1/1 PASS | Luna MAX clear, including actual open-popup and inherited renders | `d70170e` |
 | 10 | #399 | Cards/previews/contextual insertion; Node, eight unique checkpoint owners, final Staff/Campaign 3/3 and native-focus 1/1 PASS | Luna MAX / Astra HIGH / Terra MAX clear after recorded persistence, feedback and focus corrections | `43efa9b` |
-| 11 | #435 | Implemented; SQL 18/18 PASS; carried dark/feedback/independent-save findings fixed; full roster qualification pending 406-4/5 | Luna MAX / Astra HIGH source and SQL clear; Terra 13 major renders inspected, native pending | `3054851`, roster correction in #406 |
-| 12 | #406 | Implemented; source/Node clear; actual native focus obstruction and Add feedback pending shared accessibility checkpoint | Luna MAX / Astra HIGH narrow source clear; Terra 13 major + two native renders inspected | `a8c0e7d` |
-| 13 | #433 | Implemented; final SQL/browser 2/2 PASS, 14 states; read-only Library summary contrast pending #436 | Luna MAX / Astra HIGH clear; Terra groups/System summary clear, Library contrast P2 open | This commit |
-| 14 | #436 | Pending | Pending Luna MAX / Terra MAX | Pending |
+| 11 | #435 | SQL 18/18 and complete Staff 74 states/16 roster flags/eight native proofs PASS; shared accessibility corrections verified in #436 | Luna MAX / Astra HIGH clear; Terra actual desktop/mobile/dark/native renders clear | `3054851`, corrections in #406/#436 |
+| 12 | #406 | Filter/counts/preserved drafts; complete Staff PASS; final shared notice/pointer/focus checks PASS in #436 | Luna MAX / Astra HIGH clear; Terra actual major and eight native renders clear | `a8c0e7d`, corrections in #436 |
+| 13 | #433 | SQL/browser 2/2 PASS, 14 states; Library summary contrast corrected and rechecked in #436 R1 | Luna MAX / Astra HIGH clear; Terra actual groups and both summaries clear | `99469b7`, contrast correction in #436 |
+| 14 | #436 | Seven Node files, actual Settings/queue/Staff and final presentation PASS; native 200%/400% history/focus/contrast checks PASS | Luna MAX / Astra HIGH / Terra MAX final narrow verification clear | This commit |
 | 15 | #391 | Pending | Pending Luna MAX / Terra MAX | Pending |
 
 ## Environment and integration
@@ -774,7 +774,8 @@ zero-warning/error Release, all 107 native SQL-independent cases with no
 failures/skips and all 69 unique frontend files. The 141 Python checks have the
 expected pre-build population class skip. Raw job `126420844204` and summary are
 retained outside Git. Full CI and test-IIS activation were skipped; the known
-native browser failure and Add validation finding remain open.
+native browser failure and Add validation finding were carried into #436;
+their corrected runtime and focused closure evidence is recorded below.
 
 ## #433 — organization placement and one participation editor
 
@@ -840,9 +841,160 @@ native browser failure and Add validation finding remain open.
   closed functional/integrity qualification. Terra inspected the three Polaris
   views and two summary images: grouping, literal data text, inactive-parent
   associations, read-only controls and System summary are clear.
-- **433-4 P2, unresolved visual contrast:** Library summary information is dimmed
+- **433-4 P2, initial visual contrast finding (resolved in #436):** Library summary information is dimmed
   by disabled-fieldset opacity. Screenshot pixels `#8a929b` on `#eff3f5` give
   approximately 2.82:1, despite the clean axe result. Manage must stay disabled;
   the read-only status must keep normal readable contrast. Carry this shared
   style correction and direct rendered contrast assertion into #436; do not
   describe #433 visual qualification as complete until it is rechecked.
+
+The pushed `99469b7` checkpoint passed
+[draft CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/41789141510):
+zero-warning/error Release, 107 native SQL-independent cases with zero
+failures/skips and all **70** current frontend files. The 141 Python checks
+include the expected pre-build population class skip. Raw job `126438220162`
+and summary are retained outside Git. Full CI and test-IIS activation were
+skipped; the visual contrast finding remains assigned to #436.
+
+## #436 — focused accessibility and native editing
+
+- Shared unfocused input borders use `#7b8791`, measured 3.673:1 against white
+  and 3.389:1 against the page. Disabled system-only fieldsets retain native
+  disabling with a soft background rather than dimming their informational text.
+  Source-component Library summary/credential help measures 5.053:1 including
+  ancestor opacity; actual application confirmation remains pending.
+- Seven sortable Requests headers expose current `aria-sort` and column-specific
+  next actions through class changes/redraw. Settings tab orientation follows
+  the actual 760px layout breakpoint; concise labels retain separate help.
+- Three placeholder mechanisms share native insertion, observed input events,
+  selected-range/caret and exact field/page scroll preservation. Native history
+  checks include surrounding ordinary edits, selection replacement, Undo/Redo,
+  dirty-state and global Save/Discard pointer geometry.
+- Seven focused Node files and the initial Release build pass (zero warnings or
+  errors, 43.62s). The retained source-component v14 probe passes desktop,
+  mobile, native 200% and native 400%: 48 natural focus center/hit proofs,
+  32 native history cases, eight nonzero-scroll checks and 20 clean axe scans.
+  Earlier v9–v13 failed probes remain outside Git; fixes include first-dirty
+  template preview growth, queued-scroll/picker dismissal and staff focus return
+  after collapsing/hiding DOM. These component results are not full-app evidence.
+- **436-1 P3, independent visual finding:** v14's first-dirty roster Email has
+  a visible caret/center but its lower edge/focus outline is clipped on mobile
+  (center y=833.48 in height 844) and slightly at native 200%. The existing proof
+  checks vertical center and horizontal containment, not full vertical bounds.
+  Root inspected the actual screenshot and confirmed the limitation. Correction
+  and stronger natural-focus coverage are pending after the frozen runtime run.
+- Parent structured discovery selects exactly four existing application owners:
+  Staff roster, combined System/Library Settings, cumulative presentation and
+  queue/detail/native workflow. `i436-browser-r1` is in progress. Its Staff case
+  failed after 230.718s in a later operational-catalog journey: **433-5 test-only
+  integration defect**, the retained consumer still opens Staff access before
+  clicking the relocated, hidden participation action. Both deactivate/activate
+  paths must open Polaris and await its catalog. The eight native roster images
+  were captured earlier, but no complete Staff pass/report is claimed.
+- **436-2 P3, owned validation lifecycle:** a nonempty invalid partial Email still
+  leaves the old required-field message, and abandoning the empty Add form leaves
+  it outside the hidden form. Retire only this owned notice on nonblank input or
+  cancellation/reset, preserving newer server/uncertain feedback and native
+  format validation. These corrections are queued in the first review batch.
+- Completed `i436-browser-r1.trx`: **3 passed / 1 failed / 0 skipped**, 589.019s.
+  Settings passed 62.634s (14 states, eight direct rendered contrast checks),
+  cumulative presentation passed 168.844s (including all four component/native
+  configurations), queue/detail/native workflow passed 106.502s (22 native
+  states). Staff failed 230.718s at 433-5; its complete report is absent.
+  Actual Library summary measures 5.052771:1 and remains natively read-only;
+  Terra inspected its fresh mobile image and the System summary/organization
+  views, closing **433-4**. Its old failure remains recorded above.
+- **436-3 P3, independently confirmed by Luna and a real controller probe:** a
+  long Subject's picker blurs/resets horizontal scroll before the shared helper
+  captures it. The real picker probe resets scrollLeft 5112 to 0 and leaves the
+  inserted caret at x=5719.72 outside field bounds 283..859.56. Value/selection
+  and page scroll remain correct. The existing nonzero-scroll test calls the
+  helper while focused, missing this path. Preserve the owning editor's actual
+  pre-blur scroll through the picker and cover visible caret/native history.
+- Luna MAX functional review is in progress. Astra HIGH independently passed
+  three affected Node files and five insertion event/fallback cases and found
+  no integrity defect in the initial frozen source. Terra MAX inspected component
+  and actual application images and identified 436-1/2. Runtime/review closure is
+  pending; human screen-reader/deployed acceptance remains #398.
+- The bounded correction batch is frozen. Staff reveal uses current context,
+  sequence, actual focus and visible/editable ownership; full bounds include the
+  focus outline after natural layout growth. Required-email feedback retires
+  only its owned message on nonblank input or closing/resetting its Add form;
+  Escape still retains the draft and Cancel resets it. Later server feedback
+  survives. The operational-catalog journey now opens Polaris, awaits its real
+  catalog/form readiness and observes current Title links when checking retired
+  caches; all real confirmations/mutation/cache assertions remain.
+- Long Subject insertion retains its pre-blur view under the same context,
+  value and selection. Replacement can reduce the maximum scroll: the original
+  desktop example's scrollWidth 5687 to 5673, clientWidth 575, clamps 5112 to
+  5098. A separate end-caret insertion actually needs more horizontal scroll;
+  the helper restores the prior view, then makes only the additional single-line
+  adjustment needed to expose that caret. Page/textarea scroll remains exact.
+  At native zoom the actual scroll maximum can differ by 0.5px from rounded DOM
+  dimensions. Tests measure that diagnostic maximum only after the unassisted
+  caret assertion/screenshot, then restore the recorded position, so it cannot
+  repair a failure.
+- Final source-component R4 passes desktop/mobile/native 200%/400%: **64 natural
+  focus proofs, 56 full small-control/outline checks, 32 standard native history
+  paths, four long selected replacements and four long end-caret paths, 20 axe
+  scans**, with zero failures or serious/critical findings. Focused Email,
+  Staff Access and Patron Node files pass again; diff checks pass. The seven-file
+  frontend witness is `f0e2f8d2f7148e98b031cb953ad4764079121f9afca4dfaff026b9afa0107354`.
+  Tall native-400 Body direct insertion is explicitly a visible-caret/center
+  and exact-scroll claim, not full vertical field containment.
+- Parent frontend refresh passes. Final Staff and presentation application
+  qualification ran as `i436-browser-r2` (exactly two existing owners).
+  **R2: 1 passed / 1 failed / 0 skipped**, 693.851s. Staff passed 449.677s:
+  all 74 states, all 16 roster flags and all eight actual native-200 roster
+  proofs, including full field/outline containment, complete. Its real-SQL
+  witnesses and cleanup pass. Terra inspected all eight actual roster images
+  and closes 436-1's rendered finding. Presentation failed 204.060s during the
+  new rapid long-Subject end-caret picker sequence: the value remains unchanged
+  and focus ends on the picker's first option. Its preceding application renders
+  complete, but the component's first desktop case fails; no final presentation
+  or #436 pass is claimed. Queued scroll/picker ownership is being investigated,
+  rather than weakening the insertion assertion or repairing test focus.
+- Narrow cycle 2 independently clears the scroll/history/context corrections
+  (Luna source, Astra source plus focused Node/four measured-input probes, Terra
+  actual replacement/end-caret and staff-outline renders). **436-4 P3** remains:
+  an existing row's empty Email validation notice survives its Cancel/reset or
+  Escape collapse. Retire only that row control's owned notice, with the same
+  newer-generation safeguards. A final focused correction follows the running
+  frozen qualification, then implementation moves to #391 under the user cycle
+  cap. The bounded probes subsequently confirm both remaining interaction paths:
+  the Subject's already-applied blur scroll (5112 to 0) arrives after opening at
+  unchanged input position 0 and dismisses its picker while the page stays at 0;
+  **436-5 P3** moves mobile Cancel's bottom from 844.328 to 837.328 during
+  pointer-down. Pointer-up at 843.328 misses and leaves the draft dirty. Preserve
+  dismissal for genuine later scrolling while ignoring an owned queued event
+  at its opening position; button reveal must respect native keyboard modality.
+- Final correction preserves matching-row notice ownership on reset, collapse
+  and inactive-filter hide, retaining Escape/hidden drafts and newer/other-row
+  feedback. Opening field coordinates distinguish an already-applied queued
+  scroll from later movement. Native `:focus-visible` gates roster button reveal
+  so pointer-down cannot move its target; keyboard and input reveal remain.
+- **Final source-component R5:** all four configurations PASS, with 72 natural
+  focus proofs, 64 full small-staff-control/outline checks, 32 standard native
+  history paths, eight long-Subject paths, eight scroll cases, four successful
+  stationary edge clicks and 20 clean axe scans (four intermediate plus one
+  final scan per profile). Seven focused Node files pass. A separate real-native
+  immediate End/Shift+Tab/Enter probe passes 30/30, versus the retained baseline
+  failure on iteration 1. The final seven-file local frontend witness is
+  `40db7aa8fed5ac23948334e46a43f7546a23d713ff7a33f9a1d7ba448d41779d`.
+- After frontend refresh, **`i436-presentation-r3.trx` PASS 1/1**, zero failures
+  or skips, 289.645s wall time / 258.490s case time. It completes all 130
+  cumulative application states plus all four final component profiles, with
+  no external requests or page errors. Actual artifacts:
+  `staff-presentation-10b07fff5bd5414a95188d0b5d0b1fec`.
+  R2's complete Staff pass precedes the last notice/scroll/pointer corrections;
+  final focused Node/component checks and this final presentation pass verify
+  those corrections. The final combined suite still runs after #391.
+- Luna MAX independently verifies the final small source/test/receipt delta;
+  Astra HIGH closes notice and scroll/context integrity; Terra MAX personally
+  compares actual pointer baseline/fix and keyboard/native images. No actionable
+  finding remains in this issue's reviewed delta. R1/R2 failures remain recorded,
+  and component passes have not been substituted for either failed journey.
+  The user's review-cycle cap is honored: finish this in-flight qualification,
+  then move to #391, reserving the comprehensive review for the combined audit.
+  Human assistive technology, live providers and deployed-SHA verification stay
+  separately tracked and are not claimed by these local automated results.

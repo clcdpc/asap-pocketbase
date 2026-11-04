@@ -3193,7 +3193,9 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await page.locator('#email-submit-subject-placeholders [data-placeholder-key="name"]').click();
     assert.equal(await page.locator('#email-submit-subject').inputValue(), `{{name}}${originalSubject}`);
     assert.equal(await page.locator('#settings-save-title').textContent(), 'Unsaved changes');
-    assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'sticky');
+    assert.equal(await page.locator('#email-submit-subject').evaluate(node => node === document.activeElement), true);
+    assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'static',
+      'Insertion keeps the bar in flow while the restored Subject owns focus.');
     await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
     await page.waitForFunction(expected => document.getElementById('email-submit-subject').value === expected,
       originalSubject);
@@ -3272,7 +3274,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await page.locator('#workspace').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#recent-request-list button').count(), 0,
       'A replacement account must not inherit the previous account’s recents');
-    assert.equal(await page.locator('#request-grid .grid-open').count(), 0,
+    assert.equal(await page.locator('#request-grid .request-title-link').count(), 0,
       'A replacement account must not inherit the previous account’s protected queue');
     assert.deepEqual(errors, []);
     assert.equal(traffic.externalRequests, 0);
@@ -3662,7 +3664,13 @@ async function runStaffRoster(browser, args, axeSource, report) {
     await page.locator('#staff-add-submit').click();
     await page.locator('#staff-access-status').filter({ hasText: 'Email address is required.' }).waitFor();
     assert.equal(writes.length, beforeCreate);
+    await page.locator('#staff-add-email').fill('sam');
+    assert.equal(await page.locator('#staff-access-status').textContent(), '', 'A nonempty partial address retires its owned required notice.');
+    await page.locator('#staff-add-submit').click();
+    assert.equal(await page.locator('#staff-add-email').evaluate(input => input.validity.valid), false);
+    assert.equal(writes.length, beforeCreate, 'Partial email input remains blocked by native validation.');
     await page.locator('#staff-add-email').fill('roster.ui@example.org');
+    assert.equal(await page.locator('#staff-access-status').textContent(), '', 'Correcting Email retires its owned required-field notice.');
     await page.locator('#staff-add-role').selectOption('staff'); await page.locator('#staff-add-organization').selectOption('2');
     await capture('mobile', 'staff-roster-add');
     await page.keyboard.press('Escape');
@@ -3909,7 +3917,15 @@ async function runSettingsLayout(browser, args, axeSource, report) {
           const draft = page.locator('#ui-misconfigured-msg');
           const original = await draft.inputValue();
           await draft.fill(`${original} Layout draft`);
-          assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'sticky');
+          assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'static',
+            'The attention bar stays in flow while a form control owns focus.');
+          const firstDirtyFocus = await draft.evaluate(control => {
+            const bounds = control.getBoundingClientRect(), x = bounds.left + bounds.width / 2, y = bounds.top + bounds.height / 2;
+            return { active: document.activeElement === control, inViewport: x >= 0 && x < innerWidth && y >= 0 && y < innerHeight,
+              unobscured: document.elementFromPoint(x, y) === control };
+          });
+          assert.deepEqual(firstDirtyFocus, { active: true, inViewport: true, unobscured: true },
+            'First dirtiness preserves natural editor focus before any test scrolling or axe.');
           assert.equal(await page.locator('#settings-save').isDisabled(), false);
           assert.equal(await page.locator('#settings-discard').isVisible(), true);
           await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
@@ -3920,7 +3936,7 @@ async function runSettingsLayout(browser, args, axeSource, report) {
               return bounds.bottom <= bar.top && document.elementFromPoint(
                 bounds.left + bounds.width / 2, bounds.top + bounds.height / 2) === control;
             });
-          assert.equal(contentReachable, true, 'The last Settings control must remain reachable above the sticky save bar');
+          assert.equal(contentReachable, true, 'The last Settings control must remain reachable above the attention bar');
           await scan(page, axeSource, args.artifactRoot, report, name, 'settings-attention-save-bar');
           await draft.fill(original);
           assert.equal(await page.locator('.settings-save-bar.attention').count(), 0);
@@ -4029,15 +4045,16 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.locator('#operations-scope').selectOption('2');
     await page.locator('[data-view="settings"]').click();
     await page.locator('#settings-form').waitFor({ state: 'visible' });
-    await page.getByRole('tab', { name: 'Staff access', exact: true }).click();
+    await page.getByRole('tab', { name: 'Polaris', exact: true }).click();
     const organizations = await context.request.get(`${args.baseOrigin}/api/asap/staff/organizations`);
     const library = (await organizations.json()).data.find(item => item.id === 2);
     assert.equal(library.isActive, true);
-    await page.waitForFunction(() => !document.querySelector('#staff-refresh').disabled);
+    await page.locator(`#settings-organization-catalog [data-organization-id="${library.id}"]`).waitFor();
+    await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy') && !document.querySelector('#settings-form').inert);
     await decideConfirmation(page, () => page.getByRole('button', { name: `Deactivate ${library.name}`, exact: true }).click(), dialog => dialog.accept());
     await page.locator('#settings-message').filter({ hasText: `${library.name} deactivated.` }).waitFor();
     await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy'));
-    assert.equal(await page.locator('#request-grid .grid-open').count(), 0);
+    assert.equal(await page.locator('#request-grid .request-title-link').count(), 0);
     assert.equal(await page.locator('#additional-copy-grid .grid-open').count(), 0);
     assert.equal(await page.locator('#operations-scope').inputValue(), 'all');
     const failQueue = route => route.fulfill({ status: 503, contentType: 'application/json',
@@ -4047,7 +4064,7 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.locator('[data-view="queue"]').click();
     await page.waitForFunction(() => new URL(location.href).searchParams.get('scope') === 'all');
     await page.locator('#app-status').filter({ hasText: 'Forced unavailable queue' }).waitFor();
-    assert.equal(await page.locator('#request-grid .grid-open').count(), 0);
+    assert.equal(await page.locator('#request-grid .request-title-link').count(), 0);
     for (const selector of ['#library-scope', '#additional-copy-library-scope', '#operations-scope']) {
       assert.equal(await page.locator(`${selector} option[value="2"]`).count(), 0);
     }
@@ -4064,8 +4081,9 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.unroute('**/api/asap/staff/title-requests?*', failQueue);
     await page.unroute('**/api/asap/staff/additional-copies?*', failQueue);
     await page.locator('[data-view="settings"]').click();
-    await page.getByRole('tab', { name: 'Staff access', exact: true }).click();
-    await page.waitForFunction(() => !document.querySelector('#staff-refresh').disabled);
+    await page.getByRole('tab', { name: 'Polaris', exact: true }).click();
+    await page.locator(`#settings-organization-catalog [data-organization-id="${library.id}"]`).waitFor();
+    await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy') && !document.querySelector('#settings-form').inert);
     await decideConfirmation(page, () => page.getByRole('button', { name: `Activate ${library.name}`, exact: true }).click(), dialog => dialog.accept());
     await page.locator('#settings-message').filter({ hasText: `${library.name} activated.` }).waitFor();
     await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy'));

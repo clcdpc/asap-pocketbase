@@ -6,6 +6,7 @@ import { actorKey } from './session-identity.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
 import { createEmailTemplatePlaceholders } from './email-template-placeholders.js';
 import { createPatronTextPlaceholders } from './patron-text-placeholders.js';
+import { insertPlaceholderText } from './placeholder-editing.js';
 import { createEmailTestController } from './email-test.js';
 import { confirmAction, controlSnapshot } from './confirmation.js';
 import { byDisplayLabel } from './display-order.js';
@@ -392,6 +393,8 @@ export function createSettingsController({
   let notificationGeneration = 0, staffStatusGeneration = 0;
   let blockedDraftNotice = null;
   let templateValidationTarget = null;
+  let staffEmailValidationNotice = null;
+  let staffFocusSequence = 0;
 
   function releaseLogoDraft() {
     if (logoDraftUrl) URL.revokeObjectURL(logoDraftUrl);
@@ -642,33 +645,8 @@ export function createSettingsController({
       }
 
       const token = '{{next_available_date}}';
-      const before = saved.value;
-      const expected = `${before.slice(0, saved.start)}${token}${before.slice(saved.end)}`;
-      const { scrollTop, scrollLeft } = control;
       clear();
-      control.focus({ preventScroll: true });
-      control.setSelectionRange(saved.start, saved.end);
-
-      let inputObserved = false;
-      const observeInput = () => { inputObserved = true; };
-      control.addEventListener('input', observeInput);
-      try {
-        if (typeof view.document.execCommand === 'function') view.document.execCommand('insertText', false, token);
-      } catch {
-        // Use the selection-based fallback below when native editing is unavailable.
-      }
-      control.removeEventListener('input', observeInput);
-      if (control.value !== expected) {
-        control.value = before;
-        control.setRangeText(token, saved.start, saved.end, 'end');
-        control.dispatchEvent(new view.Event('input', { bubbles: true }));
-      } else {
-        if (!inputObserved) control.dispatchEvent(new view.Event('input', { bubbles: true }));
-        const caret = saved.start + token.length;
-        control.setSelectionRange(caret, caret);
-      }
-      control.scrollTop = scrollTop;
-      control.scrollLeft = scrollLeft;
+      insertPlaceholderText(control, token, saved.start, saved.end);
       status.textContent = `Inserted ${token}.`;
     });
 
@@ -986,6 +964,37 @@ export function createSettingsController({
     };
   }
 
+  function retireStaffEmailValidation(control) {
+    const notice = staffEmailValidationNotice;
+    if (!notice || notice.control !== control) return;
+    staffEmailValidationNotice = null;
+    if (isSettingsContextCurrent(notice.context)) notice.clear();
+  }
+
+  function revealStaffControl(control, context, sequence) {
+    if (sequence !== staffFocusSequence || !isSettingsContextCurrent(context) || !state.visible || state.activePanel !== 'staff' ||
+        state.pendingMutation || state.loading || dom.form.hidden || dom.form.inert || document.activeElement !== control ||
+        !control.isConnected || !root.contains(control) || !control.closest('.settings-staff-roster') ||
+        !control.matches('input, select, textarea, button') || control.matches(':disabled') || control.closest('[hidden], [inert]')) return;
+    // A pointer is already over its button. Moving it during pointerdown can
+    // lose the click; keyboard focus still needs the measured outline reveal.
+    if (control.matches('button') && !control.matches(':focus-visible')) return;
+    const view = root.ownerDocument.defaultView, bounds = control.getBoundingClientRect(), style = view.getComputedStyle(control);
+    const clearance = Math.max(6, (parseFloat(style.outlineWidth) || 0) + (parseFloat(style.outlineOffset) || 0)) + 1;
+    const viewport = view.visualViewport, top = (viewport?.offsetTop || 0) + clearance;
+    const bottom = (viewport?.offsetTop || 0) + (viewport?.height || view.innerHeight) - clearance;
+    if (!bounds.width || !bounds.height || bounds.height > bottom - top) return;
+    const scroll = bounds.top < top ? bounds.top - top : Math.max(0, bounds.bottom - bottom);
+    if (scroll) view.scrollBy({ top: scroll, behavior: 'instant' });
+  }
+
+  function queueStaffReveal(control) {
+    if (!control?.matches?.('input, select, textarea, button') || !control.closest('.settings-staff-roster')) return;
+    const context = captureSettingsContext(), sequence = ++staffFocusSequence;
+    revealStaffControl(control, context, sequence);
+    root.ownerDocument.defaultView.requestAnimationFrame?.(() => revealStaffControl(control, context, sequence));
+  }
+
   function notify(message, kind = '') {
     const generation = ++notificationGeneration;
     dom.message.textContent = message || '';
@@ -1017,6 +1026,7 @@ export function createSettingsController({
   }
 
   function resetStaffCreateDraft() {
+    retireStaffEmailValidation(dom.staffEmail);
     drafts.release(staffCreateDraft); staffDrafts.delete(staffCreateDraft);
     dom.staffEmail.value = '';
     populateStaffCreateControls();
@@ -1063,6 +1073,7 @@ export function createSettingsController({
   function draftChanged(event) {
     if (event?.target === dom.staffShowInactive) return;
     drafts.touch(event?.target); updateDirtyState();
+    queueStaffReveal(event?.target);
   }
 
   function rawSection(section) {
@@ -1536,10 +1547,11 @@ export function createSettingsController({
   }
 
   function setStaffCreateOpen(open, focus = false) {
+    if (!open) retireStaffEmailValidation(dom.staffEmail);
     dom.staffCreateForm.hidden = !open;
     dom.staffCreateForm.disabled = !open || state.activePanel !== 'staff';
     dom.staffCreateToggle.setAttribute('aria-expanded', String(open));
-    if (focus) (open ? dom.staffEmail : dom.staffCreateToggle).focus({ preventScroll: true });
+    if (focus) (open ? dom.staffEmail : dom.staffCreateToggle).focus();
   }
 
   function createStaffRow(user) {
@@ -1583,15 +1595,18 @@ export function createSettingsController({
       sync() {
         const dirty = record.dirty();
         const hidden = property(record.user, 'active') === false && !dom.staffShowInactive.checked;
-        if (hidden && row.contains(document.activeElement)) dom.staffShowInactive.focus({ preventScroll: true });
+        const returnToFilter = hidden && row.contains(document.activeElement);
+        if (hidden) retireStaffEmailValidation(email);
         row.hidden = hidden;
         editor.disabled = editor.hidden || row.hidden || state.activePanel !== 'staff';
         unsaved.hidden = !dirty;
         syncHelp.hidden = clean(property(record.user, 'userPrincipalName')) === clean(property(record.user, 'notificationEmail'));
         save.disabled = (!dirty && syncHelp.hidden) || record.conflict || state.awaitingReload || Boolean(state.pendingMutation);
         cancel.disabled = !dirty && !record.conflict;
+        if (returnToFilter) dom.staffShowInactive.focus();
       },
       reset() {
+        retireStaffEmailValidation(email);
         email.value = property(record.user, 'userPrincipalName') || '';
         displayName.value = property(record.user, 'displayName') || '';
         replaceSelectOptions(role, userRoleChoices(record.user), property(record.user, 'role') || 'staff');
@@ -1638,10 +1653,12 @@ export function createSettingsController({
       }
     };
     const setOpen = open => {
-      if (!open && editor.contains(document.activeElement)) summary.focus({ preventScroll: true });
+      if (!open) retireStaffEmailValidation(email);
+      const returnToSummary = !open && editor.contains(document.activeElement);
       editor.hidden = !open;
       summary.setAttribute('aria-expanded', String(open));
       record.sync();
+      if (returnToSummary) summary.focus();
     };
     listen(summary, 'click', () => setOpen(editor.hidden));
     listen(editor, 'keydown', event => {
@@ -1657,13 +1674,13 @@ export function createSettingsController({
       if (record.unavailable) {
         drafts.release(record.draft); staffDrafts.delete(record.draft); rosterDrafts.delete(record.draft);
         staffRows.delete(id); row.remove();
-        drafts.touch(); updateDirtyState(); dom.staffRefresh.focus({ preventScroll: true });
+        drafts.touch(); updateDirtyState(); dom.staffRefresh.focus();
         setStaffStatus('Draft discarded. The account is no longer in the current roster.');
         return;
       }
       record.reset(); drafts.touch(); updateDirtyState();
       notice.textContent = 'Unsaved edits discarded.';
-      email.focus({ preventScroll: true });
+      email.focus();
     });
     listen(save, 'click', () => {
       if (record.conflict || !validateStaffValues(email, role, organization)) return;
@@ -2048,7 +2065,9 @@ export function createSettingsController({
 
   function validateStaffValues(email, role, organization) {
     if (!clean(email.value)) {
-      setStaffStatus('Email address is required.', 'error'); email.focus(); return false;
+      staffEmailValidationNotice = { control: email, context: captureSettingsContext(),
+        clear: setStaffStatus('Email address is required.', 'error') };
+      email.focus(); return false;
     }
     if (!email.reportValidity()) return false;
     if (!role.value || role.value !== 'super_admin' && (!organization.value || Number(organization.value) <= 1)) {
@@ -2852,6 +2871,20 @@ export function createSettingsController({
     listen(dom.form, 'submit', saveSettings);
     listen(dom.form, 'input', draftChanged);
     listen(dom.form, 'change', draftChanged);
+    listen(root.ownerDocument, 'focusin', event => {
+      staffFocusSequence++;
+      queueStaffReveal(event.target);
+    });
+    listen(dom.form, 'input', event => {
+      const notice = staffEmailValidationNotice;
+      if (!notice || notice.control !== event.target || !clean(event.target.value)) return;
+      retireStaffEmailValidation(event.target);
+    });
+    const compactNavigation = window.matchMedia?.('(max-width: 760px)');
+    const syncTabOrientation = () => dom.nav[0].parentElement.setAttribute('aria-orientation',
+      (compactNavigation?.matches ?? window.innerWidth <= 760) ? 'horizontal' : 'vertical');
+    syncTabOrientation();
+    if (compactNavigation) listen(compactNavigation, 'change', syncTabOrientation);
     listen(dom.commonAuthorsEnabled, 'change', () => syncCommonAuthorsOptions());
     for (const id of [
       'outstanding-timeout-enabled', 'outstanding-timeout-send-email',

@@ -21,6 +21,18 @@ const { JSDOM } = require('jsdom');
     global.Node = dom.window.Node;
 
     const panels = [...document.querySelectorAll('[data-settings-panel-content]')];
+    assert.equal(document.getElementById('settings-nav').getAttribute('aria-orientation'), 'vertical');
+    for (const [id, name] of [
+      ['leap-bib-url-pattern', 'LEAP BIB record URL pattern'], ['leap-patron-url-pattern', 'LEAP patron record URL pattern'],
+      ['ui-system-not-enabled-msg', 'Nonparticipating-library message'], ['ui-misconfigured-msg', 'Misconfigured system message'],
+      ['staff-add-email', 'Email address']
+    ]) {
+      const control = document.getElementById(id), label = document.querySelector(`label[for="${id}"]`);
+      const help = document.getElementById(control.getAttribute('aria-describedby'));
+      assert.equal(label.textContent, name);
+      assert.ok(help?.textContent.trim(), `${name} retains associated help`);
+      assert.equal(label.contains(help), false, `${name} help is separate from its accessible name`);
+    }
     assert.strictEqual(panels.filter(panel => !panel.hidden).map(panel => panel.id).join(','), 'settings-start');
     assert.strictEqual(document.getElementById('settings-organizations-list').tagName, 'UL');
     const organizationCatalog = document.getElementById('settings-organization-catalog');

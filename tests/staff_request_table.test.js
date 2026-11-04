@@ -145,6 +145,26 @@ async function until(predicate, message) {
     await until(() => first()?.querySelector('.request-title-link'), 'Real Grid.js renders request title links.');
     assert.deepEqual([...get('#request-grid').querySelectorAll('th')].map(node => node.querySelector('.gridjs-th-content').textContent),
       ['Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Status', 'Actions']);
+    const headings = [...get('#request-grid').querySelectorAll('th')];
+    const assertSort = (header, direction, next) => {
+      const name = header.querySelector('.gridjs-th-content').textContent;
+      assert.equal(header.getAttribute('aria-sort'), direction, name);
+      assert.equal(header.querySelector('button').getAttribute('aria-label'), `Sort ${name} ${next}`, name);
+    };
+    for (const header of headings.slice(0, 7)) {
+      assertSort(header, 'none', 'ascending');
+      header.focus();
+      for (const [direction, next, shiftKey] of [
+        ['ascending', 'descending', false], ['descending', 'ascending', false], ['none', 'ascending', true]
+      ]) {
+        header.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', which: 13, keyCode: 13, shiftKey, bubbles: true }));
+        await until(() => header.getAttribute('aria-sort') === direction, `Keyboard sort exposes ${direction}`);
+        assertSort(header, direction, next);
+        assert.equal(document.activeElement, header, 'Sorting retains its header focus');
+      }
+    }
+    assert.equal(headings[7].hasAttribute('aria-sort'), false, 'Actions is unsortable');
+    assert.equal(headings[7].querySelector('button'), null);
     assert.equal(first().cells.length, 8); assert.equal(rows().length, 25);
     assert.match(get('#queue-summary').textContent, /55 suggestion requests/);
     assert.match(first().cells[0].textContent, /Alex Reader 54/);
@@ -172,6 +192,7 @@ async function until(predicate, message) {
       get('#request-grid .gridjs-summary')?.textContent.includes('of 54'),
       'Refresh must render its new accepted rows before retention is assessed.');
     await until(() => first()?.querySelector('.request-title-link')?.textContent === 'Title 25', 'Refresh preserves sort and the current page.');
+    assertSort(get('#request-grid th:nth-child(2)'), 'ascending', 'descending');
     const full = data;
     data = data.slice(-10);
     await queue.refresh();

@@ -1,3 +1,5 @@
+import { insertPlaceholderText } from './placeholder-editing.js';
+
 // These fields call applyPatronTextPlaceholders in patron/form-ui.js. Status,
 // barcode and PIN labels themselves are literal. Duplicate data is resolved by
 // PatronSuggestionService.Persistence; legacy aliases remain manual options.
@@ -125,12 +127,8 @@ export function createPatronTextPlaceholders({ root, panel, listen, captureConte
       if (!isContextCurrent(saved.context) || !editable(entry) || control.value !== saved.value ||
           !popup.contains(document.activeElement)) { clear(); return; }
       const token = `{{${button.dataset.patronPlaceholder}}}`;
-      const { scrollTop, scrollLeft } = control;
-      control.setRangeText(token, saved.start, saved.end, 'end');
       clear();
-      control.focus({ preventScroll: true });
-      control.dispatchEvent(new window.Event('input', { bubbles: true }));
-      control.scrollTop = scrollTop; control.scrollLeft = scrollLeft;
+      insertPlaceholderText(control, token, saved.start, saved.end);
       status.textContent = `${token} inserted into ${label}.`;
     });
     listen(popup, 'toggle', event => {

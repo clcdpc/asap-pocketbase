@@ -1,3 +1,5 @@
+import { insertPlaceholderText } from './placeholder-editing.js';
+
 // Patron-renderer contexts use these seven case-sensitive tokens. Named
 // rejection templates also serve timeout mail, whose shared capability is title.
 // Hold placement currently uses fixed content, not the configured hold template.
@@ -97,20 +99,27 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
     notice?.clear();
   }
 
-  function revealFocusedControl(control, context, sequence) {
+  function revealFocusedControl(control, context, sequence, focusOwner = control) {
     if (restoringEditorFocus || sequence !== focusSequence || !isContextCurrent(context) || !isActive() ||
-        document.activeElement !== control || !root.isConnected || !control.isConnected ||
+        document.activeElement !== focusOwner || !root.isConnected || !control.isConnected ||
         !panel.contains(control) || control.closest('[hidden], [inert]') ||
         root.querySelector('#settings-form')?.inert || control.disabled || control.matches(':disabled')) return;
     const bar = root.querySelector('.settings-save-bar.attention');
-    if (!bar || view.getComputedStyle(bar).position !== 'sticky') return;
     const viewport = view.visualViewport;
     const top = (viewport?.offsetTop || 0) + 6;
     const viewportBottom = (viewport?.offsetTop || 0) + (viewport?.height || view.innerHeight) - 6;
-    const footer = bar.getBoundingClientRect(), field = control.getBoundingClientRect();
-    if (!field.width || !field.height || !footer.height || footer.top >= viewportBottom || footer.bottom <= top) return;
-    const bottom = Math.min(viewportBottom, footer.top - 6);
-    const scroll = field.top < top ? field.top - top : Math.max(0, field.bottom - bottom);
+    const field = control.getBoundingClientRect();
+    if (!field.width || !field.height) return;
+    const footer = bar && view.getComputedStyle(bar).position === 'sticky' ? bar.getBoundingClientRect() : null;
+    const bottom = footer?.height && footer.top < viewportBottom && footer.bottom > top
+      ? Math.min(viewportBottom, footer.top - 6) : viewportBottom;
+    // At native 400%, Body plus its picker heading can exceed the viewport.
+    // Opening reveals the editor's center while retaining its trigger above it
+    // for Escape. Actual editor focus/ordinary typing reveals the full field.
+    const revealBottom = focusOwner !== control &&
+      field.height + focusOwner.getBoundingClientRect().height + 12 > bottom - top
+      ? (field.top + field.bottom) / 2 : field.bottom;
+    const scroll = field.top < top ? field.top - top : Math.max(0, revealBottom - bottom);
     if (scroll) view.scrollBy({ top: scroll, behavior: 'instant' });
   }
 
@@ -205,13 +214,28 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
     oldLabel.replaceWith(field);
     field.append(heading, control);
     const entry = { card, control, trigger, popup, role };
+    listen(control, 'blur', () => {
+      // blur runs before Chromium resets a single-line input's scrollLeft;
+      // focusout runs after that reset. Keep this view owned by the same draft.
+      entry.scrollBeforeBlur = editable(entry) ? { context: captureContext(), value: control.value,
+        start: control.selectionStart, end: control.selectionEnd, scrollTop: control.scrollTop, scrollLeft: control.scrollLeft } : null;
+    });
+    listen(control, 'input', () => { entry.scrollBeforeBlur = null; });
     listen(trigger, 'click', () => {
       if (opened?.entry === entry) { clear(); return; }
       clear();
       if (!editable(entry) || !supported(card).length) { refreshCard(card); return; }
+      revealFocusedControl(control, captureContext(), focusSequence, trigger);
+      const start = control.selectionStart ?? control.value.length, end = control.selectionEnd ?? control.value.length;
+      const prior = entry.scrollBeforeBlur;
+      const scroll = document.activeElement !== control && prior && isContextCurrent(prior.context) &&
+        prior.value === control.value && prior.start === start && prior.end === end ? prior : control;
       opened = { entry, context: captureContext(), ...identity(card.owner),
+        pageX: view.scrollX, pageY: view.scrollY,
+        anchorScrollTop: control.scrollTop, anchorScrollLeft: control.scrollLeft,
+        scrollTop: scroll.scrollTop, scrollLeft: scroll.scrollLeft,
         value: control.value, override: card.owner.querySelector('.settings-template-override')?.checked,
-        start: control.selectionStart ?? control.value.length, end: control.selectionEnd ?? control.value.length };
+        start, end };
       renderPicker(entry);
       trigger.setAttribute('aria-expanded', 'true');
       if (popup.showPopover) popup.showPopover(); else popup.hidden = false;
@@ -234,32 +258,10 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
           card.owner.querySelector('.settings-template-override')?.checked !== saved.override ||
           !supported(card).includes(key) || !popup.contains(document.activeElement)) { clear(); return; }
       const token = `{{${key}}}`;
-      const expected = `${saved.value.slice(0, saved.start)}${token}${saved.value.slice(saved.end)}`;
-      const { scrollTop, scrollLeft } = control;
       clear();
       restoringEditorFocus = true;
       try {
-        control.focus({ preventScroll: true });
-        control.setSelectionRange(saved.start, saved.end);
-        let inputObserved = false;
-        const observeInput = () => { inputObserved = true; };
-        control.addEventListener('input', observeInput);
-        try {
-          if (typeof document.execCommand === 'function') document.execCommand('insertText', false, token);
-        } catch {
-          // A selection-based fallback keeps insertion available in non-native editors.
-        }
-        control.removeEventListener('input', observeInput);
-        if (control.value !== expected) {
-          control.value = saved.value;
-          control.setRangeText(token, saved.start, saved.end, 'end');
-          control.dispatchEvent(new view.Event('input', { bubbles: true }));
-        } else {
-          if (!inputObserved) control.dispatchEvent(new view.Event('input', { bubbles: true }));
-          control.setSelectionRange(saved.start + token.length, saved.start + token.length);
-        }
-        control.scrollTop = scrollTop;
-        control.scrollLeft = scrollLeft;
+        insertPlaceholderText(control, token, saved.start, saved.end, saved);
       } finally {
         restoringEditorFocus = false;
       }
@@ -339,6 +341,7 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
         card.error.textContent = '';
         card.invalidControl = null;
         card.validationContext = null;
+        for (const entry of card.entries) entry.scrollBeforeBlur = null;
         for (const control of owner.querySelectorAll('[aria-invalid]')) control.removeAttribute('aria-invalid');
       }
       refreshCard(card);
@@ -377,6 +380,14 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
       card.validationContext = null;
     }
     refreshCard(card);
+    if (!restoringEditorFocus && event.target.matches('input, textarea, select')) {
+      const sequence = ++focusSequence, context = captureContext();
+      // Updating the collapsed excerpt can grow the header above a focused
+      // Body at native zoom. Reveal that ordinary edit after the layout settles;
+      // placeholder restoration deliberately retains its exact page scroll.
+      revealFocusedControl(event.target, context, sequence);
+      view.requestAnimationFrame?.(() => revealFocusedControl(event.target, context, sequence));
+    }
   });
   listen(panel, 'change', () => refreshCards());
   listen(document, 'focusin', event => {
@@ -404,6 +415,13 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
   listen(view, 'scroll', event => {
     const saved = opened;
     if (!saved || event.target instanceof view.Node && saved.entry.popup.contains(event.target)) return;
+    // Native focus/reveal and single-line blur may queue scroll events before
+    // opening. The anchor already uses those positions; later page, editor or
+    // ancestor movement still dismisses it and returns focus to the trigger.
+    if ((event.target === view || event.target === document) &&
+        view.scrollX === saved.pageX && view.scrollY === saved.pageY) return;
+    if (event.target === saved.entry.control && saved.entry.control.scrollTop === saved.anchorScrollTop &&
+        saved.entry.control.scrollLeft === saved.anchorScrollLeft) return;
     const pickerHadFocus = saved.entry.popup.contains(document.activeElement);
     clear();
     if (pickerHadFocus && editable(saved.entry)) saved.entry.trigger.focus({ preventScroll: true });

@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { URL } = require('node:url');
 const { verifyEmailTemplateCards } = require('./email-template-cards.cjs');
+const { contrast } = require('./settings-accessibility.cjs');
 
 function parseArguments(argv) {
   if (![5, 6, 8].includes(argv.length)) {
@@ -31,6 +32,12 @@ function sameOrigin(url, origin) {
 }
 
 async function scan(page, axeSource, artifactRoot, report, viewport, checkTimeoutGeometry = false, fullPage = true) {
+  for (const selector of ['#organizations-status-message', '#polaris-api-key-status', '#polaris-admin-pass-status']) {
+    if (!await page.locator(selector).isVisible()) continue;
+    const result = await contrast(page, selector);
+    assert.ok(result.ratios[0] >= 4.5, `${viewport}/${selector}: rendered text contrast including ancestor opacity: ${JSON.stringify(result)}`);
+    (report.contrastChecks ||= []).push({ viewport, selector, ...result });
+  }
   await page.evaluate(axeSource);
   const accessibility = await page.evaluate(async () => {
     const result = await axe.run();

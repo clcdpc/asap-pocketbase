@@ -195,8 +195,19 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     wrapper.setAttribute('role', 'region');
     wrapper.setAttribute('aria-label', 'Title requests');
     wrapper.setAttribute('aria-describedby', 'request-table-help');
+    for (const header of wrapper.querySelectorAll('thead th')) {
+      const button = header.querySelector('button.gridjs-sort');
+      if (!button) continue;
+      const label = header.querySelector('.gridjs-th-content').textContent.trim();
+      const ascending = button.classList.contains('gridjs-sort-asc');
+      const descending = button.classList.contains('gridjs-sort-desc');
+      header.setAttribute('aria-sort', ascending ? 'ascending' : descending ? 'descending' : 'none');
+      const action = `Sort ${label} ${ascending ? 'descending' : 'ascending'}`;
+      button.setAttribute('aria-label', action);
+      button.title = action;
+    }
   });
-  gridAccessibility.observe(root, { childList: true, subtree: true });
+  gridAccessibility.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
 
   function closeLookup() { if (lookupContext) polarisLookup?.close(lookupContext); lookupContext = null; }
   function invalidate() { closeLookup(); targetGeneration++; reads.begin('queue-target').abort(); reads.begin('queue').abort(); if (!disposed) dom.refresh.disabled = false; }

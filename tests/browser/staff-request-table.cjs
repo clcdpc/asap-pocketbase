@@ -16,6 +16,22 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await page.waitForFunction(() => document.querySelectorAll('#request-grid tbody tr').length === 25);
   assert.deepEqual(await grid.locator('th .gridjs-th-content').allTextContents(),
     ['Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Status', 'Actions']);
+  for (const header of await grid.locator('th').all().then(headers => headers.slice(0, 7))) {
+    const name = await header.locator('.gridjs-th-content').textContent();
+    await header.focus();
+    for (const [direction, next, key] of [
+      ['ascending', 'descending', 'Enter'], ['descending', 'ascending', 'Enter'], ['none', 'ascending', 'Shift+Enter']
+    ]) {
+      await header.press(key);
+      await page.waitForFunction(({ name, direction }) => [...document.querySelectorAll('#request-grid th')]
+        .find(node => node.querySelector('.gridjs-th-content').textContent === name)?.getAttribute('aria-sort') === direction, { name, direction });
+      assert.equal(await header.locator('button').getAttribute('aria-label'), `Sort ${name} ${next}`);
+      assert.equal(await header.evaluate(node => node === document.activeElement), true);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 120)))));
+    }
+  }
+  assert.equal(await grid.locator('th').last().getAttribute('aria-sort'), null);
+  assert.equal(await grid.locator('th').last().locator('button').count(), 0, 'Actions remains unsortable.');
   await grid.locator('th:nth-child(2) button').click();
   await page.waitForFunction(() => document.querySelector('#request-grid .request-title-link')?.textContent === 'Quick-create source');
   await grid.getByRole('button', { name: 'Next', exact: true }).click();
@@ -28,6 +44,8 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
     document.querySelector('#request-grid .request-title-link')?.textContent === 'Table browser record 24');
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)))));
   assert.equal(await grid.locator('.gridjs-currentPage').textContent(), '2');
+  assert.equal(await grid.locator('th:nth-child(2)').getAttribute('aria-sort'), 'ascending');
+  assert.equal(await grid.locator('th:nth-child(2) button').getAttribute('aria-label'), 'Sort Bibliographic details descending');
   assert.match(await grid.locator('.gridjs-summary').textContent(), /26 to 50 of 56/);
   await search.fill('TABLE-BROWSER-00');
   await page.waitForFunction(() => document.querySelectorAll('#request-grid .request-title-link').length === 1);

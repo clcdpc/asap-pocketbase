@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
+const { runSourceComponents } = require('./settings-accessibility.cjs');
 const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
 
 async function verifyPolarisSettings(page, width, scope, scan, report) {
@@ -668,6 +669,7 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
       }
     } finally { await browser.close(); }
   }
+  report.settingsAccessibility = await runSourceComponents(path.join(artifacts, 'settings-accessibility'));
   assert.deepEqual(report.externalRequests, []); assert.deepEqual(report.pageErrors, []);
   await fs.writeFile(path.join(artifacts, 'browser-results.json'), JSON.stringify(report, null, 2));
   console.log('Staff header, spacing, lookup sorting and horizontal-only tab geometry passed.');

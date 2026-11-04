@@ -342,14 +342,19 @@ module.exports.verifyRoster = async function verifyStaffRosterNativeZoom({ baseU
       const inactive = page.locator(`.settings-staff-row[data-staff-id="${inactiveId}"]`);
       const filter = page.getByRole('checkbox', { name: 'Show inactive accounts', exact: true });
       const scanRoster = async (name, focused) => {
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         // Capture the keyboard/editing result before axe can scroll the page.
         // A manual scroll here would hide focus occlusion from the dirty bar.
         const focus = await focused.evaluate(control => {
           const bounds = control.getBoundingClientRect(), x = (bounds.left + bounds.right) / 2, y = (bounds.top + bounds.bottom) / 2;
           const hit = document.elementFromPoint(x, y);
+          const style = getComputedStyle(control), outlineExtent = control.matches(':focus-visible')
+            ? Math.max(0, (parseFloat(style.outlineWidth) || 0) + (parseFloat(style.outlineOffset) || 0)) : 0;
           return { active: control === document.activeElement, inViewport: x >= 0 && x < innerWidth && y >= 0 && y < innerHeight,
             unobscured: hit === control || control.contains(hit), center: { x, y },
             bounds: { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom },
+            outlineExtent, fullVerticalRequired: bounds.height + outlineExtent * 2 <= innerHeight,
+            fullVertical: bounds.top - outlineExtent >= 0 && bounds.bottom + outlineExtent <= innerHeight,
             hit: hit ? { tag: hit.localName, id: hit.id, className: String(hit.className) } : null };
         });
         const session = await context.newCDPSession(page), metrics = await session.send('Page.getLayoutMetrics');
@@ -380,6 +385,7 @@ module.exports.verifyRoster = async function verifyStaffRosterNativeZoom({ baseU
         assert.deepEqual(violations, [], details); assert.equal(geometry.overflow, false, details); assert.equal(geometry.images, true, details);
         assert.ok(geometry.controls.length > 0, details); assert.deepEqual(geometry.controls.filter(control => !control.contained), [], details);
         assert.equal(focus.active, true, details); assert.equal(focus.inViewport, true, details); assert.equal(focus.unobscured, true, details);
+        if (focus.fullVerticalRequired) assert.equal(focus.fullVertical, true, details);
         states.push(receipt);
       };
       assert.equal(await filter.isChecked(), false); assert.equal(await inactive.isHidden(), true);

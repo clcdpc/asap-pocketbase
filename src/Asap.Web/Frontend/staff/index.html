@@ -321,7 +321,7 @@
         <p id="polaris-action-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
         <div class="settings-layout">
           <aside class="settings-sidebar" aria-label="Settings sections">
-            <nav id="settings-nav" class="settings-nav" role="tablist" aria-label="Settings categories">
+            <nav id="settings-nav" class="settings-nav" role="tablist" aria-label="Settings categories" aria-orientation="vertical">
               <button id="settings-nav-start" type="button" role="tab" aria-selected="true" aria-controls="settings-start" data-settings-panel="start" data-settings-system-only="true">Getting started</button>
               <button id="settings-nav-polaris" type="button" role="tab" aria-selected="false" aria-controls="settings-polaris" data-settings-panel="polaris" data-settings-system-only="true">Polaris</button>
               <button id="settings-nav-smtp" type="button" role="tab" aria-selected="false" aria-controls="settings-smtp" data-settings-panel="smtp">Email / Postmark</button>
@@ -350,28 +350,28 @@
                     <button id="use-current-staff-url" class="secondary-button" type="button" hidden>Use current address</button>
                     <p id="system-staff-url-candidate" class="field-help" role="status" aria-live="polite"></p>
                   </div>
-                  <label class="settings-field" data-setting-section="systemSettings" data-setting-key="leapBibUrlPattern" data-system-only="true">
-                    <span>LEAP BIB record URL pattern</span><input id="leap-bib-url-pattern" type="url" aria-describedby="leap-bib-help">
+                  <div class="settings-field" data-setting-section="systemSettings" data-setting-key="leapBibUrlPattern" data-system-only="true">
+                    <label for="leap-bib-url-pattern">LEAP BIB record URL pattern</label><input id="leap-bib-url-pattern" type="url" aria-describedby="leap-bib-help">
                     <small id="leap-bib-help" class="field-help">Optional HTTP(S) URL. Use {{bibid}} for the Polaris BIB ID. Example: https://leap.example.org/LeapWebApp/staff/default#bibrecords/{{bibid}}</small>
-                  </label>
-                  <label class="settings-field" data-setting-section="systemSettings" data-setting-key="leapPatronUrlPattern" data-system-only="true">
-                    <span>LEAP patron record URL pattern</span><input id="leap-patron-url-pattern" type="url" aria-describedby="leap-patron-help">
+                  </div>
+                  <div class="settings-field" data-setting-section="systemSettings" data-setting-key="leapPatronUrlPattern" data-system-only="true">
+                    <label for="leap-patron-url-pattern">LEAP patron record URL pattern</label><input id="leap-patron-url-pattern" type="url" aria-describedby="leap-patron-help">
                     <small id="leap-patron-help" class="field-help">Optional HTTP(S) URL. Use {{patron-id}} for the native Polaris patron ID; {{patronId}} is also supported. Example: https://leap.example.org/LeapWebApp/staff/default#patrons/{{patron-id}}/checkout</small>
-                  </label>
+                  </div>
                   <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="formatIconUrlPattern" data-system-only="true">
                     <span>Format icon URL pattern</span><input id="format-icon-url-pattern" type="text">
                   </label>
                   <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="patronEmbedAllowedOrigins" data-system-only="true">
                     <span>Allowed patron embed origins</span><textarea id="patron-embed-allowed-origins" rows="4"></textarea>
                   </label>
-                  <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="systemNotEnabledMessage" data-system-only="true">
-                    <span>Nonparticipating-library message</span><textarea id="ui-system-not-enabled-msg" rows="3"></textarea>
-                    <small class="field-help">Use {{library}} for the selected library name.</small>
-                  </label>
-                  <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="misconfiguredMessage" data-system-only="true">
-                    <span>Misconfigured system message</span><textarea id="ui-misconfigured-msg" rows="3"></textarea>
-                    <small class="field-help">Use {{library}} for the selected library name.</small>
-                  </label>
+                  <div class="settings-field wide" data-setting-section="systemSettings" data-setting-key="systemNotEnabledMessage" data-system-only="true">
+                    <label for="ui-system-not-enabled-msg">Nonparticipating-library message</label><textarea id="ui-system-not-enabled-msg" rows="3" aria-describedby="ui-system-not-enabled-help"></textarea>
+                    <small id="ui-system-not-enabled-help" class="field-help">Use {{library}} for the selected library name.</small>
+                  </div>
+                  <div class="settings-field wide" data-setting-section="systemSettings" data-setting-key="misconfiguredMessage" data-system-only="true">
+                    <label for="ui-misconfigured-msg">Misconfigured system message</label><textarea id="ui-misconfigured-msg" rows="3" aria-describedby="ui-misconfigured-help"></textarea>
+                    <small id="ui-misconfigured-help" class="field-help">Use {{library}} for the selected library name.</small>
+                  </div>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset" data-system-only="true" data-settings-ignore="true">
@@ -489,7 +489,7 @@
                 <fieldset id="staff-add-form" class="settings-staff-create" aria-labelledby="staff-add-heading" hidden disabled>
                 <h4 id="staff-add-heading">Add staff user</h4>
                 <div class="settings-grid staff-access-form">
-                  <label class="settings-field wide"><span>Email address</span><input id="staff-add-email" type="email" maxlength="320" autocomplete="username" aria-describedby="staff-add-email-help"><small id="staff-add-email-help">Used for sign-in and notifications.</small></label>
+                  <div class="settings-field wide"><label for="staff-add-email">Email address</label><input id="staff-add-email" type="email" maxlength="320" autocomplete="username" aria-describedby="staff-add-email-help"><small id="staff-add-email-help">Used for sign-in and notifications.</small></div>
                   <label class="settings-field"><span>Role</span><select id="staff-add-role"></select></label>
                   <label class="settings-field"><span>Library</span><select id="staff-add-organization"></select></label>
                 </div>

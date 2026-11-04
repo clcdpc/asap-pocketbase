@@ -127,7 +127,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .search-field input { width: 100%; padding-left: 36px; }
 .compact-field { display: grid; gap: 4px; color: var(--muted); font-size: .82rem; font-weight: 700; }
 .compact-field select { min-width: 160px; color: var(--ink); font-weight: 400; }
-input, select, textarea { min-height: 40px; padding: 8px 10px; color: var(--ink); background: #fff; border: 1px solid #96a2ac; border-radius: 4px; }
+input, select, textarea { min-height: 40px; padding: 8px 10px; color: var(--ink); background: #fff; border: 1px solid #7b8791; border-radius: 4px; }
 textarea { min-height: 108px; resize: vertical; }
 
 .request-grid { min-height: 280px; background: #fff; border-top: 3px solid var(--brand); }
@@ -356,7 +356,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-panel-heading p { margin: 4px 0 0; color: var(--muted); }
 .settings-fieldset { min-width: 0; margin: 0 0 16px; padding: 16px; background: #fff; border: 1px solid var(--line); border-top: 3px solid var(--brand); }
 .settings-fieldset legend { width: auto; max-width: 100%; padding: 0 7px; color: var(--ink); font-weight: 800; }
-.settings-fieldset:disabled { opacity: .7; }
+.settings-fieldset:disabled { background: var(--soft); }
 .settings-scope-badge { display: inline-block; margin-inline-start: 8px; padding: 2px 5px; border: 1px solid currentColor; border-radius: 3px; font-size: .7rem; font-weight: 700; white-space: nowrap; }
 .settings-scope-badge[hidden] { display: none; }
 .settings-scope-explanation { margin-bottom: 8px; }
@@ -621,6 +621,12 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 }
 .settings-save-bar { position: static; display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 18px; padding: 12px 14px; background: #fff; border: 1px solid var(--line); }
 .settings-save-bar.attention { position: sticky; bottom: 0; z-index: 3; box-shadow: 0 -5px 16px rgba(23,33,43,.08); }
+/* Keep a newly dirty bar from covering focused form controls or moving an
+   editor's caret. Its own actions keep the same position when clicked. */
+.settings-form:has(:focus:not(.settings-save-bar *)) .settings-save-bar.attention { position: static; }
+@media (max-height: 480px) {
+  .settings-save-bar.attention { position: static; }
+}
 .settings-save-bar > div:first-child { min-width: 0; display: grid; gap: 2px; }
 .settings-save-bar strong { color: var(--ink); }
 .settings-save-bar span { color: var(--muted); font-size: .86rem; }
