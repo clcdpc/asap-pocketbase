@@ -37,6 +37,13 @@ async function scan(page, axeSource, artifactRoot, report, viewport, checkTimeou
     return result.violations.filter(item => ['serious', 'critical'].includes(item.impact));
   });
   const layout = await page.evaluate(checkTimeoutGeometry => {
+    const bounds = element => {
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, width: rect.width, height: rect.height };
+    };
+    const organizationRows = [...document.querySelectorAll('#settings-organization-catalog [data-organization-id]')]
+      .map(row => ({ id: row.dataset.organizationId, row: bounds(row), children: [...row.children].map(bounds) }))
+      .filter(row => row.row.width > 0 && row.row.height > 0);
     const timeoutControls = checkTimeoutGeometry
       ? [...document.querySelectorAll('.settings-timeout-rule input[type="number"], .settings-timeout-rule select')]
         .map(control => {
@@ -58,7 +65,8 @@ async function scan(page, axeSource, artifactRoot, report, viewport, checkTimeou
           return bounds.width > 0 && bounds.height > 0;
         })
         .every(image => image.complete && image.naturalWidth > 0),
-      timeoutControls
+      timeoutControls,
+      organizationRows
     };
   }, checkTimeoutGeometry);
   await page.screenshot({ path: path.join(artifactRoot, `${viewport}-settings.png`), fullPage });
@@ -66,6 +74,14 @@ async function scan(page, axeSource, artifactRoot, report, viewport, checkTimeou
   assert.deepEqual(accessibility, [], `Serious or critical accessibility violation in ${viewport} settings`);
   assert.ok(layout.scrollWidth <= layout.width, `Horizontal overflow in ${viewport} settings`);
   assert.equal(layout.imagesLoaded, true, `Visible image failed to load in ${viewport} settings`);
+  for (const row of layout.organizationRows) {
+    assert.ok(row.row.left >= -1 && row.row.right <= layout.width + 1,
+      `Organization ${row.id} fits the ${viewport} viewport.`);
+    for (const child of row.children) {
+      assert.ok(child.left >= row.row.left - 1 && child.right <= row.row.right + 1,
+        `Organization ${row.id} contains its name/status/action in ${viewport}: ${JSON.stringify(row)}`);
+    }
+  }
   if (checkTimeoutGeometry) {
     assert.deepEqual(layout.timeoutControls.map(control => control.id), [
       'outstanding-timeout-days', 'outstanding-timeout-rejection-template-id',
@@ -1774,6 +1790,226 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
   if (cleanupError) throw cleanupError;
 }
 
+async function runLibraryParticipation(page, axeSource, args, report, ready, postedPayloads) {
+  const writes = [];
+  const track = request => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname.startsWith('/api/asap/staff/')) writes.push(request);
+  };
+  page.on('request', track);
+  const readCatalog = () => page.evaluate(async () => {
+    const response = await fetch('/api/asap/staff/organizations');
+    if (!response.ok) throw new Error(`Organization catalog GET ${response.status}`);
+    const body = await response.json(); return body.data;
+  });
+  const visibleCatalog = () => page.locator('#settings-organization-catalog').evaluate(catalog => ({
+    libraries: [...catalog.querySelectorAll('#settings-organizations-list [data-organization-id]')]
+      .map(row => ({ id: Number(row.dataset.organizationId), name: row.querySelector('.settings-organization-name').textContent,
+        status: row.querySelector('.status-badge').textContent, actions: row.querySelectorAll('button').length })),
+    groups: [...catalog.querySelectorAll('[data-library-organization-id]')].map(group => ({
+      id: group.dataset.libraryOrganizationId, name: group.querySelector('h4').textContent,
+      children: [...group.querySelectorAll('[data-organization-id]')].map(row => Number(row.dataset.organizationId))
+    })),
+    recordIds: [...catalog.querySelectorAll('[data-organization-id]')].map(row => Number(row.dataset.organizationId)),
+    referenceActions: catalog.querySelectorAll('#settings-reference-organizations button').length
+  }));
+  const settled = () => page.waitForFunction(() => {
+    const form = document.getElementById('settings-form'); return !form.inert && !form.hasAttribute('aria-busy');
+  });
+  const action = async (id, active, expectedStatus = 200, version = null) => {
+    const current = (await readCatalog()).find(row => row.id === id);
+    const path = `/api/asap/staff/organizations/${id}/${active ? 'activate' : 'deactivate'}`;
+    const responsePromise = page.waitForResponse(candidate => candidate.request().method() === 'POST' &&
+      new URL(candidate.url()).pathname === path);
+    await decideConfirmation(page, () => page.locator(`#settings-organizations-list [data-organization-id="${id}"] button`).click(),
+      async dialog => {
+        assert.match(dialog.message(), /participation/);
+        await dialog.accept();
+      });
+    const response = await responsePromise;
+    assert.equal(response.status(), expectedStatus, await response.text());
+    assert.deepEqual(response.request().postDataJSON(), { version: version || current.version });
+    await settled();
+    assert.equal(await page.locator(`#settings-organizations-list [data-organization-id="${id}"] button`)
+      .evaluate(button => button === document.activeElement), true,
+    `The updated library ${id} participation action retains focus after HTTP ${expectedStatus}.`);
+    return response;
+  };
+  const label = row => `${row.name}${row.abbreviation ? ` (${row.abbreviation})` : ''}`;
+  const isLibrary = row => row.id > 1 && row.organizationCodeId === 2;
+  const order = (left, right) => left.localeCompare(right, undefined, { sensitivity: 'base', numeric: true });
+  const catalogOrder = (left, right) => order(label(left), label(right)) || left.id - right.id;
+  const ownedLibraries = new Set([2, 3, 4, 5, 6, 7]);
+  const ownedReferences = new Set([1, 101, ...Array.from({ length: 11 }, (_, index) => 81001 + index)]);
+  const assertCatalog = (displayed, accepted) => {
+    const byId = new Map(accepted.map(row => [row.id, row]));
+    assert.deepEqual([...displayed.recordIds].sort((a, b) => a - b), accepted.map(row => row.id).sort((a, b) => a - b),
+      'The Polaris catalog renders every SQL record exactly once.');
+    assert.deepEqual(displayed.libraries, accepted.filter(isLibrary).sort(catalogOrder).map(row => ({
+      id: row.id, name: label(row), status: row.isActive ? 'Active' : 'Inactive', actions: 1
+    })));
+    assert.equal(displayed.referenceActions, 0);
+    assert.equal(new Set(displayed.groups.map(group => group.id)).size, displayed.groups.length);
+    assert.equal(displayed.groups.at(-1).id, 'other', 'Unassociated records appear in the final group.');
+    assert.equal(displayed.groups.at(-1).name, 'Other / unassociated organizations');
+    const associated = displayed.groups.filter(group => group.id !== 'other');
+    assert.deepEqual(associated.map(group => group.id), [...associated]
+      .sort((left, right) => catalogOrder(byId.get(Number(left.id)), byId.get(Number(right.id))))
+      .map(group => group.id), 'All parent-library groups are alphabetical, including records retained by earlier journeys.');
+    for (const group of displayed.groups) {
+      if (group.id !== 'other') {
+        const library = byId.get(Number(group.id));
+        assert.equal(isLibrary(library), true);
+        assert.equal(group.name, label(library));
+      }
+      assert.ok(group.children.every(id => !isLibrary(byId.get(id))), 'Reference groups contain only reference records.');
+      assert.deepEqual(group.children, [...group.children].sort((left, right) => catalogOrder(byId.get(left), byId.get(right))),
+        `Every record in ${group.name} is alphabetical.`);
+    }
+  };
+  const assertOwnedGroups = (displayed, expected) => {
+    for (const [libraryId, ids] of expected) {
+      assert.deepEqual(displayed.groups.find(group => group.id === libraryId)?.children.filter(id => ownedReferences.has(id)), ids,
+        `Issue 433 fixture records retain their exact membership and ordering in group ${libraryId}.`);
+    }
+  };
+  const assertSummary = async accepted => {
+    const libraries = accepted.filter(isLibrary), active = libraries.filter(row => row.isActive).length;
+    assert.equal(await page.locator('#organizations-status-message').textContent(),
+      `${active} of ${libraries.length} synchronized libraries active in ASAP; ${libraries.length - active} inactive.`);
+  };
+  try {
+    await page.locator('#settings-nav-start').click();
+    assert.equal(await page.locator('#enabled-libraries-checkbox-container').count(), 0);
+    assert.equal(await page.locator('#manage-library-participation').evaluate(button =>
+      button.closest('fieldset').querySelectorAll('input').length), 0);
+    assert.equal(await page.locator('#settings-staff #settings-organizations-list').count(), 0);
+    assert.equal(await page.locator('#settings-organizations-list').count(), 1);
+    await assertSummary(await readCatalog());
+    const systemSummaryWrites = writes.length;
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await scan(page, axeSource, args.artifactRoot, report, 'participation-summary-system-desktop');
+    assert.equal(writes.length, systemSummaryWrites, 'Capturing the system summary does not submit any changes.');
+    assert.equal(await page.locator('#settings-save').isDisabled(), true);
+    const originalUrl = await page.locator('#system-staff-url').inputValue();
+    const draftUrl = 'https://draft.example.org/staff/participation';
+    await page.locator('#system-staff-url').fill(draftUrl);
+    const beforeWrites = writes.length, beforeSettingsPosts = postedPayloads.length;
+    await page.getByRole('button', { name: 'Manage library participation', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await page.locator('#settings-polaris').isVisible(), true);
+    assert.equal(await page.locator('#settings-organization-catalog').evaluate(node => node === document.activeElement), true);
+    assert.equal(await page.locator('#system-staff-url').inputValue(), draftUrl);
+    assert.equal(await page.locator('#settings-save').isEnabled(), true);
+    assert.equal(await page.locator('#settings-scope').inputValue(), 'system');
+    assert.equal(await page.locator('#confirmation-dialog[open]').count(), 0);
+    assert.equal(writes.length, beforeWrites);
+    assert.equal(postedPayloads.length, beforeSettingsPosts);
+    await page.locator('#settings-nav-start').click();
+    await page.locator('#system-staff-url').fill(originalUrl);
+    assert.equal(await page.locator('#settings-save').isDisabled(), true);
+    report.participationNavigationPreservedDraft = true;
+
+    await page.locator('#settings-nav-polaris').click();
+    const catalog = await readCatalog(), initial = await visibleCatalog();
+    assertCatalog(initial, catalog);
+    assertOwnedGroups(initial, [
+      ['5', [81002, 81003, 81001]], ['6', [81005, 81004]], ['7', [81006]], ['2', [101]],
+      ['other', [81008, 81009, 81011, 81007, 81010, 1]]
+    ]);
+    assert.deepEqual(['5', '6', '7'].map(id => initial.groups.find(group => group.id === id).name),
+      ['Alexandria (ALEX)', 'Bexley (BEX)', 'Columbus (COL)']);
+    for (const id of [5, 6, 7]) assert.equal(initial.libraries.find(row => row.id === id).status, 'Inactive');
+    assert.equal(await page.locator('[data-organization-id="81003"] .settings-organization-parent').textContent(),
+      'Within: Alexandria services (SERV)');
+    const descriptions = await page.locator('#settings-organization-catalog').textContent();
+    assert.match(descriptions, /ASAP only; it does not activate or deactivate the organization in Polaris/);
+    assert.match(descriptions, /not necessarily available pickup locations/);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await scan(page, axeSource, args.artifactRoot, report, 'organizations-system-desktop');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scan(page, axeSource, args.artifactRoot, report, 'organizations-system-mobile');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    report.organizationParentGrouping = true;
+
+    const failSync = route => route.fulfill({ status: 502, contentType: 'application/json',
+      body: JSON.stringify({ code: 'polaris_unavailable', message: 'Deterministic organization provider unavailable.' }) });
+    await page.route('**/api/asap/staff/organizations/sync', failSync);
+    await page.locator('#btn-sync-organizations').click();
+    await page.locator('#organizations-sync-result').filter({ hasText: /outcome is uncertain/ }).waitFor();
+    assert.deepEqual(await visibleCatalog(), initial, 'A failed sync preserves the accepted catalog while review is required.');
+    await page.unroute('**/api/asap/staff/organizations/sync', failSync);
+    await page.locator('#settings-refresh').click(); await settled();
+    const syncResponse = page.waitForResponse(candidate => candidate.request().method() === 'POST' &&
+      new URL(candidate.url()).pathname === '/api/asap/staff/organizations/sync');
+    await page.locator('#btn-sync-organizations').click();
+    assert.equal((await syncResponse).status(), 200);
+    await page.locator('#organizations-sync-result').filter({ hasText: /^Synchronized 19 organizations\.$/ }).waitFor();
+    await settled();
+    const synchronized = await visibleCatalog();
+    const synchronizedCatalog = await readCatalog();
+    assertCatalog(synchronized, synchronizedCatalog);
+    assertOwnedGroups(synchronized, [
+      ['5', [81001]], ['6', [81005, 81004]], ['7', [81002, 81006, 81003]], ['2', [101]],
+      ['other', [81008, 81009, 81011, 81007, 81010, 1]]
+    ]);
+    assert.deepEqual([...synchronized.recordIds].sort((a, b) => a - b), [...initial.recordIds].sort((a, b) => a - b));
+    assert.ok(synchronizedCatalog.filter(row => ownedLibraries.has(row.id)).every(row => !row.isActive));
+    await assertSummary(synchronizedCatalog);
+    report.organizationSyncRegrouped = true;
+
+    const canceledCount = writes.length;
+    await decideConfirmation(page, () => page.locator('[data-organization-id="3"] button').click(), dialog => dialog.dismiss());
+    await settled();
+    assert.equal(writes.length, canceledCount, 'Cancel does not send a participation POST.');
+    assert.equal(await page.locator('[data-organization-id="3"] button').evaluate(button => button === document.activeElement), true,
+      'Cancel returns focus to the unchanged participation action.');
+    await action(2, true);
+    const stale = (await readCatalog()).find(row => row.id === 3);
+    const external = await page.evaluate(async ({ id, version }) => {
+      const session = await (await fetch('/api/asap/staff/session')).json();
+      const response = await fetch(`/api/asap/staff/organizations/${id}/activate`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'X-ASAP-Antiforgery': session.antiforgeryToken },
+        body: JSON.stringify({ version })
+      });
+      return { status: response.status, body: await response.json() };
+    }, { id: 3, version: stale.version });
+    assert.equal(external.status, 200);
+    const conflict = await action(3, true, 409, stale.version);
+    assert.equal((await conflict.json()).code, 'stale_version');
+    assert.equal(await page.locator('[data-organization-id="3"] .status-badge').textContent(), 'Active');
+    await action(3, false);
+    assert.equal(await page.locator('[data-organization-id="3"] .status-badge').textContent(), 'Inactive');
+    await action(3, true);
+    const current = await readCatalog();
+    assert.deepEqual(current.filter(row => ownedLibraries.has(row.id) && row.isActive).map(row => row.id).sort(), [2, 3]);
+    assert.deepEqual(current.filter(row => isLibrary(row) && !ownedLibraries.has(row.id)).map(row => [row.id, row.isActive]),
+      catalog.filter(row => isLibrary(row) && !ownedLibraries.has(row.id)).map(row => [row.id, row.isActive]),
+      'Participation actions preserve other legitimate libraries in the shared catalog.');
+    await assertSummary(current);
+    assert.equal(postedPayloads.length, beforeSettingsPosts, 'Participation changes never submit the global Settings form.');
+    report.systemParticipationRoundTrip = true;
+
+    await page.locator('#settings-scope').selectOption('2'); await ready('2');
+    await page.locator('#settings-nav-start').click();
+    assert.equal(await page.locator('#manage-library-participation').isDisabled(), true);
+    await page.locator('#manage-library-participation').evaluate(button => button.click());
+    assert.equal(await page.locator('#settings-scope').inputValue(), '2');
+    assert.equal(await page.locator('#settings-start').isVisible(), true);
+    await assertSummary(await readCatalog());
+    const librarySummaryWrites = writes.length;
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scan(page, axeSource, args.artifactRoot, report, 'participation-summary-library-mobile');
+    assert.equal(writes.length, librarySummaryWrites, 'Capturing the library summary does not submit any changes.');
+    assert.equal(await page.locator('#settings-save').isDisabled(), true);
+    await page.locator('#settings-nav-polaris').click();
+    for (const button of await page.locator('#settings-organizations-list button').all()) assert.equal(await button.isDisabled(), true);
+    await scan(page, axeSource, args.artifactRoot, report, 'organizations-library-mobile');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.locator('#settings-scope').selectOption('system'); await ready('system');
+    report.participationLibraryControlsDisabled = true;
+  } finally { page.removeListener('request', track); }
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
   if (!['full', 'system-format-rule', 'library-rule-partial-snapshot', 'library-rule-missing-row', 'library-format-rule-drafts', 'library-metadata', 'campaign2', 'campaign2-library-admin'].includes(args.mode)) {
@@ -1797,6 +2033,8 @@ async function main() {
   const pageErrors = [];
   const report = { states: [], externalRequests: 0, pageErrors, postedEditorPayload: false,
     systemParticipationRoundTrip: false, unrelatedSystemSavePreservedParticipation: false,
+    participationNavigationPreservedDraft: false, organizationParentGrouping: false,
+    organizationSyncRegrouped: false, participationLibraryControlsDisabled: false,
     systemPatronCodesRoundTrip: false, systemUnrelatedSavePreservedPatronCodes: false,
     libraryPatronCodesRoundTrip: false, libraryUnrelatedSavePreservedPatronCodes: false,
     libraryAutoClaimRuleBigintRoundTrip: false, libraryUnrelatedSavePreservedAutoClaimRules: false,
@@ -2212,31 +2450,7 @@ async function main() {
     await scan(page, axeSource, args.artifactRoot, report, 'system-mobile', true);
     await page.setViewportSize({ width: 1280, height: 900 });
 
-    await page.locator('#settings-nav-start').click();
-    const participationRows = page.locator('#enabled-libraries-checkbox-container input[type="checkbox"]');
-    const participationIds = await participationRows.evaluateAll(inputs => inputs.map(input => input.value));
-    assert.ok(participationIds.includes('2') && participationIds.includes('3') && participationIds.includes('4'),
-      'The system participation editor must expose the seeded active, new, and inactive libraries.');
-    for (const checkbox of await participationRows.all()) {
-      const id = await checkbox.inputValue();
-      await checkbox.setChecked(id === '2' || id === '3');
-    }
-    const participationPayload = await saveSettings();
-    assert.deepEqual([...participationPayload.systemSettings.enabledLibraryOrgIds].sort((left, right) => left - right), [2, 3],
-      'The browser must submit the exact numeric native library identities, independently of visible-name order.');
-    assert.equal(Object.hasOwn(participationPayload.polaris, 'apiKey'), false);
-    assert.equal(Object.hasOwn(participationPayload.polaris, 'adminPassword'), false);
-    assert.equal(Object.hasOwn(participationPayload.email, 'postmarkToken'), false);
-    assert.equal(Object.hasOwn(participationPayload.email, 'clearPostmarkToken'), false);
-    assert.equal(JSON.stringify(participationPayload).includes('********'), false,
-      'Unrelated system saves never transmit the visual credential masks.');
-    await page.reload({ waitUntil: 'networkidle' });
-    await waitForSettingsReady('system');
-    for (const id of ['2', '3', '4']) {
-      assert.equal(await page.locator(`#enabled-libraries-checkbox-container input[value="${id}"]`).isChecked(), id !== '4',
-        `Library ${id} participation did not round-trip from SQL.`);
-    }
-    report.systemParticipationRoundTrip = true;
+    await runLibraryParticipation(page, axeSource, args, report, waitForSettingsReady, postedPayloads);
 
     await page.locator('#settings-nav-workflow').click();
     const systemCodeRows = page.locator('#patron-codes-editor [data-code-id]');
@@ -2264,11 +2478,18 @@ async function main() {
       'An unrelated system edit must omit the participation replacement key.');
     assert.equal(Object.hasOwn(unrelatedPayload.workflow, 'allowedPatronCodeIds'), false,
       'An unrelated system edit must omit the patron-code replacement key.');
+    assert.equal(Object.hasOwn(unrelatedPayload.polaris, 'apiKey'), false);
+    assert.equal(Object.hasOwn(unrelatedPayload.polaris, 'adminPassword'), false);
+    assert.equal(Object.hasOwn(unrelatedPayload.email, 'postmarkToken'), false);
+    assert.equal(Object.hasOwn(unrelatedPayload.email, 'clearPostmarkToken'), false);
+    assert.equal(JSON.stringify(unrelatedPayload).includes('********'), false,
+      'Unrelated system saves never transmit the visual credential masks.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('system');
     assert.equal(await page.locator('#patron-embed-allowed-origins').inputValue(), 'https://*.domain.example');
     for (const id of ['2', '3', '4']) {
-      assert.equal(await page.locator(`#enabled-libraries-checkbox-container input[value="${id}"]`).isChecked(), id !== '4',
+      assert.equal(await page.locator(`#settings-organizations-list [data-organization-id="${id}"] .status-badge`).textContent(),
+        id === '4' ? 'Inactive' : 'Active',
         `The unrelated save changed library ${id} participation.`);
     }
     await page.locator('#settings-nav-workflow').click();

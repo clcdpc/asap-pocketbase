@@ -33,8 +33,8 @@ the parent Codex session.
 | 9 | #444 | Nearby single-token picker; focused Node, Settings 13/13, Release and final SQL/browser 1/1 PASS | Luna MAX clear, including actual open-popup and inherited renders | `d70170e` |
 | 10 | #399 | Cards/previews/contextual insertion; Node, eight unique checkpoint owners, final Staff/Campaign 3/3 and native-focus 1/1 PASS | Luna MAX / Astra HIGH / Terra MAX clear after recorded persistence, feedback and focus corrections | `43efa9b` |
 | 11 | #435 | Implemented; SQL 18/18 PASS; carried dark/feedback/independent-save findings fixed; full roster qualification pending 406-4/5 | Luna MAX / Astra HIGH source and SQL clear; Terra 13 major renders inspected, native pending | `3054851`, roster correction in #406 |
-| 12 | #406 | Implemented; source/Node clear; actual native focus obstruction and Add feedback pending shared accessibility checkpoint | Luna MAX / Astra HIGH narrow source clear; Terra 13 major + two native renders inspected | This commit |
-| 13 | #433 | Pending | Pending Luna MAX / Astra HIGH / Terra MAX | Pending |
+| 12 | #406 | Implemented; source/Node clear; actual native focus obstruction and Add feedback pending shared accessibility checkpoint | Luna MAX / Astra HIGH narrow source clear; Terra 13 major + two native renders inspected | `a8c0e7d` |
+| 13 | #433 | Implemented; final SQL/browser 2/2 PASS, 14 states; read-only Library summary contrast pending #436 | Luna MAX / Astra HIGH clear; Terra groups/System summary clear, Library contrast P2 open | This commit |
 | 14 | #436 | Pending | Pending Luna MAX / Terra MAX | Pending |
 | 15 | #391 | Pending | Pending Luna MAX / Terra MAX | Pending |
 
@@ -767,3 +767,82 @@ failure or qualify the final combined revision.
 - Commit this bounded checkpoint and proceed to #433. Full #435/#406 browser
   qualification awaits #436's shared focus/owned-validation corrections and a
   passing complete Staff receipt, including all six unreached native states.
+
+The pushed `a8c0e7d` checkpoint passed
+[draft CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/41783683365):
+zero-warning/error Release, all 107 native SQL-independent cases with no
+failures/skips and all 69 unique frontend files. The 141 Python checks have the
+expected pre-build population class skip. Raw job `126420844204` and summary are
+retained outside Git. Full CI and test-IIS activation were skipped; the known
+native browser failure and Add validation finding remain open.
+
+## #433 — organization placement and one participation editor
+
+- The existing Organizations owner is under Polaris beside synchronization.
+  Eligible active/inactive libraries have the canonical confirmed actions;
+  read-only reference records follow synchronized parent chains into alphabetic
+  library groups, with finite cycle/missing-parent fallback to Other last.
+  Getting started now has summary/navigation and retains unrelated drafts.
+- The duplicate checkboxes, full-set collection, participation baseline and
+  dead Settings-save catalog callback are removed. Read-catalog validation and
+  backend APIs/policies remain. No backend or schema behavior changes are made.
+- Initial Release passed with zero warnings/errors (40.20s). The worker passed
+  all 14 Settings files and 271 navigation journeys. Parent independently passed
+  the new participation test's 7/7 scenarios, zero failures/skips (7.095s).
+  The new root test file brings current frontend discovery to 70 files; this
+  is not yet a full 70-file execution claim.
+- Astra cycle 1 source review is clear and independently passed participation,
+  catalog and scope-race Node checks. Current discovery selects exactly two
+  browser owners: the existing combined System/Library Settings method and
+  Administration audit; no new compiled cases. Settings now requires 12 states
+  and its participation/grouping/recovery flags plus final real-SQL witnesses.
+- Initial `i433-browser.trx`: **1 passed / 1 failed / 0 skipped**, 86.062s.
+  Administration audit passed 51.951s. Settings failed 11.252s at a hardcoded
+  group-name vector that omitted the legitimate Audit Library retained by the
+  preceding fixture. Every real catalog record and eligible library were already
+  present; production correctly included its extra group. **433-1 test-only**
+  correction must allow authorized catalog additions while retaining explicit
+  seeded relationship/sync assertions, ordering and exactly-once coverage.
+  Rerun the same combined selection to retain the reproducing fixture order.
+- Luna cycle 1 independently passed participation, catalog, scope, layout,
+  save-completion and Polaris feedback Node checks. It found **433-2 P2/P3**:
+  confirmed participation success or conflict refresh makes the form inert,
+  replaces its action controls and has no focus restoration in the normal
+  visible-panel path. Include current-owner action/catalog/header fallback
+  focus after finish, without stealing newer focus or targeting inert controls.
+  Add observable Node and actual browser assertions; this is the same bounded
+  cycle-1 remediation batch as the test-only catalog correction.
+- The corrected test accepts legitimate shared-catalog groups while retaining
+  exact owned parent graphs, alpha ordering, action eligibility and every real
+  record once. Its SQL witness compares non-owned library Id/IsActive tuples
+  before/after; owned 2/3 remain active and 4–7 inactive. Focus recovery runs
+  after inert release, respects newer user focus intent and restores the current
+  action/catalog/header only within the accepted owner, panel and scope.
+  Nine participation scenarios and both narrow independent reviews pass.
+- R2 Release passed with zero warnings/errors (31.59s). Its combined browser
+  receipt is retained as **1 passed / 1 failed / 0 skipped**, 136.435s:
+  Audit passed 47.954s; the Settings report was written with 12 states, but the
+  finally block deleted seeded organizations before their successful audit
+  records and hit the real audit FK. This failure can mask an earlier assertion
+  and was not treated as qualification. **433-3 fixture cleanup** moves only
+  the existing own-audit Id > watermark deletion before the organization delete;
+  no boundary or SQL constraint is weakened.
+- Added guarded Getting started summary/Manage captures for System desktop
+  and Library mobile. The final contract requires 14 exact states, no new MTP
+  cases. Final Release R3 passed with zero warnings/errors (15.55s).
+  **Final `i433-browser-r3.trx` PASS 2/2**, zero failures/skips, 122.404s:
+  Administration audit 44.968s; combined System/Library Settings 61.099s.
+  Thus all required flags, real-SQL witnesses and finally cleanup complete.
+  All 14 states have zero serious/critical axe findings, external requests,
+  page errors, missing images or horizontal overflow. Final Settings artifacts:
+  `settings-28aedbd994264e4caae5d6156367c775`.
+- Luna and Astra independently inspected the actual final receipt/report and
+  closed functional/integrity qualification. Terra inspected the three Polaris
+  views and two summary images: grouping, literal data text, inactive-parent
+  associations, read-only controls and System summary are clear.
+- **433-4 P2, unresolved visual contrast:** Library summary information is dimmed
+  by disabled-fieldset opacity. Screenshot pixels `#8a929b` on `#eff3f5` give
+  approximately 2.82:1, despite the clean axe result. Manage must stay disabled;
+  the read-only status must keep normal readable contrast. Carry this shared
+  style correction and direct rendered contrast assertion into #436; do not
+  describe #433 visual qualification as complete until it is rechecked.

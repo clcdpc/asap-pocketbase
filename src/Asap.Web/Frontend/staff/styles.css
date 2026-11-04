@@ -412,6 +412,11 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-list-row input { width: 18px; height: 18px; min-height: auto; flex: 0 0 auto; }
 .settings-list-row button { flex: 0 0 40px; padding: 0; }
 .settings-organization-name { font-weight: 700; }
+.settings-organization-group, .settings-organization-reference-groups, .settings-organization-reference-group { display: grid; gap: 10px; min-width: 0; }
+.settings-organization-group + .settings-organization-group { margin-top: 20px; }
+.settings-organization-group h3, .settings-organization-group h4, .settings-organization-group p { margin: 0; }
+.settings-organization-reference-group + .settings-organization-reference-group { margin-top: 6px; }
+.settings-organization-parent { display: block; margin-top: 4px; color: var(--muted); font-weight: 400; }
 .settings-empty, .settings-callout { margin: 0; padding: 11px 12px; color: var(--muted); background: var(--soft); border-left: 4px solid var(--brand); }
 .settings-result { min-height: 22px; margin: 8px 0 0; color: var(--muted); }
 .settings-result.error { color: var(--danger); font-weight: 700; }

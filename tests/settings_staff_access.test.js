@@ -266,8 +266,8 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.ok(!requests.some(url => url.includes('/api/asap/staff/users')));
     assert.deepStrictEqual([...document.querySelectorAll('#settings-scope option')].map(option => option.textContent),
       ['System level', 'Library Three', 'Library Two']);
-    assert.deepStrictEqual([...document.querySelectorAll('#enabled-libraries-checkbox-container label span')].map(span => span.textContent),
-      ['Library Three', 'Library Two']);
+    assert.deepStrictEqual([...document.querySelectorAll('#settings-organizations-list .settings-organization-name')].map(span => span.textContent),
+      ['Library Three (THREE)', 'Library Two (TWO)']);
     assert.equal(document.getElementById('settings-message').textContent, '', 'A successful routine load clears its own loading status.');
     document.getElementById('settings-nav-staff').click();
     await waitFor(() => document.getElementById('settings-staff-users-list').textContent.includes('Ada Admin'));

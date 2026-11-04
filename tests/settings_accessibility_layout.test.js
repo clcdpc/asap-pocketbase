@@ -23,6 +23,16 @@ const { JSDOM } = require('jsdom');
     const panels = [...document.querySelectorAll('[data-settings-panel-content]')];
     assert.strictEqual(panels.filter(panel => !panel.hidden).map(panel => panel.id).join(','), 'settings-start');
     assert.strictEqual(document.getElementById('settings-organizations-list').tagName, 'UL');
+    const organizationCatalog = document.getElementById('settings-organization-catalog');
+    assert.strictEqual(organizationCatalog.closest('[data-settings-panel-content]').id, 'settings-polaris');
+    assert.strictEqual(organizationCatalog.querySelector('legend').textContent, 'Polaris organizations and library participation');
+    assert.deepStrictEqual([...organizationCatalog.querySelectorAll('h3')].map(heading => heading.textContent),
+      ['ASAP library participation', 'Other synchronized organizations']);
+    assert.strictEqual(organizationCatalog.getAttribute('data-system-only'), 'true');
+    assert.strictEqual(document.querySelector('#settings-staff #settings-organizations-list'), null);
+    assert.strictEqual(document.getElementById('enabled-libraries-checkbox-container'), null);
+    assert.strictEqual(document.getElementById('manage-library-participation').type, 'button');
+    assert.strictEqual(document.getElementById('manage-library-participation').getAttribute('aria-controls'), organizationCatalog.id);
 
     const header = document.querySelector('#settings-view .settings-header');
     assert.ok(header && !header.classList.contains('section-heading'));

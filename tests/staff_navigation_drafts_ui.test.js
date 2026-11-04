@@ -2853,7 +2853,7 @@ test('authoritative projections: unavailable organization review keeps retired r
     assert.equal(ui.get('#request-grid .grid-open'), null);
   }));
 
-test('authoritative projections: system save participation retires the selected library despite failed Settings reload', () =>
+test('authoritative projections: canonical participation retires the selected library despite failed Settings reload', () =>
   fixture('?stage=suggestion&scope=2', async ui => {
     let committed = false;
     const catalog = () => organizationCatalog([
@@ -2863,9 +2863,11 @@ test('authoritative projections: system save participation retires the selected 
       if (pathname.endsWith('/organizations')) {
         const rows = catalog(); ui.setOrganizations(rows); return response(200, { code: 'ok', data: rows });
       }
-      if (pathname.endsWith('/settings') && init.method === 'POST') {
-        assert.deepEqual(JSON.parse(init.body).systemSettings.enabledLibraryOrgIds, [3]);
-        committed = true; ui.setOrganizations(catalog()); return response(200, { code: 'saved', data: { orgId: 'system', version: 'v2' } });
+      if (pathname.endsWith('/organizations/2/deactivate') && init.method === 'POST') {
+        assert.deepEqual(JSON.parse(init.body), { version: 'org-2-v1' });
+        committed = true; ui.setOrganizations(catalog()); return response(200, { code: 'deactivated', data: {
+          organizationId: 2, revokedPatronSessions: 0, version: 'org-2-v2'
+        } });
       }
       if (pathname.endsWith('/settings') && committed) return response(503, { message: 'Settings reload unavailable' });
       if (pathname.endsWith('/title-requests')) {
@@ -2875,10 +2877,9 @@ test('authoritative projections: system save participation retires the selected 
     });
     await until(() => ui.get('#request-grid .grid-open'), 'pre-save operational rows');
     ui.get('[data-view="settings"]').click(); await until(() => !ui.get('#settings-form').hidden, 'system Settings loaded');
-    const enabled = ui.get('[aria-label="Enable Library A"]');
-    enabled.checked = false; enabled.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
-    ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
-    await until(() => committed && !ui.get('#settings-form').hasAttribute('aria-busy'), 'system participation committed');
+    ui.get('#settings-nav-polaris').click();
+    ui.allowDiscard(); ui.get('[aria-label="Deactivate Library A"]').click();
+    await until(() => committed && !ui.get('#settings-form').hasAttribute('aria-busy'), 'canonical participation committed');
     assert.equal(ui.get('#request-grid .grid-open'), null);
     assert.equal(ui.get('#library-scope option[value="2"]'), null);
     ui.get('[data-view="queue"]').click();

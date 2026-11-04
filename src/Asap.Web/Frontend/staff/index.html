@@ -374,10 +374,12 @@
                   </label>
                 </div>
               </fieldset>
-              <fieldset class="settings-fieldset" data-system-only="true">
+              <fieldset class="settings-fieldset" data-system-only="true" data-settings-ignore="true">
                 <legend>Library participation</legend>
-                <div id="organizations-status-message" class="settings-callout">Load Polaris organizations to manage participation.</div>
-                <div id="enabled-libraries-checkbox-container" class="settings-list" aria-live="polite"></div>
+                <p id="organizations-status-message" class="settings-callout" role="status" aria-live="polite">Load Polaris organizations to view participation.</p>
+                <div class="form-actions">
+                  <button id="manage-library-participation" class="secondary-button" type="button" aria-controls="settings-organization-catalog">Manage library participation</button>
+                </div>
               </fieldset>
             </section>
 
@@ -419,6 +421,19 @@
                     <p id="organizations-sync-result" class="settings-result"></p>
                   </div>
                 </div>
+              </fieldset>
+              <fieldset id="settings-organization-catalog" class="settings-fieldset" data-system-only="true" data-settings-ignore="true" tabindex="-1">
+                <legend>Polaris organizations and library participation</legend>
+                <section class="settings-organization-group" aria-labelledby="settings-library-participation-heading">
+                  <h3 id="settings-library-participation-heading">ASAP library participation</h3>
+                  <p>Active / Inactive indicates whether an eligible library participates in ASAP. Activating or deactivating participation affects ASAP only; it does not activate or deactivate the organization in Polaris.</p>
+                  <ul id="settings-organizations-list" class="settings-list" aria-live="polite"></ul>
+                </section>
+                <section class="settings-organization-group" aria-labelledby="settings-reference-organizations-heading">
+                  <h3 id="settings-reference-organizations-heading">Other synchronized organizations</h3>
+                  <p>Reference only organizations are retained from Polaris for reference and have no participation controls. They are not necessarily available pickup locations. Groups follow synchronized parent-library relationships.</p>
+                  <div id="settings-reference-organizations" class="settings-organization-reference-groups" aria-live="polite"></div>
+                </section>
               </fieldset>
             </section>
 
@@ -490,10 +505,6 @@
               <div class="form-actions settings-inline-actions" data-settings-ignore="true">
                 <button id="staff-audit-history" class="secondary-button" type="button"><i class="fa fa-history" aria-hidden="true"></i> View staff audit history</button>
               </div>
-              <fieldset class="settings-fieldset" data-system-only="true">
-                <legend>Organizations</legend>
-                <ul id="settings-organizations-list" class="settings-list" aria-live="polite"></ul>
-              </fieldset>
             </section>
 
             <section id="settings-workflow" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="workflow" aria-labelledby="settings-nav-workflow" hidden>

@@ -2664,6 +2664,7 @@ public sealed partial class PatronJourneyTests
 
         WorkflowSettings originalSystemTimeouts;
         WorkflowSettings? originalLibraryTimeouts;
+        var originalOtherLibraryParticipation = new List<(int Id, bool Active)>();
         await using (var snapshot = await contextFactory.CreateDbContextAsync())
         {
             originalSystemTimeouts = CopyTimeoutSettings(await snapshot.WorkflowSettings.AsNoTracking()
@@ -2671,6 +2672,11 @@ public sealed partial class PatronJourneyTests
             var libraryTimeouts = await snapshot.WorkflowSettings.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.OrganizationId == 2);
             originalLibraryTimeouts = libraryTimeouts is null ? null : CopyTimeoutSettings(libraryTimeouts);
+            var otherLibraries = await snapshot.Organizations.AsNoTracking()
+                .Where(item => item.Id > 7 && item.OrganizationCodeId == 2)
+                .OrderBy(item => item.Id)
+                .Select(item => new { item.Id, item.IsActive }).ToListAsync();
+            originalOtherLibraryParticipation.AddRange(otherLibraries.Select(item => (item.Id, item.IsActive)));
         }
 
         var originalSystemCodes = await ReadPatronCodeRowsAsync(1);
@@ -2682,7 +2688,21 @@ public sealed partial class PatronJourneyTests
             INSERT INTO [asap].[Organization]
                 ([Id], [DisplayName], [Abbreviation], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
             VALUES (3, N'Participation Library Three', N'P3', 2, 1, 0),
-                   (4, N'Inactive Library Four', N'P4', 2, 1, 0);
+                   (4, N'Inactive Library Four', N'P4', 2, 1, 0),
+                   (5, N'Alexandria', N'ALEX', 2, 1, 0),
+                   (6, N'Bexley', N'BEX', 2, 1, 0),
+                   (7, N'Columbus', N'COL', 2, 1, 0),
+                   (81001, N'Zebra reading room', N'ZEB', 3, 5, 0),
+                   (81002, N'Alexandria services', N'SERV', 3, 5, 0),
+                   (81003, N'Indirect desk', N'IND', 3, 81002, 0),
+                   (81004, N'Bexley service desk', N'DESK', 3, 6, 0),
+                   (81005, N'Alexandria in name only', N'NAME', 3, 6, 0),
+                   (81006, N'Columbus service desk', N'DESK', 3, 7, 0),
+                   (81007, N'Missing parent', N'MISS', 3, 89999, 0),
+                   (81008, N'Cycle A', N'CA', 3, 81009, 0),
+                   (81009, N'Cycle B', N'CB', 3, 81008, 0),
+                   (81010, N'Self parent', N'SELF', 3, 81010, 0),
+                   (81011, N'Cycle descendant', N'CD', 3, 81008, 0);
             UPDATE [asap].[Organization] SET [IsActive] = 0 WHERE [Id] = 2;
             DELETE FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] IN (1, 2);
             DELETE FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] IN (1, 2);
@@ -2697,7 +2717,21 @@ public sealed partial class PatronJourneyTests
                 new PolarisOrganizationSnapshot(2, "Test Library", "TEST", 2, 1),
                 new PolarisOrganizationSnapshot(3, "Participation Library Three", "P3", 2, 1),
                 new PolarisOrganizationSnapshot(4, "Inactive Library Four", "P4", 2, 1),
-                new PolarisOrganizationSnapshot(101, "Main Library Branch", "MAIN", 3, 2)
+                new PolarisOrganizationSnapshot(5, "Alexandria", "ALEX", 2, 1),
+                new PolarisOrganizationSnapshot(6, "Bexley", "BEX", 2, 1),
+                new PolarisOrganizationSnapshot(7, "Columbus", "COL", 2, 1),
+                new PolarisOrganizationSnapshot(101, "Main Library Branch", "MAIN", 3, 2),
+                new PolarisOrganizationSnapshot(81001, "Zebra reading room", "ZEB", 3, 5),
+                new PolarisOrganizationSnapshot(81002, "Alexandria services", "SERV", 3, 7),
+                new PolarisOrganizationSnapshot(81003, "Indirect desk", "IND", 3, 81002),
+                new PolarisOrganizationSnapshot(81004, "Bexley service desk", "DESK", 3, 6),
+                new PolarisOrganizationSnapshot(81005, "Alexandria in name only", "NAME", 3, 6),
+                new PolarisOrganizationSnapshot(81006, "Columbus service desk", "DESK", 3, 7),
+                new PolarisOrganizationSnapshot(81007, "Missing parent", "MISS", 3, 89999),
+                new PolarisOrganizationSnapshot(81008, "Cycle A", "CA", 3, 81009),
+                new PolarisOrganizationSnapshot(81009, "Cycle B", "CB", 3, 81008),
+                new PolarisOrganizationSnapshot(81010, "Self parent", "SELF", 3, 81010),
+                new PolarisOrganizationSnapshot(81011, "Cycle descendant", "CD", 3, 81008)
             ],
             [new PolarisPatronCodeSnapshot(1, "Child"), new PolarisPatronCodeSnapshot(2, "Adult"),
              new PolarisPatronCodeSnapshot(3, "Juvenile")]);
@@ -2825,6 +2859,10 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
                 Assert.IsTrue(report.RootElement.GetProperty("postedEditorPayload").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("systemParticipationRoundTrip").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("participationNavigationPreservedDraft").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("organizationParentGrouping").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("organizationSyncRegrouped").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("participationLibraryControlsDisabled").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("unrelatedSystemSavePreservedParticipation").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("systemPatronCodesRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("systemUnrelatedSavePreservedPatronCodes").GetBoolean());
@@ -2845,13 +2883,15 @@ public sealed partial class PatronJourneyTests
                 Assert.IsTrue(report.RootElement.GetProperty("suggestionLimitPlaceholderRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("wildcardOriginNormalized").GetBoolean());
                 var states = report.RootElement.GetProperty("states").EnumerateArray().ToArray();
-                Assert.HasCount(9, states);
+                Assert.HasCount(14, states);
                 CollectionAssert.AreEquivalent(new[]
                 {
                     "system-desktop", "system-mobile", "library-desktop", "library-mobile",
                     "common-creators-system-mobile-off", "common-creators-system-mobile-on",
                     "common-creators-library-mobile-off", "common-creators-library-mobile-on",
-                    "suggestion-placeholder-mobile"
+                    "suggestion-placeholder-mobile", "organizations-system-desktop",
+                    "organizations-system-mobile", "organizations-library-mobile",
+                    "participation-summary-system-desktop", "participation-summary-library-mobile"
                 },
                     states.Select(item => item.GetProperty("viewport").GetString()!).ToArray());
             }
@@ -2859,16 +2899,26 @@ public sealed partial class PatronJourneyTests
             await using (var connection = new SqlConnection(databaseConnectionString))
             {
                 await connection.OpenAsync();
-                Assert.AreEqual(0, await ScalarAsync(connection, """
-                    SELECT COUNT(*) FROM [asap].[Organization]
-                    WHERE [OrganizationCodeId] = 2 AND [IsActive] = 1 AND [Id] NOT IN (2, 3);
-                    """));
+                var otherLibraryParticipation = new List<(int Id, bool Active)>();
+                await using (var command = new SqlCommand("""
+                    SELECT [Id], [IsActive] FROM [asap].[Organization]
+                    WHERE [Id] > 7 AND [OrganizationCodeId] = 2 ORDER BY [Id];
+                    """, connection))
+                {
+                    await using var reader = await command.ExecuteReaderAsync();
+                    while (await reader.ReadAsync())
+                    {
+                        otherLibraryParticipation.Add((reader.GetInt32(0), reader.GetBoolean(1)));
+                    }
+                }
+                CollectionAssert.AreEqual(originalOtherLibraryParticipation.ToArray(), otherLibraryParticipation.ToArray(),
+                    "Confirmed per-library actions and unrelated Settings saves must preserve every other library's participation.");
                 Assert.AreEqual(1, await ScalarAsync(connection,
                     "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] = 2 AND [OrganizationCodeId] = 2 AND [IsActive] = 1;"));
                 Assert.AreEqual(1, await ScalarAsync(connection,
                     "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] = 3 AND [OrganizationCodeId] = 2 AND [IsActive] = 1;"));
-                Assert.AreEqual(1, await ScalarAsync(connection,
-                    "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] = 4 AND [OrganizationCodeId] = 2 AND [IsActive] = 0;"));
+                Assert.AreEqual(4, await ScalarAsync(connection,
+                    "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] IN (4, 5, 6, 7) AND [OrganizationCodeId] = 2 AND [IsActive] = 0;"));
                 var systemCodeRows = await ReadPatronCodeRowsAsync(1);
                 Assert.AreEqual(1, systemCodeRows.SetCount);
                 CollectionAssert.AreEqual(new[] { 1, 2, 3 }, systemCodeRows.Values);
@@ -2992,9 +3042,9 @@ public sealed partial class PatronJourneyTests
                 DELETE FROM [asap].[PatronCustomField]
                 WHERE [LibraryOrganizationId] = 2 AND [FieldKey] IN (N'authority_retired', N'browser_select');
                 UPDATE [asap].[Organization] SET [IsActive] = @organizationActive WHERE [Id] = 2;
-                DELETE FROM [asap].[Organization] WHERE [Id] IN (3, 4);
-                DELETE FROM [asap].[EmailTemplate] WHERE [Id] = @timeoutTemplateId;
                 DELETE FROM [asap].[AdministrativeAudit] WHERE [Id] > @auditBefore;
+                DELETE FROM [asap].[Organization] WHERE [Id] IN (3, 4, 5, 6, 7) OR [Id] BETWEEN 81001 AND 81011;
+                DELETE FROM [asap].[EmailTemplate] WHERE [Id] = @timeoutTemplateId;
                 {restoreStaffIdentitySql}
                 """, ("@organizationActive", originalOrganizationActive), ("@auditBefore", auditBefore),
                 ("@staffId", autoClaimStaffId), ("@timeoutTemplateId", timeoutTemplateId));

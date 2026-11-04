@@ -303,7 +303,9 @@ export function createSettingsController({
     polarisAnnouncement: root.querySelector('#polaris-action-announcement'),
     organizationStatus: root.querySelector('#organizations-status-message'),
     organizations: root.querySelector('#settings-organizations-list'),
-    enabledLibraries: root.querySelector('#enabled-libraries-checkbox-container'),
+    referenceOrganizations: root.querySelector('#settings-reference-organizations'),
+    manageParticipation: root.querySelector('#manage-library-participation'),
+    organizationCatalog: root.querySelector('#settings-organization-catalog'),
     staffStatus: root.querySelector('#staff-access-status'),
     staffRefresh: root.querySelector('#staff-refresh'),
     staffShowInactive: root.querySelector('#staff-show-inactive'),
@@ -342,7 +344,6 @@ export function createSettingsController({
     data: null,
     organizations: [],
     organizationsReady: false,
-    baselineParticipationIds: null,
     staffUsers: [],
     staffCanAssignSuperAdmin: false,
     staffAccessLoaded: false,
@@ -892,8 +893,6 @@ export function createSettingsController({
   function acceptOrganizationCatalog(rows) {
     state.organizations = rows;
     state.organizationsReady = true;
-    state.baselineParticipationIds = rows.filter(item => isLibraryOrganization(item) && item.isActive)
-      .map(item => item.id).sort((first, second) => first - second);
   }
 
   function scopedStaffOrganizationId() {
@@ -1407,38 +1406,24 @@ export function createSettingsController({
     select.value = selected || '';
   }
 
-  function populateParticipation() {
-    dom.enabledLibraries.replaceChildren();
-    const libraries = byDisplayLabel(state.organizations.filter(isLibraryOrganization));
-    if (libraries.length === 0) {
-      dom.enabledLibraries.append(node('p', { className: 'settings-empty', text: 'No synced library organizations.' }));
-      return;
-    }
-    for (const organization of libraries) {
-      const checkbox = node('input', {
-        type: 'checkbox',
-        value: organization.id,
-        checked: organization.isActive,
-        'aria-label': `Enable ${organization.name}`
-      });
-      dom.enabledLibraries.append(node('label', { className: 'settings-list-row' }, [
-        checkbox,
-        node('span', { text: organization.name })
-      ]));
-    }
-  }
-
   function renderOrganizations() {
     dom.organizations.replaceChildren();
-    if (state.organizations.length === 0) {
-      dom.organizations.append(node('li', { className: 'settings-empty', text: 'No organizations are available.' }));
-      return;
-    }
-    for (const organization of byDisplayLabel(state.organizations, item => `${item.name}${item.abbreviation ? ` (${item.abbreviation})` : ''}`)) {
+    dom.referenceOrganizations.replaceChildren();
+    const label = organization => `${organization.name}${organization.abbreviation ? ` (${organization.abbreviation})` : ''}`;
+    const libraries = byDisplayLabel(state.organizations.filter(isLibraryOrganization), label);
+    const activeCount = libraries.filter(organization => organization.isActive).length;
+    dom.organizationStatus.textContent = libraries.length
+      ? `${activeCount} of ${libraries.length} synchronized libraries active in ASAP; ${libraries.length - activeCount} inactive.`
+      : 'No eligible libraries are synchronized. Sync organizations in Polaris to load library participation.';
+    const organizationRow = (organization, parents = []) => {
       const isLibrary = isLibraryOrganization(organization);
       const active = isLibrary && Boolean(organization.isActive);
-      const item = node('li', { className: 'settings-list-row' }, [
-        node('span', { className: 'settings-organization-name', text: `${organization.name}${organization.abbreviation ? ` (${organization.abbreviation})` : ''}` }),
+      const name = node('span', { className: 'settings-organization-name', text: label(organization) });
+      if (parents.length) name.append(node('small', {
+        className: 'settings-organization-parent', text: `Within: ${parents.map(label).join(' → ')}`
+      }));
+      const item = node('li', { className: 'settings-list-row', 'data-organization-id': organization.id }, [
+        name,
         node('span', { className: `status-badge${active ? '' : ' blocked'}`, text: isLibrary ? active ? 'Active' : 'Inactive' : 'Reference only' })
       ]);
       if (isLibrary && state.staff?.role === 'super_admin') {
@@ -1448,10 +1433,55 @@ export function createSettingsController({
           title: active ? `Deactivate ${organization.name}` : `Activate ${organization.name}`,
           'aria-label': active ? `Deactivate ${organization.name}` : `Activate ${organization.name}`
         }, [node('i', { className: `fa fa-${active ? 'ban' : 'check'}`, 'aria-hidden': 'true' })]);
-        listen(action, 'click', () => setOrganizationActive(organization, !active));
+        listen(action, 'click', () => setOrganizationActive(organization, !active, action));
         item.append(action);
       }
-      dom.organizations.append(item);
+      return item;
+    };
+    for (const library of libraries) dom.organizations.append(organizationRow(library));
+    if (!libraries.length) {
+      dom.organizations.append(node('li', { className: 'settings-empty', text: 'No eligible library organizations are synchronized.' }));
+    }
+
+    const organizationsById = new Map(state.organizations.map(organization => [organization.id, organization]));
+    const groups = new Map(), unassociated = [];
+    for (const organization of byDisplayLabel(state.organizations.filter(item => !isLibraryOrganization(item)), label)) {
+      const visited = new Set([organization.id]), parents = [];
+      let parentId = organization.parentOrganizationId, library = null;
+      while (parentId !== null && !visited.has(parentId)) {
+        visited.add(parentId);
+        const parent = organizationsById.get(parentId);
+        if (!parent) break;
+        if (isLibraryOrganization(parent)) {
+          library = parent;
+          break;
+        }
+        parents.unshift(parent);
+        parentId = parent.parentOrganizationId;
+      }
+      if (!library) {
+        unassociated.push(organizationRow(organization));
+        continue;
+      }
+      if (!groups.has(library.id)) groups.set(library.id, { library, rows: [] });
+      groups.get(library.id).rows.push(organizationRow(organization, parents));
+    }
+    const appendReferenceGroup = (title, rows, libraryId) => {
+      const headingId = `settings-reference-group-${libraryId || 'other'}`;
+      dom.referenceOrganizations.append(node('section', {
+        className: 'settings-organization-reference-group', 'aria-labelledby': headingId,
+        'data-library-organization-id': libraryId || 'other'
+      }, [
+        node('h4', { id: headingId, text: title }),
+        node('ul', { className: 'settings-list' }, rows)
+      ]));
+    };
+    for (const group of byDisplayLabel([...groups.values()], group => label(group.library), group => group.library.id)) {
+      appendReferenceGroup(label(group.library), group.rows, group.library.id);
+    }
+    if (unassociated.length) appendReferenceGroup('Other / unassociated organizations', unassociated);
+    if (!groups.size && !unassociated.length) {
+      dom.referenceOrganizations.append(node('p', { className: 'settings-empty', text: 'No other synchronized organizations.' }));
     }
   }
 
@@ -1763,7 +1793,6 @@ export function createSettingsController({
     dom.switchSystem.hidden = state.staff?.role !== 'super_admin';
     dom.clearLogo.textContent = isSystem() ? 'Clear system image' : 'Clear image (use inherited image)';
     renderBrandingPreview();
-    populateParticipation();
     renderOrganizations();
     resetStaffCreateDraft();
     renderStaffUsers({ discard: true });
@@ -1808,7 +1837,6 @@ export function createSettingsController({
     const snapshot = snapshotDrafts();
     const loadState = reads.begin('administration-settings');
     state.organizationsReady = false;
-    state.baselineParticipationIds = null;
     updateDirtyState();
     dom.refresh.disabled = true;
     const clearLoading = !options.silent ? notify('Loading settings...') : null;
@@ -1847,7 +1875,7 @@ export function createSettingsController({
       onRefreshed(context.owner, { kind: 'settings', scope: context.scope,
         changed: !staffReview && review?.outcome === 'uncertain',
         catalogChanged: review?.outcome === 'uncertain' &&
-          (review.catalogChanged || ['administration-settings-organization-sync', 'administration-settings-participation'].includes(review.slot)) });
+          ['administration-settings-organization-sync', 'administration-settings-participation'].includes(review.slot) });
       dom.form.hidden = false;
       dom.form.inert = Boolean(state.pendingMutation || state.awaitingReload);
       restoreCommonAuthorsFocus();
@@ -2092,13 +2120,6 @@ export function createSettingsController({
     for (const [key, id] of SYSTEM_FIELDS) result[key] = readControl(document.getElementById(id));
     result.patronEmbedAllowedOrigins = document.getElementById('patron-embed-allowed-origins').value
       .split(/\r?\n/).map(clean).filter(Boolean);
-    const enabledLibraryOrgIds = [...dom.enabledLibraries.querySelectorAll('input[type="checkbox"]')]
-      .filter(input => input.checked).map(input => Number(input.value));
-    const baselineParticipationIds = state.baselineParticipationIds || [];
-    if (JSON.stringify(enabledLibraryOrgIds.slice().sort((first, second) => first - second)) !==
-        JSON.stringify(baselineParticipationIds)) {
-      result.enabledLibraryOrgIds = enabledLibraryOrgIds;
-    }
     return result;
   }
 
@@ -2296,8 +2317,6 @@ export function createSettingsController({
       ? `Settings saved. Format deletions confirmed: ${deletedFormatCount} of ${totalFormatDeletes}.`
       : 'Settings saved.';
     try {
-      // System saves replace the authoritative participation set as well as configuration.
-      mutation.catalogChanged = Array.isArray(payload.systemSettings?.enabledLibraryOrgIds);
       const deletedFormats = state.pendingDeletedFormats.slice();
       totalFormatDeletes = deletedFormats.length;
       const response = await authorizedJson('/api/asap/staff/settings', {
@@ -2310,7 +2329,6 @@ export function createSettingsController({
       }
       committed = true;
       recordCommitted(mutation, committedMessage(), mutation.context.scope);
-      if (mutation.catalogChanged) onOrganizationCatalogCommitted(mutation.owner);
       if (!isSettingsOperationCurrent(mutation)) return;
       state.data.version = response?.data?.version || state.data.version;
       if (payload.polaris?.apiKey) {
@@ -2594,12 +2612,24 @@ export function createSettingsController({
     }
   }
 
-  async function setOrganizationActive(organization, active) {
+  async function setOrganizationActive(organization, active, action) {
+    const ownsFocus = document.activeElement === action;
     if (!await confirmSettings(`${active ? 'Activate' : 'Deactivate'} ${organization.name}?`,
       `${active ? 'Enable' : 'Disable'} participation for ${organization.name}? The server will apply its current participation and session rules.`,
       active ? 'Activate library' : 'Deactivate library', active ? 'normal' : 'danger')) return;
     const mutation = beginSettingsMutation('administration-settings-participation', null);
     if (!mutation) return;
+    let focusMoved = false;
+    const focusEvents = new window.AbortController();
+    if (ownsFocus) {
+      const relinquishFocus = () => { focusMoved = true; };
+      document.addEventListener('focusin', event => {
+        if (event.target !== action && event.target !== document.body) relinquishFocus();
+      }, { signal: focusEvents.signal });
+      for (const event of ['pointerdown', 'keydown']) {
+        document.addEventListener(event, relinquishFocus, { signal: focusEvents.signal, capture: true });
+      }
+    }
     try {
       const response = await authorizedJson(`/api/asap/staff/organizations/${encodeURIComponent(organization.id)}/${active ? 'activate' : 'deactivate'}`, {
         method: 'POST',
@@ -2628,8 +2658,19 @@ export function createSettingsController({
       }
       if (error.status !== 401 && !isAbortError(error)) notify(error.message || 'Organization participation could not be changed.', 'error');
     } finally {
+      focusEvents.abort();
       finishSettingsMutation(mutation);
-      if (isSettingsContextCurrent(mutation.context)) updateDirtyState();
+      if (isSettingsContextCurrent(mutation.context)) {
+        updateDirtyState();
+        const focused = document.activeElement;
+        if (ownsFocus && !focusMoved && state.visible && state.activePanel === 'polaris' && isSystem() &&
+            (focused === action || focused === document.body || focused === document.documentElement)) {
+          const updatedAction = dom.organizations.querySelector(`[data-organization-id="${organization.id}"] button`);
+          const target = state.awaitingReload ? dom.refresh : updatedAction || dom.organizationCatalog;
+          if (target?.isConnected && !target.matches(':disabled') && !target.closest('[hidden], [inert]') &&
+              !(dom.form.contains(target) && dom.form.inert)) target.focus();
+        }
+      }
     }
   }
 
@@ -2761,7 +2802,6 @@ export function createSettingsController({
       state.data = null;
       state.organizations = [];
       state.organizationsReady = false;
-      state.baselineParticipationIds = null;
       dom.form.hidden = true;
       dom.staffRole.value = 'staff'; dom.staffOrganization.value = '';
     }
@@ -2797,7 +2837,6 @@ export function createSettingsController({
     state.data = null;
     state.organizations = [];
     state.organizationsReady = false;
-    state.baselineParticipationIds = null;
     state.staffUsers = [];
     state.staffAccessLoaded = false;
     state.lastStaffCleanup = null;
@@ -2832,6 +2871,11 @@ export function createSettingsController({
       renderCurrentStaffUrlSuggestion(alreadyCurrent ? 'unchanged' : 'applied');
     });
     listen(dom.scope, 'change', changeScope);
+    listen(dom.manageParticipation, 'click', () => {
+      if (!state.visible || state.staff?.role !== 'super_admin' || !isSystem() ||
+          state.loading || state.pendingMutation || state.awaitingReload || dom.form.inert) return;
+      if (activatePanel('polaris', true)) dom.organizationCatalog.focus();
+    });
     listen(dom.switchSystem, 'click', async () => {
       if (state.staff?.role !== 'super_admin') return;
       dom.scope.value = 'system';
