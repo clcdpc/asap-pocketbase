@@ -91,6 +91,19 @@ try {
     }
     $pins = [ordered]@{ machineName = 'DEVWEB'; iisHostName = 'devasap.clcohio.org'; sqlServerName = 'fixture-sql\instance'; databaseName = 'AsapTest' }
     $config | Add-Member -NotePropertyName SqlDataLossTarget -NotePropertyValue ([pscustomobject] $pins)
+    # Exercise actual IIS preflight against disposable management boundaries.
+    function Import-Module { [CmdletBinding()] param($Name) Assert-True ($Name -eq 'WebAdministration') 'IIS preflight may import only its management module.' }
+    $script:sitePath = $config.DeploymentPath; $script:sitePool = 'ASAP'; $script:poolPresent = $true
+    function Get-Website { [CmdletBinding()] param($Name) [pscustomobject]@{ PhysicalPath = $script:sitePath; ApplicationPool = $script:sitePool } }
+    function Get-WebAppPoolState { [CmdletBinding()] param($Name) if ($script:poolPresent) { return [pscustomobject]@{ Value = 'Started' } } }
+    Test-IisConfiguration -Config $config
+    $script:sitePath = Join-Path $fixture 'wrong-site'
+    Assert-Failure { Test-IisConfiguration -Config $config } '*physical path*'
+    $script:sitePath = $config.DeploymentPath; $script:sitePool = 'Other'
+    Assert-Failure { Test-IisConfiguration -Config $config } '*application pool*'
+    $script:sitePool = 'ASAP'; $script:poolPresent = $false
+    Assert-Failure { Test-IisConfiguration -Config $config } '*not found*'
+    $script:poolPresent = $true
     Assert-True (Get-DevSqlOverrideSettings -Configuration ([pscustomobject]@{ AllowSqlDataLoss = $true; SqlDataLossTarget = [pscustomobject] $pins })).Enabled 'The persistent setting must enable without a per-run approval input.'
     $target = Assert-SqlDataLossTarget -Config $config -ExpectedTarget ($pins | ConvertTo-Json)
     Assert-True ($target.sqlServerName -eq $pins.sqlServerName) 'Validated target must bind canonical SQL server, not the connection alias.'
@@ -284,7 +297,7 @@ function New-DacpacPlan { param($Config, $Archive, $Target, $OutputDirectory, [s
 function Read-DeploymentState { param($StatePath) Event 'state-read'; return $null }
 function Get-HangfireSchemaVersion { param($SqlCmdPath, $ConnectionString) Event 'hangfire-read'; return 9 }
 function Set-NonProductionDatabaseRecovery { param($ExternalConfiguration, $SqlCmdPath, $ConnectionString) Event 'recovery-write' }
-function Invoke-TestDeployment { param($Config, $Archive, $NeedsDacpac, $NeedsHangfire, [switch] $AllowSqlDataLoss, $SqlPlan, $TimeoutSeconds, $PollSeconds) Event "activation:$([bool] $AllowSqlDataLoss)" }
+function Invoke-TestDeployment { param($Config, $Archive, $NeedsDacpac, $NeedsHangfire, [switch] $AllowSqlDataLoss, $SqlPlan, $Source, $TimeoutSeconds, $PollSeconds) Event "activation:$([bool] $AllowSqlDataLoss)" }
 $data.Config | Add-Member -NotePropertyName StagingRoot -NotePropertyValue ([IO.Path]::GetDirectoryName($EventsPath))
 $ValidateOnly = $Mode -eq 'validate'
 $SqlPlanOnly = $Mode -in @('candidate', 'candidate-enabled')
@@ -293,6 +306,7 @@ if ($Mode -eq 'invalid-plan') { $data.Plan.Hash = '0' * 64 }
 if ($Mode -eq 'malformed-setting') { $data.Config.AllowSqlDataLoss = 'true' }
 $SqlPlanOutputDirectory = [IO.Path]::GetDirectoryName($EventsPath)
 $ConfigPath = 'fixture'; $DeploymentZip = 'fixture'; $ExpectedZipSha256 = 'b' * 64
+$env:GITHUB_OUTPUT = "$EventsPath.outputs"
 $ExpectedCommitSha = 'a' * 40
 $ExpectedDeploymentLabel = if ($Mode -eq 'production-tag') { 'v1.0.0' } else { 'v1.0.0-test.27' }
 $ReadinessTimeoutSeconds = 1; $ReadinessPollSeconds = 1
@@ -340,7 +354,7 @@ $ReadinessTimeoutSeconds = 1; $ReadinessPollSeconds = 1
     function Get-HangfireSchemaVersion { param($SqlCmdPath, $ConnectionString) if ($script:fault -eq 'version') { return 8 }; return 9 }
     function Replace-WebPayload { param($StagedWebRoot, $DeploymentPath) $script:events.Add('replace'); if ($script:fault -eq 'replace') { throw 'fixture replace failure' } }
     function Test-Ready { param($Uri, $TimeoutSeconds, $PollSeconds) $script:events.Add('ready'); return $script:fault -ne 'ready' }
-    function Write-DeploymentState { param($Path, $Manifest, $ZipHash) $script:events.Add('state'); if ($script:fault -eq 'state') { throw 'fixture state failure' } }
+    function Write-DeploymentState { param($Path, $Manifest, $ZipHash, $Source) $script:events.Add('state'); if ($script:fault -eq 'state') { throw 'fixture state failure' } }
     $activation = @{ Config = $config; Archive = $archive; NeedsDacpac = $true; NeedsHangfire = $true; TimeoutSeconds = 1; PollSeconds = 1 }
     foreach ($initial in @('Started', 'Stopped')) {
         foreach ($fault in @('', 'backup', 'stop', 'dacpac', 'hangfire', 'version', 'replace', 'ready', 'state')) {

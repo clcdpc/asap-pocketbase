@@ -100,8 +100,12 @@ exact tested commit and a digest-before-extract gate. The deployment script's
 an IIS host. See [test-IIS activation](docs/implementation/test-iis-activation.md)
 for the separately pending runner/host task. The IIS job requires
 `ASAP_TEST_DEPLOYMENT_ENABLED=true` and an explicit deployment dispatch or a
-matching test-tag push; a push to `main` alone cannot deploy. This integration
-leaves deployment activation settings unchanged. The documented
+matching test-tag push, or a current `main` push after successful Full CI.
+Main snapshots use `test-<first 12 lowercase commit characters>`; explicit
+`vX.Y.Z-test.N` tags keep their exact labels. These deployment identities do
+not change application versions or create Git tags. The environment must allow
+the `main` branch and permit unattended jobs before automatic CD can run.
+This integration leaves deployment activation settings unchanged. The documented
 `test_cd_activation: pending_runner_setup` contract requires a separate
 authorized operational task to update its deployment evidence.
 

@@ -88,6 +88,117 @@ function Get-ManifestText {
     return [string] $property.Value
 }
 
+function Assert-CommitDeploymentLabel {
+    param([string] $Label, [string] $Commit)
+
+    if ($Label -imatch '^test-' -and
+        ($Commit -cnotmatch '^[0-9a-f]{40}$' -or $Label -cne "test-$($Commit.Substring(0, 12))")) {
+        throw 'Commit-based test deployment label must match the first 12 lowercase characters of the full commit SHA.'
+    }
+}
+
+function Get-DeploymentSource {
+    param([string] $Label, [string] $Commit)
+
+    Assert-CommitDeploymentLabel -Label $Label -Commit $Commit
+    if ($Label -cmatch '^test-') {
+        # A matching string is an identity, not permission. Only the gated
+        # workflow's main push or explicit main dispatch may use this identity.
+        if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne 'clcdpc/asap-pocketbase' -or
+            $env:ASAP_TEST_DEPLOYMENT_ENABLED -cne 'true' -or $env:GITHUB_REF -cne 'refs/heads/main' -or
+            $env:GITHUB_SHA -cne $Commit -or [string]::IsNullOrWhiteSpace($env:GITHUB_EVENT_PATH)) {
+            throw 'Commit-based test deployment requires the authorized GitHub main workflow context.'
+        }
+        try {
+            $event = Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
+            if ($event.repository.full_name -isnot [string] -or
+                $event.repository.full_name -cne $env:GITHUB_REPOSITORY -or $event.ref -isnot [string]) {
+                throw 'Wrong event repository or ref.'
+            }
+            if ($env:GITHUB_EVENT_NAME -ceq 'push' -and $event.ref -ceq 'refs/heads/main' -and
+                $event.after -is [string] -and $event.after -ceq $Commit -and
+                $event.deleted -is [bool] -and $event.deleted -eq $false) {
+                return 'automatic'
+            }
+            if ($env:GITHUB_EVENT_NAME -ceq 'workflow_dispatch') {
+                $requested = $event.inputs.deploy_test_iis
+                if ($event.ref -cin @('main', 'refs/heads/main') -and $env:EXPLICIT_TEST_DEPLOYMENT -ceq 'true' -and
+                    (($requested -is [string] -and $requested -ceq 'true') -or
+                    ($requested -is [bool] -and $requested -eq $true))) {
+                    return 'manual'
+                }
+            }
+        }
+        catch {
+            throw 'Commit-based test deployment has an invalid GitHub event receipt.'
+        }
+        throw 'Commit-based test deployment requires a main push or explicitly requested main dispatch.'
+    }
+    if ($env:GITHUB_EVENT_NAME -ceq 'workflow_dispatch') {
+        return 'manual'
+    }
+    if ($Label -cmatch '^v[^/]*\.[^/]*\.[^/]*-test\.[^/]*$') {
+        return 'tagged'
+    }
+    return 'manual'
+}
+
+function Get-GitHubDeploymentData {
+    param([Parameter(Mandatory = $true)] [string] $Path)
+
+    if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+        throw 'Automatic deployment freshness requires a read-only GitHub token.'
+    }
+    try {
+        return Invoke-RestMethod -Uri "https://api.github.com/repos/clcdpc/asap-pocketbase/$Path" -Method Get `
+            -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' } `
+            -TimeoutSec 30
+    }
+    catch {
+        # Do not include request headers or operational configuration in errors.
+        throw 'Could not verify automatic deployment freshness with GitHub; no activation is authorized.'
+    }
+}
+
+function Get-AutomaticDeploymentSkipReason {
+    param([string] $Commit, [object] $State)
+
+    $head = Get-GitHubDeploymentData -Path 'git/ref/heads/main'
+    if ($head.object.sha -cnotmatch '^[0-9a-f]{40}$') {
+        throw 'GitHub main head did not contain a full commit SHA.'
+    }
+    if ($head.object.sha -cne $Commit) {
+        return "Superseded: current main is $($head.object.sha); this artifact is $Commit."
+    }
+    if ($null -ne $State) {
+        $deployed = Get-ManifestText -Manifest $State -Name 'commitSha'
+        if ($deployed -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Recorded deployment commit is invalid; automatic freshness cannot be verified.'
+        }
+        if ($deployed -cne $Commit) {
+            $comparison = Get-GitHubDeploymentData -Path "compare/$deployed...$Commit"
+            if ($comparison.status -cnotin @('ahead', 'behind', 'diverged') -or
+                $comparison.merge_base_commit.sha -cnotmatch '^[0-9a-f]{40}$') {
+                throw 'GitHub deployment ancestry comparison is invalid.'
+            }
+            if ($comparison.status -cne 'ahead' -or $comparison.merge_base_commit.sha -cne $deployed) {
+                return "Superseded: recorded deployment $deployed is newer than or unrelated to $Commit; use an explicit dispatch for intentional redeployment."
+            }
+        }
+    }
+    return ''
+}
+
+function Write-DeploymentResult {
+    param([string] $Status, [string] $Reason)
+
+    Write-Host "Test-IIS status: $Status. $Reason"
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_OUTPUT)) {
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "deployment_status=$Status"
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "deployment_reason=$Reason"
+    }
+}
+
 function Get-FullPath {
     param(
         [Parameter(Mandatory = $true)]
@@ -255,6 +366,7 @@ function Test-DeploymentArchive {
         -not $manifestCommit.Equals($ExpectedCommit, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Deployment manifest identity does not match the expected workflow identity.'
     }
+    Assert-CommitDeploymentLabel -Label $manifestLabel -Commit $manifestCommit
 
     $buildUtc = Get-ManifestText -Manifest $manifest -Name 'buildUtc'
     $parsedBuildUtc = [DateTimeOffset]::MinValue
@@ -1129,7 +1241,9 @@ function Write-DeploymentState {
         [object] $Manifest,
 
         [Parameter(Mandatory = $true)]
-        [string] $ZipHash
+        [string] $ZipHash,
+
+        [string] $Source = 'manual'
     )
 
     $state = [ordered]@{
@@ -1139,6 +1253,14 @@ function Write-DeploymentState {
         deploymentZipSha256 = $ZipHash
         dacpacSha256 = Get-ManifestText -Manifest $Manifest -Name 'dacpacSha256'
         deployedUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+        source = $Source
+        outcome = 'success'
+        targetEnvironment = 'DEVWEB'
+        githubRunId = $env:GITHUB_RUN_ID
+        githubRunAttempt = $env:GITHUB_RUN_ATTEMPT
+        githubRunUrl = if ($env:GITHUB_REPOSITORY -ceq 'clcdpc/asap-pocketbase' -and $env:GITHUB_RUN_ID -match '^[0-9]+$') {
+            "https://github.com/clcdpc/asap-pocketbase/actions/runs/$($env:GITHUB_RUN_ID)"
+        } else { $null }
     }
     $json = $state | ConvertTo-Json -Depth 3
     [IO.File]::WriteAllText($Path, $json, [Text.UTF8Encoding]::new($false))
@@ -1152,6 +1274,7 @@ function Invoke-TestDeployment {
         [bool] $NeedsHangfire,
         [switch] $AllowSqlDataLoss,
         [object] $SqlPlan,
+        [string] $Source = 'manual',
         [int] $TimeoutSeconds,
         [int] $PollSeconds
     )
@@ -1193,7 +1316,7 @@ function Invoke-TestDeployment {
         if (-not (Test-Ready -Uri $Config.ReadinessUrl -TimeoutSeconds $TimeoutSeconds -PollSeconds $PollSeconds)) {
             throw 'Test-IIS /health/ready did not return HTTP 200 with status healthy within the bounded timeout.'
         }
-        Write-DeploymentState -Path $Config.StatePath -Manifest $Archive.Manifest -ZipHash $Archive.ZipHash
+        Write-DeploymentState -Path $Config.StatePath -Manifest $Archive.Manifest -ZipHash $Archive.ZipHash -Source $Source
     }
     catch {
         $failure = $_
@@ -1231,10 +1354,18 @@ if ($ValidateOnly) {
     }
 }
 
+$deploymentSource = Get-DeploymentSource -Label $ExpectedDeploymentLabel -Commit $ExpectedCommitSha
+if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_OUTPUT)) {
+    Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "deployment_source=$deploymentSource"
+}
+if ($SqlPlanOnly -and $ExpectedDeploymentLabel -cnotmatch '^v[^/]*\.[^/]*\.[^/]*-test\.[^/]*$') {
+    throw 'SQL plan-only diagnostics require a test release tag.'
+}
 $hostConfig = Read-HostConfiguration -Path $ConfigPath
 $allowSqlDataLoss = $hostConfig.AllowSqlDataLoss
-if ($allowSqlDataLoss -and $ExpectedDeploymentLabel -cnotmatch '^v[^/]*\.[^/]*\.[^/]*-test\.[^/]*$') {
-    throw 'The persistent DEV SQL override requires a test release tag; production labels are protected independently.'
+if ($allowSqlDataLoss -and $ExpectedDeploymentLabel -cnotmatch '^v[^/]*\.[^/]*\.[^/]*-test\.[^/]*$' -and
+    $ExpectedDeploymentLabel -cnotmatch '^test-[0-9a-f]{12}$') {
+    throw 'The persistent DEV SQL override requires a test release tag or authorized main commit identity; production labels are protected independently.'
 }
 if (($SqlPlanOnly -or $allowSqlDataLoss) -and
     ($null -eq $hostConfig.SqlDataLossTarget -or [string]::IsNullOrWhiteSpace($SqlPlanOutputDirectory))) {
@@ -1252,16 +1383,25 @@ try {
         -WebRoot $archive.WebRoot `
         -ExternalApplicationConfigPath $hostConfig.ExternalApplicationConfigPath
     $null = Test-IisConfiguration -Config $hostConfig
+    $state = if (-not $SqlPlanOnly) { Read-DeploymentState -StatePath $hostConfig.StatePath } else { $null }
+    if ($deploymentSource -ceq 'automatic') {
+        $skipReason = Get-AutomaticDeploymentSkipReason -Commit $ExpectedCommitSha -State $state
+        if ($skipReason) {
+            Write-DeploymentResult -Status 'skipped' -Reason $skipReason
+            exit 0
+        }
+    }
     $sqlPlan = $null
     if ($SqlPlanOnly -or $allowSqlDataLoss) {
         $target = Assert-SqlDataLossTarget -Config $hostConfig -ExpectedTarget ($hostConfig.SqlDataLossTarget | ConvertTo-Json -Compress)
         if ($allowSqlDataLoss) {
-            Write-Warning 'Persistent DEV SQL data-loss override is ENABLED and permits the complete DACPAC plan, including data loss. It remains enabled across test tags until the environment setting is disabled.'
+            Write-Warning 'Persistent DEV SQL data-loss override is ENABLED and permits the complete DACPAC plan, including data loss. It remains enabled across authorized test deployments until the environment setting is disabled.'
         }
         $sqlPlan = New-DacpacPlan -Config $hostConfig -Archive $archive -Target $target `
             -OutputDirectory $SqlPlanOutputDirectory -AllowSqlDataLoss
         if ($SqlPlanOnly) {
             Write-Host 'SQL PLAN ONLY: inspect deployment.sql, deployment.xml and plan.json. No SQL, recovery option, IIS state, web payload or deployment state was changed.'
+            Write-DeploymentResult -Status 'plan-only' -Reason 'SQL diagnostics only; no activation was attempted.'
             exit 0
         }
         try {
@@ -1273,7 +1413,6 @@ try {
             throw
         }
     }
-    $state = Read-DeploymentState -StatePath $hostConfig.StatePath
     $hangfireVersion = Get-HangfireSchemaVersion `
         -SqlCmdPath $hostConfig.SqlCmdPath `
         -ConnectionString $hostConfig.HangfireDatabaseConnectionString
@@ -1300,6 +1439,15 @@ try {
         }
     }
 
+    # Planning can take long enough for another merge. Check again immediately
+    # before the first SQL/IIS/web mutation, while holding workflow concurrency.
+    if ($deploymentSource -ceq 'automatic') {
+        $skipReason = Get-AutomaticDeploymentSkipReason -Commit $ExpectedCommitSha -State $state
+        if ($skipReason) {
+            Write-DeploymentResult -Status 'skipped' -Reason $skipReason
+            exit 0
+        }
+    }
     Set-NonProductionDatabaseRecovery `
         -ExternalConfiguration $hostConfig.ExternalConfiguration `
         -SqlCmdPath $hostConfig.SqlCmdPath `
@@ -1311,13 +1459,16 @@ try {
         (Get-ManifestText -Manifest $state -Name 'versionOrLabel').Equals($ExpectedDeploymentLabel, [StringComparison]::Ordinal) -and
         (Test-Ready -Uri $hostConfig.ReadinessUrl -TimeoutSeconds $ReadinessTimeoutSeconds -PollSeconds $ReadinessPollSeconds)) {
         Write-Host 'The exact test-IIS artifact is already recorded and ready; deployment is idempotently complete.'
+        Write-DeploymentResult -Status 'already-deployed' -Reason 'Exact artifact is already recorded and healthy; no new activation.'
         exit 0
     }
 
     Invoke-TestDeployment -Config $hostConfig -Archive $archive -NeedsDacpac $needsDacpac -NeedsHangfire $needsHangfire `
         -AllowSqlDataLoss:$allowSqlDataLoss -SqlPlan $sqlPlan `
+        -Source $deploymentSource `
         -TimeoutSeconds $ReadinessTimeoutSeconds -PollSeconds $ReadinessPollSeconds
     Write-Host "Test-IIS deployment succeeded for $($archive.Manifest.versionOrLabel) at $($archive.Manifest.commitSha)."
+    Write-DeploymentResult -Status 'deployed' -Reason 'Activation and HTTPS readiness succeeded; deployment state recorded.'
 }
 finally {
     Remove-Item -LiteralPath $stagingPath -Recurse -Force -ErrorAction SilentlyContinue

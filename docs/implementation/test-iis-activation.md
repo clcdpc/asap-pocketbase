@@ -4,6 +4,22 @@ This guide prepares a clean Windows Server as the nonproduction/test IIS host
 for ASAP. Activation remains `test_cd_activation: pending_runner_setup` until a
 real deployment completes and its evidence is recorded.
 
+After host/runner activation and the administrator configuration below, each
+push to `main` automatically deploys its exact tested package to DEVWEB after
+the required Full CI and `Build, test and package` gate succeed. No dispatch,
+version increment or tag is needed. Trusted test-evidence reuse remains valid;
+the current commit is always built, published, packaged and integrity checked.
+Failed, cancelled, skipped or incomplete qualification cannot deploy.
+
+Automatic snapshots and manual dispatches from `main` use
+`test-<first 12 lowercase characters of the full commit SHA>`, for example
+`test-8f3c2a1d92b4`. The manifest separately retains the complete 40-character
+`commitSha`. Explicit `vX.Y.Z-test.N` tag deployments retain the exact tag as
+`versionOrLabel`. Formal `vX.Y.Z` release numbering remains Git-tag-authoritative:
+these test snapshot labels are not SemVer application/assembly versions, and
+ordinary merges never create tags or change release versions. Production
+release/deployment behavior is unchanged.
+
 The responsibility boundary is deliberate:
 
 - ASAP bootstrap owns ASAP directories and initial host configuration.
@@ -258,12 +274,40 @@ normalized value with the exact staged web payload.
 2. Install it as a Windows service using the deployment identity.
 3. Assign labels `self-hosted`, `windows`, `x64`, and `asap-test-iis`.
 4. Restrict it to deployment; do not use it for PR or hosted build jobs.
-5. Configure the `asap-test-iis` repository environment, reviewers, and tag
-   policy.
+5. Configure the `asap-test-iis` repository environment as described below.
 6. Confirm the runner can reach GitHub and reports online.
 
 The deployment job downloads the exact hosted-build artifact. It does not
 check out or build the repository on the IIS host.
+
+### Required GitHub environment policy
+
+An administrator must allow the **branch** `main` in the `asap-test-iis`
+environment's selected deployment branches/tags policy, retaining the existing
+**tag** rule `v*.*.*-test.*`. A tag-only policy blocks automatic main pushes
+and manual main dispatches even when the repository enable gate is true.
+Keep unrelated branches and production tags outside the allowed deployment
+policy. Manual deployments from other reviewed refs still work where the
+environment explicitly permits those refs; they do not gain a DEV SQL override
+merely from an arbitrary label.
+
+Unattended main deployment requires removing required reviewer approval and
+any custom protection rule that demands human intervention. Account for any
+configured wait timer: it delays deployment but does not itself require human
+action. Review existing protection rules and change them deliberately if needed;
+the normal PR review and required Full CI gates remain in place. The workflow cannot bypass an
+environment approval or a branch/tag restriction. Repository implementation
+does not change live environment policies, settings, secrets or runner
+configuration. Host provisioning, runner registration/activation and first
+successful live verification remain separately authorized operational work.
+
+The job uses the environment with `deployment: false`: built-in environment
+policy and variables still apply, but GitHub does not create an implicit
+deployment record that could mark a safely skipped job as a successful new
+activation. The host state and Actions summaries are authoritative. Custom
+deployment-protection GitHub Apps require a deployment object and are
+incompatible with this mode; an administrator must review any such proposed
+protection before enabling unattended CD.
 
 ## Step 4 - Validate
 
@@ -301,15 +345,41 @@ ASAP_TEST_DEPLOYMENT_ENABLED=true
 ```
 
 Keep the gate unset or false while any prerequisite is incomplete.
+To disable automatic deployments, set `ASAP_TEST_DEPLOYMENT_ENABLED=false`
+(or remove it). This same gate also disables manual/tag activation. Do not
+cancel an activation already modifying SQL/IIS; let it finish, then change the
+gate before the next run. There is no per-run data-loss approval toggle.
 
 ## Step 6 - Deploy And Verify
 
-Use an exact reviewed test tag such as `v1.0.0-test.1`. Dispatch `.NET baseline`
-from GitHub Actions, or run:
+Once enabled, merge a reviewed PR to `main` and follow its `.NET baseline` push
+run. Full CI success queues the tested package for DEVWEB without another
+manual action. For an intentional manual deployment of `main`, run:
+
+```text
+gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref main -f deploy_test_iis=true
+```
+
+Explicit reviewed test-release tags such as `v1.0.0-test.1` continue to deploy
+on matching tag pushes. They can also be dispatched from GitHub Actions:
 
 ```text
 gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref v1.0.0-test.1 -f deploy_test_iis=true
 ```
+
+To intentionally redeploy a previously tested revision, dispatch its existing
+reviewed test tag or other explicitly permitted immutable ref and verify the
+full commit in the resulting manifest/summary. Alternatively rerun the
+deployment job from its original manual/tag workflow while the exact tested
+artifact is still retained (14 days). Manual/tag deployment bypasses the
+automatic freshness rule and still requires the enable/environment gates,
+successful Full CI and all package/host checks. A rerun of an old automatic
+main push remains automatic and will skip if superseded. If its artifact has
+expired, dispatch the permitted ref to qualify and package that commit again.
+Reruns and dispatches at historical refs execute that revision's workflow and
+packaged installer. These new safeguards are not retroactive; use only reviewed
+revisions with the required deployment policy, and never assume an old artifact
+contains the current authorization/freshness checks.
 
 The hosted job builds, tests, publishes, packages, and hashes the exact commit.
 The ZIP excludes host-owned `application.json`, `deployment.json`, keys, logs,
@@ -318,6 +388,33 @@ validates the two application-config pointers and existing IIS/SQL state, and
 preflights the protected SQL plan before stopping the app pool. It retains the
 previous web payload before stopping IIS, publishes required schema changes, replaces files, starts the
 pool, and polls `/health/ready` with normal TLS validation.
+
+### Automatic freshness and concurrency
+
+The existing hosted reporting job first checks that a main push still matches
+live `main`, avoiding an unnecessary privileged-runner allocation for an
+already superseded artifact. Under the shared `asap-test-iis` concurrency
+group, the installer checks live `main` and the last successful deployed
+commit before SQL planning and again immediately before the first live
+mutation. The candidate must still be `main` and descend from the recorded
+commit (or equal it). Older/divergent revisions, including a backward force
+push, are skipped; use an explicit manual dispatch for an intentional change
+of revision. GitHub API/ancestry uncertainty fails closed before mutation.
+
+GitHub's native `queue: max` retains up to 100 pending deployment jobs, with
+`cancel-in-progress: false`. The default one-pending replacement policy could
+discard a newer eligible run when an older workflow finishes late. The bounded
+native queue avoids that loss without an external queue; final freshness checks
+remain necessary because concurrency order is not guaranteed. A merge arriving
+after the final check may let the active deployment finish; the newer qualified
+run then follows. New merges never cancel an in-progress activation.
+Exceeding GitHub's 100-pending limit needs operator investigation/rerun; this
+workflow does not provide an unbounded queue.
+
+The pinned actionlint version predates native `queue`; workflow lint suppresses
+only that exact unsupported-key diagnostic. The executable safety contract
+requires `queue: max` solely on the non-cancelling IIS job and rejects invalid
+values or placement. Other workflow lint diagnostics remain errors.
 
 ### Persistent DEV SQL data-loss setting
 
@@ -346,7 +443,7 @@ or credentials into this policy or into logs.
 
 `AllowSqlDataLoss` must be a JSON boolean. Missing or `false` keeps
 `BlockOnPossibleDataLoss=True`; malformed values fail before deployment effects.
-Bootstrap writes `false`. **True persists across subsequent test tag deployments
+Bootstrap writes `false`. **True persists across subsequent authorized test deployments
 until an operator changes it to false.** There is no automatic reset, approval
 hash input, or per-run approval prompt. Setting it false restores the protected
 publish path for subsequent deployments. It does not alter an already running
@@ -354,7 +451,9 @@ deployment, so change it between runs.
 
 Production safety is independent of remembering to turn the setting off:
 
-- the override requires a test-tag label and the fixed DEVWEB machine and
+- the override requires an explicit test-tag label, or a strictly matched
+  `test-<12 lowercase hex>` identity from the gated GitHub main push/manual-main
+  dispatch receipt bound to the full tested commit, and the fixed DEVWEB machine and
   `devasap.clcohio.org` hostname, even if another host copies the setting;
 - the actual configured site/pool/path and HTTPS binding must match;
 - the external application configuration must have a real boolean
@@ -364,13 +463,16 @@ Production safety is independent of remembering to turn the setting off:
 - system databases, ambiguous aliases and failover/file-attachment routing
   are rejected. An environment label/boolean alone is never proof of DEV.
 
-Normal `v1.0.0-test.NN` tag pushes use this host setting automatically. Existing
-activation, allowed-tag environment policy, exact-commit full CI and artifact
+Normal main pushes, explicit manual-main dispatches and `v1.0.0-test.NN` tag
+pushes use this host setting automatically. A commit-based label alone grants
+no permission: PRs, arbitrary branches, mismatched event SHAs, missing workflow
+authorization and malformed labels fail before host access. Existing
+activation, allowed-branch/tag environment policy, exact-commit Full CI and artifact
 verification still apply. No GitHub Actions variable or new permission on
 repository/environment variables is required. This does not change production
 deployment configuration or repository security settings.
 The IIS activation job is serialized for this target and never cancels an
-already running activation when another test tag arrives.
+already running activation when another main merge or test tag arrives.
 
 ### Plans and DEV authorization
 
@@ -379,7 +481,7 @@ it is not a three-column SQL switch. Before stopping IIS or changing recovery
 options, the installer generates and retains the complete `deployment.sql`,
 `deployment.xml` and `plan.json`. Logs identify that the persistent override is
 enabled and display plan alerts and operation counts. The workflow uploads
-SQL-plan artifacts for both tag and manual runs, including blocked runs, for
+SQL-plan artifacts for automatic, tag and manual runs, including blocked runs, for
 seven days.
 
 On the independently verified DEV target, `AllowSqlDataLoss=true` authorizes
@@ -436,7 +538,21 @@ After the workflow succeeds, verify:
 - Data Protection keys exist and the runtime identity can use the certificate;
 - the initial super-admin can complete Entra sign-in;
 - `deployment-state.json` records the expected label, exact commit, ZIP hash,
-  DACPAC hash, and deployment time.
+  DACPAC hash, deployment time, source (`automatic`, `manual` or `tagged`),
+  successful outcome, target environment `DEVWEB` and Actions run ID/attempt/URL
+  where available. Existing state files remain readable; new fields are optional
+  on old records.
+
+The Actions deployment summary shows Environment, Deployment, full Commit link,
+Source, Status, reason and run link. `Success` means activation, readiness and
+state recording completed. `Already deployed and healthy` means the exact
+recorded artifact passed readiness without a new activation. `SQL plan only`
+is diagnostic. `Skipped (superseded; no activation)` identifies stale automatic
+runs and leaves the last successful state untouched; a green safely-skipped
+job is not evidence of a new deployment. Read the state file on DEVWEB to
+identify the last successful installation, and follow its run URL to CI
+evidence. After a failed mutation, inspect SQL and web files too; the last
+successful state is not proof that those files remain installed or healthy.
 
 That evidence supports changing `test_cd_activation` from
 `pending_runner_setup` to `active`. Re-running the exact recorded artifact is
@@ -444,6 +560,14 @@ idempotent when readiness is healthy. Backups are not automatically pruned.
 
 ## Failure Behavior
 
+- For superseded runs, read the hosted/deployment summary reason and follow
+  the current main run. A pending eligible run remains queued; do not cancel an
+  active mutation to accelerate it. Failed freshness/API verification is a
+  failure, not a skipped success. For a genuine queue-limit/missing-artifact
+  issue, use a permitted intentional dispatch after checking the recorded state.
+- For failed activation, inspect the failing Actions step, uploaded SQL plan
+  (seven-day retention), retained host plan/backup paths and last successful
+  `deployment-state.json`. No failed/skipped run writes a successful state.
 - Package, configuration, path, IIS, SQL, or pointer preflight failures occur
   before the app pool is stopped and leave the live site untouched.
 - A failed backup leaves the pool untouched. A stop failure before any schema

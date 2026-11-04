@@ -17,6 +17,7 @@ $functionNames = @(
     'Get-Sha256Hex',
     'Get-RequiredText',
     'Get-ManifestText',
+    'Assert-CommitDeploymentLabel',
     'Get-FullPath',
     'Test-PathWithin',
     'Get-WebPayloadIdentity',
