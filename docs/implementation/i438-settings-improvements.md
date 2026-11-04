@@ -32,10 +32,10 @@ the parent Codex session.
 | 8 | #447 | Effective conditional options; Node 13/13, Release build, checkpoint 4/4 unaffected and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after focus/test-wrapper corrections | `3ec9a0d` |
 | 9 | #444 | Nearby single-token picker; focused Node, Settings 13/13, Release and final SQL/browser 1/1 PASS | Luna MAX clear, including actual open-popup and inherited renders | `d70170e` |
 | 10 | #399 | Cards/previews/contextual insertion; Node, eight unique checkpoint owners, final Staff/Campaign 3/3 and native-focus 1/1 PASS | Luna MAX / Astra HIGH / Terra MAX clear after recorded persistence, feedback and focus corrections | `43efa9b` |
-| 11 | #435 | SQL 18/18 and complete Staff 74 states/16 roster flags/eight native proofs PASS; shared accessibility corrections verified in #436 | Luna MAX / Astra HIGH clear; Terra actual desktop/mobile/dark/native renders clear | `3054851`, corrections in #406/#436 |
+| 11 | #435 | SQL 18/18 and complete Staff 74 states/16 roster flags/eight native proofs PASS; final owned-fixture correction passes five-case SQL regression below | Luna MAX / Astra HIGH clear; Terra actual desktop/mobile/dark/native renders clear; final fixture delta independently reviewed | `3054851`, corrections in #406/#436 and final SQL audit below |
 | 12 | #406 | Filter/counts/preserved drafts; complete Staff PASS; final shared notice/pointer/focus checks PASS in #436 | Luna MAX / Astra HIGH clear; Terra actual major and eight native renders clear | `a8c0e7d`, corrections in #436 |
 | 13 | #433 | SQL/browser 2/2 PASS, 14 states; Library summary contrast corrected and rechecked in #436 R1 | Luna MAX / Astra HIGH clear; Terra actual groups and both summaries clear | `99469b7`, contrast correction in #436 |
-| 14 | #436 | Focused R3 and Node checks PASS; carried 436-6 independently reproduced and corrected as C438-1 in the final integrated audit below | Luna MAX / Astra HIGH / Terra MAX issue reviews clear; fresh Astra XHIGH verifies final keyboard correction | `7d1b247`, final audit correction below |
+| 14 | #436 | Focused R3 and Node checks PASS; carried 436-6 independently reproduced and corrected as C438-1 in the final integrated audit below | Luna MAX / Astra HIGH / Terra MAX issue reviews clear; fresh Astra XHIGH verifies final keyboard correction | `7d1b247`, `ba2cb6f` |
 | 15 | #391 | Actual before/after spacing; seven Node files, Settings/native R2 and final Presentation R3 PASS; supplemental visible-logo/Library-roster results tracked in PR #454 | Luna MAX source and Terra MAX actual matrix clear; integrated results remain separately identified | `406b0ca` |
 
 ## Environment and integration
@@ -1197,3 +1197,45 @@ frontend/.NET/SQL/browser populations, both supplemental spacing captures, the
 six sequential acceptance suites, full CI and the auditor's final receipt review
 are recorded in PR #454 at the tested revision. No component or source pass
 substitutes for those complete executions.
+
+## Final SQL audit — contraction fixture ownership
+
+The first complete non-browser run at `ba2cb6f` executes the exact selected 1,436
+UIDs with unique execution IDs: **1,433 PASS / three FAIL / zero skipped**,
+1,759.571s wall (MTP 29m17.926s). The failed full receipt is retained as
+`results/i438-final-dotnet-r1-failed.trx`, with its log and parsed summary.
+All three failures occur before behavior assertions: the assignment race,
+automatic-rule race and invalid-authentication-email policy cases collide with
+an existing active Library 2/book rule during fixture seeding.
+
+Independent Sol MAX and Astra XHIGH traces identify **C438-2 P2, test fixture
+ownership**. The unified contraction variant correctly changes its owner's email
+and retains the in-scope active rule. Shared teardown searches by the old mutable
+email and misses that owner. The preserved TRX confirms both contraction variants
+pass before the three seed failures. This is a teardown defect; retaining the
+in-scope rule is required production behavior.
+
+The contraction test now owns rule cleanup in `finally`, parameterized by its
+captured immutable staff ID and limited to active rows owned by that fixture.
+It uses the fixture clock and preserves earlier deactivation timestamps.
+Verification readers/connections and HTTP responses dispose before cleanup.
+The obsolete email-based shared rule update is removed. Both DataRows, the seed
+prefix, all 25 assertions and the race helpers remain unchanged; production,
+schema and the unique constraint are untouched. Luna MAX and Astra XHIGH
+independently clear the actual diff, including exact comparison of the behavior
+block after indentation normalization.
+
+- Focused Release rebuild PASS, zero warnings/errors, 33.741s wall.
+- Supported native discovery verifies the exact five expected UIDs.
+- One real-SQL fixture run PASS **5/5, zero failures/skips**, 30.765s wall
+  (MTP 29.645s). False and True contraction finish before all three previously
+  failing consumers, which now pass. Exact UIDs and five unique execution IDs
+  match discovery. Raw receipt: `results/i438-fixture-r2.trx` and its summary.
+  Tested source SHA-256 is
+  `34602a96ebcc7c4d763693ad2fcf631ad0416e2692735d3725b4fa67955c5154`.
+
+The focused correction does not convert the earlier full run into a pass.
+Final C438-2 disposition requires successful execution of the complete same
+population; its final-revision receipt, remaining integrated gates and independent
+closure review are maintained in PR #454. Final results are recorded there so
+result-only documentation edits do not change the tested source revision.
