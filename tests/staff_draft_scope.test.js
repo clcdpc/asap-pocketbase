@@ -22,13 +22,24 @@ const path = require('node:path');
   assert.equal(scope.isDirty(), true, 'consumption grants permission without clearing at dispatch');
   siblingDirty = true;
   assert.equal(scope.admit({ consumes: own }).reason, 'competing_draft');
+  assert.equal(scope.admit({ consumes: own, preserves: [sibling] }).allowed, true);
+  assert.equal(scope.isDirty(), true, 'preserving a sibling grants admission without accepting either draft');
+  assert.equal(scope.admit({ consumes: null, preserves: [own, sibling] }).reason, 'invalid_preservation');
+  assert.equal(scope.admit({ consumes: own, preserves: 'all' }).reason, 'invalid_preservation');
+  const third = scope.register({ root, isDirty: () => true });
+  assert.equal(scope.admit({ consumes: own, preserves: [sibling] }).reason, 'competing_draft',
+    'an explicit preservation list never permits an undeclared dirty owner');
+  scope.release(third);
   value = 'baseline';
   assert.equal(scope.admit({ consumes: sibling }).allowed, true);
   const foreign = createDraftScope().register({ root, isDirty: () => true });
   assert.equal(scope.admit({ consumes: foreign }).reason, 'invalid_owner');
+  assert.equal(scope.admit({ consumes: own, preserves: [foreign] }).reason, 'invalid_preservation');
   siblingRoot.isConnected = false;
   assert.equal(scope.isDirty(), false);
   assert.equal(scope.admit({ consumes: sibling }).allowed, false);
+  assert.equal(scope.admit({ consumes: own, preserves: [sibling] }).reason, 'invalid_preservation',
+    'a detached preserved owner cannot authorize a command');
   scope.release(own);
   assert.equal(scope.admit({ consumes: own }).allowed, false);
   scope.dispose();

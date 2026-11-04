@@ -566,10 +566,19 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(70, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
-            foreach (var flag in new[] { "disclosures", "independentDrafts", "singleEmail", "atomicSave", "conflictRecovery", "lifecycle", "create", "nativeValidationOwner", "keyboardFocus", "responsiveContainment" })
+            Assert.HasCount(74, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            foreach (var flag in new[] { "disclosures", "independentDrafts", "singleEmail", "atomicSave", "conflictRecovery", "lifecycle", "create", "nativeValidationOwner", "keyboardFocus", "responsiveContainment", "activeFilter", "scopedCounts", "hiddenDrafts", "ownedFeedbackRecovery", "independentSaves", "preservedReviewRecovery" })
             {
                 Assert.IsTrue(report.RootElement.GetProperty("staffRoster").GetProperty(flag).GetBoolean(), flag);
+            }
+            var rosterZoom = report.RootElement.GetProperty("staffRoster").GetProperty("nativeZoom").EnumerateArray().ToArray();
+            Assert.HasCount(8, rosterZoom);
+            foreach (var state in rosterZoom)
+            {
+                Assert.AreEqual(2, state.GetProperty("actualBrowserZoom").GetInt32());
+                Assert.AreEqual(2, state.GetProperty("cdpZoom").GetInt32());
+                Assert.IsTrue(state.GetProperty("focus").GetProperty("active").GetBoolean());
+                Assert.IsTrue(state.GetProperty("focus").GetProperty("unobscured").GetBoolean());
             }
             Assert.IsTrue(report.RootElement.GetProperty("rejectionNotificationAndReopen").GetBoolean());
             var analytics = report.RootElement.GetProperty("analytics");

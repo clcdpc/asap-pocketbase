@@ -32,8 +32,8 @@ the parent Codex session.
 | 8 | #447 | Effective conditional options; Node 13/13, Release build, checkpoint 4/4 unaffected and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after focus/test-wrapper corrections | `3ec9a0d` |
 | 9 | #444 | Nearby single-token picker; focused Node, Settings 13/13, Release and final SQL/browser 1/1 PASS | Luna MAX clear, including actual open-popup and inherited renders | `d70170e` |
 | 10 | #399 | Cards/previews/contextual insertion; Node, eight unique checkpoint owners, final Staff/Campaign 3/3 and native-focus 1/1 PASS | Luna MAX / Astra HIGH / Terra MAX clear after recorded persistence, feedback and focus corrections | `43efa9b` |
-| 11 | #435 | Implemented; SQL 18/18 PASS; browser dark-feedback contrast and remaining renders pending at roster checkpoint | Luna MAX / Astra HIGH source and SQL clear; Terra partial renders pending | This commit |
-| 12 | #406 | Pending | Pending Luna MAX / Astra HIGH / Terra MAX | Pending |
+| 11 | #435 | Implemented; SQL 18/18 PASS; carried dark/feedback/independent-save findings fixed; full roster qualification pending 406-4/5 | Luna MAX / Astra HIGH source and SQL clear; Terra 13 major renders inspected, native pending | `3054851`, roster correction in #406 |
+| 12 | #406 | Implemented; source/Node clear; actual native focus obstruction and Add feedback pending shared accessibility checkpoint | Luna MAX / Astra HIGH narrow source clear; Terra 13 major + two native renders inspected | This commit |
 | 13 | #433 | Pending | Pending Luna MAX / Astra HIGH / Terra MAX | Pending |
 | 14 | #436 | Pending | Pending Luna MAX / Terra MAX | Pending |
 | 15 | #391 | Pending | Pending Luna MAX / Terra MAX | Pending |
@@ -654,8 +654,116 @@ execution has no skips. Full CI and test-IIS activation were skipped. Raw job
   says No changes. Carry this owned-feedback recovery defect into the roster
   checkpoint as well. The warning was correct in the earlier competing-drafts
   state; recovery must clear its own notices without erasing newer feedback.
+- Terra also raised **435-7 P2, pending disposition**: two dirty mounted rows
+  each block the other's Save, while the bar instructs the user to save each
+  editor. The prior source review accepted truthful competing-draft blocking
+  under the existing admission contract; actual-render review challenges its
+  compatibility with independent draft preservation. The #406 checkpoint must
+  assess and resolve this explicitly, preserving Settings/create/lifecycle
+  admission, other mounted values, rowversions and actor-change safeguards.
 - Discovery intentionally replaces the prior single contraction test UID
   `1881d8b7-150c-80c5-8046-afd3585ce756` with retained legacy-POST false row
   `1e734a89-07a8-8807-8a18-55c622bbbeeb` and new unified-PUT true row
   `17aef5ff-92b9-8837-9fde-aeb02e695aad`. Final population comparison must
   account for this retained-behavior replacement and discover current counts.
+
+The `3054851` checkpoint passed
+[draft CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/41778850983):
+zero-warning/error Release build, 107 native SQL-independent cases with zero
+failures/skips and all 69 unique frontend files. Its 141 Python checks include
+the expected pre-build population class skip. Raw job `126405509549` and summary
+are retained outside Git. Draft CI does not supersede the recorded roster browser
+failure or qualify the final combined revision.
+
+## #406 — active-only roster and preservation checkpoint (in progress)
+
+- The unchecked Show inactive accounts control filters the accepted authorized
+  roster in place. Counts and distinct empty-active/empty-roster messages use
+  that scope; the control is excluded from saved Settings and load snapshots.
+  Hidden editors retain their DOM/drafts and become natively disabled, with
+  focus returned to the filter before an account disappears.
+- The checkpoint includes carried 435-5/6/7 corrections: scoped dark feedback,
+  generation-owned blocked-action notice cleanup and explicit preservation of
+  registered mounted sibling row drafts for a coherent PUT. Global Settings,
+  creation and lifecycle admission keep their defaults; actor-context-changing
+  saves cannot retire another row's draft. Confirmed receipt reconciliation and
+  header Refresh support failed roster reloads without discarding siblings.
+- Initial Release build passed with zero warnings/errors (31.01s). Parent's
+  Settings sweep passed all 13 discovered files (`i406-settings-node.log`).
+  The implementer passed final Staff Access, postcommit401, draft admission and
+  271 navigation journeys; the earlier 42-file Staff sweep preceded the final
+  recovery refinements. No final full-frontend claim is made from that sweep.
+- The existing Staff browser case is discovered exactly once; its updated
+  contract requires 74 major states, 16 roster flags and eight actual native
+  200% roster states at physical widths 1280/1440. Those runtime and rendered
+  results remain pending.
+- Astra cycle 1 independently reproduced **406-1 P2, unresolved**: a PUT
+  receipt without `active` passes the old guard, then a failed GET lets the new
+  reconciliation classify an inactive account as Active and clear its draft.
+  Validate all status/scope evidence needed for reconciliation before recording
+  commitment; malformed responses must retain draft/uncertain recovery. Other
+  reviewed integrity paths are clear, and three focused Node files passed.
+- Luna independently confirmed 406-1, including an opposite boolean `active`
+  value: PUT must preserve the target's accepted activation state. Its complete
+  source review otherwise clears filtering/counts/empty states, scope, native
+  fieldset ownership and preserved sibling/reload recovery.
+- **406-2, test evidence correction pending**: the new native helper scrolled
+  the focused control into view before measuring/capturing it. Capture the
+  actual keyboard focus/hit and viewport before axe or manual scrolling; no
+  production focus defect is established until that corrected test runs.
+- **406-3 P3, unresolved**: a blocked-action notice can outlive its consumed
+  draft handle after confirmed discard/reload because admission then reports
+  invalid_owner rather than allowed. Retire that owned notice safely and retain
+  newer feedback. All three corrections are in one bounded cycle-1 batch.
+- The frozen correction rejects missing/nonboolean/opposite PUT activation,
+  verifies consumed nullable profile/role/Int32 scope fields and matches the
+  requested PUT result before commitment. Thirteen malformed-receipt cases
+  retain accepted state, raw drafts and uncertainty through failed review.
+  Four retired-handle/newer-message cases verify owned notice retirement.
+  The native helper captures bounds/hit and the viewport PNG before axe, with
+  no artificial scroll repair. **406-1 and 406-3 source findings are resolved**;
+  406-2's test correction is present, pending its real native execution.
+- Luna independently passed Staff Access and draft-scope checks; Astra passed
+  those plus postcommit401. Both narrow reviews are clear. Final affected
+  navigation checks passed 15/15, retaining substantive assertions and adding
+  only missing valid-DTO fixture fields. Pure frontend refresh R2 passed, and
+  the parent's final Settings sweep passed 13/13 (`i406-settings-node-r2.log`).
+  C# and the 74/16/eight browser contract are unchanged since the initial build.
+  The final actual Staff browser receipt is running, not yet qualified.
+- Actual Staff browser receipt `i406-staff-browser.trx` **FAILED 1/1**, zero
+  skips, 182.894s (case 161.294s). It reached all 13 major roster captures and
+  the native 1280 collapsed state, then exposed **406-4 P2, unresolved**: the
+  first dirty edit makes the floating global save bar cover the focused Email
+  address. Actual browser/CDP zoom and DPR are 2; CSS viewport is 632x402, CSS
+  zoom and pinch scale are 1. The active field bounds are y362.81..404.01 and
+  its center (316,383.41) hits the bar's action div. Axe, images, overflow and
+  horizontal control containment are clean at that checkpoint. Parent viewed
+  the actual pre-axe PNG and extracted `i406-native-1280-failure.json`.
+- Actual artifacts: `staff-031aae43b96747da91ed739ea18dd39b`. Thirteen major
+  roster PNGs cover desktop light/dark, filtering and hidden drafts, selected
+  library, preserved review, tablet, mobile and Add staff; only two of eight
+  native states were captured. The final report and 74/16/eight assertions
+  were not reached, so this is not a passing browser qualification.
+- Following the bounded direction, carry 406-4 into #436's planned shared
+  focus work, alongside the already recorded first-dirty-bar/template risks.
+  Keep the strict pre-scroll native check and recheck all eight states after
+  the correction. Do not restore manual scrolling as evidence.
+- Terra additionally found **406-5 P3, unresolved**: mobile Add staff retains
+  Email address is required after a valid email is entered. Its screenshot
+  follows the empty-submit then fill sequence at staff.cjs 3663–3667. Carry
+  field-owned validation-message recovery into the shared checkpoint without
+  clearing newer server/uncertain feedback.
+- Chevron review note is a reference conflict, not an open defect: older #406
+  specifies right/down, but newer pinned #435 uses down/up. The task explicitly
+  gives #435's compact layout precedence; retain that orientation and the
+  correctly exposed expanded/control relationships.
+- Terra inspected all 13 major roster PNGs and both actual native images.
+  **435-5, 435-6 and 435-7 are resolved in that observed workflow**: readable
+  dark success feedback, no obsolete competing warning after recovery/save,
+  and one row accepted while the other draft stays mounted and is later saved.
+  Tablet/mobile reflow, the filter/counts, selected-library roster and compact
+  reference composition are clear. Terra and Luna independently confirm the
+  actual 406-4 obstruction; Terra confirms 406-5. Both remain explicitly open.
+- Commit this bounded checkpoint and proceed to #433. Full #435/#406 browser
+  qualification awaits #436's shared focus/owned-validation corrections and a
+  passing complete Staff receipt, including all six unreached native states.

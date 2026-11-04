@@ -520,6 +520,10 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-staff-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; min-width: 0; margin-bottom: 10px; }
 .settings-staff-toolbar h3, .settings-staff-create h4, .settings-staff-editor h4 { margin: 0; }
 .settings-staff-toolbar .form-actions { margin: 0; gap: 8px; }
+.settings-staff-filter { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 14px; }
+.settings-staff-filter label { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.settings-staff-filter p { margin: 0; color: var(--muted); font-size: .84rem; }
+.settings-staff-filter p:empty { display: none; }
 .settings-staff-create { min-width: 0; margin-bottom: 14px; padding: 14px; border: 1px solid var(--line); border-top: 3px solid var(--brand); }
 .settings-staff-create .settings-grid { margin-top: 12px; }
 .settings-staff-list { display: grid; min-width: 0; background: var(--surface); }
@@ -543,6 +547,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-staff-footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; min-width: 0; border-top: 1px solid var(--line); margin-top: 20px; padding-top: 16px; }
 .settings-staff-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; min-width: 0; }
 .settings-staff-editor .settings-result:empty, #staff-access-status:empty { display: none; }
+.settings-staff-roster .settings-result.warning { color: var(--warning); }
 .settings-cleanup-result { margin: 0; color: var(--muted); font-size: .86rem; }
 @media (max-width: 48rem) {
   .settings-staff-columns { grid-template-columns: minmax(0, 1fr) auto 20px; gap: 6px 8px; }
@@ -556,7 +561,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
   .settings-staff-editor { padding: 14px; }
 }
 @media (prefers-color-scheme: dark) {
-  #settings-staff .settings-staff-roster { --surface: #202c36; --soft: #253641; --ink: #edf2f5; --muted: #b3c1cc; --line: #465763; --focus: #ffd48b; --danger: #ffb1ad; --warning: #ffd18b; color-scheme: dark; color: var(--ink); background: var(--surface); }
+  #settings-staff .settings-staff-roster { --surface: #202c36; --soft: #253641; --ink: #edf2f5; --muted: #b3c1cc; --line: #465763; --focus: #ffd48b; --danger: #ffb1ad; --warning: #ffd18b; --success: #9be0b5; color-scheme: dark; color: var(--ink); background: var(--surface); }
   #settings-staff .settings-staff-toolbar { padding: 12px; }
   #settings-staff .settings-staff-roster :is(input, select, .secondary-button, .danger-button) { color: var(--ink); background: var(--surface); border-color: #8295a3; }
   #settings-staff .settings-staff-roster .danger-button { color: var(--danger); border-color: var(--danger); }

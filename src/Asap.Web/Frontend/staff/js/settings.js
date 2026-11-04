@@ -306,6 +306,8 @@ export function createSettingsController({
     enabledLibraries: root.querySelector('#enabled-libraries-checkbox-container'),
     staffStatus: root.querySelector('#staff-access-status'),
     staffRefresh: root.querySelector('#staff-refresh'),
+    staffShowInactive: root.querySelector('#staff-show-inactive'),
+    staffCounts: root.querySelector('#staff-roster-counts'),
     staffCreate: root.querySelector('#staff-add-submit'),
     staffCreateToggle: root.querySelector('#staff-add-toggle'),
     staffCreateForm: root.querySelector('#staff-add-form'),
@@ -387,6 +389,7 @@ export function createSettingsController({
   let logoPreviewGeneration = 0;
   let copyGeneration = 0;
   let notificationGeneration = 0, staffStatusGeneration = 0;
+  let blockedDraftNotice = null;
   let templateValidationTarget = null;
 
   function releaseLogoDraft() {
@@ -709,13 +712,22 @@ export function createSettingsController({
     return operation?.isCurrent() && isSettingsContextCurrent(operation.context);
   }
 
-  function beginSettingsMutation(slot, consumes) {
+  function clearBlockedDraftNotice() {
+    blockedDraftNotice?.clear();
+    blockedDraftNotice = null;
+  }
+
+  function beginSettingsMutation(slot, consumes, preserves = []) {
     if (disposed || !state.staff || !state.visible || !root.isConnected || state.pendingMutation || state.awaitingReload) return null;
-    if (!drafts.admit({ consumes }).allowed) {
-      notify('Save or discard the competing Settings draft before this action.', 'warning'); return null;
+    const declaration = { consumes, preserves };
+    if (!drafts.admit(declaration).allowed) {
+      clearBlockedDraftNotice();
+      blockedDraftNotice = { declaration, clear: notify('Save or discard the competing Settings draft before this action.', 'warning') };
+      return null;
     }
+    clearBlockedDraftNotice();
     const context = captureSettingsContext();
-    const operation = { slot, context, owner: context.owner, outcome: 'pending',
+    const operation = { slot, context, owner: context.owner, outcome: 'pending', preserves,
       isCurrent: () => isSettingsContextCurrent(context) };
     holdSettingsMutation(operation);
     return operation;
@@ -775,6 +787,7 @@ export function createSettingsController({
   }
 
   function cancelSettingsOperations() {
+    clearBlockedDraftNotice();
     emailTest.invalidate();
     state.loading = false;
     placeholders.clear(); patronPlaceholders.clear(); suggestionLimitPlaceholders.clear();
@@ -787,6 +800,8 @@ export function createSettingsController({
     staffDrafts.clear(); rosterDrafts.clear(); staffRows.clear(); staffCreateDraft = null;
     state.staffCanAssignSuperAdmin = false;
     dom.staffUsers.replaceChildren();
+    dom.staffShowInactive.checked = false;
+    dom.staffCounts.textContent = '';
     setStaffCreateOpen(false);
     for (const slot of SETTINGS_OPERATION_SLOTS) reads.begin(slot).abort();
   }
@@ -946,8 +961,13 @@ export function createSettingsController({
     const user = response?.user;
     const cleanup = response?.cleanup;
     const cleanupCounts = ['rulesDeactivated', 'openTitleClaimsCleared', 'openAdditionalCopyClaimsCleared'];
-    return isCanonicalPositiveInt64Id(user?.id) &&
+    return user !== null && typeof user === 'object' && !Array.isArray(user) &&
+      isCanonicalPositiveInt64Id(user.id) &&
       typeof user.version === 'string' && user.version.length > 0 &&
+      typeof user.active === 'boolean' && ['staff', 'admin', 'super_admin'].includes(user.role) &&
+      Number.isSafeInteger(user.organizationId) && user.organizationId <= 2147483647 &&
+      (user.role === 'super_admin' ? user.organizationId === 1 : user.organizationId > 1) &&
+      ['userPrincipalName', 'displayName', 'notificationEmail'].every(key => user[key] === null || typeof user[key] === 'string') &&
       (expectedStaffId === null || user.id === String(expectedStaffId)) &&
       cleanup !== null && typeof cleanup === 'object' && !Array.isArray(cleanup) &&
       cleanupCounts.every(key => Number.isSafeInteger(cleanup[key]) && cleanup[key] >= 0) &&
@@ -1007,11 +1027,15 @@ export function createSettingsController({
 
   function snapshotDrafts() {
     return JSON.stringify([...dom.form.querySelectorAll('input, select, textarea')]
-      .filter(control => control.id !== 'patron-code-picker')
+      .filter(control => control.id !== 'patron-code-picker' && control !== dom.staffShowInactive)
       .map(control => [control.value, control.checked]));
   }
 
   function updateDirtyState() {
+    if (blockedDraftNotice) {
+      const admission = drafts.admit(blockedDraftNotice.declaration);
+      if (admission.allowed || admission.reason === 'invalid_owner' || admission.reason === 'invalid_preservation') clearBlockedDraftNotice();
+    }
     const dirty = isDirty();
     const settingsDirty = hasSettingsDraft();
     const needsAttention = dirty || state.awaitingReload || state.outcomeUncertain || state.saving;
@@ -1037,7 +1061,10 @@ export function createSettingsController({
     emailTest.sync();
   }
 
-  function draftChanged(event) { drafts.touch(event?.target); updateDirtyState(); }
+  function draftChanged(event) {
+    if (event?.target === dom.staffShowInactive) return;
+    drafts.touch(event?.target); updateDirtyState();
+  }
 
   function rawSection(section) {
     const library = state.data?.stored?.libraryOverride;
@@ -1525,7 +1552,10 @@ export function createSettingsController({
       dirty: () => controls.some((control, index) => control.value !== record.baseline[index]),
       sync() {
         const dirty = record.dirty();
-        editor.disabled = editor.hidden || state.activePanel !== 'staff';
+        const hidden = property(record.user, 'active') === false && !dom.staffShowInactive.checked;
+        if (hidden && row.contains(document.activeElement)) dom.staffShowInactive.focus({ preventScroll: true });
+        row.hidden = hidden;
+        editor.disabled = editor.hidden || row.hidden || state.activePanel !== 'staff';
         unsaved.hidden = !dirty;
         syncHelp.hidden = clean(property(record.user, 'userPrincipalName')) === clean(property(record.user, 'notificationEmail'));
         save.disabled = (!dirty && syncHelp.hidden) || record.conflict || state.awaitingReload || Boolean(state.pendingMutation);
@@ -1580,8 +1610,8 @@ export function createSettingsController({
     const setOpen = open => {
       if (!open && editor.contains(document.activeElement)) summary.focus({ preventScroll: true });
       editor.hidden = !open;
-      editor.disabled = !open || state.activePanel !== 'staff';
       summary.setAttribute('aria-expanded', String(open));
+      record.sync();
     };
     listen(summary, 'click', () => setOpen(editor.hidden));
     listen(editor, 'keydown', event => {
@@ -1617,8 +1647,10 @@ export function createSettingsController({
     record.reset();
     // The baseline changes only after this account's accepted save/cancel/reload.
     record.draft = drafts.register({ root: row, kind: 'staff editor', isDirty: () =>
-      row.isConnected && state.staff !== null && !state.awaitingReloadMutation && record.dirty() });
-    staffDrafts.set(record.draft, () => row.isConnected && !state.awaitingReloadMutation && record.dirty());
+      row.isConnected && state.staff !== null && (!state.awaitingReloadMutation ||
+        state.awaitingReloadMutation.preserves?.includes(record.draft)) && record.dirty() });
+    staffDrafts.set(record.draft, () => row.isConnected && (!state.awaitingReloadMutation ||
+      state.awaitingReloadMutation.preserves?.includes(record.draft)) && record.dirty());
     rosterDrafts.add(record.draft);
     record.accept(user, true);
     return record;
@@ -1639,7 +1671,6 @@ export function createSettingsController({
     }
     populateStaffCreateControls();
     if (!staffCreateDraft) resetStaffCreateDraft();
-    dom.staffUsers.querySelector('.settings-empty')?.remove();
     for (const user of [...state.staffUsers].sort(staffRosterOrder)) {
       const id = stringValue(property(user, 'id'));
       const record = staffRows.get(id) || createStaffRow(user);
@@ -1650,10 +1681,24 @@ export function createSettingsController({
     ordered.forEach((record, index) => {
       if (dom.staffUsers.children[index] !== record.row) dom.staffUsers.insertBefore(record.row, dom.staffUsers.children[index] || null);
     });
-    if (ordered.length === 0) dom.staffUsers.append(node('p', { className: 'settings-empty', text: state.staffAccessLoaded
-      ? `No staff users found for ${scopedStaffLabel()}.` : 'Open or refresh the roster to load staff users.' }));
-    if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+    updateStaffVisibility();
+    if (focused?.isConnected && !focused.closest('[hidden]') && document.activeElement !== focused) focused.focus({ preventScroll: true });
     else if (focused && !focused.isConnected) dom.staffRefresh.focus({ preventScroll: true });
+  }
+
+  function updateStaffVisibility() {
+    for (const record of staffRows.values()) record.sync();
+    const active = state.staffUsers.filter(user => property(user, 'active') !== false).length;
+    const inactive = state.staffUsers.length - active;
+    dom.staffCounts.textContent = state.staffAccessLoaded
+      ? `${active} active ${active === 1 ? 'account' : 'accounts'} · ${inactive} inactive ${dom.staffShowInactive.checked
+        ? `${inactive === 1 ? 'account' : 'accounts'} shown` : 'hidden'}` : '';
+    dom.staffUsers.querySelector('.settings-empty')?.remove();
+    if (state.staffAccessLoaded && state.staffUsers.length > 0 && (active > 0 || dom.staffShowInactive.checked)) return;
+    const message = !state.staffAccessLoaded ? 'Open or refresh the roster to load staff users.'
+      : state.staffUsers.length === 0 ? `No staff users found for ${scopedStaffLabel()}.`
+      : `No active staff accounts for ${scopedStaffLabel()}. Select Show inactive accounts to view ${inactive === 1 ? 'the inactive account' : 'inactive accounts'}.`;
+    dom.staffUsers.append(node('p', { className: 'settings-empty', text: message }));
   }
 
   function populate(data) {
@@ -1889,14 +1934,22 @@ export function createSettingsController({
 
   async function mutateStaffUser(path, options, successMessage, staffId, consumes) {
     const focused = document.activeElement;
-    const mutation = beginSettingsMutation('administration-staff-mutation', consumes);
+    const expectedActive = property(staffRows.get(String(staffId))?.user, 'active') !== false;
+    // Only a mounted roster PUT preserves other mounted roster drafts. A change
+    // to the actor's session identity retires those owners, so it must wait.
+    const keepsActor = String(staffId) !== String(state.staff?.id) ||
+      (clean(options.body.email)?.toLowerCase() === clean(state.staff?.authenticationEmail)?.toLowerCase() &&
+        options.body.role === state.staff?.role && Number(options.body.organizationId) === Number(state.staff?.organizationId));
+    const preserves = options.method === 'PUT' && rosterDrafts.has(consumes) && keepsActor
+      ? [...staffRows.values()].filter(record => record.row.isConnected && record.dirty() && record.draft !== consumes).map(record => record.draft) : [];
+    const mutation = beginSettingsMutation('administration-staff-mutation', consumes, preserves);
     if (!mutation) return;
     mutation.staffId = staffId;
     setStaffStatus(successMessage.replace(/\.$/, '') + '...');
     try {
       const response = await authorizedJson(path, options);
       if (!validStaffLifecycleResponse(response, options.method, staffId)) throw unconfirmedResponseError();
-      if (options.method === 'PUT' && !validStaffUpdateResponse(response.user, options.body)) throw unconfirmedResponseError();
+      if (options.method === 'PUT' && !validStaffUpdateResponse(response.user, options.body, expectedActive)) throw unconfirmedResponseError();
       const cleanup = response.cleanup;
       const committedMessage = `${successMessage} ${cleanupSummary(cleanup)}`;
       recordCommitted(mutation, committedMessage);
@@ -1908,6 +1961,12 @@ export function createSettingsController({
       state.lastStaffCleanup = { staffId: stringValue(property(response?.user ?? response?.data?.user, 'id') || staffId), cleanup };
       const record = staffRows.get(String(staffId));
       if (record) record.accept(response.user, true);
+      // The validated receipt is accepted state even if the following GET
+      // fails. Keep its counts and membership within the current roster scope.
+      state.staffUsers = state.staffUsers.filter(user => String(property(user, 'id')) !== response.user.id);
+      const scope = scopedStaffOrganizationId();
+      if (!scope || String(response.user.organizationId) === scope) state.staffUsers.push(response.user);
+      renderStaffUsers();
       const refreshed = await loadStaffAccess({ silent: true, owner: mutation, preserve: true });
       if (isSettingsOperationCurrent(mutation)) setStaffStatus(refreshed
         ? committedMessage : `${committedMessage} Staff access could not be refreshed.`,
@@ -1934,8 +1993,11 @@ export function createSettingsController({
         updateDirtyState();
         if (mutation.outcome === 'committed' && !state.awaitingReload && state.activePanel === 'staff' &&
             (document.activeElement === document.body || document.activeElement === focused)) {
-          const fallback = staffId === null ? dom.staffCreateToggle : staffRows.get(String(staffId))?.summary;
-          const target = focused?.isConnected && !focused.matches(':disabled') ? focused : fallback;
+          const record = staffRows.get(String(staffId));
+          const fallback = staffId === null ? dom.staffCreateToggle
+            : record?.row.hidden ? dom.staffShowInactive : record?.summary || dom.staffRefresh;
+          const target = focused?.isConnected && focused !== document.body && !focused.matches(':disabled') &&
+            !focused.closest('[hidden]') ? focused : fallback;
           target?.focus({ preventScroll: true });
         }
       }
@@ -1967,10 +2029,10 @@ export function createSettingsController({
     return true;
   }
 
-  function validStaffUpdateResponse(user, values) {
-    return clean(user.userPrincipalName)?.toLowerCase() === values.email?.toLowerCase() &&
+  function validStaffUpdateResponse(user, values, active) {
+    return user.active === active && clean(user.userPrincipalName)?.toLowerCase() === values.email?.toLowerCase() &&
       user.notificationEmail === user.userPrincipalName && clean(user.displayName) === values.displayName &&
-      user.role === values.role && Number(user.organizationId) === values.organizationId;
+      user.role === values.role && user.organizationId === values.organizationId;
   }
 
   async function updateStaffUser(id, version, values, draft) {
@@ -2813,6 +2875,11 @@ export function createSettingsController({
         notify('Wait for the settings change to finish before reloading.', 'warning');
         return;
       }
+      const review = state.awaitingReloadMutation || state.unconfirmedMutation;
+      if (review?.slot === 'administration-staff-mutation' && review.preserves?.length > 0) {
+        await loadStaffAccess({ preserve: true });
+        return;
+      }
       if (isDirty() && !await confirmSettings('Reload settings?', 'Discard unsaved settings changes and reload?', 'Discard changes and reload', 'danger')) return;
       await load();
     });
@@ -2839,10 +2906,15 @@ export function createSettingsController({
     });
     const refreshStaff = async () => {
       if (state.pendingMutation) return;
+      const review = state.awaitingReloadMutation || state.unconfirmedMutation;
+      if (review?.slot === 'administration-staff-mutation' && review.preserves?.length > 0) {
+        return loadStaffAccess({ preserve: true });
+      }
       if (hasStaffDraft() && !await confirmSettings('Refresh staff roster?', 'Discard unsaved staff edits and refresh the roster?', 'Discard edits and refresh', 'danger')) return;
       return loadStaffAccess({ discard: true });
     };
     listen(dom.staffRefresh, 'click', refreshStaff);
+    listen(dom.staffShowInactive, 'change', updateStaffVisibility);
     listen(dom.staffAuditHistory, 'click', () => {
       if (disposed || !state.visible || state.activePanel !== 'staff' || !state.staff) return;
       onStaffAuditHistory(scopedStaffOrganizationId(), { ownerKey: actorKey(state.staff) });
@@ -2890,8 +2962,9 @@ export function createSettingsController({
     state.visible = true;
     activatePanel(panel);
     populateScopeOptions();
-    if (state.awaitingReloadMutation?.slot === 'administration-staff-mutation' && state.data && String(state.data.orgId) === String(state.scope)) {
-      await loadStaffAccess({ discard: true });
+    const staffReview = state.awaitingReloadMutation || state.unconfirmedMutation;
+    if (staffReview?.slot === 'administration-staff-mutation' && state.data && String(state.data.orgId) === String(state.scope)) {
+      await loadStaffAccess(staffReview.preserves?.length > 0 ? { preserve: true } : { discard: true });
     } else if (state.awaitingReload || !state.data || String(state.data.orgId) !== String(state.scope)) await load();
     else configureScopedFields();
   }

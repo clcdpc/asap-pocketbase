@@ -2263,7 +2263,7 @@ for (const boundary of ['authenticationEmail', 'role', 'organizationId']) {
           const body = JSON.parse(init.body);
           ui.setStaff(boundary === 'authenticationEmail' ? { authenticationEmail: 'changed@example.org', version: 'access-v2' }
             : boundary === 'role' ? { role: 'staff', version: 'access-v2' } : { organizationId: 2, version: 'access-v2' });
-          return response(200, { user: { ...ui.readStaff(), userPrincipalName: body.email, notificationEmail: body.email,
+          return response(200, { user: { ...ui.readStaff(), active: true, userPrincipalName: body.email, notificationEmail: body.email,
             displayName: body.displayName, role: body.role, organizationId: body.organizationId },
             cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 } });
         }
@@ -2507,7 +2507,7 @@ for (const copy of [false, true]) {
     test(`authoritative projections: ${view} after Staff Access ${change}`, () =>
       fixture(`?stage=${copy ? 'additional_copies' : 'suggestion'}&scope=2`, async ui => {
         let committed = false, queueReads = 0;
-        const staffB = { id: '21', displayName: 'Staff B', userPrincipalName: 'b@example.org',
+        const staffB = { id: '21', displayName: 'Staff B', userPrincipalName: 'b@example.org', notificationEmail: 'b@example.org',
           role: 'staff', organizationId: 2, active: true, version: 'b-v1' };
         ui.setApi(({ pathname, init }) => {
           if (pathname.endsWith('/users') && init.method === 'GET') {

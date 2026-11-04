@@ -306,3 +306,116 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
   assert.deepEqual(errors, []); assert.deepEqual(externalRequests, []);
   return states;
 };
+
+// The Staff roster runs from its own browser journey, using the same real
+// extension zoom boundary without rerunning the unrelated workflow scenarios.
+module.exports.verifyRoster = async function verifyStaffRosterNativeZoom({ baseURL, artifacts, headers, activeId, inactiveId }) {
+  const states = [], errors = [], externalRequests = [];
+  const extension = path.join(__dirname, 'native-zoom-extension');
+  const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
+  for (const width of [1280, 1440]) {
+    const context = await chromium.launchPersistentContext(path.join(artifacts, `roster-zoom-profile-${width}`), {
+      channel: 'chromium', headless: true, viewport: null, extraHTTPHeaders: headers,
+      args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`, `--window-size=${width},900`]
+    });
+    try {
+      await context.route('**/*', route => {
+        if (new URL(route.request().url()).origin === new URL(baseURL).origin) return route.continue();
+        externalRequests.push(route.request().url()); return route.abort();
+      });
+      const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+      const page = context.pages()[0] || await context.newPage();
+      page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
+      await page.goto(`${baseURL}/staff/?stage=settings&settingsScope=system#settings-staff`, { waitUntil: 'networkidle' });
+      await page.waitForFunction(() => document.getElementById('settings-version').value && !document.getElementById('staff-refresh').disabled);
+      const ratio = await page.evaluate(() => devicePixelRatio);
+      const zoom = await worker.evaluate(async origin => {
+        const tab = (await chrome.tabs.query({})).find(tab => tab.url.startsWith(origin));
+        if (!tab) throw new Error('The actual application tab must exist.');
+        await chrome.tabs.setZoomSettings(tab.id, { mode: 'automatic', scope: 'per-tab' });
+        await chrome.tabs.setZoom(tab.id, 2);
+        return chrome.tabs.getZoom(tab.id);
+      }, new URL(baseURL).origin);
+      assert.equal(zoom, 2);
+      await page.waitForFunction(prior => Math.abs(devicePixelRatio / prior - 2) < .01, ratio);
+      const row = page.locator(`.settings-staff-row[data-staff-id="${activeId}"]`);
+      const inactive = page.locator(`.settings-staff-row[data-staff-id="${inactiveId}"]`);
+      const filter = page.getByRole('checkbox', { name: 'Show inactive accounts', exact: true });
+      const scanRoster = async (name, focused) => {
+        // Capture the keyboard/editing result before axe can scroll the page.
+        // A manual scroll here would hide focus occlusion from the dirty bar.
+        const focus = await focused.evaluate(control => {
+          const bounds = control.getBoundingClientRect(), x = (bounds.left + bounds.right) / 2, y = (bounds.top + bounds.bottom) / 2;
+          const hit = document.elementFromPoint(x, y);
+          return { active: control === document.activeElement, inViewport: x >= 0 && x < innerWidth && y >= 0 && y < innerHeight,
+            unobscured: hit === control || control.contains(hit), center: { x, y },
+            bounds: { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom },
+            hit: hit ? { tag: hit.localName, id: hit.id, className: String(hit.className) } : null };
+        });
+        const session = await context.newCDPSession(page), metrics = await session.send('Page.getLayoutMetrics');
+        const capture = await session.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        await fs.writeFile(path.join(artifacts, `native-zoom-${width}-${name}.png`), Buffer.from(capture.data, 'base64'));
+        await session.detach();
+        await page.evaluate(axe);
+        const violations = await page.evaluate(async () => (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact)));
+        const geometry = await page.evaluate(() => {
+          const controls = [...document.querySelectorAll('.settings-staff-roster input, .settings-staff-roster select, .settings-staff-roster button')]
+            .filter(control => control.getBoundingClientRect().height > 0).map(control => {
+              const bounds = control.getBoundingClientRect();
+              const owner = control.closest('.settings-staff-row, .settings-staff-toolbar, .settings-staff-filter, #staff-add-form').getBoundingClientRect();
+              return { name: control.getAttribute('aria-label') || control.id || control.textContent.trim(),
+                contained: bounds.left >= owner.left - 1 && bounds.right <= owner.right + 1 && bounds.left >= -1 && bounds.right <= innerWidth + 1 };
+            });
+          return { controls, width: innerWidth, height: innerHeight, devicePixelRatio, visualViewportScale: visualViewport.scale,
+            htmlZoom: getComputedStyle(document.documentElement).zoom, bodyZoom: getComputedStyle(document.body).zoom,
+            overflow: document.documentElement.scrollWidth > innerWidth,
+            images: [...document.images].filter(image => image.getClientRects().length).every(image => image.complete && image.naturalWidth > 0) };
+        });
+        const receipt = { physicalWidth: width, name, actualBrowserZoom: zoom, cdpZoom: metrics.visualViewport.zoom,
+          violations, ...geometry, focus };
+        const details = `${width}/${name}: ${JSON.stringify(receipt)}`;
+        assert.equal(metrics.visualViewport.zoom, 2, details);
+        assert.ok(Math.abs(geometry.devicePixelRatio / ratio - 2) < .01, details);
+        assert.equal(geometry.visualViewportScale, 1, details); assert.equal(geometry.htmlZoom, '1', details); assert.equal(geometry.bodyZoom, '1', details);
+        assert.deepEqual(violations, [], details); assert.equal(geometry.overflow, false, details); assert.equal(geometry.images, true, details);
+        assert.ok(geometry.controls.length > 0, details); assert.deepEqual(geometry.controls.filter(control => !control.contained), [], details);
+        assert.equal(focus.active, true, details); assert.equal(focus.inViewport, true, details); assert.equal(focus.unobscured, true, details);
+        states.push(receipt);
+      };
+      assert.equal(await filter.isChecked(), false); assert.equal(await inactive.isHidden(), true);
+      assert.equal(await page.locator('.settings-staff-summary[aria-expanded="true"]').count(), 0);
+      const summary = row.locator('.settings-staff-summary');
+      await summary.focus(); await scanRoster('staff-roster-collapsed', summary);
+      await page.keyboard.press('Enter'); await page.keyboard.press('Tab');
+      const email = row.getByLabel(/^Email address/);
+      assert.equal(await email.evaluate(input => input === document.activeElement), true);
+      await email.fill('native.roster.draft@example.org');
+      await scanRoster('staff-roster-expanded', email);
+      await filter.focus(); await page.keyboard.press('Space');
+      await inactive.locator('.settings-staff-summary').press('Enter');
+      const inactiveEmail = inactive.getByLabel(/^Email address/), mounted = await inactiveEmail.elementHandle();
+      await inactiveEmail.fill('invalid-native-inactive');
+      await filter.evaluate(input => { input.checked = false; input.dispatchEvent(new Event('change', { bubbles: true })); });
+      assert.equal(await inactive.isHidden(), true); assert.equal(await mounted.evaluate(input => input.willValidate), false);
+      await scanRoster('staff-roster-filter-hidden', filter);
+      await page.keyboard.press('Space');
+      assert.equal(await inactiveEmail.inputValue(), 'invalid-native-inactive');
+      assert.equal(await mounted.evaluate(input => input === document.querySelector(`[data-staff-id="${input.closest('article').dataset.staffId}"] input[type="email"]`)), true);
+      assert.equal(await inactive.locator('fieldset').evaluate(fieldset => fieldset.disabled), false);
+      await inactive.getByRole('button', { name: 'Cancel', exact: true }).click(); await page.keyboard.press('Escape');
+      const add = page.locator('#staff-add-toggle'); await add.press('Enter');
+      const createEmail = page.locator('#staff-add-email');
+      assert.equal(await createEmail.evaluate(input => input === document.activeElement), true);
+      await createEmail.fill('native.create.draft@example.org');
+      await scanRoster('staff-roster-add', createEmail);
+      await page.keyboard.press('Escape');
+      assert.equal(await add.evaluate(button => button === document.activeElement), true);
+      await add.press('Enter'); assert.equal(await createEmail.inputValue(), 'native.create.draft@example.org');
+      await page.locator('#staff-add-cancel').click();
+      await row.getByRole('button', { name: 'Cancel', exact: true }).click();
+      assert.equal(await page.locator('#settings-save-title').textContent(), 'No changes');
+    } finally { await context.close(); }
+  }
+  assert.deepEqual(errors, []); assert.deepEqual(externalRequests, []);
+  return states;
+};

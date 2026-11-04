@@ -97,6 +97,7 @@ async function waitFor(predicate) {
 }
 
 function openRow(row) {
+  assert.equal(row.hidden, false, 'Reveal an inactive account before opening its editor.');
   const disclosure = row.querySelector('.settings-staff-summary');
   if (disclosure.getAttribute('aria-expanded') === 'false') disclosure.click();
   return row;
@@ -278,6 +279,15 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.equal(auditNavigation[0][0], null, 'System Staff roster intentionally opens aggregate authorized history');
     assert.deepStrictEqual([...document.querySelectorAll('.settings-staff-heading strong')].map(item => item.textContent),
       ['aaron@example.org', 'Ada Admin', 'Inactive Selector'], 'Sort the actual visible fallback name, not empty displayName.');
+    const inactiveFilter = document.getElementById('staff-show-inactive');
+    assert.equal(inactiveFilter.checked, false);
+    assert.deepEqual([...document.querySelectorAll('.settings-staff-row')].filter(row => !row.hidden).map(row => row.dataset.staffId), ['22', '20']);
+    assert.equal(document.getElementById('staff-roster-counts').textContent, '2 active accounts · 1 inactive hidden');
+    inactiveFilter.click();
+    assert.equal(document.querySelector('[data-staff-id="21"]').hidden, false);
+    assert.equal(document.getElementById('staff-roster-counts').textContent, '2 active accounts · 1 inactive account shown');
+    inactiveFilter.click();
+    assert.equal(controller.isDirty(), false, 'A roster display preference is never a Settings draft.');
     assert.deepStrictEqual([...document.querySelectorAll('#staff-add-organization option')].map(option => option.textContent),
       ['Library Three', 'Library Two']);
     assert.equal(document.getElementById('staff-access-status').textContent, '', 'Roster loading completion is quiet.');
@@ -302,9 +312,9 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     const otherRow = document.querySelector('[data-staff-id="22"]');
     openRow(otherRow);
     edit(otherRow.querySelector('input[type="text"]'), 'Competing name');
-    [...initialRow.querySelectorAll('button')].find(button => button.textContent === 'Save changes').click();
+    [...initialRow.querySelectorAll('button')].find(button => button.textContent === 'Deactivate').click();
     await flush();
-    assert.equal(requests.length, beforeCompetingAction, 'a unified save cannot consume another account draft');
+    assert.equal(requests.length, beforeCompetingAction, 'lifecycle cannot consume another account draft');
     assert.equal(initialEmail.value, 'unsaved@example.org');
     [...otherRow.querySelectorAll('button')].find(button => button.textContent === 'Cancel').click();
     initialEmail.value = originalEmail;
@@ -386,6 +396,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
 
     const inactiveRow = [...document.querySelectorAll('.settings-staff-row')]
       .find(row => row.textContent.includes('Inactive Selector'));
+    inactiveFilter.click();
     openRow(inactiveRow);
     [...inactiveRow.querySelectorAll('button')].find(button => button.textContent === 'Reactivate').click();
     await waitFor(() => Boolean(reactivateBody));
@@ -529,8 +540,8 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       assert.equal(button(row, 'Save changes').disabled, true);
       edit(name, 'Zoe Zulu'); edit(email, 'one@example.org'); edit(role, 'admin'); edit(library, '3');
       edit(other.querySelector('input[type="text"]'), 'Other draft');
-      button(row, 'Save changes').click(); await flush();
-      assert.equal(writes.length, 1, 'competing row draft blocks the atomic save');
+      button(row, 'Deactivate').click(); await flush();
+      assert.equal(writes.length, 1, 'lifecycle remains blocked by dirty roster drafts');
       disclosure.click(); openRow(row);
       assert.equal(name.value, 'Zoe Zulu');
       assert.equal(other.querySelector('input[type="text"]').value, 'Other draft');
@@ -568,6 +579,233 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       await waitFor(() => !mounted.controller.hasUnconfirmedOutcome());
       assert.equal(name.value, 'Zoe Zulu', 'explicit authoritative review resolves the uncertain draft');
       mounted.controller.dispose(); mounted.dom.window.close();
+    }
+
+    {
+      const actor = { id: '61', tenantId: 'roster-filter', authenticationEmail: 'ACTOR@EXAMPLE.ORG', role: 'super_admin', organizationId: 1 };
+      let roster = [
+        staffUser(61, { userPrincipalName: 'actor@example.org', notificationEmail: 'actor@example.org', displayName: 'Current Actor', role: 'super_admin', organizationId: 1 }),
+        staffUser(62, { displayName: 'Same Name', organizationId: 3 }),
+        staffUser(63, { displayName: 'Same Name', active: false, organizationId: 2 })
+      ];
+      const writes = [], reads = [];
+      let holdRead = false, failRead = false, releaseRead, announcement = '', announcementGeneration = 0;
+      const filtered = await setupController(settingsModule, frontendRoot, actor, async (url, options = {}) => {
+        if (url.endsWith('/session')) return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
+        if (url.includes('/settings?')) {
+          const data = settingsData(new URL(url, 'http://localhost').searchParams.get('orgId'));
+          data.stored.systemSettings.libraryOrgIds = [2, 3, 4];
+          data.stored.systemSettings.enabledLibraryOrgIds = [2, 3, 4];
+          return response(200, data);
+        }
+        if (url.endsWith('/organizations')) return response(200, { data: [
+          { id: 1, name: 'System', parentOrganizationId: null, organizationCodeId: 1, isActive: true, version: 'o1' },
+          { id: 2, name: 'Library Two', parentOrganizationId: 1, organizationCodeId: 2, isActive: true, version: 'o2' },
+          { id: 3, name: 'Library Three', parentOrganizationId: 1, organizationCodeId: 2, isActive: true, version: 'o3' },
+          { id: 4, name: 'Empty Library', parentOrganizationId: 1, organizationCodeId: 2, isActive: true, version: 'o4' }
+        ] });
+        if (url.includes('/patron-codes?')) return response(200, { data: [] });
+        if (url.startsWith('/api/asap/staff/users') && options.method === 'GET') {
+          reads.push(url);
+          if (failRead) return response(503, { message: 'Roster refresh unavailable' });
+          const scope = new URL(url, 'http://localhost').searchParams.get('orgId');
+          const result = () => response(200, { canAssignSuperAdmin: true,
+            users: roster.filter(user => !scope || String(user.organizationId) === scope).map(user => ({ ...user })) });
+          if (holdRead) return new Promise(resolve => { releaseRead = () => resolve(result()); });
+          return result();
+        }
+        if (['PUT', 'DELETE', 'POST'].includes(options.method)) {
+          const id = url.match(/\/users\/(\d+)/)?.[1], body = JSON.parse(options.body);
+          const target = roster.find(user => user.id === id);
+          assert.ok(target, 'Only the requested existing account can mutate.');
+          assert.equal(body.version, target.version, 'Every independent save retains its own accepted rowversion.');
+          writes.push({ id, method: options.method, body });
+          const saved = options.method === 'PUT' ? { ...target, userPrincipalName: body.email, notificationEmail: body.email,
+            displayName: body.displayName, role: body.role, organizationId: body.organizationId }
+            : { ...target, active: options.method !== 'DELETE' };
+          saved.version = `saved-${writes.length}`;
+          roster = roster.map(user => user.id === id ? saved : user);
+          return response(200, { user: saved, cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 } });
+        }
+        throw new Error(`Unexpected filtered roster request: ${url}`);
+      }, { announce(message) {
+        announcement = message;
+        const generation = ++announcementGeneration;
+        return () => { if (announcementGeneration === generation) announcement = ''; };
+      } });
+      document.getElementById('workspace').hidden = false;
+      document.getElementById('settings-view').hidden = false;
+      document.getElementById('settings-nav-staff').click();
+      const counts = document.getElementById('staff-roster-counts'), filter = document.getElementById('staff-show-inactive');
+      await waitFor(() => counts.textContent === '2 active accounts · 1 inactive hidden');
+      const button = (row, text) => [...row.querySelectorAll('button')].find(item => item.textContent === text);
+      const row = id => document.querySelector(`[data-staff-id="${id}"]`);
+      const inactive = row('63'), other = row('62'), self = row('61');
+      assert.equal(filter.checked, false); assert.equal(inactive.hidden, true);
+      assert.equal(filter.getAttribute('aria-describedby'), counts.id);
+      assert.equal(counts.getAttribute('aria-live'), 'polite');
+      assert.equal(filtered.controller.isDirty(), false);
+      const beforeToggleReads = reads.length;
+      filter.click(); openRow(inactive); openRow(other); openRow(self);
+      assert.equal(counts.textContent, '2 active accounts · 1 inactive account shown');
+      assert.equal(reads.length, beforeToggleReads, 'The display filter never fetches another roster.');
+      assert.match(inactive.querySelector('.status-badge').textContent, /^Inactive$/);
+      assert.ok(button(inactive, 'Reactivate'));
+      const email = inactive.querySelector('input[type="email"]'), name = inactive.querySelector('input[type="text"]');
+      edit(email, 'invalid-email'); edit(name, 'Hidden draft'); edit(inactive.querySelector('select[aria-label^="Role"]'), 'admin');
+      name.focus(); name.setSelectionRange(1, 3);
+      filter.checked = false; filter.dispatchEvent(new window.Event('change', { bubbles: true }));
+      assert.equal(document.activeElement, filter, 'Focus leaves the editor before its inactive row is hidden.');
+      assert.equal(inactive.hidden, true); assert.equal(inactive.querySelector('fieldset').hidden, false);
+      assert.equal(inactive.querySelector('fieldset').disabled, true); assert.equal(email.willValidate, false);
+      assert.equal(email.checkValidity(), true, 'A filtered invalid editor cannot intercept unrelated native Save.');
+      assert.equal(filtered.controller.isDirty(), true);
+      filtered.controller.activatePanel('patron');
+      let submits = 0;
+      document.getElementById('settings-form').addEventListener('submit', () => { submits += 1; });
+      const note = document.getElementById('patron-login-note'), originalNote = note.value;
+      edit(note, 'An unrelated Settings draft');
+      document.getElementById('settings-save').click(); await flush();
+      assert.equal(submits, 1, `Native form submission reaches the owning draft guard despite the filtered invalid input: ${JSON.stringify(
+        [...document.getElementById('settings-form').elements].filter(control => control.willValidate && !control.checkValidity())
+          .map(control => [control.id, control.getAttribute('aria-label'), control.value, control.validationMessage]))}`);
+      assert.match(document.getElementById('settings-message').textContent, /competing Settings draft/);
+      assert.equal(writes.length, 0);
+      edit(note, originalNote); filtered.controller.activatePanel('staff');
+      filter.click();
+      assert.equal(row('63'), inactive); assert.equal(inactive.querySelector('input[type="email"]'), email);
+      assert.equal(email.value, 'invalid-email'); assert.equal(name.value, 'Hidden draft');
+      assert.deepEqual([name.selectionStart, name.selectionEnd], [1, 3]);
+      assert.equal(inactive.querySelector('fieldset').disabled, false); assert.equal(email.checkValidity(), false);
+      assert.equal(inactive.querySelector('select[aria-label^="Library"]').disabled, false);
+      edit(email, 'hidden.saved@example.org');
+      edit(other.querySelector('input[type="text"]'), 'Other independent draft');
+      filter.click();
+      button(other, 'Save changes').focus(); button(other, 'Save changes').click();
+      await waitFor(() => writes.length === 1 && !filtered.controller.hasPendingMutation());
+      assert.equal(writes[0].id, '62'); assert.equal(writes[0].body.version, 'v62');
+      assert.equal(row('63'), inactive); assert.equal(email.value, 'hidden.saved@example.org');
+      assert.equal(name.value, 'Hidden draft'); assert.equal(inactive.hidden, true);
+      assert.equal(inactive.querySelector('.settings-staff-unsaved').hidden, false);
+      assert.equal(document.activeElement, other.querySelector('.settings-staff-summary'));
+      filter.click(); button(inactive, 'Save changes').click();
+      await waitFor(() => writes.length === 2 && !filtered.controller.hasPendingMutation());
+      assert.equal(writes[1].id, '63'); assert.equal(writes[1].body.version, 'v63');
+      assert.equal(roster.find(user => user.id === '63').active, false);
+      assert.equal(filtered.controller.isDirty(), false, 'Both independent roster drafts can save sequentially without Cancel.');
+      assert.equal(document.getElementById('settings-message').textContent, ''); assert.equal(announcement, '');
+
+      edit(other.querySelector('input[type="text"]'), 'Sibling survives actor metadata');
+      edit(self.querySelector('input[type="text"]'), 'Actor metadata');
+      button(self, 'Save changes').click();
+      await waitFor(() => writes.length === 3 && !filtered.controller.hasPendingMutation());
+      assert.equal(other.querySelector('input[type="text"]').value, 'Sibling survives actor metadata');
+      for (const change of ['email', 'role']) {
+        const input = self.querySelector(change === 'email' ? 'input[type="email"]' : 'select[aria-label^="Role"]');
+        edit(input, change === 'email' ? 'replacement.actor@example.org' : 'admin');
+        button(self, 'Save changes').click(); await flush();
+        assert.equal(writes.length, 3, `${change}: an actor-context-changing save cannot retire another roster draft`);
+        assert.match(document.getElementById('settings-message').textContent, /competing Settings draft/);
+        button(self, 'Cancel').click();
+      }
+      edit(self.querySelector('input[type="email"]'), 'replacement.actor@example.org');
+      button(self, 'Save changes').click(); await flush();
+      document.getElementById('copy-patron-public-url').click(); await flush();
+      const newerNotice = document.getElementById('settings-message').textContent;
+      assert.match(newerNotice, /copied|could not be copied/);
+      button(other, 'Cancel').click();
+      assert.equal(document.getElementById('settings-message').textContent, newerNotice,
+        'Recovering a blocked draft clears only its owned notice, preserving a newer unrelated notice.');
+      assert.equal(announcement, newerNotice);
+      button(self, 'Cancel').click();
+      document.getElementById('staff-add-toggle').click(); edit(document.getElementById('staff-add-email'), 'create.draft@example.org');
+      edit(other.querySelector('input[type="text"]'), 'Blocked by creation');
+      button(other, 'Save changes').click(); await flush();
+      assert.equal(writes.length, 3, 'A row PUT never preserves the separately owned creation draft.');
+      document.getElementById('staff-add-cancel').click();
+      assert.equal(document.getElementById('settings-message').textContent, ''); assert.equal(announcement, '');
+      button(other, 'Deactivate').click(); await flush();
+      assert.equal(writes.length, 3, 'Lifecycle still requires explicit resolution of all roster drafts.');
+      button(other, 'Cancel').click();
+      assert.equal(document.getElementById('settings-message').textContent, '');
+
+      edit(name, 'Recoverable hidden draft');
+      edit(other.querySelector('input[type="text"]'), 'Saved before roster read failed');
+      filter.click(); failRead = true;
+      button(other, 'Save changes').click();
+      await waitFor(() => writes.length === 4 && !filtered.controller.hasPendingMutation());
+      assert.equal(document.getElementById('settings-form').inert, true, 'A known commit still requires an authoritative roster review.');
+      assert.equal(filtered.controller.isDirty(), true, 'A preserved sibling remains dirty during committed review.');
+      assert.equal(filtered.controller.inspectDeparture().dirty, true, 'Departure cannot silently retire the preserved sibling.');
+      assert.equal(name.value, 'Recoverable hidden draft'); assert.equal(inactive.hidden, true);
+      let reviewConfirmations = 0;
+      require('./helpers/confirmation.cjs').answerConfirmations(window, () => { reviewConfirmations += 1; return true; });
+      failRead = false; document.getElementById('settings-refresh').click();
+      await waitFor(() => !document.getElementById('settings-form').inert && !document.getElementById('staff-refresh').disabled);
+      assert.equal(reviewConfirmations, 0, 'Reviewing the known commit preserves the sibling without demanding a discard.');
+      assert.equal(name.value, 'Recoverable hidden draft'); assert.equal(inactive.hidden, true);
+      assert.equal(filtered.controller.isDirty(), true);
+      filter.click(); button(inactive, 'Save changes').click();
+      await waitFor(() => writes.length === 5 && !filtered.controller.hasPendingMutation());
+      assert.equal(writes.at(-1).body.version, 'saved-2', 'Preserved review does not silently advance the sibling version.');
+      assert.equal(filtered.controller.isDirty(), false);
+
+      holdRead = true; document.getElementById('staff-refresh').click();
+      await waitFor(() => releaseRead);
+      filter.click(); releaseRead(); holdRead = false;
+      await waitFor(() => !document.getElementById('staff-refresh').disabled);
+      assert.equal(document.getElementById('staff-access-status').textContent, '', 'Toggling visibility during a load does not stale its accepted roster.');
+      assert.equal(filter.checked, false); assert.equal(counts.textContent, '2 active accounts · 1 inactive hidden');
+      assert.equal(row('63'), inactive); assert.equal(inactive.hidden, true);
+      button(other, 'Deactivate').focus(); button(other, 'Deactivate').click();
+      await waitFor(() => writes.length === 6 && !filtered.controller.hasPendingMutation());
+      assert.equal(counts.textContent, '1 active account · 2 inactive hidden'); assert.equal(other.hidden, true);
+      assert.equal(document.activeElement, filter, 'Successful deactivation moves focus to the filter before hiding its row.');
+      filter.click(); button(other, 'Reactivate').click();
+      await waitFor(() => writes.length === 7 && !filtered.controller.hasPendingMutation());
+      assert.equal(counts.textContent, '2 active accounts · 1 inactive account shown');
+      assert.equal(writes.at(-1).body.version, 'saved-6');
+      failRead = true; button(other, 'Deactivate').click();
+      await waitFor(() => writes.length === 8 && !filtered.controller.hasPendingMutation());
+      assert.equal(counts.textContent, '1 active account · 2 inactive accounts shown',
+        'A failed follow-up GET cannot leave counts contradicting the confirmed deactivation receipt.');
+      assert.equal(other.querySelector('.status-badge').textContent, 'Inactive');
+      assert.match(document.getElementById('staff-access-status').textContent, /deactivated.*could not be refreshed/);
+      failRead = false; document.getElementById('staff-refresh').click();
+      await waitFor(() => !document.getElementById('settings-form').inert && !document.getElementById('staff-refresh').disabled);
+      button(other, 'Reactivate').click();
+      await waitFor(() => writes.length === 9 && !filtered.controller.hasPendingMutation());
+      assert.equal(counts.textContent, '2 active accounts · 1 inactive account shown');
+      filtered.controller.setStaff({ ...actor, version: 'preference-revision' });
+      assert.equal(filter.checked, true, 'A same-session preference revision preserves the roster display filter.');
+
+      let prepared = await filtered.controller.prepareScope('2'); prepared.accept(); await filtered.controller.activate('staff');
+      await waitFor(() => counts.textContent === '0 active accounts · 1 inactive hidden');
+      assert.equal(filter.checked, false, 'An accepted scope starts with active accounts only.');
+      assert.equal(inactive.isConnected, false, 'The retired scope releases its mounted editor identity.');
+      assert.match(document.querySelector('#settings-staff-users-list .settings-empty').textContent, /No active staff accounts for Library Two.*Show inactive accounts/);
+      filter.click();
+      assert.equal(counts.textContent, '0 active accounts · 1 inactive account shown');
+      assert.equal(document.querySelector('#settings-staff-users-list .settings-empty'), null);
+      assert.deepEqual([...document.querySelectorAll('.settings-staff-row')].map(item => item.dataset.staffId), ['63']);
+      assert.equal(reads.at(-1), '/api/asap/staff/users?orgId=2');
+      const leaving = row('63'); openRow(leaving);
+      edit(leaving.querySelector('select[aria-label^="Library"]'), '3');
+      button(leaving, 'Save changes').focus(); button(leaving, 'Save changes').click();
+      await waitFor(() => writes.length === 10 && !filtered.controller.hasPendingMutation());
+      assert.equal(row('63'), null); assert.equal(counts.textContent, '0 active accounts · 0 inactive accounts shown');
+      assert.equal(document.activeElement, document.getElementById('staff-refresh'),
+        'A saved move outside the selected scope returns focus to the surviving roster toolbar.');
+      prepared = await filtered.controller.prepareScope('4'); prepared.accept(); await filtered.controller.activate('staff');
+      await waitFor(() => counts.textContent === '0 active accounts · 0 inactive hidden');
+      assert.equal(document.querySelector('#settings-staff-users-list .settings-empty').textContent, 'No staff users found for Empty Library.');
+      filter.click();
+      assert.equal(document.querySelector('#settings-staff-users-list .settings-empty').textContent, 'No staff users found for Empty Library.');
+      assert.equal(filtered.controller.isDirty(), false); assert.equal(document.getElementById('settings-save').disabled, true);
+      filtered.controller.signedOut();
+      assert.equal(filter.checked, false); assert.equal(counts.textContent, '');
+      assert.equal(document.querySelectorAll('.settings-staff-row').length, 0);
+      filtered.controller.dispose(); filtered.dom.window.close();
     }
 
     for (const missingEvidence of ['id', 'version', 'cleanup', 'id-zero', 'id-leading-zero', 'id-overflow', 'id-number']) {
@@ -642,6 +880,157 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       lifecycle.dom.window.close();
     }
 
+    const malformedRosterReceipts = [
+      ['PUT', 'missing-active', user => { delete user.active; }],
+      ['PUT', 'string-active', user => { user.active = 'false'; }],
+      ['PUT', 'opposite-active', user => { user.active = true; }],
+      ['POST', 'missing-role', user => { delete user.role; }],
+      ['POST', 'unknown-role', user => { user.role = 'unknown'; }],
+      ['POST', 'missing-organization', user => { delete user.organizationId; }],
+      ['POST', 'string-organization', user => { user.organizationId = '2'; }],
+      ['POST', 'fractional-organization', user => { user.organizationId = 2.5; }],
+      ['POST', 'out-of-range-organization', user => { user.organizationId = 2147483648; }],
+      ['POST', 'staff-system-organization', user => { user.organizationId = 1; }],
+      ['DELETE', 'super-admin-library-organization', user => { user.role = 'super_admin'; }],
+      ['DELETE', 'missing-display-name', user => { delete user.displayName; }],
+      ['POST', 'invalid-notification-email', user => { user.notificationEmail = {}; }]
+    ];
+    for (const [method, label, corrupt] of malformedRosterReceipts) {
+      const accepted = [staffUser(71, { active: false }), staffUser(72)];
+      const commits = [], projections = [];
+      let mutation, rosterReads = 0, failedReviews = 0;
+      const receipt = await setupController(settingsModule, frontendRoot, superStaff, async (url, options = {}) => {
+        if (url.endsWith('/session')) return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
+        if (url.includes('/settings?')) return response(200, settingsData('system'));
+        if (url.endsWith('/organizations')) return response(200, { data: [
+          { id: 1, name: 'System', organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'o1' },
+          { id: 2, name: 'Library Two', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'o2' },
+          { id: 3, name: 'Library Three', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'o3' }
+        ] });
+        if (url.includes('/patron-codes?')) return response(200, { data: [] });
+        if (url === '/api/asap/staff/users' && options.method === 'GET') {
+          rosterReads += 1;
+          if (mutation) {
+            failedReviews += 1;
+            return response(503, { message: 'Authoritative roster review unavailable' });
+          }
+          return response(200, { canAssignSuperAdmin: true, users: accepted.map(user => ({ ...user })) });
+        }
+        const targetId = method === 'PUT' ? '71' : '72';
+        const path = method === 'POST' ? '/api/asap/staff/users' : `/api/asap/staff/users/${targetId}`;
+        if (url === path && options.method === method) {
+          mutation = JSON.parse(options.body);
+          const user = method === 'DELETE' ? { ...accepted[1], active: false, version: 'receipt-v2' }
+            : { ...staffUser(method === 'POST' ? 73 : targetId), active: method === 'POST', version: 'receipt-v2',
+              userPrincipalName: mutation.email, notificationEmail: mutation.email, displayName: mutation.displayName ?? null,
+              role: mutation.role, organizationId: mutation.organizationId };
+          corrupt(user);
+          return response(method === 'POST' ? 201 : 200, { user,
+            cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 } });
+        }
+        throw new Error(`Unexpected ${label} receipt request: ${url}`);
+      }, { onCommitted: message => commits.push(message), onStaffAccessCommitted: owner => projections.push(owner) });
+      receipt.controller.activatePanel('staff');
+      await waitFor(() => rosterReads === 1 && !document.getElementById('staff-refresh').disabled);
+      document.getElementById('staff-show-inactive').click();
+      const inactive = document.querySelector('[data-staff-id="71"]');
+      const other = document.querySelector('[data-staff-id="72"]');
+      const counts = document.getElementById('staff-roster-counts');
+      assert.equal(counts.textContent, '1 active account · 1 inactive account shown');
+      if (method === 'PUT') {
+        openRow(inactive); openRow(other);
+        edit(inactive.querySelector('input[type="email"]'), 'raw-receipt-draft@example.org');
+        edit(inactive.querySelector('input[type="text"]'), 'Raw inactive draft');
+        edit(other.querySelector('input[type="text"]'), 'Preserved sibling draft');
+        [...inactive.querySelectorAll('button')].find(button => button.textContent === 'Save changes').click();
+      } else if (method === 'POST') {
+        document.getElementById('staff-add-toggle').click();
+        edit(document.getElementById('staff-add-email'), 'raw-create-draft@example.org');
+        document.getElementById('staff-add-submit').click();
+      } else {
+        openRow(other);
+        [...other.querySelectorAll('button')].find(button => button.textContent === 'Deactivate').click();
+      }
+      await waitFor(() => mutation && !receipt.controller.hasPendingMutation());
+      const assertUnaccepted = () => {
+        assert.equal(commits.length, 0, `${label}: malformed evidence cannot announce a committed operation`);
+        assert.equal(projections.length, 0, `${label}: malformed evidence cannot invalidate accepted projections`);
+        assert.equal(receipt.controller.hasUnconfirmedOutcome(), true, `${label}: authoritative review remains required`);
+        assert.equal(receipt.controller.inspectDeparture().blocked, true);
+        assert.equal(counts.textContent, '1 active account · 1 inactive account shown', `${label}: accepted counts remain unchanged`);
+        assert.equal(inactive.querySelector('.status-badge').textContent, 'Inactive');
+        assert.equal(other.querySelector('.status-badge').textContent, 'Active');
+        assert.equal(document.querySelector('[data-staff-id="73"]'), null);
+        if (method === 'PUT') {
+          assert.equal(inactive.querySelector('input[type="email"]').value, 'raw-receipt-draft@example.org');
+          assert.equal(inactive.querySelector('input[type="text"]').value, 'Raw inactive draft');
+          assert.equal(other.querySelector('input[type="text"]').value, 'Preserved sibling draft');
+        } else if (method === 'POST') {
+          assert.equal(document.getElementById('staff-add-email').value, 'raw-create-draft@example.org');
+        }
+      };
+      assert.equal(rosterReads, 1, `${label}: malformed evidence does not authorize a success follow-up GET`);
+      assertUnaccepted();
+      await receipt.controller.activate('staff');
+      assert.ok(failedReviews > 0, `${label}: exercise a real failed authoritative review after the malformed receipt`);
+      assertUnaccepted();
+      receipt.controller.dispose(); receipt.dom.window.close();
+    }
+
+    for (const retired of ['owner', 'preserved']) {
+      for (const newer of [false, true]) {
+        let roster = [staffUser(81), staffUser(82)];
+        let rosterReads = 0, announcement = '', announcementGeneration = 0;
+        const feedback = await setupController(settingsModule, frontendRoot, superStaff, async (url, options = {}) => {
+          if (url.includes('/settings?')) return response(200, settingsData('system'));
+          if (url.endsWith('/organizations')) return response(200, { data: [
+            { id: 1, name: 'System', organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'o1' },
+            { id: 2, name: 'Library Two', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'o2' },
+            { id: 3, name: 'Library Three', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'o3' }
+          ] });
+          if (url.includes('/patron-codes?')) return response(200, { data: [] });
+          if (url === '/api/asap/staff/users' && options.method === 'GET') {
+            rosterReads += 1;
+            return response(200, { canAssignSuperAdmin: true, users: roster.map(user => ({ ...user })) });
+          }
+          throw new Error(`Unexpected retired feedback request: ${url}`);
+        }, { announce(message) {
+          announcement = message;
+          const generation = ++announcementGeneration;
+          return () => { if (generation === announcementGeneration) announcement = ''; };
+        } });
+        feedback.controller.activatePanel('staff');
+        await waitFor(() => rosterReads === 1 && !document.getElementById('staff-refresh').disabled);
+        const owner = document.querySelector('[data-staff-id="81"]'), sibling = document.querySelector('[data-staff-id="82"]');
+        openRow(owner); openRow(sibling);
+        edit(owner.querySelector('input[type="text"]'), 'Owner draft');
+        edit(sibling.querySelector('input[type="text"]'), 'Preserved sibling draft');
+        document.getElementById('staff-add-toggle').click();
+        edit(document.getElementById('staff-add-email'), 'Competing-create@example.org');
+        [...owner.querySelectorAll('button')].find(button => button.textContent === 'Save changes').click();
+        await flush();
+        assert.match(document.getElementById('settings-message').textContent, /competing Settings draft/);
+        let newerNotice = '';
+        if (newer) {
+          document.getElementById('copy-patron-public-url').click(); await flush();
+          newerNotice = document.getElementById('settings-message').textContent;
+          assert.match(newerNotice, /copied|could not be copied/);
+        }
+        // An accepted roster can lose an account after an external scope or
+        // eligibility change. Confirmed discard must retire its feedback owner.
+        const retiredId = retired === 'owner' ? '81' : '82';
+        roster = roster.filter(user => user.id !== retiredId);
+        document.getElementById('staff-refresh').click();
+        await waitFor(() => rosterReads === 2 && !document.getElementById('staff-refresh').disabled);
+        assert.equal(document.querySelector(`[data-staff-id="${retiredId}"]`), null);
+        assert.equal(document.getElementById('settings-message').textContent, newerNotice,
+          `${retired}: retiring an action's draft handles clears only that action's owned warning`);
+        assert.equal(announcement, newerNotice, `${retired}: the same ownership rule applies to shell feedback`);
+        assert.equal(feedback.controller.isDirty(), false);
+        feedback.controller.dispose(); feedback.dom.window.close();
+      }
+    }
+
     const adminRequests = [];
     const adminStaff = {
       id: '2',
@@ -660,7 +1049,8 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
           { id: 2, name: 'Library Two', abbreviation: 'TWO', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-v2' }
         ] });
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
-        if (requestUrl === '/api/asap/staff/users?orgId=2') return response(200, { canAssignSuperAdmin: false, users: [staffUser(22)] });
+        if (requestUrl === '/api/asap/staff/users?orgId=2') return response(200, { canAssignSuperAdmin: false,
+          users: [staffUser(22), staffUser(23, { active: false })] });
         if (requestUrl === '/api/asap/staff/audit?limit=50&organizationId=2') return response(200, { code: 'ok', data: [] });
         throw new Error(`Unexpected admin request: ${requestUrl}`);
       }
@@ -670,6 +1060,20 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.equal(adminRequests.some(url => url.includes('/api/asap/staff/audit')), false);
     assert.strictEqual(document.getElementById('staff-add-role').textContent.includes('Super admin'), false);
     assert.strictEqual(document.getElementById('staff-add-organization').disabled, true);
+    assert.equal(document.getElementById('staff-roster-counts').textContent, '1 active account · 1 inactive hidden');
+    document.getElementById('staff-show-inactive').click();
+    const scopedInactive = document.querySelector('[data-staff-id="23"]');
+    openRow(scopedInactive);
+    assert.equal(scopedInactive.querySelector('select[aria-label^="Library"]').disabled, true);
+    document.getElementById('staff-show-inactive').click();
+    assert.equal(scopedInactive.querySelector('fieldset').disabled, true);
+    document.getElementById('staff-show-inactive').click();
+    assert.equal(scopedInactive.querySelector('fieldset').disabled, false);
+    assert.equal(scopedInactive.querySelector('select[aria-label^="Library"]').disabled, true,
+      'filter and fieldset state never remove a library administrator restriction');
+    assert.deepEqual([...document.querySelectorAll('.settings-staff-row')].map(row => row.dataset.staffId), ['22', '23']);
+    assert.equal(adminRequests.some(url => url === '/api/asap/staff/users'), false,
+      'revealing inactive accounts never requests a broader roster');
     assert.strictEqual([...document.querySelectorAll('.settings-staff-row button')].some(button => button.textContent === 'Rebind identity'), false);
     admin.dom.window.close();
 
@@ -693,8 +1097,10 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       document.getElementById('settings-nav-staff').click();
       await waitFor(() => document.querySelector('[data-staff-id="71"]'));
       assert.equal(document.getElementById('staff-add-role').textContent.includes('Super admin'), true);
+      document.getElementById('staff-show-inactive').click();
       currentOwner = adminStaff;
       capability.controller.setStaff(adminStaff);
+      assert.equal(document.getElementById('staff-show-inactive').checked, false, 'a replacement actor starts with active accounts only');
       await capability.controller.activate('staff');
       await waitFor(() => pendingLibraryRosters.length > 0);
       document.getElementById('staff-add-toggle').click();
@@ -765,6 +1171,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       await waitFor(() => !document.getElementById('staff-refresh').disabled &&
         document.getElementById('staff-access-status').textContent === '');
       const targetId = action === 'reactivate' ? inactiveTargetId : activeTargetId;
+      if (action === 'reactivate') document.getElementById('staff-show-inactive').click();
       const targetRow = [...document.querySelectorAll('.settings-staff-row')]
         .find(row => row.dataset.staffId === targetId);
       assert.ok(targetRow, `${action}: the requested staff row is present`);

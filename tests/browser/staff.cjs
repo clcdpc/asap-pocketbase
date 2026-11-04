@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { URL } = require('node:url');
+const { verifyRoster: verifyStaffRosterNativeZoom } = require('./staff-native-zoom.cjs');
 
 async function revealRequestActions(page) {
   await page.locator('#request-dialog[open] .action-bar').waitFor();
@@ -3449,9 +3450,9 @@ async function runStaffRoster(browser, args, axeSource, report) {
   const capture = async (viewport, state) => {
     await scan(page, axeSource, args.artifactRoot, report, viewport, state);
     const containment = await page.evaluate(() => [...document.querySelectorAll(
-      '.settings-staff-row input, .settings-staff-row select, .settings-staff-row button, .settings-staff-toolbar button, #staff-add-form input, #staff-add-form select, #staff-add-form button')]
+      '.settings-staff-row input, .settings-staff-row select, .settings-staff-row button, .settings-staff-toolbar button, .settings-staff-filter input, #staff-add-form input, #staff-add-form select, #staff-add-form button')]
       .filter(control => control.getBoundingClientRect().height > 0).map(control => {
-        const bounds = control.getBoundingClientRect(), owner = control.closest('.settings-staff-row, .settings-staff-toolbar, #staff-add-form').getBoundingClientRect();
+        const bounds = control.getBoundingClientRect(), owner = control.closest('.settings-staff-row, .settings-staff-toolbar, .settings-staff-filter, #staff-add-form').getBoundingClientRect();
         return { name: control.getAttribute('aria-label') || control.id || control.textContent.trim(),
           contained: bounds.left >= owner.left - 1 && bounds.right <= owner.right + 1 && bounds.left >= -1 && bounds.right <= innerWidth + 1 };
       }));
@@ -3472,10 +3473,39 @@ async function runStaffRoster(browser, args, axeSource, report) {
     assert.equal(await page.locator('#settings-save-title').textContent(), 'No changes');
     assert.equal(writes.length, 0);
     const firstRow = rowFor(first.id), secondRow = rowFor(second.id), inactiveRow = rowFor(inactive.id);
+    const filter = page.getByRole('checkbox', { name: 'Show inactive accounts', exact: true });
+    const countsFor = (users, show) => {
+      const active = users.filter(user => user.active !== false).length, inactive = users.length - active;
+      return `${active} active ${active === 1 ? 'account' : 'accounts'} · ${inactive} inactive ${show ? `${inactive === 1 ? 'account' : 'accounts'} shown` : 'hidden'}`;
+    };
+    const initialUsers = await readUsers();
+    assert.equal(await filter.isChecked(), false);
+    assert.equal(await inactiveRow.isHidden(), true);
+    assert.equal(await page.locator('#staff-roster-counts').textContent(), countsFor(initialUsers, false));
     const disclosure = firstRow.locator('.settings-staff-summary');
     assert.equal(await firstRow.locator('.settings-staff-heading strong').textContent(), 'Rosa Adams <roster>');
     assert.equal(await firstRow.locator('roster').count(), 0, 'runtime display names remain text');
     await capture('desktop', 'staff-roster-collapsed');
+    await filter.check();
+    assert.equal(await page.locator('#staff-roster-counts').textContent(), countsFor(initialUsers, true));
+    assert.equal(await inactiveRow.locator('.status-badge').textContent(), 'Inactive');
+    await capture('desktop', 'staff-roster-inactive-revealed');
+    const mountedInactive = await inactiveRow.getByLabel(/^Email address/).elementHandle();
+    await inactiveRow.locator('.settings-staff-summary').press('Enter');
+    await inactiveRow.getByLabel(/^Email address/).fill('invalid-inactive-email');
+    await filter.evaluate(input => { input.checked = false; input.dispatchEvent(new Event('change', { bubbles: true })); });
+    assert.equal(await filter.evaluate(input => input === document.activeElement), true);
+    assert.equal(await inactiveRow.isHidden(), true);
+    assert.equal(await mountedInactive.evaluate(input => input.willValidate), false);
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'Unsaved changes');
+    await capture('desktop', 'staff-roster-inactive-draft-hidden');
+    await page.keyboard.press('Space');
+    assert.equal(await mountedInactive.evaluate(input => input === document.querySelector(`[data-staff-id="${input.closest('article').dataset.staffId}"] input[type="email"]`)), true);
+    assert.equal(await inactiveRow.getByLabel(/^Email address/).inputValue(), 'invalid-inactive-email');
+    await inactiveRow.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.keyboard.press('Escape');
+    await filter.uncheck();
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'No changes');
     await disclosure.focus(); await page.keyboard.press('Enter');
     assert.equal(await disclosure.getAttribute('aria-expanded'), 'true');
     assert.equal(await firstRow.getByLabel(/^Email address/).inputValue(), first.userPrincipalName);
@@ -3517,16 +3547,51 @@ async function runStaffRoster(browser, args, axeSource, report) {
     await firstRow.getByLabel(/^Library/).selectOption('82');
     await secondRow.getByLabel(/^Display name/).fill('Independent draft');
     await secondRow.getByLabel(/^Role/).selectOption('admin');
+    await page.locator('#settings-nav-patron').click();
+    await note.fill('Competing global Settings draft');
+    await page.locator('#settings-nav-staff').click();
     await firstRow.getByRole('button', { name: 'Save changes', exact: true }).click();
     await page.locator('#settings-message').filter({ hasText: 'competing Settings draft' }).waitFor();
     assert.equal(writes.length, 1);
     await disclosure.click(); await disclosure.click();
     assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
     assert.equal(await secondRow.getByLabel(/^Display name/).inputValue(), 'Independent draft');
+    await page.locator('#settings-nav-patron').click(); await note.fill(originalNote); await page.locator('#settings-nav-staff').click();
+    await page.waitForFunction(() => !document.getElementById('settings-message').textContent.includes('competing Settings draft') &&
+      !document.getElementById('app-status').textContent.includes('competing Settings draft'));
     await capture('desktop', 'staff-roster-independent-drafts');
-    await secondRow.getByRole('button', { name: 'Cancel', exact: true }).click();
-    assert.equal(await secondRow.getByLabel(/^Display name/).inputValue(), second.displayName);
-    assert.equal(await secondRow.getByLabel(/^Role/).inputValue(), second.role);
+    let failNextRoster = true;
+    const failCommittedReview = async route => {
+      if (route.request().method() === 'GET' && failNextRoster) {
+        failNextRoster = false;
+        await route.fulfill({ status: 503, json: { message: 'Committed roster review unavailable' } });
+      } else await route.fallback();
+    };
+    await page.route(`${args.baseOrigin}/api/asap/staff/users`, failCommittedReview);
+    const independentReceipt = page.waitForResponse(response => response.request().method() === 'PUT' &&
+      new URL(response.url()).pathname === `/api/asap/staff/users/${second.id}`);
+    await secondRow.getByRole('button', { name: 'Save changes', exact: true }).click();
+    const independentResponse = await independentReceipt;
+    assert.equal(independentResponse.status(), 200, await independentResponse.text());
+    const independent = await independentResponse.json();
+    await page.waitForFunction(() => document.getElementById('settings-form').inert &&
+      !document.getElementById('settings-form').hasAttribute('aria-busy') &&
+      document.getElementById('staff-access-status').textContent.includes('could not be refreshed'));
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'Saved; reload needed');
+    await capture('desktop', 'staff-roster-preserved-review');
+    assert.equal(await page.locator('#settings-refresh').evaluate(button => button.closest('form') === null), true);
+    const reviewRetry = page.waitForResponse(response => response.request().method() === 'GET' &&
+      new URL(response.url()).pathname === '/api/asap/staff/users');
+    await page.locator('#settings-refresh').click();
+    assert.equal((await reviewRetry).status(), 200); await settled();
+    await page.unroute(`${args.baseOrigin}/api/asap/staff/users`, failCommittedReview);
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'Unsaved changes');
+    assert.equal(independent.user.displayName, 'Independent draft'); assert.equal(independent.user.role, 'admin');
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
+    assert.equal(await firstRow.getByLabel(/^Email address/).inputValue(), 'roster.saved@example.org');
+    assert.equal(await firstRow.getByLabel(/^Role/).inputValue(), 'admin'); assert.equal(await firstRow.getByLabel(/^Library/).inputValue(), '82');
+    assert.equal(await firstRow.getByText('Unsaved changes', { exact: true }).isVisible(), true);
     await firstRow.getByLabel(/^Email address/).fill(second.userPrincipalName);
     await save(firstRow, first.id, 409);
     const unchanged = (await readUsers()).find(user => user.id === first.id);
@@ -3560,6 +3625,9 @@ async function runStaffRoster(browser, args, axeSource, report) {
     assert.ok(order.findIndex(row => row.id === first.id) < order.findIndex(row => row.id === inactive.id));
     assert.equal(order.some((row, index) => row.inactive && order.slice(index + 1).some(next => !next.inactive)), false);
     await capture('desktop', 'staff-roster-saved-reordered');
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'No changes');
+    assert.equal((await page.locator('#settings-message').textContent()).includes('competing Settings draft'), false);
+    assert.equal((await page.locator('#app-status').textContent()).includes('competing Settings draft'), false);
 
     await firstRow.getByLabel(/^Display name/).fill('Lifecycle draft');
     const beforeLifecycle = writes.length;
@@ -3570,6 +3638,7 @@ async function runStaffRoster(browser, args, axeSource, report) {
     assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Lifecycle draft');
     await decideConfirmation(page, () => page.locator('#staff-refresh').click(), dialog => dialog.accept()); await settled();
     assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
+    await filter.check();
     await inactiveRow.locator('.settings-staff-summary').click();
     await decideConfirmation(page, () => inactiveRow.getByRole('button', { name: 'Reactivate', exact: true }).click(), dialog => dialog.dismiss());
     assert.equal(writes.length, beforeLifecycle);
@@ -3578,6 +3647,7 @@ async function runStaffRoster(browser, args, axeSource, report) {
     assert.equal((await reactivate).status(), 200); await settled();
     assert.deepEqual(Object.keys(writes.at(-1).body), ['version']);
     assert.equal((await readUsers()).find(user => user.id === inactive.id).notificationEmail, 'inactive.primary@example.org');
+    assert.equal(await page.locator('#staff-roster-counts').textContent(), countsFor(await readUsers(), true));
 
     await page.emulateMedia({ colorScheme: 'dark' });
     await capture('desktop-dark', 'staff-roster-expanded');
@@ -3606,9 +3676,32 @@ async function runStaffRoster(browser, args, axeSource, report) {
     assert.equal(newUser.userPrincipalName, newUser.notificationEmail); assert.equal(newUser.displayName, null);
     assert.equal(await page.locator('#staff-add-form').isHidden(), true);
     assert.equal(await page.locator('#staff-add-toggle').evaluate(button => button === document.activeElement), true);
+    assert.equal(await page.locator('#staff-roster-counts').textContent(), countsFor(await readUsers(), true));
+    const scopedRoster = page.waitForResponse(response => response.request().method() === 'GET' &&
+      new URL(response.url()).pathname === '/api/asap/staff/users' && new URL(response.url()).searchParams.get('orgId') === '82');
+    await page.locator('#settings-scope').selectOption('82');
+    const scopedUsers = (await (await scopedRoster).json()).users; await settled();
+    await page.waitForFunction(expected => document.getElementById('staff-roster-counts').textContent === expected, countsFor(scopedUsers, false));
+    assert.equal(await filter.isChecked(), false, 'A new scope starts with inactive accounts hidden.');
+    assert.equal(await rowFor(first.id).isVisible(), true); assert.equal(await rowFor(second.id).count(), 0);
+    await filter.check();
+    assert.deepEqual((await page.locator('.settings-staff-row').evaluateAll(rows => rows.map(row => row.dataset.staffId))).sort(), scopedUsers.map(user => user.id).sort());
+    assert.equal(await page.locator('#staff-roster-counts').textContent(), countsFor(scopedUsers, true));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await capture('desktop', 'staff-roster-library-scope');
+    const nativeInactive = await seed('roster.native.inactive@example.org', 'Native Inactive');
+    const nativeDisabled = await context.request.delete(`${args.baseOrigin}/api/asap/staff/users/${nativeInactive.id}`, { headers,
+      data: { version: nativeInactive.version } });
+    assert.equal(nativeDisabled.status(), 200, await nativeDisabled.text());
+    const nativeZoom = await verifyStaffRosterNativeZoom({ baseURL: args.baseOrigin, artifacts: args.artifactRoot,
+      headers: { 'X-ASAP-Test-Staff-Id': args.superIdentity.staffId, 'X-ASAP-Test-Tenant-Id': args.superIdentity.tenantId,
+        'X-ASAP-Test-Staff-Email': args.superIdentity.email }, activeId: first.id, inactiveId: nativeInactive.id });
+    assert.deepEqual(nativeZoom.map(state => [state.physicalWidth, state.name]), [1280, 1440].flatMap(width =>
+      ['staff-roster-collapsed', 'staff-roster-expanded', 'staff-roster-filter-hidden', 'staff-roster-add'].map(name => [width, name])));
     assert.deepEqual(errors, []); assert.equal(traffic.externalRequests, 0);
     report.staffRoster = { disclosures: true, independentDrafts: true, singleEmail: true, atomicSave: true,
-      conflictRecovery: true, lifecycle: true, create: true, nativeValidationOwner: true, keyboardFocus: true, responsiveContainment: true };
+      conflictRecovery: true, lifecycle: true, create: true, nativeValidationOwner: true, keyboardFocus: true, responsiveContainment: true,
+      activeFilter: true, scopedCounts: true, hiddenDrafts: true, ownedFeedbackRecovery: true, independentSaves: true, preservedReviewRecovery: true, nativeZoom };
   } finally { await context.close(); }
 }
 
@@ -4080,7 +4173,7 @@ async function main() {
     await runSettingsLayout(browser, args, axeSource, report);
     await runOperationalCatalogCommits(browser, args, axeSource, report);
     await runRejectionNotificationAndReopen(browser, args, axeSource, report);
-    assert.equal(report.states.length, 70, 'Expected seventy major staff browser states');
+    assert.equal(report.states.length, 74, 'Expected seventy-four major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),
