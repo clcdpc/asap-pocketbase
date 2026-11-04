@@ -35,8 +35,8 @@ the parent Codex session.
 | 11 | #435 | SQL 18/18 and complete Staff 74 states/16 roster flags/eight native proofs PASS; shared accessibility corrections verified in #436 | Luna MAX / Astra HIGH clear; Terra actual desktop/mobile/dark/native renders clear | `3054851`, corrections in #406/#436 |
 | 12 | #406 | Filter/counts/preserved drafts; complete Staff PASS; final shared notice/pointer/focus checks PASS in #436 | Luna MAX / Astra HIGH clear; Terra actual major and eight native renders clear | `a8c0e7d`, corrections in #436 |
 | 13 | #433 | SQL/browser 2/2 PASS, 14 states; Library summary contrast corrected and rechecked in #436 R1 | Luna MAX / Astra HIGH clear; Terra actual groups and both summaries clear | `99469b7`, contrast correction in #436 |
-| 14 | #436 | Focused R3 and Node checks PASS; later #391 baseline exposes 436-6 P3 fractional focus edge, open for final integrated audit | Luna MAX / Astra HIGH / Terra MAX reviewed delta clear; new P3 explicitly carried under cycle cap | `7d1b247` |
-| 15 | #391 | Actual before/after spacing; seven Node files, Settings/native R2 and final Presentation R3 PASS; supplemental visible-logo/Library-roster captures await combined run | Luna MAX source and Terra MAX actual matrix clear; explicit integrated limits retained | This commit |
+| 14 | #436 | Focused R3 and Node checks PASS; carried 436-6 independently reproduced and corrected as C438-1 in the final integrated audit below | Luna MAX / Astra HIGH / Terra MAX issue reviews clear; fresh Astra XHIGH verifies final keyboard correction | `7d1b247`, final audit correction below |
+| 15 | #391 | Actual before/after spacing; seven Node files, Settings/native R2 and final Presentation R3 PASS; supplemental visible-logo/Library-roster results tracked in PR #454 | Luna MAX source and Terra MAX actual matrix clear; integrated results remain separately identified | `406b0ca` |
 
 ## Environment and integration
 
@@ -1154,3 +1154,46 @@ adds only supplemental artifacts. Existing axe/image/overflow/page-error/externa
 guards and the 74/16/eight-state contracts remain. These checks verify the hooks,
 not the future rendered results. The final combined evidence belongs in PR #454
 at its tested source revision.
+
+## Final integrated audit — keyboard focus after pointer use
+
+The fresh Astra XHIGH reviewer independently read all 15 requirements, approved
+decisions/reference, the complete implementation diff and focused evidence at
+`406b0ca`. Five independently run frontend files passed. Its only actionable
+source finding, **C438-1 P3**, reproduces the carried 436-6 beyond fractional
+rounding: clicking a partly visible roster summary and then pressing Enter on
+that same focused button leaves 24px or 64px below the native-200 viewport.
+Pointer focus intentionally skips reveal to preserve stationary clicks; switching
+to keyboard did not produce a second `focusin` event.
+
+The correction queues the existing guarded reveal on roster-button keyboard use.
+It retains context/generation, active-element, panel, loading/mutation,
+disabled/hidden and `:focus-visible` checks. Native activation and text editing
+remain unchanged. The retained component regression starts with genuine 24px and
+64px clipping, holds a real pointer through two animation frames without moving
+the row, verifies one toggle on release, then requires strict full outline bounds
+after Enter without test focus/scroll repair.
+
+- Four focused frontend files PASS: Staff access, Staff scope, accessibility
+  layout and template editor. Four isolated profiles PASS with 18/18/20/18 focus
+  proofs, eight native-history cases each, zero serious/critical axe findings,
+  no overflow and valid images. The exact final held-pointer regression also
+  passes; the full profile run preceded only its extra two-frame pointer wait.
+- Luna MAX independently clears the small source/test delta. Astra XHIGH reruns
+  its original independent native-200 probe against the exact final source:
+  original/further-clipped bottoms 402.640625 / 426.140625 / 466.140625 all become
+  395.640625 in the 402px viewport after Enter, with full bounds and keyboard
+  focus visible. Unexpected requests, page errors and writes remain zero.
+  Its final 64px screenshot independently confirms the complete row and outline.
+- Independent after evidence is outside Git in
+  `closure-native-focus-independent-after/closure-focus-probe.json`; focused
+  profile evidence is `closure-native-focus-component-after`, and the exact final
+  held-pointer receipt is `closure-native-focus-targeted-final/native-200.json`.
+  Failed before receipts remain retained. **C438-1 is resolved**; no other
+  actionable source/focused-evidence finding remains in this fresh audit.
+
+This closes the concrete correction, not the final integrated gate. Exact final
+frontend/.NET/SQL/browser populations, both supplemental spacing captures, the
+six sequential acceptance suites, full CI and the auditor's final receipt review
+are recorded in PR #454 at the tested revision. No component or source pass
+substitutes for those complete executions.

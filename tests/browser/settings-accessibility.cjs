@@ -460,6 +460,32 @@ async function runSourceComponents(artifacts) {
       receipt.rosterPointer = { before: pointerBefore, down: pointerDown, point, clicked: true };
       await page.locator('#staff-add-toggle').click();
       await row.locator('.settings-staff-summary').press('Enter'); await prove(row.locator('.settings-staff-summary'));
+      if (configuration.name === 'native-200') {
+        const summary = row.locator('.settings-staff-summary');
+        receipt.rosterKeyboardReveal = [];
+        for (const clipped of [24, 64]) {
+          await page.locator('#staff-roster-counts').click();
+          // Set up a genuinely clipped row, then use only native pointer and
+          // keyboard input. Do not repair its focus or scroll after activation.
+          await summary.evaluate((node, clipped) => scrollBy(0, node.getBoundingClientRect().bottom - innerHeight - clipped), clipped);
+          const before = await summary.boundingBox(), height = await page.evaluate(() => innerHeight);
+          assert.ok(before.y > 0 && before.y + before.height >= height + clipped - 1, JSON.stringify({ before, height, clipped }));
+          const expanded = await summary.getAttribute('aria-expanded');
+          await page.mouse.move(before.x + 20, before.y + 12); await page.mouse.down();
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          const down = await summary.boundingBox();
+          assert.deepEqual(down, before, 'Pointer focus leaves a clipped summary stationary until release.');
+          await page.mouse.up();
+          assert.notEqual(await summary.getAttribute('aria-expanded'), expanded, 'One stationary pointer click toggles the summary.');
+          const pointer = await focusProof(summary);
+          assert.equal(pointer.active, true);
+          assert.equal(pointer.focusVisible, false);
+          assert.equal(pointer.fullVertical, false, 'The pointer-focused row remains clipped before switching to keyboard.');
+          await page.keyboard.press('Enter'); await prove(summary);
+          assert.equal(await summary.getAttribute('aria-expanded'), expanded, 'Enter activates the same focused summary.');
+          receipt.rosterKeyboardReveal.push({ clipped, before, down, pointer, keyboard: receipt.focus.at(-1) });
+        }
+      }
       await page.locator('#staff-add-toggle').press('Enter');
       await page.locator('#staff-add-submit').click();
       assert.equal(await page.locator('#staff-access-status').textContent(), 'Email address is required.');

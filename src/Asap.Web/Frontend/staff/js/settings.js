@@ -2875,6 +2875,11 @@ export function createSettingsController({
       staffFocusSequence++;
       queueStaffReveal(event.target);
     });
+    listen(root, 'keydown', event => {
+      // Keyboard use can reveal focus on a pointer-focused button without a
+      // new focusin event. Recheck after its native activation and layout.
+      if (event.target.matches?.('button')) queueStaffReveal(event.target);
+    });
     listen(dom.form, 'input', event => {
       const notice = staffEmailValidationNotice;
       if (!notice || notice.control !== event.target || !clean(event.target.value)) return;
