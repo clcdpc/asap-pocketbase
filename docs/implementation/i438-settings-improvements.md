@@ -1347,3 +1347,47 @@ The original failure and one-pixel evidence remain retained with their actual
 scope. Human screen-reader acceptance remains #398. Final exact-revision full
 suite, acceptance, CI and fresh independent closure results belong in PR #454;
 no result-only source commit is required after that final qualification.
+
+## Acceptance correction — preserve the Workflow picker's footer
+
+**C438-5 P2** is a retained Workflow regression found by the six-suite acceptance
+invocation at `8fb1c5f`. I390, I403, D1, Q1 and PR410 pass; S1 passes four draft
+scenarios but fails both layout scenarios. All 48 unique required scenarios run:
+46 PASS, two FAIL, zero skipped. The failed invocation, traces and screenshots
+remain retained with their actual outcomes.
+
+The recorded S1 failure occurs before picker focus: another draft field retains
+focus, while the overlap helper blurs only the picker. The new generic
+static-on-focus footer rule therefore prevents the intended adverse setup.
+Actual shipped-DOM/CSS probes also confirm a product conflict: after the real
+focus owner is blurred, focusing the picker makes the footer static and moves it
+below the viewport in all five profiles. The short-height fallback independently
+affects the 720x340 profile. This cannot be cleared as a fixture-only failure.
+
+Two CSS selector changes preserve the existing footer-aware picker's ownership:
+the picker is exempt from generic static-on-focus protection, and the short-height
+fallback remains for non-Workflow panels. All other focused Workflow controls
+retain that protection. Native editing code is unchanged. The test helper blurs
+the actual focus owner and settles before arranging the overlap; two bounded
+measurements account for the sticky footer reaching its viewport anchor during
+the first scroll. These changes occur before picker focus. The original overlap,
+full-footer/status/action, input/list/active-option, hit, keyboard and scroll
+assertions remain unchanged. The retained test now focuses another draft field
+before each of its five existing profiles.
+
+Focused validation passes: the complete retained picker test is 1/1 with no
+failures/skips (9.503s logged; the earlier 9.893s pass is recorded separately).
+Five final geometry profiles pass all 20 checks, including native 200% and
+720x340. Four existing accessibility profiles pass 74 focus proofs, 32 history
+paths, eight scroll paths, 16 reopen/Undo/Redo cases, stationary-pointer and
+keyboard-reveal checks, with zero serious/critical axe findings, valid images and
+no overflow. Earlier failed focused attempts remain honestly attributed.
+Luna MAX and Astra XHIGH independently clear the actual source and receipts.
+
+The corrected stylesheet SHA-256 is
+`87ceac9782f77ed897b00328cb88d4bacf776813f81ee768c84283b1c28c6d93`.
+Actual six-suite acceptance on the resulting commit and Terra's rendered S1
+review remain pending here; their final receipts belong in PR #454. Per the
+coordinating direction, the next DEV test tag supplies authoritative broad
+frontend/core/Browser CI; this task does not duplicate those broad runs or
+dispatch a separate PR Full CI.

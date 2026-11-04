@@ -61,12 +61,19 @@ async function chipGeometry(page) {
 // Deliberately recreate native focus scrolling's blind spot: an input that is
 // in the viewport, but half covered by the dirty Settings footer.
 async function obscurePicker(page) {
+  // A different draft field can still own focus; settle that native view
+  // change before arranging an intentionally obscured picker.
+  await page.locator('#patron-code-picker').evaluate(input => input.ownerDocument.activeElement?.blur?.());
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const overlap = await page.locator('#patron-code-picker').evaluate(input => {
-    input.blur();
     const footer = document.querySelector('.settings-save-bar.attention');
     if (!footer) throw new Error('The regression requires an active dirty-state footer');
-    const r = input.getBoundingClientRect();
-    window.scrollBy(0, r.top - (footer.getBoundingClientRect().top - r.height / 2));
+    // The first scroll can move a sticky footer from its normal-flow limit
+    // to the viewport edge. Remeasure that real footer before final alignment.
+    for (let adjustment = 0; adjustment < 2; adjustment++) {
+      const r = input.getBoundingClientRect();
+      window.scrollBy(0, r.top - (footer.getBoundingClientRect().top - r.height / 2));
+    }
     return { input: input.getBoundingClientRect().toJSON(), footer: footer.getBoundingClientRect().toJSON(), scrollY };
   });
   assert.ok(overlap.input.bottom - overlap.footer.top > 1,

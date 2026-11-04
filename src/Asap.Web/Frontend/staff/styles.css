@@ -642,10 +642,10 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-save-bar { position: static; display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 18px; padding: 12px 14px; background: #fff; border: 1px solid var(--line); }
 .settings-save-bar.attention { position: sticky; bottom: 0; z-index: 3; box-shadow: 0 -5px 16px rgba(23,33,43,.08); }
 /* Keep a newly dirty bar from covering focused form controls or moving an
-   editor's caret. Its own actions keep the same position when clicked. */
-.settings-form:has(:focus:not(.settings-save-bar *)) .settings-save-bar.attention { position: static; }
+   editor's caret. The patron-code picker measures and clears its sticky footer. */
+.settings-form:has(:focus:not(.settings-save-bar *, #patron-code-picker)) .settings-save-bar.attention { position: static; }
 @media (max-height: 480px) {
-  .settings-save-bar.attention { position: static; }
+  .settings-form:not(:has(#settings-workflow:not([hidden]))) .settings-save-bar.attention { position: static; }
 }
 .settings-save-bar > div:first-child { min-width: 0; display: grid; gap: 2px; }
 .settings-save-bar strong { color: var(--ink); }
