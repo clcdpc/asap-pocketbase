@@ -28,8 +28,8 @@ the parent Codex session.
 | 4 | #449 | Explicit validated URL draft action; focused controller/layout/scope PASS, links 2/2 and SQL/browser 1/1 PASS | Luna MAX clear after wait/identity test corrections and rendered checks | `dde686a` |
 | 5 | #409 | Credential help/local outcomes; Node, SQL 3/3, browser 1/1 and checkpoint navigation 271/271 PASS | Luna MAX / Astra HIGH clear after P2 and recovery-title corrections | `2b4068a`, `33288f3` |
 | 6 | #437 | Flag-only masks; Node 13 files, initial SQL/browser 4/4 and final affected browser 1/1 PASS | Luna MAX / Astra HIGH clear after P3 wording correction | `8b3e76e` |
-| 7 | #446 | Named groups/native gates; Node 13/13, Release build and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after coverage/wait/width corrections | This issue commit |
-| 8 | #447 | Pending | Pending Luna MAX / Astra HIGH | Pending |
+| 7 | #446 | Named groups/native gates; Node 13/13, Release build and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after coverage/wait/width corrections | `1f40c91` |
+| 8 | #447 | Effective conditional options; Node 13/13, Release build, checkpoint 4/4 unaffected and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after focus/test-wrapper corrections | This commit |
 | 9 | #444 | Pending | Pending Luna MAX | Pending |
 | 10 | #399 | Pending | Pending Luna MAX / Terra MAX | Pending |
 | 11 | #435 | Pending | Pending Luna MAX / Astra HIGH / Terra MAX | Pending |
@@ -370,3 +370,50 @@ when the actual System value is null. Server timeout policy and schema are uncha
   actual renders confirms the P2 width defect is resolved. Astra HIGH inspected
   the final receipt and containment data; prior inheritance/ownership/probe and
   fixture conclusions remain clear. Both reviews have no actionable findings.
+
+## #447 — conditional Common creators options
+
+The heading, feature checkbox and its Override remain visible. A mounted native
+fieldset hides and disables the complete dependent editor when the displayed
+effective flag is false. Revealing it preserves each descendant's existing
+permission, scalar override and list ownership. Turning the Library feature
+Override off displays the authoritative System flag; turning it back on restores
+the local boolean draft, including false. Accepted population retires that cache.
+Focus inside disappearing options returns to the feature checkbox or its editable
+Override after the editor becomes interactive. Hidden retained list handlers
+cannot add, reorder, delete or change Use system list ownership.
+
+- Focused scope/domain/layout Node files PASS; the broader Settings sweep PASS
+  all 13 files (`results/i447-settings-frontend.json`). Production and root Node
+  sources stayed frozen through qualification. Release R2 build PASS with zero
+  warnings/errors (`results/i447-build-r2.log`).
+- Parent source inspection corrected an inverted deferred-focus guard before
+  qualification. The accepted-inert-refresh regression exercises the corrected
+  focus path. Astra found the owning C# wrapper still expected four scan states;
+  it now requires the exact eight states and both creator round-trip flags.
+- Workflow checkpoint executed five real-SQL/browser cases. Both Campaign2
+  role cases, Library metadata and cumulative presentation PASS (4/4). The
+  presentation journey retains 130 scans across prior issue states and viewport
+  variants; artifact `staff-presentation-3ca17ae8d41f400992eee12d481d0d13`.
+- The checkpoint's full Settings case failed a test API mismatch: Playwright
+  reports `isDisabled()` false for a fieldset although its native disabled
+  property, `:disabled` selector and child controls correctly report disabled.
+  The test now checks native fieldset state plus scalar/Add child interaction
+  barriers. No production change or weaker visibility-only assertion was used.
+  The failed receipt remains `results/i447-workflow-checkpoint.trx`.
+- Final affected Settings R2 PASS 1/1, zero failures/skips, 69 seconds
+  (`results/i447-settings-browser-r2.trx`). It persists nonempty System and
+  Library lists while off, checks exact payloads/reload, ownership, hidden
+  handlers, parent reset/draft restoration and keyboard/focus behavior, then
+  restores both initial snapshots through the real editor and SQL APIs.
+- All eight final states have zero serious/critical axe findings, missing
+  images, horizontal page overflow, external requests or page errors. Mobile
+  creator controls fit their region. Timeout round-trip flags remain true.
+  Actual final renders/report: `settings-4bc0b8ca537a4f80bca699ed7decf6ec`.
+- Astra HIGH final independent review is clear after source and receipt
+  inspection, including inherited/owned-empty/nonempty list probes, forced
+  hidden Use system events, detached row handlers, authoritative false/null
+  values and cache retirement. Luna MAX independently inspected the final
+  source, three focused Node results, raw receipts, cumulative presentation
+  and all four actual mobile on/off renders. Functional closure is clear;
+  no actionable finding remains in either review.

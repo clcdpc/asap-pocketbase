@@ -20,6 +20,11 @@ const axe = require('axe-core');
     global.window = dom.window;
     global.document = dom.window.document;
     global.Node = dom.window.Node;
+    document.getElementById('settings-view').hidden = false;
+    document.getElementById('settings-workflow').hidden = false;
+    document.getElementById('common-authors-enabled').checked = true;
+    document.getElementById('common-authors-options').hidden = false;
+    document.getElementById('common-authors-options').disabled = false;
 
     const systemFormats = [
       {

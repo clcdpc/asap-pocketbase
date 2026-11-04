@@ -556,15 +556,18 @@
               <fieldset class="settings-fieldset">
                 <legend>Common creators</legend>
                 <div class="settings-grid">
-                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="commonAuthorsEnabled"><input id="common-authors-enabled" type="checkbox"><span>Show common creators</span></label>
-                  <label class="settings-field" data-setting-section="workflow" data-setting-key="commonAuthorsLabel"><span>Common creators label</span><input id="common-authors-label" type="text"></label>
-                  <label class="settings-field wide" data-setting-section="workflow" data-setting-key="commonAuthorsHelp"><span>Common creators help</span><textarea id="common-authors-help" rows="2"></textarea></label>
-                  <label class="settings-field wide" data-setting-section="workflow" data-setting-key="commonAuthorsMessage"><span>Common creators message</span><textarea id="common-authors-message" rows="2"></textarea></label>
-                  <div class="settings-domain-block wide">
-                    <div class="settings-domain-heading"><strong>Common creator list</strong><button id="add-common-creator" class="secondary-button" type="button"><i class="fa fa-plus" aria-hidden="true"></i> Add creator</button></div>
-                    <label id="common-creators-inherit-field" class="settings-inline-check"><input id="common-creators-use-system" type="checkbox"><span>Use system list</span></label>
-                    <div id="common-creators-editor" class="settings-row-editor" aria-live="polite"></div>
-                  </div>
+                  <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="commonAuthorsEnabled"><input id="common-authors-enabled" type="checkbox" aria-controls="common-authors-options"><span id="common-authors-enabled-label">Show common creators</span></label>
+                  <fieldset id="common-authors-options" class="settings-grid wide settings-common-authors-options" aria-labelledby="common-authors-options-label" hidden disabled>
+                    <legend id="common-authors-options-label" class="sr-only">Common creators options</legend>
+                    <label class="settings-field" data-setting-section="workflow" data-setting-key="commonAuthorsLabel"><span>Common creators label</span><input id="common-authors-label" type="text"></label>
+                    <label class="settings-field wide" data-setting-section="workflow" data-setting-key="commonAuthorsHelp"><span>Common creators help</span><textarea id="common-authors-help" rows="2"></textarea></label>
+                    <label class="settings-field wide" data-setting-section="workflow" data-setting-key="commonAuthorsMessage"><span>Common creators message</span><textarea id="common-authors-message" rows="2"></textarea></label>
+                    <div class="settings-domain-block wide">
+                      <div class="settings-domain-heading"><strong>Common creator list</strong><button id="add-common-creator" class="secondary-button" type="button"><i class="fa fa-plus" aria-hidden="true"></i> Add creator</button></div>
+                      <label id="common-creators-inherit-field" class="settings-inline-check"><input id="common-creators-use-system" type="checkbox"><span>Use system list</span></label>
+                      <div id="common-creators-editor" class="settings-row-editor" aria-live="polite"></div>
+                    </div>
+                  </fieldset>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset">

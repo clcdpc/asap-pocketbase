@@ -305,6 +305,13 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
           });
           assert.ok(geometry.horizontal >= 7 || geometry.vertical >= 7, `${buttonId}: natural heading/action gap`);
         };
+        const ensureCommonCreatorsVisible = async () => {
+          const enabled = page.locator('#common-authors-enabled');
+          const override = page.locator('[data-setting-section="workflow"][data-setting-key="commonAuthorsEnabled"] .settings-override-toggle');
+          if (await override.count() && !await override.isChecked()) await override.check();
+          if (!await enabled.isChecked()) await enabled.check();
+          await page.locator('#common-authors-options:not([hidden])').waitFor();
+        };
         const measureActions = async selector => page.locator(`${selector} > button`).evaluateAll(buttons => {
           const bounds = buttons.map(button => button.getBoundingClientRect());
           return bounds.slice(1).map((current, index) => {
@@ -546,7 +553,6 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
           }
           await verifyPolarisSettings(page, width, scope, scan, report);
           await page.locator('#settings-nav-workflow').click();
-          await measureHeading('#add-common-creator');
           assert.equal(await page.locator('#patron-code-eligibility legend').textContent(), 'Patron code eligibility');
           assert.equal(await page.locator('#patron-code-eligibility').getByText(
             'The patron-code eligibility message is displayed as written.', { exact: true }).count(), 0,
@@ -556,6 +562,8 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
           `${scope}: the message editor keeps its label`);
           await providerGeometry(page);
           if (await page.locator('#add-provider').isVisible()) await measureHeading('#add-provider');
+          await ensureCommonCreatorsVisible();
+          await measureHeading('#add-common-creator');
           const inherit = page.locator('#common-creators-use-system');
           if (await inherit.isVisible() && await inherit.isChecked()) await inherit.uncheck();
           await page.locator('#add-common-creator').click();
@@ -620,7 +628,13 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
           await scan(`settings-headings-${scope}`);
           await page.locator('#settings-nav-workflow').click();
         }
+        await ensureCommonCreatorsVisible();
         await measureHeading('#add-common-creator');
+        if (await page.locator('#settings-save').isEnabled()) {
+          await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
+          await page.locator('#settings-discard').waitFor({ state: 'hidden' });
+          await page.locator('#settings-refresh:not([disabled])').waitFor();
+        }
         await page.locator('#settings-nav-templates').click();
         await measureHeading('#add-email-template');
         await page.locator('#add-email-template').evaluate(button => {

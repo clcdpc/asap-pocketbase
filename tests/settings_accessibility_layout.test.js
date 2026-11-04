@@ -114,6 +114,28 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(document.getElementById('patron-code-picker').getAttribute('aria-controls'), 'patron-code-options');
     assert.strictEqual(document.getElementById('patron-code-options').getAttribute('role'), 'listbox');
     assert.strictEqual(document.getElementById('common-creators-editor').closest('fieldset').querySelector('[id^="patron-code"]'), null);
+    const commonCreators = fieldset('common-authors-enabled');
+    const commonAuthorsEnabled = document.getElementById('common-authors-enabled');
+    const commonAuthorsOptions = document.getElementById('common-authors-options');
+    assert.equal(legend('common-authors-enabled'), 'Common creators');
+    assert.equal(commonAuthorsEnabled.closest('label').querySelector('span').textContent, 'Show common creators');
+    assert.equal(commonAuthorsEnabled.getAttribute('aria-controls'), 'common-authors-options');
+    assert.equal(commonAuthorsEnabled.hasAttribute('aria-expanded'), false,
+      'A checkbox does not expose an unsupported disclosure state.');
+    assert.equal(commonAuthorsOptions.tagName, 'FIELDSET');
+    assert.equal(commonAuthorsOptions.disabled, true);
+    assert.equal(commonAuthorsOptions.hidden, true);
+    assert.equal(commonAuthorsOptions.getAttribute('aria-labelledby'), 'common-authors-options-label');
+    assert.equal(commonAuthorsOptions.querySelector('legend').textContent, 'Common creators options');
+    assert.equal(commonAuthorsOptions.parentElement, commonCreators.querySelector('.settings-grid'));
+    assert.equal(commonAuthorsOptions.contains(commonAuthorsEnabled), false,
+      'The controlling checkbox remains outside the hidden options.');
+    assert.deepStrictEqual(controls(commonAuthorsOptions), [
+      'common-authors-label', 'common-authors-help', 'common-authors-message', 'common-creators-use-system'
+    ]);
+    for (const id of ['add-common-creator', 'common-creators-editor']) {
+      assert.ok(commonAuthorsOptions.contains(document.getElementById(id)), `${id} stays inside the collapsed options.`);
+    }
     for (const id of ['add-patron-code', 'patron-code-search', 'patron-codes-select-all', 'patron-codes-clear-all']) {
       assert.strictEqual(document.getElementById(id), null, `${id} is retired`);
     }
@@ -159,6 +181,7 @@ const { JSDOM } = require('jsdom');
     assert.match(css, /@media[^{}]*max-width:\s*760px[^]*?\.settings-grid\s*\{\s*grid-template-columns:\s*1fr;/);
     assert.match(css, /\.settings-timeout-rule,\s*\.settings-timeout-subgroup\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\);/);
     assert.match(css, /\.settings-timeout-rule\s+\.settings-field:not\(\.check-field\)\s*>\s*:is\(input,\s*select\)\s*\{\s*box-sizing:\s*border-box;\s*min-width:\s*0;\s*width:\s*100%;\s*max-width:\s*100%;/);
+    assert.match(css, /\.settings-common-authors-options\s*\{\s*min-width:\s*0;\s*margin:\s*0;\s*padding:\s*0;\s*border:\s*0;/);
 
     const formats = Array.from({ length: 6 }, (_, index) => ({
       id: String(index + 10),

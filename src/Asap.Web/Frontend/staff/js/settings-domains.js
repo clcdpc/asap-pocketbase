@@ -617,6 +617,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     publicationInheritField: root.querySelector('#publication-options-inherit-field'),
     creators: root.querySelector('#common-creators-editor'),
     creatorsUseSystem: root.querySelector('#common-creators-use-system'),
+    creatorsOptions: root.querySelector('#common-authors-options'),
     creatorsInheritField: root.querySelector('#common-creators-inherit-field'),
     codes: root.querySelector('#patron-codes-editor'),
     codeSearch: root.querySelector('#patron-code-picker'),
@@ -651,6 +652,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     system: false,
     data: null,
     models: {},
+    creatorsUseSystem: false,
     ruleRosterCodes: [],
     baseline: null,
     originalTemplates: [],
@@ -669,6 +671,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   function currentOrganizationId() {
     const value = property(state.data, 'orgId');
     return value === 'system' || value === undefined ? 1 : numeric(value, 1);
+  }
+
+  function creatorsOptionsHidden() {
+    return Boolean(dom.creatorsOptions?.hidden);
   }
 
   function systemConfig(data) {
@@ -760,6 +766,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       const row = element('div', { className: 'settings-editor-row', 'data-domain-row': 'true' }, [
         field('Creator', input),
         actions(index, values.length, (from, offset) => {
+          if (type === 'creator' && creatorsOptionsHidden()) return;
           const next = from + offset;
           if (next < 0 || next >= values.length) return;
           const current = readSetRows(container, type);
@@ -767,6 +774,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
           renderSetRows(container, current, type);
           onChange();
         }, from => {
+          if (type === 'creator' && creatorsOptionsHidden()) return;
           const current = readSetRows(container, type);
           current.splice(from, 1);
           renderSetRows(container, current, type);
@@ -1829,6 +1837,11 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   function bindSetToggle(input, name, render) {
     if (!input) return;
     listen(input, 'change', () => {
+      if (name === 'creators' && creatorsOptionsHidden()) {
+        input.checked = state.creatorsUseSystem;
+        return;
+      }
+      if (name === 'creators') state.creatorsUseSystem = input.checked;
       render(setValues(name, state.system || input.checked));
       onChange();
     });
@@ -1836,6 +1849,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
 
   function bindAdd(name, factory) {
     listen(addButtons[name], 'click', () => {
+      if (name === 'creators' && creatorsOptionsHidden()) return;
       if (['fields', 'rules'].includes(name) && !canRedrawRules()) return;
       const rules = name === 'fields' ? readRules() : null;
       const values = readDomain(name);
@@ -2038,6 +2052,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     const libraryCodes = property(library, 'allowedPatronCodeIds');
     if (dom.publicationUseSystem) dom.publicationUseSystem.checked = state.system || !libraryPublication?.exists;
     if (dom.creatorsUseSystem) dom.creatorsUseSystem.checked = state.system || !libraryCreators?.exists;
+    state.creatorsUseSystem = Boolean(dom.creatorsUseSystem?.checked);
     if (dom.codesUseSystem) dom.codesUseSystem.checked = state.system || !libraryCodes?.exists;
     for (const [input, wrapper] of [
       [dom.publicationUseSystem, dom.publicationInheritField],

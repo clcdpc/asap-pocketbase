@@ -277,6 +277,8 @@ export function createSettingsController({
 }) {
   const dom = {
     message: root.querySelector('#settings-message'),
+    commonAuthorsEnabled: root.querySelector('#common-authors-enabled'),
+    commonAuthorsOptions: root.querySelector('#common-authors-options'),
     scopeField: root.querySelector('#settings-scope-field'),
     scope: root.querySelector('#settings-scope'),
     systemStaffUrl: root.querySelector('#system-staff-url'),
@@ -360,6 +362,8 @@ export function createSettingsController({
   };
   let currentStaffUrlSuggestion = null;
   let acceptedPostmarkToken = false;
+  let commonAuthorsEnabledOverrideDraft = null;
+  let pendingCommonAuthorsFocus = false;
   const timeoutOverrideDrafts = new Map();
   const reads = createLatestLoad(), events = new window.AbortController();
   let disposed = false, contextGeneration = 0, drafts = createDraftScope(), scopePreparation = null;
@@ -619,6 +623,7 @@ export function createSettingsController({
     dom.form.inert = state.awaitingReload;
     dom.form.removeAttribute('aria-busy');
     dom.refresh.disabled = false;
+    restoreCommonAuthorsFocus();
   }
 
   function cancelSettingsOperations() {
@@ -919,6 +924,34 @@ export function createSettingsController({
     }
   }
 
+  function commonAuthorsFocusTarget() {
+    const override = dom.commonAuthorsEnabled?.closest('[data-setting-section][data-setting-key]')
+      ?.querySelector('.settings-override-toggle');
+    if (!dom.commonAuthorsEnabled?.disabled) return dom.commonAuthorsEnabled;
+    return override && !override.disabled ? override : null;
+  }
+
+  function syncCommonAuthorsOptions(focusedBeforePopulate = false) {
+    if (!dom.commonAuthorsEnabled || !dom.commonAuthorsOptions) return;
+    const enabled = dom.commonAuthorsEnabled.checked;
+    if (!enabled && (focusedBeforePopulate || dom.commonAuthorsOptions.contains(document.activeElement))) {
+      if (dom.form.inert || dom.form.hidden) {
+        pendingCommonAuthorsFocus = true;
+      } else {
+        commonAuthorsFocusTarget()?.focus({ preventScroll: true });
+      }
+    }
+    dom.commonAuthorsOptions.disabled = !enabled;
+    dom.commonAuthorsOptions.hidden = !enabled;
+    if (enabled) pendingCommonAuthorsFocus = false;
+  }
+
+  function restoreCommonAuthorsFocus() {
+    if (!pendingCommonAuthorsFocus || dom.form.inert || dom.form.hidden || !dom.commonAuthorsOptions.hidden) return;
+    pendingCommonAuthorsFocus = false;
+    commonAuthorsFocusTarget()?.focus({ preventScroll: true });
+  }
+
   function syncOverrideToggles(section, key, checked) {
     for (const field of root.querySelectorAll(
       `[data-setting-section="${section}"][data-setting-key="${key}"]`
@@ -937,10 +970,22 @@ export function createSettingsController({
           writeControl(input, property(configuredSystem.workflow, key));
         }
       }
+      if (section === 'workflow' && key === 'commonAuthorsEnabled' && input) {
+        if (checked) {
+          if (commonAuthorsEnabledOverrideDraft !== null) {
+            writeControl(input, commonAuthorsEnabledOverrideDraft);
+          }
+        } else {
+          commonAuthorsEnabledOverrideDraft = input.checked;
+          const configuredSystem = object(object(state.data?.stored).configuredSystem);
+          writeControl(input, property(configuredSystem.workflow, key));
+        }
+      }
       if (toggle) toggle.checked = checked;
       if (input) input.disabled = !checked;
     }
     applyTimeoutDependencies();
+    if (section === 'workflow' && key === 'commonAuthorsEnabled') syncCommonAuthorsOptions();
   }
 
   function createOverrideToggle(field, section, key) {
@@ -1357,6 +1402,9 @@ export function createSettingsController({
   }
 
   function populate(data) {
+    const commonAuthorsOptionsHadFocus = dom.commonAuthorsOptions?.contains(document.activeElement) === true;
+    pendingCommonAuthorsFocus = false;
+    commonAuthorsEnabledOverrideDraft = null;
     clearPolarisFeedback();
     timeoutOverrideDrafts.clear();
     releaseLogoDraft();
@@ -1404,6 +1452,7 @@ export function createSettingsController({
       for (const [key] of fields) state.baselineOverrides.set(`${section}.${key}`, hasRawOverride(section, key));
     }
     configureScopedFields();
+    syncCommonAuthorsOptions(commonAuthorsOptionsHadFocus);
     patronPlaceholders.refresh();
     dom.systemContext.hidden = isSystem();
     root.querySelector('#settings-library-context-title').textContent = `Editing ${data.organization?.name || 'this library'} settings`;
@@ -1500,6 +1549,7 @@ export function createSettingsController({
           (review.catalogChanged || ['administration-settings-organization-sync', 'administration-settings-participation'].includes(review.slot)) });
       dom.form.hidden = false;
       dom.form.inert = Boolean(state.pendingMutation || state.awaitingReload);
+      restoreCommonAuthorsFocus();
       patronPlaceholders.refresh();
       if (wasHidden) dom.panels.find(item => item.dataset.settingsPanelContent === state.activePanel)?.focus({ preventScroll: true });
       if (staffReview) {
@@ -2284,6 +2334,7 @@ export function createSettingsController({
         populate({ ...data, patronCodeChoices: Array.isArray(choices) ? choices : [],
           patronCodeChoicesUnavailable: !Array.isArray(choices) });
         renderStaffUsers(); dom.form.hidden = false; dom.form.inert = state.awaitingReload; dom.refresh.disabled = false;
+        restoreCommonAuthorsFocus();
         onRefreshed(operation.context.owner, { kind: 'settings', scope });
       } };
     } catch (error) {
@@ -2342,6 +2393,8 @@ export function createSettingsController({
     const replaced = actorKey(state.staff) !== actorKey(staff);
     if (replaced) {
       cancelSettingsOperations();
+      commonAuthorsEnabledOverrideDraft = null;
+      pendingCommonAuthorsFocus = false;
       state.pendingMutation = null; state.saving = false; state.outcomeUncertain = false; state.awaitingReload = false; state.awaitingReloadMutation = null; state.unconfirmedMutation = null;
       dom.form.inert = false; dom.form.removeAttribute('aria-busy');
       releaseLogoDraft();
@@ -2375,6 +2428,8 @@ export function createSettingsController({
     const message = state.pendingMutation && state.pendingMutation.outcome !== 'committed' || state.outcomeUncertain
       ? 'Settings change outcome is uncertain. Sign in again and check saved values before retrying.' : null;
     cancelSettingsOperations();
+    commonAuthorsEnabledOverrideDraft = null;
+    pendingCommonAuthorsFocus = false;
     releaseLogoDraft();
     copyGeneration += 1;
     state.visible = false;
@@ -2399,6 +2454,7 @@ export function createSettingsController({
     listen(dom.form, 'submit', saveSettings);
     listen(dom.form, 'input', draftChanged);
     listen(dom.form, 'change', draftChanged);
+    listen(dom.commonAuthorsEnabled, 'change', () => syncCommonAuthorsOptions());
     for (const id of [
       'outstanding-timeout-enabled', 'outstanding-timeout-send-email',
       'hold-pickup-timeout-enabled', 'pending-hold-timeout-enabled', 'additional-copy-timeout-enabled'

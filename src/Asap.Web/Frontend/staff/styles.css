@@ -387,6 +387,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-timeout-rule .settings-field:not(.check-field) > :is(input, select) { box-sizing: border-box; min-width: 0; width: 100%; max-width: 100%; }
 .settings-timeout-rule .settings-field:has(:disabled) { color: var(--muted); }
 .settings-timeout-rule :is(input, select):disabled { color: var(--muted); background: var(--soft); cursor: not-allowed; }
+.settings-common-authors-options { min-width: 0; margin: 0; padding: 0; border: 0; }
 .settings-staff-url-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; min-width: 0; }
 .settings-staff-url-control .settings-field { min-width: 0; }
 .settings-staff-url-control #system-staff-url-candidate { grid-column: 1 / -1; margin: 0; }

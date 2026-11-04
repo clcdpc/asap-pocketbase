@@ -1021,6 +1021,249 @@ async function runLibraryFormatRuleDrafts(page, args, report, saveSettings, read
   report.formatRuleDrafts = { newCode, newKey, savedKey, roundTrip: true };
 }
 
+async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettings, ready) {
+  const libraryScope = '2';
+  const readSettings = scope => page.evaluate(async scope => {
+    const response = await fetch(`/api/asap/staff/settings?orgId=${encodeURIComponent(scope)}`);
+    if (!response.ok) throw new Error(`Settings GET ${response.status}`);
+    return response.json();
+  }, scope);
+  const readEditor = () => page.evaluate(() => {
+    const enabled = document.getElementById('common-authors-enabled');
+    const override = enabled.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-override-toggle');
+    return {
+      enabled: enabled.checked,
+      enabledOverridden: override ? override.checked : null,
+      label: document.getElementById('common-authors-label').value,
+      help: document.getElementById('common-authors-help').value,
+      message: document.getElementById('common-authors-message').value,
+      creatorsUseSystem: document.getElementById('common-creators-use-system').checked,
+      creators: [...document.querySelectorAll('#common-creators-editor [data-domain-row] input')].map(input => input.value)
+    };
+  });
+  const enabled = page.locator('#common-authors-enabled');
+  const options = page.locator('#common-authors-options');
+  const enabledOverride = page.locator(
+    '[data-setting-section="workflow"][data-setting-key="commonAuthorsEnabled"] .settings-override-toggle');
+  const useSystem = page.locator('#common-creators-use-system');
+  const rows = page.locator('#common-creators-editor [data-domain-row]');
+  const setEnabledByKeyboard = async value => {
+    if (await enabled.isChecked() !== value) {
+      await enabled.focus();
+      await enabled.press('Space');
+    }
+  };
+  const setCreatorRows = async values => {
+    while (await rows.count() > values.length) {
+      await rows.last().locator('.settings-row-actions button[aria-label="Delete"]').click();
+    }
+    while (await rows.count() < values.length) await page.locator('#add-common-creator').click();
+    for (const [index, value] of values.entries()) await rows.nth(index).locator('input').fill(value);
+  };
+  const switchScope = async scope => {
+    const selectedScope = page.locator('#settings-scope');
+    if (await selectedScope.inputValue() !== scope) {
+      if (await page.locator('#settings-save').isEnabled()) {
+        await decideConfirmation(page, () => selectedScope.selectOption(scope), dialog => dialog.accept());
+      } else {
+        await selectedScope.selectOption(scope);
+      }
+      await ready(scope);
+    }
+    await page.locator('#settings-nav-workflow').click();
+    await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+  };
+  const ensureLibraryParentEditable = async () => {
+    if (await enabledOverride.count() && !await enabledOverride.isChecked()) await enabledOverride.check();
+  };
+  const saveIfDirty = async () => {
+    if (await page.locator('#settings-save').isEnabled()) return saveSettings();
+    return null;
+  };
+  const assertOptionsDisabled = async label => {
+    assert.equal(await options.evaluate(node => node.disabled), true, `${label}: the native fieldset is disabled.`);
+    assert.equal(await options.evaluate(node => node.matches(':disabled')), true, `${label}: the fieldset matches :disabled.`);
+    assert.equal(await page.locator('#common-authors-label').isDisabled(), true,
+      `${label}: scalar controls inherit the fieldset disabled state.`);
+    assert.equal(await page.locator('#add-common-creator').isDisabled(), true,
+      `${label}: creator actions inherit the fieldset disabled state.`);
+  };
+  const reloadScope = async scope => {
+    await page.reload({ waitUntil: 'networkidle' });
+    await ready(scope);
+    await page.locator('#settings-nav-workflow').click();
+    await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+  };
+  const restoreSystem = async snapshot => {
+    await switchScope('system');
+    await setEnabledByKeyboard(true);
+    for (const [id, value] of [
+      ['common-authors-label', snapshot.label], ['common-authors-help', snapshot.help],
+      ['common-authors-message', snapshot.message]
+    ]) await page.locator(`#${id}`).fill(value);
+    await setCreatorRows(snapshot.creators);
+    await setEnabledByKeyboard(snapshot.enabled);
+    await saveIfDirty();
+    await reloadScope('system');
+    assert.deepEqual(await readEditor(), snapshot, 'System common creators are restored after the browser journey.');
+  };
+  const restoreLibrary = async snapshot => {
+    await switchScope(libraryScope);
+    await ensureLibraryParentEditable();
+    await setEnabledByKeyboard(true);
+    if (snapshot.creatorsUseSystem) {
+      if (!await useSystem.isChecked()) await useSystem.check();
+    } else {
+      if (await useSystem.isChecked()) await useSystem.uncheck();
+      await setCreatorRows(snapshot.creators);
+    }
+    if (snapshot.enabledOverridden) {
+      if (!await enabledOverride.isChecked()) await enabledOverride.check();
+      await setEnabledByKeyboard(snapshot.enabled);
+    } else if (await enabledOverride.count() && await enabledOverride.isChecked()) {
+      await enabledOverride.uncheck();
+    }
+    await saveIfDirty();
+    await reloadScope(libraryScope);
+    assert.deepEqual(await readEditor(), snapshot, 'Library common creators and their list ownership are restored.');
+  };
+
+  await switchScope(libraryScope);
+  const librarySnapshot = await readEditor();
+  await switchScope('system');
+  const systemSnapshot = await readEditor();
+  await switchScope(libraryScope);
+  try {
+    await switchScope('system');
+    const systemInitially = await readEditor();
+    assert.equal(await options.evaluate(node => node.hidden), !systemInitially.enabled);
+    if (!systemInitially.enabled) await setEnabledByKeyboard(true);
+    assert.equal(await options.isVisible(), true, 'Enabling Show common creators reveals the complete options region.');
+    const systemDraft = {
+      label: 'Collapsed feature label browser draft',
+      help: 'Collapsed feature help browser draft',
+      message: 'Collapsed feature message browser draft'
+    };
+    await page.locator('#common-authors-label').fill(systemDraft.label);
+    await page.locator('#common-authors-help').fill(systemDraft.help);
+    await page.locator('#common-authors-message').fill(systemDraft.message);
+    const systemCreator = `Collapsed feature creator ${args.identity.staffId}`;
+    await setCreatorRows([...systemInitially.creators, systemCreator]);
+    await rows.last().locator('input').focus();
+    await enabled.evaluate(node => {
+      node.checked = false;
+      node.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    assert.equal(await options.isHidden(), true);
+    await assertOptionsDisabled('System hidden draft');
+    assert.equal(await enabled.evaluate(node => document.activeElement === node), true,
+      'Hiding focused editable options returns focus to Show common creators.');
+    const retainedAdd = page.locator('#add-common-creator');
+    const retainedDelete = rows.last().locator('.settings-row-actions button[aria-label="Delete"]');
+    const expectedSystemRows = [...systemInitially.creators, systemCreator];
+    await retainedAdd.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await retainedDelete.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    assert.deepEqual(await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value)), expectedSystemRows,
+      'Retained hidden Add/Delete handlers cannot mutate the invisible System list.');
+    const systemOffPayload = await saveSettings();
+    assert.equal(systemOffPayload.workflow.commonAuthorsEnabled, false);
+    assert.equal(systemOffPayload.workflow.commonAuthorsLabel, systemDraft.label);
+    assert.equal(systemOffPayload.workflow.commonAuthorsHelp, systemDraft.help);
+    assert.equal(systemOffPayload.workflow.commonAuthorsMessage, systemDraft.message);
+    assert.deepEqual(systemOffPayload.workflow.commonAuthorsList, expectedSystemRows);
+    await reloadScope('system');
+    assert.equal(await enabled.isChecked(), false);
+    assert.equal(await options.isHidden(), true);
+    await assertOptionsDisabled('System reloaded off state');
+    assert.deepEqual(await page.locator('#common-creators-editor [data-domain-row] input').evaluateAll(inputs => inputs.map(input => input.value)), expectedSystemRows,
+      'The hidden System scalar and list drafts survive accepted save and full reload.');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-system-mobile-off');
+    await setEnabledByKeyboard(true);
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-system-mobile-on');
+    const geometry = await page.evaluate(() => {
+      const region = document.getElementById('common-authors-options').getBoundingClientRect();
+      return {
+        viewport: innerWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+        region: { left: region.left, right: region.right, width: region.width },
+        controls: [...document.querySelectorAll('#common-authors-options input, #common-authors-options textarea, #common-authors-options button')]
+          .filter(control => control.getBoundingClientRect().width > 0)
+          .map(control => {
+            const bounds = control.getBoundingClientRect();
+            return { id: control.id || control.getAttribute('aria-label') || control.textContent.trim(), left: bounds.left, right: bounds.right };
+          })
+      };
+    });
+    assert.ok(geometry.region.width > 0 && geometry.region.left >= -1 && geometry.region.right <= geometry.viewport + 1,
+      `The mobile options region fits its viewport: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.scrollWidth <= geometry.viewport);
+    assert.ok(geometry.controls.every(control => control.left >= geometry.region.left - 1 && control.right <= geometry.region.right + 1),
+      `Every mobile creator control fits its region: ${JSON.stringify(geometry)}`);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await restoreSystem(systemSnapshot);
+    report.systemCommonAuthorsRoundTrip = true;
+
+    await switchScope(libraryScope);
+    const libraryInitially = await readEditor();
+    const systemConfig = await readSettings('system');
+    const systemEnabled = systemConfig.stored?.configuredSystem?.workflow?.commonAuthorsEnabled === true;
+    if (!libraryInitially.enabledOverridden) await enabledOverride.check();
+    await setEnabledByKeyboard(true);
+    assert.equal(await options.isVisible(), true);
+    if (await useSystem.isChecked()) await useSystem.uncheck();
+    const libraryCreator = `Collapsed Library creator ${args.identity.staffId}`;
+    await page.locator('#add-common-creator').click();
+    await rows.last().locator('input').fill(libraryCreator);
+    const libraryDraftRows = await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value));
+    await rows.last().locator('input').focus();
+    await enabled.evaluate(node => {
+      node.checked = false;
+      node.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    assert.equal(await options.isHidden(), true);
+    await assertOptionsDisabled('Library hidden draft');
+    assert.equal(await enabled.evaluate(node => document.activeElement === node), true);
+    const useSystemBefore = await useSystem.isChecked();
+    await useSystem.evaluate(node => {
+      node.checked = !node.checked;
+      node.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    assert.equal(await useSystem.isChecked(), useSystemBefore,
+      'A hidden Use system list event cannot change Library list ownership.');
+    const libraryOffPayload = await saveSettings();
+    assert.equal(libraryOffPayload.workflow.commonAuthorsEnabled, false);
+    assert.deepEqual(libraryOffPayload.workflow.commonAuthorsList, libraryDraftRows);
+    await reloadScope(libraryScope);
+    assert.equal(await enabled.isChecked(), false);
+    assert.equal(await enabledOverride.isChecked(), true);
+    assert.equal(await options.isHidden(), true);
+    assert.equal(await useSystem.isChecked(), false);
+    assert.deepEqual(await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value)), libraryDraftRows,
+      'The hidden Library creator list and its override survive accepted save and reload.');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-mobile-off');
+
+    await enabledOverride.uncheck();
+    assert.equal(await enabled.isChecked(), systemEnabled,
+      'Resetting the Library feature override displays the authoritative System flag.');
+    assert.equal(await enabled.isDisabled(), true);
+    assert.equal(await options.isHidden(), !systemEnabled,
+      'Inherited true reveals options, while inherited false keeps them collapsed.');
+    await enabledOverride.check();
+    assert.equal(await enabled.isChecked(), false, 'Re-enabling Override restores its local false value.');
+    assert.equal(await options.isHidden(), true);
+    await setEnabledByKeyboard(true);
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-mobile-on');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await restoreLibrary(librarySnapshot);
+    report.libraryCommonAuthorsRoundTrip = true;
+  } finally {
+    await restoreSystem(systemSnapshot);
+    await restoreLibrary(librarySnapshot);
+  }
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
   if (!['full', 'system-format-rule', 'library-rule-partial-snapshot', 'library-rule-missing-row', 'library-format-rule-drafts', 'library-metadata', 'campaign2', 'campaign2-library-admin'].includes(args.mode)) {
@@ -1050,6 +1293,7 @@ async function main() {
     libraryInitialScalarSavePreservedAutoClaimRules: false,
     libraryEmptyPatronCodeReplacementRoundTrip: false, libraryPatronCodeResetRoundTrip: false,
     systemTimeoutDependenciesRoundTrip: false, libraryTimeoutDependenciesRoundTrip: false,
+    systemCommonAuthorsRoundTrip: false, libraryCommonAuthorsRoundTrip: false,
     wildcardOriginNormalized: false, systemFormatRuleRoundTrip: false, systemFormatRulePost: null,
     systemFormatRulePostCount: 0,
     libraryFormatRuleWitness: {
@@ -1915,6 +2159,7 @@ async function main() {
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
     report.libraryTimeoutDependenciesRoundTrip = true;
+    await runCommonAuthorsOptions(page, axeSource, args, report, saveSettings, waitForSettingsReady);
 
     await page.close();
     await context.close();
@@ -1940,6 +2185,8 @@ async function main() {
   assert.equal(report.libraryPatronCodeResetRoundTrip, true);
   assert.equal(report.systemTimeoutDependenciesRoundTrip, true);
   assert.equal(report.libraryTimeoutDependenciesRoundTrip, true);
+  assert.equal(report.systemCommonAuthorsRoundTrip, true);
+  assert.equal(report.libraryCommonAuthorsRoundTrip, true);
   assert.equal(report.wildcardOriginNormalized, true);
   console.log('Settings editor browser journey passed.');
 }

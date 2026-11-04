@@ -37,6 +37,22 @@ const libraryTimeoutOverrides = {
   additionalCopyTimeoutDays: 33
 };
 const timeoutKeys = new Set(Object.keys(systemTimeoutValues));
+let systemCommonAuthorsEnabled = true;
+let libraryCommonAuthorsEnabled = false;
+let libraryCommonAuthorsEnabledOverridden = true;
+const systemCommonCreators = ['System creator'];
+let libraryCommonCreators = ['Library creator'];
+let libraryCommonCreatorsOverridden = true;
+const systemCommonAuthorText = {
+  commonAuthorsLabel: 'System creator label',
+  commonAuthorsHelp: 'System creator help',
+  commonAuthorsMessage: 'System creator message'
+};
+let libraryCommonAuthorText = {
+  commonAuthorsLabel: 'Library creator label',
+  commonAuthorsHelp: 'Library creator help',
+  commonAuthorsMessage: 'Library creator message'
+};
 
 function settingsData(librarySetsExist = false) {
   const emptySet = { exists: false, values: [] };
@@ -49,11 +65,11 @@ function settingsData(librarySetsExist = false) {
       systemSettings: {},
       polaris: {},
       configuredSystem: {
-        workflow: { ...systemTimeoutValues },
+        workflow: { ...systemTimeoutValues, commonAuthorsEnabled: systemCommonAuthorsEnabled, ...systemCommonAuthorText },
         patron: {},
         email: { fromAddress: 'system@example.org', fromName: 'System' },
         publicationOptions: emptySet,
-        commonCreators: emptySet,
+        commonCreators: { exists: true, values: systemCommonCreators },
         allowedPatronCodeIds: emptySet,
         providers: [],
         formats: [],
@@ -61,23 +77,31 @@ function settingsData(librarySetsExist = false) {
         branding: { hasLogo: false, altText: 'System alt' }
       },
       libraryOverride: {
-        workflow: { ...libraryTimeoutOverrides },
+        workflow: {
+          ...libraryTimeoutOverrides,
+          ...(libraryCommonAuthorsEnabledOverridden ? { commonAuthorsEnabled: libraryCommonAuthorsEnabled } : {}),
+          ...libraryCommonAuthorText
+        },
         patron: { loginNote: 'Existing library note' },
         email: { hasPostmarkToken: true },
         publicationOptions: librarySet,
-        commonCreators: librarySet,
+        commonCreators: { exists: libraryCommonCreatorsOverridden, values: libraryCommonCreators },
         allowedPatronCodeIds: emptySet,
         providers: [],
         formats: [],
         templates: [],
         branding: { hasLogo: false, altText: null }
       },
-      workflow: { ...libraryTimeoutOverrides },
+      workflow: {
+        ...libraryTimeoutOverrides,
+        commonAuthorsEnabled: libraryCommonAuthorsEnabledOverridden ? libraryCommonAuthorsEnabled : systemCommonAuthorsEnabled,
+        ...libraryCommonAuthorText
+      },
       patron: {},
       email: {},
       origins: [],
       publicationOptions: [],
-      commonCreators: [],
+      commonCreators: libraryCommonCreatorsOverridden ? libraryCommonCreators : systemCommonCreators,
       allowedPatronCodeIds: [],
       providers: [],
       formats: [],
@@ -91,14 +115,19 @@ function settingsData(librarySetsExist = false) {
     effective: {
       allowedPatronCodeIds: [],
       publicationOptions: [],
-      commonCreators: [],
+      commonCreators: libraryCommonCreatorsOverridden ? libraryCommonCreators : systemCommonCreators,
       externalSearchProviders: [],
       formats: [],
       customFields: [],
       email: { fromAddress: 'system@example.org', fromName: 'System' },
       logoAltText: 'System alt'
     },
-    workflow: { ...systemTimeoutValues, ...libraryTimeoutOverrides },
+    workflow: {
+      ...systemTimeoutValues,
+      ...libraryTimeoutOverrides,
+      commonAuthorsEnabled: libraryCommonAuthorsEnabledOverridden ? libraryCommonAuthorsEnabled : systemCommonAuthorsEnabled,
+      ...libraryCommonAuthorText
+    },
     ui_text: {},
     emails: { fromAddress: 'system@example.org', fromName: 'System', templates: [] },
     autoClaimStaff: []
@@ -163,6 +192,19 @@ async function flush() {
           if (!timeoutKeys.has(key)) continue;
           if (value === null) delete libraryTimeoutOverrides[key];
           else libraryTimeoutOverrides[key] = value;
+        }
+        if (Object.hasOwn(saveBody.workflow || {}, 'commonAuthorsEnabled')) {
+          const value = saveBody.workflow.commonAuthorsEnabled;
+          libraryCommonAuthorsEnabledOverridden = value !== null;
+          if (libraryCommonAuthorsEnabledOverridden) libraryCommonAuthorsEnabled = value;
+        }
+        for (const key of Object.keys(systemCommonAuthorText)) {
+          if (Object.hasOwn(saveBody.workflow || {}, key)) libraryCommonAuthorText[key] = saveBody.workflow[key];
+        }
+        if (Object.hasOwn(saveBody.workflow || {}, 'commonAuthorsList')) {
+          const values = saveBody.workflow.commonAuthorsList;
+          libraryCommonCreatorsOverridden = values !== null;
+          if (libraryCommonCreatorsOverridden) libraryCommonCreators = values;
         }
         if (saveBodies.length === 1) saveCompleted();
         return response(200, { code: 'saved', data: { orgId: '2', version: 'library-2-saved' } });
@@ -268,6 +310,58 @@ async function flush() {
     assert.equal(additionalDays.value, '33');
     setChecked(timeoutOverride('additionalCopyTimeoutEnabled'), false);
 
+    const commonAuthorsEnabled = timeout('common-authors-enabled');
+    const commonAuthorsOptions = timeout('common-authors-options');
+    const commonAuthorsOverride = timeoutOverride('commonAuthorsEnabled');
+    const commonCreatorsUseSystem = timeout('common-creators-use-system');
+    const commonCreatorsEditor = timeout('common-creators-editor');
+    const commonCreatorInput = () => commonCreatorsEditor.querySelector('[data-domain-row] input');
+    assert.equal(commonAuthorsEnabled.checked, false);
+    assert.equal(commonAuthorsOverride.checked, true);
+    assert.equal(commonAuthorsOptions.hidden, true, 'An initially disabled feature keeps its options collapsed.');
+    assert.equal(commonAuthorsOptions.disabled, true);
+    setChecked(commonAuthorsOverride, false);
+    assert.equal(commonAuthorsEnabled.checked, true, 'Reset displays the configured System feature flag.');
+    assert.equal(commonAuthorsEnabled.disabled, true);
+    assert.equal(commonAuthorsOptions.hidden, false, 'An inherited true flag reveals its read-only options.');
+    assert.equal(commonCreatorsUseSystem.checked, false);
+    assert.equal(commonCreatorInput().value, 'Library creator');
+    commonCreatorInput().focus();
+    setChecked(commonAuthorsOverride, true);
+    assert.equal(commonAuthorsEnabled.checked, false, 'Re-enabling Override restores the Library flag draft.');
+    assert.equal(commonAuthorsOptions.hidden, true);
+    assert.strictEqual(document.activeElement, commonAuthorsEnabled,
+      'Hiding focused options with an editable parent returns focus to its checkbox.');
+
+    setChecked(commonAuthorsEnabled, true);
+    assert.equal(commonAuthorsOptions.hidden, false);
+    const setText = (control, value) => {
+      control.value = value;
+      control.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    };
+    setText(timeout('common-authors-label'), 'Draft creator label');
+    setText(timeout('common-authors-help'), 'Draft creator help');
+    setText(timeout('common-authors-message'), 'Draft creator message');
+    setText(commonCreatorInput(), 'Draft library creator');
+    const retainedCreatorRow = commonCreatorInput().closest('[data-domain-row]');
+    const retainedCreatorDelete = retainedCreatorRow.querySelector('.settings-row-actions button[aria-label="Delete"]');
+    commonCreatorInput().focus();
+    setChecked(commonAuthorsEnabled, false);
+    assert.equal(commonAuthorsOptions.hidden, true);
+    assert.equal(commonAuthorsOptions.disabled, true);
+    assert.strictEqual(document.activeElement, commonAuthorsEnabled,
+      'Hiding focused editable options returns focus to the controlling checkbox.');
+    timeout('add-common-creator').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    retainedCreatorDelete.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    commonCreatorsUseSystem.checked = true;
+    change(commonCreatorsUseSystem);
+    assert.equal(commonCreatorsUseSystem.checked, false,
+      'A hidden Use system list action cannot change creator-list ownership.');
+    assert.strictEqual(retainedCreatorRow.isConnected, true, 'A retained hidden Delete handler cannot remove its row.');
+    assert.equal(commonCreatorsEditor.querySelectorAll('[data-domain-row]').length, 1,
+      'A hidden Add handler cannot create an invisible row.');
+    assert.equal(commonCreatorInput().value, 'Draft library creator');
+
     assert.strictEqual(document.getElementById('settings-scope').value, '2');
     assert.strictEqual(document.getElementById('settings-scope-field').hidden, true);
     const currentAddressButton = document.getElementById('use-current-staff-url');
@@ -336,8 +430,14 @@ async function flush() {
       'Resetting a parent does not transfer or delete its dependent override.');
     assert.strictEqual(saveBody.workflow.holdPickupTimeoutDays, 9);
     assert.strictEqual(saveBody.workflow.additionalCopyTimeoutDays, 33);
+    assert.strictEqual(saveBody.workflow.commonAuthorsEnabled, false,
+      'The feature remains explicitly off when its hidden configuration is saved.');
+    assert.strictEqual(saveBody.workflow.commonAuthorsLabel, 'Draft creator label');
+    assert.strictEqual(saveBody.workflow.commonAuthorsHelp, 'Draft creator help');
+    assert.strictEqual(saveBody.workflow.commonAuthorsMessage, 'Draft creator message');
     assert.deepStrictEqual(saveBody.patron.publicationOptions, []);
-    assert.deepStrictEqual(saveBody.workflow.commonAuthorsList, []);
+    assert.deepStrictEqual(saveBody.workflow.commonAuthorsList, ['Draft library creator'],
+      'Saving while collapsed preserves the edited Library creator list and its ownership.');
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody.email, 'postmarkToken'), false);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody.email, 'clearPostmarkToken'), false);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody, 'systemSettings'), false);
@@ -355,6 +455,16 @@ async function flush() {
     assert.strictEqual(sendRejectionEmail.disabled, false);
     assert.strictEqual(rejectionTemplate.value, '9007199254740993');
     assert.strictEqual(rejectionTemplate.disabled, false);
+    assert.strictEqual(commonAuthorsEnabled.checked, false);
+    assert.strictEqual(commonAuthorsOptions.hidden, true);
+    assert.strictEqual(commonAuthorsOptions.disabled, true);
+    assert.strictEqual(timeout('common-authors-label').value, 'Draft creator label');
+    assert.strictEqual(timeout('common-authors-help').value, 'Draft creator help');
+    assert.strictEqual(timeout('common-authors-message').value, 'Draft creator message');
+    assert.strictEqual(commonCreatorsUseSystem.checked, false);
+    assert.deepStrictEqual([...commonCreatorsEditor.querySelectorAll('[data-domain-row] input')]
+      .map(input => input.value), ['Draft library creator'],
+    'Accepted reload retains the hidden creator row and keeps the explicit local list selected.');
     assert.strictEqual(timeoutOverride('pendingHoldTimeoutEnabled').checked, false);
     assert.strictEqual(pendingEnabled.checked, false);
     assert.strictEqual(pendingEnabled.disabled, true);
@@ -363,6 +473,11 @@ async function flush() {
     for (const id of ['publication-options-use-system', 'common-creators-use-system']) {
       const toggle = document.getElementById(id);
       assert.strictEqual(toggle.checked, false);
+      if (id === 'common-creators-use-system') {
+        setChecked(commonAuthorsEnabled, true);
+        assert.equal(commonAuthorsOptions.hidden, false,
+          'The feature must be on before its list inheritance control can be changed.');
+      }
       toggle.checked = true;
       toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     }
@@ -374,9 +489,57 @@ async function flush() {
     assert.strictEqual(saveBodies.length, 2);
     assert.strictEqual(saveBodies[1].patron.publicationOptions, null);
     assert.strictEqual(saveBodies[1].workflow.commonAuthorsList, null);
+    assert.strictEqual(saveBodies[1].workflow.commonAuthorsEnabled, true);
 
     for (let attempt = 0; attempt < 20 &&
       document.getElementById('settings-save-title').textContent !== 'No changes'; attempt++) await flush();
+    assert.strictEqual(commonAuthorsEnabled.checked, true);
+    assert.strictEqual(commonAuthorsOptions.hidden, false);
+    assert.strictEqual(commonCreatorsUseSystem.checked, true);
+    assert.deepStrictEqual([...commonCreatorsEditor.querySelectorAll('[data-domain-row] input')]
+      .map(input => input.value), systemCommonCreators,
+    'The accepted Use system list selection displays the System creators.');
+    commonCreatorsUseSystem.checked = false;
+    change(commonCreatorsUseSystem);
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
+      bubbles: true,
+      cancelable: true
+    }));
+    for (let attempt = 0; attempt < 20 && saveBodies.length < 3; attempt++) await flush();
+    assert.strictEqual(saveBodies.length, 3);
+    assert.deepStrictEqual(saveBodies[2].workflow.commonAuthorsList, systemCommonCreators,
+      'A Library list can be made explicitly editable before testing focused row refresh.');
+    for (let attempt = 0; attempt < 20 &&
+      document.getElementById('settings-save-title').textContent !== 'No changes'; attempt++) await flush();
+    assert.strictEqual(commonCreatorsUseSystem.checked, false);
+
+    systemCommonAuthorsEnabled = null;
+    libraryCommonAuthorsEnabledOverridden = false;
+    commonCreatorInput().focus();
+    document.getElementById('settings-form').inert = true;
+    await controller.load({ silent: true });
+    assert.strictEqual(commonAuthorsEnabled.checked, false, 'A null System feature value presents as unchecked.');
+    assert.strictEqual(commonAuthorsEnabled.disabled, true);
+    assert.strictEqual(commonAuthorsOptions.hidden, true);
+    assert.strictEqual(commonAuthorsOptions.disabled, true);
+    assert.strictEqual(document.activeElement, commonAuthorsOverride,
+      `An accepted inert refresh that hides the focused creator row restores focus to the available Override. ` +
+      `Active=${document.activeElement.id || document.activeElement.outerHTML}; checkboxDisabled=${commonAuthorsEnabled.disabled}; ` +
+      `overrideDisabled=${commonAuthorsOverride.disabled}; formInert=${document.getElementById('settings-form').inert}`);
+
+    systemCommonAuthorsEnabled = false;
+    await controller.load({ silent: true });
+    assert.strictEqual(commonAuthorsEnabled.checked, false, 'Inherited false remains collapsed after accepted refresh.');
+    assert.strictEqual(commonAuthorsOptions.hidden, true);
+
+    setChecked(commonAuthorsOverride, true);
+    assert.strictEqual(commonAuthorsEnabled.checked, false, 'A fresh local override begins at the accepted inherited false value.');
+    setChecked(commonAuthorsEnabled, true);
+    setChecked(commonAuthorsOverride, false);
+    assert.strictEqual(commonAuthorsEnabled.checked, false,
+      'Resetting a local true draft shows the latest authoritative System false value.');
+    assert.strictEqual(commonAuthorsOptions.hidden, true);
+
     setChecked(timeoutOverride('outstandingTimeoutEnabled'), true);
     setChecked(outstandingEnabled, false);
     setChecked(timeoutOverride('outstandingTimeoutEnabled'), false);
@@ -388,6 +551,13 @@ async function flush() {
     assert.strictEqual(timeoutOverride('outstandingTimeoutEnabled').checked, false);
     assert.strictEqual(outstandingEnabled.checked, true,
       'A replacement staff identity reloads the accepted System value rather than restoring a retired local override draft.');
+    assert.strictEqual(commonAuthorsOverride.checked, false);
+    assert.strictEqual(commonAuthorsEnabled.checked, false);
+    assert.strictEqual(commonAuthorsOptions.hidden, true);
+    setChecked(commonAuthorsOverride, true);
+    assert.strictEqual(commonAuthorsEnabled.checked, false,
+      'A replacement staff identity cannot restore a retired local common-creators draft.');
+    assert.strictEqual(commonAuthorsOptions.hidden, true);
     setChecked(timeoutOverride('outstandingTimeoutEnabled'), true);
     assert.strictEqual(outstandingEnabled.checked, true,
       'Accepted context population clears the previous identity’s timeout draft cache.');
