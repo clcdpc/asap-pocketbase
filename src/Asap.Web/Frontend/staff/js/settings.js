@@ -377,13 +377,14 @@ export function createSettingsController({
   let staffCreateDraft = null;
   let polarisTest = null;
   const staffDrafts = new Map(), rosterDrafts = new Set();
-  function listen(target, name, handler) {
-    target?.addEventListener(name, event => { if (!disposed && target.isConnected !== false) return handler(event); }, { signal: events.signal });
+  function listen(target, name, handler, capture = false) {
+    target?.addEventListener(name, event => { if (!disposed && target.isConnected !== false) return handler(event); }, { signal: events.signal, capture });
   }
   let logoDraftUrl = null;
   let logoPreviewGeneration = 0;
   let copyGeneration = 0;
   let notificationGeneration = 0, staffStatusGeneration = 0;
+  let templateValidationTarget = null;
 
   function releaseLogoDraft() {
     if (logoDraftUrl) URL.revokeObjectURL(logoDraftUrl);
@@ -475,6 +476,8 @@ export function createSettingsController({
   const domainEditors = createSettingsDomainEditors({
     root,
     onChange: draftChanged,
+    onTemplatesRendered: () => placeholders.refresh(),
+    onInvalidTemplate: (control, message) => placeholders.showError(control, message),
     onRetryCodes: retryPatronCodes,
     canRemoveTemplate: template => {
       const id = stringValue(template.id);
@@ -490,9 +493,13 @@ export function createSettingsController({
 
   const placeholders = createEmailTemplatePlaceholders({
     root, panel: root.querySelector('#settings-templates'), listen,
+    onReveal: () => activatePanel('templates'),
+    onValidationError: (control, message) => {
+      if (templateValidationTarget) templateValidationTarget = { control, message };
+    },
     captureContext: captureSettingsContext, isContextCurrent: isSettingsContextCurrent,
-    isActive: () => state.visible && state.activePanel === 'templates' && !state.pendingMutation &&
-      !state.awaitingReload && !state.outcomeUncertain
+    isActive: () => state.visible && state.activePanel === 'templates' && Boolean(state.data) &&
+      !state.loading && !state.saving && !state.pendingMutation && !state.awaitingReload && !state.outcomeUncertain
   });
 
   const patronPlaceholders = createPatronTextPlaceholders({
@@ -744,6 +751,7 @@ export function createSettingsController({
     reads.begin('administration-settings').abort();
     reads.begin('administration-staff-access').abort();
     reads.begin('administration-patron-codes').abort();
+    placeholders.clear();
     suggestionLimitPlaceholders.clear();
     state.pendingMutation = operation;
     dom.form.inert = true;
@@ -759,6 +767,7 @@ export function createSettingsController({
     dom.form.removeAttribute('aria-busy');
     dom.refresh.disabled = false;
     restoreCommonAuthorsFocus();
+    placeholders.refresh();
     suggestionLimitPlaceholders.refresh();
   }
 
@@ -766,6 +775,7 @@ export function createSettingsController({
     emailTest.invalidate();
     state.loading = false;
     placeholders.clear(); patronPlaceholders.clear(); suggestionLimitPlaceholders.clear();
+    placeholders.retireValidationNotice();
     scopePreparation = null;
     cancelPolarisTest();
     dom.syncOrganizations.disabled = false;
@@ -1264,10 +1274,15 @@ export function createSettingsController({
       writeControl(document.getElementById(subjectId), property(effective, 'subject'));
       writeControl(document.getElementById(bodyId), property(effective, 'body'));
       state.baselineTemplates.set(key, {
-        subject: property(effective, 'subject') || null,
-        body: property(effective, 'body') || null
+        // Native controls normalize line endings. Detect edits against what
+        // staff actually see, so untouched raw SQL text is never rewritten.
+        subject: document.getElementById(subjectId).value || null,
+        body: document.getElementById(bodyId).value || null
       });
       const fieldset = root.querySelector(`[data-template-key="${key}"]`);
+      const inherited = findTemplate(systemRows, key) || {};
+      fieldset.dataset.templateInheritedSubject = inherited.subject || '';
+      fieldset.dataset.templateInheritedBody = inherited.body || '';
       fieldset.querySelector('.settings-template-override-control')?.remove();
       document.getElementById(subjectId).disabled = false;
       document.getElementById(bodyId).disabled = false;
@@ -1286,7 +1301,18 @@ export function createSettingsController({
           node('span', { text: 'Override' })
         ]);
         fieldset.querySelector('legend').append(wrapper);
+        let draft = null;
         listen(input, 'change', () => {
+          const subject = document.getElementById(subjectId);
+          const body = document.getElementById(bodyId);
+          if (!input.checked) {
+            draft = { subject: subject.value, body: body.value };
+            subject.value = fieldset.dataset.templateInheritedSubject;
+            body.value = fieldset.dataset.templateInheritedBody;
+          } else if (draft) {
+            subject.value = draft.subject;
+            body.value = draft.body;
+          }
           document.getElementById(subjectId).disabled = !input.checked;
           document.getElementById(bodyId).disabled = !input.checked;
           updateDirtyState();
@@ -1710,7 +1736,7 @@ export function createSettingsController({
     } finally {
       clearLoading?.();
       if (loadState.isCurrent() && isSettingsContextCurrent(context)) {
-        state.loading = false; dom.refresh.disabled = false; emailTest.sync(); suggestionLimitPlaceholders.refresh();
+        state.loading = false; dom.refresh.disabled = false; emailTest.sync(); placeholders.refresh(); suggestionLimitPlaceholders.refresh();
       }
       reads.finish('administration-settings', loadState.token);
     }
@@ -1912,6 +1938,10 @@ export function createSettingsController({
 
   function collectTemplates(domainData) {
     const rows = [];
+    const append = (row, editor) => {
+      placeholders.validate([row], isSystem(), editor);
+      rows.push(row);
+    };
     const raw = templateRows(state.data);
     const systemRows = raw.filter(row => Number(row.organizationId) === 1);
     const libraryRows = raw.filter(row => Number(row.organizationId) === organizationId());
@@ -1920,22 +1950,23 @@ export function createSettingsController({
       const body = document.getElementById(bodyId).value;
       const systemRow = findTemplate(systemRows, key);
       const baseline = state.baselineTemplates.get(key) || {};
+      const fieldset = root.querySelector(`[data-template-key="${key}"]`);
       if (isSystem()) {
-        if (subject !== (baseline.subject ?? '') || body !== (baseline.body ?? '')) {
-          rows.push({ templateKey: key, subject, body });
-        }
+        const row = { templateKey: key };
+        if (subject !== (baseline.subject ?? '')) row.subject = subject;
+        if (body !== (baseline.body ?? '')) row.body = body;
+        if (Object.keys(row).length > 1) append(row, fieldset);
         continue;
       }
-      const fieldset = root.querySelector(`[data-template-key="${key}"]`);
       const overrideToggle = fieldset.querySelector('.settings-template-override');
       const libraryRow = libraryRows.find(row =>
         String(row.sourceTemplateId || '') === String(systemRow?.id || '') && !row.isCustom);
       if (!overrideToggle?.checked) {
-        if (libraryRow) rows.push({
+        if (libraryRow) append({
           templateKey: key,
           sourceTemplateId: String(systemRow?.id || libraryRow.sourceTemplateId || ''),
           reset: true
-        });
+        }, fieldset);
         continue;
       }
       const row = {
@@ -1944,19 +1975,21 @@ export function createSettingsController({
       };
       if (subject !== (baseline.subject ?? '')) row.subject = subject;
       if (body !== (baseline.body ?? '')) row.body = body;
-      if (Object.keys(row).length > 2) rows.push(row);
+      if (Object.keys(row).length > 2) append(row, fieldset);
     }
     if (domainData?.domainsChanged?.templates) {
       for (const item of domainData.templates) {
+        const editor = root.querySelector(`[data-template-ui-id="${item.uiId}"]`);
         if (item.isCustom) {
-          rows.push({
-            templateKey: item.templateKey,
-            displayName: item.displayName,
-            subject: item.subject,
-            body: item.body,
-            enabled: item.enabled,
-            isCustom: true
-          });
+          if (item.reset) {
+            append({ templateKey: item.templateKey, isCustom: true, reset: true }, editor);
+            continue;
+          }
+          const row = { templateKey: item.templateKey, isCustom: true };
+          for (const key of ['displayName', 'subject', 'body', 'enabled', 'sortOrder']) {
+            if (item[`${key}Changed`]) row[key] = item[key];
+          }
+          if (Object.keys(row).length > 2) append(row, editor);
           continue;
         }
         const row = {
@@ -1970,8 +2003,9 @@ export function createSettingsController({
           if (item.bodyChanged) row.body = item.body;
           if (item.displayNameChanged) row.displayName = item.displayName;
           if (item.enabledChanged) row.enabled = item.enabled;
+          if (isSystem() && item.sortOrderChanged) row.sortOrder = item.sortOrder;
         }
-        if (row.reset || item.overridden && !item.hadOverride || Object.keys(row).length > 2) rows.push(row);
+        if (row.reset || !isSystem() && item.overridden && !item.hadOverride || Object.keys(row).length > 2) append(row, editor);
       }
     }
     return rows;
@@ -2060,11 +2094,18 @@ export function createSettingsController({
       return;
     }
     let payload;
+    templateValidationTarget = {};
     try {
       payload = collectPayload();
     } catch (error) {
-      notify(error.message || 'The settings are invalid. Reload settings before saving.', 'error');
+      const message = error.message || 'The settings are invalid. Reload settings before saving.';
+      const clearNotice = notify(message, 'error');
+      if (templateValidationTarget?.message === message) {
+        placeholders.ownValidationNotice(templateValidationTarget.control, message, clearNotice);
+      }
       return;
+    } finally {
+      templateValidationTarget = null;
     }
     const mutation = beginSettingsMutation('administration-settings-save', settingsDraft);
     if (!mutation) return;
@@ -2493,6 +2534,7 @@ export function createSettingsController({
     }
     for (const panel of dom.panels) panel.hidden = panel.dataset.settingsPanelContent !== name;
     if (name === 'patron') patronPlaceholders.refresh();
+    if (name === 'templates') placeholders.refresh();
     if (name === 'workflow') suggestionLimitPlaceholders.refresh();
     const panel = dom.panels.find(item => item.dataset.settingsPanelContent === name);
     panel?.focus({ preventScroll: true });
@@ -2735,6 +2777,7 @@ export function createSettingsController({
     state.visible = false;
     emailTest.invalidate();
     placeholders.clear(); patronPlaceholders.clear(); suggestionLimitPlaceholders.refresh();
+    placeholders.retireValidationNotice();
     cancelPolarisTest();
     releaseLogoDraft();
     dom.logo.value = '';

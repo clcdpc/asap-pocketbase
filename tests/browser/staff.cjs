@@ -3177,15 +3177,19 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       { waitUntil: 'networkidle' });
     await page.locator('#settings-templates').waitFor({ state: 'visible' });
     const originalSubject = await page.locator('#email-submit-subject').inputValue();
-    await page.locator('#template-placeholder-help summary').click();
-    assert.equal(await page.locator('#template-placeholder-list button').count(), 7);
+    const submissionCard = page.locator('[data-template-key="suggestion_submitted"]');
+    assert.equal(await submissionCard.locator('[data-template-toggle]').getAttribute('aria-expanded'), 'false');
+    await submissionCard.locator('[data-template-toggle]').click();
     await page.evaluate(() => {
       const subject = document.getElementById('email-submit-subject');
       subject.focus();
       subject.setSelectionRange(0, 0);
       subject.dispatchEvent(new Event('select', { bubbles: true }));
     });
-    await page.getByRole('button', { name: '{{name}}' }).click();
+    await page.getByRole('button', { name: 'Insert placeholder into Submission confirmation Subject', exact: true }).click();
+    assert.equal(await page.locator('#email-submit-subject-placeholders [data-placeholder-key]').count(), 7);
+    await page.locator('#email-submit-subject-placeholders summary').click();
+    await page.locator('#email-submit-subject-placeholders [data-placeholder-key="name"]').click();
     assert.equal(await page.locator('#email-submit-subject').inputValue(), `{{name}}${originalSubject}`);
     assert.equal(await page.locator('#settings-save-title').textContent(), 'Unsaved changes');
     assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'sticky');
@@ -3628,13 +3632,29 @@ async function runSettingsLayout(browser, args, axeSource, report) {
           assert.equal(await page.locator('#settings-discard').isHidden(), true);
         }
         const layout = await page.evaluate(section => {
-          const bounds = id => {
+          const bounds = (id, fullWidth = false) => {
             const label = document.getElementById(id).closest('.settings-field');
-            const rect = label.getBoundingClientRect();
-            return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom,
-              width: rect.width, gridWidth: label.closest('.settings-grid').getBoundingClientRect().width };
+            const item = fullWidth ? label.closest('.settings-grid > .wide') : label;
+            const grid = label.closest('.settings-grid');
+            const rect = item.getBoundingClientRect();
+            const gridRect = grid.getBoundingClientRect();
+            return { id, top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom,
+              width: rect.width, gridWidth: gridRect.width, gridLeft: gridRect.left, gridRight: gridRect.right,
+              controls: fullWidth ? [...item.querySelectorAll('input, textarea, select, button')].map(control => {
+                const bounds = control.getBoundingClientRect();
+                return { id: control.id, left: bounds.left, right: bounds.right, top: bounds.top,
+                  bottom: bounds.bottom, width: bounds.width, height: bounds.height };
+              }).filter(control => control.width > 0 && control.height > 0) : [],
+              partners: fullWidth ? [...grid.children].filter(sibling => {
+                if (sibling === item) return false;
+                const bounds = sibling.getBoundingClientRect();
+                return bounds.width > 0 && bounds.height > 0 &&
+                  Math.min(rect.bottom, bounds.bottom) - Math.max(rect.top, bounds.top) > 1;
+              }).length : 0 };
           };
-          return { pairs: section.pairs.map(pair => pair.map(bounds)), wide: section.wide.map(bounds) };
+          return { pairs: section.pairs.map(pair => pair.map(id => bounds(id))),
+            wide: section.wide.map(id => bounds(id, true)),
+            staffUrlLabel: section.name === 'start' ? bounds('system-staff-url') : null };
         }, section);
         for (const [first, second] of layout.pairs) {
           if (name === 'desktop') {
@@ -3646,7 +3666,30 @@ async function runSettingsLayout(browser, args, axeSource, report) {
           }
         }
         for (const field of layout.wide) {
-          assert.ok(Math.abs(field.width - field.gridWidth) < 1, `${section.name} full-width field has an arbitrary partner`);
+          assert.ok(Math.abs(field.width - field.gridWidth) < 1 &&
+            Math.abs(field.left - field.gridLeft) < 1 && Math.abs(field.right - field.gridRight) < 1 &&
+            field.partners === 0, `${section.name} full-width field has an arbitrary partner`);
+          for (const control of field.controls) {
+            assert.ok(control.left >= field.left - 1 && control.right <= field.right + 1 &&
+              control.top >= field.top - 1 && control.bottom <= field.bottom + 1,
+              `${section.name} ${control.id} must stay inside its full-width group`);
+          }
+        }
+        if (section.name === 'start') {
+          const group = layout.wide.find(field => field.id === 'system-staff-url');
+          const label = layout.staffUrlLabel;
+          const input = group.controls.find(control => control.id === 'system-staff-url');
+          const action = group.controls.find(control => control.id === 'use-current-staff-url');
+          assert.ok(input && action, 'Staff URL and Use current address must both be visible within the wide group');
+          assert.ok(Math.abs(label.left - input.left) < 1 && Math.abs(label.right - input.right) < 1 &&
+            Math.abs(label.bottom - input.bottom) < 1, 'Staff URL input must fill and end its labeled field');
+          if (name === 'desktop') {
+            assert.ok(label.right < action.left && Math.abs(input.bottom - action.bottom) < 1,
+              'Use current address must sit beside and bottom-align with the Staff URL input');
+          } else {
+            assert.ok(label.bottom <= action.top && Math.abs(label.left - action.left) < 1,
+              'Use current address must stack below and align left with the Staff URL field on mobile');
+          }
         }
         if (section.name === 'polaris') {
           await page.locator('#polaris-host').focus();

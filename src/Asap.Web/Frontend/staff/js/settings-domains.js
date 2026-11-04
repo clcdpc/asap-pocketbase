@@ -1,6 +1,7 @@
 import { byDisplayLabel } from './display-order.js';
 
 let nextRulePanelId = 0;
+let nextTemplateRowId = 0;
 
 function element(tag, attributes = {}, children = []) {
   const value = document.createElement(tag);
@@ -187,6 +188,7 @@ function normalizeTemplate(value, index) {
     displayName: clean(property(value, 'displayName')),
     subject: property(value, 'subject') ?? property(value, 'subjectTemplate') ?? null,
     body: property(value, 'body') ?? property(value, 'bodyTemplate') ?? null,
+    sortOrder: numeric(property(value, 'sortOrder'), 0),
     enabled: property(value, 'enabled') !== false && property(value, 'isHidden') !== true,
     isCustom: Boolean(property(value, 'isCustom') ?? property(value, 'custom')),
     overridden: Boolean(property(value, 'overridden')),
@@ -584,7 +586,8 @@ function rawSnapshot(configuredSystem, libraryOverride, key, system) {
   return property(libraryOverride, key);
 }
 
-export function createSettingsDomainEditors({ root, onChange = () => {}, onRetryCodes = () => {}, canRemoveTemplate = () => true }) {
+export function createSettingsDomainEditors({ root, onChange = () => {}, onRetryCodes = () => {},
+  canRemoveTemplate = () => true, onTemplatesRendered = () => {}, onInvalidTemplate = () => {} }) {
   const events = new window.AbortController();
   let disposed = false;
   function listen(target, name, handler) {
@@ -656,6 +659,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     ruleRosterCodes: [],
     baseline: null,
     originalTemplates: [],
+    templateOrderBaseline: [],
     deletedFormats: [],
     validationError: null,
     selectedCodes: [],
@@ -1513,7 +1517,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     const systemRows = raw
       .filter(item => stringId(property(item, 'organizationId')) === '1')
       .filter(item => !BUILTIN_TEMPLATE_KEYS.has(clean(property(item, 'templateKey'))));
-    if (state.system) return systemRows.map(normalizeTemplate);
+    if (state.system) return systemRows.map(normalizeTemplate).sort(compareTemplateOrder);
 
     const organizationId = String(currentOrganizationId());
     const libraryRows = raw.filter(item => stringId(property(item, 'organizationId')) === organizationId);
@@ -1539,6 +1543,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         rawSubject: override?.subject ?? null,
         rawBody: override?.body ?? null,
         rawDisplayName: override?.displayName ?? null,
+        inheritedSubject: system.subject,
+        inheritedBody: system.body,
+        inheritedDisplayName: system.displayName,
+        inheritedEnabled: system.enabled,
         subjectBaseline: override?.subject?.trim() ? override.subject : system.subject,
         bodyBaseline: override?.body?.trim() ? override.body : system.body,
         displayNameBaseline: override?.displayName ?? system.displayName,
@@ -1548,14 +1556,69 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     const custom = libraryRows
       .filter(item => Boolean(property(item, 'isCustom')))
       .map(normalizeTemplate);
-    return lineage.concat(custom);
+    // Sending choices order System sources and Library custom records together.
+    // A Library content override does not own its source's order.
+    return lineage.concat(custom).sort(compareTemplateOrder);
+  }
+
+  function compareTemplateIds(left, right) {
+    const leftId = left.sourceTemplateId || left.id;
+    const rightId = right.sourceTemplateId || right.id;
+    if (!leftId || !rightId) return leftId ? -1 : rightId ? 1 : 0;
+    const first = BigInt(leftId), second = BigInt(rightId);
+    return first < second ? -1 : first > second ? 1 : 0;
+  }
+
+  function compareTemplateOrder(left, right) {
+    return left.sortOrder - right.sortOrder || compareTemplateIds(left, right);
+  }
+
+  function movedTemplateSortOrder(values, index, offset) {
+    const next = index + offset;
+    if (next < 0 || next >= values.length) return null;
+    const ordered = [...values];
+    [ordered[index], ordered[next]] = [ordered[next], ordered[index]];
+    const moved = ordered[next], before = ordered[next - 1], after = ordered[next + 1];
+    const minimum = before ? before.sortOrder + (compareTemplateIds(moved, before) < 0 ? 1 : 0) : -2147483648;
+    const maximum = after ? after.sortOrder - (compareTemplateIds(moved, after) > 0 ? 1 : 0) : 2147483647;
+    return minimum <= maximum ? Math.max(minimum, Math.min(moved.sortOrder, maximum)) : null;
+  }
+
+  function orderSystemTemplateBlock(values, first, last) {
+    // Tied System rows may need more than one changed rank. Expand only as
+    // far as necessary; unrelated records outside this block remain untouched.
+    for (let size = last - first + 1; size <= values.length; size++) {
+      for (let start = Math.max(0, last - size + 1); start <= Math.min(first, values.length - size); start++) {
+        const end = start + size - 1;
+        const minimum = start ? values[start - 1].sortOrder +
+          (compareTemplateIds(values[start], values[start - 1]) < 0 ? 1 : 0) : -2147483648;
+        const maximum = end < values.length - 1 ? values[end + 1].sortOrder -
+          (compareTemplateIds(values[end], values[end + 1]) > 0 ? 1 : 0) : 2147483647;
+        if (maximum - minimum < size - 1) continue;
+        const base = Math.max(minimum, Math.min(values[start].sortOrder, maximum - size + 1));
+        for (let offset = 0; offset < size; offset++) values[start + offset].sortOrder = base + offset;
+        return;
+      }
+    }
   }
 
   function renderTemplates(values) {
     if (!dom.templates) return;
-    dom.templates.replaceChildren();
+    const existing = new Map([...dom.templates.querySelectorAll('[data-domain-row]')]
+      .map(row => [row.dataset.templateUiId, row]));
+    const focused = dom.templates.contains(document.activeElement) ? document.activeElement : null;
+    dom.templates.querySelector('.settings-empty')?.remove();
     if (values.length === 0) dom.templates.append(element('p', { className: 'settings-empty', text: 'No named templates configured.' }));
     for (const [index, value] of values.entries()) {
+      const uiId = value.uiId || `template-row-${++nextTemplateRowId}`;
+      if (existing.has(uiId)) {
+        const row = existing.get(uiId);
+        existing.delete(uiId);
+        row.dataset.templateSortOrder = String(value.sortOrder ?? 0);
+        updateTemplateRowActions(row, index, values);
+        dom.templates.append(row);
+        continue;
+      }
       const lineage = !value.isCustom && !state.system;
       const override = lineage
         ? checkbox('Override', value.overridden, 'settings-inline-check settings-template-override-control')
@@ -1564,6 +1627,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       const row = element('div', {
         className: 'settings-editor-row settings-template-row',
         'data-domain-row': 'true',
+        'data-template-ui-id': uiId,
+        'data-template-sort-order': value.sortOrder ?? 0,
+        'data-template-baseline-sort-order': value.sortOrder ?? 0,
         'data-template-id': stringId(value.id) || '',
         'data-template-version': stringId(value.version) || '',
         'data-template-source-id': stringId(value.sourceTemplateId) || '',
@@ -1572,7 +1638,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         'data-template-baseline-subject': value.subjectBaseline || '',
         'data-template-baseline-body': value.bodyBaseline || '',
         'data-template-baseline-display-name': value.displayNameBaseline || '',
-        'data-template-baseline-enabled': value.enabledBaseline ? 'true' : 'false'
+        'data-template-baseline-enabled': value.enabledBaseline ? 'true' : 'false',
+        'data-template-inherited-subject': value.inheritedSubject || '',
+        'data-template-inherited-body': value.inheritedBody || ''
       }, [
         field('Template key', element('input', {
           type: 'text',
@@ -1607,23 +1675,70 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
           'data-domain-editable': 'true'
         }), element('span', { text: 'Enabled' })]),
         override?.wrapper,
-        actions(index, values.length, (from, offset) => reorder('templates', from, offset), value.isCustom ? from => {
-          if (canRemoveTemplate(value)) remove('templates', from);
+        element('p', { className: 'field-help settings-template-order-help', hidden: 'true' }),
+        actions(index, values.length, (_, offset) => reorder('templates', templateRowIndex(row), offset), value.isCustom ? () => {
+          const currentIndex = templateRowIndex(row);
+          if (canRemoveTemplate(readTemplates()[currentIndex])) remove('templates', currentIndex);
         } : null)
       ]);
+      row.dataset.templateBaselineSubject = row.querySelector('.template-subject').value;
+      row.dataset.templateBaselineBody = row.querySelector('.template-body').value;
+      row.dataset.templateBaselineDisplayName = clean(row.querySelector('.template-display-name').value) || '';
+      row.dataset.templateBaselineEnabled = String(row.querySelector('.template-enabled').checked);
       if (override) {
+        let draft = null;
         listen(override.input, 'change', () => {
+          const subject = row.querySelector('.template-subject');
+          const body = row.querySelector('.template-body');
+          const name = row.querySelector('.template-display-name');
+          const enabled = row.querySelector('.template-enabled');
+          if (!override.input.checked) {
+            draft = { subject: subject.value, body: body.value, name: name.value, enabled: enabled.checked };
+            subject.value = value.inheritedSubject || '';
+            body.value = value.inheritedBody || '';
+            name.value = value.inheritedDisplayName || '';
+            enabled.checked = value.inheritedEnabled;
+          } else if (draft) {
+            subject.value = draft.subject; body.value = draft.body;
+            name.value = draft.name; enabled.checked = draft.enabled;
+          }
           updateRowDisabled(row, !override.input.checked);
+          updateTemplateRowActions(row, templateRowIndex(row), readTemplates());
           onChange();
         });
         updateRowDisabled(row, !override.input.checked);
       }
       dom.templates.append(row);
+      updateTemplateRowActions(row, index, values);
+    }
+    for (const row of existing.values()) row.remove();
+    onTemplatesRendered();
+    if (focused?.isConnected) {
+      const target = focused.disabled ? focused.closest('[data-domain-row]')?.querySelector('[data-template-toggle]') : focused;
+      target?.focus({ preventScroll: true });
     }
   }
 
+  function templateRowIndex(row) {
+    return [...dom.templates.querySelectorAll('[data-domain-row]')].indexOf(row);
+  }
+
+  function updateTemplateRowActions(row, index, values) {
+    const inherited = row.dataset.templateKind === 'lineage';
+    const buttons = row.querySelectorAll('.settings-row-actions button');
+    const blockedUp = !state.system && !inherited && index > 0 && movedTemplateSortOrder(values, index, -1) === null;
+    const blockedDown = !state.system && !inherited && index < values.length - 1 && movedTemplateSortOrder(values, index, 1) === null;
+    buttons[0].disabled = inherited || index === 0 || blockedUp;
+    buttons[1].disabled = inherited || index === values.length - 1 || blockedDown;
+    const help = row.querySelector('.settings-template-order-help');
+    help.hidden = !inherited && !blockedUp && !blockedDown;
+    help.textContent = inherited ? 'Template order is managed at System level.'
+      : 'Some positions follow inherited template order. Change that order at System level.';
+  }
+
   function readTemplates() {
-    return [...(dom.templates?.querySelectorAll('[data-domain-row]') || [])].map(row => {
+    const rows = [...(dom.templates?.querySelectorAll('[data-domain-row]') || [])];
+    return rows.map(row => {
       const lineage = row.dataset.templateKind === 'lineage';
       const currentSubject = row.querySelector('.template-subject')?.value ?? null;
       const currentBody = row.querySelector('.template-body')?.value ?? null;
@@ -1634,7 +1749,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       const baselineDisplayName = clean(row.dataset.templateBaselineDisplayName);
       const baselineEnabled = row.dataset.templateBaselineEnabled === 'true';
       const override = row.querySelector('.settings-template-override');
+      const persisted = Boolean(row.dataset.templateId);
+      const sortOrder = numeric(row.dataset.templateSortOrder, 0);
       return {
+        uiId: row.dataset.templateUiId,
         id: stringId(row.dataset.templateId),
         version: stringId(row.dataset.templateVersion),
         sourceTemplateId: stringId(row.dataset.templateSourceId),
@@ -1643,6 +1761,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         subject: currentSubject,
         body: currentBody,
         enabled: currentEnabled,
+        sortOrder,
+        sortOrderBaseline: numeric(row.dataset.templateBaselineSortOrder, 0),
+        sortOrderChanged: !persisted || sortOrder !== numeric(row.dataset.templateBaselineSortOrder, 0),
         isCustom: row.dataset.templateKind === 'custom',
         overridden: lineage ? Boolean(override?.checked) : !lineage,
         hadOverride: row.dataset.templateHadOverride === 'true',
@@ -1651,10 +1772,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         bodyBaseline: baselineBody,
         displayNameBaseline: baselineDisplayName,
         enabledBaseline: baselineEnabled,
-        subjectChanged: !lineage || currentSubject !== baselineSubject,
-        bodyChanged: !lineage || currentBody !== baselineBody,
-        displayNameChanged: !lineage || currentDisplayName !== baselineDisplayName,
-        enabledChanged: !lineage || currentEnabled !== baselineEnabled
+        subjectChanged: !persisted || currentSubject !== baselineSubject,
+        bodyChanged: !persisted || currentBody !== baselineBody,
+        displayNameChanged: !persisted || currentDisplayName !== baselineDisplayName,
+        enabledChanged: !persisted || currentEnabled !== baselineEnabled
       };
     });
   }
@@ -1680,7 +1801,17 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     const values = readDomain(name);
     const next = index + offset;
     if (next < 0 || next >= values.length) return;
+    const sortOrder = name === 'templates' ? movedTemplateSortOrder(values, index, offset) : null;
+    if (name === 'templates' && !state.system && (!values[index].isCustom || sortOrder === null)) return;
     [values[index], values[next]] = [values[next], values[index]];
+    if (name === 'templates') {
+      if (sortOrder !== null) values[next].sortOrder = sortOrder;
+      else orderSystemTemplateBlock(values, Math.min(index, next), Math.max(index, next));
+      if (values.length === state.templateOrderBaseline.length &&
+          values.every((value, position) => value.uiId === state.templateOrderBaseline[position])) {
+        for (const value of values) value.sortOrder = value.sortOrderBaseline;
+      }
+    }
     if (name === 'formats' || name === 'providers') {
       values.forEach((value, order) => { value.sortOrder = (order + 1) * 10; });
     }
@@ -1703,6 +1834,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       state.ruleRosterCodes = state.ruleRosterCodes.filter(code => code !== removed.code);
     }
     renderDomain(name, values);
+    if (name === 'templates') {
+      const rows = dom.templates.querySelectorAll('[data-domain-row]');
+      (rows[Math.min(index, rows.length - 1)]?.querySelector('[data-template-toggle]') || addButtons.templates)?.focus();
+    }
     if (name === 'fields') {
       for (const rule of rules || []) delete rule.customFields[removedFieldKey];
       state.models.rules = clone(rules);
@@ -1813,8 +1948,26 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     if (readPublication().some(option => !option.id || !option.label)) {
       throw new Error('Publication options require stable IDs and labels. Delete a row to remove it.');
     }
-    if (readTemplates().some(template => !template.templateKey)) {
-      throw new Error('Email templates require a stable key. Delete a row to remove it.');
+    const blankKey = [...dom.templates.querySelectorAll('.template-key')].find(control => !control.value.trim());
+    if (blankKey) {
+      const message = 'Email templates require a stable key. Delete a row to remove it.';
+      onInvalidTemplate(blankKey, message);
+      throw new Error(message);
+    }
+    const templateKeys = new Set(state.system ? BUILTIN_TEMPLATE_KEYS : []);
+    for (const template of state.models.templates) {
+      if (template.id && (state.system || template.isCustom)) templateKeys.add(template.templateKey.toLowerCase());
+    }
+    for (const row of dom.templates.querySelectorAll('[data-domain-row]')) {
+      if (row.dataset.templateId) continue;
+      const control = row.querySelector('.template-key');
+      const key = control.value.trim().toLowerCase();
+      if (templateKeys.has(key)) {
+        const message = 'This email template key is already used in this settings scope. Choose a different key.';
+        onInvalidTemplate(control, message);
+        throw new Error(message);
+      }
+      templateKeys.add(key);
     }
     const fields = readFields();
     const keys = new Set();
@@ -1861,6 +2014,11 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       }
       if (name === 'rules') expandedRuleCodes.add(added.code);
       renderDomain(name, values);
+      if (name === 'templates') {
+        const row = dom.templates.lastElementChild;
+        row?.querySelector('[data-template-toggle]')?.click();
+        row?.querySelector('.template-display-name')?.focus();
+      }
       if (name === 'rules') dom.rules.lastElementChild?.querySelector('[data-rule-toggle]')?.focus();
       if (name === 'fields') {
         renderRules(rules);
@@ -1976,7 +2134,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   bindAdd('claims', values => ({ materialFormatId: readFormats()[0]?.id || '', staffUserId: '' }));
   function unusedTemplateKey(values) {
     // The DACPAC uses a case-insensitive collation for unique template keys.
-    const keys = new Set(values.map(value => String(value.templateKey || '').toLowerCase()));
+    const keys = new Set([...values, ...state.models.templates].map(value => String(value.templateKey || '').toLowerCase()));
     const prefix = state.system ? 'rejection:template_' : 'rejection:custom_template_';
     let index = 1;
     while (keys.has(`${prefix}${index}`)) index += 1;
@@ -1989,6 +2147,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     displayName: 'New rejection template',
     subject: '',
     body: '',
+    sortOrder: Math.min(2147483647, Math.max(0, ...values.map(value => value.sortOrder ?? 0)) + 10),
     enabled: true,
     isCustom: !state.system
   }));
@@ -2070,7 +2229,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     renderFields(fields);
     renderRules(rules);
     renderClaims(claims);
+    dom.templates?.replaceChildren();
     renderTemplates(templates);
+    state.templateOrderBaseline = [...dom.templates.querySelectorAll('[data-domain-row]')].map(row => row.dataset.templateUiId);
     state.baseline = readSnapshot();
   }
 

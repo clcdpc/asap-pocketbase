@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { URL } = require('node:url');
+const { verifyEmailTemplateCards } = require('./email-template-cards.cjs');
 
 function parseArguments(argv) {
   if (![5, 6, 8].includes(argv.length)) {
@@ -597,6 +598,8 @@ async function runPatronTextRefinements(page, axeSource, args, report, saveSetti
 }
 
 async function runCampaign2Editor(page, axeSource, args, report, saveSettings, ready) {
+  await verifyEmailTemplateCards({ page, report,
+    scan: (name, fullPage = false) => scan(page, axeSource, args.artifactRoot, report, name, false, fullPage) });
   const library = args.scopeId;
   const read = scope => page.evaluate(async scope => {
     const response = await fetch(`/api/asap/staff/settings?orgId=${encodeURIComponent(scope)}`);
@@ -618,14 +621,52 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   // their actual current values rather than an original value attribute.
   const rowIndex = key => page.locator('#email-templates-editor [data-domain-row]').evaluateAll((rows, key) =>
     rows.findIndex(row => row.querySelector('.template-key').value === key), key);
-  const row = async key => page.locator('#email-templates-editor [data-domain-row]').nth(await rowIndex(key));
-  const titleButton = () => page.locator('[data-placeholder-key="title"]');
+  const openCard = async control => {
+    const card = control.locator('xpath=ancestor-or-self::*[contains(concat(" ",normalize-space(@class)," ")," settings-template-card ")][1]');
+    const toggle = card.locator('[data-template-toggle]');
+    if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+  };
+  const row = async key => {
+    const card = page.locator('#email-templates-editor [data-domain-row]').nth(await rowIndex(key));
+    await openCard(card); return card;
+  };
+  const titleButton = () => page.locator('.template-placeholder-picker:popover-open [data-placeholder-key="title"]');
+  const tokenKeys = () => page.locator('.template-placeholder-picker:popover-open [data-placeholder-key]')
+    .evaluateAll(buttons => buttons.map(button => button.dataset.placeholderKey));
+  const openPicker = async control => {
+    await openCard(control);
+    const trigger = control.locator('xpath=..').locator('.template-placeholder-trigger');
+    await trigger.scrollIntoViewIfNeeded();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await trigger.click();
+    const popupId = await trigger.getAttribute('aria-controls');
+    try {
+      await page.waitForFunction(id => document.getElementById(id)?.matches(':popover-open') === true,
+        popupId, { timeout: 5000 });
+    } catch (error) {
+      const diagnostic = await trigger.evaluate(node => {
+        const card = node.closest('.settings-template-card');
+        const popup = document.getElementById(node.getAttribute('aria-controls'));
+        const control = node.closest('.settings-template-field').querySelector('input, textarea');
+        return { scope: document.getElementById('settings-scope').value, version: document.getElementById('settings-version').value,
+          formInert: document.getElementById('settings-form').inert, key: card.querySelector('.template-key')?.value || card.dataset.templateKey,
+          kind: card.dataset.templateKind, expanded: card.querySelector('[data-template-toggle]').getAttribute('aria-expanded'),
+          override: card.querySelector('.settings-template-override')?.checked, triggerDisabled: node.disabled,
+          triggerExpanded: node.getAttribute('aria-expanded'), fieldDisabled: control.disabled, fieldReadOnly: control.readOnly,
+          nativeOpen: popup.matches(':popover-open'), activeElement: document.activeElement?.id || document.activeElement?.localName,
+          viewport: { width: innerWidth, height: innerHeight, scrollY }, bounds: node.getBoundingClientRect().toJSON() };
+      });
+      throw new Error(`The contextual email picker did not stay open: ${JSON.stringify(diagnostic)}. ${error.message}`);
+    }
+  };
   const selectRange = async (control, start, end = start) => {
+    await openCard(control);
     await control.focus();
     await control.evaluate((element, range) => {
       element.setSelectionRange(range.start, range.end);
       element.dispatchEvent(new Event('select', { bubbles: true }));
     }, { start, end });
+    await openPicker(control);
   };
   const assertLibraryContext = async () => {
     assert.match(await page.locator('#settings-system-context').textContent(), /Campaign 2 library/);
@@ -663,8 +704,10 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     const patronKeys = ['name', 'title', 'author', 'format', 'barcode', 'firstName', 'lastName'];
     assert.deepEqual([...initial.templatePlaceholders].sort(), [...patronKeys].sort(),
       'The UI catalog must remain aligned with the actual patron renderer capability contract.');
-    await page.locator('#email-submit-subject').focus();
-    assert.deepEqual(await page.locator('#template-placeholder-list button').allTextContents(), patronKeys.map(key => `{{${key}}}`));
+    assert.equal(await page.locator('[data-template-toggle][aria-expanded="false"]').count(), 7,
+      'The five built-in and two existing Additional cards start collapsed.');
+    await openPicker(page.locator('#email-submit-subject'));
+    assert.deepEqual(await tokenKeys(), patronKeys);
     for (const key of ['rejection:template_1', 'rejection:template_3']) {
       assert.equal(await (await row(key)).locator('.template-key').evaluate(input => input.readOnly), true);
     }
@@ -677,13 +720,11 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await added.locator('.template-subject').fill('É & title: ');
     await added.locator('.template-body').fill('First\nselected & last');
     await selectRange(added.locator('.template-body'), 6, 14);
-    assert.deepEqual(await page.locator('#template-placeholder-list button').allTextContents(), ['{{title}}']);
+    assert.deepEqual(await tokenKeys(), ['title']);
     await titleButton().focus();
     report.campaign2InsertionFocus = await page.evaluate(() => ({
-      target: document.getElementById('template-placeholder-target').textContent,
-      status: document.getElementById('template-placeholder-status').textContent,
       active: document.activeElement?.className,
-      allowed: document.querySelector('[data-placeholder-key="title"]')?.getAttribute('aria-disabled')
+      expanded: document.querySelector('.template-placeholder-trigger[aria-expanded="true"]')?.getAttribute('aria-label')
     }));
     await page.keyboard.press('Enter');
     assert.equal(await added.locator('.template-body').inputValue(), 'First\n{{title}} & last',
@@ -705,9 +746,30 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
       assert.deepEqual(saved.stored.templates.find(item => item.id === original.id), original,
         'Creating an additional template must preserve every existing raw row/version.');
     }
+    const systemKeysBefore = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+    const movingSystem = await row('rejection:template_2');
+    await movingSystem.locator('[aria-label="Move up"]').click();
+    const systemKeysAfter = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+    assert.notDeepEqual(systemKeysAfter, systemKeysBefore);
+    const systemOrderPayload = await saveSettings();
+    assert.equal(systemOrderPayload.templates.length, 1, 'A representable System move patches only its moved row.');
+    assert.deepEqual(Object.keys(systemOrderPayload.templates[0]).sort(), ['sortOrder', 'templateKey']);
+    assert.equal(systemOrderPayload.templates[0].templateKey, created.templateKey);
+    const systemOrdered = await read('system');
+    const orderedCreated = systemOrdered.stored.templates.find(item => item.id === created.id);
+    assert.equal(orderedCreated.sortOrder, systemOrderPayload.templates[0].sortOrder);
+    assert.deepEqual({ ...orderedCreated, sortOrder: created.sortOrder, version: created.version }, created,
+      'System ordering preserves exact identity, ownership, enabled and raw text values.');
+    for (const original of saved.stored.templates.filter(item => item.id !== created.id)) {
+      assert.deepEqual(systemOrdered.stored.templates.find(item => item.id === original.id), original,
+        'System ordering preserves every sibling row, raw CRLF/whitespace value and rowversion.');
+    }
+    await reload('system'); await page.locator('#settings-nav-templates').click();
+    assert.deepEqual(await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value)), systemKeysAfter,
+      'The System Move order survives the SQL-backed GET and full reload.');
+    report.systemTemplateOrderingRoundTrip = true;
 
-    // The actual duplicate POST is rejected atomically, including a sibling
-    // sender draft, and authoritative SQL-backed snapshots remain exact.
+    // A new UI row cannot use an existing key to upsert that source record.
     const beforeRejected = await read('system');
     await page.locator('#add-email-template').click();
     const invalid = page.locator('#email-templates-editor [data-template-id=""]');
@@ -715,14 +777,41 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await invalid.locator('.template-subject').fill('Duplicate');
     await invalid.locator('.template-body').fill('Duplicate body');
     await page.locator('#email-template-from-name').fill('Must roll back');
-    const rejectedResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
-      new URL(response.url()).pathname === '/api/asap/staff/settings');
-    await page.locator('#settings-save').click();
-    assert.equal((await rejectedResponse).status(), 400);
-    await page.locator('#settings-message.error').waitFor();
+    await invalid.locator('[data-template-toggle]').click();
+    await page.locator('#settings-nav-workflow').click();
+    const duplicatePosts = [];
+    const trackDuplicatePost = request => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/settings') duplicatePosts.push(request.url());
+    };
+    page.on('request', trackDuplicatePost);
+    try {
+      await page.locator('#settings-save').click();
+      await invalid.locator('[role="alert"]').filter({ hasText: /already used/ }).waitFor();
+      assert.equal(await page.locator('#settings-templates').isVisible(), true);
+      assert.equal(await invalid.locator('.template-key').evaluate(node => node === document.activeElement), true);
+      assert.equal(await page.locator('#email-template-from-name').inputValue(), 'Must roll back', 'Validation preserves the sender draft.');
+      assert.deepEqual(duplicatePosts, [], 'Duplicate UI validation runs before any mutation request.');
+    } finally { page.off('request', trackDuplicatePost); }
     assert.deepEqual(await read('system'), beforeRejected);
+    report.duplicateTemplateKeyBlocked = true;
     await reload('system');
     await page.locator('#settings-nav-templates').click();
+
+    // Keep the backend's repeated-target atomic rollback contract independent
+    // of the UI's new-row protection. A single-key API operation remains an upsert.
+    const rejectedResponse = await page.evaluate(async ({ version, key }) => {
+      const session = await (await fetch('/api/asap/staff/session')).json();
+      const response = await fetch('/api/asap/staff/settings', { method: 'POST', headers: {
+        'Content-Type': 'application/json', 'X-ASAP-Antiforgery': session.antiforgeryToken
+      }, body: JSON.stringify({ orgId: 'system', version, email: { fromName: 'Must roll back' }, templates: [
+        { templateKey: key, subject: 'First repeated target', body: 'First body' },
+        { templateKey: key, subject: 'Second repeated target', body: 'Second body' }
+      ] }) });
+      return { status: response.status, body: await response.text() };
+    }, { version: beforeRejected.version, key: 'rejection:template_1' });
+    assert.equal(rejectedResponse.status, 400, rejectedResponse.body);
+    assert.deepEqual(await read('system'), beforeRejected, 'Repeated HTTP targets roll back source and sibling sender changes atomically.');
+    report.duplicateTemplateHttpRollback = true;
 
     const submission = page.locator('#email-submit-subject');
     const purchase = page.locator('#email-purchase-approved-body');
@@ -733,21 +822,31 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await submission.dispatchEvent('select');
     await submission.dispatchEvent('keyup');
     await titleButton().focus();
+    const staleTitle = await titleButton().elementHandle();
     await page.keyboard.press('Space');
     assert.equal(await submission.inputValue(), submissionBefore, 'Late events cannot reclaim the prior editor.');
     assert.equal(await purchase.inputValue(), `{{title}}${purchaseBefore}`);
     await page.locator('#email-template-from-name').focus();
-    await titleButton().focus();
-    await page.keyboard.press('Enter');
+    await staleTitle.evaluate(button => button.click());
     assert.equal(await purchase.inputValue(), `{{title}}${purchaseBefore}`, 'An unrelated field clears insertion ownership.');
-    await page.locator('#email-hold-subject').focus();
-    assert.equal(await page.locator('#template-placeholder-list button').count(), 0);
-    assert.match(await page.locator('#template-placeholder-guidance').textContent(), /not verified/);
+    await openCard(page.locator('#email-hold-subject'));
+    assert.equal(await page.locator('#email-hold-subject').locator('xpath=..').locator('.template-placeholder-trigger').isDisabled(), true);
+    assert.match(await page.locator('[data-template-key="hold_placed"] .settings-template-preview-note').textContent(), /not verified/);
     await purchase.fill(Array.from({ length: 50 }, (_, index) => `Line ${index} & é`).join('\n'));
     await selectRange(purchase, 0);
+    const purchaseTrigger = purchase.locator('xpath=..').locator('.template-placeholder-trigger');
+    const purchasePopupId = await purchaseTrigger.getAttribute('aria-controls');
+    const draftBeforeScroll = await purchase.inputValue();
     await purchase.evaluate(element => { element.scrollTop = 80; });
+    await page.waitForFunction(id => document.getElementById(id)?.matches(':popover-open') === false, purchasePopupId);
+    assert.equal(await purchaseTrigger.getAttribute('aria-expanded'), 'false', 'Scrolling the field dismisses its anchored picker.');
+    assert.equal(await purchaseTrigger.evaluate(element => element === document.activeElement), true,
+      'Field-scroll dismissal restores the trigger focus.');
+    assert.equal(await purchase.inputValue(), draftBeforeScroll, 'Field scrolling never inserts into the draft.');
+    await openPicker(purchase);
     await titleButton().focus();
     const scrollBefore = await purchase.evaluate(element => ({ page: scrollY, field: element.scrollTop }));
+    assert.equal(scrollBefore.field, 80, 'Reopening the settled picker preserves the field scroll position.');
     await page.keyboard.press('Enter');
     assert.deepEqual(await purchase.evaluate(element => ({ page: scrollY, field: element.scrollTop })), scrollBefore,
       'Insertion restores focus without scrolling the page or multiline editor.');
@@ -800,6 +899,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
 
     // The shortcut shares normal draft consent; cancellation leaves scope and
     // draft untouched, acceptance switches and discards only after consent.
+    await openCard(inherited);
     await inherited.locator('.template-subject').fill('Unsaved library draft');
     await decideConfirmation(page, () => page.locator('#settings-switch-system').click(), dialog => dialog.dismiss());
     assert.equal(await page.locator('#settings-scope').inputValue(), library);
@@ -810,6 +910,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await page.waitForLoadState('networkidle');
     await ready('system');
     await page.locator('#settings-nav-templates').click();
+    await openCard(page.locator('#email-submit-subject'));
     assert.equal(await page.locator('#email-submit-subject').isEditable(), true,
       'Returning from library inheritance must restore System built-in template editability.');
     await (await row('rejection:template_2')).locator('.template-subject').fill('Updated System subject {{title}}');
@@ -842,9 +943,9 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await custom.locator('.template-body').fill(body);
     await custom.locator('.template-body').focus();
     assert.equal(await custom.getAttribute('data-template-kind'), 'custom');
-    assert.equal(await page.locator('#template-placeholder-list button').count(), 0,
+    assert.equal(await custom.locator('.template-placeholder-trigger').first().isDisabled(), true,
       `A library-custom ${key} key cannot claim its built-in sending capabilities.`);
-    assert.match(await page.locator('#template-placeholder-guidance').textContent(), /not verified/);
+    assert.match(await custom.locator('.settings-template-preview-note').textContent(), /not verified/);
     assert.equal(await custom.locator('.template-body').inputValue(), body);
   }
   const rejectionKey = 'REJECTION:campaign2_custom';
@@ -855,8 +956,8 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   await upper.locator('.template-subject').fill('Uppercase rejection {{title}}');
   await upper.locator('.template-body').fill('Upper & ');
   await selectRange(upper.locator('.template-body'), 8);
-  assert.deepEqual(await page.locator('#template-placeholder-list button').allTextContents(), ['{{title}}']);
-  assert.match(await page.locator('#template-placeholder-guidance').textContent(), /including timeouts/);
+  assert.deepEqual(await tokenKeys(), ['title']);
+  assert.match(await upper.locator('.settings-template-preview-note').textContent(), /including timeouts/);
   await titleButton().focus();
   await page.keyboard.press('Enter');
   customBodies.set(rejectionKey, 'Upper & {{title}}');
@@ -881,7 +982,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   }
   await reload(library);
   await page.locator('#settings-nav-templates').click();
-  const customSaved = await read(library);
+  let customSaved = await read(library);
   for (const original of beforeCustomSave.stored.templates) {
     assert.deepEqual(customSaved.stored.templates.find(item => item.id === original.id), original,
       'Custom template saves preserve every preexisting raw row, sparse field and rowversion.');
@@ -897,12 +998,73 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     const custom = await row(key);
     assert.equal(await custom.getAttribute('data-template-kind'), 'custom');
     assert.equal(await custom.locator('.template-key').evaluate(input => input.readOnly), true);
-    await custom.locator('.template-body').focus();
-    assert.deepEqual(await page.locator('#template-placeholder-list button').allTextContents(),
-      key === rejectionKey ? ['{{title}}'] : [], 'Saved custom identity cannot borrow built-in capabilities.');
+    if (key === rejectionKey) {
+      await openPicker(custom.locator('.template-body'));
+      assert.deepEqual(await tokenKeys(), ['title']);
+      await page.keyboard.press('Escape');
+    } else {
+      assert.equal(await custom.locator('.template-placeholder-trigger').first().isDisabled(), true,
+        'Saved custom identity cannot borrow built-in capabilities.');
+    }
     assert.equal(await custom.locator('.template-body').inputValue(), body);
   }
   report.campaign2CustomUsageCapabilities = true;
+  // Establish exact raw CRLF text through the existing API. The native textarea
+  // displays LF, but sibling ordering/deletion must never rewrite this record.
+  const rawCustomKey = 'purchase_approved';
+  const rawCustomBody = '  Raw line one\r\nRaw line two {{name}} & é  ';
+  const rawCustomResponse = await page.evaluate(async ({ library, version, key, body }) => {
+    const session = await (await fetch('/api/asap/staff/session')).json();
+    const response = await fetch('/api/asap/staff/settings', { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'X-ASAP-Antiforgery': session.antiforgeryToken
+    }, body: JSON.stringify({ orgId: library, version, templates: [{ templateKey: key, isCustom: true, body }] }) });
+    return { status: response.status, body: await response.text() };
+  }, { library, version: customSaved.version, key: rawCustomKey, body: rawCustomBody });
+  assert.equal(rawCustomResponse.status, 200, rawCustomResponse.body);
+  customSaved = await read(library);
+  assert.equal(customSaved.stored.templates.find(item => item.organizationId === library && item.templateKey === rawCustomKey).body, rawCustomBody);
+  await reload(library); await page.locator('#settings-nav-templates').click();
+  assert.equal(await (await row(rawCustomKey)).locator('.template-body').inputValue(), rawCustomBody.replace(/\r\n/g, '\n'));
+  const libraryOrderBefore = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+  await (await row('rejected')).locator('[aria-label="Move up"]').click();
+  const libraryOrderAfter = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+  assert.notDeepEqual(libraryOrderAfter, libraryOrderBefore);
+  const libraryOrderPayload = await saveSettings();
+  assert.equal(libraryOrderPayload.templates.length, 1, 'A Library move writes only its custom row, without creating lineage overrides.');
+  assert.deepEqual(Object.keys(libraryOrderPayload.templates[0]).sort(), ['isCustom', 'sortOrder', 'templateKey']);
+  assert.equal(libraryOrderPayload.templates[0].isCustom, true);
+  assert.equal(libraryOrderPayload.templates[0].templateKey, 'rejected');
+  const orderedLibrary = await read(library);
+  for (const original of customSaved.stored.templates) {
+    const current = orderedLibrary.stored.templates.find(item => item.id === original.id);
+    if (original.organizationId === library && original.templateKey === 'rejected' && original.isCustom) {
+      assert.equal(current.sortOrder, libraryOrderPayload.templates[0].sortOrder);
+      assert.deepEqual({ ...current, sortOrder: original.sortOrder, version: original.version }, original);
+    } else assert.deepEqual(current, original, 'Library ordering preserves all inherited/custom siblings, raw content and rowversions.');
+  }
+  await reload(library); await page.locator('#settings-nav-templates').click();
+  assert.deepEqual(await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value)), libraryOrderAfter,
+    'Library custom ordering survives the SQL-backed GET and full reload.');
+  customSaved = orderedLibrary;
+  report.customTemplateOrderingRoundTrip = true;
+  const deletedCustom = customSaved.stored.templates.find(item =>
+    item.templateKey === 'rejected' && item.organizationId === library && item.isCustom);
+  await (await row('rejected')).locator('[aria-label="Delete"]').click();
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-template-toggle], #add-email-template')), true);
+  const deletePayload = await saveSettings();
+  assert.deepEqual(deletePayload.templates.find(item => item.templateKey === 'rejected' && item.isCustom),
+    { templateKey: 'rejected', isCustom: true, reset: true }, 'Delete submits the existing custom reset operation.');
+  await reload(library); await page.locator('#settings-nav-templates').click();
+  const afterDelete = await read(library);
+  assert.equal(afterDelete.stored.templates.some(item => item.id === deletedCustom.id), false,
+    'The saved custom template is deleted from the real SQL-backed settings snapshot.');
+  for (const original of customSaved.stored.templates.filter(item => item.id !== deletedCustom.id)) {
+    assert.deepEqual(afterDelete.stored.templates.find(item => item.id === original.id), original,
+      'Deleting a custom template preserves every sibling row, value and rowversion.');
+  }
+  report.customTemplateDeleteRoundTrip = true;
+  assert.equal(afterDelete.stored.templates.find(item => item.organizationId === library && item.templateKey === rawCustomKey).body, rawCustomBody);
+  report.templateRawTextPreserved = true;
 
   const source = customSaved.stored.templates.find(item =>
     item.organizationId === '1' && item.templateKey === 'rejection:template_3');

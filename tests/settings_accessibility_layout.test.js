@@ -289,6 +289,10 @@ const { JSDOM } = require('jsdom');
     assert.match(css, /#format-rules-editor\s*\{\s*container-type:\s*inline-size;/);
     assert.match(css, /#format-rules-editor \[hidden\]\s*\{\s*display:\s*none;/);
     assert.match(css, /@container \(min-width: 42rem\)[^]*?#format-rules-editor \.settings-rule-fields[^]*?repeat\(2, minmax\(0, 1fr\)\)/);
+    assert.match(css, /\.settings-header\s*\{[^}]*grid-template-columns:\s*max-content minmax\(0, 1fr\)/,
+      'The heading retains its intrinsic width while the toolbar shrinks and wraps.');
+    assert.match(css, /@container \(min-width: 48rem\)\s*\{\s*\.settings-template-layout[^}]*1\.65fr/,
+      'Two-column email previews require a spacious card, including at native 200% zoom.');
 
     dom.window.close();
     console.log('Settings header hooks, Patron section order, save-bar styles, field layout, and dynamic labels passed');

@@ -21,6 +21,9 @@ public sealed partial class PatronJourneyTests
         var originalFormat = await ReadSystemFormatEvidenceAsync("book");
         var originalIdentity = 0L;
         object originalSuccessMessage = DBNull.Value;
+        object originalSubmissionBody = DBNull.Value;
+        const string rawSubmissionBody = "  Campaign submission line one\r\nCampaign submission line two  ";
+        const string rawCustomBody = "  Raw line one\r\nRaw line two {{name}} & é  ";
         var auditBefore = await ReadAuditHighWatermarkAsync();
         var outboxBefore = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];");
         var suffix = Guid.NewGuid().ToString("N");
@@ -40,6 +43,8 @@ public sealed partial class PatronJourneyTests
                 originalIdentity = (long)(await command.ExecuteScalarAsync())!;
                 command.CommandText = "SELECT [SuccessMessage] FROM [asap].[PatronSettings] WHERE [OrganizationId] = 1;";
                 originalSuccessMessage = (await command.ExecuteScalarAsync())!;
+                command.CommandText = "SELECT [BodyTemplate] FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted';";
+                originalSubmissionBody = (await command.ExecuteScalarAsync())!;
             }
             await ExecuteNonQueryAsync("""
                 INSERT INTO [asap].[Organization]
@@ -48,10 +53,12 @@ public sealed partial class PatronJourneyTests
                 SET IDENTITY_INSERT [asap].[EmailTemplate] ON;
                 INSERT INTO [asap].[EmailTemplate]
                     ([Id], [OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-                VALUES (9007199254740993, 1, N'rejection:template_1', N'Campaign 2 first', N'First {{title}}', N'First body {{title}}', 0, 0, 9810),
+                VALUES (9007199254740993, 1, N'rejection:template_1', N'Campaign 2 first', N'First {{title}}', N'  First body {{title}}' + NCHAR(13) + NCHAR(10) + N'Second line  ', 0, 0, 9810),
                        (9007199254740995, 1, N'rejection:template_3', N'Campaign 2 third', N'Third {{title}}', N'Third body {{title}}', 0, 0, 9830);
                 SET IDENTITY_INSERT [asap].[EmailTemplate] OFF;
-                """, ("@org", libraryId));
+                UPDATE [asap].[EmailTemplate] SET [BodyTemplate] = @submissionBody
+                WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted';
+                """, ("@org", libraryId), ("@submissionBody", rawSubmissionBody));
             if (libraryAdmin)
             {
                 await using var connection = new SqlConnection(databaseConnectionString);
@@ -112,13 +119,31 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(report.RootElement.GetProperty("namedOverrideEditsBackToSystem").GetBoolean());
             Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
             Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
-            Assert.HasCount(7, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(13, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            var templateCards = report.RootElement.GetProperty("emailTemplateCards");
+            Assert.IsTrue(templateCards.GetProperty("nativeHistory").GetBoolean());
+            Assert.IsTrue(templateCards.GetProperty("collapsedValidation").GetBoolean());
+            Assert.IsTrue(templateCards.GetProperty("stableRows").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("customTemplateDeleteRoundTrip").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("customTemplateOrderingRoundTrip").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("templateRawTextPreserved").GetBoolean());
+            CollectionAssert.AreEqual(new[] { "email-template-desktop", "email-template-mobile", "email-template-forced-colors",
+                    "email-template-invalid", "email-template-additional-desktop", "email-template-additional-mobile" },
+                templateCards.GetProperty("contexts").EnumerateArray().Select(item => item.GetProperty("name").GetString()).ToArray());
             Assert.IsTrue(report.RootElement.GetProperty("patronTextRoundTrip").GetBoolean());
             if (!libraryAdmin)
             {
                 Assert.IsTrue(report.RootElement.GetProperty("providerIdentityRoundTrip").GetBoolean());
             }
             Assert.AreEqual(outboxBefore, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];"));
+            Assert.AreEqual(1, await ReadCountWithParameterAsync("""
+                SELECT COUNT(*) FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1
+                  AND [TemplateKey] = N'suggestion_submitted' AND [BodyTemplate] = @body;
+                """, ("@body", rawSubmissionBody)), "Unrelated template changes preserve raw built-in CRLF/whitespace text.");
+            Assert.AreEqual(1, await ReadCountWithParameterAsync("""
+                SELECT COUNT(*) FROM [asap].[EmailTemplate] WHERE [OrganizationId] = @org
+                  AND [TemplateKey] = N'purchase_approved' AND [IsCustom] = 1 AND [BodyTemplate] = @body;
+                """, ("@org", libraryId), ("@body", rawCustomBody)), "Sibling order/delete preserves exact raw custom text.");
             Assert.AreEqual(1, await ReadCountWithParameterAsync("""
                 SELECT COUNT(*) FROM [asap].[EmailTemplate]
                 WHERE [OrganizationId] = @org AND [SourceTemplateId] = @source
@@ -128,6 +153,9 @@ public sealed partial class PatronJourneyTests
                 "The actual editor must preserve sparse library lineage in authoritative SQL.");
             if (!libraryAdmin)
             {
+                Assert.IsTrue(report.RootElement.GetProperty("systemTemplateOrderingRoundTrip").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("duplicateTemplateKeyBlocked").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("duplicateTemplateHttpRollback").GetBoolean());
                 Assert.AreEqual(1, await ReadCountWithParameterAsync("""
                     SELECT COUNT(*) FROM [asap].[EmailTemplate]
                     WHERE [Id] = 9007199254740996 AND [OrganizationId] = 1 AND [TemplateKey] = N'rejection:template_2'
@@ -151,6 +179,8 @@ public sealed partial class PatronJourneyTests
                 DELETE FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] = @org;
                 DELETE FROM [asap].[ExternalSearchProvider] WHERE [Label] LIKE @providerLabel;
                 UPDATE [asap].[PatronSettings] SET [SuccessMessage] = @success WHERE [OrganizationId] = 1;
+                UPDATE [asap].[EmailTemplate] SET [BodyTemplate] = @submissionBody
+                WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted';
                 DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = @org;
                 DELETE FROM [asap].[Organization] WHERE [Id] = @org;
                 UPDATE [asap].[MaterialFormat] SET [MessageBehavior] = @behavior, [Message] = @message
@@ -158,7 +188,8 @@ public sealed partial class PatronJourneyTests
                 """, ("@org", libraryId), ("@auditBefore", auditBefore),
                 ("@behavior", (object?)originalFormat.MessageBehavior ?? DBNull.Value),
                 ("@message", (object?)originalFormat.Message ?? DBNull.Value),
-                ("@success", originalSuccessMessage), ("@providerLabel", $"UI refinements provider {suffix}%"));
+                ("@success", originalSuccessMessage), ("@submissionBody", originalSubmissionBody),
+                ("@providerLabel", $"UI refinements provider {suffix}%"));
             if (originalIdentity > 0)
             {
                 await ExecuteNonQueryAsync($"DBCC CHECKIDENT (N'[asap].[EmailTemplate]', RESEED, {originalIdentity}) WITH NO_INFOMSGS;");

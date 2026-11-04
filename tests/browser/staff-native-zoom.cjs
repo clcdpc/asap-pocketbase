@@ -8,6 +8,7 @@ const verifyMixedFieldLayout = require('./form-layout.cjs');
 const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
 const { actionGeometry, activateRowAction } = require('../acceptance/helpers/request-actions.cjs');
 const { formatRuleGeometry } = require('../acceptance/helpers/format-rules.cjs');
+const { geometry: emailTemplateGeometry } = require('./email-template-cards.cjs');
 
 // Chromium's tab API changes actual browser zoom. CSS zoom and pinch scaling
 // do not exercise the same viewport, native controls or top-layer geometry.
@@ -43,7 +44,7 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
         return zoom;
       };
       const zoom = await applyNativeZoom();
-      const scan = async (name, visible = null) => {
+      const scan = async (name, visible = null, viewportOnly = false) => {
         await page.evaluate(axe);
         const result = await page.evaluate(async () => ({
           violations: (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact)),
@@ -68,8 +69,10 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
         const session = await context.newCDPSession(page);
         const metrics = await session.send('Page.getLayoutMetrics');
         assert.equal(metrics.visualViewport.zoom, 2);
-        const capture = await session.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true,
-          clip: { x: 0, y: 0, width: metrics.contentSize.width, height: metrics.contentSize.height, scale: 1 } });
+        const capture = await session.send('Page.captureScreenshot', viewportOnly
+          ? { format: 'png', captureBeyondViewport: false }
+          : { format: 'png', captureBeyondViewport: true,
+            clip: { x: 0, y: 0, width: metrics.contentSize.width, height: metrics.contentSize.height, scale: 1 } });
         await fs.writeFile(path.join(artifacts, `native-zoom-${width}-${name}.png`), Buffer.from(capture.data, 'base64'));
         await session.detach();
         states.push({ physicalWidth: width, name, actualBrowserZoom: zoom, ...result });
@@ -191,6 +194,113 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       await scan('patron-placeholder');
       await page.keyboard.press('Escape');
       assert.equal(await insert.evaluate(node => node === document.activeElement), true);
+      await page.locator('#settings-nav-templates').click();
+      const emailCard = page.locator('[data-template-key="suggestion_submitted"]');
+      assert.equal(await emailCard.locator('[data-template-toggle]').getAttribute('aria-expanded'), 'false');
+      await emailCard.locator('[data-template-toggle]').press('Enter');
+      await page.locator('#email-submit-subject').fill('An example for {{name}}: {{title}}');
+      await page.locator('#email-submit-body').fill('Hello {{firstName}},\n\nYour suggestion: {{title}}\n{{unknown}}');
+      assert.equal(await emailCard.locator('.settings-template-preview-body').textContent(),
+        'Hello Alex,\n\nYour suggestion: Example title\n{{unknown}}');
+      try { await emailTemplateGeometry(emailCard, true); }
+      catch (error) {
+        const diagnosticSession = await context.newCDPSession(page);
+        const capture = await diagnosticSession.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        await fs.writeFile(path.join(artifacts, `native-zoom-${width}-email-template-geometry-failure.png`), Buffer.from(capture.data, 'base64'));
+        await diagnosticSession.detach();
+        throw error;
+      }
+      const emailSubject = page.locator('#email-submit-subject');
+      const emailBody = page.locator('#email-submit-body');
+      const bodyInsert = emailCard.getByRole('button', { name: 'Insert placeholder into Submission confirmation Body', exact: true });
+      await emailSubject.focus();
+      const subjectFocused = await emailSubject.evaluate(node => node === document.activeElement);
+      await page.keyboard.press('Tab');
+      const bodyTriggerFocused = await bodyInsert.evaluate(node => node === document.activeElement);
+      await page.keyboard.press('Tab');
+      const focusDiagnostic = await emailBody.evaluate(node => {
+        const rect = element => {
+          const bounds = element.getBoundingClientRect();
+          return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom,
+            width: bounds.width, height: bounds.height };
+        };
+        const field = rect(node), barNode = document.querySelector('.settings-save-bar'), bar = rect(barNode);
+        const style = getComputedStyle(node), lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2;
+        const lines = node.value.slice(0, node.selectionEnd).split('\n');
+        const canvas = document.createElement('canvas'), measure = canvas.getContext('2d');
+        measure.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        const point = (x, y) => {
+          const hit = document.elementFromPoint(x, y);
+          return { x, y, inViewport: x >= 0 && x < innerWidth && y >= 0 && y < innerHeight,
+            owned: hit === node || node.contains(hit),
+            hit: hit ? { tag: hit.localName, id: hit.id, className: String(hit.className) } : null };
+        };
+        const caretLeft = field.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft) +
+          measure.measureText(lines.at(-1)).width - node.scrollLeft;
+        const caretTop = field.top + parseFloat(style.borderTopWidth) + parseFloat(style.paddingTop) +
+          (lines.length - 1) * lineHeight - node.scrollTop;
+        const overlapWidth = Math.max(0, Math.min(field.right, bar.right) - Math.max(field.left, bar.left));
+        const overlapHeight = Math.max(0, Math.min(field.bottom, bar.bottom) - Math.max(field.top, bar.top));
+        return { activeBody: document.activeElement === node, field,
+          fieldSample: point((field.left + field.right) / 2, (field.top + field.bottom) / 2),
+          caret: { left: caretLeft, top: caretTop, height: lineHeight,
+            sample: point(caretLeft + 1, caretTop + lineHeight / 2) },
+          selection: [node.selectionStart, node.selectionEnd], scrollTop: node.scrollTop, scrollLeft: node.scrollLeft,
+          textFitsWithoutWrapping: lines.every(line => measure.measureText(line).width <=
+            node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)),
+          stickyBar: { ...bar, position: getComputedStyle(barNode).position,
+            fieldOverlapFraction: overlapWidth * overlapHeight / (field.width * field.height) },
+          viewport: { width: innerWidth, height: innerHeight, devicePixelRatio, scale: visualViewport.scale,
+            htmlZoom: getComputedStyle(document.documentElement).zoom, bodyZoom: getComputedStyle(document.body).zoom } };
+      });
+      const focusSession = await context.newCDPSession(page);
+      const focusMetrics = await focusSession.send('Page.getLayoutMetrics');
+      const focusCapture = await focusSession.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      await fs.writeFile(path.join(artifacts, `native-zoom-${width}-email-template-focus.png`), Buffer.from(focusCapture.data, 'base64'));
+      const focusReceipt = { physicalWidth: width, browserZoom: focusMetrics.visualViewport.zoom,
+        subjectFocused, bodyTriggerFocused, ...focusDiagnostic };
+      await fs.writeFile(path.join(artifacts, `native-zoom-${width}-email-template-focus.json`), JSON.stringify(focusReceipt, null, 2));
+      await focusSession.detach();
+      const focusDetails = JSON.stringify(focusReceipt);
+      assert.equal(subjectFocused, true, focusDetails);
+      assert.equal(bodyTriggerFocused, true, focusDetails);
+      assert.equal(focusDiagnostic.activeBody, true, focusDetails);
+      assert.equal(focusMetrics.visualViewport.zoom, 2, focusDetails);
+      assert.ok(Math.abs(focusDiagnostic.viewport.devicePixelRatio / ratio - 2) < .01, focusDetails);
+      assert.equal(focusDiagnostic.viewport.scale, 1, focusDetails);
+      assert.equal(focusDiagnostic.viewport.htmlZoom, '1', focusDetails);
+      assert.equal(focusDiagnostic.viewport.bodyZoom, '1', focusDetails);
+      assert.equal(focusDiagnostic.textFitsWithoutWrapping, true, focusDetails);
+      assert.equal(focusDiagnostic.fieldSample.inViewport && focusDiagnostic.fieldSample.owned, true, focusDetails);
+      assert.equal(focusDiagnostic.caret.sample.inViewport && focusDiagnostic.caret.sample.owned, true, focusDetails);
+      await scan('email-template-preview', null, true);
+      const emailInsert = emailCard.getByRole('button', { name: 'Insert placeholder into Submission confirmation Subject', exact: true });
+      await emailInsert.scrollIntoViewIfNeeded();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await emailInsert.focus(); await emailInsert.press('Enter');
+      const emailPopup = page.locator('#email-submit-subject-placeholders');
+      assert.equal(await emailPopup.evaluate(node => node.matches(':popover-open')), true);
+      const pickerScroll = await emailPopup.evaluate(node => {
+        const before = node.scrollTop;
+        node.scrollTop = node.scrollHeight;
+        return { before, after: node.scrollTop, max: node.scrollHeight - node.clientHeight };
+      });
+      assert.ok(pickerScroll.max > 0 && pickerScroll.after > pickerScroll.before,
+        'The real 200% picker has a scrollable list/reference.');
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await emailPopup.evaluate(node => node.matches(':popover-open')), true,
+        'Scrolling inside the real narrow picker preserves its open state.');
+      await emailPopup.evaluate(node => { node.scrollTop = 0; });
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const emailBounds = await emailPopup.boundingBox();
+      const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+      assert.ok(emailBounds && emailBounds.x >= 0 && emailBounds.y >= 0 &&
+        emailBounds.x + emailBounds.width <= viewport.width && emailBounds.y + emailBounds.height <= viewport.height);
+      await scan('email-template-picker', null, true);
+      assert.equal(await emailPopup.evaluate(node => node.matches(':popover-open')), true,
+        'The actual 200% viewport image includes the open email picker.');
+      await page.keyboard.press('Escape');
+      assert.equal(await emailInsert.evaluate(node => node === document.activeElement), true);
     } finally { await context.close(); }
   }
   assert.deepEqual(errors, []); assert.deepEqual(externalRequests, []);

@@ -30,8 +30,8 @@ the parent Codex session.
 | 6 | #437 | Flag-only masks; Node 13 files, initial SQL/browser 4/4 and final affected browser 1/1 PASS | Luna MAX / Astra HIGH clear after P3 wording correction | `8b3e76e` |
 | 7 | #446 | Named groups/native gates; Node 13/13, Release build and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after coverage/wait/width corrections | `1f40c91` |
 | 8 | #447 | Effective conditional options; Node 13/13, Release build, checkpoint 4/4 unaffected and final SQL/browser 1/1 PASS | Luna MAX / Astra HIGH clear after focus/test-wrapper corrections | `3ec9a0d` |
-| 9 | #444 | Nearby single-token picker; focused Node, Settings 13/13, Release and final SQL/browser 1/1 PASS | Luna MAX clear, including actual open-popup and inherited renders | This commit |
-| 10 | #399 | Pending | Pending Luna MAX / Terra MAX | Pending |
+| 9 | #444 | Nearby single-token picker; focused Node, Settings 13/13, Release and final SQL/browser 1/1 PASS | Luna MAX clear, including actual open-popup and inherited renders | `d70170e` |
+| 10 | #399 | Cards/previews/contextual insertion; Node, eight unique checkpoint owners, final Staff/Campaign 3/3 and native-focus 1/1 PASS | Luna MAX / Astra HIGH / Terra MAX clear after recorded persistence, feedback and focus corrections | Pending |
 | 11 | #435 | Pending | Pending Luna MAX / Astra HIGH / Terra MAX | Pending |
 | 12 | #406 | Pending | Pending Luna MAX / Astra HIGH / Terra MAX | Pending |
 | 13 | #433 | Pending | Pending Luna MAX / Astra HIGH / Terra MAX | Pending |
@@ -467,3 +467,111 @@ Runtime date substitution and business-time-zone policy are unchanged.
 - Final Luna MAX closure independently inspected source, contract, corrected
   tests, raw R5 receipt, report, actual open-popup PNG and System/Library scope
   renders. All reviews are clear; no actionable finding remains.
+
+The pushed `d70170e` checkpoint passed
+[draft CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/41761781830):
+zero-warning/error Release build, all 107 SQL-independent native cases with no
+failures/skips, and all 69 frontend files. The 141 Python checks retain the
+expected pre-build population-discovery class skip. Full CI and IIS activation
+remain skipped for this draft checkpoint; final full-population work is pending.
+
+## #399 — email template cards, contextual insertion and example preview
+
+The five built-ins and Additional templates use mounted, initially collapsed
+cards with draft summaries. Multiple cards can stay open; new rows open for
+editing. Subject/Body retain the global Save/Discard path, with per-field
+capability-filtered pickers and safe text-only synthetic previews. Desktop uses
+a 62.3% editor share; narrow containers stack the preview. Hold text remains an
+editing example with no verified sending-path claim. Invalid collapsed content
+opens the correct panel/card and focuses the field.
+
+Stable UI identities preserve surviving rows, expansion, selection and drafts
+through add/move/delete. Ordering follows the existing rejection-choice policy:
+System owns source positions, Library owns only its custom ranks, and tied ranks
+use exact decimal IDs. Unrepresentable Library positions stay disabled. Sparse
+operations preserve untouched raw CRLF/whitespace, metadata, identities and
+sibling versions; no schema, renderer or delivery policy changes were made.
+
+- All 15 affected frontend files passed after ordering/raw-text remediation
+  (13 Settings files plus the email/Patron placeholder helpers). Five files
+  affected by the final notice correction passed again; independent Luna reran
+  five and Astra reran three, all PASS. Release R3 build has zero warnings/errors
+  (`results/i399-build-r3.log`); later frontend-only corrections were copied
+  through the owning MSBuild target (`i399-frontend-refresh-r4.log` and
+  `i399-frontend-refresh-r5.log`).
+- Source review found inherited Move actions could unlock after rerender, fixed
+  by composing ownership with position. Page/ancestor scrolling now dismisses
+  anchored pickers; popup-internal scrolling remains open. Ordering now survives
+  save/full reload through sparse rank patches, preserving fixed inherited
+  positions and exact bigint identities. Displayed control baselines detect
+  intentional edits without rewriting untouched stored line endings.
+- Initial eight-case checkpoint executed 4 PASS / 4 FAIL / 0 skipped
+  (`i399-checkpoint.trx`). EmailDefaults, full Settings, Library metadata and
+  cumulative presentation passed. Failures exposed a 761px long-error header
+  squeeze, duplicate new System keys becoming upserts, a picker-opening scroll
+  race, and a native-200 preview breakpoint. The header now reserves intrinsic
+  title width; the toolbar wraps. Template columns now require 48rem, preserving
+  the wide ratio while stacking both supported native-200 widths.
+- New keys are validated against the owning scope, including saved/pending-delete
+  keys and unsaved peers. Library custom/System key sharing remains legal. The
+  UI duplicate case proves no POST and retained sender/source drafts; a separate
+  real HTTP repeated-target case proves 400 with atomic source/sender rollback.
+- Campaign R2 passed Library, then System hit an old test sequence that scrolled
+  the textarea after opening its picker. The corrected test explicitly verifies
+  dismissal/focus/draft preservation, reopens after readiness, and proves insertion
+  preserves page and field scroll. Production dismissal was retained.
+- Terra found stale global validation text after the Subject was corrected.
+  The matching control/message/context now owns the existing generation-guarded
+  notice-clear closure. Correction, removal and context retirement clear that
+  notice; other fields/cards and newer feedback are preserved. Retained browser
+  checks pin the local, Settings and shell messages before/after correction.
+- Final Campaign R3 PASS 2/2, zero failures/skips, 109.464 seconds
+  (`i399-campaign-r3.trx`). System and Library each require 13 clean states and
+  six template contexts, with native Undo/Redo, collapsed validation, stable
+  rows, exact custom deletion, durable ordering and raw-text SQL witnesses.
+  System additionally passes both duplicate flags and source ordering. All
+  scans have zero serious/critical axe findings, missing images, overflow,
+  external requests or page errors. Final actual artifacts:
+  `settings-campaign2-46f275e2c1cd44b4826e64e29dad0186` and
+  `settings-campaign2-2f33d87e36f34b41bfe98dcc5d09e640`.
+- Luna independently inspected final source, tests, raw receipts and rendered
+  template states; Astra's final integrity review inspected both passing SQL
+  cases and raw/order/reset/collision probes. No template/data finding remains.
+  Terra inspected all 12 final template images and confirmed the stale-notice
+  correction.
+- Terra's native full-page images prompted a real viewport check. R3 confirmed
+  the sticky Save/Discard bar covered 73.4% of the keyboard-focused Body,
+  including its caret. The helper now reveals focused card controls above the
+  measured bar, retaining the floating actions. A focus generation and current
+  context/connectedness guards retire old frame callbacks; insertion suppresses
+  reveal through native/fallback editing and selection/scroll restoration.
+  Focused Node checks and independent Luna/Astra re-reviews pass.
+- Native R4 PASS 1/1, zero failures/skips, 184.113 seconds
+  (`i399-native-r4.trx`). All 22 native states are clean. Actual browser zoom
+  and DPR are 2, with CSS/pinch zoom unchanged. At both physical widths
+  1280/1440, the full Body field and exact caret hit-test above the visible
+  actions with zero overlap, selection `[60,60]` and unchanged textarea scroll.
+  Final viewport PNG/JSON: `staff-workflow-c3f402b3c5c54577a41b57251b008572`.
+  Terra and Luna personally inspected both focus images and receipts; the P2
+  is resolved. The stacked preview was inspected with the same 48rem CSS and
+  is retained by the geometry checks; focus captures frame the focused editor.
+- The broad Staff retry retained a Chromium `ERR_NO_BUFFER_SPACE` navigation
+  failure separately. It did not recur on the next run, which passed the 761px
+  header check then exposed an old Staff URL test measuring its inner label
+  rather than the approved full-width group containing the action. The corrected
+  test retains whole-row width, no unrelated partner, child containment and
+  explicit desktop/mobile label/input/action alignment.
+- Final Staff/Campaign R4 PASS 3/3, zero failures/skips, 334.318 seconds
+  (`i399-staff-campaign-r4.trx`): Staff 210.865s, System 56.794s, Library 37.806s.
+  The Staff journey retains all 61 states, including both long-error header
+  boundaries and URL group geometry. Both Campaign cases again retain all
+  13 states/six contexts, native history, exact insertion scroll, validation,
+  stable identity, ordering, deletion and raw-text witnesses after the focus fix.
+  Final artifacts: `staff-1e4d4f8341ba4b7a8cbf5e5972d6e62b`,
+  `settings-campaign2-e23c84ac58fa4bc28da5d570ed02accc`, and
+  `settings-campaign2-3b47cfa135904d24856079e5d14878af`.
+- All eight discovered checkpoint owners have passing receipts. The retained
+  final source and focused results are independently reviewed; all reported
+  implementation findings are resolved with evidence. Full combined-revision
+  qualification, human acceptance and the final fresh closure audit remain
+  separate from this issue checkpoint.
