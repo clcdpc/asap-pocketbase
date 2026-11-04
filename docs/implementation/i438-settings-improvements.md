@@ -1391,3 +1391,132 @@ review remain pending here; their final receipts belong in PR #454. Per the
 coordinating direction, the next DEV test tag supplies authoritative broad
 frontend/core/Browser CI; this task does not duplicate those broad runs or
 dispatch a separate PR Full CI.
+
+## November 4 live-remediation follow-up (#464, #436, #435 / #456)
+
+This follow-up starts from the fetched PR head `f49768ad` and base `21acd4f`.
+The existing PR worktree was clean and fast-forwarded; four uncommitted browser
+files in the separate original checkout were left untouched. The old test.30
+Full CI/deployment qualifies `f446baf`, not this new application change. The
+current-head workflow at task start, run `41863632522`, was cancelled. Final-head
+validation and its actual workflow outcome are recorded in PR #454.
+
+### Staff HTTP boundaries and remaining live investigation
+
+Save sends `PUT /api/asap/staff/users/{id}` with JSON version, email, displayName,
+role and organizationId. Deactivate sends `DELETE` to the same URL with an
+explicitly body-bound JSON version. `authorizedJson` rechecks the session,
+supplies `X-ASAP-Antiforgery`, and delegates serialization/error handling to the
+shared HTTP helper. Both routes require authentication and the antiforgery
+filter before entering `StaffLifecycleService.ChangeLifecycleAsync`.
+
+The service takes the lifecycle application lock and transaction, locks current
+actor/target organizations and staff, rechecks actor identity/role/scope and
+rowversion, validates the usable-super-admin invariant, and commits permitted
+profile/access changes, contraction cleanup and successful audits atomically.
+Neither route requires the target's first sign-in or a display name. The PR
+introduces unified PUT; DELETE and its body binding already exist on main.
+The shared lifecycle path was extended for unified saves, so that fact alone
+does not establish the live deactivation failure as independent of this PR.
+
+The application uses the SDK-generated IIS ASP.NET Core handler; there is no
+repository-specific WebDAV removal or verb-filter override. IIS/WebDAV can
+reject PUT/DELETE before the application, but that is a hypothesis, not evidence
+of the reported host's state. See Microsoft's
+[IIS 405 troubleshooting](https://learn.microsoft.com/en-us/troubleshoot/iis/http-error-405-website).
+No hosting setting, route method, authorization or lifecycle rule was changed
+to work around an unconfirmed cause.
+
+The confirmed feedback defect is that non-JSON/empty host errors can become
+only `Request failed.`; status and response correlation were not shown. The
+shared helper now retains a bounded safe `X-Correlation-ID`. Staff messages
+identify the operation, HTTP status, known authorization/conflict reason, and
+available reference without displaying host HTML. Uncertain writes retain the
+draft and mutation lock and direct the user to the operable external **Refresh
+settings** action. No automatic mutation retry or successful history is added.
+
+**The original live save and deactivation causes and affected account's persisted
+state remain unverified.** The user reported that logs are not readily
+accessible. No live host/account retry, deployment or environment change was
+performed. Before any future retry, an authorized operator must reconcile the
+target's current IsActive, role/library, rowversion and successful audit history
+through an authoritative read; the refreshed roster alone is insufficient.
+Use separate disposable synthetic accounts for any subsequent mutations.
+
+The specific #464 follow-up is to capture each request's method/path/time,
+HTTP status and safe error/reference independently; correlate IIS W3C
+status/substatus/Win32 status and handler/module evidence with application
+correlation/error logs and SQL accepted state. Check request filtering/WebDAV
+only if the request stops before ASP.NET Core; otherwise distinguish
+authentication/antiforgery/body binding, legitimate scope/invariant/rowversion
+rejections and application/SQL exceptions. Record exact deployed artifact/backend
+identity. Do not classify either failure as unrelated or fixed from local success.
+
+### Keyboard, labels and local theme correction
+
+Grid.js handles Enter on its sortable header even when that event bubbles from
+the inner native sort button. The native button then generates a second click,
+undoing the sort. Header-only/synthetic tests miss this pointer-to-keyboard path.
+The Requests owner now handles Enter/Space once in capture and dispatches the
+existing click path with Shift retained. Column-specific names, aria-sort,
+focus, redraw state and the unsortable Actions header remain intact.
+
+Scalar Override checkboxes were appended inside the field's wrapping label,
+mixing two controls and the Override text into accessible names. Such fields
+now use a container with separate explicit primary and Override labels. Input
+nodes, IDs, descriptions, setting metadata, native keyboard behavior and
+override ownership remain intact. This does not implement #463's direct-edit /
+Use system value redesign.
+
+The roster-only dark media block introduced by this PR overrode the otherwise
+light Settings palette and native controls. Removing that local palette makes
+the roster inherit its shell under both preferences, including after an
+Operations round trip. Complete dark appearance across Settings and other Staff
+views remains #456; the original #435 whole-view light/dark criterion stays open.
+
+### Focused receipts and bounded independent review
+
+The new Browser-category method is included in the reviewed category inventory.
+Its disposable library, accounts and requests run through real Kestrel and SQL
+Server 2022 with deterministic provider boundaries. The two API cases compare
+never-signed-in and previously-bound targets with blank display names, actual
+role/library saves and deactivation, antiforgery rejection, stale versions and
+unchanged SQL/audit state after rejection. Browser deactivation also succeeds
+without a preceding profile save. Simulated HTML 405 rejection and HTTP 502
+after forwarding a real committed PUT/DELETE exercise rejection and uncertain
+recovery; they are not IIS execution or proof of the live cause.
+
+- Pre-fix generated assets: new actual-keyboard Browser regression FAIL,
+  1/1 at the first inner-button Enter (descending was never reached). Retained
+  `.artifacts/staff-remediation/pre-fix/pre-fix.trx` identifies the failure.
+- Initial remediation receipts remain failed. Two API fixture setup problems
+  (missing Testing identity headers, then explicit client options losing the
+  dynamic Kestrel address) and an unconditional disclosure click in recovery
+  were corrected. API clients now keep the fixture address and disallow auth
+  redirects. No failed attempt is counted as a pass.
+- Final focused R3: **3/3 PASS, zero failures/skips**, 84.524s wall, at
+  `.artifacts/staff-remediation/focused-r3/focused-r3.trx` and `focused-r3.log`.
+- An existing-lifecycle selection executes 16/16 cases successfully but its
+  command fails the minimum-count guard because 18 were requested. Its
+  `lifecycle/lifecycle.trx` and log retain that policy failure; it is not counted
+  as a passing qualification command. Final validation uses discovered counts.
+- Actual Browser evidence:
+  `.artifacts/browser/staff-remediation-190fad8a81a54c2e9a3454be3e5a20c9/`.
+  Seven headings exercise real header/button repeated Enter, Space and pointer
+  input, with actual bibliographic row reversal. Five field names and Override
+  controls are checked through browser accessible roles and keyboard input.
+  Ten rendered states include four expanded roster light/dark-preference views
+  at 1280/390px, focus outlines and Operations/Settings round trips, rejected
+  drafts, committed-loss reconciliation and confirmed deactivation/filter counts.
+  Serious/critical axe, overflow, missing images, page errors and external
+  browser requests are all zero. Both preferences intentionally show the same
+  inherited light Settings palette; no complete dark-mode pass is claimed.
+- Independent review used two cycles. Cycle one found that the proposed recovery
+  instruction pointed into the inert form and that an existing Presentation
+  assertion assumed a wrapping label. Both were fixed using Refresh settings
+  and native `node.labels`. Cycle two independently read all three final TRX
+  results, browser JSON and actual desktop/mobile PNGs and reports no remaining
+  substantive finding. It explicitly does not attest IIS/live state or Full CI.
+
+Human assistive-technology acceptance remains #398. Final-head broad validation,
+workflow links, source SHA and remaining blockers belong in the PR/issue updates.

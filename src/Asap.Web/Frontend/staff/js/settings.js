@@ -1179,6 +1179,20 @@ export function createSettingsController({
   }
 
   function createOverrideToggle(field, section, key) {
+    if (field.localName === 'label') {
+      // Each field and Override checkbox needs its own label. Nesting a second
+      // input in the field label makes both names include the override text.
+      const control = fieldInput(field);
+      const title = field.querySelector('span');
+      const container = node('div');
+      for (const attribute of field.attributes) container.setAttribute(attribute.name, attribute.value);
+      container.append(...field.childNodes);
+      field.replaceWith(container);
+      const label = node('label', { for: control.id });
+      title.before(label);
+      label.append(title);
+      field = container;
+    }
     let input = field.querySelector('.settings-override-toggle');
     if (!input) {
       input = node('input', {
@@ -1186,7 +1200,7 @@ export function createSettingsController({
         className: 'settings-override-toggle',
         'aria-label': `Override ${field.querySelector('span')?.textContent || key}`
       });
-      const wrapper = node('span', { className: 'settings-override-control' }, [
+      const wrapper = node('label', { className: 'settings-override-control' }, [
         input,
         node('span', { text: 'Override' })
       ]);
@@ -1990,7 +2004,7 @@ export function createSettingsController({
     const mutation = beginSettingsMutation('administration-staff-mutation', consumes, preserves);
     if (!mutation) return;
     mutation.staffId = staffId;
-    setStaffStatus(successMessage.replace(/\.$/, '') + '...');
+    setStaffStatus(options.method === 'PUT' ? 'Saving staff changes...' : options.method === 'DELETE' ? 'Deactivating staff user...' : 'Saving staff access...');
     try {
       const response = await authorizedJson(path, options);
       if (!validStaffLifecycleResponse(response, options.method, staffId)) throw unconfirmedResponseError();
@@ -2018,7 +2032,8 @@ export function createSettingsController({
       refreshed ? 'success' : 'error');
       return isSettingsOperationCurrent(mutation) ? response : null;
     } catch (error) {
-      recordFailure(mutation, error, 'Settings change outcome is uncertain. Reload current values before retrying.');
+      const failureMessage = staffMutationFailure(error, options.method);
+      recordFailure(mutation, error, failureMessage);
       if (!isSettingsOperationCurrent(mutation)) return null;
       if (mutation.outcome === 'committed') {
         setStaffStatus(`${successMessage} Current staff session and roster could not be refreshed. Reload before editing again.`, 'error');
@@ -2027,9 +2042,9 @@ export function createSettingsController({
       if (error.status === 409) {
         await loadStaffAccess({ silent: true, owner: mutation, preserve: true });
         if (!isSettingsOperationCurrent(mutation)) return null;
-        setStaffStatus(error.message || 'Staff access changed elsewhere. Review the refreshed roster.', 'error');
+        setStaffStatus(failureMessage, 'error');
       } else if (error.status !== 401 && !isAbortError(error)) {
-        setStaffStatus(error.message || 'The staff access change could not be saved.', 'error');
+        setStaffStatus(failureMessage, 'error');
       }
       return null;
     } finally {
@@ -2047,6 +2062,26 @@ export function createSettingsController({
         }
       }
     }
+  }
+
+  function staffMutationFailure(error, method) {
+    const action = method === 'DELETE' ? 'Staff deactivation' : method === 'PUT' ? 'Staff save' : 'Staff access change';
+    const status = Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? ` (HTTP ${error.status})` : '';
+    const details = {
+      stale_version: 'Staff access changed elsewhere. Review the refreshed roster and your draft.',
+      staff_scope_forbidden: 'Your current access does not permit this staff change.',
+      active_super_admin_required: 'At least one currently usable super administrator must remain.',
+      identity_already_exists: 'This staff identity already exists or is already active.',
+      staff_invariant_busy: 'Another staff access change is in progress.',
+      organization_inactive: 'Select an active library for this access change.',
+      invalid_version: 'Refresh roster to obtain the current staff version.'
+    };
+    const detail = details[error.response?.code] || error.response?.message ||
+      (error.status === 405 ? 'The server or hosting layer rejected this request method.' : 'The server did not confirm this staff change.');
+    const reference = error.correlationId ? ` Reference: ${error.correlationId}.` : '';
+    return isUnconfirmedMutationFailure(error)
+      ? `${action} outcome is uncertain${status}. ${detail} Use Refresh settings above to reconcile current values before retrying.${reference}`
+      : `${action} failed${status}. ${detail}${reference}`;
   }
 
   async function createStaffUser() {

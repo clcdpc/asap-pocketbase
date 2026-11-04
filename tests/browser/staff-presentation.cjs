@@ -756,7 +756,7 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
             'The patron-code eligibility message is displayed as written.', { exact: true }).count(), 0,
           `${scope}: the redundant patron-code eligibility callout is absent`);
           assert.equal(await page.locator('#patron-code-eligibility-message').evaluate(node =>
-            node.closest('label').querySelector('span').textContent.trim()), 'Patron-code eligibility message',
+            node.labels[0].querySelector('span').textContent.trim()), 'Patron-code eligibility message',
           `${scope}: the message editor keeps its label`);
           await providerGeometry(page);
           if (await page.locator('#add-provider').isVisible()) await measureHeading('#add-provider');

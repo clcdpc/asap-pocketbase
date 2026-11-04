@@ -209,6 +209,19 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   });
   gridAccessibility.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
 
+  root.addEventListener('keydown', event => {
+    if (!['Enter', ' '].includes(event.key)) return;
+    const header = event.target.closest('thead th');
+    const button = header?.querySelector('button.gridjs-sort');
+    if (!button || !dom.grid.contains(header) || event.target !== header && event.target !== button) return;
+    // Grid handles Enter on the header, including events bubbling from its
+    // native sort button. Own this key once so the button's default click
+    // cannot immediately undo that sort. Keep Shift's multi-sort semantics.
+    event.preventDefault();
+    event.stopPropagation();
+    button.dispatchEvent(new window.MouseEvent('click', { bubbles: true, shiftKey: event.shiftKey }));
+  }, { capture: true, signal: events.signal });
+
   function closeLookup() { if (lookupContext) polarisLookup?.close(lookupContext); lookupContext = null; }
   function invalidate() { closeLookup(); targetGeneration++; reads.begin('queue-target').abort(); reads.begin('queue').abort(); if (!disposed) dom.refresh.disabled = false; }
 

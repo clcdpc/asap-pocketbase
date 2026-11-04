@@ -5,6 +5,7 @@ export class HttpError extends Error {
     this.status = status || 0;
     this.response = response || null;
     this.outcomeUnknown = Boolean(options.outcomeUnknown);
+    this.correlationId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(options.correlationId || '') ? options.correlationId : null;
   }
 }
 
@@ -43,16 +44,17 @@ export async function requestJson(path, options = {}) {
       cache: options.cache || 'default',
       signal: options.signal
     });
+    const correlationId = response.headers?.get('X-Correlation-ID');
 
     if (response.status === 204 || method === 'HEAD') {
       if (response.ok && options.allowNoContent === true) return null;
       if (response.ok) {
         throw new HttpError('The server returned an empty response where JSON was required.', response.status,
-          { code: 'empty_response' }, { outcomeUnknown: isMutationMethod(method) });
+          { code: 'empty_response' }, { outcomeUnknown: isMutationMethod(method), correlationId });
       }
       if (!response.ok) {
         throw new HttpError(response.statusText || 'Request failed.', response.status, null,
-          { outcomeUnknown: isMutationMethod(method) });
+          { outcomeUnknown: isMutationMethod(method), correlationId });
       }
       return null;
     }
@@ -64,20 +66,20 @@ export async function requestJson(path, options = {}) {
       if (isAbortError(error)) throw error;
       if (response.ok) {
         throw new HttpError('The server returned an invalid JSON response.', response.status,
-          { code: 'invalid_response_json' }, { outcomeUnknown: isMutationMethod(method) });
+          { code: 'invalid_response_json' }, { outcomeUnknown: isMutationMethod(method), correlationId });
       }
       data = null;
     }
 
     if (!response.ok) {
       throw new HttpError(data?.message || response.statusText || 'Request failed.', response.status, data,
-        { outcomeUnknown: isMutationMethod(method) && (response.status === 408 || response.status >= 500) });
+        { outcomeUnknown: isMutationMethod(method) && (response.status === 408 || response.status >= 500), correlationId });
     }
 
     if (options.requireObjectResponse &&
         (!data || typeof data !== 'object' || Array.isArray(data))) {
       throw new HttpError('The server returned an invalid response body.', response.status,
-        { code: 'invalid_response_shape' }, { outcomeUnknown: isMutationMethod(method) });
+        { code: 'invalid_response_shape' }, { outcomeUnknown: isMutationMethod(method), correlationId });
     }
     if (typeof options.validateResponse === 'function') {
       try {
@@ -85,7 +87,7 @@ export async function requestJson(path, options = {}) {
       } catch (error) {
         if (isAbortError(error)) throw error;
         throw new HttpError('The server returned an invalid response body.', response.status,
-          { code: 'invalid_response_shape' }, { outcomeUnknown: isMutationMethod(method) });
+          { code: 'invalid_response_shape' }, { outcomeUnknown: isMutationMethod(method), correlationId });
       }
     }
 
