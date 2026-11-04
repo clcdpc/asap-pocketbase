@@ -12,4 +12,8 @@ printf '%s  %s\n' \
   "$tool_root/actionlint.tar.gz" | sha256sum --check --status
 tar -xzf "$tool_root/actionlint.tar.gz" -C "$tool_root" actionlint
 # ShellCheck/pyflakes are separate tools, unavailable on some clc-linux images.
-"$tool_root/actionlint" -shellcheck= -pyflakes=
+# 1.7.12 predates GitHub's native concurrency queue:max. Suppress only its
+# exact unsupported-key diagnostic; executable workflow contracts validate
+# this key's sole permitted location/value plus the non-cancelling policy.
+"$tool_root/actionlint" -shellcheck= -pyflakes= \
+  -ignore '^unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"$'

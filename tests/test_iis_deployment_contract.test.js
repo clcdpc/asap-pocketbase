@@ -29,6 +29,11 @@ childProcess.execFileSync(
   ['-NoLogo', '-NoProfile', '-File', path.join(__dirname, 'test_deployment_sql_plan.ps1')],
   { stdio: 'inherit' }
 );
+childProcess.execFileSync(
+  'pwsh',
+  ['-NoLogo', '-NoProfile', '-File', path.join(__dirname, 'test_deployment_automatic.ps1')],
+  { stdio: 'inherit' }
+);
 
 assert.ok(workflow.includes("tags:\n      - 'v*.*.*'"), 'all release tags must qualify every category');
 assert.ok(workflow.includes('- codex/csharp-port'), 'integration-branch push trigger is required');
@@ -82,14 +87,19 @@ assert.ok(deploymentJobStart > 0, 'the deployment job should be present');
 const hostedJobs = workflow.slice(0, deploymentJobStart);
 const deploymentJob = workflow.slice(deploymentJobStart);
 assert.ok(!hostedJobs.includes('self-hosted'), 'hosted build/test/package jobs must not use self-hosted labels');
-assert.ok(!hostedJobs.includes('ASAP_TEST_DEPLOYMENT_ENABLED'), 'hosted build/test/package jobs must not depend on activation');
+const workflowJobs = YAML.parse(workflow, { uniqueKeys: true }).jobs;
+for (const job of [workflowJobs['validation-policy'], workflowJobs['build-test-package'], workflowJobs['draft-validation']]) {
+  assert.ok(!JSON.stringify(job).includes('ASAP_TEST_DEPLOYMENT_ENABLED'), 'hosted build/test/package jobs must not depend on activation');
+}
 assert.match(
   workflow,
   /  workflow_dispatch:\n    inputs:\n      deploy_test_iis:\n(?:        [^\n]+\n)*        default: false\n/,
   'manual workflow dispatch must default to no test-IIS deployment'
 );
 const deployWorkflow = YAML.parse(workflow, { uniqueKeys: true }).jobs['deploy-test-iis'];
-assert.deepEqual(deployWorkflow.concurrency, { group: 'asap-test-iis', 'cancel-in-progress': false },
+assert.deepEqual(deployWorkflow.environment, { name: 'asap-test-iis', deployment: false },
+  'safe skips must not generate successful implicit GitHub deployment records');
+assert.deepEqual(deployWorkflow.concurrency, { group: 'asap-test-iis', 'cancel-in-progress': false, queue: 'max' },
   'IIS activation must be serialized without interrupting a running SQL deployment');
 const deployCondition = deployWorkflow.if;
 assert.match(deployCondition, /!\s*cancelled\(\)/,
@@ -102,8 +112,10 @@ assert.ok(deployCondition.includes("vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true'"
   'deployment must retain the repository activation gate');
 assert.ok(deployCondition.includes("(github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis)"),
   'manual deployment must require explicit opt-in');
-assert.ok(deployCondition.includes("(github.event_name == 'push' && needs.validation-policy.outputs.test_tag == 'true')"),
+assert.ok(deployCondition.includes("needs.validation-policy.outputs.test_tag == 'true'"),
   'test-release tags must remain eligible for automatic deployment');
+assert.ok(deployCondition.includes("github.ref == 'refs/heads/main' && needs.validation.outputs.automatic_current == 'true'"),
+  'current main pushes must become eligible only after hosted freshness preflight');
 assert.ok(
   workflow.slice(deploymentJobStart).includes('runs-on: [self-hosted, windows, x64, asap-test-iis]'),
   'deployment must be isolated to the dedicated test-IIS runner labels'
