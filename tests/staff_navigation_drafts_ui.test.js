@@ -2783,11 +2783,23 @@ for (const invalid of [
       assert.equal(mutations, 1);
       assert.equal(ui.calls.filter(call => new URL(call.url, 'https://localhost').pathname.endsWith('/organizations')).length,
         organizationsBefore, 'an invalid acknowledgement does not accept or refresh the organization catalog');
-      assert.doesNotMatch(ui.get('#settings-message').textContent,
+      const operationFeedback = ui.get(invalid.action === 'sync' ? '#organizations-sync-result' : '#settings-message');
+      assert.doesNotMatch(operationFeedback.textContent,
         invalid.action === 'sync' ? /synchronized/i : /activated/i,
         'invalid data cannot present the operation as committed');
-      assert.match(ui.get('#settings-message').textContent, /uncertain|confirm/i,
+      assert.match(operationFeedback.textContent, /uncertain|confirm/i,
         'the invalid 2xx requires an authoritative reload before retry');
+      if (invalid.action === 'sync') {
+        assert.equal(operationFeedback.textContent,
+          'Organization synchronization outcome is uncertain. Reload current values before retrying.',
+          'sync reports its uncertain result in the operation-specific live feedback');
+        assert.equal(ui.get('#polaris-action-announcement').textContent, operationFeedback.textContent,
+          'the operation-specific result is announced outside the inert Settings form');
+      }
+      assert.equal(ui.get('#settings-save-title').textContent, 'Outcome uncertain; reload needed',
+        'the invalid acknowledgement retains the global recovery barrier');
+      assert.equal(ui.get('#settings-form').inert, true,
+        'the settings editor stays inert until authoritative reload');
       if (invalid.action === 'activation') ui.get('[aria-label="Activate Library B"]').click();
       else ui.get('#btn-sync-organizations').click();
       await settle();

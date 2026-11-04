@@ -27,8 +27,8 @@ the parent Codex session.
 | 3 | #445 | Redundant paragraph removed; focused DOM/picker/scope and SQL/browser tests PASS | Luna MAX clear, including desktop/mobile gap check | `35de01e` |
 | 4 | #449 | Explicit validated URL draft action; focused controller/layout/scope PASS, links 2/2 and SQL/browser 1/1 PASS | Luna MAX clear after wait/identity test corrections and rendered checks | `dde686a` |
 | 5 | #409 | Accepted credential help and local outcomes; Node, SQL 3/3 and final browser 1/1 PASS | Luna MAX / Astra HIGH clear after P2 correction | `2b4068a` |
-| 6 | #437 | Flag-only masks; Node 13 files, initial SQL/browser 4/4 and final affected browser 1/1 PASS | Luna MAX / Astra HIGH clear after P3 wording correction | This issue commit |
-| 7 | #446 | Pending | Pending Luna MAX / Astra HIGH | Pending |
+| 6 | #437 | Flag-only masks; Node 13 files, initial SQL/browser 4/4 and final affected browser 1/1 PASS | Luna MAX / Astra HIGH clear after P3 wording correction | `8b3e76e` |
+| 7 | #446 | In progress | Luna MAX / Astra HIGH preparing | Pending |
 | 8 | #447 | Pending | Pending Luna MAX / Astra HIGH | Pending |
 | 9 | #444 | Pending | Pending Luna MAX | Pending |
 | 10 | #399 | Pending | Pending Luna MAX / Terra MAX | Pending |
@@ -45,6 +45,8 @@ the parent Codex session.
   PASS, 1/1, no failures/skips. This establishes the local SQL/HTTP harness;
   it is not final implementation qualification.
 - Node dependencies and Chromium installed; .NET SDK 10.0.303 / Node 24.19.0.
+- Acceptance runtime preflight: WSLC 3.0.3 and disposable `hello-world` PASS.
+  This verifies the local container prerequisite; it does not qualify a suite.
 - Real SQL Server 2022 Developer 16.0.1210.3 (metadata explicitly verified) and deterministic provider boundaries are used for
   mutation and browser journeys. No live Polaris/Postmark actions are part of
   ordinary qualification.
@@ -268,3 +270,36 @@ mutations retain truthful recovery guidance until an authoritative reload.
 - Final Luna MAX closure independently inspected the corrected source, Node
   results, final TRX/report and representative actual desktop/mobile renders.
   Both functional and security reviews are clear; no actionable finding remains.
+
+## Credential-checkpoint navigation regression (#409)
+
+The [draft checkpoint CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/41740465554)
+at `8b3e76e` passed its build and 107 SQL-independent native cases, then failed
+one of 69 executed frontend files. Three of 271 navigation variants still
+expected uncertain synchronization feedback in the global Settings message,
+although #409 deliberately routes it to the local operation result and separate
+announcer. The application retained its uncertain/reload-required barrier.
+
+#446 implementation was paused with its partial draft preserved. The initial
+correction changed only navigation-test expectations: Sync uses its local
+feedback/announcer, activation retains the global message, and both explicitly
+check the uncertain title and inert editor. Existing no-catalog-refresh,
+no-false-success and no-replay assertions remain intact.
+
+The isolated R1 run then exposed a P3 application projection defect: all three
+sync variants passed, while the three activation variants found “No changes”
+in the save bar despite the correct uncertain/inert interaction barrier.
+Activation cleanup now refreshes dirty/recovery presentation only for its still-
+current context, matching Sync. Receipts, callbacks, acknowledgement validation
+and replay blocking are unchanged. R1 remains FAIL 3/271 in
+`results/i409-navigation-correction.log`. Independent source re-reviews are
+clear; the parent is rerunning all 271 journeys against a Git archive of exact
+committed `8b3e76e` frontend source plus only the one-line production correction
+and corrected test, isolating the paused timeout draft. R2 PASS all 271 journeys,
+exit 0, in `results/i409-navigation-correction-r2.log`. Astra independently
+verified the export contains exactly the one production line and that retired
+contexts cannot repaint. The tested production file's Git-normalized blob
+matches the staged source (`cc8ad988aa635a321afbd0ff7fcc17c891899e44`);
+the Windows export uses CRLF while the index stores LF. Final Luna MAX source
+and raw-receipt inspection is clear, including all six malformed-ack cases.
+No actionable finding remains. The timeout draft is excluded from this commit.

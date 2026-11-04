@@ -2181,6 +2181,7 @@ export function createSettingsController({
       if (error.status !== 401 && !isAbortError(error)) notify(error.message || 'Organization participation could not be changed.', 'error');
     } finally {
       finishSettingsMutation(mutation);
+      if (isSettingsContextCurrent(mutation.context)) updateDirtyState();
     }
   }
 
