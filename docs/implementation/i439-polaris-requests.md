@@ -312,6 +312,25 @@ order and responsive geometry. No application behavior changed. The failed
 invocation remains retained outside the worktree. Final qualification reruns all
 six selected suites against one clean updated application/tooling snapshot.
 
+The first forced Full CI at `9296c60` passed frontend and all 1,448 non-browser
+.NET/SQL tests; browser passed 50/52 with zero skips. Its two retained-test
+assumptions were corrected through objective failure reproduction. Follow-up
+`38c5d4f` keeps the BIB detail fixture stable across #389's holdings prefetch and
+explicit selection; the complete staff owner then passes 1/1 with zero skips.
+The native-zoom More assertion passed unchanged on Windows but failed in Linux
+with a 0.1796875 CSS-pixel right-edge difference, restored focus and a matching
+center hit. Its focus-visibility bounds now use the existing `visibleEvidence`
+one-pixel tolerance and retain clipping, focus and hit-test guards. Strict #428
+wide-table sizing remains intact. A temporary Linux I403 probe passed all six
+scenarios, including native 200% at both 1280 and 1440 widths; its source was
+restored byte-for-byte before final qualification. The original failed CI and
+probe receipts are retained. The final permanent native-zoom owner passes 1/1
+with zero skips. This is integration remediation, not another
+independent review pass. Evidence: `ci42088055100/remediation-staff-r01/`,
+`ci42088055100/remediation-zoom-r01/`, `ci42088055100/remediation-zoom-r02/` and external acceptance invocations
+`7fc4aa2437204be6bb6479fdf57588c1` (failed strict Linux probe) and
+`3dc9de87e70d47898ce2aa040f586d0c` (passing corrected probe).
+
 All nine focused two-pass qualifications are complete. Exact final revision,
 registered acceptance-suite results, full frontend/.NET/SQL/browser discovery and
 Full CI/package gates are recorded in the consolidated PR after execution. Those
