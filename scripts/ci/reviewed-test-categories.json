@@ -31,6 +31,7 @@
     "Asap.Tests.Integration.PatronJourneyTests.StaffRemediationBrowserVerifiesKeyboardLabelsThemeAndProvisionedAccountMutations",
     "Asap.Tests.Integration.PatronJourneyTests.StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp",
     "Asap.Tests.Integration.PatronJourneyTests.SystemFormatRuleEditorPersistsItsActualPostThroughSqlAndReload",
+    "Asap.Tests.Integration.PatronJourneyTests.TitleTabCountsBrowserUsesCompleteAuthorizedSqlDataAndRefreshesAfterMutation",
     "Asap.Tests.Integration.PatronJourneyTests.WeeklySummaryBrowserPreservesGestureIdentityRecoveryAndAuthorizedRunScope"
   ]
 }

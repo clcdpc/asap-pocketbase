@@ -17,8 +17,8 @@ Routine regression checks and final evidence reconciliation are not new reviews.
 | #426 Detail footer Close | `398bb8c`: secondary footer Close reuses guarded host dismissal | Luna MAX: 1 recovery finding fixed | Luna MAX actual-browser comparisons: no findings | Technically qualified |
 | #424 Pickup help boundary | `1ad8c4d`: scoped accessible pickup disclosure | Luna MAX: no findings | Luna MAX actual-browser scenarios: 1 held-Escape finding fixed | Technically qualified |
 | #425 Patron email link | `a569897`: normalized, safely encoded mailto recipient | Luna MAX: 2 findings fixed | Luna MAX executed browser/DOM matrix: no findings | Technically qualified |
-| #396 Initial heading focus | Startup-only queue focus distinction | Luna MAX: 1 test-coverage finding fixed | Luna MAX actual focus matrix: no product findings | Technically qualified |
-| #442 Authorized workflow counts | Pending | Pending | Pending | Pending |
+| #396 Initial heading focus | `dbdc1f1`: startup-only queue focus distinction | Luna MAX: 1 test-coverage finding fixed | Luna MAX actual focus matrix: no product findings | Technically qualified |
+| #442 Authorized workflow counts | Complete scoped totals with explicit unknown states | Luna MAX: no findings | Astra HIGH executed scope/identity matrix: no findings | Technically qualified |
 | #428 Requests table sizing | Pending | Pending | Pending | Pending |
 
 Implementation/reviewer models are selected explicitly per the task: Sol MAX
@@ -218,6 +218,44 @@ drafts/focus and no premature mutations. All 271 navigation journeys and the
 separate dialog-focus file pass. The earlier 266/271 result is retained in tool
 output and `i396/navigation-checkpoint-before.json`; no product behavior was
 changed for that alignment.
+
+### #442
+
+Every title workflow tab includes its complete accepted dataset total, including
+zero, independent of table filters and pagination. Loading/unavailable values
+stay distinct from zero; scope, identity and stale-result guards own publication.
+Existing server-normalized super-admin scopes remain authoritative, while ordinary
+users resolve to their own library. The existing complete list query is reused;
+there is no new endpoint, service or schema. Count help remains visible, names
+include totals and an already-focused tab stays fully visible after names widen.
+
+Initial complete frontend discovery ran 73 files: 68 passed and five failed.
+The overly strict new scope check was corrected, and all five affected files pass
+targeted reruns, including 271 navigation journeys. Separate follow-up `f5bfa6d`
+renames a private catalog function without changing its API and supplies current
+quick-create fixture owner hooks; the native-dialog guard remains intact. This
+does not claim a fresh complete 73/73 run; final Full CI supplies that gate.
+Release builds have zero warnings/errors, focused controller/Grid.js checks pass,
+real-SQL scope passes 1/1 and the final browser owner passes 1/1 with eight clean
+states. Actual Purchase persistence, status_changed audit, provider refresh and
+authoritative count transition pass. Visible help, dialog focus, mobile and native
+200% focused-tab geometry were measured before axe; screenshots were inspected.
+Earlier fixture/probe failures and the real help/tab-visibility corrections remain
+recorded. Final initial receipt: `i442/i442-browser-counts-retry6.trx`.
+
+Pass 1 had no findings. Pass 2 independently executed ordinary API attempts for
+All, another library, System and nonexistent scopes: all returned only the user's
+own library. A held old All response could not replace newer library totals.
+Failed/malformed targets recovered, same-ID email/role/library changes canceled
+obsolete refresh and preparation, and an older refresh could not replace an
+accepted prepared target. Native SQL/browser passes 1/1 with zero skips; augmented
+Node probes pass. Eight scans have zero serious/critical axe findings, overflow,
+missing images, page errors or external requests. No findings remained. Identity
+replacement was exercised at controller ownership boundaries, not live Entra.
+Both instrumented files were restored exactly before commit. Evidence:
+`i442/i442-sql-scope-initial.trx`, `i442/frontend-initial.json`,
+`i442-pass2/native/i442-pass2.trx`, `i442-pass2/node-pass2.txt` and
+`i442-pass2/browser-evidence/browser-results.json`.
 
 ## Integrated qualification
 

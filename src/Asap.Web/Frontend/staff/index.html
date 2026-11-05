@@ -84,13 +84,14 @@
           </div>
         </div>
 
-        <div id="status-tabs" class="status-tabs" role="tablist" aria-label="Request status">
+        <div id="status-tabs" class="status-tabs" role="tablist" aria-label="Request status" aria-describedby="status-count-help">
           <button type="button" role="tab" data-status="suggestion" aria-selected="true">Suggestions</button>
           <button type="button" role="tab" data-status="outstanding_purchase" aria-selected="false">Purchases</button>
           <button type="button" role="tab" data-status="pending_hold" aria-selected="false">Pending holds</button>
           <button type="button" role="tab" data-status="hold_placed" aria-selected="false">Placed holds</button>
           <button type="button" role="tab" data-status="closed" aria-selected="false">Closed</button>
         </div>
+        <p id="status-count-help" class="request-table-help">Tab counts show all requests in the selected library scope. <span id="status-count-state">Counts unavailable. Refresh to load them.</span></p>
 
         <div class="queue-filters" aria-label="Request filters">
           <label class="search-field">

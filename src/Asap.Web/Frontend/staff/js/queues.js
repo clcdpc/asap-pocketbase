@@ -169,6 +169,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   request = authorizedJson }) {
   const dom = {
     statusTabs: [...root.querySelectorAll('#status-tabs [data-status]')],
+    countState: root.querySelector('#status-count-state'),
     scopeField: root.querySelector('#scope-field'),
     scope: root.querySelector('#library-scope'),
     search: root.querySelector('#request-search'),
@@ -182,9 +183,18 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     grid: root.querySelector('#request-grid'),
     empty: root.querySelector('#queue-empty'),
   };
-  const state = { requests: [], grid: null, gridStatus: null, loadedContext: null, stale: true, refreshRequired: false, sequence: 0 };
+  const state = { requests: [], grid: null, gridStatus: null, loadedContext: null, loadedOwner: null,
+    countState: 'unavailable', stale: true, refreshRequired: false, sequence: 0 };
+  const statusCounts = dom.statusTabs.map(tab => {
+    tab.querySelector('.status-count')?.remove();
+    const label = tab.textContent.trim();
+    const count = element('span', { className: 'status-count quiet', 'aria-hidden': 'true' });
+    tab.append(' ', count);
+    return { tab, label, count };
+  });
   // The API accepts a library scope and returns every title status in that scope.
-  const isReady = context => !state.stale && !state.refreshRequired && state.loadedContext?.scope === context.scope;
+  const isReady = context => !state.stale && !state.refreshRequired && state.loadedContext?.scope === context.scope &&
+    sessionIdentity.isCurrent(state.loadedOwner);
   const reads = createLatestLoad();
   const events = new window.AbortController();
   let disposed = false, acceptingScope = false, targetGeneration = 0, lookupContext = null;
@@ -223,7 +233,37 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   }, { capture: true, signal: events.signal });
 
   function closeLookup() { if (lookupContext) polarisLookup?.close(lookupContext); lookupContext = null; }
-  function invalidate() { closeLookup(); targetGeneration++; reads.begin('queue-target').abort(); reads.begin('queue').abort(); if (!disposed) dom.refresh.disabled = false; }
+  function invalidate() {
+    closeLookup(); targetGeneration++; reads.begin('queue-target').abort(); reads.begin('queue').abort();
+    if (disposed) return;
+    dom.refresh.disabled = false;
+    if (state.countState === 'loading') state.countState = 'unavailable';
+    renderCounts();
+  }
+
+  function validateResult(result, owner) {
+    const validScope = result?.scope === 'all' || typeof result?.scope === 'string' &&
+      /^[1-9]\d{0,9}$/.test(result.scope) && Number(result.scope) > 1;
+    if (!validScope || owner.role !== 'super_admin' && result.scope !== String(owner.organizationId) || !Array.isArray(result.items) ||
+        result.items.some(item => !item || !statusCounts.some(({ tab }) => tab.dataset.status === item.status))) {
+      throw new Error('Requests could not be loaded. Refresh to try again.');
+    }
+  }
+
+  function renderCounts() {
+    const available = state.countState === 'ready' && !state.stale &&
+      state.loadedContext?.scope === getContext().scope && sessionIdentity.isCurrent(state.loadedOwner);
+    const loading = state.countState === 'loading';
+    for (const { tab, label, count } of statusCounts) {
+      const total = available ? state.requests.filter(request => request.status === tab.dataset.status).length : null;
+      count.textContent = available ? `(${total})` : loading ? '(…)' : '(—)';
+      count.classList.toggle('quiet', !total);
+      tab.setAttribute('aria-label', `${label} (${available ? total : loading ? 'count loading' : 'count unavailable'})`);
+    }
+    dom.countState.textContent = available ? '' : loading ? 'Counts loading…' : 'Counts unavailable. Refresh to load them.';
+    // Counts and selection can widen a tab after keyboard focus has moved.
+    dom.statusTabs.find(tab => tab === document.activeElement)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }
 
   async function prepare(context) {
     const owner = sessionIdentity.preferences(), load = reads.begin('queue-target'), ticket = ++targetGeneration;
@@ -232,18 +272,21 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       const scope = owner.role === 'super_admin' ? context.scope : String(owner.organizationId);
       const result = await request(`/api/asap/staff/title-requests?scope=${encodeURIComponent(scope)}`, { signal: load.signal });
       if (!live()) return null;
-      return { scope: result.scope, isCurrent: live, accept: () => acceptResult(result, ++state.sequence) };
+      validateResult(result, owner);
+      return { scope: result.scope, isCurrent: live, accept: () => acceptResult(result, ++state.sequence, owner) };
     } finally { reads.finish('queue-target', load.token); }
   }
 
-  function acceptResult(result, sequence) {
-    if (disposed) return;
-    state.requests = Object.freeze(Array.isArray(result.items) ? result.items.map(item => Object.freeze({ ...item })) : []);
+  function acceptResult(result, sequence, owner) {
+    if (disposed || !sessionIdentity.isCurrent(owner) || result.scope !== getContext().scope) return;
+    state.requests = Object.freeze(result.items.map(item => Object.freeze({ ...item })));
     state.loadedContext = Object.freeze({ scope: result.scope, status: getContext().status });
+    state.loadedOwner = owner;
+    state.countState = 'ready';
     state.stale = false;
     state.refreshRequired = false;
     if (sessionIdentity.actor()?.role === 'super_admin') { setLibraries(result.organizations); onLibraries(result.organizations); }
-    populateTags(); renderGrid({ preservePage: true });
+    renderCounts(); populateTags(); renderGrid({ preservePage: true });
     onRefreshed({ sequence, items: state.requests, context: state.loadedContext });
   }
 
@@ -255,6 +298,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     // A canceled authoritative reload still requires a read on navigation, while
     // accepted rows remain usable to open fresh details during that reload.
     state.refreshRequired = true;
+    state.countState = 'loading'; renderCounts();
     dom.refresh.disabled = true;
     const clearLoading = !options.silent ? announce('Loading authorized requests...') : null;
     try {
@@ -263,13 +307,15 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       if (!acceptedScope || disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
       acceptingScope = true;
       try { onScopeAccepted(acceptedScope); } finally { acceptingScope = false; }
+      state.countState = 'loading'; renderCounts();
       const context = getContext();
       const scope = owner.role === 'super_admin' ? context.scope : String(owner.organizationId);
       const result = await request(`/api/asap/staff/title-requests?scope=${encodeURIComponent(scope)}`, { signal: load.signal });
       if (disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner) || context.scope !== getContext().scope || context.status !== getContext().status) return false;
+      validateResult(result, owner);
       acceptingScope = true;
       try { onScopeAccepted(result.scope); } finally { acceptingScope = false; }
-      acceptResult(result, sequence);
+      acceptResult(result, sequence, owner);
       return true;
     } catch (error) {
       if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) &&
@@ -277,7 +323,11 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       return false;
     } finally {
       if (typeof clearLoading === 'function') clearLoading();
-      if (!disposed && load.isCurrent()) dom.refresh.disabled = false;
+      if (!disposed && load.isCurrent()) {
+        dom.refresh.disabled = false;
+        if (state.countState === 'loading') state.countState = 'unavailable';
+        renderCounts();
+      }
       reads.finish('queue', load.token);
     }
   }
@@ -285,6 +335,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   function setLibraries(libraries) { if (!disposed) populateLibraries(dom.scope, libraries, getContext().scope); }
   function setStaff(staff) {
     if (disposed) return;
+    if (!sessionIdentity.isCurrent(state.loadedOwner)) retireProjection();
     dom.scopeField.hidden = staff?.role !== 'super_admin';
     dom.scope.replaceChildren(element('option', { value: getContext().scope, text: staff?.role === 'super_admin' ? 'All libraries' : 'My library' }));
     resetQueueFilters(); updateStatusTabs();
@@ -302,8 +353,11 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     if (disposed) return;
     state.requests = [];
     state.loadedContext = null;
+    state.loadedOwner = null;
+    state.countState = 'unavailable';
     state.stale = true;
     if (!acceptingScope) invalidate();
+    renderCounts();
     state.grid?.destroy?.();
     // An older Grid.js render can finish after navigation; keep its container detached.
     dom.grid = detachGridContainer(dom.grid);
@@ -323,6 +377,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       tab.tabIndex = selected ? 0 : -1;
     }
     dom.similarField.hidden = getContext().status !== 'suggestion';
+    renderCounts();
   }
 
   function populateTags() {
@@ -549,6 +604,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     dom.scope.value = getContext().scope;
   }, { signal: events.signal });
   bindStatusTabs(dom.statusTabs, 'status', onStatusIntent, events.signal);
+  renderCounts();
   dom.search.addEventListener('input', renderGrid, { signal: events.signal });
   for (const input of [dom.claim, dom.tag, dom.similar]) input.addEventListener('change', renderGrid, { signal: events.signal });
   return {
@@ -582,7 +638,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     },
     preferencesChanged() { if (disposed) return; dom.claim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all'; renderGrid(); },
     clear: retireProjection,
-    signedOut() { if (disposed) return; invalidate(); state.requests = []; state.loadedContext = null; state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); },
+    signedOut: retireProjection,
     dispose() { if (disposed) return; disposed = true; gridAccessibility.disconnect(); events.abort(); invalidate(); state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); state.requests = []; }
   };
 }
