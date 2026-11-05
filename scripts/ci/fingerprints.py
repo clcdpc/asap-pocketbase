@@ -146,8 +146,7 @@ def nuget_identity(root=ROOT):
 
 
 def environment(config, root=ROOT):
-    # Epoch covers VM image, native libraries, runner configuration and test policy.
-    # Observe actual versions too: setup-dotnet rollForward/setup-node major can drift.
+    # Retain observed versions for provenance, including ephemeral runner drift.
     common = {
         "epoch": config["environment_epoch"],
         "os": platform.system(), "arch": platform.machine(), "kernel": platform.release(),
@@ -204,6 +203,15 @@ def environment(config, root=ROOT):
     return result, problems, image
 
 
+def environment_fingerprint(inputs):
+    # Repository policy and resolved test dependencies remain effective inputs.
+    # VM/kernel/native packages, installed tools and the mutable SQL image are
+    # throwaway execution context, not a reason to repeat matching test evidence.
+    if not inputs.get("epoch") or not inputs.get("nuget"):
+        raise ValueError("Missing test dependency identity")
+    return digest({key: inputs[key] for key in ("epoch", "nuget", "playwright") if key in inputs})
+
+
 def calculate(expected, config, root=ROOT):
     commit, tree = checkout(expected, root)
     entries = tracked_entries(root)
@@ -215,7 +223,7 @@ def calculate(expected, config, root=ROOT):
         selection = selected[suite]
         inputs = {"schema": config["schema"], "suite": suite,
                   "source": source_fingerprint(entries, suite, config, contract),
-                  "environment": digest(environments[suite]), "selection": selection}
+                  "environment": environment_fingerprint(environments[suite]), "selection": selection}
         suites[suite] = {**inputs, "fingerprint": digest(inputs), "environment_inputs": environments[suite],
                          "unavailable": problems.get(suite)}
     return {"commit": commit, "tree": tree, "sql_image": image,

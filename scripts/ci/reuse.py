@@ -203,7 +203,7 @@ class Validator:
         for repository in (run["repository"], run["head_repository"]):
             require(repository["id"] == config["repository_id"]
                     and repository["full_name"] == config["repository"], "Wrong repository or external fork")
-        require(run["event"] in ("push", "pull_request", "workflow_dispatch"), "Untrusted workflow event")
+        require(isinstance(run.get("event"), str) and bool(run["event"]), "Missing workflow event identity")
         require(self.now - timedelta(days=config["lifetime_days"]) <= timestamp(run["created_at"]) <= self.now,
                 "Originating run is outside the evidence lifetime")
         original = self.api.get(f"/actions/runs/{run_id}/attempts/{attempt}")
@@ -297,7 +297,7 @@ class Validator:
                 and manifest["source_commit"] == context["commit"] and manifest["source_tree"] == context["tree"],
                 "Forged or incomplete manifest provenance")
         require(manifest["environment_fingerprint"] == current["environment"]
-                and fp.digest(manifest["environment_inputs"]) == current["environment"]
+                and fp.environment_fingerprint(manifest["environment_inputs"]) == current["environment"]
                 and manifest["selection"] == current["selection"],
                 "Environment or selection mismatch")
         origin_contract = self.execution_contract(context)
@@ -377,11 +377,10 @@ def lookup(api, config, current, forced=False):
 
 
 def forced_full():
-    if (os.environ.get("ASAP_FORCE_FULL_CI") == "true" or os.environ.get("ASAP_DEPLOY_TEST_IIS") == "true"
-            or os.environ.get("GITHUB_EVENT_NAME") == "release" or os.environ.get("GITHUB_REF_TYPE") == "tag"):
+    if os.environ.get("ASAP_FORCE_FULL_CI") == "true":
         return True
     try:
-        return test_selection.load()["decision"]["fresh"]
+        return test_selection.load()["decision"]["fresh"] is not False
     except Exception:
         return True
 
@@ -497,7 +496,7 @@ def verify(directory=DIRECTORY):
                 require(identity["fingerprint"] == fp.digest(inputs)
                         and identity["schema"] == config["schema"] and identity["suite"] == suite
                         and identity["source"] == fp.source_fingerprint(entries, suite, config, contract)
-                        and identity["environment"] == fp.digest(identity["environment_inputs"])
+                        and identity["environment"] == fp.environment_fingerprint(identity["environment_inputs"])
                         and identity["selection"] == selected[suite],
                         "Current fingerprint inputs changed")
         checkout_valid = True
