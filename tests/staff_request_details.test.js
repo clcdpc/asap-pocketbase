@@ -27,7 +27,7 @@ async function setup(ui, initial = source, options = {}) {
   const controller = createTitleDetailController({ host, sessionIdentity: identity,
     polarisLookup: { open: context => lookups.push(context), close() {}, invalidate() {} },
     copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
-    announce: (...args) => announcements.push(args), beforeOpen: () => ({ isCurrent: () => true }), beforeClose: () => true,
+    announce: (...args) => announcements.push(args), beforeOpen: () => ({ isCurrent: () => true }), beforeClose: options.beforeClose || (() => true),
     isNavigationCurrent: () => true, getNavigationGeneration: () => 1, getScope: () => 'all',
     onAlign: async () => ({ scope: 'all', commit: () => 1 }), onOpened() {}, onClosed() {},
     getFocusReturn: () => null, refreshQueue: async () => true, queueSequence: () => 1,
@@ -335,6 +335,53 @@ async function setup(ui, initial = source, options = {}) {
       t.root.querySelector('.grid-new-suggestion').click(); assert.equal(t.quick.length, 0, 'pending command blocks quick create');
       t.complete({ ...source, version: 'v2', activity: [...activity, { id: '99', created: '2026-10-24T12:00:00Z', message: 'Newest' }] });
       await settle(); assert.equal(messages()[0], 'Newest');
+    } finally { t.dispose(); }
+  });
+  await fixture(async ui => {
+    const t = await setup(ui);
+    try {
+      const close = t.root.querySelector('.request-detail-close');
+      assert.ok(close, 'The persistent title footer exposes Close.');
+      assert.equal(close.textContent.trim(), 'Close');
+      assert.equal(close.classList.contains('secondary-button'), true);
+      close.focus(); assert.equal(document.activeElement, close, 'Close is keyboard focusable.');
+      close.click(); await settle();
+      assert.equal(t.root.open, false, 'Clean Close follows the existing dismissal path.');
+      assert.equal(t.calls.some(call => call.init.method), false, 'Close does not submit a request mutation.');
+    } finally { t.dispose(); }
+  });
+  await fixture(async ui => {
+    const t = await setup(ui, source, { beforeClose: () => false });
+    try {
+      const close = t.root.querySelector('.request-detail-close');
+      close.click(); await settle();
+      assert.equal(t.root.open, true, 'Close respects the existing departure guard.');
+      assert.equal(t.calls.some(call => call.init.method), false);
+    } finally { t.dispose(); }
+  });
+  await fixture(async ui => {
+    const t = await setup(ui);
+    try {
+      button(t.root, 'Claim').click(); await settle();
+      const close = t.root.querySelector('.request-detail-close');
+      assert.equal(close.disabled, false, 'Pending operations keep Close available to invoke its guard.');
+      close.click(); await settle();
+      assert.equal(t.root.open, true, 'Pending operations block footer dismissal.');
+      assert.equal(t.calls.filter(call => call.init.method).length, 1, 'Footer Close starts no additional mutation.');
+      assert.ok(t.announcements.some(([message]) => /workflow action is in progress/i.test(message)));
+    } finally { t.dispose(); }
+  });
+  await fixture(async ui => {
+    const closed = { ...source, status: 'closed', closeReason: 'rejected',
+      capabilities: { ...capabilities, allowedActions: [] } };
+    const t = await setup(ui, closed);
+    try {
+      assert.match(ui.get('#request-dialog-status').textContent, /^Closed/);
+      const close = t.root.querySelector('.request-detail-close');
+      assert.ok(close); assert.equal(close.disabled, false, 'Closed requests keep Close available.');
+      close.click(); await settle();
+      assert.equal(t.root.open, false);
+      assert.equal(t.calls.some(call => call.init.method), false);
     } finally { t.dispose(); }
   });
   console.log('D1 detail actions, status/locks, research, activity, quick-create and stale lifecycle passed');

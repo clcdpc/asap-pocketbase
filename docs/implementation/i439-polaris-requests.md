@@ -13,8 +13,8 @@ Routine regression checks and final evidence reconciliation are not new reviews.
 | --- | --- | --- | --- | --- |
 | #389 Polaris search and direct actions | `7ebc90b`: compact catalog UI and scoped direct actions | Luna MAX: 2 findings fixed | Astra HIGH + Terra MAX: 1 finding fixed | Technically qualified |
 | #413 Already own Bib linking | `acc63cb`: atomic verified association/action; unrelated drafts retained | Luna MAX: 1 finding fixed | Astra HIGH: 2 findings fixed | Technically qualified |
-| #423 Purchase/rejection confirmations | Scoped inline-action toolbar/focus ownership; Confirm purchase | Luna MAX: no findings | Luna MAX browser scenarios: 1 finding fixed | Technically qualified |
-| #426 Detail footer Close | Pending | Pending | Pending | Pending |
+| #423 Purchase/rejection confirmations | `62c4c17`: scoped inline-action toolbar/focus ownership; Confirm purchase | Luna MAX: no findings | Luna MAX browser scenarios: 1 finding fixed | Technically qualified |
+| #426 Detail footer Close | Secondary footer Close reuses guarded host dismissal | Luna MAX: 1 recovery finding fixed | Luna MAX actual-browser comparisons: no findings | Technically qualified |
 | #424 Pickup help boundary | Pending | Pending | Pending | Pending |
 | #425 Patron email link | Pending | Pending | Pending | Pending |
 | #396 Initial heading focus | Pending | Pending | Pending | Pending |
@@ -118,6 +118,26 @@ the local root. Failed focused runs and the independent pre-fix probe are
 retained. Temporary test instrumentation was restored byte-for-byte before the
 implementation fix. Registered d1/i403/pr410 assertions are updated; their full
 runner executions remain final integrated gates.
+
+### #426
+
+Secondary footer Close uses the same host dismissal as X and preserves Save,
+Revert, pending-operation and unsaved-edit protections. It stays available on
+closed requests and across detail tabs. Pass 1 found that unavailable-detail
+fallbacks lost the footer; both now retain a guarded Close. Focused Node checks,
+Web build (zero warnings/errors) and the browser/SQL owner pass 1/1 with thirteen
+clean states, including both fallback branches.
+
+Pass 2 independently compared footer/X/Escape for clean, dirty, pending, closed
+and recovery states; checked safe connected heading focus, stale detached
+callbacks, 390px and native 200% geometry. The corrected objective run passes
+1/1 with 32 clean states and no app finding. Temporary probe setup failures
+(navigation zoom reset, callback argument and overly narrow focus expectation)
+are retained and are not app failures or extra review cycles. Source was restored
+exactly to SHA256 `528aba548eb0cafebe2b3f5a788f8cb84996793f3bcd57c623f1f4a155967d30`.
+Evidence: `i426/i426-request-confirmations-test-run-7.trx`,
+`i426-pass2/native/i426-pass2.trx` and `i426-pass2/pass2-report.md` under the local
+root. No implicit save, revert, workflow action or added notification occurred.
 
 ## Integrated qualification
 

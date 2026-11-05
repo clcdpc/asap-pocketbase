@@ -827,7 +827,7 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .identifier-lock-help { margin: 0 0 8px; font-size: .84rem; }
 .request-footer-slot { flex: 0 0 auto; }
 .request-save-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 20px; border-top: 1px solid var(--line); background: #fff; }
-.request-save-footer .form-actions { flex: 0 0 auto; margin: 0; }
+.request-save-footer .form-actions { flex: 0 0 auto; flex-wrap: wrap; margin: 0; }
 .request-save-footer .form-actions > button { white-space: nowrap; padding-inline: 8px; font-size: .85rem; }
 .request-save-feedback { min-width: 0; font-size: .86rem; }
 .request-save-state[data-state="clean"] { color: var(--muted); font-weight: 400; }
@@ -842,7 +842,7 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
   .request-heading-context, .patron-context, .request-middle > [role="tabpanel"], .request-detail-tabs, .request-save-footer { padding-inline: 14px; }
   .request-save-footer { flex-wrap: wrap; }
   .request-save-footer .form-actions { flex: 1 1 100%; }
-  .request-save-footer .form-actions > button { flex: 1; }
+  .request-save-footer .form-actions > button { flex: 1 1 0; min-width: 0; white-space: normal; }
   .app-header { padding-inline: 14px; flex-wrap: wrap; }
   .session-actions { flex: 1 1 220px; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   #staff-identity { flex: 1 1 100px; min-width: 0; }

@@ -6,7 +6,7 @@ import { createRequestEditor } from './request-editor.js';
 import { researchRecordValue } from './research.js';
 import { createRequestWorkflows } from './request-workflows.js';
 import { unconfirmedResponseError, notificationOutcome, isCommittedRequestResponse } from './mutation-outcome.js';
-import { element, icon, statusLabel, dateTime, text, closeReasonLabel, timeoutLabel, addDetail } from './ui.js';
+import { element, icon, commandButton, statusLabel, dateTime, text, closeReasonLabel, timeoutLabel, addDetail } from './ui.js';
 
 export function createTitleDetailController({ host, sessionIdentity, polarisLookup, copyCreation, announce,
   beforeOpen, isNavigationCurrent, getNavigationGeneration, getScope, onAlign, onOpened, onUpdated = () => {}, beforeClose, onClosed,
@@ -86,6 +86,21 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   }
   function invalidate() { targetGeneration++; reads.begin('detail-target').abort(); reads.begin('detail').abort(); editor?.invalidate(); workflows?.invalidate(); if (copyParent) copyCreation.invalidate(copyParent); }
   function closeCopy(options) { return !copyParent || copyCreation.close(options, copyParent); }
+  function showDetailsUnavailable(mounted, message) {
+    if (!mounted?.isCurrent()) return false;
+    const close = commandButton('Close', 'times', () => {
+      if (mounted.isCurrent()) host.requestClose();
+    });
+    close.classList.add('request-detail-close');
+    mounted.content.replaceChildren(
+      element('div', { className: 'request-middle' }, element('p', { text: message })),
+      element('footer', { className: 'request-save-footer' }, [
+        element('div', { className: 'request-save-feedback', text: 'Details unavailable' }),
+        element('div', { className: 'form-actions' }, [close])
+      ])
+    );
+    return true;
+  }
   function disposeChildren() {
     renderRevision = null;
     inlineActions.clear();
@@ -163,7 +178,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         if (options.authoritativeRefresh && lease?.isCurrent()) {
           disposeChildren(); current = Object.freeze({ id: String(id), version: null });
           lease.heading(priorTitle, `Request ${id}`);
-          lease.content.replaceChildren(element('p', { text: 'Current details could not refresh. Reload this request before performing another action.' })); lease.show();
+          showDetailsUnavailable(lease, 'Current details could not refresh. Reload this request before performing another action.'); lease.show();
         }
         announce(error.status === 404 ? 'That request is no longer available.' : error.message, 'error');
         if (options.fromRecent && error.status === 404) forgetUnavailable(String(id));
@@ -208,7 +223,8 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     activeAttempt = attempt; return attempt;
   }
   function disableControls(attempt) {
-    const controls = [...attempt.mounted.content.querySelectorAll('input, select, textarea, button')].map(control => ({ control, disabled: control.disabled }));
+    const controls = [...attempt.mounted.content.querySelectorAll('input, select, textarea, button:not(.request-detail-close)')]
+      .map(control => ({ control, disabled: control.disabled }));
     for (const item of controls) item.control.disabled = true;
     return () => { for (const item of controls) if (attempt.mounted.isCurrent() && item.control.isConnected) item.control.disabled = item.disabled; };
   }
@@ -321,7 +337,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       } else {
         disposeChildren(); current = Object.freeze({ id: snapshot.id, version: null });
         attempt.mounted.heading(snapshot.title, `${snapshot.libraryOrgName} · Request ${snapshot.id}`);
-        attempt.mounted.content.replaceChildren(element('p', { text: 'The action committed. Reload this request to review current details.' }));
+        showDetailsUnavailable(attempt.mounted, 'The action committed. Reload this request to review current details.');
       }
       host.focusClose(); announce(message, notification.partial || patronNotification.partial ? 'warning' : 'success');
       releaseAttempt(attempt);
@@ -508,7 +524,8 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       delete: () => live() ? deleteTitleRequest(snapshot) : Promise.resolve(),
       openCopy: opener => live() ? openCopy(snapshot, context, opener) : Promise.resolve(false)
     });
-    editor = createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot, verified, retained, request: send });
+    editor = createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot,
+      closeDetail: () => host.requestClose(), verified, retained, request: send });
     workflows = createRequestWorkflows({ context, editor, announce, request: send });
     const status = statusLabel(request.status);
     lease?.heading(request.title, `${request.libraryOrgName} · Request ${request.id}`, {

@@ -12,7 +12,7 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
   const browser = await chromium.launch({ headless: true, ...(process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH
     ? { executablePath: process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH } : {}) });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers });
-  const report = { states: [], errors: [], external: [], actions: [], heldEnter: [], cancellation: false, retries: false, otherPanels: false };
+  const report = { states: [], errors: [], external: [], actions: [], heldEnter: [], cancellation: false, retries: false, otherPanels: false, close: {} };
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   const guard = async ctx => ctx.route('**/*', route => {
     if (new URL(route.request().url()).origin === new URL(baseURL).origin) return route.continue();
@@ -28,6 +28,7 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
   };
   watch(page);
   const dialog = (target = page) => target.locator('#request-dialog');
+  const footerClose = (target = page) => dialog(target).getByRole('button', { name: 'Close', exact: true });
   const bar = (target = page) => dialog(target).locator('.action-bar');
   const review = (target = page) => dialog(target).locator('.action-choice');
   const opener = (name, target = page) => bar(target).getByRole('button', { name, exact: true });
@@ -112,12 +113,131 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     } else await target.screenshot({ path: path.join(artifacts, `${name}.png`), fullPage: true });
     report.states.push({ name, ...state });
   }
+  async function scanCloseFooter(name, target = page, nativeZoom = false) {
+    const close = footerClose(target);
+    await close.waitFor(); assert.equal(await close.isVisible(), true); assert.equal(await close.isEnabled(), true);
+    await target.evaluate(axe); await close.focus();
+    const state = await target.evaluate(async () => {
+      const modal = document.querySelector('#request-dialog'), footer = modal.querySelector('.request-save-footer');
+      const actions = footer.querySelector('.form-actions'), buttons = [...actions.querySelectorAll('button')];
+      return { violations: (await axe.run()).violations.filter(v => ['serious', 'critical'].includes(v.impact)),
+        width: innerWidth, documentWidth: document.documentElement.scrollWidth,
+        footerOverflow: footer.scrollWidth > footer.clientWidth + 1 || actions.scrollWidth > actions.clientWidth + 1,
+        clippedButtons: buttons.some(button => {
+          const rect = button.getBoundingClientRect(), bounds = actions.getBoundingClientRect();
+          return !button.getClientRects().length || rect.left < bounds.left - 1 || rect.right > bounds.right + 1 ||
+            button.scrollWidth > button.clientWidth + 1;
+        }),
+        focusVisible: document.activeElement.matches(':focus-visible') &&
+          getComputedStyle(document.activeElement).outlineStyle !== 'none' && parseFloat(getComputedStyle(document.activeElement).outlineWidth) > 0 };
+    });
+    assert.deepEqual(state.violations, [], `${name}: serious/critical axe findings`);
+    assert.ok(state.documentWidth <= state.width && !state.footerOverflow && !state.clippedButtons, `${name}: clipped footer or horizontal overflow`);
+    assert.equal(state.focusVisible, true, `${name}: keyboard focus is visible`);
+    if (nativeZoom) {
+      const cdp = await target.context().newCDPSession(target);
+      try {
+        const metrics = await cdp.send('Page.getLayoutMetrics');
+        assert.equal(metrics.visualViewport.zoom, 2); state.browserZoom = metrics.visualViewport.zoom;
+        const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        await fs.writeFile(path.join(artifacts, `${name}.png`), Buffer.from(screenshot.data, 'base64'));
+      } finally { await cdp.detach(); }
+    } else await target.screenshot({ path: path.join(artifacts, `${name}.png`), fullPage: true });
+    report.states.push({ name, ...state });
+  }
+  async function verifyUnavailableClose(name, response, expectedMessage) {
+    await open(untouchedId);
+    const before = await getDetail(untouchedId), actionCount = report.actions.length;
+    const endpoint = `**/api/asap/staff/title-requests/${untouchedId}**`;
+    let actionCalls = 0, failedRefreshReads = 0;
+    await page.route(endpoint, async route => {
+      const request = route.request(), url = new URL(request.url());
+      if (request.method() === 'POST' && url.pathname.endsWith('/action')) {
+        actionCalls++;
+        await route.fulfill({ status: response.status, contentType: 'application/json', body: JSON.stringify(response.body) });
+      } else if (request.method() === 'GET' && url.pathname.endsWith(`/${untouchedId}`) && actionCalls) {
+        failedRefreshReads++;
+        await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ message: 'Deterministic detail refresh failure' }) });
+      } else {
+        await route.continue();
+      }
+    });
+    try {
+      const panel = await choose('Purchase');
+      await panel.locator('button[type=submit]').click();
+      await dialog().locator('.request-save-footer').waitFor();
+      await dialog().getByText(expectedMessage).waitFor();
+      assert.equal(actionCalls, 1, `${name}: one deliberately intercepted action`);
+      assert.equal(failedRefreshReads, 1, `${name}: the authoritative refresh failed`);
+      assert.deepEqual(await footerClose().isVisible(), true, `${name}: recovery retains footer Close`);
+      for (let tab = 0; tab < 5 && !await footerClose().evaluate(node => node === document.activeElement); tab++) {
+        await page.keyboard.press('Tab');
+      }
+      assert.equal(await footerClose().evaluate(node => node === document.activeElement), true,
+        `${name}: Tab reaches recovery Close`);
+      await scanCloseFooter(`${name}-close-fallback`);
+      await footerClose().press('Enter');
+      await dialog().waitFor({ state: 'hidden' });
+      await page.waitForFunction(id => [...document.querySelectorAll('#request-grid .grid-open')]
+        .find(node => node.dataset.requestId === id) === document.activeElement, untouchedId);
+      assert.deepEqual(await getDetail(untouchedId), before, `${name}: Close preserves the request after the failed refresh`);
+      assert.equal(report.actions.length, actionCount + 1, `${name}: Close starts no additional action`);
+      report.close[name] = true;
+    } finally {
+      await page.unroute(endpoint);
+    }
+  }
+  async function verifyUnsavedClose(name, trigger) {
+    await open(untouchedId);
+    const before = await getDetail(untouchedId), actionsBefore = report.actions.length;
+    const notes = dialog().getByLabel('Notes', { exact: true }), draft = `${before.notes || ''}\nUnsaved ${name} close draft`;
+    await notes.fill(draft);
+    await decideConfirmation(page, trigger, async decision => {
+      assert.match(decision.message(), /Discard unsaved request changes and navigate away/i);
+      await decision.dismiss();
+    });
+    assert.equal(await dialog().isVisible(), true, `${name}: Keep editing cancels dismissal`);
+    assert.equal(await notes.inputValue(), draft, `${name}: Keep editing retains the draft`);
+    assert.deepEqual(await getDetail(untouchedId), before, `${name}: a local draft is not saved by Close`);
+    await decideConfirmation(page, trigger, decision => decision.accept());
+    await dialog().waitFor({ state: 'hidden' });
+    assert.deepEqual(await getDetail(untouchedId), before, `${name}: explicit discard does not mutate the request`);
+    assert.equal(report.actions.length, actionsBefore, `${name}: dismissal starts no request action`);
+    report.close[name] = true;
+  }
   try {
     await open(untouchedId); const untouched = await getDetail(untouchedId);
     // The cancellation fixture never authorizes a write. An opening regression
     // fails here before it can reach SQL or enqueue a notification.
     await page.route(`**/staff/title-requests/${untouchedId}/action`, route => route.fulfill({ status: 409,
       json: { code: 'stale_version', message: 'Unexpected action during an opening-only scenario' } }));
+    const rowOpener = page.locator(`#request-grid .request-title-link[data-request-id="${untouchedId}"]`);
+    await footerClose().waitFor();
+    assert.equal(await footerClose().isEnabled(), true, 'Clean requests expose an enabled footer Close button.');
+    await scanCloseFooter('request-close-desktop');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scanCloseFooter('request-close-mobile');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await footerClose().press('Enter');
+    await dialog().waitFor({ state: 'hidden' });
+    await page.waitForFunction(id => [...document.querySelectorAll('#request-grid .grid-open')]
+      .find(node => node.dataset.requestId === id) === document.activeElement, untouchedId);
+    assert.equal(await rowOpener.evaluate(node => node === document.activeElement), true);
+    assert.deepEqual(await getDetail(untouchedId), untouched, 'Clean footer Close returns focus and preserves the request.');
+    report.close.cleanKeyboard = true; report.close.focusReturn = true;
+    await verifyUnavailableClose('failedRefresh', {
+      status: 409, body: { code: 'stale_version', message: 'Deterministic stale request for recovery coverage' }
+    }, 'Current details could not refresh');
+    await verifyUnavailableClose('committedRefreshFailure', {
+      status: 200, body: { committed: true, request: null, refreshUnavailable: true, finalStatus: 'suggestion' }
+    }, 'The action committed. Reload this request to review current details.');
+    await verifyUnsavedClose('footer', () => footerClose().click());
+    await verifyUnsavedClose('x', () => page.locator('#close-request').click());
+    await verifyUnsavedClose('escape', async () => {
+      await dialog().getByLabel('Notes', { exact: true }).focus(); await page.keyboard.press('Escape');
+    });
+    await open(untouchedId);
+    const openCancellationActionCount = report.actions.length;
     for (const name of ['Purchase', 'Reject']) {
       let panel = await choose(name);
       if (name === 'Purchase') assert.equal(await panel.getByRole('checkbox', { name: 'Send purchase reminder' }).isChecked(), true);
@@ -138,7 +258,7 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
       await cancel(panel, name, true);
       assert.deepEqual(await getDetail(untouchedId), untouched, 'Opening and cancellation preserve version, state and history');
     }
-    assert.equal(report.actions.length, 0);
+    assert.equal(report.actions.length, openCancellationActionCount, 'Opening and cancelling choices posts no additional actions');
 
     // Template failure and an aborted late read both leave cancellation usable.
     const templatePath = `**/staff/title-requests/${untouchedId}/rejection-templates`;
@@ -171,7 +291,8 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     await cancel(panel, 'Purchase', true);
     panel = await choose('Reject'); await page.locator('#close-request').click();
     await dialog().waitFor({ state: 'hidden' });
-    assert.deepEqual(await getDetail(untouchedId), untouched); assert.equal(report.actions.length, 0);
+    assert.deepEqual(await getDetail(untouchedId), untouched);
+    assert.equal(report.actions.length, openCancellationActionCount, 'Closing inline panels posts no additional actions');
     await open(untouchedId);
 
     // Async assignment options must not introduce a competing panel after Purchase has opened.
@@ -221,6 +342,13 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
         await chrome.tabs.setZoomSettings(tab.id, { mode: 'automatic', scope: 'per-tab' });
         await chrome.tabs.setZoom(tab.id, 2); return chrome.tabs.getZoom(tab.id);
       }, new URL(baseURL).origin), 2);
+      await scanCloseFooter('request-close-native-200', zoomPage, true);
+      await footerClose(zoomPage).press('Enter'); await dialog(zoomPage).waitFor({ state: 'hidden' });
+      await zoomPage.waitForFunction(id => [...document.querySelectorAll('#request-grid .grid-open')]
+        .find(node => node.dataset.requestId === id) === document.activeElement, untouchedId);
+      report.close.native200 = true;
+      await zoomPage.locator(`#request-grid .request-title-link[data-request-id="${untouchedId}"]`).click();
+      await dialog(zoomPage).waitFor({ state: 'visible' }); await bar(zoomPage).waitFor();
       for (const name of ['Purchase', 'Reject']) {
         const zoomPanel = await choose(name, zoomPage); await scan(`${name.toLowerCase()}-native-200`, zoomPage, true);
         await cancel(zoomPanel, name, true, zoomPage);
@@ -246,9 +374,12 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
       await panel.locator('button[type=submit]').focus();
       await page.keyboard.down('Enter'); await page.keyboard.down('Enter'); await page.keyboard.up('Enter'); await started;
       await page.keyboard.press('Escape'); await page.locator('#close-request').click();
+      assert.equal(await footerClose().isEnabled(), true, 'The footer Close remains enabled while the action guard is active.');
+      await footerClose().click();
       assert.equal(await dialog().isVisible(), true); assert.equal(await review().isVisible(), true);
       assert.equal(await panel.locator('button[type=submit]').isDisabled(), true); assert.equal(await bar().isVisible(), false);
       assert.equal(report.actions.length, countBefore + 1, 'Repeated confirmation dispatches one action');
+      report.close.pending = true;
       release(); const accepted = await (await response).json(); assert.equal(accepted.committed, true);
       assert.equal(accepted.notificationStatus, 'queued');
       await status().filter({ hasText: expected }).waitFor(); await bar().waitFor(); await page.unroute(actionPath);
@@ -264,6 +395,15 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
       assert.match(await panel.textContent(), /purchase reminder does not apply/);
       assert.match(await panel.textContent(), expected === 'Pending hold' ? /Pending hold for automatic hold placement/ : /closes this request without placing a hold/);
       await panel.locator('button[type=submit]').press('Enter'); await status().filter({ hasText: expected }).waitFor(); await bar().waitFor();
+      if (expected === 'Closed') {
+        const closed = await getDetail(id), actionCount = report.actions.length;
+        assert.equal(await footerClose().isVisible(), true, 'Already closed requests retain the footer Close button.');
+        assert.equal(await footerClose().isEnabled(), true);
+        await footerClose().click(); await dialog().waitFor({ state: 'hidden' });
+        assert.deepEqual(await getDetail(id), closed, 'Closing an already closed request does not mutate it.');
+        assert.equal(report.actions.length, actionCount);
+        report.close.alreadyClosed = true;
+      }
       if (id === savedBibId) {
         const before = await getDetail(id);
         const pickup = await holdOpeningEnter('Pickup', dialog().locator('.inline-form')); await panelState(pickup);

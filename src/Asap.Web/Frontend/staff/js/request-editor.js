@@ -4,7 +4,7 @@ import { applyPolarisResultToControls, renderResearchLinks, selectedStaffBibId, 
 import { customFieldValue, renderCustomFieldEditor, collectCustomFields } from './custom-fields.js';
 import { element, icon, commandButton, labeledInput, selectWithHistorical } from './ui.js';
 
-export function createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot = null, verified = null, retained = null, request: send = authorizedJson }) {
+export function createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot = null, closeDetail = () => {}, verified = null, retained = null, request: send = authorizedJson }) {
   const { request, actor, root, scope: interactionScope, isCurrent, isPending, admit, confirm: confirmChanges, mutate } = context;
   const reads = createLatestLoad();
   let editControls = null, editorDirty = false, editorDraft = null, verifiedBib = verified, research = null, lookupContext = null;
@@ -317,6 +317,10 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       (updated.closest('[hidden]') ? root.querySelector('[role="tab"][aria-selected="true"]') : updated.querySelector('input'))?.focus();
       announce('Unsaved request changes discarded.');
     });
+    const close = commandButton('Close', 'times', () => {
+      if (form.isConnected && isCurrent()) closeDetail();
+    });
+    close.classList.add('request-detail-close');
     function updatePreview() {
       const changed = [];
       const identifierChanged = !identifier.disabled && identifier.value.trim() !== (request.identifier || '').trim();
@@ -372,7 +376,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     );
     const footer = element('footer', { className: 'request-save-footer wide' }, [
       element('div', { className: 'request-save-feedback' }, [saveState, pendingPreview]),
-      element('div', { className: 'form-actions' }, [save, revert])
+      element('div', { className: 'form-actions' }, [save, revert, close])
     ]);
     if (footerRoot) footerRoot.replaceChildren(footer); else form.append(footer);
     updatePreview();
