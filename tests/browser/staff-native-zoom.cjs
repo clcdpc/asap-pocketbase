@@ -291,7 +291,7 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
         return { before, after: node.scrollTop, max: node.scrollHeight - node.clientHeight };
       });
       assert.ok(pickerScroll.max > 0 && pickerScroll.after > pickerScroll.before,
-        'The real 200% picker has a scrollable list/reference.');
+        'The real 200% picker has a scrollable option list.');
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.equal(await emailPopup.evaluate(node => node.matches(':popover-open')), true,
         'Scrolling inside the real narrow picker preserves its open state.');

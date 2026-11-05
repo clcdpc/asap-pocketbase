@@ -173,20 +173,12 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
       button.type = 'button';
       button.dataset.placeholderKey = item.key;
       button.setAttribute('aria-label', `Insert ${item.name} — {{${item.key}}}`);
-      const description = make('small', '', item.description);
+      const description = make('small', '', `${item.description} Example: ${item.example}`);
       description.id = `${entry.control.id}-${item.key}-description`;
       button.setAttribute('aria-describedby', description.id);
       button.append(make('span', '', item.name), make('code', '', `{{${item.key}}}`), description);
       entry.popup.append(button);
     }
-    const reference = make('details', 'template-placeholder-reference');
-    reference.append(make('summary', '', 'What each placeholder means'));
-    const definitions = make('dl');
-    for (const item of PLACEHOLDERS.filter(item => keys.includes(item.key))) {
-      definitions.append(make('dt', '', `{{${item.key}}}`), make('dd', '', `${item.description} Example: ${item.example}`));
-    }
-    reference.append(definitions);
-    entry.popup.append(reference);
   }
 
   function createEntry(card, control) {

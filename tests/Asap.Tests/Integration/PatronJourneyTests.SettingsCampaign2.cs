@@ -119,8 +119,11 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(report.RootElement.GetProperty("namedOverrideEditsBackToSystem").GetBoolean());
             Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
             Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
-            Assert.HasCount(13, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(16, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
             var templateCards = report.RootElement.GetProperty("emailTemplateCards");
+            CollectionAssert.AreEqual(new[] { "email-template-subject", "email-template-body-forced-colors",
+                    "email-template-additional-subject-forced-colors", "email-template-additional-body-forced-colors" },
+                templateCards.GetProperty("pickerFields").EnumerateArray().Select(item => item.GetString()).ToArray());
             Assert.IsTrue(templateCards.GetProperty("nativeHistory").GetBoolean());
             Assert.IsTrue(templateCards.GetProperty("collapsedValidation").GetBoolean());
             Assert.IsTrue(templateCards.GetProperty("stableRows").GetBoolean());

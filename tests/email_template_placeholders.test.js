@@ -277,9 +277,9 @@ const { JSDOM } = require('jsdom');
       trigger(body).click();
       const option = popup(body).querySelector('[data-placeholder-key="title"]');
       option.focus();
-      for (const inside of [popup(body), popup(body).querySelector('summary')]) {
+      for (const inside of [popup(body), option.querySelector('small')]) {
         inside.dispatchEvent(new window.Event('scroll'));
-        assert.equal(trigger(body).getAttribute('aria-expanded'), 'true', 'Scrolling the picker list/reference keeps it open.');
+        assert.equal(trigger(body).getAttribute('aria-expanded'), 'true', 'Scrolling the picker options keeps it open.');
         assert.equal(document.activeElement, option);
       }
       if (outside === window || outside === document) window.scrollY++;
@@ -335,8 +335,20 @@ const { JSDOM } = require('jsdom');
     open(subject);
     trigger(subject).click();
     assert.deepEqual([...popup(subject).querySelectorAll('[data-placeholder-key]')].map(node => node.dataset.placeholderKey), ['title']);
-    assert.equal(popup(subject).querySelector('summary').textContent, 'What each placeholder means');
-    assert.match(popup(subject).querySelector('dl').textContent, /Example title/);
+    for (const control of [subject, body]) {
+      open(control);
+      if (trigger(control).getAttribute('aria-expanded') !== 'true') trigger(control).click();
+      assert.equal(popup(control).querySelector('details, summary, dl'), null);
+      assert.doesNotMatch(popup(control).textContent, /What (each placeholder|this) means/);
+      const button = popup(control).querySelector('[data-placeholder-key="title"]');
+      assert.equal(button.getAttribute('aria-label'), 'Insert Requested title — {{title}}');
+      assert.equal(button.querySelector('span').textContent, 'Requested title');
+      assert.equal(button.querySelector('code').textContent, '{{title}}');
+      const description = document.getElementById(button.getAttribute('aria-describedby'));
+      assert.equal(button.contains(description), true);
+      assert.equal(description.textContent, 'Requested title. Example: Example title');
+      document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    }
     console.log('Email accordion, safe previews, contextual capabilities, native insertion, stale ownership and collapsed validation passed');
   } finally {
     dom.window.close();

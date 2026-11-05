@@ -164,7 +164,12 @@ async function flush() {
     const popup = document.getElementById(trigger.getAttribute('aria-controls'));
     assert.deepStrictEqual([...popup.querySelectorAll('[data-placeholder-key]')]
       .map(button => button.dataset.placeholderKey), ['name', 'title']);
-    popup.querySelector('details').open = true;
+    assert.strictEqual(popup.querySelector('details, summary, dl'), null);
+    for (const button of popup.querySelectorAll('[data-placeholder-key]')) {
+      const description = document.getElementById(button.getAttribute('aria-describedby'));
+      assert.strictEqual(button.contains(description), true);
+      assert.match(description.textContent, /Example: /);
+    }
     assert.strictEqual(controller.isDirty(), false);
     const subject = document.getElementById('email-submit-subject');
     subject.focus();
@@ -423,6 +428,24 @@ async function flush() {
     const additionalB = [...document.querySelectorAll('#email-templates-editor [data-domain-row]')]
       .find(row => row.querySelector('.template-key').value === 'rejection:raw_B');
     additionalB.querySelector('[data-template-toggle]').click();
+    for (const field of additionalB.querySelectorAll('.settings-template-field')) {
+      const fieldTrigger = field.querySelector('.template-placeholder-trigger');
+      fieldTrigger.click();
+      const fieldPopup = document.getElementById(fieldTrigger.getAttribute('aria-controls'));
+      assert.strictEqual(fieldPopup.querySelector('details, summary, dl'), null);
+      assert.doesNotMatch(fieldPopup.textContent, /What (each placeholder|this) means/);
+      assert.deepStrictEqual([...fieldPopup.querySelectorAll('[data-placeholder-key]')]
+        .map(button => button.dataset.placeholderKey), ['title']);
+      const button = fieldPopup.querySelector('button');
+      assert.strictEqual(button.getAttribute('aria-label'), 'Insert Requested title — {{title}}');
+      assert.strictEqual(button.querySelector('span').textContent, 'Requested title');
+      assert.strictEqual(button.querySelector('code').textContent, '{{title}}');
+      const description = document.getElementById(button.getAttribute('aria-describedby'));
+      assert.strictEqual(button.contains(description), true);
+      assert.strictEqual(description.textContent, 'Requested title. Example: Example title');
+      document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    }
+    assert.strictEqual(controller.isDirty(), false, 'Reading Additional template placeholders leaves Settings clean.');
     additionalB.querySelector('[aria-label="Move up"]').click();
     form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     for (let attempt = 0; attempt < 30 && saved.length < 6; attempt++) await flush();

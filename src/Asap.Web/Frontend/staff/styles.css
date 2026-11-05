@@ -622,10 +622,6 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .template-placeholder-picker > button:hover { background: var(--soft); }
 .template-placeholder-picker code { overflow-wrap: anywhere; }
 .template-placeholder-picker small { flex-basis: 100%; color: var(--muted); }
-.template-placeholder-reference { margin: 8px 6px; font-size: .8rem; }
-.template-placeholder-reference summary { cursor: pointer; }
-.template-placeholder-reference dt { margin-top: 10px; font-family: monospace; font-weight: 700; }
-.template-placeholder-reference dd { margin: 3px 0 0; overflow-wrap: anywhere; }
 @container (min-width: 48rem) {
   .settings-template-layout { grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); }
   .settings-template-admin { grid-template-columns: repeat(2, minmax(0, 1fr)); }

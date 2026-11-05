@@ -46,7 +46,66 @@ async function verifyEmailTemplateCards({ page, scan, report }) {
   const mutations = [];
   const trackMutation = request => { if (request.method() !== 'GET') mutations.push(request.url()); };
   page.on('request', trackMutation);
-  const receipt = { contexts: [], nativeHistory: false, collapsedValidation: false, stableRows: false };
+  const receipt = { contexts: [], pickerFields: [], nativeHistory: false, collapsedValidation: false, stableRows: false };
+  const verifyOptions = async (popup, keys) => {
+    assert.equal(await popup.locator('details, summary, dl').count(), 0);
+    assert.doesNotMatch(await popup.textContent(), /What (each placeholder|this) means/);
+    const options = await popup.locator('[data-placeholder-key]').evaluateAll(buttons => buttons.map(button => {
+      const description = document.getElementById(button.getAttribute('aria-describedby'));
+      return { key: button.dataset.placeholderKey, name: button.querySelector('span')?.textContent,
+        token: button.querySelector('code')?.textContent, label: button.getAttribute('aria-label'),
+        description: description?.textContent, associated: description === button.querySelector('small'),
+        visible: Boolean(description?.getBoundingClientRect().height) };
+    }));
+    assert.deepEqual(options.map(option => option.key), keys);
+    for (const option of options) {
+      assert.ok(option.name);
+      assert.equal(option.token, `{{${option.key}}}`);
+      assert.equal(option.label, `Insert ${option.name} — ${option.token}`);
+      assert.ok(option.description?.includes(' Example: '));
+      assert.equal(option.associated && option.visible, true);
+    }
+  };
+  const verifyFieldPicker = async (control, keys, name) => {
+    const original = await control.inputValue();
+    await control.fill('Prefix selected suffix');
+    await control.evaluate(node => node.setSelectionRange(7, 15));
+    const trigger = control.locator('xpath=..').locator('.template-placeholder-trigger');
+    const popup = page.locator(`#${await trigger.getAttribute('aria-controls')}`);
+    await page.emulateMedia({ forcedColors: 'active' });
+    await trigger.scrollIntoViewIfNeeded(); await settleLayout(); await trigger.focus(); await trigger.press('Space');
+    await verifyOptions(popup, keys);
+    assert.equal(await popup.locator('button').first().evaluate(node => node === document.activeElement), true);
+    for (let index = 1; index < keys.length; index++) await page.keyboard.press('Tab');
+    assert.equal(await popup.locator('button').last().evaluate(node => node === document.activeElement), true);
+    for (let index = 1; index < keys.length; index++) await page.keyboard.press('Shift+Tab');
+    assert.equal(await popup.locator('button').first().evaluate(node => node === document.activeElement), true);
+    const focus = await popup.locator('button').first().evaluate(node => ({
+      forced: matchMedia('(forced-colors: active)').matches, visible: node.matches(':focus-visible'),
+      style: getComputedStyle(node).outlineStyle, width: parseFloat(getComputedStyle(node).outlineWidth)
+    }));
+    assert.equal(focus.forced && focus.visible, true);
+    assert.ok(focus.style !== 'none' && focus.width > 0, JSON.stringify(focus));
+    await scan(name);
+    assert.equal(await popup.evaluate(node => node.matches(':popover-open')), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
+    assert.equal(await trigger.evaluate(node => node === document.activeElement), true);
+    await trigger.press('Enter');
+    for (let index = 0; index < keys.indexOf('title'); index++) await page.keyboard.press('Tab');
+    assert.equal(await popup.locator('[data-placeholder-key="title"]').evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press('Space');
+    assert.equal(await control.inputValue(), 'Prefix {{title}} suffix');
+    assert.equal(await control.evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press('Control+Z');
+    assert.equal(await control.inputValue(), 'Prefix selected suffix');
+    assert.deepEqual(await control.evaluate(node => [node.selectionStart, node.selectionEnd]), [7, 15]);
+    await page.keyboard.press('Control+Shift+Z');
+    assert.equal(await control.inputValue(), 'Prefix {{title}} suffix');
+    await control.fill(original);
+    await page.emulateMedia({ forcedColors: 'none' });
+    receipt.pickerFields.push(name);
+  };
   try {
     const card = page.locator('[data-template-key="suggestion_submitted"]');
     const toggle = card.locator('[data-template-toggle]');
@@ -80,9 +139,14 @@ async function verifyEmailTemplateCards({ page, scan, report }) {
     });
     await trigger.focus(); await trigger.press('Enter');
     const popup = page.locator('#email-submit-subject-placeholders');
-    assert.deepEqual(await popup.locator('[data-placeholder-key]').evaluateAll(nodes => nodes.map(node => node.dataset.placeholderKey)),
-      ['name', 'title', 'author', 'format', 'barcode', 'firstName', 'lastName']);
-    await popup.locator('[data-placeholder-key="title"]').press('Enter');
+    const keys = ['name', 'title', 'author', 'format', 'barcode', 'firstName', 'lastName'];
+    await verifyOptions(popup, keys);
+    assert.equal(await popup.locator('button').first().evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press('Tab');
+    assert.equal(await popup.locator('[data-placeholder-key="title"]').evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await popup.locator('button').first().evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press('Tab'); await page.keyboard.press('Enter');
     assert.equal(await subject.inputValue(), inserted);
     assert.equal(await subject.evaluate(node => node === document.activeElement), true);
     const adjacent = ' extra';
@@ -118,6 +182,8 @@ async function verifyEmailTemplateCards({ page, scan, report }) {
     assert.equal(await subject.inputValue(), `${prefix}${adjacent}${suffix}`);
     assert.deepEqual(await subject.evaluate(() => ['historyUndo', 'historyRedo'].map(type => window.__emailTemplateInputTypes.includes(type))), [true, true]);
     receipt.nativeHistory = true;
+    receipt.pickerFields.push('email-template-subject');
+    await verifyFieldPicker(body, keys, 'email-template-body-forced-colors');
     await toggle.click();
     assert.equal(await subject.isVisible(), false);
     assert.match(await card.locator('.settings-template-subject-excerpt').textContent(), /{{title}} extra/);
@@ -184,6 +250,9 @@ async function verifyEmailTemplateCards({ page, scan, report }) {
     assert.equal(await added.locator('[role="alert"]').textContent(), '');
     assert.equal(await page.locator('#settings-message').textContent(), '', 'Correcting Subject clears its matching Settings validation notice.');
     assert.equal(await page.locator('#app-status').textContent(), '', 'Correcting Subject clears its matching shell validation notice.');
+    for (const role of ['subject', 'body']) {
+      await verifyFieldPicker(added.locator(`.template-${role}`), ['title'], `email-template-additional-${role}-forced-colors`);
+    }
     for (const [name, width, height] of [['email-template-additional-desktop', 1280, 900], ['email-template-additional-mobile', 390, 844]]) {
       await page.setViewportSize({ width, height });
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
