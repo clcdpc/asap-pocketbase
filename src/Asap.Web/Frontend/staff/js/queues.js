@@ -164,7 +164,7 @@ function focusPort({ grid, label, fallback, sessionIdentity, getContext, copy, s
 
 export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   onOpen, onScopeIntent, onStatusIntent, onScopeAccepted, onLibraries, onRefreshed, onRendered,
-  onNewSuggestion = null, polarisLookup = null,
+  onNewSuggestion = null, polarisLookup = null, onCatalogCommitted = () => {},
   resolveScope = () => getContext().scope,
   request = authorizedJson }) {
   const dom = {
@@ -400,7 +400,21 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     lookupContext = {
       requestId: request.id, libraryOrgId: request.libraryOrgId, mode,
       query: mode === 'author' ? request.author || '' : request.title,
-      readOnly: true, canApply: false, returnFocus: opener,
+      title: request.title, author: request.author, actor: owner,
+      // Grid research cannot apply draft edits. Direct actions require their own
+      // authoritative, scoped preview and combined versioned server command.
+      readOnly: true, canApply: false, returnFocus: opener, fallbackFocus: dom.refresh,
+      directActions: ['suggestion', 'outstanding_purchase'].includes(request.status) &&
+        request.capabilities?.allowedActions?.includes('catalogFound') &&
+        request.capabilities.canChangeBib === true && request.capabilities.canEditIdentifier === true,
+      onCommitted: async result => {
+        if (!sessionIdentity.isCurrent(owner)) return false;
+        onCatalogCommitted(result);
+        const refreshed = await refresh({ silent: true });
+        if (sessionIdentity.isCurrent(owner) && getContext().activeView === 'queue' &&
+            getContext().scope === context.scope && getContext().status === context.status) dom.refresh.focus();
+        return refreshed;
+      },
       isCurrent: () => !disposed && !state.stale && state.requests === projection && sessionIdentity.isCurrent(owner) &&
         getContext().activeView === 'queue' && getContext().scope === context.scope && getContext().status === context.status && opener.isConnected
     };

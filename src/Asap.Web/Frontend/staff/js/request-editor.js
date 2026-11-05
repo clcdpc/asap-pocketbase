@@ -108,6 +108,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
         mode: 'title',
         query: title.value.trim(),
         title: title.value.trim(),
+        sourceAuthor: author.value.trim(),
         apply: (selected, verifiedDetail) => {
           applyPolarisResultToControls(selected, { bib, title, author, identifier });
           verifiedBib = {

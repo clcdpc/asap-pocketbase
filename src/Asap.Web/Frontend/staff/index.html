@@ -791,14 +791,14 @@
     <dialog id="polaris-dialog" aria-labelledby="polaris-dialog-title">
       <div class="dialog-shell compact-dialog-shell">
         <header class="dialog-header">
-          <h2 id="polaris-dialog-title">Search Polaris catalog</h2>
+          <h2 id="polaris-dialog-title">Search Polaris</h2>
           <button id="close-polaris" class="icon-button" type="button" aria-label="Close Polaris search">
             <i class="fa fa-times" aria-hidden="true"></i>
           </button>
         </header>
-        <div class="dialog-body">
+        <div class="dialog-body polaris-body">
           <form id="polaris-form" class="polaris-form">
-            <label>Search by
+            <label>Search mode
               <select id="polaris-mode">
                 <option value="bib">Exact BIB ID</option>
                 <option value="identifier">Identifier</option>
@@ -807,17 +807,24 @@
                 <option value="title_author">Title and author</option>
               </select>
             </label>
-            <label id="polaris-query-field"><span id="polaris-query-label">Catalog title</span>
+            <label id="polaris-query-field"><span id="polaris-query-label">Title keywords</span>
               <input id="polaris-query" maxlength="250" required>
             </label>
             <div id="polaris-pair-fields" hidden>
               <label>Catalog title <input id="polaris-title" maxlength="250"></label>
               <label>Catalog author <input id="polaris-author" maxlength="250"></label>
             </div>
-            <button class="primary-button" type="submit">Search Polaris</button>
+            <div class="polaris-search-actions">
+              <button class="primary-button" type="submit">Search Polaris</button>
+              <button id="polaris-add-author" class="polaris-author-shortcut" type="button" hidden>Add author to search</button>
+            </div>
           </form>
           <p id="polaris-status" role="status" aria-live="polite"></p>
-          <ul id="polaris-results" class="polaris-results"></ul>
+          <p id="polaris-ownership-status" class="sr-only" role="status" aria-live="polite"></p>
+          <div class="polaris-result-pane">
+            <section id="polaris-confirmation" class="polaris-confirmation" aria-label="Review catalog action" hidden></section>
+            <ul id="polaris-results" class="polaris-results" aria-label="Polaris catalog results" tabindex="0"></ul>
+          </div>
         </div>
       </div>
     </dialog>

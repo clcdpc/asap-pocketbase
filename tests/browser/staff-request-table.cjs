@@ -86,7 +86,8 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
     assert.match(await lookup.textContent(), /Current Author lookup result retained/);
     assert.doesNotMatch(await lookup.textContent(), /Stale Title lookup result/);
     assert.equal(await page.locator('#polaris-mode').inputValue(), 'author');
-    assert.equal(await lookup.getByRole('button', { name: /^Use BIB/ }).count(), 0);
+    assert.equal(await lookup.getByRole('button', { name: /^Use BIB \d+ in form/ }).count(), 0,
+      'Grid research cannot overwrite an editor draft. Workflow actions use their own confirmation.');
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#request-dialog').isVisible(), false);
     const after = await (await context.request.get(`${baseURL}/api/asap/staff/title-requests/${id}`)).json();
