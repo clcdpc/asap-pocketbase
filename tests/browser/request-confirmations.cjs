@@ -34,6 +34,8 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
   const opener = (name, target = page) => bar(target).getByRole('button', { name, exact: true });
   const pickupCell = (target = page) => dialog(target).locator('.patron-context .detail-grid > div')
     .filter({ has: target.locator('.recorded-pickup-help') });
+  const emailCell = (target = page) => dialog(target).locator('.patron-context .detail-grid > div')
+    .filter({ has: target.locator('dt', { hasText: /^Email$/ }) });
   const pickupHelp = (target = page) => pickupCell(target).locator('.recorded-pickup-help');
   const pickupHelpToggle = (target = page) => pickupHelp(target).locator(':scope > summary');
   const pickupHelpText = (target = page) => pickupHelp(target).locator('.recorded-pickup-help-content');
@@ -228,6 +230,42 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     assert.equal(await disclosure.evaluate(node => node.open), false, `${name}: Space opens and dismisses pickup help`);
     report.pickup[name] = true;
   }
+  async function verifyEmailLink(name, target, recipient, expectedHref) {
+    const cell = emailCell(target), link = cell.getByRole('link', { name: recipient, exact: true });
+    assert.equal(await cell.locator('dd').textContent(), recipient, `${name}: the displayed recipient is unchanged`);
+    assert.equal(await link.getAttribute('href'), expectedHref, `${name}: the recipient separator and encoded characters follow mailto URI syntax`);
+    await target.setViewportSize({ width: 390, height: 844 });
+    for (let tab = 0; tab < 36 && !await link.evaluate(node => node === document.activeElement); tab++) {
+      await target.keyboard.press('Tab');
+    }
+    assert.equal(await link.evaluate(node => node === document.activeElement), true, `${name}: Tab reaches the email link`);
+    const layout = await link.evaluate(node => {
+      const bounds = node.closest('dd').getBoundingClientRect();
+      const rects = [...node.getClientRects()].map(rect => ({ left: rect.left, right: rect.right }));
+      const style = getComputedStyle(node);
+      return { width: innerWidth, documentWidth: document.documentElement.scrollWidth,
+        wraps: rects.length > 1, fitsCell: rects.every(rect => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1),
+        focusVisible: node.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0 };
+    });
+    assert.ok(layout.documentWidth <= layout.width && layout.wraps && layout.fitsCell, `${name}: the long recipient wraps without horizontal overflow`);
+    assert.equal(layout.focusVisible, true, `${name}: keyboard focus remains visible`);
+    await target.evaluate(() => {
+      window.__mailtoActivation = null;
+      document.addEventListener('click', event => {
+        const anchor = event.target instanceof Element ? event.target.closest('a[href^="mailto:"]') : null;
+        if (!anchor) return;
+        event.preventDefault(); window.__mailtoActivation = { href: anchor.getAttribute('href'), trusted: event.isTrusted };
+      }, { capture: true });
+    });
+    const actionsBefore = report.actions.length, urlBefore = target.url();
+    await target.keyboard.press('Enter');
+    assert.deepEqual(await target.evaluate(() => window.__mailtoActivation), {
+      href: expectedHref, trusted: true
+    }, `${name}: keyboard activation reaches a normal mailto link without launching a handler`);
+    assert.equal(report.actions.length, actionsBefore, `${name}: activating email posts no request action`);
+    assert.equal(target.url(), urlBefore, `${name}: intercepting mailto leaves the request modal in place`);
+    report.email = { [name]: true };
+  }
   async function verifyTouchPickupHelp() {
     const touchContext = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1,
       isMobile: true, hasTouch: true, extraHTTPHeaders: headers });
@@ -336,6 +374,15 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
   }
   try {
     await open(untouchedId); const untouched = await getDetail(untouchedId);
+    assert.equal(await emailCell().locator('dd').textContent(), 'Not recorded', 'Missing email keeps its current presentation.');
+    assert.equal(await emailCell().locator('a[href^="mailto:"]').count(), 0, 'Missing email does not create an empty mailto link.');
+    const displayedEmail = `${'a'.repeat(55)}+x&y@example.org`;
+    const expectedMobileMailto = `mailto:${'a'.repeat(55)}%2Bx%26y@example.org`;
+    await open(purchaseId); await verifyEmailLink('request-email-mobile', page, displayedEmail, expectedMobileMailto);
+    await page.setViewportSize({ width: 1280, height: 900 }); await open(rejectionId);
+    assert.equal(await emailCell().locator('dd').textContent(), 'synthetic@example.org');
+    assert.equal(await emailCell().locator('a').getAttribute('href'), 'mailto:synthetic@example.org', 'A standard address retains its structural @ separator.');
+    await page.setViewportSize({ width: 1280, height: 900 }); await open(untouchedId);
     // The cancellation fixture never authorizes a write. An opening regression
     // fails here before it can reach SQL or enqueue a notification.
     await page.route(`**/staff/title-requests/${untouchedId}/action`, route => route.fulfill({ status: 409,

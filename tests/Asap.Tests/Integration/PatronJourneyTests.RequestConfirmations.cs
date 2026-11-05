@@ -26,7 +26,7 @@ public sealed partial class PatronJourneyTests
             await using var setup = await item.Contexts.CreateDbContextAsync();
             var row = await setup.TitleRequests.SingleAsync(value => value.Id == item.Source.Id);
             row.Title = $"Confirmation fixture {index}";
-            row.Email = "synthetic@example.org";
+            row.Email = index == 4 ? null : index == 0 ? $"{new string('a', 55)}+x&y@example.org" : "synthetic@example.org";
             row.PatronIdSnapshot = checked(88001 + (int)item.Source.Id);
             row.NameFirst = "Synthetic";
             row.NameLast = "Patron";

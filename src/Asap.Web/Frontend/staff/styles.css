@@ -809,6 +809,7 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 }
 .patron-context { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 20px; background: var(--soft); }
 .patron-context .detail-grid { flex: 1 1 240px; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 12px; margin: 0; font-size: .84rem; }
+.patron-context .detail-grid dd > a { color: var(--brand-dark); overflow-wrap: anywhere; text-decoration: underline; }
 .patron-context .grid-new-suggestion { flex: 0 0 32px; min-height: 32px; width: 32px; padding: 5px; color: #fff; background: var(--success); border: 0; border-radius: 4px; cursor: pointer; }
 .recorded-pickup-help { margin-top: 4px; }
 .recorded-pickup-help > summary { display: inline-flex; align-items: center; gap: 5px; min-height: 40px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--brand-dark); background: var(--surface); cursor: pointer; font-size: .76rem; font-weight: 700; list-style: none; }

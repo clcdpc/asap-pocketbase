@@ -578,7 +578,15 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     const details = element('dl', { className: 'detail-grid' });
     addDetail(details, 'Patron', patronName).replaceChildren(patronValue);
     addDetail(details, 'Barcode', request.barcode).replaceChildren(researchRecordValue(request.barcode, request.research, 'patron'));
-    addDetail(details, 'Email', request.email);
+    const email = text(request.email, '');
+    const emailCell = addDetail(details, 'Email', email);
+    if (email) {
+      const encodedEmail = encodeURIComponent(email);
+      const separator = encodedEmail.lastIndexOf('%40');
+      const recipient = separator < 0 ? encodedEmail
+        : `${encodedEmail.slice(0, separator)}@${encodedEmail.slice(separator + 3)}`;
+      emailCell.replaceChildren(element('a', { href: `mailto:${recipient}`, text: email }));
+    }
     const pickupCell = addDetail(details, 'Recorded ASAP pickup', request.preferredPickupBranchName || request.preferredPickupBranchId);
     const pickupHelp = element('details', { className: 'recorded-pickup-help' });
     const pickupHelpToggle = element('summary', { className: 'recorded-pickup-help-toggle', 'aria-label': 'Pickup details' }, [icon('info-circle'), 'Pickup details']);

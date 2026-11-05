@@ -15,8 +15,8 @@ Routine regression checks and final evidence reconciliation are not new reviews.
 | #413 Already own Bib linking | `acc63cb`: atomic verified association/action; unrelated drafts retained | Luna MAX: 1 finding fixed | Astra HIGH: 2 findings fixed | Technically qualified |
 | #423 Purchase/rejection confirmations | `62c4c17`: scoped inline-action toolbar/focus ownership; Confirm purchase | Luna MAX: no findings | Luna MAX browser scenarios: 1 finding fixed | Technically qualified |
 | #426 Detail footer Close | `398bb8c`: secondary footer Close reuses guarded host dismissal | Luna MAX: 1 recovery finding fixed | Luna MAX actual-browser comparisons: no findings | Technically qualified |
-| #424 Pickup help boundary | Scoped accessible pickup disclosure | Luna MAX: no findings | Luna MAX actual-browser scenarios: 1 held-Escape finding fixed | Technically qualified |
-| #425 Patron email link | Pending | Pending | Pending | Pending |
+| #424 Pickup help boundary | `1ad8c4d`: scoped accessible pickup disclosure | Luna MAX: no findings | Luna MAX actual-browser scenarios: 1 held-Escape finding fixed | Technically qualified |
+| #425 Patron email link | Normalized, safely encoded mailto recipient | Luna MAX: 2 findings fixed | Luna MAX executed browser/DOM matrix: no findings | Technically qualified |
 | #396 Initial heading focus | Pending | Pending | Pending | Pending |
 | #442 Authorized workflow counts | Pending | Pending | Pending | Pending |
 | #428 Requests table sizing | Pending | Pending | Pending | Pending |
@@ -159,6 +159,28 @@ are retained; that brittle extra assertion was removed from the keyboard-only
 remediation after independent Pass 2 had already proved scrolling. Temporary
 instrumentation was restored before remediation. All final states have zero
 serious/critical axe findings, overflow, page errors or external requests.
+
+### #425
+
+Present summary email is a standard, underlined mailto link with safely encoded
+recipient text; missing values retain Not recorded. Pass 1 fixed an encoded
+structural address separator and blank links for whitespace-only values. Literal
+regressions cover ordinary addresses, quoted local parts containing @, and URI
+encoding boundaries. Node controller/details checks, browser syntax, Release
+builds (zero warnings/errors) and the real-SQL browser owner pass 1/1.
+
+Pass 2 independently executed null/empty/whitespace/omitted values, valid unusual
+characters, quoted-local @, literal percent sequences, query/header delimiters
+and markup-as-text. Actual pointer/Enter activation was intercepted without
+launching a mail handler or posting an action. At 390px and native Chromium 200%,
+long addresses wrap within their cells and keyboard focus has a visible 3px
+outline. The instrumented owner passes 1/1 with zero serious/critical axe findings,
+overflow, page errors or external requests; viewed screenshots are retained.
+There were no findings. The harness was restored exactly to SHA256
+`C8AC9BE49168CB3F4174B569A2F5AEB09C1B9EC218ECBDAE89A32B64F264A9DA`.
+Evidence: `i425/i425-request-confirmations-test-run-2.trx`,
+`i425-pass2/native/i425-pass2.trx` and `i425-pass2/browser/browser-results.json`.
+The owner also retains the prior confirmation, Close and pickup-help checkpoints.
 
 ## Integrated qualification
 
