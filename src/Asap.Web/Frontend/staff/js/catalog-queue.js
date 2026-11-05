@@ -110,7 +110,7 @@ export function createCatalogQueue({ dialog, panel, searchForm, results, session
     announce('A previous catalog action is unconfirmed. Its original command has been retained for safe recovery.', 'warning');
   }
 
-  function confirm(current, row, detail, action, opener) {
+  function openConfirmation(current, row, detail, action, opener) {
     if (decision || pending || !isCurrent(current) || current.directActions !== true) return;
     const previous = recovery(current);
     if (previous) { showRecovery(current, previous); return; }
@@ -210,7 +210,7 @@ export function createCatalogQueue({ dialog, panel, searchForm, results, session
   }
 
   return {
-    confirm,
+    confirm: openConfirmation,
     isLocked: () => Boolean(decision || pending),
     hasPending: () => Boolean(pending),
     inspectDeparture: () => ({ owner: pending, blocked: Boolean(pending), dirty: false,

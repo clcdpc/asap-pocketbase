@@ -17,7 +17,8 @@ const verified = barcode => ({ status: 'verified', libraryOrgId: 2, libraryOrgNa
       const workflows = createRequestWorkflows({ context: {
         root, actor: { id: '20', role: 'staff' },
         request: { id: '9007199254740993', version: 'v1', status: 'pending_hold', capabilities: { canChangeWorkflowState: true } },
-        scope: { register: () => ({}), release() {} }, isCurrent: () => true, isPending: () => false
+        scope: { register: () => ({}), release() {} }, isCurrent: () => true, isPending: () => false,
+        hasInlineAction: () => false, beginInlineAction() {}, endInlineAction() {}
       }, editor: {}, announce() {}, request: async () => ({ version: 'v1', selectedPickupBranchId: selected,
         currentPreferredPickupBranchId: selected, pickupBranches: [{ id: 101, label: 'Live pickup' }],
         pickupBranchWarning: selected ? null : 'Current preference is absent.' }) });
