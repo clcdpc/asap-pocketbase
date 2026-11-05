@@ -27,7 +27,8 @@ async function toolbarGeometry(page, columns) {
       }) };
   });
   assert.deepEqual(geometry.buttons.map(b => b.label), labels, 'All six direct actions retain DOM/keyboard order');
-  assert.equal(await dialog(page).locator('.request-more, summary').count(), 0, 'No modal overflow menu');
+  // Recorded pickup has a field-specific disclosure outside the action toolbar.
+  assert.equal(await dialog(page).locator('.request-more, .action-bar summary').count(), 0, 'No modal overflow menu');
   const rows = new Map();
   for (const b of geometry.buttons) {
     const y = Math.round(b.y); rows.set(y, (rows.get(y) || 0) + 1);

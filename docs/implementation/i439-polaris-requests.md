@@ -303,6 +303,15 @@ Final geometry/screens: `i428/title-layout-94e06b0647ff48988df765ba496d9786/`.
 
 ## Integrated qualification
 
+The first exact-revision acceptance invocation at `42b3244` passed i390, i403,
+S1, Q1 and PR410. D1 passed five scenarios and failed its toolbar check because
+the old dialog-wide `summary` selector counted #424's pickup-help disclosure as
+an action overflow menu. The selector now checks toolbar disclosures and retains
+the dialog-wide `.request-more` guard, all six direct-action checks, keyboard
+order and responsive geometry. No application behavior changed. The failed
+invocation remains retained outside the worktree. Final qualification reruns all
+six selected suites against one clean updated application/tooling snapshot.
+
 All nine focused two-pass qualifications are complete. Exact final revision,
 registered acceptance-suite results, full frontend/.NET/SQL/browser discovery and
 Full CI/package gates are recorded in the consolidated PR after execution. Those
