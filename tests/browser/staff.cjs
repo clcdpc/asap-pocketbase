@@ -3234,11 +3234,19 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       subject.setSelectionRange(0, 0);
       subject.dispatchEvent(new Event('select', { bubbles: true }));
     });
-    await page.getByRole('button', { name: 'Insert placeholder into Submission confirmation Subject', exact: true }).click();
-    assert.equal(await page.locator('#email-submit-subject-placeholders [data-placeholder-key]').count(), 7);
-    await page.locator('#email-submit-subject-placeholders summary').click();
-    await page.locator('#email-submit-subject-placeholders [data-placeholder-key="name"]').click();
+    const placeholderTrigger = page.getByRole('button', { name: 'Insert placeholder into Submission confirmation Subject', exact: true });
+    const placeholderPicker = page.locator('#email-submit-subject-placeholders');
+    await placeholderTrigger.click();
+    await placeholderPicker.waitFor({ state: 'visible' });
+    assert.equal(await placeholderPicker.evaluate(node => node.matches(':popover-open')), true);
+    assert.equal(await placeholderTrigger.getAttribute('aria-expanded'), 'true');
+    assert.deepEqual(await placeholderPicker.locator('button[data-placeholder-key]:visible')
+      .evaluateAll(buttons => buttons.map(button => button.dataset.placeholderKey)),
+      ['name', 'title', 'author', 'format', 'barcode', 'firstName', 'lastName']);
+    await placeholderPicker.locator('[data-placeholder-key="name"]').click();
     assert.equal(await page.locator('#email-submit-subject').inputValue(), `{{name}}${originalSubject}`);
+    assert.equal(await placeholderPicker.evaluate(node => node.matches(':popover-open')), false);
+    assert.equal(await placeholderTrigger.getAttribute('aria-expanded'), 'false');
     assert.equal(await page.locator('#settings-save-title').textContent(), 'Unsaved changes');
     assert.equal(await page.locator('#email-submit-subject').evaluate(node => node === document.activeElement), true);
     assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'static',
