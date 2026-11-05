@@ -63,10 +63,12 @@ merge base and both sides of renames. Every valid changed path selects the full
 required population, including documentation, build/CI tooling and unknown paths.
 The cumulative PR diff does not demand fresh execution: reuse independently
 compares the effective tested inputs, including CI/test tooling by default.
-Ambiguous or invalid metadata still forces fresh execution. Explicit force-full,
-release tags and deployment qualification bypass reuse. Manual dispatch can reuse
-otherwise valid evidence, and a forced manual run can supply original evidence
-to a later PR synthetic merge with identical effective contents.
+Ambiguous or invalid metadata still forces fresh execution. Only explicit
+force-full bypasses otherwise valid matching evidence. Triggering and originating
+events do not affect eligibility: PR, manual, branch, tag, release and deployment
+runs share the same fingerprint/evidence contract. Tag refs (including annotated
+tags) must peel to the exact tested commit; release and deployment metadata must
+agree with it. Verified empty diffs still require the complete population.
 
 Evidence schema 4 rejects prior populations and the two-job contract. It binds suite, exact
 identities, complete classification, source/resolved dependencies, originating

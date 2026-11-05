@@ -64,6 +64,7 @@ def changed_paths(event_name, event, env, root=ROOT, current_pr=None):
     """Diff the exact tested integration tree, including base changes since fork."""
     tested = env.get("GITHUB_SHA")
     require(sha(tested) and git("rev-parse", "HEAD", root=root) == tested, "Tested commit identity is unavailable")
+    ref = env.get("GITHUB_REF", "")
     if event_name == "pull_request":
         pr = event["pull_request"]
         current = current_pr or pr
@@ -83,30 +84,56 @@ def changed_paths(event_name, event, env, root=ROOT, current_pr=None):
         merge_bases = git("merge-base", "--all", base, head, root=root).splitlines()
         require(len(merge_bases) == 1 and sha(merge_bases[0]), "PR merge base is ambiguous")
         baseline = merge_bases[0]
-    else:
-        require(event_name == "push" and env.get("GITHUB_REF") == "refs/heads/main"
-                and event.get("ref") == "refs/heads/main" and event.get("after") == tested
-                and event.get("deleted") is False and event.get("forced") is False and sha(event.get("before")),
-                "Unsupported or ambiguous push metadata")
+    elif env.get("GITHUB_REF_TYPE") == "tag" or ref.startswith("refs/tags/"):
+        require(ref.startswith("refs/tags/") and env.get("GITHUB_REF_TYPE") in (None, "tag"), "Invalid tag ref metadata")
+        git("check-ref-format", ref, root=root)
+        require(git("rev-parse", "--verify", ref + "^{commit}", root=root) == tested,
+                "Tag ref does not identify the tested commit")
+        if event_name == "push":
+            require(event.get("ref") == ref and event.get("deleted") is False
+                    and type(event.get("forced")) is bool and sha(event.get("after"))
+                    and git("rev-parse", "--verify", event["after"] + "^{commit}", root=root) == tested,
+                    "Tag push metadata does not identify the tested commit")
+        if event_name == "release":
+            require(ref == "refs/tags/" + event["release"]["tag_name"], "Release tag metadata changed")
+        if event_name in ("deployment", "deployment_status"):
+            require(event["deployment"]["sha"] == tested, "Deployment source metadata changed")
+        return []
+    elif event_name == "push":
+        require(ref.startswith("refs/heads/") and event.get("ref") == ref and event.get("after") == tested
+                and event.get("deleted") is False and type(event.get("forced")) is bool,
+                "Ambiguous push metadata")
+        git("check-ref-format", ref, root=root)
+        if event.get("before") == "0" * 40:
+            require(event.get("created") is True, "Missing new-branch metadata")
+            return []
+        require(sha(event.get("before")), "Missing previous push source")
         baseline = event["before"]
-        git("merge-base", "--is-ancestor", baseline, tested, root=root)
+    else:
+        require(isinstance(event_name, str) and bool(event_name), "Missing workflow event identity")
+        require(event_name != "release", "Release is missing its tag ref")
+        if event_name in ("deployment", "deployment_status"):
+            require(event["deployment"]["sha"] == tested, "Deployment source metadata changed")
+        # All suites are mandatory. Other event types need no dependency diff;
+        # the exact checkout and complete fingerprint still authorize reuse.
+        return []
     # Disable rename detection: both deleted and added dependency paths matter.
     raw = subprocess.check_output(["git", "diff", "--no-renames", "--name-only", "-z", baseline, tested],
                                   cwd=root, timeout=30, stderr=subprocess.PIPE)
-    require(len(raw) <= 1024 * 1024 and raw.endswith(b"\0"), "Empty or incomplete Git diff")
-    return raw[:-1].decode("utf-8").split("\0")
+    require(len(raw) <= 1024 * 1024 and (not raw or raw.endswith(b"\0")), "Incomplete Git diff")
+    return raw[:-1].decode("utf-8").split("\0") if raw else []
 
 
 def decision(env=None, root=ROOT):
     env = os.environ if env is None else env
     event_name = env.get("GITHUB_EVENT_NAME")
-    if (env.get("ASAP_FORCE_FULL_CI") == "true" or env.get("ASAP_DEPLOY_TEST_IIS") == "true"
-            or env.get("GITHUB_REF_TYPE") == "tag" or event_name == "release"):
-        return full("Explicit force-full, release tag or test-IIS qualification")
-    if event_name == "workflow_dispatch":
+    if env.get("ASAP_FORCE_FULL_CI") == "true":
+        return full("Explicit force-full")
+    if (event_name == "workflow_dispatch" and env.get("GITHUB_REF_TYPE") != "tag"
+            and not env.get("GITHUB_REF", "").startswith("refs/tags/")):
         return full("Manual full qualification", fresh=False)
     try:
-        require(event_name in ("pull_request", "push"), "Unsupported event")
+        require(isinstance(event_name, str) and bool(event_name), "Missing workflow event identity")
         event_path = Path(env["GITHUB_EVENT_PATH"])
         require(event_path.stat().st_size <= 4 * 1024 * 1024, "Oversized event metadata")
         event = json.loads(event_path.read_bytes())
@@ -119,7 +146,8 @@ def decision(env=None, root=ROOT):
             require(type(number) is int and number > 0, "Invalid PR number")
             current_pr = reuse.GitHub(env["GITHUB_REPOSITORY"], env["GH_TOKEN"]).get(f"/pulls/{number}")
         paths = changed_paths(event_name, event, env, root, current_pr)
-        return {**paths_policy(paths), "base_paths": paths}
+        selected = paths_policy(paths) if paths else full("Complete current population; inputs independently fingerprinted", fresh=False)
+        return {**selected, "base_paths": paths}
     except Exception as error:
         reason = str(error) if isinstance(error, SelectionError) else type(error).__name__
         return full("Change metadata fallback: " + reason)

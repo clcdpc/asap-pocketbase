@@ -68,17 +68,17 @@ class PolicyTests(unittest.TestCase):
                 self.assertTrue(selected["fresh"])
                 self.assertIn("fallback", selected["reason"])
 
-    def test_manual_full_release_and_test_iis_qualification(self):
-        for env in ({"ASAP_FORCE_FULL_CI": "true"}, {"GITHUB_EVENT_NAME": "release"},
-                    {"GITHUB_EVENT_NAME": "workflow_dispatch", "ASAP_FORCE_FULL_CI": "true"},
-                    {"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v1.0.0-test.1", "GITHUB_EVENT_NAME": "push"},
-                    {"GITHUB_EVENT_NAME": "workflow_dispatch", "ASAP_DEPLOY_TEST_IIS": "true"}):
+    def test_only_explicit_force_demands_fresh_manual_qualification(self):
+        for env in ({"ASAP_FORCE_FULL_CI": "true"},
+                    {"GITHUB_EVENT_NAME": "workflow_dispatch", "ASAP_FORCE_FULL_CI": "true"}):
             with self.subTest(env=env):
                 selected = policy.decision(env)
                 self.assertEqual(selected["categories"], policy.ALL)
                 self.assertTrue(selected["fresh"])
         selected = policy.decision({"GITHUB_EVENT_NAME": "workflow_dispatch"})
         self.assertEqual(selected["categories"], policy.ALL)
+        self.assertFalse(selected["fresh"])
+        selected = policy.decision({"GITHUB_EVENT_NAME": "workflow_dispatch", "ASAP_DEPLOY_TEST_IIS": "true"})
         self.assertFalse(selected["fresh"])
 
     def test_invalid_path_lists_cannot_narrow_selection(self):
@@ -132,6 +132,65 @@ class GitDiffTests(unittest.TestCase):
         self.assertEqual(paths, ["src/Asap.Web/Frontend/app.js"])
         self.assertEqual(policy.paths_policy(paths)["categories"], ["core"])
 
+    def test_lightweight_and_annotated_tag_pushes_allow_same_commit_reuse(self):
+        for annotated in (False, True):
+            tag = "v1.0.0-test." + str(int(annotated))
+            self.git("tag", *(["-a", "-m", "test qualification"] if annotated else []), tag, self.initial)
+            ref = "refs/tags/" + tag
+            event = {"before": "0" * 40, "after": self.git("rev-parse", ref), "ref": ref,
+                     "created": True, "deleted": False, "forced": False}
+            (self.root / "event.json").write_text(json.dumps(event))
+            env = {**self.env(self.initial, "push"), "GITHUB_REF": ref, "GITHUB_REF_TYPE": "tag"}
+            with self.subTest(annotated=annotated):
+                selected = policy.decision(env, self.root)
+                self.assertEqual(selected["categories"], policy.ALL)
+                self.assertFalse(selected["fresh"], selected)
+
+    def test_same_commit_manual_branch_release_and_deployment_events_allow_reuse(self):
+        tag = "v1.0.0-test.9"
+        self.git("tag", tag, self.initial)
+        tag_ref = "refs/tags/" + tag
+        cases = (
+            ("workflow_dispatch", tag_ref, {}),
+            ("release", tag_ref, {"release": {"tag_name": tag}}),
+            ("push", "refs/heads/topic", {"ref": "refs/heads/topic", "before": self.initial,
+                                         "after": self.initial, "deleted": False, "forced": False}),
+            ("push", "refs/heads/new", {"ref": "refs/heads/new", "before": "0" * 40,
+                                       "after": self.initial, "created": True, "deleted": False, "forced": False}),
+            ("deployment", "", {"deployment": {"sha": self.initial}}),
+            ("deployment_status", tag_ref, {"deployment": {"sha": self.initial}}),
+            ("schedule", "refs/heads/main", {}),
+        )
+        for event_name, ref, event in cases:
+            (self.root / "event.json").write_text(json.dumps(event))
+            env = {**self.env(self.initial, event_name), "GITHUB_REF": ref, "ASAP_DEPLOY_TEST_IIS": "true",
+                   "GITHUB_REF_TYPE": "tag" if ref.startswith("refs/tags/") else "branch"}
+            with self.subTest(event=event_name, ref=ref):
+                selected = policy.decision(env, self.root)
+                self.assertEqual(selected["categories"], policy.ALL)
+                self.assertFalse(selected["fresh"], selected)
+                self.assertTrue(policy.decision({**env, "ASAP_FORCE_FULL_CI": "true"}, self.root)["fresh"])
+
+    def test_invalid_tag_release_and_deployment_metadata_still_demands_fresh_execution(self):
+        tag = "v1.0.0-test.9"
+        self.git("tag", tag, self.initial)
+        ref = "refs/tags/" + tag
+        for event_name, event, extra in (
+                ("push", {"ref": ref, "after": "f" * 40, "deleted": False, "forced": False}, {}),
+                ("push", {"ref": ref, "after": self.initial, "deleted": True, "forced": False}, {}),
+                ("workflow_dispatch", {}, {"GITHUB_REF": "refs/tags/missing"}),
+                ("workflow_dispatch", {}, {"GITHUB_REF_TYPE": "branch"}),
+                ("release", {"release": {"tag_name": "different-tag"}}, {}),
+                ("deployment", {"deployment": {"sha": "f" * 40}}, {})):
+            (self.root / "event.json").write_text(json.dumps(event))
+            env = {**self.env(self.initial, event_name), "GITHUB_REF": ref, "GITHUB_REF_TYPE": "tag", **extra}
+            with self.subTest(event=event_name, extra=extra):
+                self.assertTrue(policy.decision(env, self.root)["fresh"])
+        tested = self.commit("code.txt", "another commit")
+        (self.root / "event.json").write_text("{}")
+        env = {**self.env(tested, "workflow_dispatch"), "GITHUB_REF": ref, "GITHUB_REF_TYPE": "tag"}
+        self.assertTrue(policy.decision(env, self.root)["fresh"])
+
     def test_base_changes_since_fork_are_included(self):
         event, env = self.integration(advance_base=True)
         paths = policy.changed_paths("pull_request", event, env, self.root, event["pull_request"])
@@ -177,7 +236,7 @@ class GitDiffTests(unittest.TestCase):
         path = self.root / "event.json"
         path.write_text(json.dumps(event))
         self.assertEqual(policy.decision(env, self.root)["categories"], ["core"])
-        for change in ({"before": "0" * 40}, {"before": "f" * 40}, {"forced": True}, {"after": self.initial},
+        for change in ({"before": "0" * 40}, {"before": "f" * 40}, {"forced": "true"}, {"after": self.initial},
                        {"deleted": True}, {"ref": "refs/heads/other"}):
             path.write_text(json.dumps({**event, **change}))
             selected = policy.decision(env, self.root)

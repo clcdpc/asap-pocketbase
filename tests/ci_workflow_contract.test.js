@@ -622,6 +622,28 @@ async function main() {
     assert.equal(report(context), 0);
     assert.equal(enabled(deploy, context), false);
   });
+  await check('manual test deployment and test tags retain reuse and every deployment prerequisite', async () => {
+    for (const request of [
+      nonPr('workflow_dispatch', 130, 'refs/tags/v1.0.0-test.10', { deploy_test_iis: true }),
+      nonPr('push', 131, 'refs/tags/v1.0.0-test.11')
+    ]) {
+      const context = await routed(request);
+      context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
+      context.steps = { reuse: { outputs: { frontend: 'true', dotnet: 'true', browser: 'true' } } };
+      context.needs['build-test-package'] = { result: 'success' };
+      context.needs['draft-validation'] = { result: 'skipped' };
+      context.needs.validation = { result: 'success' };
+      assert.equal(template(full.env.ASAP_FORCE_FULL_CI, context), 'false');
+      for (const suite of ['frontend', 'dotnet', 'browser']) {
+        assert.equal(enabled(full.steps.find((candidate) => candidate.id === suite), context), false);
+      }
+      assert.equal(step(full, 'Verify required test suites').if, '${{ always() }}');
+      assert.equal(report(context), 0);
+      assert.equal(enabled(deploy, context), true);
+      context.needs.validation.result = 'failure';
+      assert.equal(enabled(deploy, context), false);
+    }
+  });
   await check('suite diagnostics retain separate TRX, fixture timelines and resource files without copying results', () => {
     const dotnet = full.steps.find((candidate) => candidate.id === 'dotnet');
     const browser = full.steps.find((candidate) => candidate.id === 'browser');

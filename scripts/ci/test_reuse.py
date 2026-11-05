@@ -310,6 +310,7 @@ class GitIdentityTests(unittest.TestCase):
             event_path.write_bytes(fp.canonical({"pull_request": pr}))
             os.environ.update(GITHUB_EVENT_NAME="pull_request", GITHUB_SHA=tested, GITHUB_RUN_ID="99",
                               GITHUB_RUN_ATTEMPT="1", GITHUB_EVENT_PATH=str(event_path), ASAP_FORCE_FULL_CI="false",
+                              GITHUB_REF="refs/pull/1/merge", GITHUB_REF_TYPE="branch",
                               **{s.upper() + "_OUTCOME": "skipped" for s in fp.SUITES})
             test_selection.prepare(self.root, selection_directory)
             selected = load(self.root, verify=True, directory=selection_directory)
@@ -330,6 +331,34 @@ class GitIdentityTests(unittest.TestCase):
             self.assertTrue(all(row["status"] == "REUSED" for row in rows.values()))
             self.assertFalse((directory / "evidence").exists())
             self.assertIn("/actions/artifacts/10/zip", fixture.calls)
+
+            # Keep the literal tested commit fixed while changing the trigger.
+            tag = "v1.0.0-test.1"
+            self.git("tag", "-a", "-m", "same tested commit", tag, tested)
+            tag_ref = "refs/tags/" + tag
+            for event_name, ref, event in (
+                    ("workflow_dispatch", "refs/heads/pr", {}),
+                    ("workflow_dispatch", tag_ref, {}),
+                    ("push", "refs/heads/integration", {"ref": "refs/heads/integration", "before": head,
+                                                        "after": tested, "deleted": False, "forced": False}),
+                    ("push", tag_ref, {"ref": tag_ref, "after": self.git("rev-parse", tag_ref),
+                                       "deleted": False, "forced": False}),
+                    ("release", tag_ref, {"release": {"tag_name": tag}}),
+                    ("deployment", "", {"deployment": {"sha": tested}}),
+                    ("deployment_status", tag_ref, {"deployment": {"sha": tested}})):
+                with self.subTest(trigger=event_name, ref=ref):
+                    os.environ.update(GITHUB_EVENT_NAME=event_name, GITHUB_REF=ref, ASAP_DEPLOY_TEST_IIS="true",
+                                      GITHUB_REF_TYPE="tag" if ref.startswith("refs/tags/") else "branch")
+                    event_path.write_bytes(fp.canonical(event))
+                    test_selection.prepare(self.root, selection_directory)
+                    self.assertFalse(load(self.root, directory=selection_directory)["decision"]["fresh"])
+                    reuse.plan(directory)
+                    self.assertTrue(all(d["reuse"] for d in json.loads((directory / "plan.json").read_bytes())["decisions"].values()))
+                    reuse.verify(directory)
+                    self.assertTrue(all(row["status"] == "REUSED" for row in json.loads((directory / "verification.json").read_bytes()).values()))
+            os.environ.update(GITHUB_EVENT_NAME="pull_request", GITHUB_REF="refs/pull/1/merge",
+                              GITHUB_REF_TYPE="branch", ASAP_DEPLOY_TEST_IIS="false")
+            event_path.write_bytes(fp.canonical({"pull_request": pr}))
 
             original_environments, original_partitions = copy.deepcopy(environments), copy.deepcopy(partitions)
             original_archives = copy.deepcopy(fixture.archives)
@@ -470,6 +499,15 @@ class DependencyTests(unittest.TestCase):
         self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
 
 class ProvenanceTests(unittest.TestCase):
+    def test_originating_event_alone_never_rejects_matching_same_commit_evidence(self):
+        for event in ("push", "workflow_dispatch", "release", "deployment", "deployment_status", "schedule"):
+            fixture = Fixture()
+            fixture.run["event"] = event
+            with self.subTest(event=event):
+                self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
+                fixture.run["head_repository"]["id"] = 42
+                self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
+
     def test_different_category_selections_cannot_share_execution_evidence(self):
         for current_categories, evidence_categories in ((["core"], ["unrecognized"]),
                                                         (["unrecognized"], ["core"])):
@@ -769,13 +807,17 @@ class ApiTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             reuse.SafeRedirect().redirect_request(request, None, 302, "", {}, "http://storage.example/artifact")
 
-    def test_forced_release_deployment_and_manual_requests(self):
-        for env in ({"ASAP_FORCE_FULL_CI": "true"}, {"GITHUB_EVENT_NAME": "release"},
+    def test_only_explicit_force_or_invalid_selection_requires_fresh_execution(self):
+        for env in ({"ASAP_FORCE_FULL_CI": "true"}, {"ASAP_FORCE_FULL_CI": "true", "GITHUB_EVENT_NAME": "release"}):
+            with mock.patch.dict(os.environ, env, clear=True):
+                self.assertTrue(reuse.forced_full())
+        for env in ({"GITHUB_EVENT_NAME": "release"},
                     {"GITHUB_REF_TYPE": "tag", "GITHUB_EVENT_NAME": "push", "GITHUB_REF_NAME": "v1.0.0"},
                     {"GITHUB_REF_TYPE": "tag", "GITHUB_EVENT_NAME": "push", "GITHUB_REF_NAME": "v1.0.0-test.24"},
                     {"ASAP_DEPLOY_TEST_IIS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch"}):
-            with mock.patch.dict(os.environ, env, clear=True):
-                self.assertTrue(reuse.forced_full())
+            with mock.patch.dict(os.environ, env, clear=True), \
+                 mock.patch.object(test_selection, "load", return_value={"decision": {"fresh": False}}):
+                self.assertFalse(reuse.forced_full())
         for fresh in (True, False, None, 0, "false"):
             with mock.patch.dict(os.environ, {}, clear=True), \
                  mock.patch.object(test_selection, "load", return_value={"decision": {"fresh": fresh}}):

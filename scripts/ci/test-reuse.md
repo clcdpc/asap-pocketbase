@@ -14,8 +14,11 @@ ambiguous PR metadata and unavailable lookup all fail closed.
 
 Selecting the complete required population is separate from requiring fresh
 execution. A valid PR diff containing documentation, CI/build tooling or unknown
-paths can reuse an original successful manual Full CI run when the effective
-inputs match. Included source, CI/test tooling, the complete workflow execution
+paths can reuse any original successful Full CI run when the effective inputs
+match, regardless of its originating event or the current trigger. PR, manual,
+branch, tag, release and deployment events share the same evidence contract.
+An identical literal commit or proven-equivalent input tree is not forced fresh
+because the event changed. Included source, CI/test tooling, the complete workflow execution
 contract, repository policy and discovered populations must still match. A new
 CI implementation needs a fresh baseline; evidence from the earlier logic cannot
 qualify it. No run numbers or commit ancestry are special-cased.
@@ -46,16 +49,19 @@ without starting SQL or installing Chromium. Full reuse still runs current-sourc
 build, safety checks, native discovery, evidence revalidation and packaging.
 
 Current-commit build, publication, frontend verification, DACPAC/package content,
-manifest/digest checks and ValidateOnly always execute. Release tags,
-force-full and test-IIS qualification require fresh suites. Deployment remains
+manifest/digest checks and ValidateOnly always execute. Only explicit force-full
+or invalid/missing selection metadata demands fresh suites. Tags are verified
+against their peeled commit, including annotated tags; release and deployment
+metadata must identify that same tested source. Deployment remains
 separately gated and is outside ordinary implementation.
 
-To qualify a reuse change without duplicate suites, push the final CI-only
-revision on a branch without a PR, manually dispatch it with `force_full_ci=true`
-and both deployment inputs false, and wait for the required gate to pass. Then
-open a ready PR on that unchanged revision. Its normal PR-triggered run must
-report `REUSED` for all three suites at final verification and pass
-`Build, test and package`. Do not change relevant inputs between these runs.
+To qualify reuse without duplicate suites, let one successful Full CI run
+establish original evidence for the final inputs. A later supported event at
+that commit or equivalent tree must report `REUSED` for all three suites at
+final verification and pass `Build, test and package`. Do not change relevant
+inputs between these runs. A test tag can exercise reuse while retaining its
+normal authorized test-IIS activation; creating such a tag can really deploy.
+Use `force_full_ci=true` when fresh testing is wanted explicitly.
 The planner and final verifier both honor metadata fallbacks and explicit fresh
 requirements; a saved plan alone never authorizes skipped tests.
 
