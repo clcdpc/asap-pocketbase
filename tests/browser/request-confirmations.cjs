@@ -12,7 +12,8 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
   const browser = await chromium.launch({ headless: true, ...(process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH
     ? { executablePath: process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH } : {}) });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers });
-  const report = { states: [], errors: [], external: [], actions: [], heldEnter: [], cancellation: false, retries: false, otherPanels: false, close: {}, pickup: {} };
+  const report = { states: [], errors: [], external: [], actions: [], heldEnter: [], cancellation: false, retries: false, otherPanels: false, close: {}, pickup: {},
+    initialFocus: { chromium: browser.version(), directNavigation: null, reload: null, skipLink: false, keyboardViewChange: false, pointerViewChange: null, modalReturn: null } };
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   const guard = async ctx => ctx.route('**/*', route => {
     if (new URL(route.request().url()).origin === new URL(baseURL).origin) return route.continue();
@@ -20,6 +21,18 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
   });
   await guard(context);
   const page = await context.newPage();
+  await page.addInitScript(() => {
+    const describe = node => ({ tagName: node?.tagName || null, id: node?.id || null });
+    window.__focusProbe = { initial: describe(document.activeElement), domContentLoaded: null, focusCalls: [] };
+    const nativeFocus = HTMLElement.prototype.focus;
+    HTMLElement.prototype.focus = function (...args) {
+      window.__focusProbe.focusCalls.push({ target: this.id ? `#${this.id}` : this.tagName.toLowerCase(), stack: new Error().stack });
+      return nativeFocus.apply(this, args);
+    };
+    document.addEventListener('DOMContentLoaded', () => {
+      window.__focusProbe.domContentLoaded = describe(document.activeElement);
+    }, { once: true });
+  });
   const watch = target => {
     target.on('pageerror', error => report.errors.push(error.message)); rejectNativeDialogs(target, report.errors);
     target.on('request', request => {
@@ -40,6 +53,112 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
   const pickupHelpToggle = (target = page) => pickupHelp(target).locator(':scope > summary');
   const pickupHelpText = (target = page) => pickupHelp(target).locator('.recorded-pickup-help-content');
   const status = (target = page) => target.locator('#request-dialog-status');
+  async function focusEvidence() {
+    return page.evaluate(() => {
+      const heading = document.getElementById('queue-title'), style = getComputedStyle(heading), probe = window.__focusProbe;
+      return { initialActiveElement: probe.initial, domContentLoadedActiveElement: probe.domContentLoaded,
+        activeElement: { tagName: document.activeElement?.tagName || null, id: document.activeElement?.id || null },
+        headingFocused: document.activeElement === heading, focusVisible: heading.matches(':focus-visible'),
+        outline: { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor },
+        headingFocusCalls: probe.focusCalls.filter(call => call.target === '#queue-title') };
+    });
+  }
+  async function waitForQueue(target = page) {
+    await target.locator('#workspace:not([hidden])').waitFor();
+    await target.locator('#queue-view:not([hidden])').waitFor();
+    await target.locator('#refresh-queue:not([disabled])').waitFor();
+    await target.waitForFunction(() => document.querySelector('#request-grid table') ||
+      document.querySelector('#queue-empty')?.getClientRects().length > 0);
+  }
+  async function scanFocusPage(name) {
+    await page.evaluate(axe);
+    const state = await page.evaluate(async () => ({
+      violations: (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact)),
+      width: innerWidth, documentWidth: document.documentElement.scrollWidth,
+      images: [...document.images].filter(image => image.getClientRects().length)
+        .every(image => image.complete && image.naturalWidth > 0)
+    }));
+    assert.deepEqual(state.violations, [], `${name}: serious/critical axe findings`);
+    assert.ok(state.documentWidth <= state.width, `${name}: horizontal page overflow`);
+    assert.equal(state.images, true, `${name}: missing visible image`);
+    await page.screenshot({ path: path.join(artifacts, `${name}.png`), fullPage: true });
+    report.states.push({ name, ...state });
+  }
+  async function verifyInitialHeadingFocus() {
+    const queueUrl = `${baseURL}/staff/?stage=suggestion&scope=all`;
+    await page.goto(queueUrl, { waitUntil: 'networkidle' });
+    await waitForQueue();
+    const direct = await focusEvidence();
+    report.initialFocus.directNavigation = direct;
+    assert.equal(direct.headingFocused, false, `Fresh queue navigation unexpectedly focuses Title requests: ${JSON.stringify(direct)}`);
+    assert.equal(direct.headingFocusCalls.length, 0, `Fresh queue navigation called focus() on Title requests: ${JSON.stringify(direct)}`);
+    assert.equal(direct.focusVisible && direct.outline.style !== 'none' && parseFloat(direct.outline.width) > 0, false,
+      `Fresh queue navigation renders an unsolicited Title requests outline: ${JSON.stringify(direct)}`);
+    await scanFocusPage('heading-focus-direct-navigation');
+
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForQueue();
+    const reload = { beforeReloadActiveElement: direct.activeElement, ...await focusEvidence() };
+    report.initialFocus.reload = reload;
+    assert.equal(reload.headingFocused, false, `Reload unexpectedly focuses Title requests: ${JSON.stringify(reload)}`);
+    assert.equal(reload.headingFocusCalls.length, 0, `Reload called focus() on Title requests: ${JSON.stringify(reload)}`);
+    assert.equal(reload.focusVisible && reload.outline.style !== 'none' && parseFloat(reload.outline.width) > 0, false,
+      `Reload renders an unsolicited Title requests outline: ${JSON.stringify(reload)}`);
+    await scanFocusPage('heading-focus-reload');
+
+    await page.keyboard.press('Tab');
+    const skipLink = page.locator('.skip-link');
+    assert.equal(await skipLink.evaluate(node => node === document.activeElement), true, 'Tab reaches the skip link first.');
+    const skipStyle = await skipLink.evaluate(node => ({ focusVisible: node.matches(':focus-visible'), outlineStyle: getComputedStyle(node).outlineStyle,
+      outlineWidth: getComputedStyle(node).outlineWidth, href: node.getAttribute('href') }));
+    assert.equal(skipStyle.href, '#main-content');
+    assert.equal(skipStyle.focusVisible, true, 'Keyboard focus remains visible on the skip link.');
+    assert.ok(skipStyle.outlineStyle !== 'none' && parseFloat(skipStyle.outlineWidth) > 0, 'The skip link has a rendered focus indicator.');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => location.hash === '#main-content');
+    report.initialFocus.skipLink = true;
+
+    await page.goto(queueUrl, { waitUntil: 'networkidle' });
+    await waitForQueue();
+    for (let index = 0; index < 24 && await page.evaluate(() => document.activeElement?.id !== 'profile-button'); index++) {
+      await page.keyboard.press('Tab');
+    }
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'profile-button', 'Keyboard navigation reaches Profile.');
+    assert.equal(await page.locator('#profile-button').evaluate(node => node.matches(':focus-visible')), true);
+    await page.keyboard.press('Enter');
+    await page.locator('#profile-view:not([hidden])').waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'profile-title', 'Keyboard view changes focus the new heading.');
+    const profileFocus = await page.locator('#profile-title').evaluate(node => ({ focusVisible: node.matches(':focus-visible'),
+      outlineStyle: getComputedStyle(node).outlineStyle, outlineWidth: getComputedStyle(node).outlineWidth }));
+    assert.equal(profileFocus.focusVisible, true, 'The new view heading retains keyboard focus visibility.');
+    assert.ok(profileFocus.outlineStyle !== 'none' && parseFloat(profileFocus.outlineWidth) > 0);
+    report.initialFocus.keyboardViewChange = true;
+    await page.locator('[data-view="queue"]').click();
+    await page.locator('#queue-view:not([hidden])').waitFor();
+    const pointer = await focusEvidence();
+    report.initialFocus.pointerViewChange = pointer;
+    assert.equal(pointer.headingFocused, true, 'A deliberate pointer view change still moves focus to the new heading.');
+    assert.equal(pointer.focusVisible && pointer.outline.style !== 'none' && parseFloat(pointer.outline.width) > 0, false,
+      `Pointer navigation must not leave a misleading heading outline: ${JSON.stringify(pointer)}`);
+    await scanFocusPage('heading-focus-pointer-view-change');
+
+    const opener = page.locator(`#request-grid .grid-open[data-request-id="${untouchedId}"]`);
+    await opener.waitFor();
+    await opener.click();
+    await dialog().waitFor({ state: 'visible' });
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'close-request');
+    await page.keyboard.press('Escape');
+    await dialog().waitFor({ state: 'hidden' });
+    await page.waitForFunction(id => document.activeElement?.dataset.requestId === id &&
+      document.activeElement?.classList.contains('grid-open'), untouchedId);
+    const modalReturn = await page.evaluate(() => ({ id: document.activeElement?.id || null,
+      target: document.activeElement?.getAttribute('aria-label'), focusVisible: document.activeElement?.matches(':focus-visible'),
+      outlineStyle: getComputedStyle(document.activeElement).outlineStyle, outlineWidth: getComputedStyle(document.activeElement).outlineWidth }));
+    assert.equal(modalReturn.focusVisible, true, 'Keyboard dismissal restores visible focus to the request opener.');
+    assert.ok(modalReturn.outlineStyle !== 'none' && parseFloat(modalReturn.outlineWidth) > 0);
+    report.initialFocus.modalReturn = modalReturn;
+    await scanFocusPage('heading-focus-modal-return');
+  }
   const getDetail = async id => {
     const response = await context.request.get(`${baseURL}/api/asap/staff/title-requests/${id}`);
     assert.equal(response.status(), 200); return response.json();
@@ -373,6 +492,7 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     report.close[name] = true;
   }
   try {
+    await verifyInitialHeadingFocus();
     await open(untouchedId); const untouched = await getDetail(untouchedId);
     assert.equal(await emailCell().locator('dd').textContent(), 'Not recorded', 'Missing email keeps its current presentation.');
     assert.equal(await emailCell().locator('a[href^="mailto:"]').count(), 0, 'Missing email does not create an empty mailto link.');

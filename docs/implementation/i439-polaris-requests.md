@@ -16,8 +16,8 @@ Routine regression checks and final evidence reconciliation are not new reviews.
 | #423 Purchase/rejection confirmations | `62c4c17`: scoped inline-action toolbar/focus ownership; Confirm purchase | Luna MAX: no findings | Luna MAX browser scenarios: 1 finding fixed | Technically qualified |
 | #426 Detail footer Close | `398bb8c`: secondary footer Close reuses guarded host dismissal | Luna MAX: 1 recovery finding fixed | Luna MAX actual-browser comparisons: no findings | Technically qualified |
 | #424 Pickup help boundary | `1ad8c4d`: scoped accessible pickup disclosure | Luna MAX: no findings | Luna MAX actual-browser scenarios: 1 held-Escape finding fixed | Technically qualified |
-| #425 Patron email link | Normalized, safely encoded mailto recipient | Luna MAX: 2 findings fixed | Luna MAX executed browser/DOM matrix: no findings | Technically qualified |
-| #396 Initial heading focus | Pending | Pending | Pending | Pending |
+| #425 Patron email link | `a569897`: normalized, safely encoded mailto recipient | Luna MAX: 2 findings fixed | Luna MAX executed browser/DOM matrix: no findings | Technically qualified |
+| #396 Initial heading focus | Startup-only queue focus distinction | Luna MAX: 1 test-coverage finding fixed | Luna MAX actual focus matrix: no product findings | Technically qualified |
 | #442 Authorized workflow counts | Pending | Pending | Pending | Pending |
 | #428 Requests table sizing | Pending | Pending | Pending | Pending |
 
@@ -181,6 +181,43 @@ There were no findings. The harness was restored exactly to SHA256
 Evidence: `i425/i425-request-confirmations-test-run-2.trx`,
 `i425-pass2/native/i425-pass2.trx` and `i425-pass2/browser/browser-results.json`.
 The owner also retains the prior confirmation, Close and pickup-help checkpoints.
+
+### #396
+
+The exact pre-fix local build (`a569897`, Chromium 151.0.7922.34) reproduced the
+orange 3px heading outline. At DOMContentLoaded focus was on body; the captured
+stack then showed session startup navigating and focusing the queue heading.
+Initial queue presentation now skips that focus call. Deliberate navigation,
+other headings, skip links and dialog return keep their existing behavior and
+global focus styles. The reported deployed DEV build was not contacted.
+
+Pass 1 found one coverage gap: direct/reload measured final focus but did not
+assert their recorded focus calls. Both now assert zero app heading-focus calls.
+Web build (zero warnings/errors), shell Node and the strengthened browser owner
+pass 1/1 with 21 clean states. Pass 2 independently passed delayed-session Tab
+preservation, pointer/keyboard view entry, real browser Back/Forward, deliberate
+heading focus/reload, deep-link dialog focus, Escape return and native 200% zoom.
+Viewed screenshots confirm focus appearance; the final owner passes 1/1 with
+zero skips, serious/critical axe findings, overflow, page errors or external
+requests. Browser-history API calls followed pointer input; this does not prove
+keyboard-history shortcuts. Keyboard view entry and dialog return were exercised.
+
+Three temporary probe failures (retained separately) concerned keyboard starting
+focus, an ignored headless Alt+Left shortcut and a missing probe in the separate
+zoom context. The corrected final run passed; no product defect was found.
+The harness was restored exactly to SHA256
+`B9BA6F1AE8E07BC0C77B9262756E90307EA073E093C4BD3409969D68E09A6B6F`.
+Evidence: `i396/final/i396-focus-final.trx`,
+`i396-pass2/native-final2/i396-pass2-final2.trx` and
+`request-confirmations-b7752c26a4eb459987d99893b91d1bee/browser-results.json`.
+
+The bounded navigation checkpoint exposed five retained expectations for #413's
+former global notice and #423's former competing panels. Test-only follow-up
+`9b70388` checks inline validation, one active panel, explicit Cancel, retained
+drafts/focus and no premature mutations. All 271 navigation journeys and the
+separate dialog-focus file pass. The earlier 266/271 result is retained in tool
+output and `i396/navigation-checkpoint-before.json`; no product behavior was
+changed for that alignment.
 
 ## Integrated qualification
 
