@@ -766,8 +766,14 @@ test('new authoritative version cannot inherit ephemeral verification', () => fi
   const posts = ui.calls.filter(call => call.url.endsWith('/action')).length;
   ui.allowDiscard();
   [...document.querySelectorAll('.action-bar button')].find(button => button.textContent === 'Already own').click(); await settle();
-  assert.equal(ui.calls.filter(call => call.url.endsWith('/action')).length, posts);
-  assert.match(ui.get('#app-status').textContent, /Search Polaris/);
+  const linkPanel = ui.get('.bib-link-panel');
+  assert.equal(linkPanel.hidden, false, 'An unverified authoritative BIB opens the inline catalog-link panel.');
+  assert.equal(ui.get('.polaris-selection-context').textContent, '', 'A new request version has no inherited ephemeral verification details.');
+  assert.equal(ui.calls.filter(call => call.url.endsWith('/action')).length, posts, 'Already own cannot mutate until this version has a verified BIB.');
+  linkPanel.querySelector('.form-actions .primary-button').click();
+  await settle();
+  assert.match(linkPanel.querySelector('[role="alert"]').textContent, /Search Polaris and use the matching result/);
+  assert.equal(ui.calls.filter(call => call.url.endsWith('/action')).length, posts, 'Unverified completion remains a local validation error.');
 }, { verified: false }));
 test('open close back does not reopen the closed request', () => fixture('?stage=profile', async ui => {
   ui.get('[data-view="queue"]').click(); await settle();
@@ -1575,24 +1581,34 @@ for (const finish of ['baseline', 'cancel', 'clean']) {
     }));
 }
 
-test('assignment submission cannot consume a second dirty assignment form', () =>
+test('assignment keeps one active draft until Cancel and submits only the deliberately reopened form', () =>
   fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+    const opener = actionButton('Assign');
     const first = await openInlineDraft(ui, 'Assign', assignmentLabel);
     first.querySelector('select').value = '21';
     actionButton('Assign').click();
-    await until(() => document.querySelectorAll('.inline-form').length === 2, 'second assignment loaded');
-    const second = ui.get('.inline-form');
-    second.querySelector('select').value = '21';
-    submitForm(ui, first); await settle();
+    await settle();
+    assert.equal(document.querySelectorAll('.inline-form').length, 1, 'A second Assign cannot create another panel.');
+    assert.equal(ui.get('.inline-form'), first, 'The existing assignment remains the sole panel.');
+    assert.equal(ui.get('.action-bar').hidden, true, 'Toolbar actions remain hidden until the active draft is canceled.');
+    assert.equal(first.querySelector('select').value, '21', 'The original assignment choice remains intact.');
     assert.equal(requestMutations(ui).length, 0);
-    assert.equal(first.isConnected, true);
-    assert.equal(second.isConnected, true);
-    assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
-    actionButton('Cancel', second).click();
-    assert.equal(protectedUnload(ui), true, 'cancelling one form preserves the other draft');
-    submitForm(ui, first);
-    await until(() => !first.isConnected, 'only remaining draft is consumed');
+    assert.equal(ui.confirms.length, 0);
+
+    actionButton('Cancel', first).click();
+    assert.equal(first.isConnected, false, 'Explicit Cancel removes the active assignment.');
+    assert.equal(ui.get('.action-bar').hidden, false, 'Cancel restores the action toolbar.');
+    assert.equal(document.activeElement, opener, 'Cancel returns focus to Assign.');
+    assert.equal(protectedUnload(ui), false);
+
+    const reopened = await openInlineDraft(ui, 'Assign', assignmentLabel);
+    assert.equal(reopened.querySelector('select').value, '20');
+    ui.edit(`select[aria-label="${assignmentLabel}"]`, '21');
+    submitForm(ui, reopened);
+    await until(() => !reopened.isConnected, 'deliberately reopened assignment completes');
     assert.equal(requestMutations(ui).length, 1);
+    assert.ok(requestMutations(ui)[0].url.endsWith('/assign'));
+    assert.deepEqual(JSON.parse(requestMutations(ui)[0].init.body), { version: 'v1', assigneeId: '21' });
   }));
 
 test('dirty pickup blocks Claim, Place hold and Additional Copy preview', () =>
@@ -1638,19 +1654,24 @@ test('Cancel pickup discards only pickup and returns focus without another confi
   }, { status: 'pending_hold' }));
 
 for (const action of ['Purchase', 'Reject']) {
-  test(`dirty rejection choice blocks replacement by ${action}, Claim and Close silently`, () =>
+  test(`dirty rejection choice retains one panel and blocks hidden toolbar actions without mutation (${action})`, () =>
     fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+      const toolbar = ui.get('.action-bar');
       const form = await openInlineDraft(ui, 'Reject', 'Rejection template');
       await until(() => form.querySelector('select').options.length === 3, 'rejection templates loaded');
       ui.edit('.action-choice select', '2'); ui.allowDiscard();
+      assert.equal(toolbar.hidden, true, 'The action toolbar is hidden while the rejection panel is active.');
+      const mutations = requestMutations(ui).length;
+      const confirmations = ui.confirms.length;
       for (const competing of [action, 'Claim', 'Close silently']) {
         actionButton(competing).click(); await settle();
         assert.equal(ui.get('.action-choice'), form);
+        assert.equal(form.isConnected, true);
         assert.equal(form.querySelector('select').value, '2');
-        assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+        assert.equal(toolbar.hidden, true);
+        assert.equal(requestMutations(ui).length, mutations, `${competing} cannot mutate through the hidden toolbar.`);
+        assert.equal(ui.confirms.length, confirmations, `${competing} cannot create a confirmation through the hidden toolbar.`);
       }
-      assert.equal(requestMutations(ui).length, 0);
-      assert.equal(ui.confirms.length, 0);
     }));
 }
 
@@ -1667,16 +1688,30 @@ test('dirty rejection choice submits its selected template and clears only after
     assert.equal(protectedUnload(ui), false);
   }));
 
-test('returning a rejection choice to baseline permits another action-choice', () =>
+test('returning a rejection choice to baseline still requires explicit Cancel before another action-choice', () =>
   fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+    const opener = actionButton('Reject');
     const form = await openInlineDraft(ui, 'Reject', 'Rejection template');
     await until(() => form.querySelector('select').options.length === 3, 'rejection templates loaded');
     ui.edit('.action-choice select', '2'); ui.edit('.action-choice select', '1');
     assert.equal(protectedUnload(ui), false);
     actionButton('Purchase').click();
+    assert.equal(ui.get('.action-choice'), form, 'Returning to baseline does not replace the active inline panel.');
+    assert.equal(form.isConnected, true);
+    assert.equal(ui.get('.action-bar').hidden, true);
+    assert.equal(requestMutations(ui).length, 0);
+    assert.equal(ui.confirms.length, 0);
+
+    actionButton('Cancel', form).click();
     assert.equal(form.isConnected, false);
+    assert.equal(ui.get('.action-bar').hidden, false, 'Cancel restores the action toolbar.');
+    assert.equal(document.activeElement, opener, 'Cancel returns focus to Reject.');
+    assert.equal(protectedUnload(ui), false);
+    actionButton('Purchase').click();
+    await until(() => ui.get('.action-choice')?.getAttribute('aria-label') === 'purchase options', 'Purchase opens after explicit Cancel');
     assert.equal(ui.get('.action-choice').getAttribute('aria-label'), 'purchase options');
     assert.equal(ui.confirms.length, 0);
+    assert.equal(requestMutations(ui).length, 0);
   }));
 
 test('dirty purchase reminder choice blocks competing actions and submits its own decision', () =>
