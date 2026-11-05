@@ -18,8 +18,8 @@ Routine regression checks and final evidence reconciliation are not new reviews.
 | #424 Pickup help boundary | `1ad8c4d`: scoped accessible pickup disclosure | Luna MAX: no findings | Luna MAX actual-browser scenarios: 1 held-Escape finding fixed | Technically qualified |
 | #425 Patron email link | `a569897`: normalized, safely encoded mailto recipient | Luna MAX: 2 findings fixed | Luna MAX executed browser/DOM matrix: no findings | Technically qualified |
 | #396 Initial heading focus | `dbdc1f1`: startup-only queue focus distinction | Luna MAX: 1 test-coverage finding fixed | Luna MAX actual focus matrix: no product findings | Technically qualified |
-| #442 Authorized workflow counts | Complete scoped totals with explicit unknown states | Luna MAX: no findings | Astra HIGH executed scope/identity matrix: no findings | Technically qualified |
-| #428 Requests table sizing | Pending | Pending | Pending | Pending |
+| #442 Authorized workflow counts | `440606c`: complete scoped totals with explicit unknown states | Luna MAX: no findings | Astra HIGH executed scope/identity matrix: no findings | Technically qualified |
+| #428 Requests table sizing | Final issue commit; exact SHA in consolidated PR | Luna MAX: no findings | Terra MAX visual + Luna MAX functional: 1 finding fixed | Technically qualified |
 
 Implementation/reviewer models are selected explicitly per the task: Sol MAX
 for #389/#413/#423/#442, Luna MAX for smaller implementations and requirements
@@ -257,7 +257,54 @@ Both instrumented files were restored exactly before commit. Evidence:
 `i442-pass2/native/i442-pass2.trx`, `i442-pass2/node-pass2.txt` and
 `i442-pass2/browser-evidence/browser-results.json`.
 
+### #428
+
+The current local Release build at `440606c` reproduced the reported small-table
+problem: Closed with two rows and Placed with one had a 1421px table in a 1420px
+region at a 3000px viewport. Grid.js converted each percentage independently to
+integer inline widths. A fractional-input tweak was rejected because its parser
+truncated it. Title columns now retain the original 14/23/8/10/10/9/9/17 percent
+proportions in scoped native CSS; Grid.js receives static column identifiers and
+keeps autoWidth disabled. All eight columns, sort and action definitions remain.
+No vendor, global-grid, text-size or overflow-masking change was needed.
+
+Five focused frontend files and zero-warning/error Release builds pass. Initial
+native layout passes 1/1: all stages fit 1420/1420 at 3000px and 1360/1360 at
+1440px. One mounted table retains its identity through desktop/mobile/down/up
+resizes. At 900/390px the 1080px minimum remains within 842/366px scroll regions;
+true native 200% gives a 712px CSS viewport and a 688px region with no document
+overflow. Screenshots and before-axe geometry are retained; native captures use
+CDP and recorded zoom metrics. The original deployed DEV build was not contacted,
+so its SHA and original screenshot comparison remain unavailable.
+
+Pass 1 had no findings. Within the single Pass 2, Terra independently passed all
+five stages plus combined catalog/confirmation/help/BIB/mailto/Close/count/focus
+views at desktop, mobile and native zoom: 12 base plus 15 combined scans had zero
+serious/critical axe findings. Luna found that new CSS priority blocked the
+existing real column-resize helper. Removing the unnecessary priority restores
+normal inline overrides while preserving fractional defaults. A permanent test
+now proves Actions at 231.234px normally/reset, 952.031px at 70% and 163.219px at
+12%, with six direct actions at the wide setting and one direct/five overflow at
+the narrow setting. More Enter/Space/Escape, Assign open/cancel, clean footer
+Close to the connected title link and zero mutations pass. The final native
+owner passes 1/1 with zero skips, all layout/axe/image/error/external guards clean.
+No new independent review followed remediation.
+
+Probe failures concerning committed-frame waits, expected overflow order, native
+screenshot framing and the established title-link focus port are retained. The
+pre-axe BIB-search measurement showed an unobscured center and only a 0.234px
+fractional border edge; no product focus change was made. An existing duplicate
+empty-stage message was observed and left outside this sizing change.
+Evidence: `i428/frontend-tests-20261105/focused-tables.log` (Node text log),
+`i428/test-final-20261105-04/i428-layout-final.trx`,
+`i428-pass2/visual/native/i428-pass2-visual-r02.trx`, the functional failed
+receipts, and `i428-pass2/remediation-20261105-05/i428-layout-remediation.trx`.
+Final geometry/screens: `i428/title-layout-94e06b0647ff48988df765ba496d9786/`.
+
 ## Integrated qualification
 
-Pending completion of all nine issues. Final gates use current discovered test
-identities and registered acceptance suites, without fabricated counts or skips.
+All nine focused two-pass qualifications are complete. Exact final revision,
+registered acceptance-suite results, full frontend/.NET/SQL/browser discovery and
+Full CI/package gates are recorded in the consolidated PR after execution. Those
+results use current discovered identities and manifests, not guessed totals.
+Human assistive-technology and live-provider boundaries above remain separate.

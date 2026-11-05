@@ -137,6 +137,15 @@ textarea { min-height: 108px; resize: vertical; }
 .gridjs-wrapper { width: 100%; overflow-x: auto; border-radius: 0; box-shadow: none; border-color: var(--line); }
 table.gridjs-table { width: 100%; min-width: 920px; max-width: none; table-layout: fixed; }
 #request-grid table.gridjs-table { min-width: 0; }
+/* Keep Title requests' original proportions fractional through table layout; Grid.js rounds pixel widths separately. */
+#request-grid th[data-request-column="patron"] { width: 14%; }
+#request-grid th[data-request-column="bibliographic"] { width: 23%; }
+#request-grid th[data-request-column="format"] { width: 8%; }
+#request-grid th[data-request-column="submitted"] { width: 10%; }
+#request-grid th[data-request-column="library"] { width: 10%; }
+#request-grid th[data-request-column="claim"] { width: 9%; }
+#request-grid th[data-request-column="status"] { width: 9%; }
+#request-grid th[data-request-column="actions"] { width: 17%; }
 #additional-copy-grid .gridjs-container { container: additional-copies / inline-size; }
 #additional-copy-grid table.gridjs-table { min-width: 0; }
 /* Grid.js parses column widths numerically; CSS owns the reserved action space. */

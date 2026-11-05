@@ -431,15 +431,15 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
 
   function queueColumns() {
     return [
-      { label: 'Barcode', kind: 'patron', width: '14%', value: request => request.barcode || 'Not recorded' },
+      { label: 'Barcode', kind: 'patron', value: request => request.barcode || 'Not recorded' },
       // The combined bibliographic column sorts by Title; Author has its own search shortcut.
-      { label: 'Bibliographic details', kind: 'bibliographic', width: '23%', value: request => request.title },
-      { label: 'Format', width: '8%', value: request => request.formatLabel || request.format || 'Not recorded' },
-      { label: 'Submitted', kind: 'submitted', width: '10%', value: request => request.created || '' },
-      { label: 'Library', width: '10%', value: request => request.libraryOrgName },
-      { label: 'Claim', kind: 'claim', width: '9%', value: request => request.claimedByDisplayName || 'Unclaimed' },
-      { label: 'Status', kind: 'status', width: '9%', value: request => statusLabel(request.status) },
-      { label: 'Actions', kind: 'actions', width: '17%', value: request => request.id }
+      { label: 'Bibliographic details', kind: 'bibliographic', value: request => request.title },
+      { label: 'Format', kind: 'format', value: request => request.formatLabel || request.format || 'Not recorded' },
+      { label: 'Submitted', kind: 'submitted', value: request => request.created || '' },
+      { label: 'Library', kind: 'library', value: request => request.libraryOrgName },
+      { label: 'Claim', kind: 'claim', value: request => request.claimedByDisplayName || 'Unclaimed' },
+      { label: 'Status', kind: 'status', value: request => statusLabel(request.status) },
+      { label: 'Actions', kind: 'actions', value: request => request.id }
     ];
   }
 
@@ -568,11 +568,11 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       state.gridStatus = getContext().status;
       state.grid = createQueueGrid({
         columns: definitions.map(column => ({
-          name: column.label, width: column.width, sort: column.kind !== 'actions',
+          name: column.label, attributes: { 'data-request-column': column.kind }, sort: column.kind !== 'actions',
           formatter: (cell, row) => formatCell(column, cell, row, owner)
         })),
         data: rows,
-        // Columns own their widths. Grid.js 6 sizing headers can replace the live Sort processor during a render.
+        // CSS supplies fractional Title widths; Grid.js sizing headers can replace the live Sort processor during a render.
         autoWidth: false,
         sort: true,
         pagination: { limit: 25, summary: true, resetPageOnUpdate: false },
