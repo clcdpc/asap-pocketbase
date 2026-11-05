@@ -390,6 +390,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
     } catch (error) {
       if (!active(current, token)) return;
       status.textContent = error.message || 'BIB verification failed.';
+      current.onError?.(status.textContent);
       announce(status.textContent, 'error');
     }
   }
@@ -409,6 +410,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
       body.bibId = positivePolarisId(query.value);
       if (body.bibId === null) {
         status.textContent = 'Enter a positive Polaris BIB ID up to 2147483647.';
+        current.onError?.(status.textContent);
         announce(status.textContent, 'error');
         return;
       }
@@ -426,6 +428,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
     } catch (error) {
       if (!active(current, token)) return;
       status.textContent = error.message || 'Polaris search failed.';
+      current.onError?.(status.textContent);
       announce(status.textContent, 'error');
     }
   }

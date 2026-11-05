@@ -671,6 +671,10 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .polaris-edit-tools p:empty { display: none; }
 .polaris-edit-tools { min-width: 0; }
 .polaris-edit-tools > button { max-width: 100%; white-space: normal; }
+.bib-link-panel { flex: 1 1 100%; min-width: 0; display: grid; gap: 8px; }
+.bib-link-panel h3 { margin: 0; }
+.bib-link-panel .form-actions { flex-wrap: wrap; justify-content: flex-start; margin-top: 2px; }
+.bib-link-panel button { max-width: 100%; white-space: normal; }
 .polaris-selection-context { flex-basis: 100%; }
 .request-research-links { display: contents; }
 .staff-format-notice { white-space: pre-wrap; }

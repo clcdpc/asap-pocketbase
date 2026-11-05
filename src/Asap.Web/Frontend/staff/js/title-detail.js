@@ -26,6 +26,10 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   function hasPendingMutation() { return Boolean(activeAttempt?.pending && sessionIdentity.isCurrent(activeAttempt.owner) || copyParent && copyCreation.hasPendingMutation(copyParent)); }
   function allowRequestMutation(snapshot, declaration) {
     if (!isCurrentSelection(snapshot) || current.version !== snapshot.version || hasPendingMutation()) return false;
+    if (editor?.needsBibLinkReload()) {
+      editor.showBibLinkError('Reload the current request before trying another change.', true);
+      return false;
+    }
     const admission = drafts.admit(declaration);
     if (!admission.allowed) {
       announce(admission.kind === 'editor' ? 'Save or revert the current request edits before performing a workflow action.'
@@ -94,7 +98,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     for (const name of ['input', 'change']) mounted.content.addEventListener(name, event => {
       if (isPresentationCurrent(mounted, owner) && mounted.content.contains(event.target)) drafts.touch(event.target);
     });
-    onOpened(request, options); renderRequest(request, configuration); mounted.show();
+    onOpened(request, options); renderRequest(request, configuration, null, options.retainedEditor); mounted.show();
     announce(`Opened ${request.title}.`); rememberOpened(request.id);
     if (options.action) workflows.startAction(options.action);
     return true;
@@ -177,14 +181,37 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     onReceipt(message, attempt.owner, attempt, { detailAvailable, queueSequence: queueSequence() });
   }
   function releaseAttempt(attempt) { if (activeAttempt === attempt) activeAttempt = null; }
-  async function reloadAfterMutation(attempt) {
+  async function reloadAfterMutation(attempt, retained = null) {
     const refreshed = await refreshQueue({ skipDeepLink: true, silent: true });
     if (!attempt.isCurrent()) return null;
+    if (retained) {
+      const detailLoaded = await reloadBibLink(attempt.snapshot, retained, attempt.isCurrent);
+      return { refreshed, detailLoaded, isCurrent: attempt.isCurrent };
+    }
     const detailLoaded = await open(attempt.snapshot.id, null, { authoritativeRefresh: true });
     const replacement = lease;
     return { refreshed, detailLoaded,
       isCurrent: () => isPresentationCurrent(replacement, attempt.owner) && (detailLoaded || replacement === attempt.mounted) &&
         isNavigationCurrent(attempt.generation + (detailLoaded ? 1 : 0)) && current?.id === attempt.snapshot.id };
+  }
+  async function reloadBibLink(snapshot, retained, isCurrent = () => isCurrentSelection(snapshot)) {
+    const ownerEditor = editor;
+    try {
+      const target = await prepare(snapshot.id, { scope: getScope() });
+      if (!target?.isCurrent() || !isCurrent() || editor !== ownerEditor) return false;
+      // Recovery reads leave the editor interactive. Retain changes and any
+      // cancellation made while the authoritative response was in flight.
+      const latestDraft = ownerEditor.captureDraft() ?? retained;
+      onUpdated(target.request);
+      renderRequest(target.request, target.configuration, null, { ...latestDraft, needsReload: false });
+      if (!latestDraft.linking) host.focusClose();
+      return true;
+    } catch (error) {
+      if (isCurrent() && !isAbortError(error) && error.status !== 401) {
+        editor?.showBibLinkError('Current request details could not be loaded. Reload before retrying the action.', true);
+      }
+      return false;
+    }
   }
   async function deleteTitleRequest(snapshot) {
     if (!allowRequestMutation(snapshot, { consumes: null })) return;
@@ -218,8 +245,9 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         : error.message || 'The title request was not deleted. Review its current state.', uncertain ? 'warning' : 'error');
     } finally { attempt.pending = false; releaseAttempt(attempt); restore(); }
   }
-  async function mutateRequest(snapshot, path, body, successMessage, draft = null) {
+  async function mutateRequest(snapshot, path, body, successMessage, draft = null, retainEditor = false) {
     if (!allowRequestMutation(snapshot, { consumes: draft })) return;
+    const retained = retainEditor ? editor.captureDraft() : null;
     const attempt = beginAttempt(snapshot, path, body), restore = disableControls(attempt);
     announce('Saving request...');
     try {
@@ -248,9 +276,14 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       recordReceipt(attempt, `${message} Sign in again to review the committed request.`, Boolean(detail));
       if (detail) {
         onUpdated(detail);
-        renderRequest(detail, configurations.get(String(detail.libraryOrgId))?.value || {}, editor?.acceptedVerification(detail, body));
+        renderRequest(detail, configurations.get(String(detail.libraryOrgId))?.value || {}, editor?.acceptedVerification(detail, body), retained);
+        if (retained) showBibLinkOutcome(message);
       }
-      else {
+      else if (retained) {
+        const recovery = `${message} Current details could not refresh. Reload before making another change.`;
+        editor.showBibLinkError(recovery, true);
+        showBibLinkOutcome(recovery, true);
+      } else {
         disposeChildren(); current = Object.freeze({ id: snapshot.id, version: null });
         attempt.mounted.heading(snapshot.title, `${snapshot.libraryOrgName} · Request ${snapshot.id}`);
         attempt.mounted.content.replaceChildren(element('p', { text: 'The action committed. Reload this request to review current details.' }));
@@ -270,7 +303,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         ['request_outcome_unconfirmed', 'hold_outcome_unconfirmed', 'hold_provider_error'].includes(error.response?.code));
       attempt.outcome = recordedProviderOutcome ? 'provider_recorded' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
       if ((path.endsWith('/action') || path.endsWith('/place-hold')) && error.status === 409 && error.response?.code === 'duplicate_open_request') {
-        if (attempt.isCurrent()) await showDuplicateRecovery(attempt, error.response.duplicate); return;
+        if (attempt.isCurrent()) await showDuplicateRecovery(attempt, error.response.duplicate, retained); return;
       }
       const holdReview = path.endsWith('/place-hold') && error.status === 409;
       const pickupReview = path.endsWith('/pickup-preference') && Boolean(error.response?.operationId);
@@ -283,15 +316,31 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       if (needsReceipt) recordReceipt(attempt, `${message} Sign in again to check the authoritative result before retrying.`);
       if (!attempt.isCurrent()) return;
       if (error.status === 409 || uncertain || recordedProviderOutcome) {
-        const review = await reloadAfterMutation(attempt);
+        const review = await reloadAfterMutation(attempt, retained);
         if (needsReceipt && review?.refreshed === true && review.detailLoaded === true) clearReceipt(attempt);
-        if (review?.isCurrent()) announce(message, 'error');
+        if (review?.isCurrent()) {
+          const feedback = retained && uncertain && review.detailLoaded
+            ? `The response was not confirmed. Current saved state: ${statusLabel(current.status)}. Review the saved BIB before retrying.` : message;
+          announce(feedback, 'error');
+          if (retained) {
+            showBibLinkOutcome(feedback, true);
+            editor.showBibLinkError(review.detailLoaded ? feedback : 'Current request details could not be loaded. Reload before retrying the action.', !review.detailLoaded);
+          }
+        }
+        return { outcome: uncertain && !review?.detailLoaded ? 'uncertain' : 'rejected', message, code: error.response?.code };
       } else if (error.status !== 401 && !isAbortError(error)) {
         const message = error.message || 'The request could not be updated.';
         announce(message, 'error');
-        return { outcome: 'rejected', message };
+        return { outcome: 'rejected', message, code: error.response?.code };
       }
     } finally { attempt.pending = false; releaseAttempt(attempt); restore(); }
+  }
+  function showBibLinkOutcome(message, error = false) {
+    const panel = lease?.content.querySelector('.request-workflow-panel');
+    if (!panel) return;
+    panel.querySelector('.bib-link-outcome')?.remove();
+    panel.append(element('p', { className: 'bib-link-outcome', role: error ? 'alert' : 'status',
+      text: `${message}${editor?.isDirty() ? ' Other request edits remain unsaved.' : ''}` }));
   }
   async function mutateOperation(snapshot, operation, action, body, draft = null) {
     if (!allowRequestMutation(snapshot, { consumes: draft })) return;
@@ -333,12 +382,18 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       } else if (error.status !== 401 && !isAbortError(error)) announce(error.message || 'Hold recovery could not be updated.', 'error');
     } finally { attempt.pending = false; releaseAttempt(attempt); restore(); }
   }
-  async function showDuplicateRecovery(attempt, duplicate) {
-    const review = await reloadAfterMutation(attempt);
+  async function showDuplicateRecovery(attempt, duplicate, retained = null) {
+    const review = await reloadAfterMutation(attempt, retained);
     if (!review?.isCurrent()) return;
     if (!review.detailLoaded) {
-      announce('The attempted change was not saved because another open request has this BIB. Current details could not refresh; reload this request before deciding whether to close it.', 'error'); return;
+      const message = 'The attempted change was not saved because another open request has this BIB. Current details could not refresh; reload this request before deciding whether to close it.';
+      if (retained) {
+        editor.showBibLinkError(message, true);
+        showBibLinkOutcome(message, true);
+      }
+      announce(message, 'error'); return;
     }
+    if (retained) editor.showBibLinkError('The BIB association and Already own action were not saved because another open request has this BIB. Your selected BIB and other edits remain unsaved.');
     const snapshot = current, mounted = lease, child = workflows;
     const live = () => review.isCurrent() && mounted.isCurrent() && current === snapshot;
     const label = duplicate && typeof duplicate.id === 'string' && /^\d+$/.test(duplicate.id)
@@ -348,6 +403,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     panel.append(element('h3', { id: 'duplicate-recovery-title', text: 'Duplicate BIB request' }),
       element('p', { text: `The attempted change was not saved. This patron already has ${label}.` }),
       element('p', { text: 'Close this current request as a duplicate, or leave it open to edit or select another BIB.' }));
+    if (retained && editor.isDirty()) panel.append(element('p', { text: 'Your unsaved edits and selected BIB are retained. Save or revert those edits before closing this request as a duplicate.' }));
     const edit = element('button', { type: 'button', onclick: () => {
       if (!panel.isConnected || !live()) return;
       panel.remove(); mounted.content.querySelector('.edit-form input[inputmode="numeric"]')?.focus(); announce('The request remains open. Edit it or select another BIB.');
@@ -364,7 +420,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     (snapshot.status === 'closed' ? edit : closeDuplicate).focus();
     announce('The attempted change was not saved. Review the duplicate request and choose whether to close this request.', 'error');
   }
-  function renderRequest(request, configuration, verified = null) {
+  function renderRequest(request, configuration, verified = null, retained = null) {
     if (tabRequestId !== String(request.id)) { tabRequestId = String(request.id); selectedTab = 'details'; }
     disposeChildren();
     drafts = createDraftScope();
@@ -402,11 +458,16 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         return await confirmAction({ ...options, isCurrent }) && isCurrent();
       },
       mutate: (path, body, message, draft = null) => live() ? mutateRequest(snapshot, path, body, message, draft) : Promise.resolve(),
+      completeBibLink: (bibId, draft) => live() ? mutateRequest(snapshot,
+        `/api/asap/staff/title-requests/${snapshot.id}/action`,
+        { version: snapshot.version, action: 'alreadyOwn', bibid: bibId, staffSelectedBibId: bibId },
+        'BIB association and Already own action saved.', draft, true) : Promise.resolve(),
+      reloadBibLink: retained => live() ? reloadBibLink(snapshot, retained, live) : Promise.resolve(false),
       mutateOperation: (operation, action, body, draft = null) => live() ? mutateOperation(snapshot, operation, action, body, draft) : Promise.resolve(),
       delete: () => live() ? deleteTitleRequest(snapshot) : Promise.resolve(),
       openCopy: opener => live() ? openCopy(snapshot, context, opener) : Promise.resolve(false)
     });
-    editor = createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot, verified, request: send });
+    editor = createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot, verified, retained, request: send });
     workflows = createRequestWorkflows({ context, editor, announce, request: send });
     const status = statusLabel(request.status);
     lease?.heading(request.title, `${request.libraryOrgName} · Request ${request.id}`, {
@@ -530,6 +591,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     body.append(middle, footerRoot);
     lease.content.replaceChildren(body);
     activateTab(selectedTab);
+    editor.restoreBibLink();
     void editor.loadResearch();
   }
 

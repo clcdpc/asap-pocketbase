@@ -89,7 +89,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       bar.append(
         commandButton('Purchase', 'shopping-cart', event => showActionChoice(request, 'purchase', event.currentTarget), 'primary-button', !allowedActions.has('purchase')),
         assign,
-        commandButton('Already own', 'book', () => runAction(request, 'alreadyOwn'), 'secondary-button', !allowedActions.has('alreadyOwn')),
+        commandButton('Already own', 'book', event => runAction(request, 'alreadyOwn', undefined, {}, null, event.currentTarget), 'secondary-button', !allowedActions.has('alreadyOwn')),
         commandButton('Close silently', 'archive', () => runAction(request, 'silentClose'), 'secondary-button', !allowedActions.has('silentClose')),
         commandButton('Reject', 'ban', event => showActionChoice(request, 'reject', event.currentTarget), 'danger-button', !allowedActions.has('reject'))
       );
@@ -216,7 +216,12 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       .finally(() => reads.finish('action-choice', load.token));
   }
 
-  async function runAction(request, action, targetStatus, choices = {}, draft = null) {
+  async function runAction(request, action, targetStatus, choices = {}, draft = null, returnFocus = null) {
+    if (action === 'alreadyOwn' &&
+        (request.bibidStaffVerified !== true || positivePolarisId(request.bibid) === null)) {
+      editor.beginBibLink(returnFocus);
+      return;
+    }
     const entersPendingHold = action === 'catalogFound' || action === 'alreadyOwn' ||
       targetStatus === 'pending_hold' || action === 'purchase' && Boolean(request.bibid);
     if (!allowRequestMutation(request, { consumes: draft })) {
@@ -244,12 +249,15 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     const labels = { alreadyOwn: 'Already own', catalogFound: request.autohold ? 'Ready for hold' : 'Close without hold',
       silentClose: 'Close silently', closeDuplicate: 'Close duplicate', close: 'Close request', reopen: 'Reopen request' };
     if (confirmations[action] && !await confirmCurrent(request, labels[action], confirmations[action], draft)) return;
-    await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
+    const result = await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
       version: request.version,
       action,
       status: targetStatus,
       ...choices
     }, 'Workflow action completed.', draft);
+    if (action === 'alreadyOwn' && ['bib_not_found', 'invalid_bib', 'bib_unverified', 'bib_required'].includes(result?.code)) {
+      editor.beginBibLink(returnFocus, result.message);
+    }
   }
 
   async function showAssignment(request, returnFocus) {
@@ -541,6 +549,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       else announce('That action is no longer available. Review the current request.', 'warning');
     },
     escape() {
+      if (editor.cancelBibLink()) return true;
       if (!actionChoice || isPending()) return false;
       dismissActionChoice(); return true;
     },

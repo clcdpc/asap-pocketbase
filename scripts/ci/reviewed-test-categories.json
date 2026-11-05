@@ -9,6 +9,7 @@
     "Asap.Tests.Integration.FrontendCacheTests.PublishedFirstPartyFilesRequireRevalidationAndRetainConditionalResponses",
     "Asap.Tests.Integration.FrontendCacheTests.VendorAssetsStayCacheableAndOtherResponsesRetainTheirPolicy",
     "Asap.Tests.Integration.PatronJourneyTests.AdministrationAuditBrowserPreservesSectionsFiltersScopesDraftsAndApprovedLayouts",
+    "Asap.Tests.Integration.PatronJourneyTests.AlreadyOwnLinkBrowserPreservesDraftsAndRecoversInsideTheExistingRequestModal",
     "Asap.Tests.Integration.PatronJourneyTests.Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload",
     "Asap.Tests.Integration.PatronJourneyTests.ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery",
     "Asap.Tests.Integration.PatronJourneyTests.EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance",

@@ -4,11 +4,12 @@ import { applyPolarisResultToControls, renderResearchLinks, selectedStaffBibId, 
 import { customFieldValue, renderCustomFieldEditor, collectCustomFields } from './custom-fields.js';
 import { element, icon, commandButton, labeledInput, selectWithHistorical } from './ui.js';
 
-export function createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot = null, verified = null, request: send = authorizedJson }) {
+export function createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot = null, verified = null, retained = null, request: send = authorizedJson }) {
   const { request, actor, root, scope: interactionScope, isCurrent, isPending, admit, confirm: confirmChanges, mutate } = context;
   const reads = createLatestLoad();
   let editControls = null, editorDirty = false, editorDraft = null, verifiedBib = verified, research = null, lookupContext = null;
-  let formEvents = null;
+  let formEvents = null, linkNeedsReload = false;
+  let beginBibLink = () => {}, cancelBibLink = () => false, captureDraft = () => null, showBibLinkError = () => {}, needsBibLinkReload = () => false;
   function isVerifiedDraft(request) {
     return verifiedBib?.requestId === String(request.id) &&
       verifiedBib.version === request.version &&
@@ -95,6 +96,58 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       return field;
     }
     editControls = { title, author, identifier, bib };
+    const linkPanel = element('section', { className: 'bib-link-panel blocked-callout', hidden: true,
+      'aria-labelledby': `request-${request.id}-bib-link-heading` });
+    const linkHelp = element('p', { id: `request-${request.id}-bib-link-help`,
+      text: 'Search Polaris and use the matching verified BIB in this form. The final action saves only the BIB association and Already own decision. Other request edits remain unsaved.' });
+    const linkStatus = element('p', { id: `request-${request.id}-bib-link-status`, role: 'status', 'aria-live': 'polite' });
+    let linking = false, linkReturnFocus = null;
+    needsBibLinkReload = () => linkNeedsReload;
+    const completeLink = commandButton(linkNeedsReload ? 'Reload current request'
+      : request.autohold ? 'Save Bib ID and move to Pending hold' : 'Save Bib ID and close without hold', 'check', async () => {
+      if (!linking || !isCurrent() || isPending()) return;
+      if (linkNeedsReload) {
+        completeLink.disabled = true;
+        const refreshed = await context.reloadBibLink(captureDraft());
+        if (!refreshed && isCurrent()) {
+          completeLink.disabled = false;
+          showBibLinkError('Current request details could not be loaded. Reload before retrying the action.', true);
+          completeLink.focus();
+        }
+        return;
+      }
+      if (!admit({ consumes: draft })) {
+        showBibLinkError('Finish or cancel the other request action before saving this BIB.');
+        return;
+      }
+      const bibId = positivePolarisId(bib.value);
+      if (!bibId || !isVerifiedDraft(request)) {
+        showBibLinkError(bibId ? 'Search Polaris and use the matching result to verify this BIB before continuing.'
+          : 'Enter a positive Polaris BIB ID up to 2147483647, then verify it with Search Polaris.');
+        (bibId ? searchButton : bib).focus();
+        return;
+      }
+      const outcome = await context.completeBibLink(bibId, draft);
+      if (isCurrent() && linkPanel.isConnected && outcome?.message) {
+        showBibLinkError(outcome.message, outcome.outcome === 'uncertain');
+        completeLink.focus();
+      }
+    }, 'primary-button');
+    completeLink.setAttribute('aria-describedby', linkStatus.id);
+    const cancelLink = commandButton('Cancel linking', 'times', () => cancelBibLink());
+    linkPanel.append(element('h3', { id: `request-${request.id}-bib-link-heading`, text: 'Link a catalog record to continue' }),
+      linkHelp, element('p', { text: request.autohold ? 'Saving the verified BIB moves this request to Pending hold.'
+        : 'Automatic hold placement is off. Saving the verified BIB closes this request without placing a hold.' }),
+      linkStatus, element('div', { className: 'form-actions' }, [completeLink, cancelLink]));
+    showBibLinkError = (message, needsReload = false) => {
+      if (!isCurrent()) return;
+      linkStatus.textContent = message;
+      linkStatus.setAttribute('role', 'alert');
+      // Local lookup/validation feedback cannot resolve an uncertain action.
+      // Only a new authoritative request editor releases the recovery gate.
+      linkNeedsReload ||= needsReload;
+      if (linkNeedsReload) completeLink.textContent = 'Reload current request';
+    };
     const selectedContext = element('p', { className: 'polaris-selection-context wide', role: 'status' });
     const searchButton = commandButton('Search Polaris catalog', 'search', () => {
       if (!form.isConnected || !isCurrent() || isPending()) return;
@@ -109,8 +162,12 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
         query: title.value.trim(),
         title: title.value.trim(),
         sourceAuthor: author.value.trim(),
+        onError: message => { if (linking && isCurrent()) showBibLinkError(message); },
         apply: (selected, verifiedDetail) => {
-          applyPolarisResultToControls(selected, { bib, title, author, identifier });
+          if (!isCurrent() || !form.isConnected || isPending()) return;
+          // Linking owns only the BIB; retain the staff member's title draft too.
+          if (linking) bib.value = String(selected.bibId);
+          else applyPolarisResultToControls(selected, { bib, title, author, identifier });
           verifiedBib = {
             requestId: String(request.id),
             version: request.version,
@@ -123,10 +180,40 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
           updateResearchLinks();
           showSelectedContext();
           updatePreview();
+          if (linking) {
+            linkStatus.setAttribute('role', 'status');
+            linkStatus.textContent = linkNeedsReload
+              ? `BIB ${selected.bibId} is verified. Reload the current request before making another change.`
+              : `BIB ${selected.bibId} is verified. Use the final action to save it and ${request.autohold ? 'move to Pending hold' : 'close without a hold'}.`;
+          }
         }
       };
       if (isCurrent()) polarisLookup.open(lookupContext);
     });
+    beginBibLink = (returnFocus = null, message = '') => {
+      if (!form.isConnected || !isCurrent() || isPending() || !request.capabilities?.canChangeBib ||
+          !request.capabilities?.allowedActions?.includes('alreadyOwn') || !linkNeedsReload && !admit({ consumes: draft })) return;
+      context.showDetails?.();
+      linking = true;
+      linkReturnFocus = returnFocus || [...root.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own');
+      linkPanel.hidden = false;
+      bib.setAttribute('aria-describedby', `${linkHelp.id} ${linkStatus.id}`);
+      if (message) showBibLinkError(message);
+      else if (linkNeedsReload) showBibLinkError('Reload the current request before making another change.');
+      const focus = linkNeedsReload ? completeLink : searchButton;
+      focus.scrollIntoView?.({ block: 'nearest' });
+      focus.focus();
+    };
+    cancelBibLink = () => {
+      if (!linking || isPending()) return false;
+      if (lookupContext) polarisLookup.close(lookupContext);
+      linking = false;
+      linkPanel.hidden = true;
+      bib.removeAttribute('aria-describedby');
+      if (linkReturnFocus?.isConnected) linkReturnFocus.focus();
+      announce('Catalog linking canceled. Request edits remain unsaved.');
+      return true;
+    };
     function showSelectedContext() {
       const detail = verifiedBib?.detail;
       if (!detail || verifiedBib.requestId !== String(request.id)) {
@@ -149,12 +236,20 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       verifiedBib = null;
       if (lookupContext) polarisLookup.invalidate(lookupContext);
       showSelectedContext();
+      if (linking && !linkNeedsReload) {
+        linkStatus.setAttribute('role', 'status');
+        linkStatus.textContent = 'The BIB changed. Search Polaris to verify it before continuing.';
+      }
       updateResearchLinks();
     });
     listen(identifier, 'input', () => {
       verifiedBib = null;
       if (lookupContext) polarisLookup.invalidate(lookupContext);
       showSelectedContext();
+      if (linking && !linkNeedsReload) {
+        linkStatus.setAttribute('role', 'status');
+        linkStatus.textContent = 'The identifier changed. Search Polaris to verify the BIB before continuing.';
+      }
       updateResearchLinks();
     });
     listen(title, 'input', updateResearchLinks);
@@ -177,6 +272,31 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     });
     const customFields = element('div', { className: 'custom-fields wide' });
     let customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value);
+    const controls = { title, author, identifier, bib, publication, exactDate, format, notes, autohold };
+    const value = control => control.type === 'checkbox' ? control.checked : control.value;
+    const baseline = Object.fromEntries(Object.entries(controls).map(([key, control]) => [key, value(control)]));
+    captureDraft = () => ({
+      fields: Object.fromEntries(Object.entries(controls).filter(([key, control]) => value(control) !== baseline[key])
+        .map(([key, control]) => [key, value(control)])),
+      customFields: Object.fromEntries([...customFieldControls].filter(([key, control]) => control.mode !== 'hidden' &&
+        control.input.value.trim() !== customFieldValue(request.customFields?.[key]).trim())
+        .map(([key, control]) => [key, control.input.value])),
+      verified: isVerifiedDraft(request) ? verifiedBib : null,
+      linking, needsReload: linkNeedsReload
+    });
+    if (retained) {
+      for (const [key, saved] of Object.entries(retained.fields || {})) {
+        if (!controls[key]) continue;
+        if (controls[key].type === 'checkbox') controls[key].checked = saved;
+        else controls[key].value = saved;
+      }
+      customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value, customFieldControls);
+      for (const [key, saved] of Object.entries(retained.customFields || {})) {
+        const field = customFieldControls.get(key);
+        if (field) field.input.value = saved;
+      }
+      if (retained.verified?.requestId === String(request.id)) verifiedBib = { ...retained.verified, version: request.version };
+    }
     const pendingPreview = element('p', { className: 'pending-audit-preview wide', role: 'status' });
     const saveState = element('strong', { className: 'request-save-state', role: 'status', 'aria-live': 'polite' });
     const save = element('button', { type: 'submit', form: form.id, className: 'primary-button' }, [icon('save'), 'Save changes']);
@@ -237,7 +357,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       labeledInput('Author', author),
       identifierField('Identifier', identifier),
       identifierField('BIB ID', bib),
-      element('div', { className: 'wide polaris-edit-tools' }, [searchButton,
+      element('div', { className: 'wide polaris-edit-tools' }, [linkPanel, searchButton,
         element('div', { className: 'request-research-links', hidden: true }), selectedContext]),
       labeledInput('Publication timing', publication),
       labeledInput('Exact publication date', exactDate),
@@ -252,6 +372,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     ]);
     if (footerRoot) footerRoot.replaceChildren(footer); else form.append(footer);
     updatePreview();
+    showSelectedContext();
     listen(form, 'submit', async event => {
       event.preventDefault();
       if (save.disabled || !form.isConnected || !admit({ consumes: draft })) return;
@@ -325,6 +446,12 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     loadResearch: () => loadResearchConfiguration(request),
     isDirty: () => editorDirty, draft: () => editorDraft,
     isVerifiedDraft: () => isVerifiedDraft(request), hasAuthoritativeBib: () => hasAuthoritativeBib(request),
+    beginBibLink: (...args) => beginBibLink(...args), cancelBibLink: () => cancelBibLink(),
+    captureDraft: () => captureDraft(), showBibLinkError: (...args) => showBibLinkError(...args),
+    needsBibLinkReload: () => needsBibLinkReload(),
+    restoreBibLink() {
+      if (retained?.linking && request.status === 'suggestion') beginBibLink();
+    },
     acceptedVerification(next, body) {
       if (body?.action !== 'edit' || next.bibidStaffVerified !== true || !verifiedBib ||
           verifiedBib.requestId !== next.id || verifiedBib.bibId !== next.bibid ||

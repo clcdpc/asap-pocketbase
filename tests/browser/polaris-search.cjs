@@ -79,6 +79,7 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
     for (const index of [2, 3, 4]) assert.equal(await cards.nth(index).locator('.polaris-queue-button').isDisabled(), true);
     assert.equal(await first().locator('img').getAttribute('alt'), '');
     assert.equal(new URL(await first().locator('img').getAttribute('src'), baseURL).origin, new URL(baseURL).origin);
+    await lookup.locator('#polaris-ownership-status').filter({ hasText: 'Ownership checks complete.' }).waitFor();
     const posts = [];
     page.on('request', request => { if (request.url().endsWith('/staff/bib-lookup')) posts.push(request.postDataJSON()); });
     await lookup.getByRole('button', { name: 'Add author to search', exact: true }).focus();
