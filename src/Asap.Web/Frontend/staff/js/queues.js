@@ -195,8 +195,32 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     wrapper.setAttribute('role', 'region');
     wrapper.setAttribute('aria-label', 'Title requests');
     wrapper.setAttribute('aria-describedby', 'request-table-help');
+    for (const header of wrapper.querySelectorAll('thead th')) {
+      const button = header.querySelector('button.gridjs-sort');
+      if (!button) continue;
+      const label = header.querySelector('.gridjs-th-content').textContent.trim();
+      const ascending = button.classList.contains('gridjs-sort-asc');
+      const descending = button.classList.contains('gridjs-sort-desc');
+      header.setAttribute('aria-sort', ascending ? 'ascending' : descending ? 'descending' : 'none');
+      const action = `Sort ${label} ${ascending ? 'descending' : 'ascending'}`;
+      button.setAttribute('aria-label', action);
+      button.title = action;
+    }
   });
-  gridAccessibility.observe(root, { childList: true, subtree: true });
+  gridAccessibility.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+
+  root.addEventListener('keydown', event => {
+    if (!['Enter', ' '].includes(event.key)) return;
+    const header = event.target.closest('thead th');
+    const button = header?.querySelector('button.gridjs-sort');
+    if (!button || !dom.grid.contains(header) || event.target !== header && event.target !== button) return;
+    // Grid handles Enter on the header, including events bubbling from its
+    // native sort button. Own this key once so the button's default click
+    // cannot immediately undo that sort. Keep Shift's multi-sort semantics.
+    event.preventDefault();
+    event.stopPropagation();
+    button.dispatchEvent(new window.MouseEvent('click', { bubbles: true, shiftKey: event.shiftKey }));
+  }, { capture: true, signal: events.signal });
 
   function closeLookup() { if (lookupContext) polarisLookup?.close(lookupContext); lookupContext = null; }
   function invalidate() { closeLookup(); targetGeneration++; reads.begin('queue-target').abort(); reads.begin('queue').abort(); if (!disposed) dom.refresh.disabled = false; }

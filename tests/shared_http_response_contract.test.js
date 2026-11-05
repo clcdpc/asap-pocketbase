@@ -73,6 +73,14 @@ function response(status, body, parseError = null) {
       error => error.status === 400 && error.response === null && !error.outcomeUnknown,
       'a known client rejection stays distinguishable when its error body is malformed');
 
+    for (const [reference, expected] of [['safe-host:405', 'safe-host:405'], ['unsafe <private>', null], ['x'.repeat(65), null]]) {
+      global.fetch = async () => ({ ...response(405, null, new SyntaxError('IIS HTML error')),
+        headers: { get: () => reference } });
+      await assert.rejects(requestJson('/staff-change', { method: 'PUT', body: {} }),
+        error => error.status === 405 && error.response === null && !error.outcomeUnknown && error.correlationId === expected,
+        'host errors retain a safe correlation reference without rendering the HTML body');
+    }
+
     const aborted = Object.assign(new Error('aborted'), { name: 'AbortError' });
     global.fetch = async () => { throw aborted; };
     await assert.rejects(

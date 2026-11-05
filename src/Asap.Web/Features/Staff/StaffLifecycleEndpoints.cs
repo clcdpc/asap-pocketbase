@@ -14,7 +14,9 @@ public static class StaffLifecycleEndpoints
         group.MapGet("", ListAsync);
         group.MapPost("", CreateAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPatch("/{id:long}", UpdateMetadataAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
+        group.MapPut("/{id:long}", UpdateAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/role", ChangeRoleAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
+        group.MapPost("/{id:long}/reactivate", ReactivateAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapDelete("/{id:long}", DeactivateAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         return endpoints;
     }
@@ -98,6 +100,24 @@ public static class StaffLifecycleEndpoints
             id,
             input,
             cancellationToken));
+
+    private static async Task<IResult> UpdateAsync(
+        HttpContext context,
+        long id,
+        StaffUpdateInput input,
+        StaffLifecycleService lifecycle,
+        CancellationToken cancellationToken) =>
+        ToResult(await lifecycle.UpdateAsync(
+            StaffAuthenticationEndpoints.RequireCurrentStaff(context), id, input, cancellationToken));
+
+    private static async Task<IResult> ReactivateAsync(
+        HttpContext context,
+        long id,
+        StaffDeactivateInput input,
+        StaffLifecycleService lifecycle,
+        CancellationToken cancellationToken) =>
+        ToResult(await lifecycle.ReactivateAsync(
+            StaffAuthenticationEndpoints.RequireCurrentStaff(context), id, input, cancellationToken));
 
     private static async Task<IResult> DeactivateAsync(
         HttpContext context,

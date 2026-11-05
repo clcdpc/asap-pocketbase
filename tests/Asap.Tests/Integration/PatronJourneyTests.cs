@@ -566,7 +566,20 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(61, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(74, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            foreach (var flag in new[] { "disclosures", "independentDrafts", "singleEmail", "atomicSave", "conflictRecovery", "lifecycle", "create", "nativeValidationOwner", "keyboardFocus", "responsiveContainment", "activeFilter", "scopedCounts", "hiddenDrafts", "ownedFeedbackRecovery", "independentSaves", "preservedReviewRecovery" })
+            {
+                Assert.IsTrue(report.RootElement.GetProperty("staffRoster").GetProperty(flag).GetBoolean(), flag);
+            }
+            var rosterZoom = report.RootElement.GetProperty("staffRoster").GetProperty("nativeZoom").EnumerateArray().ToArray();
+            Assert.HasCount(8, rosterZoom);
+            foreach (var state in rosterZoom)
+            {
+                Assert.AreEqual(2, state.GetProperty("actualBrowserZoom").GetInt32());
+                Assert.AreEqual(2, state.GetProperty("cdpZoom").GetInt32());
+                Assert.IsTrue(state.GetProperty("focus").GetProperty("active").GetBoolean());
+                Assert.IsTrue(state.GetProperty("focus").GetProperty("unobscured").GetBoolean());
+            }
             Assert.IsTrue(report.RootElement.GetProperty("rejectionNotificationAndReopen").GetBoolean());
             var analytics = report.RootElement.GetProperty("analytics");
             Assert.AreEqual("all", analytics.GetProperty("desktopSuperAdminScope").GetString());
@@ -2731,7 +2744,9 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
     }
 
     [TestMethod]
-    public async Task StaffRoleContractionRetainsInScopeWorkAndClearsOnlyOutOfScopeOperations()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task StaffRoleContractionRetainsInScopeWorkAndClearsOnlyOutOfScopeOperations(bool unified)
     {
         var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
         using var client = factory!.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
@@ -2758,7 +2773,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 INSERT INTO [asap].[StaffUser]
                     ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
                      [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive])
-                VALUES (@tenantId, @targetObjectId, N'contracting.admin@example.org', N'CONTRACTING.ADMIN@EXAMPLE.ORG',
+                VALUES (@tenantId, @targetObjectId, @targetEmail, UPPER(@targetEmail),
                         N'Contracting Administrator', N'contracting.admin@example.org', N'super_admin', 1, 1);
                 DECLARE @targetId bigint = SCOPE_IDENTITY();
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
@@ -2791,6 +2806,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             seed.Parameters.AddWithValue("@actorObjectId", Guid.Parse(identity.ObjectId!));
             seed.Parameters.AddWithValue("@tenantId", Guid.Parse(identity.TenantId!));
             seed.Parameters.AddWithValue("@targetObjectId", targetObjectId);
+            seed.Parameters.AddWithValue("@targetEmail", unified ? "contracting.unified@example.org" : "contracting.admin@example.org");
             await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
@@ -2801,57 +2817,95 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             closedRequestId = reader.GetInt64(5);
         }
 
-        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), identity.UserPrincipalName!);
-        using var session = await client.GetAsync("/api/asap/staff/session");
-        using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
-        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
-        using var change = await client.PostAsJsonAsync(
-            $"/api/asap/staff/users/{targetId}/role",
-            new { version = targetVersion, role = "admin", organizationId = 2 });
-        Assert.AreEqual(HttpStatusCode.OK, change.StatusCode, await change.Content.ReadAsStringAsync());
-        using var changeBody = JsonDocument.Parse(await change.Content.ReadAsStringAsync());
-        Assert.AreEqual(1, changeBody.RootElement.GetProperty("cleanup").GetProperty("rulesDeactivated").GetInt32());
-        Assert.AreEqual(1, changeBody.RootElement.GetProperty("cleanup").GetProperty("openTitleClaimsCleared").GetInt32());
+        try
+        {
+            AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), identity.UserPrincipalName!);
+            using var session = await client.GetAsync("/api/asap/staff/session");
+            using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
+            using var rejectedDraft = await client.PutAsJsonAsync(
+                $"/api/asap/staff/users/{targetId}",
+                new { version = targetVersion, email = identity.UserPrincipalName, displayName = "Must not persist", role = "admin", organizationId = 2 });
+            Assert.AreEqual(HttpStatusCode.Conflict, rejectedDraft.StatusCode, await rejectedDraft.Content.ReadAsStringAsync());
+            await using (var rejectedContext = await UnifiedStaffContextAsync())
+            {
+                Assert.AreEqual(2, await rejectedContext.FormatAutoClaimRules.CountAsync(item => item.StaffUserId == targetId && item.IsActive));
+                Assert.AreEqual(targetId, await rejectedContext.TitleRequests.Where(item => item.Id == outOfScopeRequestId).Select(item => item.ClaimedByStaffUserId).SingleAsync());
+            }
+            using var change = unified ? await client.PutAsJsonAsync(
+                $"/api/asap/staff/users/{targetId}",
+                new { version = targetVersion, email = "contraction.saved@example.org", displayName = "Saved Contracted Staff", role = "admin", organizationId = 2 })
+                : await client.PostAsJsonAsync($"/api/asap/staff/users/{targetId}/role", new { version = targetVersion, role = "admin", organizationId = 2 });
+            Assert.AreEqual(HttpStatusCode.OK, change.StatusCode, await change.Content.ReadAsStringAsync());
+            using var changeBody = JsonDocument.Parse(await change.Content.ReadAsStringAsync());
+            if (unified)
+            {
+                Assert.AreEqual("contraction.saved@example.org", changeBody.RootElement.GetProperty("user").GetProperty("userPrincipalName").GetString());
+                Assert.AreEqual("contraction.saved@example.org", changeBody.RootElement.GetProperty("user").GetProperty("notificationEmail").GetString());
+                Assert.AreEqual("Saved Contracted Staff", changeBody.RootElement.GetProperty("user").GetProperty("displayName").GetString());
+                CollectionAssert.AreEquivalent(new[] { "staff_metadata_updated", "staff_lifecycle_updated" }, await UnifiedStaffAuditsAsync(targetId));
+            }
+            Assert.AreEqual(1, changeBody.RootElement.GetProperty("cleanup").GetProperty("rulesDeactivated").GetInt32());
+            Assert.AreEqual(1, changeBody.RootElement.GetProperty("cleanup").GetProperty("openTitleClaimsCleared").GetInt32());
 
-        await using var verify = new SqlConnection(databaseConnectionString);
-        await verify.OpenAsync();
-        await using var command = new SqlCommand(
-            """
-            SELECT target.[Role], target.[OrganizationId], target.[IsActive],
-                   (SELECT [IsActive] FROM [asap].[FormatAutoClaimRule]
-                    WHERE [StaffUserId] = @targetId AND [LibraryOrganizationId] = 2),
-                   (SELECT [IsActive] FROM [asap].[FormatAutoClaimRule]
-                    WHERE [StaffUserId] = @targetId AND [LibraryOrganizationId] = 91320),
-                   (SELECT [ClaimedByStaffUserId] FROM [asap].[TitleRequest] WHERE [Id] = @inScopeId),
-                   (SELECT [ClaimedByStaffUserId] FROM [asap].[TitleRequest] WHERE [Id] = @outOfScopeId),
-                   (SELECT [ClaimedByDisplayName] FROM [asap].[TitleRequest] WHERE [Id] = @outOfScopeId),
-                   (SELECT [ClaimType] FROM [asap].[TitleRequest] WHERE [Id] = @outOfScopeId),
-                   (SELECT [ClaimedByStaffUserId] FROM [asap].[TitleRequest] WHERE [Id] = @closedId),
-                   (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
-                    WHERE [TitleRequestId] = @outOfScopeId AND [EventType] = N'claim_cleared'),
-                   (SELECT COUNT(*) FROM [asap].[AdministrativeAudit]
-                    WHERE [TargetId] = CONVERT(nvarchar(40), @targetId) AND [Action] = N'staff_lifecycle_updated')
-            FROM [asap].[StaffUser] target WHERE target.[Id] = @targetId;
-            """,
-            verify);
-        command.Parameters.AddWithValue("@targetId", targetId);
-        command.Parameters.AddWithValue("@inScopeId", inScopeRequestId);
-        command.Parameters.AddWithValue("@outOfScopeId", outOfScopeRequestId);
-        command.Parameters.AddWithValue("@closedId", closedRequestId);
-        await using var result = await WithFixtureClock(command).ExecuteReaderAsync();
-        Assert.IsTrue(await result.ReadAsync());
-        Assert.AreEqual("admin", result.GetString(0));
-        Assert.AreEqual(2, result.GetInt32(1));
-        Assert.IsTrue(result.GetBoolean(2));
-        Assert.IsTrue(result.GetBoolean(3));
-        Assert.IsFalse(result.GetBoolean(4));
-        Assert.AreEqual(targetId, result.GetInt64(5));
-        Assert.IsTrue(result.IsDBNull(6));
-        Assert.IsTrue(result.IsDBNull(7));
-        Assert.IsTrue(result.IsDBNull(8));
-        Assert.AreEqual(targetId, result.GetInt64(9));
-        Assert.AreEqual(1, result.GetInt32(10));
-        Assert.AreEqual(1, result.GetInt32(11));
+            await using var verify = new SqlConnection(databaseConnectionString);
+            await verify.OpenAsync();
+            await using var command = new SqlCommand(
+                """
+                SELECT target.[Role], target.[OrganizationId], target.[IsActive],
+                       (SELECT [IsActive] FROM [asap].[FormatAutoClaimRule]
+                        WHERE [StaffUserId] = @targetId AND [LibraryOrganizationId] = 2),
+                       (SELECT [IsActive] FROM [asap].[FormatAutoClaimRule]
+                        WHERE [StaffUserId] = @targetId AND [LibraryOrganizationId] = 91320),
+                       (SELECT [ClaimedByStaffUserId] FROM [asap].[TitleRequest] WHERE [Id] = @inScopeId),
+                       (SELECT [ClaimedByStaffUserId] FROM [asap].[TitleRequest] WHERE [Id] = @outOfScopeId),
+                       (SELECT [ClaimedByDisplayName] FROM [asap].[TitleRequest] WHERE [Id] = @outOfScopeId),
+                       (SELECT [ClaimType] FROM [asap].[TitleRequest] WHERE [Id] = @outOfScopeId),
+                       (SELECT [ClaimedByStaffUserId] FROM [asap].[TitleRequest] WHERE [Id] = @closedId),
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
+                        WHERE [TitleRequestId] = @outOfScopeId AND [EventType] = N'claim_cleared'),
+                       (SELECT COUNT(*) FROM [asap].[AdministrativeAudit]
+                        WHERE [TargetId] = CONVERT(nvarchar(40), @targetId) AND [Action] = N'staff_lifecycle_updated')
+                FROM [asap].[StaffUser] target WHERE target.[Id] = @targetId;
+                """,
+                verify);
+            command.Parameters.AddWithValue("@targetId", targetId);
+            command.Parameters.AddWithValue("@inScopeId", inScopeRequestId);
+            command.Parameters.AddWithValue("@outOfScopeId", outOfScopeRequestId);
+            command.Parameters.AddWithValue("@closedId", closedRequestId);
+            await using var result = await WithFixtureClock(command).ExecuteReaderAsync();
+            Assert.IsTrue(await result.ReadAsync());
+            Assert.AreEqual("admin", result.GetString(0));
+            Assert.AreEqual(2, result.GetInt32(1));
+            Assert.IsTrue(result.GetBoolean(2));
+            Assert.IsTrue(result.GetBoolean(3));
+            Assert.IsFalse(result.GetBoolean(4));
+            Assert.AreEqual(targetId, result.GetInt64(5));
+            Assert.IsTrue(result.IsDBNull(6));
+            Assert.IsTrue(result.IsDBNull(7));
+            Assert.IsTrue(result.IsDBNull(8));
+            Assert.AreEqual(targetId, result.GetInt64(9));
+            Assert.AreEqual(1, result.GetInt32(10));
+            Assert.AreEqual(1, result.GetInt32(11));
+        }
+        finally
+        {
+            // Retained in-scope rules belong to this seed even when saving
+            // changes its owner's authentication email.
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var cleanup = new SqlCommand(
+                """
+                UPDATE [asap].[FormatAutoClaimRule]
+                SET [IsActive] = 0,
+                    [DeactivatedUtc] = COALESCE([DeactivatedUtc], SYSUTCDATETIME())
+                WHERE [StaffUserId] = @targetId
+                  AND [IsActive] = 1;
+                """,
+                connection);
+            cleanup.Parameters.AddWithValue("@targetId", targetId);
+            await WithFixtureClock(cleanup).ExecuteNonQueryAsync();
+        }
     }
 
     [TestMethod]
@@ -10017,14 +10071,6 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            UPDATE targetRule
-            SET targetRule.[IsActive] = 0,
-                targetRule.[DeactivatedUtc] = COALESCE(targetRule.[DeactivatedUtc], SYSUTCDATETIME())
-            FROM [asap].[FormatAutoClaimRule] targetRule
-            JOIN [asap].[StaffUser] staff ON staff.[Id] = targetRule.[StaffUserId]
-            WHERE staff.[UserPrincipalName] = N'contracting.admin@example.org'
-              AND targetRule.[IsActive] = 1;
-
             DELETE customRule
             FROM [asap].[MaterialFormatCustomFieldRule] customRule
             JOIN [asap].[PatronCustomField] field ON field.[Id] = customRule.[PatronCustomFieldId]

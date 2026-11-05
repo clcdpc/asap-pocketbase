@@ -40,6 +40,9 @@ async function main() {
     await page.locator('#settings-form').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#settings-scope').inputValue(), scope);
     await page.locator('#settings-nav-templates').click();
+    assert.equal(await page.locator('#settings-template-editor [data-template-toggle][aria-expanded="false"]').count(), 5,
+      'All five built-in cards start collapsed on every accepted scope population.');
+    for (const item of expected) await field(item.key).locator('[data-template-toggle]').click();
   }
   async function save() {
     const responsePromise = page.waitForResponse(response => response.request().method() === 'POST' &&

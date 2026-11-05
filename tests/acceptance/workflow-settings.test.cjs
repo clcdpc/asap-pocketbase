@@ -61,6 +61,7 @@ test('patron-code picker clears the sticky footer at native zoom and limited hei
   for (const [width, height, zoom] of [[1440, 1000, 2], [1280, 900, 1.5], [1440, 1000, 1], [390, 844, 1], [720, 340, 1]]) {
     await page.setViewportSize({ width, height });
     await nativeZoom(context, page, zoom);
+    await page.locator('#patron-code-eligibility-message').focus();
     await obscurePicker(page);
     await input.focus();
     await pickerGeometry(page, { open: false });

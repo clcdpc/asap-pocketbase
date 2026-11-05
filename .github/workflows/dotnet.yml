@@ -330,6 +330,20 @@ jobs:
         run: |
           dotnet publish src/Asap.Web/Asap.Web.csproj -c Release --no-build --no-restore -o .artifacts/web
           & scripts/build/Test-FrontendPublish.ps1 -PublishRoot .artifacts/web
+          [xml] $iisConfig = Get-Content -LiteralPath .artifacts/web/web.config -Raw
+          $applicationServerPath = '/configuration/location[@path="." and @inheritInChildApplications="false"]/system.webServer'
+          $requiredIisPaths = @(
+            'handlers/remove[@name="WebDAV"]'
+            'modules/remove[@name="WebDAVModule"]'
+            'handlers/add[@name="aspNetCore" and @path="*" and @verb="*" and @modules="AspNetCoreModuleV2" and @resourceType="Unspecified"]'
+            ('aspNetCore[@processPath="dotnet" and @arguments=".\Asap.Web.dll" and @hostingModel="inprocess"' +
+              ' and @stdoutLogEnabled="false" and @stdoutLogFile=".\logs\stdout"]')
+          )
+          foreach ($requiredPath in $requiredIisPaths) {
+            if ($null -eq $iisConfig.SelectSingleNode("$applicationServerPath/$requiredPath")) {
+              throw "Published IIS configuration is missing required application configuration: $requiredPath"
+            }
+          }
           if (Get-ChildItem .artifacts -Recurse -File | Where-Object Name -Match 'pocketbase|node(.exe)?|npm(.cmd)?') {
             throw 'Published artifacts contain a forbidden PocketBase or Node runtime file.'
           }

@@ -21,6 +21,12 @@ public sealed record StaffMetadataInput(
 
 public sealed record StaffRoleInput(string? Version, string? Role, int? OrganizationId);
 public sealed record StaffDeactivateInput(string? Version);
+public sealed record StaffUpdateInput(
+    [property: JsonRequired] string? Version,
+    [property: JsonRequired] string? Email,
+    [property: JsonRequired] string? DisplayName,
+    [property: JsonRequired] string? Role,
+    [property: JsonRequired] int? OrganizationId);
 
 public sealed record StaffLifecycleResult(
     string Code,
@@ -112,7 +118,7 @@ public sealed class StaffLifecycleService(
                 out var email,
                 out var normalizedEmail) ||
             !TryNormalizeRoleOrganization(input.Role, input.OrganizationId, out var role, out var organizationId) ||
-            email is null || normalizedEmail is null)
+            email is null || normalizedEmail is null || email.Length > 320)
         {
             return new StaffLifecycleResult("invalid_staff_user");
         }
@@ -201,6 +207,7 @@ public sealed class StaffLifecycleService(
             existing.OrganizationId = organizationId;
             existing.UserPrincipalName = email;
             existing.NormalizedUserPrincipalName = normalizedEmail;
+            existing.NotificationEmail = email;
             AddAudit(context, actor, existing.Id, organizationId, "staff_reactivated", new { role });
             await context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -346,6 +353,20 @@ public sealed class StaffLifecycleService(
         CancellationToken cancellationToken) =>
         ChangeLifecycleAsync(actor, targetId, input.Version, null, input.Role, input.OrganizationId, cancellationToken);
 
+    public Task<StaffLifecycleResult> UpdateAsync(
+        CurrentStaff actor,
+        long targetId,
+        StaffUpdateInput input,
+        CancellationToken cancellationToken) =>
+        ChangeLifecycleAsync(actor, targetId, input.Version, null, input.Role, input.OrganizationId, cancellationToken, input);
+
+    public Task<StaffLifecycleResult> ReactivateAsync(
+        CurrentStaff actor,
+        long targetId,
+        StaffDeactivateInput input,
+        CancellationToken cancellationToken) =>
+        ChangeLifecycleAsync(actor, targetId, input.Version, true, null, null, cancellationToken);
+
     public Task<StaffLifecycleResult> DeactivateAsync(
         CurrentStaff actor,
         long targetId,
@@ -360,11 +381,22 @@ public sealed class StaffLifecycleService(
         bool? requestedActive,
         string? requestedRole,
         int? requestedOrganizationId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        StaffUpdateInput? update = null)
     {
         if (!StaffVersion.TryDecode(encodedVersion, out var expectedVersion))
         {
             return new StaffLifecycleResult("invalid_version");
+        }
+        string? email = null;
+        string? normalizedEmail = null;
+        if (update is not null &&
+            (string.IsNullOrWhiteSpace(update.Role) || !update.OrganizationId.HasValue ||
+             !StaffEmail.TryNormalizeAuthenticationEmail(update.Email, out email, out normalizedEmail) ||
+             !TryNormalizeRoleOrganization(update.Role, update.OrganizationId, out _, out _) ||
+             email is null || normalizedEmail is null || email.Length > 320 || (Clean(update.DisplayName)?.Length ?? 0) > 256))
+        {
+            return new StaffLifecycleResult("invalid_staff_user");
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -438,14 +470,32 @@ public sealed class StaffLifecycleService(
             return new StaffLifecycleResult("stale_version");
         }
 
+        if (requestedActive == true && target.IsActive)
+        {
+            return new StaffLifecycleResult("identity_already_exists");
+        }
         var newActive = requestedActive ?? target.IsActive;
-        if (newActive && role != StaffRole.SuperAdmin && !OrganizationAuthority.IsActiveLibrary(organizations[organizationId]))
+        if (requestedActive == true && !StaffEmail.IsValidAuthenticationEmail(target))
+        {
+            return new StaffLifecycleResult("invalid_staff_user");
+        }
+        var accessChanged = role != target.Role || organizationId != target.OrganizationId;
+        // Editing metadata on an unchanged inactive library remains allowed. An
+        // access transition or reactivation must still select an active library.
+        if (newActive && role != StaffRole.SuperAdmin &&
+            (update is null || accessChanged) && !OrganizationAuthority.IsActiveLibrary(organizations[organizationId]))
         {
             return new StaffLifecycleResult("organization_inactive");
         }
+        if (update is not null && await context.StaffUsers.AsNoTracking().AnyAsync(
+                item => item.Id != targetId && item.NormalizedUserPrincipalName == normalizedEmail,
+                cancellationToken))
+        {
+            return new StaffLifecycleResult("identity_already_exists");
+        }
 
         var targetWillBeUsableSuperAdmin = newActive && role == StaffRole.SuperAdmin && organizationId == LibraryScope.SystemOrganizationId &&
-                                           StaffEmail.IsValidAuthenticationEmail(target);
+                                           (update is not null || StaffEmail.IsValidAuthenticationEmail(target));
         var otherSuperAdmins = await context.StaffUsers.AsNoTracking()
             .Where(
             item => item.Id != target.Id && item.IsActive && item.Role == StaffRole.SuperAdmin &&
@@ -453,8 +503,8 @@ public sealed class StaffLifecycleService(
             .Select(item => new { item.UserPrincipalName, item.NormalizedUserPrincipalName })
             .ToListAsync(cancellationToken);
         var hasOtherUsableSuperAdmin = otherSuperAdmins.Any(item =>
-            StaffEmail.TryNormalizeAuthenticationEmail(item.UserPrincipalName, out _, out var normalizedEmail) &&
-            string.Equals(normalizedEmail, item.NormalizedUserPrincipalName, StringComparison.Ordinal));
+            StaffEmail.TryNormalizeAuthenticationEmail(item.UserPrincipalName, out _, out var otherNormalizedEmail) &&
+            string.Equals(otherNormalizedEmail, item.NormalizedUserPrincipalName, StringComparison.Ordinal));
         if (!targetWillBeUsableSuperAdmin && !hasOtherUsableSuperAdmin)
         {
             return new StaffLifecycleResult("active_super_admin_required");
@@ -537,15 +587,55 @@ public sealed class StaffLifecycleService(
         target.IsActive = newActive;
         target.Role = role;
         target.OrganizationId = organizationId;
-        AddAudit(context, actor, target.Id, organizationId, requestedActive == false ? "staff_deactivated" : "staff_lifecycle_updated", new
+        if (update is not null)
         {
-            role,
-            rulesDeactivated,
-            openTitleClaimsCleared = titleClaimsCleared,
-            openAdditionalCopyClaimsCleared = additionalCopyClaimsCleared
-        });
-        await context.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+            var previousAuthenticationEmail = target.UserPrincipalName;
+            var metadataChanged = target.UserPrincipalName != email || target.NormalizedUserPrincipalName != normalizedEmail ||
+                                  target.NotificationEmail != email || target.DisplayName != Clean(update.DisplayName);
+            if (!string.Equals(target.NormalizedUserPrincipalName, normalizedEmail, StringComparison.Ordinal))
+            {
+                target.EntraTenantId = null;
+                target.EntraObjectId = null;
+                target.LastLoginUtc = null;
+            }
+            target.UserPrincipalName = email;
+            target.NormalizedUserPrincipalName = normalizedEmail;
+            target.NotificationEmail = email;
+            target.DisplayName = Clean(update.DisplayName);
+            if (metadataChanged)
+            {
+                AddAudit(context, actor, target.Id, organizationId, "staff_metadata_updated", new
+                {
+                    previousAuthenticationEmail,
+                    authenticationEmail = email
+                });
+            }
+        }
+        if (update is null || accessChanged)
+        {
+            var action = requestedActive switch
+            {
+                true => "staff_reactivated",
+                false => "staff_deactivated",
+                null => "staff_lifecycle_updated"
+            };
+            AddAudit(context, actor, target.Id, organizationId, action, new
+            {
+                role,
+                rulesDeactivated,
+                openTitleClaimsCleared = titleClaimsCleared,
+                openAdditionalCopyClaimsCleared = additionalCopyClaimsCleared
+            });
+        }
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return new StaffLifecycleResult("stale_version");
+        }
         return new StaffLifecycleResult(
             "updated",
             target,

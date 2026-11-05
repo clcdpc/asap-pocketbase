@@ -5,6 +5,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { URL } = require('node:url');
+const { verifyEmailTemplateCards } = require('./email-template-cards.cjs');
+const { contrast } = require('./settings-accessibility.cjs');
+const settingsSpacingRecorder = require('./settings-spacing.cjs');
 
 function parseArguments(argv) {
   if (![5, 6, 8].includes(argv.length)) {
@@ -29,27 +32,81 @@ function sameOrigin(url, origin) {
   try { return new URL(url).origin === origin; } catch { return false; }
 }
 
-async function scan(page, axeSource, artifactRoot, report, viewport) {
+async function scan(page, axeSource, artifactRoot, report, viewport, checkTimeoutGeometry = false, fullPage = true) {
+  await report.recordSpacing?.(viewport);
+  for (const selector of ['#organizations-status-message', '#polaris-api-key-status', '#polaris-admin-pass-status']) {
+    if (!await page.locator(selector).isVisible()) continue;
+    const result = await contrast(page, selector);
+    assert.ok(result.ratios[0] >= 4.5, `${viewport}/${selector}: rendered text contrast including ancestor opacity: ${JSON.stringify(result)}`);
+    (report.contrastChecks ||= []).push({ viewport, selector, ...result });
+  }
   await page.evaluate(axeSource);
   const accessibility = await page.evaluate(async () => {
     const result = await axe.run();
     return result.violations.filter(item => ['serious', 'critical'].includes(item.impact));
   });
-  const layout = await page.evaluate(() => ({
-    width: innerWidth,
-    scrollWidth: document.documentElement.scrollWidth,
-    imagesLoaded: [...document.images]
-      .filter(image => {
-        const bounds = image.getBoundingClientRect();
-        return bounds.width > 0 && bounds.height > 0;
-      })
-      .every(image => image.complete && image.naturalWidth > 0)
-  }));
-  await page.screenshot({ path: path.join(artifactRoot, `${viewport}-settings.png`), fullPage: true });
+  const layout = await page.evaluate(checkTimeoutGeometry => {
+    const bounds = element => {
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, width: rect.width, height: rect.height };
+    };
+    const organizationRows = [...document.querySelectorAll('#settings-organization-catalog [data-organization-id]')]
+      .map(row => ({ id: row.dataset.organizationId, row: bounds(row), children: [...row.children].map(bounds) }))
+      .filter(row => row.row.width > 0 && row.row.height > 0);
+    const timeoutControls = checkTimeoutGeometry
+      ? [...document.querySelectorAll('.settings-timeout-rule input[type="number"], .settings-timeout-rule select')]
+        .map(control => {
+          const field = control.closest('.settings-field');
+          const rule = control.closest('.settings-timeout-rule');
+          const rect = element => {
+            const bounds = element.getBoundingClientRect();
+            return { left: bounds.left, right: bounds.right, width: bounds.width, height: bounds.height };
+          };
+          return { id: control.id, control: rect(control), field: rect(field), rule: rect(rule) };
+        })
+      : [];
+    return {
+      width: innerWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+      imagesLoaded: [...document.images]
+        .filter(image => {
+          const bounds = image.getBoundingClientRect();
+          return bounds.width > 0 && bounds.height > 0;
+        })
+        .every(image => image.complete && image.naturalWidth > 0),
+      timeoutControls,
+      organizationRows
+    };
+  }, checkTimeoutGeometry);
+  await page.screenshot({ path: path.join(artifactRoot, `${viewport}-settings.png`), fullPage });
   report.states.push({ viewport, accessibility, layout });
   assert.deepEqual(accessibility, [], `Serious or critical accessibility violation in ${viewport} settings`);
   assert.ok(layout.scrollWidth <= layout.width, `Horizontal overflow in ${viewport} settings`);
   assert.equal(layout.imagesLoaded, true, `Visible image failed to load in ${viewport} settings`);
+  for (const row of layout.organizationRows) {
+    assert.ok(row.row.left >= -1 && row.row.right <= layout.width + 1,
+      `Organization ${row.id} fits the ${viewport} viewport.`);
+    for (const child of row.children) {
+      assert.ok(child.left >= row.row.left - 1 && child.right <= row.row.right + 1,
+        `Organization ${row.id} contains its name/status/action in ${viewport}: ${JSON.stringify(row)}`);
+    }
+  }
+  if (checkTimeoutGeometry) {
+    assert.deepEqual(layout.timeoutControls.map(control => control.id), [
+      'outstanding-timeout-days', 'outstanding-timeout-rejection-template-id',
+      'hold-pickup-timeout-days', 'pending-hold-timeout-days', 'additional-copy-timeout-days'
+    ], `All timeout number/select controls are visible in ${viewport}.`);
+    const fitsInside = (inner, outer) => inner.left >= outer.left - 1 && inner.right <= outer.right + 1;
+    for (const control of layout.timeoutControls) {
+      assert.ok(control.control.width > 0 && control.control.height > 0, `${control.id} is visible in ${viewport}.`);
+      assert.ok(fitsInside(control.control, control.field),
+        `${control.id} fits its label in ${viewport}: ${JSON.stringify(control)}`);
+      assert.ok(fitsInside(control.control, control.rule),
+        `${control.id} fits its timeout rule in ${viewport}: ${JSON.stringify(control)}`);
+      assert.ok(control.control.left >= -1 && control.control.right <= layout.width + 1,
+        `${control.id} fits the viewport in ${viewport}: ${JSON.stringify(control)}`);
+    }
+  }
 }
 
 async function verifyFormatRuleDraftNames(page) {
@@ -566,6 +623,8 @@ async function runPatronTextRefinements(page, axeSource, args, report, saveSetti
 }
 
 async function runCampaign2Editor(page, axeSource, args, report, saveSettings, ready) {
+  await verifyEmailTemplateCards({ page, report,
+    scan: (name, fullPage = false) => scan(page, axeSource, args.artifactRoot, report, name, false, fullPage) });
   const library = args.scopeId;
   const read = scope => page.evaluate(async scope => {
     const response = await fetch(`/api/asap/staff/settings?orgId=${encodeURIComponent(scope)}`);
@@ -587,14 +646,52 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   // their actual current values rather than an original value attribute.
   const rowIndex = key => page.locator('#email-templates-editor [data-domain-row]').evaluateAll((rows, key) =>
     rows.findIndex(row => row.querySelector('.template-key').value === key), key);
-  const row = async key => page.locator('#email-templates-editor [data-domain-row]').nth(await rowIndex(key));
-  const titleButton = () => page.locator('[data-placeholder-key="title"]');
+  const openCard = async control => {
+    const card = control.locator('xpath=ancestor-or-self::*[contains(concat(" ",normalize-space(@class)," ")," settings-template-card ")][1]');
+    const toggle = card.locator('[data-template-toggle]');
+    if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+  };
+  const row = async key => {
+    const card = page.locator('#email-templates-editor [data-domain-row]').nth(await rowIndex(key));
+    await openCard(card); return card;
+  };
+  const titleButton = () => page.locator('.template-placeholder-picker:popover-open [data-placeholder-key="title"]');
+  const tokenKeys = () => page.locator('.template-placeholder-picker:popover-open [data-placeholder-key]')
+    .evaluateAll(buttons => buttons.map(button => button.dataset.placeholderKey));
+  const openPicker = async control => {
+    await openCard(control);
+    const trigger = control.locator('xpath=..').locator('.template-placeholder-trigger');
+    await trigger.scrollIntoViewIfNeeded();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await trigger.click();
+    const popupId = await trigger.getAttribute('aria-controls');
+    try {
+      await page.waitForFunction(id => document.getElementById(id)?.matches(':popover-open') === true,
+        popupId, { timeout: 5000 });
+    } catch (error) {
+      const diagnostic = await trigger.evaluate(node => {
+        const card = node.closest('.settings-template-card');
+        const popup = document.getElementById(node.getAttribute('aria-controls'));
+        const control = node.closest('.settings-template-field').querySelector('input, textarea');
+        return { scope: document.getElementById('settings-scope').value, version: document.getElementById('settings-version').value,
+          formInert: document.getElementById('settings-form').inert, key: card.querySelector('.template-key')?.value || card.dataset.templateKey,
+          kind: card.dataset.templateKind, expanded: card.querySelector('[data-template-toggle]').getAttribute('aria-expanded'),
+          override: card.querySelector('.settings-template-override')?.checked, triggerDisabled: node.disabled,
+          triggerExpanded: node.getAttribute('aria-expanded'), fieldDisabled: control.disabled, fieldReadOnly: control.readOnly,
+          nativeOpen: popup.matches(':popover-open'), activeElement: document.activeElement?.id || document.activeElement?.localName,
+          viewport: { width: innerWidth, height: innerHeight, scrollY }, bounds: node.getBoundingClientRect().toJSON() };
+      });
+      throw new Error(`The contextual email picker did not stay open: ${JSON.stringify(diagnostic)}. ${error.message}`);
+    }
+  };
   const selectRange = async (control, start, end = start) => {
+    await openCard(control);
     await control.focus();
     await control.evaluate((element, range) => {
       element.setSelectionRange(range.start, range.end);
       element.dispatchEvent(new Event('select', { bubbles: true }));
     }, { start, end });
+    await openPicker(control);
   };
   const assertLibraryContext = async () => {
     assert.match(await page.locator('#settings-system-context').textContent(), /Campaign 2 library/);
@@ -632,8 +729,10 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     const patronKeys = ['name', 'title', 'author', 'format', 'barcode', 'firstName', 'lastName'];
     assert.deepEqual([...initial.templatePlaceholders].sort(), [...patronKeys].sort(),
       'The UI catalog must remain aligned with the actual patron renderer capability contract.');
-    await page.locator('#email-submit-subject').focus();
-    assert.deepEqual(await page.locator('#template-placeholder-list button').allTextContents(), patronKeys.map(key => `{{${key}}}`));
+    assert.equal(await page.locator('[data-template-toggle][aria-expanded="false"]').count(), 7,
+      'The five built-in and two existing Additional cards start collapsed.');
+    await openPicker(page.locator('#email-submit-subject'));
+    assert.deepEqual(await tokenKeys(), patronKeys);
     for (const key of ['rejection:template_1', 'rejection:template_3']) {
       assert.equal(await (await row(key)).locator('.template-key').evaluate(input => input.readOnly), true);
     }
@@ -646,13 +745,11 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await added.locator('.template-subject').fill('É & title: ');
     await added.locator('.template-body').fill('First\nselected & last');
     await selectRange(added.locator('.template-body'), 6, 14);
-    assert.deepEqual(await page.locator('#template-placeholder-list button').allTextContents(), ['{{title}}']);
+    assert.deepEqual(await tokenKeys(), ['title']);
     await titleButton().focus();
     report.campaign2InsertionFocus = await page.evaluate(() => ({
-      target: document.getElementById('template-placeholder-target').textContent,
-      status: document.getElementById('template-placeholder-status').textContent,
       active: document.activeElement?.className,
-      allowed: document.querySelector('[data-placeholder-key="title"]')?.getAttribute('aria-disabled')
+      expanded: document.querySelector('.template-placeholder-trigger[aria-expanded="true"]')?.getAttribute('aria-label')
     }));
     await page.keyboard.press('Enter');
     assert.equal(await added.locator('.template-body').inputValue(), 'First\n{{title}} & last',
@@ -674,9 +771,30 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
       assert.deepEqual(saved.stored.templates.find(item => item.id === original.id), original,
         'Creating an additional template must preserve every existing raw row/version.');
     }
+    const systemKeysBefore = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+    const movingSystem = await row('rejection:template_2');
+    await movingSystem.locator('[aria-label="Move up"]').click();
+    const systemKeysAfter = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+    assert.notDeepEqual(systemKeysAfter, systemKeysBefore);
+    const systemOrderPayload = await saveSettings();
+    assert.equal(systemOrderPayload.templates.length, 1, 'A representable System move patches only its moved row.');
+    assert.deepEqual(Object.keys(systemOrderPayload.templates[0]).sort(), ['sortOrder', 'templateKey']);
+    assert.equal(systemOrderPayload.templates[0].templateKey, created.templateKey);
+    const systemOrdered = await read('system');
+    const orderedCreated = systemOrdered.stored.templates.find(item => item.id === created.id);
+    assert.equal(orderedCreated.sortOrder, systemOrderPayload.templates[0].sortOrder);
+    assert.deepEqual({ ...orderedCreated, sortOrder: created.sortOrder, version: created.version }, created,
+      'System ordering preserves exact identity, ownership, enabled and raw text values.');
+    for (const original of saved.stored.templates.filter(item => item.id !== created.id)) {
+      assert.deepEqual(systemOrdered.stored.templates.find(item => item.id === original.id), original,
+        'System ordering preserves every sibling row, raw CRLF/whitespace value and rowversion.');
+    }
+    await reload('system'); await page.locator('#settings-nav-templates').click();
+    assert.deepEqual(await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value)), systemKeysAfter,
+      'The System Move order survives the SQL-backed GET and full reload.');
+    report.systemTemplateOrderingRoundTrip = true;
 
-    // The actual duplicate POST is rejected atomically, including a sibling
-    // sender draft, and authoritative SQL-backed snapshots remain exact.
+    // A new UI row cannot use an existing key to upsert that source record.
     const beforeRejected = await read('system');
     await page.locator('#add-email-template').click();
     const invalid = page.locator('#email-templates-editor [data-template-id=""]');
@@ -684,14 +802,41 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await invalid.locator('.template-subject').fill('Duplicate');
     await invalid.locator('.template-body').fill('Duplicate body');
     await page.locator('#email-template-from-name').fill('Must roll back');
-    const rejectedResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
-      new URL(response.url()).pathname === '/api/asap/staff/settings');
-    await page.locator('#settings-save').click();
-    assert.equal((await rejectedResponse).status(), 400);
-    await page.locator('#settings-message.error').waitFor();
+    await invalid.locator('[data-template-toggle]').click();
+    await page.locator('#settings-nav-workflow').click();
+    const duplicatePosts = [];
+    const trackDuplicatePost = request => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/settings') duplicatePosts.push(request.url());
+    };
+    page.on('request', trackDuplicatePost);
+    try {
+      await page.locator('#settings-save').click();
+      await invalid.locator('[role="alert"]').filter({ hasText: /already used/ }).waitFor();
+      assert.equal(await page.locator('#settings-templates').isVisible(), true);
+      assert.equal(await invalid.locator('.template-key').evaluate(node => node === document.activeElement), true);
+      assert.equal(await page.locator('#email-template-from-name').inputValue(), 'Must roll back', 'Validation preserves the sender draft.');
+      assert.deepEqual(duplicatePosts, [], 'Duplicate UI validation runs before any mutation request.');
+    } finally { page.off('request', trackDuplicatePost); }
     assert.deepEqual(await read('system'), beforeRejected);
+    report.duplicateTemplateKeyBlocked = true;
     await reload('system');
     await page.locator('#settings-nav-templates').click();
+
+    // Keep the backend's repeated-target atomic rollback contract independent
+    // of the UI's new-row protection. A single-key API operation remains an upsert.
+    const rejectedResponse = await page.evaluate(async ({ version, key }) => {
+      const session = await (await fetch('/api/asap/staff/session')).json();
+      const response = await fetch('/api/asap/staff/settings', { method: 'POST', headers: {
+        'Content-Type': 'application/json', 'X-ASAP-Antiforgery': session.antiforgeryToken
+      }, body: JSON.stringify({ orgId: 'system', version, email: { fromName: 'Must roll back' }, templates: [
+        { templateKey: key, subject: 'First repeated target', body: 'First body' },
+        { templateKey: key, subject: 'Second repeated target', body: 'Second body' }
+      ] }) });
+      return { status: response.status, body: await response.text() };
+    }, { version: beforeRejected.version, key: 'rejection:template_1' });
+    assert.equal(rejectedResponse.status, 400, rejectedResponse.body);
+    assert.deepEqual(await read('system'), beforeRejected, 'Repeated HTTP targets roll back source and sibling sender changes atomically.');
+    report.duplicateTemplateHttpRollback = true;
 
     const submission = page.locator('#email-submit-subject');
     const purchase = page.locator('#email-purchase-approved-body');
@@ -702,21 +847,31 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await submission.dispatchEvent('select');
     await submission.dispatchEvent('keyup');
     await titleButton().focus();
+    const staleTitle = await titleButton().elementHandle();
     await page.keyboard.press('Space');
     assert.equal(await submission.inputValue(), submissionBefore, 'Late events cannot reclaim the prior editor.');
     assert.equal(await purchase.inputValue(), `{{title}}${purchaseBefore}`);
     await page.locator('#email-template-from-name').focus();
-    await titleButton().focus();
-    await page.keyboard.press('Enter');
+    await staleTitle.evaluate(button => button.click());
     assert.equal(await purchase.inputValue(), `{{title}}${purchaseBefore}`, 'An unrelated field clears insertion ownership.');
-    await page.locator('#email-hold-subject').focus();
-    assert.equal(await page.locator('#template-placeholder-list button').count(), 0);
-    assert.match(await page.locator('#template-placeholder-guidance').textContent(), /not verified/);
+    await openCard(page.locator('#email-hold-subject'));
+    assert.equal(await page.locator('#email-hold-subject').locator('xpath=..').locator('.template-placeholder-trigger').isDisabled(), true);
+    assert.match(await page.locator('[data-template-key="hold_placed"] .settings-template-preview-note').textContent(), /not verified/);
     await purchase.fill(Array.from({ length: 50 }, (_, index) => `Line ${index} & é`).join('\n'));
     await selectRange(purchase, 0);
+    const purchaseTrigger = purchase.locator('xpath=..').locator('.template-placeholder-trigger');
+    const purchasePopupId = await purchaseTrigger.getAttribute('aria-controls');
+    const draftBeforeScroll = await purchase.inputValue();
     await purchase.evaluate(element => { element.scrollTop = 80; });
+    await page.waitForFunction(id => document.getElementById(id)?.matches(':popover-open') === false, purchasePopupId);
+    assert.equal(await purchaseTrigger.getAttribute('aria-expanded'), 'false', 'Scrolling the field dismisses its anchored picker.');
+    assert.equal(await purchaseTrigger.evaluate(element => element === document.activeElement), true,
+      'Field-scroll dismissal restores the trigger focus.');
+    assert.equal(await purchase.inputValue(), draftBeforeScroll, 'Field scrolling never inserts into the draft.');
+    await openPicker(purchase);
     await titleButton().focus();
     const scrollBefore = await purchase.evaluate(element => ({ page: scrollY, field: element.scrollTop }));
+    assert.equal(scrollBefore.field, 80, 'Reopening the settled picker preserves the field scroll position.');
     await page.keyboard.press('Enter');
     assert.deepEqual(await purchase.evaluate(element => ({ page: scrollY, field: element.scrollTop })), scrollBefore,
       'Insertion restores focus without scrolling the page or multiline editor.');
@@ -769,6 +924,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
 
     // The shortcut shares normal draft consent; cancellation leaves scope and
     // draft untouched, acceptance switches and discards only after consent.
+    await openCard(inherited);
     await inherited.locator('.template-subject').fill('Unsaved library draft');
     await decideConfirmation(page, () => page.locator('#settings-switch-system').click(), dialog => dialog.dismiss());
     assert.equal(await page.locator('#settings-scope').inputValue(), library);
@@ -779,6 +935,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await page.waitForLoadState('networkidle');
     await ready('system');
     await page.locator('#settings-nav-templates').click();
+    await openCard(page.locator('#email-submit-subject'));
     assert.equal(await page.locator('#email-submit-subject').isEditable(), true,
       'Returning from library inheritance must restore System built-in template editability.');
     await (await row('rejection:template_2')).locator('.template-subject').fill('Updated System subject {{title}}');
@@ -811,9 +968,9 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await custom.locator('.template-body').fill(body);
     await custom.locator('.template-body').focus();
     assert.equal(await custom.getAttribute('data-template-kind'), 'custom');
-    assert.equal(await page.locator('#template-placeholder-list button').count(), 0,
+    assert.equal(await custom.locator('.template-placeholder-trigger').first().isDisabled(), true,
       `A library-custom ${key} key cannot claim its built-in sending capabilities.`);
-    assert.match(await page.locator('#template-placeholder-guidance').textContent(), /not verified/);
+    assert.match(await custom.locator('.settings-template-preview-note').textContent(), /not verified/);
     assert.equal(await custom.locator('.template-body').inputValue(), body);
   }
   const rejectionKey = 'REJECTION:campaign2_custom';
@@ -824,8 +981,8 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   await upper.locator('.template-subject').fill('Uppercase rejection {{title}}');
   await upper.locator('.template-body').fill('Upper & ');
   await selectRange(upper.locator('.template-body'), 8);
-  assert.deepEqual(await page.locator('#template-placeholder-list button').allTextContents(), ['{{title}}']);
-  assert.match(await page.locator('#template-placeholder-guidance').textContent(), /including timeouts/);
+  assert.deepEqual(await tokenKeys(), ['title']);
+  assert.match(await upper.locator('.settings-template-preview-note').textContent(), /including timeouts/);
   await titleButton().focus();
   await page.keyboard.press('Enter');
   customBodies.set(rejectionKey, 'Upper & {{title}}');
@@ -850,7 +1007,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   }
   await reload(library);
   await page.locator('#settings-nav-templates').click();
-  const customSaved = await read(library);
+  let customSaved = await read(library);
   for (const original of beforeCustomSave.stored.templates) {
     assert.deepEqual(customSaved.stored.templates.find(item => item.id === original.id), original,
       'Custom template saves preserve every preexisting raw row, sparse field and rowversion.');
@@ -866,12 +1023,73 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     const custom = await row(key);
     assert.equal(await custom.getAttribute('data-template-kind'), 'custom');
     assert.equal(await custom.locator('.template-key').evaluate(input => input.readOnly), true);
-    await custom.locator('.template-body').focus();
-    assert.deepEqual(await page.locator('#template-placeholder-list button').allTextContents(),
-      key === rejectionKey ? ['{{title}}'] : [], 'Saved custom identity cannot borrow built-in capabilities.');
+    if (key === rejectionKey) {
+      await openPicker(custom.locator('.template-body'));
+      assert.deepEqual(await tokenKeys(), ['title']);
+      await page.keyboard.press('Escape');
+    } else {
+      assert.equal(await custom.locator('.template-placeholder-trigger').first().isDisabled(), true,
+        'Saved custom identity cannot borrow built-in capabilities.');
+    }
     assert.equal(await custom.locator('.template-body').inputValue(), body);
   }
   report.campaign2CustomUsageCapabilities = true;
+  // Establish exact raw CRLF text through the existing API. The native textarea
+  // displays LF, but sibling ordering/deletion must never rewrite this record.
+  const rawCustomKey = 'purchase_approved';
+  const rawCustomBody = '  Raw line one\r\nRaw line two {{name}} & é  ';
+  const rawCustomResponse = await page.evaluate(async ({ library, version, key, body }) => {
+    const session = await (await fetch('/api/asap/staff/session')).json();
+    const response = await fetch('/api/asap/staff/settings', { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'X-ASAP-Antiforgery': session.antiforgeryToken
+    }, body: JSON.stringify({ orgId: library, version, templates: [{ templateKey: key, isCustom: true, body }] }) });
+    return { status: response.status, body: await response.text() };
+  }, { library, version: customSaved.version, key: rawCustomKey, body: rawCustomBody });
+  assert.equal(rawCustomResponse.status, 200, rawCustomResponse.body);
+  customSaved = await read(library);
+  assert.equal(customSaved.stored.templates.find(item => item.organizationId === library && item.templateKey === rawCustomKey).body, rawCustomBody);
+  await reload(library); await page.locator('#settings-nav-templates').click();
+  assert.equal(await (await row(rawCustomKey)).locator('.template-body').inputValue(), rawCustomBody.replace(/\r\n/g, '\n'));
+  const libraryOrderBefore = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+  await (await row('rejected')).locator('[aria-label="Move up"]').click();
+  const libraryOrderAfter = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+  assert.notDeepEqual(libraryOrderAfter, libraryOrderBefore);
+  const libraryOrderPayload = await saveSettings();
+  assert.equal(libraryOrderPayload.templates.length, 1, 'A Library move writes only its custom row, without creating lineage overrides.');
+  assert.deepEqual(Object.keys(libraryOrderPayload.templates[0]).sort(), ['isCustom', 'sortOrder', 'templateKey']);
+  assert.equal(libraryOrderPayload.templates[0].isCustom, true);
+  assert.equal(libraryOrderPayload.templates[0].templateKey, 'rejected');
+  const orderedLibrary = await read(library);
+  for (const original of customSaved.stored.templates) {
+    const current = orderedLibrary.stored.templates.find(item => item.id === original.id);
+    if (original.organizationId === library && original.templateKey === 'rejected' && original.isCustom) {
+      assert.equal(current.sortOrder, libraryOrderPayload.templates[0].sortOrder);
+      assert.deepEqual({ ...current, sortOrder: original.sortOrder, version: original.version }, original);
+    } else assert.deepEqual(current, original, 'Library ordering preserves all inherited/custom siblings, raw content and rowversions.');
+  }
+  await reload(library); await page.locator('#settings-nav-templates').click();
+  assert.deepEqual(await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value)), libraryOrderAfter,
+    'Library custom ordering survives the SQL-backed GET and full reload.');
+  customSaved = orderedLibrary;
+  report.customTemplateOrderingRoundTrip = true;
+  const deletedCustom = customSaved.stored.templates.find(item =>
+    item.templateKey === 'rejected' && item.organizationId === library && item.isCustom);
+  await (await row('rejected')).locator('[aria-label="Delete"]').click();
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-template-toggle], #add-email-template')), true);
+  const deletePayload = await saveSettings();
+  assert.deepEqual(deletePayload.templates.find(item => item.templateKey === 'rejected' && item.isCustom),
+    { templateKey: 'rejected', isCustom: true, reset: true }, 'Delete submits the existing custom reset operation.');
+  await reload(library); await page.locator('#settings-nav-templates').click();
+  const afterDelete = await read(library);
+  assert.equal(afterDelete.stored.templates.some(item => item.id === deletedCustom.id), false,
+    'The saved custom template is deleted from the real SQL-backed settings snapshot.');
+  for (const original of customSaved.stored.templates.filter(item => item.id !== deletedCustom.id)) {
+    assert.deepEqual(afterDelete.stored.templates.find(item => item.id === original.id), original,
+      'Deleting a custom template preserves every sibling row, value and rowversion.');
+  }
+  report.customTemplateDeleteRoundTrip = true;
+  assert.equal(afterDelete.stored.templates.find(item => item.organizationId === library && item.templateKey === rawCustomKey).body, rawCustomBody);
+  report.templateRawTextPreserved = true;
 
   const source = customSaved.stored.templates.find(item =>
     item.organizationId === '1' && item.templateKey === 'rejection:template_3');
@@ -990,6 +1208,817 @@ async function runLibraryFormatRuleDrafts(page, args, report, saveSettings, read
   report.formatRuleDrafts = { newCode, newKey, savedKey, roundTrip: true };
 }
 
+async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettings, ready) {
+  const libraryScope = '2';
+  const readSettings = scope => page.evaluate(async scope => {
+    const response = await fetch(`/api/asap/staff/settings?orgId=${encodeURIComponent(scope)}`);
+    if (!response.ok) throw new Error(`Settings GET ${response.status}`);
+    return response.json();
+  }, scope);
+  const readEditor = () => page.evaluate(() => {
+    const enabled = document.getElementById('common-authors-enabled');
+    const override = enabled.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-override-toggle');
+    return {
+      enabled: enabled.checked,
+      enabledOverridden: override ? override.checked : null,
+      label: document.getElementById('common-authors-label').value,
+      help: document.getElementById('common-authors-help').value,
+      message: document.getElementById('common-authors-message').value,
+      creatorsUseSystem: document.getElementById('common-creators-use-system').checked,
+      creators: [...document.querySelectorAll('#common-creators-editor [data-domain-row] input')].map(input => input.value)
+    };
+  });
+  const enabled = page.locator('#common-authors-enabled');
+  const options = page.locator('#common-authors-options');
+  const enabledOverride = page.locator(
+    '[data-setting-section="workflow"][data-setting-key="commonAuthorsEnabled"] .settings-override-toggle');
+  const useSystem = page.locator('#common-creators-use-system');
+  const rows = page.locator('#common-creators-editor [data-domain-row]');
+  const setEnabledByKeyboard = async value => {
+    if (await enabled.isChecked() !== value) {
+      await enabled.focus();
+      await enabled.press('Space');
+    }
+  };
+  const setCreatorRows = async values => {
+    while (await rows.count() > values.length) {
+      await rows.last().locator('.settings-row-actions button[aria-label="Delete"]').click();
+    }
+    while (await rows.count() < values.length) await page.locator('#add-common-creator').click();
+    for (const [index, value] of values.entries()) await rows.nth(index).locator('input').fill(value);
+  };
+  const switchScope = async scope => {
+    const selectedScope = page.locator('#settings-scope');
+    if (await selectedScope.inputValue() !== scope) {
+      if (await page.locator('#settings-save').isEnabled()) {
+        await decideConfirmation(page, () => selectedScope.selectOption(scope), dialog => dialog.accept());
+      } else {
+        await selectedScope.selectOption(scope);
+      }
+      await ready(scope);
+    }
+    await page.locator('#settings-nav-workflow').click();
+    await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+  };
+  const ensureLibraryParentEditable = async () => {
+    if (await enabledOverride.count() && !await enabledOverride.isChecked()) await enabledOverride.check();
+  };
+  const saveIfDirty = async () => {
+    if (await page.locator('#settings-save').isEnabled()) return saveSettings();
+    return null;
+  };
+  const assertOptionsDisabled = async label => {
+    assert.equal(await options.evaluate(node => node.disabled), true, `${label}: the native fieldset is disabled.`);
+    assert.equal(await options.evaluate(node => node.matches(':disabled')), true, `${label}: the fieldset matches :disabled.`);
+    assert.equal(await page.locator('#common-authors-label').isDisabled(), true,
+      `${label}: scalar controls inherit the fieldset disabled state.`);
+    assert.equal(await page.locator('#add-common-creator').isDisabled(), true,
+      `${label}: creator actions inherit the fieldset disabled state.`);
+  };
+  const reloadScope = async scope => {
+    await page.reload({ waitUntil: 'networkidle' });
+    await ready(scope);
+    await page.locator('#settings-nav-workflow').click();
+    await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+  };
+  const restoreSystem = async snapshot => {
+    await switchScope('system');
+    await setEnabledByKeyboard(true);
+    for (const [id, value] of [
+      ['common-authors-label', snapshot.label], ['common-authors-help', snapshot.help],
+      ['common-authors-message', snapshot.message]
+    ]) await page.locator(`#${id}`).fill(value);
+    await setCreatorRows(snapshot.creators);
+    await setEnabledByKeyboard(snapshot.enabled);
+    await saveIfDirty();
+    await reloadScope('system');
+    assert.deepEqual(await readEditor(), snapshot, 'System common creators are restored after the browser journey.');
+  };
+  const restoreLibrary = async snapshot => {
+    await switchScope(libraryScope);
+    await ensureLibraryParentEditable();
+    await setEnabledByKeyboard(true);
+    if (snapshot.creatorsUseSystem) {
+      if (!await useSystem.isChecked()) await useSystem.check();
+    } else {
+      if (await useSystem.isChecked()) await useSystem.uncheck();
+      await setCreatorRows(snapshot.creators);
+    }
+    if (snapshot.enabledOverridden) {
+      if (!await enabledOverride.isChecked()) await enabledOverride.check();
+      await setEnabledByKeyboard(snapshot.enabled);
+    } else if (await enabledOverride.count() && await enabledOverride.isChecked()) {
+      await enabledOverride.uncheck();
+    }
+    await saveIfDirty();
+    await reloadScope(libraryScope);
+    assert.deepEqual(await readEditor(), snapshot, 'Library common creators and their list ownership are restored.');
+  };
+
+  await switchScope(libraryScope);
+  const librarySnapshot = await readEditor();
+  await switchScope('system');
+  const systemSnapshot = await readEditor();
+  await switchScope(libraryScope);
+  try {
+    await switchScope('system');
+    const systemInitially = await readEditor();
+    assert.equal(await options.evaluate(node => node.hidden), !systemInitially.enabled);
+    if (!systemInitially.enabled) await setEnabledByKeyboard(true);
+    assert.equal(await options.isVisible(), true, 'Enabling Show common creators reveals the complete options region.');
+    const systemDraft = {
+      label: 'Collapsed feature label browser draft',
+      help: 'Collapsed feature help browser draft',
+      message: 'Collapsed feature message browser draft'
+    };
+    await page.locator('#common-authors-label').fill(systemDraft.label);
+    await page.locator('#common-authors-help').fill(systemDraft.help);
+    await page.locator('#common-authors-message').fill(systemDraft.message);
+    const systemCreator = `Collapsed feature creator ${args.identity.staffId}`;
+    await setCreatorRows([...systemInitially.creators, systemCreator]);
+    await rows.last().locator('input').focus();
+    await enabled.evaluate(node => {
+      node.checked = false;
+      node.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    assert.equal(await options.isHidden(), true);
+    await assertOptionsDisabled('System hidden draft');
+    assert.equal(await enabled.evaluate(node => document.activeElement === node), true,
+      'Hiding focused editable options returns focus to Show common creators.');
+    const retainedAdd = page.locator('#add-common-creator');
+    const retainedDelete = rows.last().locator('.settings-row-actions button[aria-label="Delete"]');
+    const expectedSystemRows = [...systemInitially.creators, systemCreator];
+    await retainedAdd.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await retainedDelete.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    assert.deepEqual(await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value)), expectedSystemRows,
+      'Retained hidden Add/Delete handlers cannot mutate the invisible System list.');
+    const systemOffPayload = await saveSettings();
+    assert.equal(systemOffPayload.workflow.commonAuthorsEnabled, false);
+    assert.equal(systemOffPayload.workflow.commonAuthorsLabel, systemDraft.label);
+    assert.equal(systemOffPayload.workflow.commonAuthorsHelp, systemDraft.help);
+    assert.equal(systemOffPayload.workflow.commonAuthorsMessage, systemDraft.message);
+    assert.deepEqual(systemOffPayload.workflow.commonAuthorsList, expectedSystemRows);
+    await reloadScope('system');
+    assert.equal(await enabled.isChecked(), false);
+    assert.equal(await options.isHidden(), true);
+    await assertOptionsDisabled('System reloaded off state');
+    assert.deepEqual(await page.locator('#common-creators-editor [data-domain-row] input').evaluateAll(inputs => inputs.map(input => input.value)), expectedSystemRows,
+      'The hidden System scalar and list drafts survive accepted save and full reload.');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-system-mobile-off');
+    await setEnabledByKeyboard(true);
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-system-mobile-on');
+    const geometry = await page.evaluate(() => {
+      const region = document.getElementById('common-authors-options').getBoundingClientRect();
+      return {
+        viewport: innerWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+        region: { left: region.left, right: region.right, width: region.width },
+        controls: [...document.querySelectorAll('#common-authors-options input, #common-authors-options textarea, #common-authors-options button')]
+          .filter(control => control.getBoundingClientRect().width > 0)
+          .map(control => {
+            const bounds = control.getBoundingClientRect();
+            return { id: control.id || control.getAttribute('aria-label') || control.textContent.trim(), left: bounds.left, right: bounds.right };
+          })
+      };
+    });
+    assert.ok(geometry.region.width > 0 && geometry.region.left >= -1 && geometry.region.right <= geometry.viewport + 1,
+      `The mobile options region fits its viewport: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.scrollWidth <= geometry.viewport);
+    assert.ok(geometry.controls.every(control => control.left >= geometry.region.left - 1 && control.right <= geometry.region.right + 1),
+      `Every mobile creator control fits its region: ${JSON.stringify(geometry)}`);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await restoreSystem(systemSnapshot);
+    report.systemCommonAuthorsRoundTrip = true;
+
+    await switchScope(libraryScope);
+    const libraryInitially = await readEditor();
+    const systemConfig = await readSettings('system');
+    const systemEnabled = systemConfig.stored?.configuredSystem?.workflow?.commonAuthorsEnabled === true;
+    if (!libraryInitially.enabledOverridden) await enabledOverride.check();
+    await setEnabledByKeyboard(true);
+    assert.equal(await options.isVisible(), true);
+    if (await useSystem.isChecked()) await useSystem.uncheck();
+    const libraryCreator = `Collapsed Library creator ${args.identity.staffId}`;
+    await page.locator('#add-common-creator').click();
+    await rows.last().locator('input').fill(libraryCreator);
+    const libraryDraftRows = await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value));
+    await rows.last().locator('input').focus();
+    await enabled.evaluate(node => {
+      node.checked = false;
+      node.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    assert.equal(await options.isHidden(), true);
+    await assertOptionsDisabled('Library hidden draft');
+    assert.equal(await enabled.evaluate(node => document.activeElement === node), true);
+    const useSystemBefore = await useSystem.isChecked();
+    await useSystem.evaluate(node => {
+      node.checked = !node.checked;
+      node.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    assert.equal(await useSystem.isChecked(), useSystemBefore,
+      'A hidden Use system list event cannot change Library list ownership.');
+    const libraryOffPayload = await saveSettings();
+    assert.equal(libraryOffPayload.workflow.commonAuthorsEnabled, false);
+    assert.deepEqual(libraryOffPayload.workflow.commonAuthorsList, libraryDraftRows);
+    await reloadScope(libraryScope);
+    assert.equal(await enabled.isChecked(), false);
+    assert.equal(await enabledOverride.isChecked(), true);
+    assert.equal(await options.isHidden(), true);
+    assert.equal(await useSystem.isChecked(), false);
+    assert.deepEqual(await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value)), libraryDraftRows,
+      'The hidden Library creator list and its override survive accepted save and reload.');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-mobile-off');
+
+    await enabledOverride.uncheck();
+    assert.equal(await enabled.isChecked(), systemEnabled,
+      'Resetting the Library feature override displays the authoritative System flag.');
+    assert.equal(await enabled.isDisabled(), true);
+    assert.equal(await options.isHidden(), !systemEnabled,
+      'Inherited true reveals options, while inherited false keeps them collapsed.');
+    await enabledOverride.check();
+    assert.equal(await enabled.isChecked(), false, 'Re-enabling Override restores its local false value.');
+    assert.equal(await options.isHidden(), true);
+    await setEnabledByKeyboard(true);
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-mobile-on');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await restoreLibrary(librarySnapshot);
+    report.libraryCommonAuthorsRoundTrip = true;
+  } finally {
+    await restoreSystem(systemSnapshot);
+    await restoreLibrary(librarySnapshot);
+  }
+}
+
+async function runSuggestionLimitPlaceholder(page, axeSource, args, report, saveSettings, ready, postedPayloads) {
+  const message = page.locator('#suggestion-limit-message');
+  const trigger = page.locator('#suggestion-limit-placeholder-trigger');
+  const picker = page.locator('#suggestion-limit-placeholder-picker');
+  const option = page.getByRole('button', {
+    name: 'Insert Next available submission date/time — {{next_available_date}}', exact: true
+  });
+  const retainedOption = picker.locator('[data-suggestion-placeholder="next_available_date"]');
+  const override = page.locator(
+    '[data-setting-section="workflow"][data-setting-key="suggestionLimitMessage"] .settings-override-toggle');
+  const scope = page.locator('#settings-scope');
+  let librarySnapshot = null;
+  const readEditor = async () => ({
+    value: await message.inputValue(),
+    overridden: await override.count() ? await override.isChecked() : null
+  });
+  const switchScope = async target => {
+    if (await scope.inputValue() !== target) {
+      if (await page.locator('#settings-save').isEnabled()) {
+        await decideConfirmation(page, () => scope.selectOption(target), dialog => dialog.accept());
+      } else {
+        await scope.selectOption(target);
+      }
+      await ready(target);
+    }
+    await page.locator('#settings-nav-workflow').click();
+    await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+  };
+  const reloadScope = async target => {
+    await page.reload({ waitUntil: 'networkidle' });
+    await ready(target);
+    await page.locator('#settings-nav-workflow').click();
+    await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+  };
+  const saveMessage = async value => {
+    await message.fill(value);
+    const payload = await saveSettings();
+    assert.equal(payload.workflow.suggestionLimitMessage, value,
+      'The current scoped Workflow message is submitted through the ordinary settings payload.');
+    await reloadScope(await scope.inputValue());
+    assert.equal(await message.inputValue(), value, 'The accepted Workflow message survives a full reload.');
+  };
+  const trackInputEvents = () => message.evaluate(node => {
+    window.__suggestionLimitInputTypes = [];
+    node.addEventListener('input', event => window.__suggestionLimitInputTypes.push(event.inputType));
+  });
+
+  await switchScope('system');
+  const systemSnapshot = await readEditor();
+  await switchScope('2');
+  librarySnapshot = await readEditor();
+  await switchScope('system');
+  const postsBeforeOpen = postedPayloads.length;
+  let testError = null;
+  try {
+    assert.equal(await page.locator('#settings-save').isDisabled(), true,
+      'The accepted System message starts with a clean save bar.');
+    await trigger.focus();
+    await trigger.press('Enter');
+    await option.waitFor({ state: 'visible' });
+    assert.equal(await trigger.getAttribute('aria-expanded'), 'true');
+    assert.equal(await picker.locator('[data-suggestion-placeholder]').count(), 1);
+    assert.equal(await page.locator('#settings-save').isDisabled(), true,
+      'Opening the placeholder picker does not dirty the Workflow setting.');
+    assert.equal(postedPayloads.length, postsBeforeOpen, 'Opening the picker does not submit a POST.');
+    await page.keyboard.press('Escape');
+    assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
+    assert.equal(await trigger.evaluate(node => document.activeElement === node), true,
+      'Escape closes the picker and returns focus to its trigger.');
+
+    await trackInputEvents();
+    const systemSource = `Prefix selected suffix ${args.identity.staffId}`;
+    const inserted = `Prefix {{next_available_date}} suffix ${args.identity.staffId}`;
+    assert.notEqual(inserted, systemSnapshot.value, 'The System round trip uses a distinct message draft.');
+    await message.fill(systemSource);
+    await message.evaluate(node => node.setSelectionRange(7, 15));
+    await trigger.focus();
+    await trigger.press('Enter');
+    await option.waitFor({ state: 'visible' });
+    await option.press('Enter');
+    assert.equal(await message.inputValue(), inserted,
+      'Keyboard insertion replaces only the remembered selection and preserves adjacent text.');
+    assert.equal(await message.evaluate(node => document.activeElement === node), true,
+      'Insertion returns focus to the message editor.');
+    const adjacentText = ' adjacent';
+    const adjacentSuffix = ` suffix ${args.identity.staffId}`;
+    const adjacentPrefix = inserted.slice(0, -adjacentSuffix.length);
+    const withAdjacentText = `${adjacentPrefix}${adjacentText}${adjacentSuffix}`;
+    const readRemainingAdjacentText = async () => {
+      const current = await message.inputValue();
+      assert.ok(current.startsWith(adjacentPrefix) && current.endsWith(adjacentSuffix),
+        `Native history preserves the inserted token and surrounding text: ${current}`);
+      const remaining = current.slice(adjacentPrefix.length, current.length - adjacentSuffix.length);
+      assert.ok(adjacentText.startsWith(remaining),
+        `Native history retains only a leading prefix of adjacent typing: ${current}`);
+      return remaining;
+    };
+    await page.keyboard.type(adjacentText);
+    assert.equal(await message.inputValue(), withAdjacentText);
+    let remainingAdjacent = await readRemainingAdjacentText();
+    let undoSteps = 0;
+    while (remainingAdjacent.length > 0) {
+      assert.ok(undoSteps < adjacentText.length, 'Native Undo converges within the adjacent typing length.');
+      await page.keyboard.press('Control+Z');
+      const previousAdjacent = await readRemainingAdjacentText();
+      assert.ok(previousAdjacent.length < remainingAdjacent.length,
+        'Each native Undo removes adjacent text without removing or altering the token.');
+      remainingAdjacent = previousAdjacent;
+      undoSteps++;
+    }
+    assert.equal(await message.inputValue(), inserted,
+      'Native Undo removes all adjacent typing before undoing the placeholder insertion.');
+    await page.keyboard.press('Control+Z');
+    assert.equal(await message.inputValue(), systemSource, 'Native Undo restores the replaced selection.');
+    assert.deepEqual(await message.evaluate(node => [node.selectionStart, node.selectionEnd]), [7, 15],
+      'Undo restores the exact selection replaced by the token.');
+    await page.keyboard.press('Control+Shift+Z');
+    assert.equal(await message.inputValue(), inserted, 'Native Redo restores the token and surrounding text.');
+    remainingAdjacent = await readRemainingAdjacentText();
+    let redoSteps = 0;
+    while (remainingAdjacent.length < adjacentText.length) {
+      assert.ok(redoSteps < adjacentText.length, 'Native Redo converges within the adjacent typing length.');
+      await page.keyboard.press('Control+Shift+Z');
+      const nextAdjacent = await readRemainingAdjacentText();
+      assert.ok(nextAdjacent.length > remainingAdjacent.length,
+        'Each native Redo restores adjacent text without altering the token.');
+      remainingAdjacent = nextAdjacent;
+      redoSteps++;
+    }
+    assert.equal(await message.inputValue(), withAdjacentText,
+      'Native Redo restores all adjacent typing after restoring the placeholder insertion.');
+    const historyInputTypes = await message.evaluate(() => window.__suggestionLimitInputTypes);
+    assert.ok(historyInputTypes.includes('historyUndo') && historyInputTypes.includes('historyRedo'),
+      `Native history events were observed: ${JSON.stringify(historyInputTypes)}`);
+    assert.equal(postedPayloads.length, postsBeforeOpen, 'Editing, Undo and Redo do not autosave.');
+    await saveMessage(inserted);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => new Promise(resolve => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
+    const mobileTriggerBeforeOpen = await trigger.evaluate(node => ({
+      disabled: node.disabled,
+      ariaExpanded: node.getAttribute('aria-expanded'),
+      activeElement: document.activeElement?.id || document.activeElement?.localName || null,
+      viewport: { width: innerWidth, height: innerHeight }
+    }));
+    assert.equal(mobileTriggerBeforeOpen.viewport.width, 390,
+      `The mobile viewport is ready before opening the picker: ${JSON.stringify(mobileTriggerBeforeOpen)}`);
+    assert.equal(mobileTriggerBeforeOpen.disabled, false,
+      `The placeholder trigger remains enabled after the mobile resize: ${JSON.stringify(mobileTriggerBeforeOpen)}`);
+    await trigger.focus();
+    await trigger.press('Enter');
+    try {
+      await page.waitForFunction(() => {
+        const triggerNode = document.getElementById('suggestion-limit-placeholder-trigger');
+        const popupNode = document.getElementById('suggestion-limit-placeholder-picker');
+        return triggerNode?.getAttribute('aria-expanded') === 'true' &&
+          (popupNode?.matches(':popover-open') || popupNode?.hidden === false);
+      }, undefined, { timeout: 5000 });
+    } catch (error) {
+      const mobileOpenDiagnostic = await page.evaluate(() => {
+        const triggerNode = document.getElementById('suggestion-limit-placeholder-trigger');
+        const popupNode = document.getElementById('suggestion-limit-placeholder-picker');
+        return {
+          triggerDisabled: triggerNode?.disabled ?? null,
+          ariaExpanded: triggerNode?.getAttribute('aria-expanded') ?? null,
+          popoverOpen: popupNode?.matches(':popover-open') ?? false,
+          popupHidden: popupNode?.hidden ?? null,
+          activeElement: document.activeElement?.id || document.activeElement?.localName || null,
+          viewport: { width: innerWidth, height: innerHeight }
+        };
+      });
+      throw new Error(`The mobile placeholder popup did not open: ${JSON.stringify(mobileOpenDiagnostic)}`, { cause: error });
+    }
+    await option.waitFor({ state: 'visible' });
+    const popupGeometry = await page.evaluate(() => {
+      const picker = document.getElementById('suggestion-limit-placeholder-picker').getBoundingClientRect();
+      const button = document.querySelector('#suggestion-limit-placeholder-picker [data-suggestion-placeholder]').getBoundingClientRect();
+      return { width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
+        picker: { left: picker.left, right: picker.right, width: picker.width },
+        option: { left: button.left, right: button.right, width: button.width } };
+    });
+    assert.ok(popupGeometry.picker.width > 0 && popupGeometry.picker.left >= -1 &&
+      popupGeometry.picker.right <= popupGeometry.width + 1,
+    `The mobile picker fits inside the viewport: ${JSON.stringify(popupGeometry)}`);
+    assert.ok(popupGeometry.option.left >= popupGeometry.picker.left - 1 &&
+      popupGeometry.option.right <= popupGeometry.picker.right + 1,
+    `The mobile option fits inside the picker: ${JSON.stringify(popupGeometry)}`);
+    assert.ok(popupGeometry.scrollWidth <= popupGeometry.width);
+    const assertMobilePickerOpen = async phase => {
+      const state = await page.evaluate(() => {
+        const triggerNode = document.getElementById('suggestion-limit-placeholder-trigger');
+        const popupNode = document.getElementById('suggestion-limit-placeholder-picker');
+        const optionNode = popupNode?.querySelector('[data-suggestion-placeholder]');
+        const bounds = optionNode?.getBoundingClientRect();
+        return {
+          ariaExpanded: triggerNode?.getAttribute('aria-expanded') ?? null,
+          popoverOpen: popupNode?.matches(':popover-open') ?? false,
+          popupHidden: popupNode?.hidden ?? null,
+          optionVisible: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
+          viewport: { width: innerWidth, height: innerHeight }
+        };
+      });
+      assert.equal(state.ariaExpanded, 'true', `The mobile picker trigger remains expanded ${phase}: ${JSON.stringify(state)}`);
+      assert.equal(state.popoverOpen, true, `The native mobile popover remains open ${phase}: ${JSON.stringify(state)}`);
+      assert.equal(state.optionVisible, true, `The mobile option remains rendered ${phase}: ${JSON.stringify(state)}`);
+    };
+    report.suggestionLimitPlaceholderGeometry = popupGeometry;
+    await assertMobilePickerOpen('before screenshot capture');
+    await scan(page, axeSource, args.artifactRoot, report, 'suggestion-placeholder-mobile', false, false);
+    await assertMobilePickerOpen('after screenshot capture');
+    await page.keyboard.press('Escape');
+    assert.equal(await trigger.evaluate(node => document.activeElement === node), true);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    if ((await message.inputValue()) !== systemSnapshot.value) await saveMessage(systemSnapshot.value);
+    else await reloadScope('system');
+
+    await switchScope('2');
+    assert.deepEqual(await readEditor(), librarySnapshot,
+      'The accepted Library message still reflects the initial System fallback before Library editing.');
+    await trackInputEvents();
+    assert.equal(await override.count(), 1);
+    if (!await override.isChecked()) await override.check();
+    const librarySource = `Library selected suffix ${args.identity.staffId}`;
+    const libraryInserted = `Library {{next_available_date}} suffix ${args.identity.staffId}`;
+    assert.notEqual(libraryInserted, librarySnapshot.value, 'The Library round trip uses a distinct message draft.');
+    await message.fill(librarySource);
+    await message.evaluate(node => node.setSelectionRange(8, 16));
+    await trigger.focus();
+    await trigger.press('Enter');
+    await option.waitFor({ state: 'visible' });
+    await option.press('Enter');
+    assert.equal(await message.inputValue(), libraryInserted,
+      'The Library picker inserts the token into the local override message.');
+    const libraryPayload = await saveSettings();
+    assert.equal(libraryPayload.workflow.suggestionLimitMessage, libraryInserted,
+      'The Library token is saved through the existing Workflow override payload.');
+    await reloadScope('2');
+    assert.equal(await override.isChecked(), true);
+    assert.equal(await message.inputValue(), libraryInserted,
+      'The explicit Library message survives an accepted save and reload.');
+    if (librarySnapshot.overridden) {
+      await message.fill(librarySnapshot.value);
+      const restoreLibraryValue = await saveSettings();
+      assert.equal(restoreLibraryValue.workflow.suggestionLimitMessage, librarySnapshot.value);
+    } else {
+      await override.uncheck();
+      const resetLibraryOverride = await saveSettings();
+      assert.equal(resetLibraryOverride.workflow.suggestionLimitMessage, null,
+        'Restoring an initially inherited message removes only the temporary Library override.');
+    }
+    await reloadScope('2');
+    assert.deepEqual(await readEditor(), librarySnapshot,
+      'The Library message and Override ownership are restored after the insertion round trip.');
+
+    await trackInputEvents();
+    if (!await override.isChecked()) await override.check();
+    await message.fill('Library override draft for stale picker');
+    await message.evaluate(node => node.setSelectionRange(8, 20));
+    await trigger.focus();
+    await trigger.press('Enter');
+    await option.waitFor({ state: 'visible' });
+    await override.evaluate(node => {
+      node.checked = false;
+      node.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    assert.equal(await trigger.isDisabled(), true, 'The inherited Library editor disables its picker.');
+    const overrideDraft = await message.inputValue();
+    const inputEventsBeforeOverrideClick = await message.evaluate(node => window.__suggestionLimitInputTypes.length);
+    await retainedOption.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    assert.equal(await message.inputValue(), overrideDraft, 'A stale Override-value option cannot insert text.');
+    assert.equal(await message.evaluate(node => window.__suggestionLimitInputTypes.length), inputEventsBeforeOverrideClick,
+      'Rejecting an Override-stale action dispatches no editor input.');
+    await reloadScope('2');
+    assert.deepEqual(await readEditor(), librarySnapshot,
+      'The Library message and Override ownership are restored after the stale-value check.');
+
+    await trackInputEvents();
+    if (!await override.isChecked()) await override.check();
+    await message.fill('Library scope draft before switch');
+    await message.evaluate(node => node.setSelectionRange(0, 7));
+    await trigger.focus();
+    await trigger.press('Enter');
+    await option.waitFor({ state: 'visible' });
+    const inputEventsBeforeScopeSwitch = await message.evaluate(node => window.__suggestionLimitInputTypes.length);
+    await switchScope('system');
+    const systemValueAfterSwitch = await message.inputValue();
+    const inputEventsAfterScopeSwitch = await message.evaluate(node => window.__suggestionLimitInputTypes.length);
+    assert.equal(systemValueAfterSwitch, systemSnapshot.value,
+      'The accepted System context replaces the pending Library message.');
+    await retainedOption.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    assert.equal(await message.inputValue(), systemSnapshot.value,
+      'A retained Library option cannot insert into the accepted System context.');
+    assert.equal(await message.evaluate(node => window.__suggestionLimitInputTypes.length), inputEventsAfterScopeSwitch,
+      'A scope-retired picker dispatches no editor input.');
+    assert.ok(inputEventsAfterScopeSwitch >= inputEventsBeforeScopeSwitch);
+    await switchScope('2');
+    assert.deepEqual(await readEditor(), librarySnapshot,
+      'The Library scope switch leaves its persisted message and ownership unchanged.');
+    report.suggestionLimitPlaceholderRoundTrip = true;
+  } catch (error) {
+    testError = error;
+  }
+
+  let cleanupError = null;
+  try {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await switchScope('system');
+    if ((await message.inputValue()) !== systemSnapshot.value) {
+      await message.fill(systemSnapshot.value);
+    }
+    if (await page.locator('#settings-save').isEnabled()) {
+      const payload = await saveSettings();
+      assert.equal(payload.workflow.suggestionLimitMessage, systemSnapshot.value,
+        'Only a dirty, accepted System replacement is saved during restoration.');
+    }
+    await reloadScope('system');
+    assert.equal(await message.inputValue(), systemSnapshot.value,
+      'The accepted System message is restored after the placeholder journey.');
+    await switchScope('2');
+    const currentLibrary = await readEditor();
+    if (librarySnapshot.overridden) {
+      if (!currentLibrary.overridden) await override.check();
+      if (currentLibrary.value !== librarySnapshot.value) await message.fill(librarySnapshot.value);
+    } else if (currentLibrary.overridden) {
+      await override.uncheck();
+    }
+    if (await page.locator('#settings-save').isEnabled()) {
+      const payload = await saveSettings();
+      assert.equal(payload.workflow.suggestionLimitMessage,
+        librarySnapshot.overridden ? librarySnapshot.value : null);
+    }
+    await reloadScope('2');
+    if (librarySnapshot) {
+      assert.deepEqual(await readEditor(), librarySnapshot, 'The final Library state matches its accepted snapshot.');
+    }
+  } catch (error) {
+    cleanupError = error;
+  }
+  if (testError && cleanupError) {
+    throw new AggregateError([testError, cleanupError],
+      'The suggestion placeholder journey failed and its settings snapshots could not both be restored.');
+  }
+  if (testError) throw testError;
+  if (cleanupError) throw cleanupError;
+}
+
+async function runLibraryParticipation(page, axeSource, args, report, ready, postedPayloads) {
+  const writes = [];
+  const track = request => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname.startsWith('/api/asap/staff/')) writes.push(request);
+  };
+  page.on('request', track);
+  const readCatalog = () => page.evaluate(async () => {
+    const response = await fetch('/api/asap/staff/organizations');
+    if (!response.ok) throw new Error(`Organization catalog GET ${response.status}`);
+    const body = await response.json(); return body.data;
+  });
+  const visibleCatalog = () => page.locator('#settings-organization-catalog').evaluate(catalog => ({
+    libraries: [...catalog.querySelectorAll('#settings-organizations-list [data-organization-id]')]
+      .map(row => ({ id: Number(row.dataset.organizationId), name: row.querySelector('.settings-organization-name').textContent,
+        status: row.querySelector('.status-badge').textContent, actions: row.querySelectorAll('button').length })),
+    groups: [...catalog.querySelectorAll('[data-library-organization-id]')].map(group => ({
+      id: group.dataset.libraryOrganizationId, name: group.querySelector('h4').textContent,
+      children: [...group.querySelectorAll('[data-organization-id]')].map(row => Number(row.dataset.organizationId))
+    })),
+    recordIds: [...catalog.querySelectorAll('[data-organization-id]')].map(row => Number(row.dataset.organizationId)),
+    referenceActions: catalog.querySelectorAll('#settings-reference-organizations button').length
+  }));
+  const settled = () => page.waitForFunction(() => {
+    const form = document.getElementById('settings-form'); return !form.inert && !form.hasAttribute('aria-busy');
+  });
+  const action = async (id, active, expectedStatus = 200, version = null) => {
+    const current = (await readCatalog()).find(row => row.id === id);
+    const path = `/api/asap/staff/organizations/${id}/${active ? 'activate' : 'deactivate'}`;
+    const responsePromise = page.waitForResponse(candidate => candidate.request().method() === 'POST' &&
+      new URL(candidate.url()).pathname === path);
+    await decideConfirmation(page, () => page.locator(`#settings-organizations-list [data-organization-id="${id}"] button`).click(),
+      async dialog => {
+        assert.match(dialog.message(), /participation/);
+        await dialog.accept();
+      });
+    const response = await responsePromise;
+    assert.equal(response.status(), expectedStatus, await response.text());
+    assert.deepEqual(response.request().postDataJSON(), { version: version || current.version });
+    await settled();
+    assert.equal(await page.locator(`#settings-organizations-list [data-organization-id="${id}"] button`)
+      .evaluate(button => button === document.activeElement), true,
+    `The updated library ${id} participation action retains focus after HTTP ${expectedStatus}.`);
+    return response;
+  };
+  const label = row => `${row.name}${row.abbreviation ? ` (${row.abbreviation})` : ''}`;
+  const isLibrary = row => row.id > 1 && row.organizationCodeId === 2;
+  const order = (left, right) => left.localeCompare(right, undefined, { sensitivity: 'base', numeric: true });
+  const catalogOrder = (left, right) => order(label(left), label(right)) || left.id - right.id;
+  const ownedLibraries = new Set([2, 3, 4, 5, 6, 7]);
+  const ownedReferences = new Set([1, 101, ...Array.from({ length: 11 }, (_, index) => 81001 + index)]);
+  const assertCatalog = (displayed, accepted) => {
+    const byId = new Map(accepted.map(row => [row.id, row]));
+    assert.deepEqual([...displayed.recordIds].sort((a, b) => a - b), accepted.map(row => row.id).sort((a, b) => a - b),
+      'The Polaris catalog renders every SQL record exactly once.');
+    assert.deepEqual(displayed.libraries, accepted.filter(isLibrary).sort(catalogOrder).map(row => ({
+      id: row.id, name: label(row), status: row.isActive ? 'Active' : 'Inactive', actions: 1
+    })));
+    assert.equal(displayed.referenceActions, 0);
+    assert.equal(new Set(displayed.groups.map(group => group.id)).size, displayed.groups.length);
+    assert.equal(displayed.groups.at(-1).id, 'other', 'Unassociated records appear in the final group.');
+    assert.equal(displayed.groups.at(-1).name, 'Other / unassociated organizations');
+    const associated = displayed.groups.filter(group => group.id !== 'other');
+    assert.deepEqual(associated.map(group => group.id), [...associated]
+      .sort((left, right) => catalogOrder(byId.get(Number(left.id)), byId.get(Number(right.id))))
+      .map(group => group.id), 'All parent-library groups are alphabetical, including records retained by earlier journeys.');
+    for (const group of displayed.groups) {
+      if (group.id !== 'other') {
+        const library = byId.get(Number(group.id));
+        assert.equal(isLibrary(library), true);
+        assert.equal(group.name, label(library));
+      }
+      assert.ok(group.children.every(id => !isLibrary(byId.get(id))), 'Reference groups contain only reference records.');
+      assert.deepEqual(group.children, [...group.children].sort((left, right) => catalogOrder(byId.get(left), byId.get(right))),
+        `Every record in ${group.name} is alphabetical.`);
+    }
+  };
+  const assertOwnedGroups = (displayed, expected) => {
+    for (const [libraryId, ids] of expected) {
+      assert.deepEqual(displayed.groups.find(group => group.id === libraryId)?.children.filter(id => ownedReferences.has(id)), ids,
+        `Issue 433 fixture records retain their exact membership and ordering in group ${libraryId}.`);
+    }
+  };
+  const assertSummary = async accepted => {
+    const libraries = accepted.filter(isLibrary), active = libraries.filter(row => row.isActive).length;
+    assert.equal(await page.locator('#organizations-status-message').textContent(),
+      `${active} of ${libraries.length} synchronized libraries active in ASAP; ${libraries.length - active} inactive.`);
+  };
+  try {
+    await page.locator('#settings-nav-start').click();
+    assert.equal(await page.locator('#enabled-libraries-checkbox-container').count(), 0);
+    assert.equal(await page.locator('#manage-library-participation').evaluate(button =>
+      button.closest('fieldset').querySelectorAll('input').length), 0);
+    assert.equal(await page.locator('#settings-staff #settings-organizations-list').count(), 0);
+    assert.equal(await page.locator('#settings-organizations-list').count(), 1);
+    await assertSummary(await readCatalog());
+    const systemSummaryWrites = writes.length;
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await scan(page, axeSource, args.artifactRoot, report, 'participation-summary-system-desktop');
+    assert.equal(writes.length, systemSummaryWrites, 'Capturing the system summary does not submit any changes.');
+    assert.equal(await page.locator('#settings-save').isDisabled(), true);
+    const originalUrl = await page.locator('#system-staff-url').inputValue();
+    const draftUrl = 'https://draft.example.org/staff/participation';
+    await page.locator('#system-staff-url').fill(draftUrl);
+    const beforeWrites = writes.length, beforeSettingsPosts = postedPayloads.length;
+    await page.getByRole('button', { name: 'Manage library participation', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await page.locator('#settings-polaris').isVisible(), true);
+    assert.equal(await page.locator('#settings-organization-catalog').evaluate(node => node === document.activeElement), true);
+    assert.equal(await page.locator('#system-staff-url').inputValue(), draftUrl);
+    assert.equal(await page.locator('#settings-save').isEnabled(), true);
+    assert.equal(await page.locator('#settings-scope').inputValue(), 'system');
+    assert.equal(await page.locator('#confirmation-dialog[open]').count(), 0);
+    assert.equal(writes.length, beforeWrites);
+    assert.equal(postedPayloads.length, beforeSettingsPosts);
+    await page.locator('#settings-nav-start').click();
+    await page.locator('#system-staff-url').fill(originalUrl);
+    assert.equal(await page.locator('#settings-save').isDisabled(), true);
+    report.participationNavigationPreservedDraft = true;
+
+    await page.locator('#settings-nav-polaris').click();
+    const catalog = await readCatalog(), initial = await visibleCatalog();
+    assertCatalog(initial, catalog);
+    assertOwnedGroups(initial, [
+      ['5', [81002, 81003, 81001]], ['6', [81005, 81004]], ['7', [81006]], ['2', [101]],
+      ['other', [81008, 81009, 81011, 81007, 81010, 1]]
+    ]);
+    assert.deepEqual(['5', '6', '7'].map(id => initial.groups.find(group => group.id === id).name),
+      ['Alexandria (ALEX)', 'Bexley (BEX)', 'Columbus (COL)']);
+    for (const id of [5, 6, 7]) assert.equal(initial.libraries.find(row => row.id === id).status, 'Inactive');
+    assert.equal(await page.locator('[data-organization-id="81003"] .settings-organization-parent').textContent(),
+      'Within: Alexandria services (SERV)');
+    const descriptions = await page.locator('#settings-organization-catalog').textContent();
+    assert.match(descriptions, /ASAP only; it does not activate or deactivate the organization in Polaris/);
+    assert.match(descriptions, /not necessarily available pickup locations/);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await scan(page, axeSource, args.artifactRoot, report, 'organizations-system-desktop');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scan(page, axeSource, args.artifactRoot, report, 'organizations-system-mobile');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    report.organizationParentGrouping = true;
+
+    const failSync = route => route.fulfill({ status: 502, contentType: 'application/json',
+      body: JSON.stringify({ code: 'polaris_unavailable', message: 'Deterministic organization provider unavailable.' }) });
+    await page.route('**/api/asap/staff/organizations/sync', failSync);
+    await page.locator('#btn-sync-organizations').click();
+    await page.locator('#organizations-sync-result').filter({ hasText: /outcome is uncertain/ }).waitFor();
+    assert.deepEqual(await visibleCatalog(), initial, 'A failed sync preserves the accepted catalog while review is required.');
+    await page.unroute('**/api/asap/staff/organizations/sync', failSync);
+    await page.locator('#settings-refresh').click(); await settled();
+    const syncResponse = page.waitForResponse(candidate => candidate.request().method() === 'POST' &&
+      new URL(candidate.url()).pathname === '/api/asap/staff/organizations/sync');
+    await page.locator('#btn-sync-organizations').click();
+    assert.equal((await syncResponse).status(), 200);
+    await page.locator('#organizations-sync-result').filter({ hasText: /^Synchronized 19 organizations\.$/ }).waitFor();
+    await settled();
+    const synchronized = await visibleCatalog();
+    const synchronizedCatalog = await readCatalog();
+    assertCatalog(synchronized, synchronizedCatalog);
+    assertOwnedGroups(synchronized, [
+      ['5', [81001]], ['6', [81005, 81004]], ['7', [81002, 81006, 81003]], ['2', [101]],
+      ['other', [81008, 81009, 81011, 81007, 81010, 1]]
+    ]);
+    assert.deepEqual([...synchronized.recordIds].sort((a, b) => a - b), [...initial.recordIds].sort((a, b) => a - b));
+    assert.ok(synchronizedCatalog.filter(row => ownedLibraries.has(row.id)).every(row => !row.isActive));
+    await assertSummary(synchronizedCatalog);
+    report.organizationSyncRegrouped = true;
+
+    const canceledCount = writes.length;
+    await decideConfirmation(page, () => page.locator('[data-organization-id="3"] button').click(), dialog => dialog.dismiss());
+    await settled();
+    assert.equal(writes.length, canceledCount, 'Cancel does not send a participation POST.');
+    assert.equal(await page.locator('[data-organization-id="3"] button').evaluate(button => button === document.activeElement), true,
+      'Cancel returns focus to the unchanged participation action.');
+    await action(2, true);
+    const stale = (await readCatalog()).find(row => row.id === 3);
+    const external = await page.evaluate(async ({ id, version }) => {
+      const session = await (await fetch('/api/asap/staff/session')).json();
+      const response = await fetch(`/api/asap/staff/organizations/${id}/activate`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'X-ASAP-Antiforgery': session.antiforgeryToken },
+        body: JSON.stringify({ version })
+      });
+      return { status: response.status, body: await response.json() };
+    }, { id: 3, version: stale.version });
+    assert.equal(external.status, 200);
+    const conflict = await action(3, true, 409, stale.version);
+    assert.equal((await conflict.json()).code, 'stale_version');
+    assert.equal(await page.locator('[data-organization-id="3"] .status-badge').textContent(), 'Active');
+    await action(3, false);
+    assert.equal(await page.locator('[data-organization-id="3"] .status-badge').textContent(), 'Inactive');
+    await action(3, true);
+    const current = await readCatalog();
+    assert.deepEqual(current.filter(row => ownedLibraries.has(row.id) && row.isActive).map(row => row.id).sort(), [2, 3]);
+    assert.deepEqual(current.filter(row => isLibrary(row) && !ownedLibraries.has(row.id)).map(row => [row.id, row.isActive]),
+      catalog.filter(row => isLibrary(row) && !ownedLibraries.has(row.id)).map(row => [row.id, row.isActive]),
+      'Participation actions preserve other legitimate libraries in the shared catalog.');
+    await assertSummary(current);
+    assert.equal(postedPayloads.length, beforeSettingsPosts, 'Participation changes never submit the global Settings form.');
+    report.systemParticipationRoundTrip = true;
+
+    await page.locator('#settings-scope').selectOption('2'); await ready('2');
+    await page.locator('#settings-nav-start').click();
+    assert.equal(await page.locator('#manage-library-participation').isDisabled(), true);
+    await page.locator('#manage-library-participation').evaluate(button => button.click());
+    assert.equal(await page.locator('#settings-scope').inputValue(), '2');
+    assert.equal(await page.locator('#settings-start').isVisible(), true);
+    await assertSummary(await readCatalog());
+    const librarySummaryWrites = writes.length;
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scan(page, axeSource, args.artifactRoot, report, 'participation-summary-library-mobile');
+    assert.equal(writes.length, librarySummaryWrites, 'Capturing the library summary does not submit any changes.');
+    assert.equal(await page.locator('#settings-save').isDisabled(), true);
+    await page.locator('#settings-nav-polaris').click();
+    for (const button of await page.locator('#settings-organizations-list button').all()) assert.equal(await button.isDisabled(), true);
+    await scan(page, axeSource, args.artifactRoot, report, 'organizations-library-mobile');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.locator('#settings-scope').selectOption('system'); await ready('system');
+    report.participationLibraryControlsDisabled = true;
+  } finally { page.removeListener('request', track); }
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
   if (!['full', 'system-format-rule', 'library-rule-partial-snapshot', 'library-rule-missing-row', 'library-format-rule-drafts', 'library-metadata', 'campaign2', 'campaign2-library-admin'].includes(args.mode)) {
@@ -1013,11 +2042,16 @@ async function main() {
   const pageErrors = [];
   const report = { states: [], externalRequests: 0, pageErrors, postedEditorPayload: false,
     systemParticipationRoundTrip: false, unrelatedSystemSavePreservedParticipation: false,
+    participationNavigationPreservedDraft: false, organizationParentGrouping: false,
+    organizationSyncRegrouped: false, participationLibraryControlsDisabled: false,
     systemPatronCodesRoundTrip: false, systemUnrelatedSavePreservedPatronCodes: false,
     libraryPatronCodesRoundTrip: false, libraryUnrelatedSavePreservedPatronCodes: false,
     libraryAutoClaimRuleBigintRoundTrip: false, libraryUnrelatedSavePreservedAutoClaimRules: false,
     libraryInitialScalarSavePreservedAutoClaimRules: false,
     libraryEmptyPatronCodeReplacementRoundTrip: false, libraryPatronCodeResetRoundTrip: false,
+    systemTimeoutDependenciesRoundTrip: false, libraryTimeoutDependenciesRoundTrip: false,
+    systemCommonAuthorsRoundTrip: false, libraryCommonAuthorsRoundTrip: false,
+    suggestionLimitPlaceholderRoundTrip: false,
     wildcardOriginNormalized: false, systemFormatRuleRoundTrip: false, systemFormatRulePost: null,
     systemFormatRulePostCount: 0,
     libraryFormatRuleWitness: {
@@ -1053,6 +2087,7 @@ async function main() {
       return route.abort('blockedbyclient');
     });
     const page = await context.newPage();
+    report.recordSpacing = settingsSpacingRecorder(page, args.artifactRoot);
     page.on('pageerror', error => pageErrors.push(error.message)); rejectNativeDialogs(page, pageErrors);
     page.on('request', request => {
       if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/settings') {
@@ -1111,12 +2146,14 @@ async function main() {
     };
 
     const waitForSettingsReady = async expectedScope => {
-      await page.waitForFunction(() => {
+      await page.waitForFunction(expectedScope => {
         const form = document.getElementById('settings-form');
         const message = document.getElementById('settings-message');
-        return Boolean(form && !form.hidden) ||
+        const scope = document.getElementById('settings-scope');
+        const acceptedScope = Boolean(form && !form.hidden && scope?.value === expectedScope);
+        return acceptedScope ||
           Boolean(message?.classList.contains('error') && message.textContent.trim());
-      });
+      }, expectedScope);
       const message = page.locator('#settings-message');
       if (await message.evaluate(element => element.classList.contains('error'))) {
         throw new Error(`Settings load failed: ${await message.textContent()}`);
@@ -1189,24 +2226,241 @@ async function main() {
       }
       return;
     }
-    const participationRows = page.locator('#enabled-libraries-checkbox-container input[type="checkbox"]');
-    const participationIds = await participationRows.evaluateAll(inputs => inputs.map(input => input.value));
-    assert.ok(participationIds.includes('2') && participationIds.includes('3') && participationIds.includes('4'),
-      'The system participation editor must expose the seeded active, new, and inactive libraries.');
-    for (const checkbox of await participationRows.all()) {
-      const id = await checkbox.inputValue();
-      await checkbox.setChecked(id === '2' || id === '3');
+    const systemCredentialFlags = await page.evaluate(async () => {
+      const response = await fetch('/api/asap/staff/settings?orgId=system');
+      if (!response.ok) throw new Error(`Settings credential flags GET ${response.status}`);
+      const data = await response.json();
+      const configured = data.stored?.configuredSystem || {};
+      return {
+        apiKey: configured.polaris?.hasApiKey === true,
+        adminPassword: configured.polaris?.hasAdminPassword === true,
+        postmarkToken: configured.email?.hasPostmarkToken === true
+      };
+    });
+    await page.locator('#settings-nav-polaris').click();
+    for (const [id, saved] of [
+      ['polaris-api-key', systemCredentialFlags.apiKey],
+      ['polaris-admin-pass', systemCredentialFlags.adminPassword]
+    ]) {
+      const input = page.locator(`#${id}`);
+      assert.equal(await input.inputValue(), '', `${id}: the stored secret is never placed in the input value`);
+      assert.equal(await input.getAttribute('placeholder') || '', saved ? '********' : '',
+        `${id}: the fixed mask follows only the accepted saved-credential flag`);
+      await input.focus(); await input.blur();
     }
-    const participationPayload = await saveSettings();
-    assert.deepEqual([...participationPayload.systemSettings.enabledLibraryOrgIds].sort((left, right) => left - right), [2, 3],
-      'The browser must submit the exact numeric native library identities, independently of visible-name order.');
+    assert.equal(await page.locator('#settings-save').isDisabled(), true,
+      'Credential focus and blur do not create a settings draft.');
+    assert.equal(await page.locator('#polaris-api-key-status').textContent(), systemCredentialFlags.apiKey
+      ? 'API key saved. Leave blank to keep the current key; enter a new key to replace it.' : 'No API key saved.');
+    assert.equal(await page.locator('#polaris-admin-pass-status').textContent(), systemCredentialFlags.adminPassword
+      ? 'System staff password saved. Leave blank to keep the current password; enter a new password to replace it.'
+      : 'No system staff password saved.');
+
+    await page.locator('#settings-nav-smtp').click();
+    const postmarkInput = page.locator('#email-postmark-token');
+    const clearPostmark = page.locator('#email-clear-postmark-token');
+    const postmarkStatus = page.locator('#email-token-status');
+    assert.equal(await postmarkInput.inputValue(), '', 'The stored Postmark token is never placed in the input value.');
+    assert.equal(await postmarkInput.getAttribute('placeholder') || '', systemCredentialFlags.postmarkToken ? '********' : '',
+      'The Postmark mask follows only the accepted saved-token flag.');
+    assert.equal(await postmarkInput.getAttribute('aria-describedby'), 'email-token-status');
+    assert.equal(await postmarkStatus.getAttribute('role'), 'status');
+    assert.equal(await postmarkStatus.getAttribute('aria-live'), 'polite');
+    assert.equal(await postmarkStatus.textContent(), systemCredentialFlags.postmarkToken
+      ? 'A system Postmark token is stored. Leave blank to keep it; enter a new token to replace it.'
+      : 'No system Postmark token is stored.');
+    await postmarkInput.focus(); await postmarkInput.blur();
+    assert.equal(await page.locator('#settings-save').isDisabled(), true,
+      'Postmark focus and blur do not create a settings draft.');
+    await clearPostmark.check();
+    assert.equal(await postmarkInput.getAttribute('placeholder') || '', '', 'Selecting clear hides the retain-current mask.');
+    assert.equal(await postmarkStatus.textContent(), systemCredentialFlags.postmarkToken
+      ? 'Postmark token removal is pending. Save settings to remove the stored token.'
+      : 'Postmark token clear is selected. No token is currently stored; saving keeps it unconfigured.');
+    if (!systemCredentialFlags.postmarkToken) {
+      await clearPostmark.uncheck();
+      await postmarkInput.fill('unsaved-postmark-draft');
+      await clearPostmark.check();
+      assert.equal(await postmarkInput.inputValue(), '', 'Selecting clear discards a first unsaved replacement draft.');
+      assert.equal(await postmarkStatus.textContent(),
+        'Postmark token clear is selected. No token is currently stored; saving keeps it unconfigured.');
+    }
+    await clearPostmark.uncheck();
+    assert.equal(await postmarkInput.getAttribute('placeholder') || '', systemCredentialFlags.postmarkToken ? '********' : '');
+    assert.equal(await postmarkStatus.textContent(), systemCredentialFlags.postmarkToken
+      ? 'A system Postmark token is stored. Leave blank to keep it; enter a new token to replace it.'
+      : 'No system Postmark token is stored.');
+    assert.equal(await page.locator('#settings-save').isDisabled(), true,
+      'Canceling clear restores the accepted presentation without saving.');
+    assert.equal(postedPayloads.length, 0, 'Placeholder and clear-preview checks send no settings POST.');
+
+    const timeoutFieldDefinitions = [
+      { key: 'outstandingTimeoutEnabled', id: 'outstanding-timeout-enabled', kind: 'checkbox' },
+      { key: 'outstandingTimeoutDays', id: 'outstanding-timeout-days', kind: 'number' },
+      { key: 'outstandingTimeoutSendEmail', id: 'outstanding-timeout-send-email', kind: 'checkbox' },
+      { key: 'outstandingTimeoutRejectionTemplateId', id: 'outstanding-timeout-rejection-template-id', kind: 'select' },
+      { key: 'holdPickupTimeoutEnabled', id: 'hold-pickup-timeout-enabled', kind: 'checkbox' },
+      { key: 'holdPickupTimeoutDays', id: 'hold-pickup-timeout-days', kind: 'number' },
+      { key: 'pendingHoldTimeoutEnabled', id: 'pending-hold-timeout-enabled', kind: 'checkbox' },
+      { key: 'pendingHoldTimeoutDays', id: 'pending-hold-timeout-days', kind: 'number' },
+      { key: 'additionalCopyTimeoutEnabled', id: 'additional-copy-timeout-enabled', kind: 'checkbox' },
+      { key: 'additionalCopyTimeoutDays', id: 'additional-copy-timeout-days', kind: 'number' }
+    ];
+    const timeoutParentIds = [
+      'outstanding-timeout-enabled', 'hold-pickup-timeout-enabled',
+      'pending-hold-timeout-enabled', 'additional-copy-timeout-enabled'
+    ];
+    const timeoutSnapshot = async () => page.evaluate(definitions => Object.fromEntries(definitions.map(({ key, id, kind }) => {
+      const control = document.getElementById(id);
+      return [key, kind === 'checkbox' ? control.checked : control.value];
+    })), timeoutFieldDefinitions);
+    const setTimeoutSnapshot = async values => {
+      for (const id of timeoutParentIds) await page.locator(`#${id}`).check();
+      await page.locator('#outstanding-timeout-send-email').check();
+      for (const { key, id, kind } of timeoutFieldDefinitions) {
+        if (kind === 'checkbox') continue;
+        const control = page.locator(`#${id}`);
+        const value = values[key] ?? '';
+        if (kind === 'select') await control.selectOption(String(value));
+        else await control.fill(String(value));
+      }
+      await page.locator('#outstanding-timeout-send-email').setChecked(Boolean(values.outstandingTimeoutSendEmail));
+      for (const { key, id } of timeoutFieldDefinitions.filter(field => timeoutParentIds.includes(field.id))) {
+        await page.locator(`#${id}`).setChecked(Boolean(values[key]));
+      }
+    };
+    const systemTimeoutSnapshot = await timeoutSnapshot();
+    await page.locator('#settings-nav-workflow').click();
+    const testTemplateId = await page.locator('#outstanding-timeout-rejection-template-id option')
+      .evaluateAll(options => options.find(option => option.textContent.trim() === 'Timeout dependency browser template')?.value || '');
+    assert.notEqual(testTemplateId, '', 'The SQL fixture must seed a selectable rejection template for timeout retention.');
+    const testTimeouts = {
+      outstandingTimeoutEnabled: true,
+      outstandingTimeoutDays: '43',
+      outstandingTimeoutSendEmail: true,
+      outstandingTimeoutRejectionTemplateId: testTemplateId,
+      holdPickupTimeoutEnabled: true,
+      holdPickupTimeoutDays: '9',
+      pendingHoldTimeoutEnabled: true,
+      pendingHoldTimeoutDays: '17',
+      additionalCopyTimeoutEnabled: true,
+      additionalCopyTimeoutDays: '24'
+    };
+    await setTimeoutSnapshot(testTimeouts);
+    const configuredTimeoutPayload = await saveSettings();
+    for (const { key, kind } of timeoutFieldDefinitions) {
+      const expected = kind === 'checkbox' ? testTimeouts[key] : kind === 'number'
+        ? Number(testTimeouts[key]) : testTimeouts[key] || null;
+      assert.equal(configuredTimeoutPayload.workflow[key], expected, `${key} test value was submitted.`);
+    }
+    assert.equal(await page.getByRole('group', { name: 'Auto-reject unreviewed suggestions' }).count(), 1);
+    assert.equal(await page.getByRole('group', { name: 'Send auto-rejection email' }).count(), 1);
+    const outstandingDaysInput = page.locator('#outstanding-timeout-days');
+    const outstandingEmailInput = page.locator('#outstanding-timeout-send-email');
+    const rejectionTemplateInput = page.locator('#outstanding-timeout-rejection-template-id');
+    const holdDaysInput = page.locator('#hold-pickup-timeout-days');
+    const pendingDaysInput = page.locator('#pending-hold-timeout-days');
+    const additionalDaysInput = page.locator('#additional-copy-timeout-days');
+    const keyboardToggle = async locator => { await locator.focus(); await locator.press('Space'); };
+    await keyboardToggle(page.locator('#outstanding-timeout-enabled'));
+    assert.equal(await page.locator('#outstanding-timeout-enabled').isChecked(), false);
+    assert.equal(await outstandingDaysInput.isDisabled(), true);
+    assert.equal(await outstandingEmailInput.isDisabled(), true);
+    assert.equal(await rejectionTemplateInput.isDisabled(), true);
+    assert.equal(await outstandingDaysInput.inputValue(), '43');
+    assert.equal(await outstandingEmailInput.isChecked(), true);
+    assert.equal(await rejectionTemplateInput.inputValue(), testTemplateId);
+    await keyboardToggle(page.locator('#outstanding-timeout-enabled'));
+    assert.equal(await outstandingDaysInput.isDisabled(), false);
+    assert.equal(await outstandingEmailInput.isDisabled(), false);
+    await keyboardToggle(outstandingEmailInput);
+    assert.equal(await rejectionTemplateInput.isDisabled(), true);
+    assert.equal(await rejectionTemplateInput.inputValue(), testTemplateId);
+    const emailOffTimeoutPayload = await saveSettings();
+    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutEnabled, true);
+    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutSendEmail, false);
+    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, testTemplateId,
+      'Saving with only the email option off retains the nonblank template choice.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('system');
-    for (const id of ['2', '3', '4']) {
-      assert.equal(await page.locator(`#enabled-libraries-checkbox-container input[value="${id}"]`).isChecked(), id !== '4',
-        `Library ${id} participation did not round-trip from SQL.`);
+    await page.locator('#settings-nav-workflow').click();
+    assert.equal(await page.locator('#outstanding-timeout-enabled').isChecked(), true);
+    assert.equal(await outstandingDaysInput.isDisabled(), false,
+      'Days stay enabled while the main rule is on, independent of the email option.');
+    assert.equal(await outstandingEmailInput.isChecked(), false);
+    assert.equal(await outstandingEmailInput.isDisabled(), false);
+    assert.equal(await rejectionTemplateInput.inputValue(), testTemplateId,
+      'The nonblank template selection survives an accepted save and full page reload.');
+    assert.equal(await rejectionTemplateInput.isDisabled(), true,
+      'The template remains disabled while its email option is off.');
+    await keyboardToggle(outstandingEmailInput);
+    assert.equal(await rejectionTemplateInput.isDisabled(), false);
+    for (const [parentId, daysInput, expected] of [
+      ['hold-pickup-timeout-enabled', holdDaysInput, '9'],
+      ['pending-hold-timeout-enabled', pendingDaysInput, '17'],
+      ['additional-copy-timeout-enabled', additionalDaysInput, '24']
+    ]) {
+      await keyboardToggle(page.locator(`#${parentId}`));
+      assert.equal(await daysInput.isDisabled(), true, `${parentId} disables its days input.`);
+      assert.equal(await daysInput.inputValue(), expected, `${parentId} retains its disabled days value.`);
+      await keyboardToggle(page.locator(`#${parentId}`));
+      assert.equal(await daysInput.isDisabled(), false, `${parentId} re-enables its days input.`);
     }
-    report.systemParticipationRoundTrip = true;
+    for (const id of timeoutParentIds) await page.locator(`#${id}`).uncheck();
+    assert.equal(await outstandingDaysInput.isDisabled(), true);
+    assert.equal(await outstandingEmailInput.isDisabled(), true);
+    assert.equal(await rejectionTemplateInput.isDisabled(), true);
+    assert.equal(await holdDaysInput.isDisabled(), true);
+    assert.equal(await pendingDaysInput.isDisabled(), true);
+    assert.equal(await additionalDaysInput.isDisabled(), true);
+    const disabledTimeoutPayload = await saveSettings();
+    for (const [key, expected] of Object.entries({
+      outstandingTimeoutEnabled: false,
+      outstandingTimeoutDays: 43,
+      outstandingTimeoutSendEmail: true,
+      outstandingTimeoutRejectionTemplateId: testTemplateId || null,
+      holdPickupTimeoutEnabled: false,
+      holdPickupTimeoutDays: 9,
+      pendingHoldTimeoutEnabled: false,
+      pendingHoldTimeoutDays: 17,
+      additionalCopyTimeoutEnabled: false,
+      additionalCopyTimeoutDays: 24
+    })) assert.equal(disabledTimeoutPayload.workflow[key], expected, `${key} remains in the save payload while disabled.`);
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForSettingsReady('system');
+    await page.locator('#settings-nav-workflow').click();
+    for (const [id, value] of [
+      ['outstanding-timeout-days', '43'], ['outstanding-timeout-send-email', true],
+      ['outstanding-timeout-rejection-template-id', testTemplateId], ['hold-pickup-timeout-days', '9'],
+      ['pending-hold-timeout-days', '17'], ['additional-copy-timeout-days', '24']
+    ]) {
+      const input = page.locator(`#${id}`);
+      assert.equal(id === 'outstanding-timeout-send-email' ? await input.isChecked() : await input.inputValue(), value,
+        `${id} round-trips while its parent is off.`);
+    }
+    assert.equal(await outstandingDaysInput.isDisabled(), true);
+    assert.equal(await outstandingEmailInput.isDisabled(), true);
+    assert.equal(await rejectionTemplateInput.isDisabled(), true);
+    assert.equal(await holdDaysInput.isDisabled(), true);
+    assert.equal(await pendingDaysInput.isDisabled(), true);
+    assert.equal(await additionalDaysInput.isDisabled(), true);
+    report.systemTimeoutDependenciesRoundTrip = true;
+    const preservedSystemTimeouts = {
+      ...systemTimeoutSnapshot,
+      outstandingTimeoutEnabled: true,
+      holdPickupTimeoutEnabled: true,
+      pendingHoldTimeoutEnabled: true,
+      additionalCopyTimeoutEnabled: true
+    };
+    await setTimeoutSnapshot(preservedSystemTimeouts);
+    await saveSettings();
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await scan(page, axeSource, args.artifactRoot, report, 'system-desktop', true);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scan(page, axeSource, args.artifactRoot, report, 'system-mobile', true);
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    await runLibraryParticipation(page, axeSource, args, report, waitForSettingsReady, postedPayloads);
 
     await page.locator('#settings-nav-workflow').click();
     const systemCodeRows = page.locator('#patron-codes-editor [data-code-id]');
@@ -1234,11 +2488,18 @@ async function main() {
       'An unrelated system edit must omit the participation replacement key.');
     assert.equal(Object.hasOwn(unrelatedPayload.workflow, 'allowedPatronCodeIds'), false,
       'An unrelated system edit must omit the patron-code replacement key.');
+    assert.equal(Object.hasOwn(unrelatedPayload.polaris, 'apiKey'), false);
+    assert.equal(Object.hasOwn(unrelatedPayload.polaris, 'adminPassword'), false);
+    assert.equal(Object.hasOwn(unrelatedPayload.email, 'postmarkToken'), false);
+    assert.equal(Object.hasOwn(unrelatedPayload.email, 'clearPostmarkToken'), false);
+    assert.equal(JSON.stringify(unrelatedPayload).includes('********'), false,
+      'Unrelated system saves never transmit the visual credential masks.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('system');
     assert.equal(await page.locator('#patron-embed-allowed-origins').inputValue(), 'https://*.domain.example');
     for (const id of ['2', '3', '4']) {
-      assert.equal(await page.locator(`#enabled-libraries-checkbox-container input[value="${id}"]`).isChecked(), id !== '4',
+      assert.equal(await page.locator(`#settings-organizations-list [data-organization-id="${id}"] .status-badge`).textContent(),
+        id === '4' ? 'Inactive' : 'Active',
         `The unrelated save changed library ${id} participation.`);
     }
     await page.locator('#settings-nav-workflow').click();
@@ -1476,9 +2737,173 @@ async function main() {
       .evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2', '3']);
     report.libraryPatronCodeResetRoundTrip = true;
 
-    await scan(page, axeSource, args.artifactRoot, report, 'desktop');
+    const libraryTimeoutSnapshot = await page.evaluate(definitions => Object.fromEntries(definitions.map(({ key, id, kind }) => {
+      const control = document.getElementById(id);
+      const override = control.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-override-toggle');
+      return [key, { overridden: override?.checked === true, value: kind === 'checkbox' ? control.checked : control.value }];
+    })), timeoutFieldDefinitions);
+    const libraryTimeoutOverride = key => page.locator(
+      `[data-setting-section="workflow"][data-setting-key="${key}"] .settings-override-toggle`);
+    const libraryTimeoutControl = key => page.locator(`#${timeoutFieldDefinitions.find(field => field.key === key).id}`);
+    const setLibraryTimeoutOverride = async (key, checked) => {
+      const toggle = libraryTimeoutOverride(key);
+      if (await toggle.isChecked() !== checked) await toggle.setChecked(checked);
+    };
+    const setLibraryTimeoutValue = async (key, value) => {
+      const definition = timeoutFieldDefinitions.find(field => field.key === key);
+      const control = libraryTimeoutControl(key);
+      const normalized = value ?? '';
+      if (definition.kind === 'checkbox') await control.setChecked(Boolean(normalized));
+      else if (definition.kind === 'select') await control.selectOption(String(normalized));
+      else await control.fill(String(normalized));
+    };
+    assert.equal(await page.getByRole('group', { name: 'Auto-reject unreviewed suggestions' }).count(), 1);
+    assert.equal(await page.getByRole('group', { name: 'Send auto-rejection email' }).count(), 1);
+    await setLibraryTimeoutOverride('outstandingTimeoutEnabled', true);
+    await setLibraryTimeoutValue('outstandingTimeoutEnabled', true);
+    await setLibraryTimeoutOverride('outstandingTimeoutDays', true);
+    await setLibraryTimeoutValue('outstandingTimeoutDays', '47');
+    await setLibraryTimeoutOverride('outstandingTimeoutSendEmail', true);
+    await setLibraryTimeoutValue('outstandingTimeoutSendEmail', true);
+    await setLibraryTimeoutOverride('outstandingTimeoutRejectionTemplateId', true);
+    await setLibraryTimeoutValue('outstandingTimeoutRejectionTemplateId', testTemplateId);
+    await setLibraryTimeoutValue('outstandingTimeoutEnabled', false);
+    await setLibraryTimeoutOverride('holdPickupTimeoutEnabled', false);
+    await setLibraryTimeoutOverride('holdPickupTimeoutDays', false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), false);
+    assert.equal(await libraryTimeoutOverride('outstandingTimeoutEnabled').isChecked(), true,
+      'The test begins from an explicit false Library override over a true System parent.');
+    assert.equal(await libraryTimeoutControl('holdPickupTimeoutEnabled').isChecked(), true);
+    assert.equal(await libraryTimeoutOverride('holdPickupTimeoutDays').isChecked(), false);
+    assert.equal(await libraryTimeoutControl('holdPickupTimeoutDays').isDisabled(), true,
+      'An inherited true parent cannot unlock a dependent without its own Library override.');
+    const explicitLibraryTimeoutPayload = await saveSettings();
+    assert.equal(explicitLibraryTimeoutPayload.workflow.outstandingTimeoutEnabled, false);
+    assert.equal(explicitLibraryTimeoutPayload.workflow.outstandingTimeoutDays, 47);
+    assert.equal(explicitLibraryTimeoutPayload.workflow.outstandingTimeoutSendEmail, true);
+    assert.equal(explicitLibraryTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, testTemplateId);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isChecked(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').inputValue(), testTemplateId);
+
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true,
+      'Removing the explicit false override displays the inherited true System parent.');
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').isDisabled(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isDisabled(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').isDisabled(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').inputValue(), testTemplateId);
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').check();
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), false,
+      'Re-enabling Override restores the saved Library draft value.');
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
+    const resetLibraryTimeoutPayload = await saveSettings();
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutEnabled, null,
+      'The explicit false parent reset is saved as inheritance.');
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutDays, 47,
+      'Resetting the parent keeps the independently owned days override.');
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutSendEmail, true);
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, testTemplateId,
+      'Resetting the parent keeps the independently owned nonblank template choice.');
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForSettingsReady('2');
+    await page.locator('#settings-nav-workflow').click();
+    assert.equal(await libraryTimeoutOverride('outstandingTimeoutEnabled').isChecked(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').isDisabled(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isChecked(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isDisabled(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').inputValue(), testTemplateId);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').isDisabled(), false);
+
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').check();
+    await libraryTimeoutControl('outstandingTimeoutEnabled').uncheck();
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
+    await page.locator('#settings-scope').selectOption('system');
+    await waitForSettingsReady('system');
+    await page.locator('#settings-scope').selectOption('2');
+    await waitForSettingsReady('2');
+    await page.locator('#settings-nav-workflow').click();
+    assert.equal(await libraryTimeoutOverride('outstandingTimeoutEnabled').isChecked(), false);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').check();
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true,
+      'Scope population retires the previous unsaved timeout override draft.');
+    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await scan(page, axeSource, args.artifactRoot, report, 'library-desktop', true);
     await page.setViewportSize({ width: 390, height: 844 });
-    await scan(page, axeSource, args.artifactRoot, report, 'mobile');
+    await scan(page, axeSource, args.artifactRoot, report, 'library-mobile', true);
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    for (const key of timeoutParentIds.map(id => timeoutFieldDefinitions.find(field => field.id === id).key)) {
+      await setLibraryTimeoutOverride(key, true);
+      await setLibraryTimeoutValue(key, true);
+    }
+    await setLibraryTimeoutOverride('outstandingTimeoutSendEmail', true);
+    await setLibraryTimeoutValue('outstandingTimeoutSendEmail', true);
+    for (const field of timeoutFieldDefinitions.filter(item =>
+      !timeoutParentIds.includes(item.id) && item.key !== 'outstandingTimeoutSendEmail')) {
+      await setLibraryTimeoutOverride(field.key, libraryTimeoutSnapshot[field.key].overridden);
+      if (libraryTimeoutSnapshot[field.key].overridden) {
+        await setLibraryTimeoutValue(field.key, libraryTimeoutSnapshot[field.key].value);
+      }
+    }
+    await setLibraryTimeoutOverride('outstandingTimeoutSendEmail', libraryTimeoutSnapshot.outstandingTimeoutSendEmail.overridden);
+    if (libraryTimeoutSnapshot.outstandingTimeoutSendEmail.overridden) {
+      await setLibraryTimeoutValue('outstandingTimeoutSendEmail', libraryTimeoutSnapshot.outstandingTimeoutSendEmail.value);
+    }
+    for (const id of timeoutParentIds) {
+      const key = timeoutFieldDefinitions.find(field => field.id === id).key;
+      if (libraryTimeoutSnapshot[key].overridden) {
+        await setLibraryTimeoutValue(key, libraryTimeoutSnapshot[key].value);
+      } else {
+        await setLibraryTimeoutOverride(key, false);
+      }
+    }
+    if (!await page.locator('#settings-save').isDisabled()) await saveSettings();
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForSettingsReady('2');
+    await page.locator('#settings-nav-workflow').click();
+    const libraryTimeoutAfterRestore = await page.evaluate(definitions => Object.fromEntries(definitions.map(({ key, id, kind }) => {
+      const control = document.getElementById(id);
+      const override = control.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-override-toggle');
+      return [key, { overridden: override?.checked === true, value: kind === 'checkbox' ? control.checked : control.value }];
+    })), timeoutFieldDefinitions);
+    for (const { key } of timeoutFieldDefinitions) {
+      assert.equal(libraryTimeoutAfterRestore[key].overridden, libraryTimeoutSnapshot[key].overridden,
+        `${key} Library override ownership is restored after the browser journey.`);
+      if (libraryTimeoutSnapshot[key].overridden) {
+        assert.equal(libraryTimeoutAfterRestore[key].value, libraryTimeoutSnapshot[key].value,
+          `${key} Library value is restored after the browser journey.`);
+      }
+    }
+
+    await page.locator('#settings-scope').selectOption('system');
+    await waitForSettingsReady('system');
+    await page.locator('#settings-nav-workflow').click();
+    await setTimeoutSnapshot(systemTimeoutSnapshot);
+    if (!await page.locator('#settings-save').isDisabled()) await saveSettings();
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForSettingsReady('system');
+    await page.locator('#settings-scope').selectOption('2');
+    await waitForSettingsReady('2');
+    await page.locator('#settings-nav-workflow').click();
+    report.libraryTimeoutDependenciesRoundTrip = true;
+    await runCommonAuthorsOptions(page, axeSource, args, report, saveSettings, waitForSettingsReady);
+    await runSuggestionLimitPlaceholder(page, axeSource, args, report, saveSettings, waitForSettingsReady, postedPayloads);
+
     await page.close();
     await context.close();
   } finally {
@@ -1501,6 +2926,11 @@ async function main() {
   assert.equal(report.libraryInitialScalarSavePreservedAutoClaimRules, true);
   assert.equal(report.libraryEmptyPatronCodeReplacementRoundTrip, true);
   assert.equal(report.libraryPatronCodeResetRoundTrip, true);
+  assert.equal(report.systemTimeoutDependenciesRoundTrip, true);
+  assert.equal(report.libraryTimeoutDependenciesRoundTrip, true);
+  assert.equal(report.systemCommonAuthorsRoundTrip, true);
+  assert.equal(report.libraryCommonAuthorsRoundTrip, true);
+  assert.equal(report.suggestionLimitPlaceholderRoundTrip, true);
   assert.equal(report.wildcardOriginNormalized, true);
   console.log('Settings editor browser journey passed.');
 }

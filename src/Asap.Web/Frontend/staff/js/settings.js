@@ -6,6 +6,7 @@ import { actorKey } from './session-identity.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
 import { createEmailTemplatePlaceholders } from './email-template-placeholders.js';
 import { createPatronTextPlaceholders } from './patron-text-placeholders.js';
+import { insertPlaceholderText } from './placeholder-editing.js';
 import { createEmailTestController } from './email-test.js';
 import { confirmAction, controlSnapshot } from './confirmation.js';
 import { byDisplayLabel } from './display-order.js';
@@ -33,6 +34,13 @@ const WORKFLOW_FIELDS = [
   ['patronCodeEligibilityEnabled', 'patron-code-eligibility-enabled', 'boolean'],
   ['patronCodeEligibilityMessage', 'patron-code-eligibility-message', 'text']
 ];
+
+const TIMEOUT_OVERRIDE_KEYS = new Set([
+  'outstandingTimeoutEnabled', 'outstandingTimeoutDays', 'outstandingTimeoutSendEmail',
+  'outstandingTimeoutRejectionTemplateId', 'holdPickupTimeoutEnabled', 'holdPickupTimeoutDays',
+  'pendingHoldTimeoutEnabled', 'pendingHoldTimeoutDays', 'additionalCopyTimeoutEnabled',
+  'additionalCopyTimeoutDays'
+]);
 
 const PATRON_FIELDS = [
   ['pageTitle', 'patron-page-title'],
@@ -269,10 +277,17 @@ export function createSettingsController({
   onEmailTestOperations = () => {}, onEmailTestSubmitted = () => {}, onStaffAuditHistory = () => {}
 }) {
   const dom = {
-    contextSummary: root.querySelector('#settings-context-summary'),
     message: root.querySelector('#settings-message'),
+    commonAuthorsEnabled: root.querySelector('#common-authors-enabled'),
+    commonAuthorsOptions: root.querySelector('#common-authors-options'),
     scopeField: root.querySelector('#settings-scope-field'),
     scope: root.querySelector('#settings-scope'),
+    systemStaffUrl: root.querySelector('#system-staff-url'),
+    useCurrentStaffUrl: root.querySelector('#use-current-staff-url'),
+    staffUrlCandidate: root.querySelector('#system-staff-url-candidate'),
+    postmarkToken: root.querySelector('#email-postmark-token'),
+    clearPostmarkToken: root.querySelector('#email-clear-postmark-token'),
+    postmarkTokenStatus: root.querySelector('#email-token-status'),
     form: root.querySelector('#settings-form'),
     version: root.querySelector('#settings-version'),
     nav: [...root.querySelectorAll('#settings-nav [data-settings-panel]')],
@@ -286,12 +301,20 @@ export function createSettingsController({
     syncOrganizations: root.querySelector('#btn-sync-organizations'),
     polarisResult: root.querySelector('#polaris-test-result'),
     syncResult: root.querySelector('#organizations-sync-result'),
+    polarisAnnouncement: root.querySelector('#polaris-action-announcement'),
     organizationStatus: root.querySelector('#organizations-status-message'),
     organizations: root.querySelector('#settings-organizations-list'),
-    enabledLibraries: root.querySelector('#enabled-libraries-checkbox-container'),
+    referenceOrganizations: root.querySelector('#settings-reference-organizations'),
+    manageParticipation: root.querySelector('#manage-library-participation'),
+    organizationCatalog: root.querySelector('#settings-organization-catalog'),
     staffStatus: root.querySelector('#staff-access-status'),
     staffRefresh: root.querySelector('#staff-refresh'),
+    staffShowInactive: root.querySelector('#staff-show-inactive'),
+    staffCounts: root.querySelector('#staff-roster-counts'),
     staffCreate: root.querySelector('#staff-add-submit'),
+    staffCreateToggle: root.querySelector('#staff-add-toggle'),
+    staffCreateForm: root.querySelector('#staff-add-form'),
+    staffCreateCancel: root.querySelector('#staff-add-cancel'),
     staffEmail: root.querySelector('#staff-add-email'),
     staffRole: root.querySelector('#staff-add-role'),
     staffOrganization: root.querySelector('#staff-add-organization'),
@@ -322,7 +345,6 @@ export function createSettingsController({
     data: null,
     organizations: [],
     organizationsReady: false,
-    baselineParticipationIds: null,
     staffUsers: [],
     staffCanAssignSuperAdmin: false,
     staffAccessLoaded: false,
@@ -345,6 +367,11 @@ export function createSettingsController({
     visible: false,
     bound: false
   };
+  let currentStaffUrlSuggestion = null;
+  let acceptedPostmarkToken = false;
+  let commonAuthorsEnabledOverrideDraft = null;
+  let pendingCommonAuthorsFocus = false;
+  const timeoutOverrideDrafts = new Map();
   const reads = createLatestLoad(), events = new window.AbortController();
   let disposed = false, contextGeneration = 0, drafts = createDraftScope(), scopePreparation = null;
   const emailTest = createEmailTestController({ root: root.querySelector('#settings-email-test'),
@@ -356,14 +383,18 @@ export function createSettingsController({
   let settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
   let staffCreateDraft = null;
   let polarisTest = null;
-  const staffDrafts = new Map(), rosterDrafts = new Set();
-  function listen(target, name, handler) {
-    target?.addEventListener(name, event => { if (!disposed && target.isConnected !== false) return handler(event); }, { signal: events.signal });
+  const staffDrafts = new Map(), rosterDrafts = new Set(), staffRows = new Map();
+  function listen(target, name, handler, capture = false) {
+    target?.addEventListener(name, event => { if (!disposed && target.isConnected !== false) return handler(event); }, { signal: events.signal, capture });
   }
   let logoDraftUrl = null;
   let logoPreviewGeneration = 0;
   let copyGeneration = 0;
   let notificationGeneration = 0, staffStatusGeneration = 0;
+  let blockedDraftNotice = null;
+  let templateValidationTarget = null;
+  let staffEmailValidationNotice = null;
+  let staffFocusSequence = 0;
 
   function releaseLogoDraft() {
     if (logoDraftUrl) URL.revokeObjectURL(logoDraftUrl);
@@ -455,6 +486,8 @@ export function createSettingsController({
   const domainEditors = createSettingsDomainEditors({
     root,
     onChange: draftChanged,
+    onTemplatesRendered: () => placeholders.refresh(),
+    onInvalidTemplate: (control, message) => placeholders.showError(control, message),
     onRetryCodes: retryPatronCodes,
     canRemoveTemplate: template => {
       const id = stringValue(template.id);
@@ -470,9 +503,13 @@ export function createSettingsController({
 
   const placeholders = createEmailTemplatePlaceholders({
     root, panel: root.querySelector('#settings-templates'), listen,
+    onReveal: () => activatePanel('templates'),
+    onValidationError: (control, message) => {
+      if (templateValidationTarget) templateValidationTarget = { control, message };
+    },
     captureContext: captureSettingsContext, isContextCurrent: isSettingsContextCurrent,
-    isActive: () => state.visible && state.activePanel === 'templates' && !state.pendingMutation &&
-      !state.awaitingReload && !state.outcomeUncertain
+    isActive: () => state.visible && state.activePanel === 'templates' && Boolean(state.data) &&
+      !state.loading && !state.saving && !state.pendingMutation && !state.awaitingReload && !state.outcomeUncertain
   });
 
   const patronPlaceholders = createPatronTextPlaceholders({
@@ -486,6 +523,36 @@ export function createSettingsController({
     return state.scope === 'system';
   }
 
+  function buildCurrentStaffUrlSuggestion() {
+    try {
+      const currentAddress = new URL(window.location.href);
+      const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(currentAddress.hostname);
+      if (currentAddress.protocol !== 'https:' &&
+          !(currentAddress.protocol === 'http:' && loopback)) return null;
+      const candidate = new URL('/staff/', currentAddress.origin);
+      if (candidate.origin === 'null') return null;
+      candidate.username = '';
+      candidate.password = '';
+      candidate.search = '';
+      candidate.hash = '';
+      return candidate.href;
+    } catch {
+      return null;
+    }
+  }
+
+  function renderCurrentStaffUrlSuggestion(result = '') {
+    currentStaffUrlSuggestion = buildCurrentStaffUrlSuggestion();
+    dom.useCurrentStaffUrl.hidden = !currentStaffUrlSuggestion;
+    dom.staffUrlCandidate.textContent = currentStaffUrlSuggestion
+      ? result === 'applied'
+        ? `Staff URL draft updated to ${currentStaffUrlSuggestion}. Save settings to persist it.`
+        : result === 'unchanged'
+          ? `Staff URL already matches the current address: ${currentStaffUrlSuggestion}.`
+          : `Current address candidate: ${currentStaffUrlSuggestion}`
+      : 'Current address unavailable. Use HTTPS or HTTP on localhost, 127.0.0.1, or [::1].';
+  }
+
   function captureSettingsContext() {
     return { scope: String(state.scope), staff: actorKey(state.staff), generation: contextGeneration, owner: state.staff };
   }
@@ -493,6 +560,115 @@ export function createSettingsController({
   function isSettingsContextCurrent(context) {
     return !disposed && context && context.generation === contextGeneration && context.scope === String(state.scope) && context.staff === actorKey(state.staff);
   }
+
+  function createSuggestionLimitPlaceholderPicker() {
+    const field = root.querySelector('[data-setting-section="workflow"][data-setting-key="suggestionLimitMessage"]');
+    const control = field?.querySelector('#suggestion-limit-message');
+    const trigger = field?.querySelector('#suggestion-limit-placeholder-trigger');
+    const popup = field?.querySelector('#suggestion-limit-placeholder-picker');
+    const status = field?.querySelector('#suggestion-limit-placeholder-status');
+    const view = root.ownerDocument.defaultView;
+    let opened = null;
+
+    if (!field || !control || !trigger || !popup || !status) return { clear() {}, refresh() {} };
+    if (!popup.showPopover) popup.hidden = true;
+
+    function overrideValue() {
+      return field.querySelector('.settings-override-toggle')?.checked ?? null;
+    }
+
+    function editable() {
+      if (!state.visible || state.activePanel !== 'workflow' || !state.data || state.pendingMutation ||
+          state.loading || state.saving || state.awaitingReload || state.outcomeUncertain || dom.form.inert ||
+          dom.form.hidden || !root.contains(field) || !field.isConnected || !control.isConnected ||
+          !field.contains(control) || control.disabled ||
+          control.readOnly || control.matches(':disabled') || control.closest('[hidden], [inert]')) return false;
+      for (let ancestor = control; ancestor; ancestor = ancestor.parentElement) {
+        const style = view.getComputedStyle(ancestor);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+      }
+      return true;
+    }
+
+    function clear() {
+      const prior = opened;
+      opened = null;
+      trigger.setAttribute('aria-expanded', 'false');
+      status.textContent = '';
+      if (popup.showPopover && popup.matches(':popover-open')) popup.hidePopover();
+      else if (!popup.showPopover) popup.hidden = true;
+      return prior;
+    }
+
+    function refresh() {
+      clear();
+      trigger.disabled = !editable();
+    }
+
+    listen(trigger, 'click', () => {
+      if (opened) {
+        clear();
+        return;
+      }
+      if (!editable()) {
+        refresh();
+        return;
+      }
+      const start = control.selectionStart ?? control.value.length;
+      const end = control.selectionEnd ?? control.value.length;
+      opened = {
+        context: captureSettingsContext(), value: control.value, start, end,
+        override: overrideValue()
+      };
+      trigger.setAttribute('aria-expanded', 'true');
+      if (popup.showPopover) popup.showPopover();
+      else popup.hidden = false;
+      const bounds = trigger.getBoundingClientRect();
+      const width = Math.min(384, Math.max(160, view.innerWidth - 24));
+      popup.style.width = `${width}px`;
+      popup.style.maxHeight = `${Math.max(120, view.innerHeight - 24)}px`;
+      popup.style.left = `${Math.max(12, Math.min(bounds.left, view.innerWidth - width - 12))}px`;
+      const height = popup.getBoundingClientRect().height || popup.offsetHeight;
+      popup.style.top = `${Math.max(12, Math.min(bounds.bottom + 4, view.innerHeight - height - 12))}px`;
+      popup.querySelector('button[data-suggestion-placeholder]')?.focus({ preventScroll: true });
+    });
+
+    listen(popup, 'click', event => {
+      const button = event.target.closest('[data-suggestion-placeholder]');
+      const saved = opened;
+      if (!button || !popup.contains(button) || !saved) return;
+      if (button.dataset.suggestionPlaceholder !== 'next_available_date' ||
+          !isSettingsContextCurrent(saved.context) || !editable() || control.value !== saved.value ||
+          overrideValue() !== saved.override || !popup.contains(root.ownerDocument.activeElement)) {
+        clear();
+        return;
+      }
+
+      const token = '{{next_available_date}}';
+      clear();
+      insertPlaceholderText(control, token, saved.start, saved.end);
+      status.textContent = `Inserted ${token}.`;
+    });
+
+    listen(field, 'change', refresh);
+    listen(control, 'input', () => { if (opened) clear(); });
+    listen(popup, 'toggle', event => { if (event.newState === 'closed' && opened) clear(); });
+    listen(root.ownerDocument, 'focusin', event => {
+      if (opened && event.target !== trigger && !popup.contains(event.target)) clear();
+    });
+    listen(root.ownerDocument, 'keydown', event => {
+      if (event.key !== 'Escape' || !opened) return;
+      event.preventDefault();
+      event.stopPropagation();
+      clear();
+      trigger.focus({ preventScroll: true });
+    });
+    listen(view, 'resize', clear);
+    listen(view, 'blur', clear);
+    return { clear, refresh };
+  }
+
+  const suggestionLimitPlaceholders = createSuggestionLimitPlaceholderPicker();
 
   async function confirmSettings(title, message, confirmLabel, tone = 'normal') {
     const context = captureSettingsContext(), data = state.data, version = state.data?.version;
@@ -515,13 +691,22 @@ export function createSettingsController({
     return operation?.isCurrent() && isSettingsContextCurrent(operation.context);
   }
 
-  function beginSettingsMutation(slot, consumes) {
+  function clearBlockedDraftNotice() {
+    blockedDraftNotice?.clear();
+    blockedDraftNotice = null;
+  }
+
+  function beginSettingsMutation(slot, consumes, preserves = []) {
     if (disposed || !state.staff || !state.visible || !root.isConnected || state.pendingMutation || state.awaitingReload) return null;
-    if (!drafts.admit({ consumes }).allowed) {
-      notify('Save or discard the competing Settings draft before this action.', 'warning'); return null;
+    const declaration = { consumes, preserves };
+    if (!drafts.admit(declaration).allowed) {
+      clearBlockedDraftNotice();
+      blockedDraftNotice = { declaration, clear: notify('Save or discard the competing Settings draft before this action.', 'warning') };
+      return null;
     }
+    clearBlockedDraftNotice();
     const context = captureSettingsContext();
-    const operation = { slot, context, owner: context.owner, outcome: 'pending',
+    const operation = { slot, context, owner: context.owner, outcome: 'pending', preserves,
       isCurrent: () => isSettingsContextCurrent(context) };
     holdSettingsMutation(operation);
     return operation;
@@ -537,22 +722,22 @@ export function createSettingsController({
     }
   }
 
-  function recordFailure(operation, error, message) {
+  function recordFailure(operation, error, message, report = notify) {
     if (operation.outcome === 'committed') return;
     operation.outcome = isUnconfirmedMutationFailure(error) ? 'uncertain' : 'rejected';
     if (operation.outcome !== 'uncertain') return;
     onUnconfirmed(message, operation.owner, operation);
-    if (isSettingsOperationCurrent(operation)) { state.unconfirmedMutation = operation; markUnconfirmedMutation(message); }
+    if (isSettingsOperationCurrent(operation)) { state.unconfirmedMutation = operation; markUnconfirmedMutation(message, report); }
   }
 
   function isUnconfirmedMutationFailure(error) {
     return error?.outcomeUnknown === true || !error?.status || error.status === 408 || error.status >= 500 || isAbortError(error);
   }
 
-  function markUnconfirmedMutation(message) {
+  function markUnconfirmedMutation(message, report = notify) {
     state.outcomeUncertain = true;
     state.awaitingReload = true;
-    notify(message, 'error');
+    report(message, 'error');
   }
 
   function holdSettingsMutation(operation) {
@@ -560,6 +745,8 @@ export function createSettingsController({
     reads.begin('administration-settings').abort();
     reads.begin('administration-staff-access').abort();
     reads.begin('administration-patron-codes').abort();
+    placeholders.clear();
+    suggestionLimitPlaceholders.clear();
     state.pendingMutation = operation;
     dom.form.inert = true;
     dom.form.setAttribute('aria-busy', 'true');
@@ -573,18 +760,28 @@ export function createSettingsController({
     dom.form.inert = state.awaitingReload;
     dom.form.removeAttribute('aria-busy');
     dom.refresh.disabled = false;
+    restoreCommonAuthorsFocus();
+    placeholders.refresh();
+    suggestionLimitPlaceholders.refresh();
   }
 
   function cancelSettingsOperations() {
+    clearBlockedDraftNotice();
     emailTest.invalidate();
     state.loading = false;
-    placeholders.clear(); patronPlaceholders.clear();
+    placeholders.clear(); patronPlaceholders.clear(); suggestionLimitPlaceholders.clear();
+    placeholders.retireValidationNotice();
     scopePreparation = null;
     cancelPolarisTest();
     dom.syncOrganizations.disabled = false;
     contextGeneration += 1; drafts.dispose(); drafts = createDraftScope();
     settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
-    staffDrafts.clear(); rosterDrafts.clear(); staffCreateDraft = null;
+    staffDrafts.clear(); rosterDrafts.clear(); staffRows.clear(); staffCreateDraft = null;
+    state.staffCanAssignSuperAdmin = false;
+    dom.staffUsers.replaceChildren();
+    dom.staffShowInactive.checked = false;
+    dom.staffCounts.textContent = '';
+    setStaffCreateOpen(false);
     for (const slot of SETTINGS_OPERATION_SLOTS) reads.begin(slot).abort();
   }
 
@@ -592,6 +789,22 @@ export function createSettingsController({
     reads.begin('administration-polaris-test').abort();
     polarisTest = null;
     dom.testPolaris.disabled = false;
+    clearPolarisFeedback();
+  }
+
+  function clearPolarisFeedback() {
+    for (const result of [dom.polarisResult, dom.syncResult]) {
+      result.textContent = '';
+      result.className = 'settings-result';
+    }
+    dom.polarisAnnouncement.textContent = '';
+  }
+
+  function setPolarisFeedback(result, message, kind = '') {
+    clearPolarisFeedback();
+    result.textContent = message;
+    result.className = `settings-result${kind ? ` ${kind}` : ''}`;
+    dom.polarisAnnouncement.textContent = message;
   }
 
   function organizationId() {
@@ -658,8 +871,6 @@ export function createSettingsController({
   function acceptOrganizationCatalog(rows) {
     state.organizations = rows;
     state.organizationsReady = true;
-    state.baselineParticipationIds = rows.filter(item => isLibraryOrganization(item) && item.isActive)
-      .map(item => item.id).sort((first, second) => first - second);
   }
 
   function scopedStaffOrganizationId() {
@@ -727,12 +938,17 @@ export function createSettingsController({
     const user = response?.user;
     const cleanup = response?.cleanup;
     const cleanupCounts = ['rulesDeactivated', 'openTitleClaimsCleared', 'openAdditionalCopyClaimsCleared'];
-    return isCanonicalPositiveInt64Id(user?.id) &&
+    return user !== null && typeof user === 'object' && !Array.isArray(user) &&
+      isCanonicalPositiveInt64Id(user.id) &&
       typeof user.version === 'string' && user.version.length > 0 &&
+      typeof user.active === 'boolean' && ['staff', 'admin', 'super_admin'].includes(user.role) &&
+      Number.isSafeInteger(user.organizationId) && user.organizationId <= 2147483647 &&
+      (user.role === 'super_admin' ? user.organizationId === 1 : user.organizationId > 1) &&
+      ['userPrincipalName', 'displayName', 'notificationEmail'].every(key => user[key] === null || typeof user[key] === 'string') &&
       (expectedStaffId === null || user.id === String(expectedStaffId)) &&
       cleanup !== null && typeof cleanup === 'object' && !Array.isArray(cleanup) &&
       cleanupCounts.every(key => Number.isSafeInteger(cleanup[key]) && cleanup[key] >= 0) &&
-      (method !== 'DELETE' || user.active === false);
+      (method !== 'DELETE' || user.active === false) && (method !== 'POST' || user.active === true);
   }
 
   function setStaffStatus(message, kind = '') {
@@ -746,6 +962,37 @@ export function createSettingsController({
         dom.staffStatus.className = 'settings-result';
       }
     };
+  }
+
+  function retireStaffEmailValidation(control) {
+    const notice = staffEmailValidationNotice;
+    if (!notice || notice.control !== control) return;
+    staffEmailValidationNotice = null;
+    if (isSettingsContextCurrent(notice.context)) notice.clear();
+  }
+
+  function revealStaffControl(control, context, sequence) {
+    if (sequence !== staffFocusSequence || !isSettingsContextCurrent(context) || !state.visible || state.activePanel !== 'staff' ||
+        state.pendingMutation || state.loading || dom.form.hidden || dom.form.inert || document.activeElement !== control ||
+        !control.isConnected || !root.contains(control) || !control.closest('.settings-staff-roster') ||
+        !control.matches('input, select, textarea, button') || control.matches(':disabled') || control.closest('[hidden], [inert]')) return;
+    // A pointer is already over its button. Moving it during pointerdown can
+    // lose the click; keyboard focus still needs the measured outline reveal.
+    if (control.matches('button') && !control.matches(':focus-visible')) return;
+    const view = root.ownerDocument.defaultView, bounds = control.getBoundingClientRect(), style = view.getComputedStyle(control);
+    const clearance = Math.max(6, (parseFloat(style.outlineWidth) || 0) + (parseFloat(style.outlineOffset) || 0)) + 1;
+    const viewport = view.visualViewport, top = (viewport?.offsetTop || 0) + clearance;
+    const bottom = (viewport?.offsetTop || 0) + (viewport?.height || view.innerHeight) - clearance;
+    if (!bounds.width || !bounds.height || bounds.height > bottom - top) return;
+    const scroll = bounds.top < top ? bounds.top - top : Math.max(0, bounds.bottom - bottom);
+    if (scroll) view.scrollBy({ top: scroll, behavior: 'instant' });
+  }
+
+  function queueStaffReveal(control) {
+    if (!control?.matches?.('input, select, textarea, button') || !control.closest('.settings-staff-roster')) return;
+    const context = captureSettingsContext(), sequence = ++staffFocusSequence;
+    revealStaffControl(control, context, sequence);
+    root.ownerDocument.defaultView.requestAnimationFrame?.(() => revealStaffControl(control, context, sequence));
   }
 
   function notify(message, kind = '') {
@@ -779,6 +1026,7 @@ export function createSettingsController({
   }
 
   function resetStaffCreateDraft() {
+    retireStaffEmailValidation(dom.staffEmail);
     drafts.release(staffCreateDraft); staffDrafts.delete(staffCreateDraft);
     dom.staffEmail.value = '';
     populateStaffCreateControls();
@@ -788,11 +1036,15 @@ export function createSettingsController({
 
   function snapshotDrafts() {
     return JSON.stringify([...dom.form.querySelectorAll('input, select, textarea')]
-      .filter(control => control.id !== 'patron-code-picker')
+      .filter(control => control.id !== 'patron-code-picker' && control !== dom.staffShowInactive)
       .map(control => [control.value, control.checked]));
   }
 
   function updateDirtyState() {
+    if (blockedDraftNotice) {
+      const admission = drafts.admit(blockedDraftNotice.declaration);
+      if (admission.allowed || admission.reason === 'invalid_owner' || admission.reason === 'invalid_preservation') clearBlockedDraftNotice();
+    }
     const dirty = isDirty();
     const settingsDirty = hasSettingsDraft();
     const needsAttention = dirty || state.awaitingReload || state.outcomeUncertain || state.saving;
@@ -810,14 +1062,19 @@ export function createSettingsController({
       : isSystem() && !state.organizationsReady
       ? 'The organization list is unavailable or incomplete. Reload settings before saving.'
       : dirty
-      ? settingsDirty ? 'Changes are local until you save this settings context.' : 'Save each staff profile or access change, or discard the edits.'
+      ? settingsDirty ? 'Changes are local until you save this settings context.' : 'Save changes in each staff editor, or cancel the edits.'
       : 'Everything in this settings context is saved.';
     dom.reset.hidden = isSystem();
     dom.reset.disabled = state.awaitingReload || Boolean(state.pendingMutation);
+    for (const row of staffRows.values()) row.sync();
     emailTest.sync();
   }
 
-  function draftChanged(event) { drafts.touch(event?.target); updateDirtyState(); }
+  function draftChanged(event) {
+    if (event?.target === dom.staffShowInactive) return;
+    drafts.touch(event?.target); updateDirtyState();
+    queueStaffReveal(event?.target);
+  }
 
   function rawSection(section) {
     const library = state.data?.stored?.libraryOverride;
@@ -837,18 +1094,105 @@ export function createSettingsController({
     return field.querySelector('input:not(.settings-override-toggle), textarea, select');
   }
 
+  function applyTimeoutDependencies() {
+    const outstandingEnabled = document.getElementById('outstanding-timeout-enabled').checked;
+    const sendEmailEnabled = document.getElementById('outstanding-timeout-send-email').checked;
+    const dependents = [
+      ['outstanding-timeout-days', outstandingEnabled],
+      ['outstanding-timeout-send-email', outstandingEnabled],
+      ['outstanding-timeout-rejection-template-id', outstandingEnabled && sendEmailEnabled],
+      ['hold-pickup-timeout-days', document.getElementById('hold-pickup-timeout-enabled').checked],
+      ['pending-hold-timeout-days', document.getElementById('pending-hold-timeout-enabled').checked],
+      ['additional-copy-timeout-days', document.getElementById('additional-copy-timeout-enabled').checked]
+    ];
+    for (const [id, ruleEnabled] of dependents) {
+      const control = document.getElementById(id);
+      const field = control.closest('[data-setting-section][data-setting-key]');
+      const override = field?.querySelector('.settings-override-toggle');
+      const editable = isSystem() || override?.checked === true;
+      control.disabled = !editable || !ruleEnabled;
+    }
+  }
+
+  function commonAuthorsFocusTarget() {
+    const override = dom.commonAuthorsEnabled?.closest('[data-setting-section][data-setting-key]')
+      ?.querySelector('.settings-override-toggle');
+    if (!dom.commonAuthorsEnabled?.disabled) return dom.commonAuthorsEnabled;
+    return override && !override.disabled ? override : null;
+  }
+
+  function syncCommonAuthorsOptions(focusedBeforePopulate = false) {
+    if (!dom.commonAuthorsEnabled || !dom.commonAuthorsOptions) return;
+    const enabled = dom.commonAuthorsEnabled.checked;
+    if (!enabled && (focusedBeforePopulate || dom.commonAuthorsOptions.contains(document.activeElement))) {
+      if (dom.form.inert || dom.form.hidden) {
+        pendingCommonAuthorsFocus = true;
+      } else {
+        commonAuthorsFocusTarget()?.focus({ preventScroll: true });
+      }
+    }
+    dom.commonAuthorsOptions.disabled = !enabled;
+    dom.commonAuthorsOptions.hidden = !enabled;
+    if (enabled) pendingCommonAuthorsFocus = false;
+  }
+
+  function restoreCommonAuthorsFocus() {
+    if (!pendingCommonAuthorsFocus || dom.form.inert || dom.form.hidden || !dom.commonAuthorsOptions.hidden) return;
+    pendingCommonAuthorsFocus = false;
+    commonAuthorsFocusTarget()?.focus({ preventScroll: true });
+  }
+
   function syncOverrideToggles(section, key, checked) {
     for (const field of root.querySelectorAll(
       `[data-setting-section="${section}"][data-setting-key="${key}"]`
     )) {
       const toggle = field.querySelector('.settings-override-toggle');
       const input = fieldInput(field);
+      if (section === 'workflow' && TIMEOUT_OVERRIDE_KEYS.has(key) && input) {
+        const draftKey = `${section}.${key}`;
+        if (checked) {
+          if (timeoutOverrideDrafts.has(draftKey)) {
+            writeControl(input, timeoutOverrideDrafts.get(draftKey));
+          }
+        } else {
+          timeoutOverrideDrafts.set(draftKey, input.type === 'checkbox' ? input.checked : input.value);
+          const configuredSystem = object(object(state.data?.stored).configuredSystem);
+          writeControl(input, property(configuredSystem.workflow, key));
+        }
+      }
+      if (section === 'workflow' && key === 'commonAuthorsEnabled' && input) {
+        if (checked) {
+          if (commonAuthorsEnabledOverrideDraft !== null) {
+            writeControl(input, commonAuthorsEnabledOverrideDraft);
+          }
+        } else {
+          commonAuthorsEnabledOverrideDraft = input.checked;
+          const configuredSystem = object(object(state.data?.stored).configuredSystem);
+          writeControl(input, property(configuredSystem.workflow, key));
+        }
+      }
       if (toggle) toggle.checked = checked;
       if (input) input.disabled = !checked;
     }
+    applyTimeoutDependencies();
+    if (section === 'workflow' && key === 'commonAuthorsEnabled') syncCommonAuthorsOptions();
   }
 
   function createOverrideToggle(field, section, key) {
+    if (field.localName === 'label') {
+      // Each field and Override checkbox needs its own label. Nesting a second
+      // input in the field label makes both names include the override text.
+      const control = fieldInput(field);
+      const title = field.querySelector('span');
+      const container = node('div');
+      for (const attribute of field.attributes) container.setAttribute(attribute.name, attribute.value);
+      container.append(...field.childNodes);
+      field.replaceWith(container);
+      const label = node('label', { for: control.id });
+      title.before(label);
+      label.append(title);
+      field = container;
+    }
     let input = field.querySelector('.settings-override-toggle');
     if (!input) {
       input = node('input', {
@@ -856,7 +1200,7 @@ export function createSettingsController({
         className: 'settings-override-toggle',
         'aria-label': `Override ${field.querySelector('span')?.textContent || key}`
       });
-      const wrapper = node('span', { className: 'settings-override-control' }, [
+      const wrapper = node('label', { className: 'settings-override-control' }, [
         input,
         node('span', { text: 'Override' })
       ]);
@@ -915,6 +1259,7 @@ export function createSettingsController({
       }
       badge.hidden = system;
     }
+    applyTimeoutDependencies();
   }
 
   function setScopedFields(section, fields) {
@@ -931,8 +1276,30 @@ export function createSettingsController({
 
   function setPolarisFields(polaris) {
     for (const [key, id] of POLARIS_FIELDS) writeControl(document.getElementById(id), property(polaris, key));
+    const hasApiKey = property(polaris, 'hasApiKey') === true;
+    const hasAdminPassword = property(polaris, 'hasAdminPassword') === true;
     document.getElementById('polaris-api-key').value = '';
+    document.getElementById('polaris-api-key').placeholder = hasApiKey ? '********' : '';
     document.getElementById('polaris-admin-pass').value = '';
+    document.getElementById('polaris-admin-pass').placeholder = hasAdminPassword ? '********' : '';
+    document.getElementById('polaris-api-key-status').textContent = hasApiKey
+      ? 'API key saved. Leave blank to keep the current key; enter a new key to replace it.'
+      : 'No API key saved.';
+    document.getElementById('polaris-admin-pass-status').textContent = hasAdminPassword
+      ? 'System staff password saved. Leave blank to keep the current password; enter a new password to replace it.'
+      : 'No system staff password saved.';
+  }
+
+  function renderPostmarkTokenStatus() {
+    const clearSelected = dom.clearPostmarkToken.checked;
+    dom.postmarkToken.placeholder = acceptedPostmarkToken && !clearSelected ? '********' : '';
+    dom.postmarkTokenStatus.textContent = clearSelected
+      ? acceptedPostmarkToken
+        ? 'Postmark token removal is pending. Save settings to remove the stored token.'
+        : 'Postmark token clear is selected. No token is currently stored; saving keeps it unconfigured.'
+      : acceptedPostmarkToken
+        ? 'A system Postmark token is stored. Leave blank to keep it; enter a new token to replace it.'
+        : 'No system Postmark token is stored.';
   }
 
   function setSender(email) {
@@ -965,10 +1332,15 @@ export function createSettingsController({
       writeControl(document.getElementById(subjectId), property(effective, 'subject'));
       writeControl(document.getElementById(bodyId), property(effective, 'body'));
       state.baselineTemplates.set(key, {
-        subject: property(effective, 'subject') || null,
-        body: property(effective, 'body') || null
+        // Native controls normalize line endings. Detect edits against what
+        // staff actually see, so untouched raw SQL text is never rewritten.
+        subject: document.getElementById(subjectId).value || null,
+        body: document.getElementById(bodyId).value || null
       });
       const fieldset = root.querySelector(`[data-template-key="${key}"]`);
+      const inherited = findTemplate(systemRows, key) || {};
+      fieldset.dataset.templateInheritedSubject = inherited.subject || '';
+      fieldset.dataset.templateInheritedBody = inherited.body || '';
       fieldset.querySelector('.settings-template-override-control')?.remove();
       document.getElementById(subjectId).disabled = false;
       document.getElementById(bodyId).disabled = false;
@@ -987,7 +1359,18 @@ export function createSettingsController({
           node('span', { text: 'Override' })
         ]);
         fieldset.querySelector('legend').append(wrapper);
+        let draft = null;
         listen(input, 'change', () => {
+          const subject = document.getElementById(subjectId);
+          const body = document.getElementById(bodyId);
+          if (!input.checked) {
+            draft = { subject: subject.value, body: body.value };
+            subject.value = fieldset.dataset.templateInheritedSubject;
+            body.value = fieldset.dataset.templateInheritedBody;
+          } else if (draft) {
+            subject.value = draft.subject;
+            body.value = draft.body;
+          }
           document.getElementById(subjectId).disabled = !input.checked;
           document.getElementById(bodyId).disabled = !input.checked;
           updateDirtyState();
@@ -1048,38 +1431,24 @@ export function createSettingsController({
     select.value = selected || '';
   }
 
-  function populateParticipation() {
-    dom.enabledLibraries.replaceChildren();
-    const libraries = byDisplayLabel(state.organizations.filter(isLibraryOrganization));
-    if (libraries.length === 0) {
-      dom.enabledLibraries.append(node('p', { className: 'settings-empty', text: 'No synced library organizations.' }));
-      return;
-    }
-    for (const organization of libraries) {
-      const checkbox = node('input', {
-        type: 'checkbox',
-        value: organization.id,
-        checked: organization.isActive,
-        'aria-label': `Enable ${organization.name}`
-      });
-      dom.enabledLibraries.append(node('label', { className: 'settings-list-row' }, [
-        checkbox,
-        node('span', { text: organization.name })
-      ]));
-    }
-  }
-
   function renderOrganizations() {
     dom.organizations.replaceChildren();
-    if (state.organizations.length === 0) {
-      dom.organizations.append(node('li', { className: 'settings-empty', text: 'No organizations are available.' }));
-      return;
-    }
-    for (const organization of byDisplayLabel(state.organizations, item => `${item.name}${item.abbreviation ? ` (${item.abbreviation})` : ''}`)) {
+    dom.referenceOrganizations.replaceChildren();
+    const label = organization => `${organization.name}${organization.abbreviation ? ` (${organization.abbreviation})` : ''}`;
+    const libraries = byDisplayLabel(state.organizations.filter(isLibraryOrganization), label);
+    const activeCount = libraries.filter(organization => organization.isActive).length;
+    dom.organizationStatus.textContent = libraries.length
+      ? `${activeCount} of ${libraries.length} synchronized libraries active in ASAP; ${libraries.length - activeCount} inactive.`
+      : 'No eligible libraries are synchronized. Sync organizations in Polaris to load library participation.';
+    const organizationRow = (organization, parents = []) => {
       const isLibrary = isLibraryOrganization(organization);
       const active = isLibrary && Boolean(organization.isActive);
-      const item = node('li', { className: 'settings-list-row' }, [
-        node('span', { className: 'settings-organization-name', text: `${organization.name}${organization.abbreviation ? ` (${organization.abbreviation})` : ''}` }),
+      const name = node('span', { className: 'settings-organization-name', text: label(organization) });
+      if (parents.length) name.append(node('small', {
+        className: 'settings-organization-parent', text: `Within: ${parents.map(label).join(' → ')}`
+      }));
+      const item = node('li', { className: 'settings-list-row', 'data-organization-id': organization.id }, [
+        name,
         node('span', { className: `status-badge${active ? '' : ' blocked'}`, text: isLibrary ? active ? 'Active' : 'Inactive' : 'Reference only' })
       ]);
       if (isLibrary && state.staff?.role === 'super_admin') {
@@ -1089,10 +1458,55 @@ export function createSettingsController({
           title: active ? `Deactivate ${organization.name}` : `Activate ${organization.name}`,
           'aria-label': active ? `Deactivate ${organization.name}` : `Activate ${organization.name}`
         }, [node('i', { className: `fa fa-${active ? 'ban' : 'check'}`, 'aria-hidden': 'true' })]);
-        listen(action, 'click', () => setOrganizationActive(organization, !active));
+        listen(action, 'click', () => setOrganizationActive(organization, !active, action));
         item.append(action);
       }
-      dom.organizations.append(item);
+      return item;
+    };
+    for (const library of libraries) dom.organizations.append(organizationRow(library));
+    if (!libraries.length) {
+      dom.organizations.append(node('li', { className: 'settings-empty', text: 'No eligible library organizations are synchronized.' }));
+    }
+
+    const organizationsById = new Map(state.organizations.map(organization => [organization.id, organization]));
+    const groups = new Map(), unassociated = [];
+    for (const organization of byDisplayLabel(state.organizations.filter(item => !isLibraryOrganization(item)), label)) {
+      const visited = new Set([organization.id]), parents = [];
+      let parentId = organization.parentOrganizationId, library = null;
+      while (parentId !== null && !visited.has(parentId)) {
+        visited.add(parentId);
+        const parent = organizationsById.get(parentId);
+        if (!parent) break;
+        if (isLibraryOrganization(parent)) {
+          library = parent;
+          break;
+        }
+        parents.unshift(parent);
+        parentId = parent.parentOrganizationId;
+      }
+      if (!library) {
+        unassociated.push(organizationRow(organization));
+        continue;
+      }
+      if (!groups.has(library.id)) groups.set(library.id, { library, rows: [] });
+      groups.get(library.id).rows.push(organizationRow(organization, parents));
+    }
+    const appendReferenceGroup = (title, rows, libraryId) => {
+      const headingId = `settings-reference-group-${libraryId || 'other'}`;
+      dom.referenceOrganizations.append(node('section', {
+        className: 'settings-organization-reference-group', 'aria-labelledby': headingId,
+        'data-library-organization-id': libraryId || 'other'
+      }, [
+        node('h4', { id: headingId, text: title }),
+        node('ul', { className: 'settings-list' }, rows)
+      ]));
+    };
+    for (const group of byDisplayLabel([...groups.values()], group => label(group.library), group => group.library.id)) {
+      appendReferenceGroup(label(group.library), group.rows, group.library.id);
+    }
+    if (unassociated.length) appendReferenceGroup('Other / unassociated organizations', unassociated);
+    if (!groups.size && !unassociated.length) {
+      dom.referenceOrganizations.append(node('p', { className: 'settings-empty', text: 'No other synchronized organizations.' }));
     }
   }
 
@@ -1127,118 +1541,233 @@ export function createSettingsController({
     return choices;
   }
 
-  function renderStaffUsers() {
+  // DisplayName is unstructured: use its final nonempty component, then the
+  // complete name/email/opaque ID. This is a sort convention, not a name parser.
+  function staffRosterOrder(first, second) {
+    const key = user => {
+      const name = clean(property(user, 'displayName')) || '';
+      const email = clean(property(user, 'userPrincipalName')) || '';
+      return [name.split(/\s+/).at(-1) || email, name || email, email, stringValue(property(user, 'id'))];
+    };
+    const activeOrder = Number(property(first, 'active') === false) - Number(property(second, 'active') === false);
+    if (activeOrder) return activeOrder;
+    const firstKey = key(first), secondKey = key(second);
+    for (let index = 0; index < firstKey.length; index += 1) {
+      const order = firstKey[index].localeCompare(secondKey[index], 'en', { sensitivity: 'base' }) ||
+        firstKey[index].localeCompare(secondKey[index], 'en', { sensitivity: 'variant' });
+      if (order) return order;
+    }
+    return 0;
+  }
+
+  function setStaffCreateOpen(open, focus = false) {
+    if (!open) retireStaffEmailValidation(dom.staffEmail);
+    dom.staffCreateForm.hidden = !open;
+    dom.staffCreateForm.disabled = !open || state.activePanel !== 'staff';
+    dom.staffCreateToggle.setAttribute('aria-expanded', String(open));
+    if (focus) (open ? dom.staffEmail : dom.staffCreateToggle).focus();
+  }
+
+  function createStaffRow(user) {
+    const id = stringValue(property(user, 'id'));
+    const row = node('article', { className: 'settings-staff-row', 'data-staff-id': id });
+    const name = node('strong'), emailLabel = node('span', { className: 'settings-staff-email' });
+    const unsaved = node('span', { className: 'settings-staff-unsaved', text: 'Unsaved changes' });
+    const roleLabelNode = node('span', { className: 'settings-staff-role' });
+    const libraryLabel = node('span', { className: 'settings-staff-library' });
+    const status = node('span');
+    const summary = node('button', { type: 'button', className: 'settings-staff-summary settings-staff-columns',
+      'aria-expanded': 'false', 'aria-controls': `staff-editor-${id}` }, [
+      node('span', { className: 'settings-staff-heading' }, [name, emailLabel, unsaved]),
+      roleLabelNode, libraryLabel, status,
+      node('span', { className: 'settings-staff-chevron', 'aria-hidden': 'true', text: '⌄' })
+    ]);
+    const editor = node('fieldset', { className: 'settings-staff-editor', id: `staff-editor-${id}`, 'aria-label': 'Staff editor' });
+    editor.hidden = true;
+    editor.disabled = true;
+    const email = node('input', { type: 'email', maxlength: '320', 'aria-describedby': `staff-email-help-${id}` });
+    const displayName = node('input', { type: 'text', maxlength: '256' });
+    const role = node('select'), organization = node('select');
+    const controls = [email, displayName, role, organization];
+    const cancel = node('button', { type: 'button', className: 'secondary-button', text: 'Cancel' });
+    const save = node('button', { type: 'button', className: 'primary-button', text: 'Save changes' });
+    const lifecycle = node('button', { type: 'button' });
+    const notice = node('p', { className: 'settings-result', role: 'status', 'aria-live': 'polite' });
+    const syncHelp = node('p', { className: 'settings-staff-sync-help',
+      text: 'Save changes to also use this email for primary notifications.' });
+    const cleanup = node('p', { className: 'settings-cleanup-result' });
+    const field = (label, input, help = null) => node('label', { className: 'settings-field' },
+      [node('span', { text: label }), input, help]);
+    editor.append(node('h4', { text: 'Profile' }), node('div', { className: 'settings-staff-controls' }, [
+      field('Email address', email, node('small', { id: `staff-email-help-${id}`, text: 'Used for sign-in and notifications.' })),
+      field('Display name', displayName), field('Role', role), field('Library', organization)
+    ]), syncHelp, node('div', { className: 'settings-staff-footer' }, [lifecycle,
+      node('div', { className: 'settings-staff-actions' }, [cancel, save])]), notice, cleanup);
+    row.append(summary, editor);
+    const record = { id, row, summary, user, version: '', baseline: [], conflict: false,
+      dirty: () => controls.some((control, index) => control.value !== record.baseline[index]),
+      sync() {
+        const dirty = record.dirty();
+        const hidden = property(record.user, 'active') === false && !dom.staffShowInactive.checked;
+        const returnToFilter = hidden && row.contains(document.activeElement);
+        if (hidden) retireStaffEmailValidation(email);
+        row.hidden = hidden;
+        editor.disabled = editor.hidden || row.hidden || state.activePanel !== 'staff';
+        unsaved.hidden = !dirty;
+        syncHelp.hidden = clean(property(record.user, 'userPrincipalName')) === clean(property(record.user, 'notificationEmail'));
+        save.disabled = (!dirty && syncHelp.hidden) || record.conflict || state.awaitingReload || Boolean(state.pendingMutation);
+        cancel.disabled = !dirty && !record.conflict;
+        if (returnToFilter) dom.staffShowInactive.focus();
+      },
+      reset() {
+        retireStaffEmailValidation(email);
+        email.value = property(record.user, 'userPrincipalName') || '';
+        displayName.value = property(record.user, 'displayName') || '';
+        replaceSelectOptions(role, userRoleChoices(record.user), property(record.user, 'role') || 'staff');
+        replaceSelectOptions(organization, organizationChoices(role.value), property(record.user, 'organizationId'));
+        organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
+        record.version = stringValue(property(record.user, 'version'));
+        record.baseline = controls.map(control => control.value);
+        record.conflict = false;
+        notice.textContent = '';
+        record.sync();
+      },
+      accept(next, discard = false) {
+        const dirty = record.dirty();
+        record.unavailable = false;
+        record.user = next;
+        const active = property(next, 'active') !== false;
+        row.classList.toggle('inactive', !active);
+        name.textContent = staffUserDisplay(next);
+        emailLabel.textContent = stringValue(property(next, 'userPrincipalName'));
+        roleLabelNode.textContent = roleLabel(property(next, 'role'));
+        libraryLabel.textContent = staffUserOrganizationName(next);
+        status.textContent = active ? 'Active' : 'Inactive';
+        status.className = `status-badge${active ? '' : ' blocked'}`;
+        lifecycle.textContent = active ? 'Deactivate' : 'Reactivate';
+        lifecycle.className = active ? 'danger-button' : 'secondary-button';
+        for (const [input, label] of [[email, 'Email address'], [displayName, 'Display name'], [role, 'Role'], [organization, 'Library']]) {
+          input.setAttribute('aria-label', `${label} for ${staffUserDisplay(next)}`);
+        }
+        if (!dirty || discard) record.reset();
+        else if (record.version !== stringValue(property(next, 'version'))) {
+          record.conflict = true;
+          notice.textContent = 'Saved values changed elsewhere. Your draft is retained. Cancel to load the saved values before editing again.';
+        }
+        cleanup.hidden = state.lastStaffCleanup?.staffId !== id;
+        cleanup.textContent = cleanup.hidden ? '' : cleanupSummary(state.lastStaffCleanup.cleanup);
+        record.sync();
+      },
+      unavailable: false,
+      markUnavailable() {
+        record.unavailable = true;
+        record.conflict = true;
+        notice.textContent = 'This account is no longer in the current roster. Your draft is retained. Cancel to discard this draft.';
+        record.sync();
+      }
+    };
+    const setOpen = open => {
+      if (!open) retireStaffEmailValidation(email);
+      const returnToSummary = !open && editor.contains(document.activeElement);
+      editor.hidden = !open;
+      summary.setAttribute('aria-expanded', String(open));
+      record.sync();
+      if (returnToSummary) summary.focus();
+    };
+    listen(summary, 'click', () => setOpen(editor.hidden));
+    listen(editor, 'keydown', event => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault(); event.stopPropagation(); setOpen(false);
+    });
+    listen(role, 'change', () => {
+      replaceSelectOptions(organization, organizationChoices(role.value), organization.value);
+      organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
+      record.sync();
+    });
+    listen(cancel, 'click', () => {
+      if (record.unavailable) {
+        drafts.release(record.draft); staffDrafts.delete(record.draft); rosterDrafts.delete(record.draft);
+        staffRows.delete(id); row.remove();
+        drafts.touch(); updateDirtyState(); dom.staffRefresh.focus();
+        setStaffStatus('Draft discarded. The account is no longer in the current roster.');
+        return;
+      }
+      record.reset(); drafts.touch(); updateDirtyState();
+      notice.textContent = 'Unsaved edits discarded.';
+      email.focus();
+    });
+    listen(save, 'click', () => {
+      if (record.conflict || !validateStaffValues(email, role, organization)) return;
+      void updateStaffUser(id, record.version, { email: clean(email.value), displayName: clean(displayName.value),
+        role: role.value, organizationId: role.value === 'super_admin' ? 1 : Number(organization.value) }, record.draft);
+    });
+    listen(lifecycle, 'click', () => {
+      if (property(record.user, 'active') !== false) void deactivateStaffUser(id, record.version, staffUserDisplay(record.user));
+      else void reactivateStaffUser(record.user, record.version);
+    });
+    record.reset();
+    // The baseline changes only after this account's accepted save/cancel/reload.
+    record.draft = drafts.register({ root: row, kind: 'staff editor', isDirty: () =>
+      row.isConnected && state.staff !== null && (!state.awaitingReloadMutation ||
+        state.awaitingReloadMutation.preserves?.includes(record.draft)) && record.dirty() });
+    staffDrafts.set(record.draft, () => row.isConnected && (!state.awaitingReloadMutation ||
+      state.awaitingReloadMutation.preserves?.includes(record.draft)) && record.dirty());
+    rosterDrafts.add(record.draft);
+    record.accept(user, true);
+    return record;
+  }
+
+  function renderStaffUsers({ discard = false } = {}) {
     if (!dom.staffUsers) return;
-    for (const handle of rosterDrafts) { drafts.release(handle); staffDrafts.delete(handle); }
-    rosterDrafts.clear();
-    dom.staffUsers.replaceChildren();
+    const focused = dom.staffUsers.contains(document.activeElement) ? document.activeElement : null;
+    const ids = new Set(state.staffUsers.map(user => stringValue(property(user, 'id'))));
+    for (const [id, record] of staffRows) {
+      if (ids.has(id)) continue;
+      if (!discard && record.dirty()) {
+        record.markUnavailable();
+        continue;
+      }
+      drafts.release(record.draft); staffDrafts.delete(record.draft); rosterDrafts.delete(record.draft);
+      record.row.remove(); staffRows.delete(id);
+    }
     populateStaffCreateControls();
     if (!staffCreateDraft) resetStaffCreateDraft();
-    if (state.staffUsers.length === 0) {
-      const message = state.staffAccessLoaded
-        ? `No staff users found for ${scopedStaffLabel()}.`
-        : 'Open or refresh the roster to load staff users.';
-      dom.staffUsers.append(node('p', { className: 'settings-empty', text: message }));
-      return;
-    }
-
-    for (const user of byDisplayLabel(state.staffUsers, staffUserDisplay)) {
+    for (const user of [...state.staffUsers].sort(staffRosterOrder)) {
       const id = stringValue(property(user, 'id'));
-      const version = stringValue(property(user, 'version'));
-      const active = property(user, 'active') !== false;
-      const row = node('article', { className: `settings-staff-row${active ? '' : ' inactive'}` });
-      const upn = node('input', {
-        type: 'email',
-        value: property(user, 'userPrincipalName') || '',
-        'aria-label': `Authentication email for ${staffUserDisplay(user)}`
-      });
-      const displayName = node('input', {
-        type: 'text',
-        value: property(user, 'displayName') || '',
-        'aria-label': `Display name for ${staffUserDisplay(user)}`
-      });
-      const notificationEmail = node('input', {
-        type: 'email',
-        value: property(user, 'notificationEmail') || '',
-        'aria-label': `Notification email for ${staffUserDisplay(user)}`
-      });
-      const role = node('select', { 'aria-label': `Role for ${staffUserDisplay(user)}` });
-      replaceSelectOptions(role, userRoleChoices(user), property(user, 'role') || 'staff');
-      const organization = node('select', { 'aria-label': `Library for ${staffUserDisplay(user)}` });
-      replaceSelectOptions(organization, organizationChoices(role.value), property(user, 'organizationId'));
-      organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
-      const metadataDraft = registerStaffDraft(row, [upn, displayName, notificationEmail], 'staff profile');
-      const accessDraft = registerStaffDraft(row, [role, organization], 'staff access');
-      rosterDrafts.add(metadataDraft); rosterDrafts.add(accessDraft);
-      listen(role, 'change', () => {
-        replaceSelectOptions(organization, organizationChoices(role.value), organization.value);
-        organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
-      });
-
-      const saveMetadata = node('button', {
-        type: 'button',
-        className: 'secondary-button',
-        text: 'Save profile'
-      });
-      listen(saveMetadata, 'click', () => updateStaffMetadata(id, version, {
-        email: clean(upn.value),
-        displayName: clean(displayName.value),
-        notificationEmail: clean(notificationEmail.value)
-      }, metadataDraft));
-
-      const saveRole = node('button', {
-        type: 'button',
-        className: 'secondary-button',
-        text: 'Update access'
-      });
-      listen(saveRole, 'click', () => changeStaffRole(id, version, {
-        role: role.value,
-        organizationId: role.value === 'super_admin' ? 1 : Number(organization.value)
-      }, accessDraft));
-
-      const lifecycle = node('button', {
-        type: 'button',
-        className: active ? 'danger-button' : 'secondary-button',
-        text: active ? 'Deactivate' : 'Reactivate'
-      });
-      listen(lifecycle, 'click', () => {
-        if (active) deactivateStaffUser(id, version, staffUserDisplay(user));
-        else reactivateStaffUser(user, role.value, organization.value, accessDraft);
-      });
-
-      const actions = [saveMetadata, saveRole, lifecycle];
-
-      row.replaceChildren(
-        node('div', { className: 'settings-staff-heading' }, [
-          node('strong', { text: staffUserDisplay(user) }),
-          node('span', { className: `status-badge${active ? '' : ' blocked'}`, text: active ? 'Active' : 'Inactive' })
-        ]),
-        node('p', { className: 'settings-staff-meta' }, [
-          node('span', { text: `ID ${id}` }),
-          node('span', { text: roleLabel(property(user, 'role')) }),
-          node('span', { text: staffUserOrganizationName(user) }),
-          node('span', { text: `Version ${version}` })
-        ]),
-        node('div', { className: 'settings-staff-controls' }, [
-          node('label', { className: 'settings-field' }, [node('span', { text: 'Authentication email' }), upn]),
-          node('label', { className: 'settings-field' }, [node('span', { text: 'Display name' }), displayName]),
-          node('label', { className: 'settings-field' }, [node('span', { text: 'Notification email' }), notificationEmail]),
-          node('label', { className: 'settings-field' }, [node('span', { text: 'Role' }), role]),
-          node('label', { className: 'settings-field' }, [node('span', { text: 'Library' }), organization])
-        ]),
-        node('div', { className: 'settings-staff-actions' }, actions)
-      );
-      if (state.lastStaffCleanup?.staffId === id) {
-        row.append(node('p', {
-          className: 'settings-cleanup-result',
-          text: cleanupSummary(state.lastStaffCleanup.cleanup)
-        }));
-      }
-      dom.staffUsers.append(row);
+      const record = staffRows.get(id) || createStaffRow(user);
+      staffRows.set(id, record);
+      record.accept(user, discard);
     }
+    const ordered = [...staffRows.values()].sort((first, second) => staffRosterOrder(first.user, second.user));
+    ordered.forEach((record, index) => {
+      if (dom.staffUsers.children[index] !== record.row) dom.staffUsers.insertBefore(record.row, dom.staffUsers.children[index] || null);
+    });
+    updateStaffVisibility();
+    if (focused?.isConnected && !focused.closest('[hidden]') && document.activeElement !== focused) focused.focus({ preventScroll: true });
+    else if (focused && !focused.isConnected) dom.staffRefresh.focus({ preventScroll: true });
+  }
+
+  function updateStaffVisibility() {
+    for (const record of staffRows.values()) record.sync();
+    const active = state.staffUsers.filter(user => property(user, 'active') !== false).length;
+    const inactive = state.staffUsers.length - active;
+    dom.staffCounts.textContent = state.staffAccessLoaded
+      ? `${active} active ${active === 1 ? 'account' : 'accounts'} · ${inactive} inactive ${dom.staffShowInactive.checked
+        ? `${inactive === 1 ? 'account' : 'accounts'} shown` : 'hidden'}` : '';
+    dom.staffUsers.querySelector('.settings-empty')?.remove();
+    if (state.staffAccessLoaded && state.staffUsers.length > 0 && (active > 0 || dom.staffShowInactive.checked)) return;
+    const message = !state.staffAccessLoaded ? 'Open or refresh the roster to load staff users.'
+      : state.staffUsers.length === 0 ? `No staff users found for ${scopedStaffLabel()}.`
+      : `No active staff accounts for ${scopedStaffLabel()}. Select Show inactive accounts to view ${inactive === 1 ? 'the inactive account' : 'inactive accounts'}.`;
+    dom.staffUsers.append(node('p', { className: 'settings-empty', text: message }));
   }
 
   function populate(data) {
+    const commonAuthorsOptionsHadFocus = dom.commonAuthorsOptions?.contains(document.activeElement) === true;
+    pendingCommonAuthorsFocus = false;
+    commonAuthorsEnabledOverrideDraft = null;
+    clearPolarisFeedback();
+    timeoutOverrideDrafts.clear();
     releaseLogoDraft();
     dom.logo.value = '';
     dom.discardLogoDraft.hidden = true;
@@ -1248,9 +1777,10 @@ export function createSettingsController({
     const configuredSystem = object(stored.configuredSystem);
     const libraryOverride = object(stored.libraryOverride);
     const systemSettings = object(stored.systemSettings);
+    renderCurrentStaffUrlSuggestion();
     const effective = object(data.effective);
     const effectivePatron = object(data.ui_text || effective);
-    const systemWorkflow = mergeConfigured(configuredSystem.workflow, null, stored.workflow);
+    const systemWorkflow = mergeConfigured(configuredSystem.workflow, null);
     const workflow = isSystem()
       ? systemWorkflow
       : mergeConfigured(systemWorkflow, libraryOverride.workflow, data.workflow);
@@ -1263,19 +1793,14 @@ export function createSettingsController({
       ? mergeConfigured(configuredSystem.email, null, data.emails)
       : mergeConfigured(configuredSystem.email, libraryOverride.email, data.emails);
 
-    dom.contextSummary.textContent = isSystem()
-      ? 'System level configuration'
-      : `Library configuration for ${data.organization?.name || `organization ${organizationId()}`}`;
     dom.version.value = data.version || '';
     setSystemFields(systemSettings);
     setPolarisFields(configuredSystem.polaris || stored.polaris);
     for (const [key, id, kind] of WORKFLOW_FIELDS) writeControl(document.getElementById(id), property(workflow, key));
     setScopedFields(patron, PATRON_FIELDS);
     setSender(email);
-    document.getElementById('email-token-status').textContent =
-      property(configuredSystem.email, 'hasPostmarkToken')
-        ? 'A system Postmark token is stored. Leave the token field blank to keep it.'
-        : 'No system Postmark token is stored.';
+    acceptedPostmarkToken = property(configuredSystem.email, 'hasPostmarkToken') === true;
+    renderPostmarkTokenStatus();
     setCollections(data);
     renderPublicLinks(data);
     writeControl(document.getElementById('branding-alt'), property(effective, 'logoAltText'));
@@ -1288,7 +1813,9 @@ export function createSettingsController({
       for (const [key] of fields) state.baselineOverrides.set(`${section}.${key}`, hasRawOverride(section, key));
     }
     configureScopedFields();
+    syncCommonAuthorsOptions(commonAuthorsOptionsHadFocus);
     patronPlaceholders.refresh();
+    suggestionLimitPlaceholders.refresh();
     dom.systemContext.hidden = isSystem();
     root.querySelector('#settings-library-context-title').textContent = `Editing ${data.organization?.name || 'this library'} settings`;
     root.querySelector('#settings-library-context-guidance').textContent =
@@ -1297,10 +1824,9 @@ export function createSettingsController({
     dom.switchSystem.hidden = state.staff?.role !== 'super_admin';
     dom.clearLogo.textContent = isSystem() ? 'Clear system image' : 'Clear image (use inherited image)';
     renderBrandingPreview();
-    populateParticipation();
     renderOrganizations();
     resetStaffCreateDraft();
-    renderStaffUsers();
+    renderStaffUsers({ discard: true });
     dom.scope.value = state.scope;
     state.baselineSnapshot = snapshotForm(dom.form);
     updateDirtyState();
@@ -1332,15 +1858,16 @@ export function createSettingsController({
   async function load(options = {}) {
     if (disposed || !state.staff || state.staff.role === 'staff') return;
     if (state.pendingMutation && state.pendingMutation !== options.owner) return false;
+    if (options.owner !== polarisTest && options.owner?.slot !== 'administration-settings-organization-sync') cancelPolarisTest();
+    const report = options.report || notify;
     reads.begin('administration-patron-codes').abort();
     const context = captureSettingsContext();
     state.loading = true;
     emailTest.invalidate();
-    placeholders.clear(); patronPlaceholders.clear();
+    placeholders.clear(); patronPlaceholders.clear(); suggestionLimitPlaceholders.refresh();
     const snapshot = snapshotDrafts();
     const loadState = reads.begin('administration-settings');
     state.organizationsReady = false;
-    state.baselineParticipationIds = null;
     updateDirtyState();
     dom.refresh.disabled = true;
     const clearLoading = !options.silent ? notify('Loading settings...') : null;
@@ -1357,7 +1884,7 @@ export function createSettingsController({
       if (!loadState.isCurrent() || !isSettingsContextCurrent(context) || !state.visible ||
           state.pendingMutation && state.pendingMutation !== options.owner) return false;
       if (snapshot !== snapshotDrafts()) {
-        notify('Settings edits changed during reload. Save or discard the edits before reloading again.', 'warning');
+        report('Settings edits changed during reload. Save or discard the edits before reloading again.', 'warning');
         return false;
       }
       const data = settingsResponse?.data && settingsResponse?.version === undefined
@@ -1379,9 +1906,10 @@ export function createSettingsController({
       onRefreshed(context.owner, { kind: 'settings', scope: context.scope,
         changed: !staffReview && review?.outcome === 'uncertain',
         catalogChanged: review?.outcome === 'uncertain' &&
-          (review.catalogChanged || ['administration-settings-organization-sync', 'administration-settings-participation'].includes(review.slot)) });
+          ['administration-settings-organization-sync', 'administration-settings-participation'].includes(review.slot) });
       dom.form.hidden = false;
       dom.form.inert = Boolean(state.pendingMutation || state.awaitingReload);
+      restoreCommonAuthorsFocus();
       patronPlaceholders.refresh();
       if (wasHidden) dom.panels.find(item => item.dataset.settingsPanelContent === state.activePanel)?.focus({ preventScroll: true });
       if (staffReview) {
@@ -1397,7 +1925,7 @@ export function createSettingsController({
       return true;
     } catch (error) {
       if (loadState.isCurrent() && isSettingsContextCurrent(context) && state.visible && !isAbortError(error) && error.status !== 401) {
-        notify(state.outcomeUncertain
+        report(state.outcomeUncertain
           ? 'Settings change outcome is still uncertain. Current values could not be reloaded; try again before editing.'
           : error.message || 'Settings could not be loaded.', 'error');
       }
@@ -1405,7 +1933,7 @@ export function createSettingsController({
     } finally {
       clearLoading?.();
       if (loadState.isCurrent() && isSettingsContextCurrent(context)) {
-        state.loading = false; dom.refresh.disabled = false; emailTest.sync();
+        state.loading = false; dom.refresh.disabled = false; emailTest.sync(); placeholders.refresh(); suggestionLimitPlaceholders.refresh();
       }
       reads.finish('administration-settings', loadState.token);
     }
@@ -1419,7 +1947,7 @@ export function createSettingsController({
   async function loadStaffAccess(options = {}) {
     if (disposed || !state.staff || state.staff.role === 'staff') return false;
     if (state.pendingMutation && state.pendingMutation !== options.owner) return false;
-    if (hasStaffDraft() && !options.discard) return false;
+    if (hasStaffDraft() && !options.discard && !options.preserve) return false;
     const snapshot = snapshotDrafts();
     const loadState = beginSettingsOperation('administration-staff-access');
     const clearLoading = !options.silent ? setStaffStatus(`Loading staff access for ${scopedStaffLabel()}...`) : null;
@@ -1443,7 +1971,8 @@ export function createSettingsController({
         state.unconfirmedMutation = null; state.outcomeUncertain = false; state.awaitingReload = false; state.awaitingReloadMutation = null;
       }
       dom.form.inert = Boolean(state.pendingMutation || state.awaitingReload);
-      renderStaffUsers();
+      if (options.discard) resetStaffCreateDraft();
+      renderStaffUsers({ discard: options.discard === true });
       updateDirtyState();
       onRefreshed(loadState.context.owner, { kind: 'staff', scope: loadState.context.scope,
         changed: review?.slot === 'administration-staff-mutation' });
@@ -1463,47 +1992,100 @@ export function createSettingsController({
   }
 
   async function mutateStaffUser(path, options, successMessage, staffId, consumes) {
-    const mutation = beginSettingsMutation('administration-staff-mutation', consumes);
+    const focused = document.activeElement;
+    const expectedActive = property(staffRows.get(String(staffId))?.user, 'active') !== false;
+    // Only a mounted roster PUT preserves other mounted roster drafts. A change
+    // to the actor's session identity retires those owners, so it must wait.
+    const keepsActor = String(staffId) !== String(state.staff?.id) ||
+      (clean(options.body.email)?.toLowerCase() === clean(state.staff?.authenticationEmail)?.toLowerCase() &&
+        options.body.role === state.staff?.role && Number(options.body.organizationId) === Number(state.staff?.organizationId));
+    const preserves = options.method === 'PUT' && rosterDrafts.has(consumes) && keepsActor
+      ? [...staffRows.values()].filter(record => record.row.isConnected && record.dirty() && record.draft !== consumes).map(record => record.draft) : [];
+    const mutation = beginSettingsMutation('administration-staff-mutation', consumes, preserves);
     if (!mutation) return;
     mutation.staffId = staffId;
-    setStaffStatus(successMessage.replace(/\.$/, '') + '...');
+    setStaffStatus(options.method === 'PUT' ? 'Saving staff changes...' : options.method === 'DELETE' ? 'Deactivating staff user...' : 'Saving staff access...');
     try {
       const response = await authorizedJson(path, options);
       if (!validStaffLifecycleResponse(response, options.method, staffId)) throw unconfirmedResponseError();
+      if (options.method === 'PUT' && !validStaffUpdateResponse(response.user, options.body, expectedActive)) throw unconfirmedResponseError();
       const cleanup = response.cleanup;
       const committedMessage = `${successMessage} ${cleanupSummary(cleanup)}`;
       recordCommitted(mutation, committedMessage);
       onStaffAccessCommitted(mutation.owner);
       if (!isSettingsOperationCurrent(mutation)) return null;
-      if (consumes === staffCreateDraft) resetStaffCreateDraft();
+      if (consumes === staffCreateDraft) {
+        resetStaffCreateDraft(); setStaffCreateOpen(false, true);
+      }
       state.lastStaffCleanup = { staffId: stringValue(property(response?.user ?? response?.data?.user, 'id') || staffId), cleanup };
-      const refreshed = await loadStaffAccess({ silent: true, owner: mutation, discard: true });
+      const record = staffRows.get(String(staffId));
+      if (record) record.accept(response.user, true);
+      // The validated receipt is accepted state even if the following GET
+      // fails. Keep its counts and membership within the current roster scope.
+      state.staffUsers = state.staffUsers.filter(user => String(property(user, 'id')) !== response.user.id);
+      const scope = scopedStaffOrganizationId();
+      if (!scope || String(response.user.organizationId) === scope) state.staffUsers.push(response.user);
+      renderStaffUsers();
+      const refreshed = await loadStaffAccess({ silent: true, owner: mutation, preserve: true });
       if (isSettingsOperationCurrent(mutation)) setStaffStatus(refreshed
         ? committedMessage : `${committedMessage} Staff access could not be refreshed.`,
       refreshed ? 'success' : 'error');
       return isSettingsOperationCurrent(mutation) ? response : null;
     } catch (error) {
-      recordFailure(mutation, error, 'Settings change outcome is uncertain. Reload current values before retrying.');
+      const failureMessage = staffMutationFailure(error, options.method);
+      recordFailure(mutation, error, failureMessage);
       if (!isSettingsOperationCurrent(mutation)) return null;
       if (mutation.outcome === 'committed') {
         setStaffStatus(`${successMessage} Current staff session and roster could not be refreshed. Reload before editing again.`, 'error');
         return null;
       }
       if (error.status === 409) {
-        await loadStaffAccess({ silent: true, owner: mutation, discard: true });
+        await loadStaffAccess({ silent: true, owner: mutation, preserve: true });
         if (!isSettingsOperationCurrent(mutation)) return null;
-        setStaffStatus(error.message || 'Staff access changed elsewhere. Review the refreshed roster.', 'error');
+        setStaffStatus(failureMessage, 'error');
       } else if (error.status !== 401 && !isAbortError(error)) {
-        setStaffStatus(error.message || 'The staff access change could not be saved.', 'error');
+        setStaffStatus(failureMessage, 'error');
       }
       return null;
     } finally {
       finishSettingsMutation(mutation);
-      if (isSettingsOperationCurrent(mutation)) updateDirtyState();
+      if (isSettingsOperationCurrent(mutation)) {
+        updateDirtyState();
+        if (mutation.outcome === 'committed' && !state.awaitingReload && state.activePanel === 'staff' &&
+            (document.activeElement === document.body || document.activeElement === focused)) {
+          const record = staffRows.get(String(staffId));
+          const fallback = staffId === null ? dom.staffCreateToggle
+            : record?.row.hidden ? dom.staffShowInactive : record?.summary || dom.staffRefresh;
+          const target = focused?.isConnected && focused !== document.body && !focused.matches(':disabled') &&
+            !focused.closest('[hidden]') ? focused : fallback;
+          target?.focus({ preventScroll: true });
+        }
+      }
     }
   }
 
+  function staffMutationFailure(error, method) {
+    const action = method === 'DELETE' ? 'Staff deactivation' : method === 'PUT' ? 'Staff save' : 'Staff access change';
+    const status = Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? ` (HTTP ${error.status})` : '';
+    const details = {
+      stale_version: 'Staff access changed elsewhere. Review the refreshed roster and your draft.',
+      staff_scope_forbidden: 'Your current access does not permit this staff change.',
+      active_super_admin_required: 'At least one currently usable super administrator must remain.',
+      identity_already_exists: 'This staff identity already exists or is already active.',
+      staff_invariant_busy: 'Another staff access change is in progress.',
+      organization_inactive: 'Select an active library for this access change.',
+      invalid_version: 'Refresh roster to obtain the current staff version.'
+    };
+    const detail = details[error.response?.code] || error.response?.message ||
+      (error.status === 405 ? 'The server or hosting layer rejected this request method.' : 'The server did not confirm this staff change.');
+    const reference = error.correlationId ? ` Reference: ${error.correlationId}.` : '';
+    return isUnconfirmedMutationFailure(error)
+      ? `${action} outcome is uncertain${status}. ${detail} Use Refresh settings above to reconcile current values before retrying.${reference}`
+      : `${action} failed${status}. ${detail}${reference}`;
+  }
+
   async function createStaffUser() {
+    if (!validateStaffValues(dom.staffEmail, dom.staffRole, dom.staffOrganization)) return;
     const role = dom.staffRole.value || 'staff';
     const body = {
       email: clean(dom.staffEmail.value),
@@ -1516,27 +2098,36 @@ export function createSettingsController({
     }, 'Staff user saved.', null, staffCreateDraft);
   }
 
-  async function updateStaffMetadata(id, version, values, draft) {
+  function validateStaffValues(email, role, organization) {
+    if (!clean(email.value)) {
+      staffEmailValidationNotice = { control: email, context: captureSettingsContext(),
+        clear: setStaffStatus('Email address is required.', 'error') };
+      email.focus(); return false;
+    }
+    if (!email.reportValidity()) return false;
+    if (!role.value || role.value !== 'super_admin' && (!organization.value || Number(organization.value) <= 1)) {
+      setStaffStatus('Select a role and library.', 'error'); (role.value ? organization : role).focus(); return false;
+    }
+    return true;
+  }
+
+  function validStaffUpdateResponse(user, values, active) {
+    return user.active === active && clean(user.userPrincipalName)?.toLowerCase() === values.email?.toLowerCase() &&
+      user.notificationEmail === user.userPrincipalName && clean(user.displayName) === values.displayName &&
+      user.role === values.role && user.organizationId === values.organizationId;
+  }
+
+  async function updateStaffUser(id, version, values, draft) {
     await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
+      method: 'PUT',
       body: {
         version: stringValue(version),
         email: values.email,
         displayName: values.displayName,
-        notificationEmail: values.notificationEmail
-      }
-    }, 'Staff profile saved.', id, draft);
-  }
-
-  async function changeStaffRole(id, version, values, draft) {
-    await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}/role`, {
-      method: 'POST',
-      body: {
-        version: stringValue(version),
         role: values.role,
         organizationId: values.organizationId
       }
-    }, 'Staff access updated.', id, draft);
+    }, 'Staff changes saved.', id, draft);
   }
 
   async function deactivateStaffUser(id, version, displayName) {
@@ -1548,15 +2139,14 @@ export function createSettingsController({
     }, 'Staff user deactivated.', id, null);
   }
 
-  async function reactivateStaffUser(user, role, organizationId, draft) {
-    await mutateStaffUser('/api/asap/staff/users', {
+  async function reactivateStaffUser(user, version) {
+    const displayName = staffUserDisplay(user);
+    if (!await confirmSettings(`Reactivate ${displayName}?`,
+      `${displayName} will regain their saved staff access. Save or cancel unsaved edits separately.`, 'Reactivate staff')) return;
+    await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(property(user, 'id'))}/reactivate`, {
       method: 'POST',
-      body: {
-        email: clean(property(user, 'userPrincipalName')),
-        role,
-        organizationId: role === 'super_admin' ? 1 : Number(organizationId)
-      }
-    }, 'Staff user reactivated.', property(user, 'id'), draft);
+      body: { version: stringValue(version) }
+    }, 'Staff user reactivated.', property(user, 'id'), null);
   }
 
   function collectScoped(section, fields) {
@@ -1584,13 +2174,6 @@ export function createSettingsController({
     for (const [key, id] of SYSTEM_FIELDS) result[key] = readControl(document.getElementById(id));
     result.patronEmbedAllowedOrigins = document.getElementById('patron-embed-allowed-origins').value
       .split(/\r?\n/).map(clean).filter(Boolean);
-    const enabledLibraryOrgIds = [...dom.enabledLibraries.querySelectorAll('input[type="checkbox"]')]
-      .filter(input => input.checked).map(input => Number(input.value));
-    const baselineParticipationIds = state.baselineParticipationIds || [];
-    if (JSON.stringify(enabledLibraryOrgIds.slice().sort((first, second) => first - second)) !==
-        JSON.stringify(baselineParticipationIds)) {
-      result.enabledLibraryOrgIds = enabledLibraryOrgIds;
-    }
     return result;
   }
 
@@ -1607,6 +2190,10 @@ export function createSettingsController({
 
   function collectTemplates(domainData) {
     const rows = [];
+    const append = (row, editor) => {
+      placeholders.validate([row], isSystem(), editor);
+      rows.push(row);
+    };
     const raw = templateRows(state.data);
     const systemRows = raw.filter(row => Number(row.organizationId) === 1);
     const libraryRows = raw.filter(row => Number(row.organizationId) === organizationId());
@@ -1615,22 +2202,23 @@ export function createSettingsController({
       const body = document.getElementById(bodyId).value;
       const systemRow = findTemplate(systemRows, key);
       const baseline = state.baselineTemplates.get(key) || {};
+      const fieldset = root.querySelector(`[data-template-key="${key}"]`);
       if (isSystem()) {
-        if (subject !== (baseline.subject ?? '') || body !== (baseline.body ?? '')) {
-          rows.push({ templateKey: key, subject, body });
-        }
+        const row = { templateKey: key };
+        if (subject !== (baseline.subject ?? '')) row.subject = subject;
+        if (body !== (baseline.body ?? '')) row.body = body;
+        if (Object.keys(row).length > 1) append(row, fieldset);
         continue;
       }
-      const fieldset = root.querySelector(`[data-template-key="${key}"]`);
       const overrideToggle = fieldset.querySelector('.settings-template-override');
       const libraryRow = libraryRows.find(row =>
         String(row.sourceTemplateId || '') === String(systemRow?.id || '') && !row.isCustom);
       if (!overrideToggle?.checked) {
-        if (libraryRow) rows.push({
+        if (libraryRow) append({
           templateKey: key,
           sourceTemplateId: String(systemRow?.id || libraryRow.sourceTemplateId || ''),
           reset: true
-        });
+        }, fieldset);
         continue;
       }
       const row = {
@@ -1639,19 +2227,21 @@ export function createSettingsController({
       };
       if (subject !== (baseline.subject ?? '')) row.subject = subject;
       if (body !== (baseline.body ?? '')) row.body = body;
-      if (Object.keys(row).length > 2) rows.push(row);
+      if (Object.keys(row).length > 2) append(row, fieldset);
     }
     if (domainData?.domainsChanged?.templates) {
       for (const item of domainData.templates) {
+        const editor = root.querySelector(`[data-template-ui-id="${item.uiId}"]`);
         if (item.isCustom) {
-          rows.push({
-            templateKey: item.templateKey,
-            displayName: item.displayName,
-            subject: item.subject,
-            body: item.body,
-            enabled: item.enabled,
-            isCustom: true
-          });
+          if (item.reset) {
+            append({ templateKey: item.templateKey, isCustom: true, reset: true }, editor);
+            continue;
+          }
+          const row = { templateKey: item.templateKey, isCustom: true };
+          for (const key of ['displayName', 'subject', 'body', 'enabled', 'sortOrder']) {
+            if (item[`${key}Changed`]) row[key] = item[key];
+          }
+          if (Object.keys(row).length > 2) append(row, editor);
           continue;
         }
         const row = {
@@ -1665,8 +2255,9 @@ export function createSettingsController({
           if (item.bodyChanged) row.body = item.body;
           if (item.displayNameChanged) row.displayName = item.displayName;
           if (item.enabledChanged) row.enabled = item.enabled;
+          if (isSystem() && item.sortOrderChanged) row.sortOrder = item.sortOrder;
         }
-        if (row.reset || item.overridden && !item.hadOverride || Object.keys(row).length > 2) rows.push(row);
+        if (row.reset || !isSystem() && item.overridden && !item.hadOverride || Object.keys(row).length > 2) append(row, editor);
       }
     }
     return rows;
@@ -1755,11 +2346,18 @@ export function createSettingsController({
       return;
     }
     let payload;
+    templateValidationTarget = {};
     try {
       payload = collectPayload();
     } catch (error) {
-      notify(error.message || 'The settings are invalid. Reload settings before saving.', 'error');
+      const message = error.message || 'The settings are invalid. Reload settings before saving.';
+      const clearNotice = notify(message, 'error');
+      if (templateValidationTarget?.message === message) {
+        placeholders.ownValidationNotice(templateValidationTarget.control, message, clearNotice);
+      }
       return;
+    } finally {
+      templateValidationTarget = null;
     }
     const mutation = beginSettingsMutation('administration-settings-save', settingsDraft);
     if (!mutation) return;
@@ -1773,8 +2371,6 @@ export function createSettingsController({
       ? `Settings saved. Format deletions confirmed: ${deletedFormatCount} of ${totalFormatDeletes}.`
       : 'Settings saved.';
     try {
-      // System saves replace the authoritative participation set as well as configuration.
-      mutation.catalogChanged = Array.isArray(payload.systemSettings?.enabledLibraryOrgIds);
       const deletedFormats = state.pendingDeletedFormats.slice();
       totalFormatDeletes = deletedFormats.length;
       const response = await authorizedJson('/api/asap/staff/settings', {
@@ -1787,9 +2383,21 @@ export function createSettingsController({
       }
       committed = true;
       recordCommitted(mutation, committedMessage(), mutation.context.scope);
-      if (mutation.catalogChanged) onOrganizationCatalogCommitted(mutation.owner);
       if (!isSettingsOperationCurrent(mutation)) return;
       state.data.version = response?.data?.version || state.data.version;
+      if (payload.polaris?.apiKey) {
+        document.getElementById('polaris-api-key-status').textContent =
+          'API key replacement saved. Reload settings to refresh the credential status.';
+      }
+      if (payload.polaris?.adminPassword) {
+        document.getElementById('polaris-admin-pass-status').textContent =
+          'System staff password replacement saved. Reload settings to refresh the credential status.';
+      }
+      if (payload.email?.clearPostmarkToken) {
+        dom.postmarkTokenStatus.textContent = 'Postmark token removal saved. Reload settings to refresh credential status.';
+      } else if (payload.email?.postmarkToken) {
+        dom.postmarkTokenStatus.textContent = 'Postmark token replacement saved. Reload settings to refresh credential status.';
+      }
       state.baselineSnapshot = snapshotForm(dom.form);
       domainEditors.setBaseline();
       state.awaitingReload = true;
@@ -1824,6 +2432,11 @@ export function createSettingsController({
         return;
       }
       if (isUnconfirmedMutationFailure(error, mutation)) {
+        if (payload.email?.clearPostmarkToken) {
+          dom.postmarkTokenStatus.textContent = 'Postmark token removal outcome is uncertain. Reload current settings before retrying.';
+        } else if (payload.email?.postmarkToken) {
+          dom.postmarkTokenStatus.textContent = 'Postmark token replacement outcome is uncertain. Reload current settings before retrying.';
+        }
         markUnconfirmedMutation('Settings change outcome is uncertain. Reload current values before retrying.');
         return;
       }
@@ -1983,9 +2596,12 @@ export function createSettingsController({
     const operation = beginSettingsOperation('administration-polaris-test');
     polarisTest = operation;
     dom.testPolaris.disabled = true;
+    setPolarisFeedback(dom.polarisResult, 'Testing saved Polaris connection...');
     try {
-      if (isDirty() && !await load({ silent: true })) return;
+      if (isDirty() && !await load({ silent: true, owner: operation,
+        report: () => setPolarisFeedback(dom.polarisResult, 'The Polaris connection test could not start because saved settings could not be reloaded.', 'error') })) return;
       if (!isSettingsOperationCurrent(operation)) return;
+      setPolarisFeedback(dom.polarisResult, 'Testing saved Polaris connection...');
       const response = await authorizedJson('/api/asap/staff/polaris/test', {
         method: 'POST',
         body: {},
@@ -1997,15 +2613,11 @@ export function createSettingsController({
         throw new Error('Polaris connection response is incomplete.');
       }
       const data = response.data;
-      dom.polarisResult.textContent = data.connected
-        ? `Connected; ${data.organizationCount || 0} organizations available.`
-        : `Polaris is unavailable${data.errorCode ? ` (${data.errorCode})` : ''}.`;
-      notify(data.connected ? 'Polaris connection succeeded.' : 'Polaris connection is unavailable.', data.connected ? 'success' : 'error');
+      setPolarisFeedback(dom.polarisResult, `Connected; ${data.organizationCount} organizations available.`, 'success');
     } catch (error) {
       if (isSettingsOperationCurrent(operation) && error.status !== 401 && !isAbortError(error)) {
         const unavailable = error.status === 502 || error.response?.code === 'polaris_unavailable';
-        dom.polarisResult.textContent = unavailable ? 'Polaris is unavailable.' : 'The Polaris connection test could not be completed.';
-        notify(dom.polarisResult.textContent, 'error');
+        setPolarisFeedback(dom.polarisResult, unavailable ? 'Polaris is unavailable.' : 'The Polaris connection test could not be completed.', 'error');
       }
     } finally {
       if (polarisTest === operation) { polarisTest = null; if (!disposed) dom.testPolaris.disabled = false; }
@@ -2017,6 +2629,7 @@ export function createSettingsController({
     const mutation = beginSettingsMutation('administration-settings-organization-sync', null);
     if (!mutation) return;
     dom.syncOrganizations.disabled = true;
+    setPolarisFeedback(dom.syncResult, 'Synchronizing Polaris organizations...');
     try {
       const response = await authorizedJson('/api/asap/staff/organizations/sync', {
         method: 'POST',
@@ -2029,29 +2642,48 @@ export function createSettingsController({
       recordCommitted(mutation, 'Polaris organizations synchronized.', 'system');
       onOrganizationCatalogCommitted(mutation.owner);
       if (!isSettingsOperationCurrent(mutation)) return;
-      dom.syncResult.textContent = `Synchronized ${response.data.received} organizations.`;
-      const refreshed = await load({ silent: true, owner: mutation });
-      if (isSettingsOperationCurrent(mutation)) notify(refreshed
-        ? 'Polaris organizations synchronized.'
-        : 'Polaris organizations synchronized, but current values could not be refreshed.',
-      refreshed ? 'success' : 'error');
+      const summary = `Synchronized ${response.data.received} organizations.`;
+      setPolarisFeedback(dom.syncResult, `${summary} Refreshing current values...`);
+      const refreshed = await load({ silent: true, owner: mutation, report: () => {} });
+      if (isSettingsOperationCurrent(mutation)) setPolarisFeedback(dom.syncResult, refreshed
+        ? summary : `${summary} Current values could not be refreshed. Reload before editing.`, refreshed ? 'success' : 'error');
     } catch (error) {
-      recordFailure(mutation, error, 'Settings change outcome is uncertain. Reload current values before retrying.');
+      recordFailure(mutation, error, 'Organization synchronization outcome is uncertain. Reload current values before retrying.',
+        (message, kind) => setPolarisFeedback(dom.syncResult, message, kind));
       if (isSettingsOperationCurrent(mutation) && error.status !== 401 && !isAbortError(error)) {
-        notify(error.message || 'Organizations could not be synchronized.', 'error');
+        if (mutation.outcome === 'committed') {
+          setPolarisFeedback(dom.syncResult, 'Polaris organizations synchronized, but current values could not be refreshed. Reload before editing.', 'error');
+        } else if (mutation.outcome !== 'uncertain') {
+          setPolarisFeedback(dom.syncResult, error.message || 'Organizations could not be synchronized.', 'error');
+        }
       }
     } finally {
       finishSettingsMutation(mutation);
-      if (isSettingsContextCurrent(mutation.context)) dom.syncOrganizations.disabled = false;
+      if (isSettingsContextCurrent(mutation.context)) {
+        dom.syncOrganizations.disabled = false;
+        updateDirtyState();
+      }
     }
   }
 
-  async function setOrganizationActive(organization, active) {
+  async function setOrganizationActive(organization, active, action) {
+    const ownsFocus = document.activeElement === action;
     if (!await confirmSettings(`${active ? 'Activate' : 'Deactivate'} ${organization.name}?`,
       `${active ? 'Enable' : 'Disable'} participation for ${organization.name}? The server will apply its current participation and session rules.`,
       active ? 'Activate library' : 'Deactivate library', active ? 'normal' : 'danger')) return;
     const mutation = beginSettingsMutation('administration-settings-participation', null);
     if (!mutation) return;
+    let focusMoved = false;
+    const focusEvents = new window.AbortController();
+    if (ownsFocus) {
+      const relinquishFocus = () => { focusMoved = true; };
+      document.addEventListener('focusin', event => {
+        if (event.target !== action && event.target !== document.body) relinquishFocus();
+      }, { signal: focusEvents.signal });
+      for (const event of ['pointerdown', 'keydown']) {
+        document.addEventListener(event, relinquishFocus, { signal: focusEvents.signal, capture: true });
+      }
+    }
     try {
       const response = await authorizedJson(`/api/asap/staff/organizations/${encodeURIComponent(organization.id)}/${active ? 'activate' : 'deactivate'}`, {
         method: 'POST',
@@ -2080,7 +2712,19 @@ export function createSettingsController({
       }
       if (error.status !== 401 && !isAbortError(error)) notify(error.message || 'Organization participation could not be changed.', 'error');
     } finally {
+      focusEvents.abort();
       finishSettingsMutation(mutation);
+      if (isSettingsContextCurrent(mutation.context)) {
+        updateDirtyState();
+        const focused = document.activeElement;
+        if (ownsFocus && !focusMoved && state.visible && state.activePanel === 'polaris' && isSystem() &&
+            (focused === action || focused === document.body || focused === document.documentElement)) {
+          const updatedAction = dom.organizations.querySelector(`[data-organization-id="${organization.id}"] button`);
+          const target = state.awaitingReload ? dom.refresh : updatedAction || dom.organizationCatalog;
+          if (target?.isConnected && !target.matches(':disabled') && !target.closest('[hidden], [inert]') &&
+              !(dom.form.contains(target) && dom.form.inert)) target.focus();
+        }
+      }
     }
   }
 
@@ -2140,6 +2784,7 @@ export function createSettingsController({
         populate({ ...data, patronCodeChoices: Array.isArray(choices) ? choices : [],
           patronCodeChoicesUnavailable: !Array.isArray(choices) });
         renderStaffUsers(); dom.form.hidden = false; dom.form.inert = state.awaitingReload; dom.refresh.disabled = false;
+        restoreCommonAuthorsFocus();
         onRefreshed(operation.context.owner, { kind: 'settings', scope });
       } };
     } catch (error) {
@@ -2151,7 +2796,7 @@ export function createSettingsController({
   function activatePanel(name, updateUrl = false) {
     if (disposed || !dom.nav.some(button => button.dataset.settingsPanel === name) ||
         !state.staff || state.staff.role === 'staff') return false;
-    if (name !== state.activePanel) { placeholders.clear(); patronPlaceholders.clear(); }
+    if (name !== state.activePanel) { placeholders.clear(); patronPlaceholders.clear(); suggestionLimitPlaceholders.clear(); }
     state.activePanel = name;
     for (const button of dom.nav) {
       const active = button.dataset.settingsPanel === name;
@@ -2160,7 +2805,11 @@ export function createSettingsController({
       button.tabIndex = active ? 0 : -1;
     }
     for (const panel of dom.panels) panel.hidden = panel.dataset.settingsPanelContent !== name;
+    dom.staffCreateForm.disabled = dom.staffCreateForm.hidden || name !== 'staff';
+    for (const record of staffRows.values()) record.sync();
     if (name === 'patron') patronPlaceholders.refresh();
+    if (name === 'templates') placeholders.refresh();
+    if (name === 'workflow') suggestionLimitPlaceholders.refresh();
     const panel = dom.panels.find(item => item.dataset.settingsPanelContent === name);
     panel?.focus({ preventScroll: true });
     if (name === 'staff') void loadStaffAccess();
@@ -2198,6 +2847,8 @@ export function createSettingsController({
     const replaced = actorKey(state.staff) !== actorKey(staff);
     if (replaced) {
       cancelSettingsOperations();
+      commonAuthorsEnabledOverrideDraft = null;
+      pendingCommonAuthorsFocus = false;
       state.pendingMutation = null; state.saving = false; state.outcomeUncertain = false; state.awaitingReload = false; state.awaitingReloadMutation = null; state.unconfirmedMutation = null;
       dom.form.inert = false; dom.form.removeAttribute('aria-busy');
       releaseLogoDraft();
@@ -2205,7 +2856,6 @@ export function createSettingsController({
       state.data = null;
       state.organizations = [];
       state.organizationsReady = false;
-      state.baselineParticipationIds = null;
       dom.form.hidden = true;
       dom.staffRole.value = 'staff'; dom.staffOrganization.value = '';
     }
@@ -2231,6 +2881,8 @@ export function createSettingsController({
     const message = state.pendingMutation && state.pendingMutation.outcome !== 'committed' || state.outcomeUncertain
       ? 'Settings change outcome is uncertain. Sign in again and check saved values before retrying.' : null;
     cancelSettingsOperations();
+    commonAuthorsEnabledOverrideDraft = null;
+    pendingCommonAuthorsFocus = false;
     releaseLogoDraft();
     copyGeneration += 1;
     state.visible = false;
@@ -2239,7 +2891,6 @@ export function createSettingsController({
     state.data = null;
     state.organizations = [];
     state.organizationsReady = false;
-    state.baselineParticipationIds = null;
     state.staffUsers = [];
     state.staffAccessLoaded = false;
     state.lastStaffCleanup = null;
@@ -2255,7 +2906,49 @@ export function createSettingsController({
     listen(dom.form, 'submit', saveSettings);
     listen(dom.form, 'input', draftChanged);
     listen(dom.form, 'change', draftChanged);
+    listen(root.ownerDocument, 'focusin', event => {
+      staffFocusSequence++;
+      queueStaffReveal(event.target);
+    });
+    listen(root, 'keydown', event => {
+      // Keyboard use can reveal focus on a pointer-focused button without a
+      // new focusin event. Recheck after its native activation and layout.
+      if (event.target.matches?.('button')) queueStaffReveal(event.target);
+    });
+    listen(dom.form, 'input', event => {
+      const notice = staffEmailValidationNotice;
+      if (!notice || notice.control !== event.target || !clean(event.target.value)) return;
+      retireStaffEmailValidation(event.target);
+    });
+    const compactNavigation = window.matchMedia?.('(max-width: 760px)');
+    const syncTabOrientation = () => dom.nav[0].parentElement.setAttribute('aria-orientation',
+      (compactNavigation?.matches ?? window.innerWidth <= 760) ? 'horizontal' : 'vertical');
+    syncTabOrientation();
+    if (compactNavigation) listen(compactNavigation, 'change', syncTabOrientation);
+    listen(dom.commonAuthorsEnabled, 'change', () => syncCommonAuthorsOptions());
+    for (const id of [
+      'outstanding-timeout-enabled', 'outstanding-timeout-send-email',
+      'hold-pickup-timeout-enabled', 'pending-hold-timeout-enabled', 'additional-copy-timeout-enabled'
+    ]) {
+      listen(document.getElementById(id), 'change', applyTimeoutDependencies);
+    }
+    listen(dom.useCurrentStaffUrl, 'click', () => {
+      if (!currentStaffUrlSuggestion || disposed || !state.visible || state.staff?.role !== 'super_admin' ||
+          !isSystem() || state.activePanel !== 'start' || !state.data || state.loading || state.saving ||
+          state.pendingMutation || state.awaitingReload || state.outcomeUncertain || dom.form.inert ||
+          dom.useCurrentStaffUrl.matches(':disabled') || dom.systemStaffUrl.matches(':disabled')) return;
+      const alreadyCurrent = dom.systemStaffUrl.value === currentStaffUrlSuggestion;
+      dom.systemStaffUrl.value = currentStaffUrlSuggestion;
+      dom.systemStaffUrl.dispatchEvent(new window.Event('input', { bubbles: true }));
+      dom.systemStaffUrl.dispatchEvent(new window.Event('change', { bubbles: true }));
+      renderCurrentStaffUrlSuggestion(alreadyCurrent ? 'unchanged' : 'applied');
+    });
     listen(dom.scope, 'change', changeScope);
+    listen(dom.manageParticipation, 'click', () => {
+      if (!state.visible || state.staff?.role !== 'super_admin' || !isSystem() ||
+          state.loading || state.pendingMutation || state.awaitingReload || dom.form.inert) return;
+      if (activatePanel('polaris', true)) dom.organizationCatalog.focus();
+    });
     listen(dom.switchSystem, 'click', async () => {
       if (state.staff?.role !== 'super_admin') return;
       dom.scope.value = 'system';
@@ -2299,6 +2992,11 @@ export function createSettingsController({
         notify('Wait for the settings change to finish before reloading.', 'warning');
         return;
       }
+      const review = state.awaitingReloadMutation || state.unconfirmedMutation;
+      if (review?.slot === 'administration-staff-mutation' && review.preserves?.length > 0) {
+        await loadStaffAccess({ preserve: true });
+        return;
+      }
       if (isDirty() && !await confirmSettings('Reload settings?', 'Discard unsaved settings changes and reload?', 'Discard changes and reload', 'danger')) return;
       await load();
     });
@@ -2315,23 +3013,40 @@ export function createSettingsController({
     listen(dom.syncOrganizations, 'click', syncOrganizations);
     listen(dom.staffRole, 'change', populateStaffCreateControls);
     listen(dom.staffCreate, 'click', createStaffUser);
+    listen(dom.staffCreateToggle, 'click', () => setStaffCreateOpen(dom.staffCreateForm.hidden, true));
+    listen(dom.staffCreateCancel, 'click', () => {
+      resetStaffCreateDraft(); setStaffCreateOpen(false, true); drafts.touch(); updateDirtyState();
+    });
+    listen(dom.staffCreateForm, 'keydown', event => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault(); event.stopPropagation(); setStaffCreateOpen(false, true);
+    });
     const refreshStaff = async () => {
       if (state.pendingMutation) return;
+      const review = state.awaitingReloadMutation || state.unconfirmedMutation;
+      if (review?.slot === 'administration-staff-mutation' && review.preserves?.length > 0) {
+        return loadStaffAccess({ preserve: true });
+      }
       if (hasStaffDraft() && !await confirmSettings('Refresh staff roster?', 'Discard unsaved staff edits and refresh the roster?', 'Discard edits and refresh', 'danger')) return;
       return loadStaffAccess({ discard: true });
     };
     listen(dom.staffRefresh, 'click', refreshStaff);
+    listen(dom.staffShowInactive, 'change', updateStaffVisibility);
     listen(dom.staffAuditHistory, 'click', () => {
       if (disposed || !state.visible || state.activePanel !== 'staff' || !state.staff) return;
       onStaffAuditHistory(scopedStaffOrganizationId(), { ownerKey: actorKey(state.staff) });
     });
     listen(dom.saveLogo, 'click', () => saveLogo(false));
     listen(dom.clearLogo, 'click', () => saveLogo(true));
-    listen(document.getElementById('email-postmark-token'), 'input', event => {
-      if (event.target.value) document.getElementById('email-clear-postmark-token').checked = false;
+    listen(dom.postmarkToken, 'input', event => {
+      if (event.target.value) {
+        dom.clearPostmarkToken.checked = false;
+        renderPostmarkTokenStatus();
+      }
     });
-    listen(document.getElementById('email-clear-postmark-token'), 'change', event => {
-      if (event.target.checked) document.getElementById('email-postmark-token').value = '';
+    listen(dom.clearPostmarkToken, 'change', event => {
+      if (event.target.checked) dom.postmarkToken.value = '';
+      renderPostmarkTokenStatus();
     });
     for (const [sourceId, targetId] of [
       ['email-from-address', 'email-template-from-address'],
@@ -2364,8 +3079,9 @@ export function createSettingsController({
     state.visible = true;
     activatePanel(panel);
     populateScopeOptions();
-    if (state.awaitingReloadMutation?.slot === 'administration-staff-mutation' && state.data && String(state.data.orgId) === String(state.scope)) {
-      await loadStaffAccess({ discard: true });
+    const staffReview = state.awaitingReloadMutation || state.unconfirmedMutation;
+    if (staffReview?.slot === 'administration-staff-mutation' && state.data && String(state.data.orgId) === String(state.scope)) {
+      await loadStaffAccess(staffReview.preserves?.length > 0 ? { preserve: true } : { discard: true });
     } else if (state.awaitingReload || !state.data || String(state.data.orgId) !== String(state.scope)) await load();
     else configureScopedFields();
   }
@@ -2375,7 +3091,8 @@ export function createSettingsController({
     if (state.pendingMutation || state.outcomeUncertain) return false;
     state.visible = false;
     emailTest.invalidate();
-    placeholders.clear(); patronPlaceholders.clear();
+    placeholders.clear(); patronPlaceholders.clear(); suggestionLimitPlaceholders.refresh();
+    placeholders.retireValidationNotice();
     cancelPolarisTest();
     releaseLogoDraft();
     dom.logo.value = '';

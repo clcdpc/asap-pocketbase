@@ -54,8 +54,13 @@ export function createDraftScope() {
       if (disposed || (declaration.consumes !== null && !drafts.has(declaration.consumes))) {
         return { allowed: false, reason: 'invalid_owner' };
       }
+      const preserves = declaration.preserves ?? [];
+      if (!Array.isArray(preserves) || (preserves.length > 0 && declaration.consumes === null) ||
+          preserves.some(handle => !drafts.has(handle))) {
+        return { allowed: false, reason: 'invalid_preservation' };
+      }
       for (const [handle, draft] of drafts) {
-        if (handle !== declaration.consumes && draft.isDirty()) {
+        if (handle !== declaration.consumes && !preserves.includes(handle) && draft.isDirty()) {
           return { allowed: false, reason: 'competing_draft', kind: draft.kind };
         }
       }

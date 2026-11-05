@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { URL } = require('node:url');
+const { verifyRoster: verifyStaffRosterNativeZoom } = require('./staff-native-zoom.cjs');
+const settingsSpacingRecorder = require('./settings-spacing.cjs');
 
 async function revealRequestActions(page) {
   await page.locator('#request-dialog[open] .action-bar').waitFor();
@@ -2878,6 +2880,14 @@ async function runNavigationSupport(browser, args, axeSource, report) {
   const { context, traffic } = await createContext(
     browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const page = await context.newPage();
+  const brandingSpacingRoot = path.join(args.artifactRoot, 'branding-preview-spacing');
+  await fs.mkdir(brandingSpacingRoot, { recursive: true });
+  const recordBrandingSpacing = settingsSpacingRecorder(page, brandingSpacingRoot);
+  let navigationWrites = 0;
+  page.on('request', request => {
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method()) &&
+        new URL(request.url()).pathname.startsWith('/api/asap/staff/')) navigationWrites += 1;
+  });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
   try {
@@ -3070,9 +3080,47 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await page.locator('#settings-nav-patron').click();
     await page.locator('#branding-logo').setInputFiles({
       name: 'preview.gif', mimeType: 'image/gif',
-      buffer: Buffer.from('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 'base64')
+      // An opaque 160×48 two-color GIF makes the preview visibly reviewable.
+      buffer: Buffer.from('R0lGODlhoAAwAPAAAAddh/O8SCwAAAAAoAAwAAAIxgABCBxIsKDBgwgTKlzIsKHDhxAjSpxIsaLFixgzatzIsaPHjyBDihxJsqTJkyhTqlzJsqXLlzBjypxJs6bNmzhz6tzJs6fPn0CDCh1KtKjRowQDKF3KtKnTp1CjSp1KtarVq1izat3KtavXr2DDih1LtqzZs2jTql3Ltq3bt3Djyp1Lt67du3jz6t3Lt6/fv4ADCx5MuLDhw4gTK17MuLHjx0yRSp5MubLly5gza97MubPnz6BDix5NurTp06hTq17NurXQgAA7', 'base64')
     });
     await page.locator('#branding-preview-source').filter({ hasText: /Unsaved image preview/ }).waitFor();
+    await page.waitForFunction(() => {
+      const image = document.getElementById('branding-preview');
+      const bounds = image.getBoundingClientRect();
+      return !image.hidden && image.complete && image.naturalWidth === 160 && image.naturalHeight === 48 &&
+        bounds.width >= 128 && bounds.height >= 38;
+    });
+    const writesBeforePreview = navigationWrites;
+    const selectedLogo = await page.locator('#branding-logo').inputValue();
+    const previewSpacing = await recordBrandingSpacing('supplemental-branding-visible-preview');
+    const visiblePreview = await page.locator('#branding-preview').evaluate(image => {
+      const source = document.getElementById('branding-preview-source'), grid = image.nextElementSibling;
+      const bounds = element => {
+        const box = element.getBoundingClientRect();
+        return { top: box.top, bottom: box.bottom, left: box.left, right: box.right, width: box.width, height: box.height };
+      };
+      const scale = parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+      return { source: bounds(source), image: bounds(image), grid: bounds(grid),
+        sourceToPreviewGap: (bounds(image).top - bounds(source).bottom) / scale,
+        previewToGridGap: (bounds(grid).top - bounds(image).bottom) / scale,
+        sourceLabel: source.textContent, sourceProtocol: new URL(image.currentSrc).protocol,
+        loaded: image.complete, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight,
+        followingGrid: grid.classList.contains('settings-grid') };
+    });
+    report.brandingVisiblePreview = { scope: previewSpacing.scope, ...visiblePreview,
+      screenshot: 'branding-unsaved-visible-preview.png', spacingReceipt: 'branding-preview-spacing/settings-spacing.json' };
+    await page.screenshot({ path: path.join(args.artifactRoot, report.brandingVisiblePreview.screenshot), fullPage: true });
+    await fs.writeFile(path.join(brandingSpacingRoot, 'visible-preview.json'), JSON.stringify(report.brandingVisiblePreview, null, 2));
+    assert.equal(previewSpacing.scope, '2');
+    assert.equal(visiblePreview.loaded, true); assert.equal(visiblePreview.sourceProtocol, 'blob:');
+    assert.equal(visiblePreview.naturalWidth, 160); assert.equal(visiblePreview.naturalHeight, 48);
+    assert.ok(visiblePreview.image.width >= 128 && visiblePreview.image.height >= 38, 'The loaded Branding preview is visibly sized.');
+    assert.equal(visiblePreview.followingGrid, true);
+    for (const gap of [visiblePreview.sourceToPreviewGap, visiblePreview.previewToGridGap]) {
+      assert.ok(gap >= 11.8 && gap <= 12.2, `Visible Branding preview keeps its 12px gaps: ${JSON.stringify(visiblePreview)}`);
+    }
+    assert.equal(await page.locator('#branding-logo').inputValue(), selectedLogo);
+    assert.equal(navigationWrites, writesBeforePreview, 'Capturing the visible preview never writes an API.');
     let prematureSettingsSaves = 0;
     const unexpectedSettingsSave = route => {
       prematureSettingsSaves += 1;
@@ -3177,18 +3225,24 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       { waitUntil: 'networkidle' });
     await page.locator('#settings-templates').waitFor({ state: 'visible' });
     const originalSubject = await page.locator('#email-submit-subject').inputValue();
-    await page.locator('#template-placeholder-help summary').click();
-    assert.equal(await page.locator('#template-placeholder-list button').count(), 7);
+    const submissionCard = page.locator('[data-template-key="suggestion_submitted"]');
+    assert.equal(await submissionCard.locator('[data-template-toggle]').getAttribute('aria-expanded'), 'false');
+    await submissionCard.locator('[data-template-toggle]').click();
     await page.evaluate(() => {
       const subject = document.getElementById('email-submit-subject');
       subject.focus();
       subject.setSelectionRange(0, 0);
       subject.dispatchEvent(new Event('select', { bubbles: true }));
     });
-    await page.getByRole('button', { name: '{{name}}' }).click();
+    await page.getByRole('button', { name: 'Insert placeholder into Submission confirmation Subject', exact: true }).click();
+    assert.equal(await page.locator('#email-submit-subject-placeholders [data-placeholder-key]').count(), 7);
+    await page.locator('#email-submit-subject-placeholders summary').click();
+    await page.locator('#email-submit-subject-placeholders [data-placeholder-key="name"]').click();
     assert.equal(await page.locator('#email-submit-subject').inputValue(), `{{name}}${originalSubject}`);
     assert.equal(await page.locator('#settings-save-title').textContent(), 'Unsaved changes');
-    assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'sticky');
+    assert.equal(await page.locator('#email-submit-subject').evaluate(node => node === document.activeElement), true);
+    assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'static',
+      'Insertion keeps the bar in flow while the restored Subject owns focus.');
     await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
     await page.waitForFunction(expected => document.getElementById('email-submit-subject').value === expected,
       originalSubject);
@@ -3223,11 +3277,11 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await page.waitForFunction(() => document.querySelector('#email-readiness-warning')?.textContent
       .includes('Email delivery is not configured'));
     await page.waitForFunction(() => !document.getElementById('settings-form').hidden &&
-      document.getElementById('settings-context-summary').textContent.includes('Library configuration'));
+      !document.getElementById('settings-form').inert && !document.getElementById('settings-system-context').hidden);
     await page.locator('#settings-scope').selectOption('system');
     await page.locator('#email-readiness-warning').waitFor({ state: 'hidden' });
     await page.waitForFunction(() => !document.getElementById('settings-form').hidden &&
-      document.getElementById('settings-context-summary').textContent === 'System level configuration');
+      !document.getElementById('settings-form').inert && document.getElementById('settings-system-context').hidden);
     await page.unroute('**/api/asap/staff/email-readiness*', scopedEmailReadiness);
     assert.equal(await page.locator('#settings-nav [role="tab"][tabindex="0"]').count(), 1);
     await page.locator('#settings-nav-workflow').focus();
@@ -3267,7 +3321,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await page.locator('#workspace').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#recent-request-list button').count(), 0,
       'A replacement account must not inherit the previous account’s recents');
-    assert.equal(await page.locator('#request-grid .grid-open').count(), 0,
+    assert.equal(await page.locator('#request-grid .request-title-link').count(), 0,
       'A replacement account must not inherit the previous account’s protected queue');
     assert.deepEqual(errors, []);
     assert.equal(traffic.externalRequests, 0);
@@ -3409,6 +3463,323 @@ async function runSettingsUnconfirmedSessionCase(browser, args) {
   }
 }
 
+async function runStaffRoster(browser, args, axeSource, report) {
+  const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const page = await context.newPage(), errors = [], writes = [];
+  const spacingRoot = path.join(args.artifactRoot, 'staff-roster-spacing');
+  await fs.mkdir(spacingRoot, { recursive: true });
+  const recordSpacing = settingsSpacingRecorder(page, spacingRoot);
+  page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
+  page.on('request', request => {
+    if (/\/api\/asap\/staff\/users(?:\/|$)/.test(new URL(request.url()).pathname) && request.method() !== 'GET') {
+      writes.push({ path: new URL(request.url()).pathname, method: request.method(), body: request.postDataJSON() });
+    }
+  });
+  const token = (await session(context, args.baseOrigin)).antiforgeryToken;
+  const headers = { 'X-ASAP-Antiforgery': token };
+  const readUsers = async () => {
+    const result = await context.request.get(`${args.baseOrigin}/api/asap/staff/users`);
+    assert.equal(result.status(), 200, await result.text()); return (await result.json()).users;
+  };
+  const seed = async (email, displayName, notificationEmail = email) => {
+    const created = await context.request.post(`${args.baseOrigin}/api/asap/staff/users`, { headers,
+      data: { email, role: 'staff', organizationId: 2 } });
+    assert.equal(created.status(), 201, await created.text());
+    const user = (await created.json()).user;
+    const named = await context.request.patch(`${args.baseOrigin}/api/asap/staff/users/${user.id}`, { headers,
+      data: { version: user.version, email, displayName, notificationEmail } });
+    assert.equal(named.status(), 200, await named.text()); return (await named.json()).user;
+  };
+  const rowFor = id => page.locator(`.settings-staff-row[data-staff-id="${id}"]`);
+  const settled = () => page.waitForFunction(() => !document.getElementById('settings-form').inert &&
+    !document.getElementById('settings-form').hasAttribute('aria-busy') && !document.getElementById('staff-refresh').disabled);
+  const save = async (row, id, status = 200) => {
+    const receipt = page.waitForResponse(response => response.request().method() === 'PUT' &&
+      new URL(response.url()).pathname === `/api/asap/staff/users/${id}`);
+    await row.getByRole('button', { name: 'Save changes', exact: true }).click();
+    const result = await receipt; assert.equal(result.status(), status, await result.text()); await settled(); return result.json();
+  };
+  const capture = async (viewport, state) => {
+    await recordSpacing(`roster-${viewport}-${state}`);
+    await scan(page, axeSource, args.artifactRoot, report, viewport, state);
+    const containment = await page.evaluate(() => [...document.querySelectorAll(
+      '.settings-staff-row input, .settings-staff-row select, .settings-staff-row button, .settings-staff-toolbar button, .settings-staff-filter input, #staff-add-form input, #staff-add-form select, #staff-add-form button')]
+      .filter(control => control.getBoundingClientRect().height > 0).map(control => {
+        const bounds = control.getBoundingClientRect(), owner = control.closest('.settings-staff-row, .settings-staff-toolbar, .settings-staff-filter, #staff-add-form').getBoundingClientRect();
+        return { name: control.getAttribute('aria-label') || control.id || control.textContent.trim(),
+          contained: bounds.left >= owner.left - 1 && bounds.right <= owner.right + 1 && bounds.left >= -1 && bounds.right <= innerWidth + 1 };
+      }));
+    assert.ok(containment.length > 0); assert.deepEqual(containment.filter(item => !item.contained), [], `${state}: clipped roster controls`);
+    report.states.at(-1).staffContainment = containment;
+  };
+  try {
+    const first = await seed('roster.adams@example.org', 'Rosa Adams <roster>', 'roster.primary@example.org');
+    const second = await seed('roster.zimmer@example.org', 'Beth Zimmer');
+    const inactive = await seed('roster.inactive@example.org', 'Quinn Aardvark', 'inactive.primary@example.org');
+    const deactivated = await context.request.delete(`${args.baseOrigin}/api/asap/staff/users/${inactive.id}`, { headers,
+      data: { version: inactive.version } });
+    assert.equal(deactivated.status(), 200, await deactivated.text());
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=system#settings-staff`, { waitUntil: 'networkidle' });
+    await rowFor(first.id).waitFor(); await settled();
+    assert.equal(await page.locator('.settings-staff-summary[aria-expanded="true"]').count(), 0);
+    assert.equal(await page.locator('#staff-add-form').isHidden(), true);
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'No changes');
+    assert.equal(writes.length, 0);
+    const firstRow = rowFor(first.id), secondRow = rowFor(second.id), inactiveRow = rowFor(inactive.id);
+    const filter = page.getByRole('checkbox', { name: 'Show inactive accounts', exact: true });
+    const countsFor = (users, show) => {
+      const active = users.filter(user => user.active !== false).length, inactive = users.length - active;
+      return `${active} active ${active === 1 ? 'account' : 'accounts'} · ${inactive} inactive ${show ? `${inactive === 1 ? 'account' : 'accounts'} shown` : 'hidden'}`;
+    };
+    const initialUsers = await readUsers();
+    assert.equal(await filter.isChecked(), false);
+    assert.equal(await inactiveRow.isHidden(), true);
+    assert.equal(await page.locator('#staff-roster-counts').textContent(), countsFor(initialUsers, false));
+    const disclosure = firstRow.locator('.settings-staff-summary');
+    assert.equal(await firstRow.locator('.settings-staff-heading strong').textContent(), 'Rosa Adams <roster>');
+    assert.equal(await firstRow.locator('roster').count(), 0, 'runtime display names remain text');
+    await capture('desktop', 'staff-roster-collapsed');
+    await filter.check();
+    assert.equal(await page.locator('#staff-roster-counts').textContent(), countsFor(initialUsers, true));
+    assert.equal(await inactiveRow.locator('.status-badge').textContent(), 'Inactive');
+    await capture('desktop', 'staff-roster-inactive-revealed');
+    const mountedInactive = await inactiveRow.getByLabel(/^Email address/).elementHandle();
+    await inactiveRow.locator('.settings-staff-summary').press('Enter');
+    await inactiveRow.getByLabel(/^Email address/).fill('invalid-inactive-email');
+    await filter.evaluate(input => { input.checked = false; input.dispatchEvent(new Event('change', { bubbles: true })); });
+    assert.equal(await filter.evaluate(input => input === document.activeElement), true);
+    assert.equal(await inactiveRow.isHidden(), true);
+    assert.equal(await mountedInactive.evaluate(input => input.willValidate), false);
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'Unsaved changes');
+    await capture('desktop', 'staff-roster-inactive-draft-hidden');
+    await page.keyboard.press('Space');
+    assert.equal(await mountedInactive.evaluate(input => input === document.querySelector(`[data-staff-id="${input.closest('article').dataset.staffId}"] input[type="email"]`)), true);
+    assert.equal(await inactiveRow.getByLabel(/^Email address/).inputValue(), 'invalid-inactive-email');
+    await inactiveRow.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.keyboard.press('Escape');
+    await filter.uncheck();
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'No changes');
+    await disclosure.focus(); await page.keyboard.press('Enter');
+    assert.equal(await disclosure.getAttribute('aria-expanded'), 'true');
+    assert.equal(await firstRow.getByLabel(/^Email address/).inputValue(), first.userPrincipalName);
+    assert.equal(await firstRow.locator('input[type="email"]').count(), 1);
+    assert.equal(await firstRow.getByText('Used for sign-in and notifications.', { exact: true }).count(), 1);
+    assert.equal(await firstRow.getByRole('button', { name: 'Save changes', exact: true }).isEnabled(), true);
+    await capture('desktop', 'staff-roster-expanded-mismatch');
+    await page.keyboard.press('Space');
+    assert.equal(await disclosure.getAttribute('aria-expanded'), 'false');
+    assert.equal(await firstRow.locator('fieldset').evaluate(fieldset => fieldset.disabled && fieldset.matches(':disabled')), true);
+    await page.keyboard.press('Enter');
+    await secondRow.locator('.settings-staff-summary').click();
+    await firstRow.getByLabel(/^Email address/).fill('invalid-email');
+    await page.keyboard.press('Escape');
+    assert.equal(await disclosure.evaluate(button => document.activeElement === button), true);
+    assert.equal(await firstRow.getByText('Unsaved changes', { exact: true }).isVisible(), true);
+    assert.equal(await firstRow.getByLabel(/^Email address/).isDisabled(), true);
+    await disclosure.click();
+    await page.locator('#settings-nav-patron').click();
+    assert.equal(await firstRow.locator('fieldset').evaluate(fieldset => fieldset.disabled), true);
+    assert.equal(await firstRow.getByLabel(/^Email address/).evaluate(input => input.willValidate), false);
+    const note = page.locator('#patron-login-note'), originalNote = await note.inputValue();
+    await note.fill('Roster native validation ownership probe');
+    await page.locator('#settings-save').click();
+    await page.locator('#settings-message').filter({ hasText: 'competing Settings draft' }).waitFor();
+    assert.equal(writes.length, 0);
+    await note.fill(originalNote);
+    await page.locator('#settings-nav-staff').click();
+    await firstRow.getByRole('button', { name: 'Cancel', exact: true }).click();
+    assert.equal((await readUsers()).find(user => user.id === first.id).notificationEmail, 'roster.primary@example.org', 'pure UI lifecycle never rewrites mismatched accepted emails');
+    const synchronized = await save(firstRow, first.id);
+    assert.equal(synchronized.user.userPrincipalName, first.userPrincipalName);
+    assert.equal(synchronized.user.notificationEmail, first.userPrincipalName);
+    assert.equal(writes.length, 1);
+
+    await firstRow.getByLabel(/^Display name/).fill('Rosa Zulu');
+    await firstRow.getByLabel(/^Email address/).fill('roster.saved@example.org');
+    await firstRow.getByLabel(/^Role/).selectOption('admin');
+    await firstRow.getByLabel(/^Library/).selectOption('82');
+    await secondRow.getByLabel(/^Display name/).fill('Independent draft');
+    await secondRow.getByLabel(/^Role/).selectOption('admin');
+    await page.locator('#settings-nav-patron').click();
+    await note.fill('Competing global Settings draft');
+    await page.locator('#settings-nav-staff').click();
+    await firstRow.getByRole('button', { name: 'Save changes', exact: true }).click();
+    await page.locator('#settings-message').filter({ hasText: 'competing Settings draft' }).waitFor();
+    assert.equal(writes.length, 1);
+    await disclosure.click(); await disclosure.click();
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
+    assert.equal(await secondRow.getByLabel(/^Display name/).inputValue(), 'Independent draft');
+    await page.locator('#settings-nav-patron').click(); await note.fill(originalNote); await page.locator('#settings-nav-staff').click();
+    await page.waitForFunction(() => !document.getElementById('settings-message').textContent.includes('competing Settings draft') &&
+      !document.getElementById('app-status').textContent.includes('competing Settings draft'));
+    await capture('desktop', 'staff-roster-independent-drafts');
+    let failNextRoster = true;
+    const failCommittedReview = async route => {
+      if (route.request().method() === 'GET' && failNextRoster) {
+        failNextRoster = false;
+        await route.fulfill({ status: 503, json: { message: 'Committed roster review unavailable' } });
+      } else await route.fallback();
+    };
+    await page.route(`${args.baseOrigin}/api/asap/staff/users`, failCommittedReview);
+    const independentReceipt = page.waitForResponse(response => response.request().method() === 'PUT' &&
+      new URL(response.url()).pathname === `/api/asap/staff/users/${second.id}`);
+    await secondRow.getByRole('button', { name: 'Save changes', exact: true }).click();
+    const independentResponse = await independentReceipt;
+    assert.equal(independentResponse.status(), 200, await independentResponse.text());
+    const independent = await independentResponse.json();
+    await page.waitForFunction(() => document.getElementById('settings-form').inert &&
+      !document.getElementById('settings-form').hasAttribute('aria-busy') &&
+      document.getElementById('staff-access-status').textContent.includes('could not be refreshed'));
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'Saved; reload needed');
+    await capture('desktop', 'staff-roster-preserved-review');
+    assert.equal(await page.locator('#settings-refresh').evaluate(button => button.closest('form') === null), true);
+    const reviewRetry = page.waitForResponse(response => response.request().method() === 'GET' &&
+      new URL(response.url()).pathname === '/api/asap/staff/users');
+    await page.locator('#settings-refresh').click();
+    assert.equal((await reviewRetry).status(), 200); await settled();
+    await page.unroute(`${args.baseOrigin}/api/asap/staff/users`, failCommittedReview);
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'Unsaved changes');
+    assert.equal(independent.user.displayName, 'Independent draft'); assert.equal(independent.user.role, 'admin');
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
+    assert.equal(await firstRow.getByLabel(/^Email address/).inputValue(), 'roster.saved@example.org');
+    assert.equal(await firstRow.getByLabel(/^Role/).inputValue(), 'admin'); assert.equal(await firstRow.getByLabel(/^Library/).inputValue(), '82');
+    assert.equal(await firstRow.getByText('Unsaved changes', { exact: true }).isVisible(), true);
+    await firstRow.getByLabel(/^Email address/).fill(second.userPrincipalName);
+    await save(firstRow, first.id, 409);
+    const unchanged = (await readUsers()).find(user => user.id === first.id);
+    assert.equal(unchanged.displayName, first.displayName); assert.equal(unchanged.role, first.role); assert.equal(unchanged.organizationId, 2);
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
+    const external = await context.request.patch(`${args.baseOrigin}/api/asap/staff/users/${first.id}`, { headers,
+      data: { version: unchanged.version, email: first.userPrincipalName, displayName: 'External Adams', notificationEmail: first.userPrincipalName } });
+    assert.equal(external.status(), 200, await external.text());
+    await firstRow.getByLabel(/^Email address/).fill('roster.saved@example.org');
+    await save(firstRow, first.id, 409);
+    await firstRow.getByText(/Saved values changed elsewhere/).waitFor();
+    assert.equal(await firstRow.getByRole('button', { name: 'Save changes', exact: true }).isDisabled(), true);
+    await capture('desktop', 'staff-roster-conflict');
+    await firstRow.getByRole('button', { name: 'Cancel', exact: true }).click();
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'External Adams');
+    const mountedEmail = await firstRow.getByLabel(/^Email address/).elementHandle();
+    await firstRow.getByLabel(/^Email address/).fill('roster.saved@example.org');
+    await firstRow.getByLabel(/^Display name/).fill('Rosa Zulu');
+    await firstRow.getByLabel(/^Role/).selectOption('admin'); await firstRow.getByLabel(/^Library/).selectOption('82');
+    const beforeSave = writes.length;
+    const accepted = await save(firstRow, first.id);
+    assert.equal(writes.length, beforeSave + 1, 'unified Save dispatches exactly one mutation');
+    assert.equal(writes.at(-1).method, 'PUT');
+    assert.deepEqual(writes.at(-1).body, { version: (await external.json()).user.version, email: 'roster.saved@example.org',
+      displayName: 'Rosa Zulu', role: 'admin', organizationId: 82 });
+    assert.equal(accepted.user.notificationEmail, 'roster.saved@example.org');
+    assert.equal(await mountedEmail.evaluate(input => input === document.querySelector(`[data-staff-id="${input.closest('article').dataset.staffId}"] input[type="email"]`)), true);
+    assert.equal(await disclosure.evaluate(button => document.activeElement === button), true);
+    const order = await page.locator('.settings-staff-row').evaluateAll(rows => rows.map(row => ({ id: row.dataset.staffId, inactive: row.classList.contains('inactive') })));
+    assert.ok(order.findIndex(row => row.id === second.id) < order.findIndex(row => row.id === first.id));
+    assert.ok(order.findIndex(row => row.id === first.id) < order.findIndex(row => row.id === inactive.id));
+    assert.equal(order.some((row, index) => row.inactive && order.slice(index + 1).some(next => !next.inactive)), false);
+    await capture('desktop', 'staff-roster-saved-reordered');
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'No changes');
+    assert.equal((await page.locator('#settings-message').textContent()).includes('competing Settings draft'), false);
+    assert.equal((await page.locator('#app-status').textContent()).includes('competing Settings draft'), false);
+
+    await firstRow.getByLabel(/^Display name/).fill('Lifecycle draft');
+    const beforeLifecycle = writes.length;
+    await decideConfirmation(page, () => firstRow.getByRole('button', { name: 'Deactivate', exact: true }).click(), dialog => dialog.accept());
+    await page.locator('#settings-message').filter({ hasText: 'competing Settings draft' }).waitFor();
+    assert.equal(writes.length, beforeLifecycle); assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Lifecycle draft');
+    await decideConfirmation(page, () => page.locator('#staff-refresh').click(), dialog => dialog.dismiss());
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Lifecycle draft');
+    await decideConfirmation(page, () => page.locator('#staff-refresh').click(), dialog => dialog.accept()); await settled();
+    assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
+    await filter.check();
+    await inactiveRow.locator('.settings-staff-summary').click();
+    await decideConfirmation(page, () => inactiveRow.getByRole('button', { name: 'Reactivate', exact: true }).click(), dialog => dialog.dismiss());
+    assert.equal(writes.length, beforeLifecycle);
+    const reactivate = page.waitForResponse(response => new URL(response.url()).pathname === `/api/asap/staff/users/${inactive.id}/reactivate`);
+    await decideConfirmation(page, () => inactiveRow.getByRole('button', { name: 'Reactivate', exact: true }).click(), dialog => dialog.accept());
+    assert.equal((await reactivate).status(), 200); await settled();
+    assert.deepEqual(Object.keys(writes.at(-1).body), ['version']);
+    assert.equal((await readUsers()).find(user => user.id === inactive.id).notificationEmail, 'inactive.primary@example.org');
+    assert.equal(await page.locator('#staff-roster-counts').textContent(), countsFor(await readUsers(), true));
+
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await capture('desktop-dark', 'staff-roster-expanded');
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.setViewportSize({ width: 760, height: 900 });
+    await capture('tablet', 'staff-roster-expanded');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await capture('mobile', 'staff-roster-expanded');
+    await page.locator('#staff-add-toggle').click();
+    assert.equal(await page.locator('#staff-add-email').evaluate(input => input === document.activeElement), true);
+    const beforeCreate = writes.length;
+    await page.locator('#staff-add-submit').click();
+    await page.locator('#staff-access-status').filter({ hasText: 'Email address is required.' }).waitFor();
+    assert.equal(writes.length, beforeCreate);
+    await page.locator('#staff-add-email').fill('sam');
+    assert.equal(await page.locator('#staff-access-status').textContent(), '', 'A nonempty partial address retires its owned required notice.');
+    await page.locator('#staff-add-submit').click();
+    assert.equal(await page.locator('#staff-add-email').evaluate(input => input.validity.valid), false);
+    assert.equal(writes.length, beforeCreate, 'Partial email input remains blocked by native validation.');
+    await page.locator('#staff-add-email').fill('roster.ui@example.org');
+    assert.equal(await page.locator('#staff-access-status').textContent(), '', 'Correcting Email retires its owned required-field notice.');
+    await page.locator('#staff-add-role').selectOption('staff'); await page.locator('#staff-add-organization').selectOption('2');
+    await capture('mobile', 'staff-roster-add');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#staff-add-form').isHidden(), true);
+    await page.locator('#staff-add-toggle').click();
+    assert.equal(await page.locator('#staff-add-email').inputValue(), 'roster.ui@example.org');
+    const created = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/asap/staff/users');
+    await page.locator('#staff-add-submit').click(); const result = await created;
+    assert.equal(result.status(), 201, await result.text()); await settled();
+    const newUser = (await result.json()).user;
+    assert.equal(newUser.userPrincipalName, newUser.notificationEmail); assert.equal(newUser.displayName, null);
+    assert.equal(await page.locator('#staff-add-form').isHidden(), true);
+    assert.equal(await page.locator('#staff-add-toggle').evaluate(button => button === document.activeElement), true);
+    assert.equal(await page.locator('#staff-roster-counts').textContent(), countsFor(await readUsers(), true));
+    const scopedRoster = page.waitForResponse(response => response.request().method() === 'GET' &&
+      new URL(response.url()).pathname === '/api/asap/staff/users' && new URL(response.url()).searchParams.get('orgId') === '82');
+    await page.locator('#settings-scope').selectOption('82');
+    const scopedUsers = (await (await scopedRoster).json()).users; await settled();
+    await page.waitForFunction(expected => document.getElementById('staff-roster-counts').textContent === expected, countsFor(scopedUsers, false));
+    assert.equal(await filter.isChecked(), false, 'A new scope starts with inactive accounts hidden.');
+    assert.equal(await rowFor(first.id).isVisible(), true); assert.equal(await rowFor(second.id).count(), 0);
+    await filter.check();
+    assert.deepEqual((await page.locator('.settings-staff-row').evaluateAll(rows => rows.map(row => row.dataset.staffId))).sort(), scopedUsers.map(user => user.id).sort());
+    assert.equal(await page.locator('#staff-roster-counts').textContent(), countsFor(scopedUsers, true));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await capture('desktop', 'staff-roster-library-scope');
+    const librarySummary = rowFor(first.id).locator('.settings-staff-summary');
+    const writesBeforeDisclosure = writes.length;
+    const draftTitleBeforeDisclosure = await page.locator('#settings-save-title').textContent();
+    assert.equal(await librarySummary.getAttribute('aria-expanded'), 'false');
+    await librarySummary.click();
+    const librarySpacing = await recordSpacing('supplemental-staff-roster-library-expanded');
+    report.staffRosterLibraryExpanded = { scope: librarySpacing.scope, staffId: first.id,
+      screenshot: 'staff-roster-library-expanded.png', spacingReceipt: 'staff-roster-spacing/settings-spacing.json' };
+    await page.screenshot({ path: path.join(args.artifactRoot, report.staffRosterLibraryExpanded.screenshot), fullPage: true });
+    await fs.writeFile(path.join(spacingRoot, 'library-expanded.json'), JSON.stringify(report.staffRosterLibraryExpanded, null, 2));
+    assert.equal(librarySpacing.scope, '82');
+    assert.equal(await librarySummary.getAttribute('aria-expanded'), 'true');
+    assert.equal(await rowFor(first.id).getByLabel(/^Email address/).isVisible(), true);
+    await librarySummary.click();
+    assert.equal(await page.locator('#settings-save-title').textContent(), draftTitleBeforeDisclosure);
+    assert.equal(writes.length, writesBeforeDisclosure, 'Expanding the scoped roster never writes a staff record.');
+    const nativeInactive = await seed('roster.native.inactive@example.org', 'Native Inactive');
+    const nativeDisabled = await context.request.delete(`${args.baseOrigin}/api/asap/staff/users/${nativeInactive.id}`, { headers,
+      data: { version: nativeInactive.version } });
+    assert.equal(nativeDisabled.status(), 200, await nativeDisabled.text());
+    const nativeZoom = await verifyStaffRosterNativeZoom({ baseURL: args.baseOrigin, artifacts: args.artifactRoot,
+      headers: { 'X-ASAP-Test-Staff-Id': args.superIdentity.staffId, 'X-ASAP-Test-Tenant-Id': args.superIdentity.tenantId,
+        'X-ASAP-Test-Staff-Email': args.superIdentity.email }, activeId: first.id, inactiveId: nativeInactive.id });
+    assert.deepEqual(nativeZoom.map(state => [state.physicalWidth, state.name]), [1280, 1440].flatMap(width =>
+      ['staff-roster-collapsed', 'staff-roster-expanded', 'staff-roster-filter-hidden', 'staff-roster-add'].map(name => [width, name])));
+    assert.deepEqual(errors, []); assert.equal(traffic.externalRequests, 0);
+    report.staffRoster = { disclosures: true, independentDrafts: true, singleEmail: true, atomicSave: true,
+      conflictRecovery: true, lifecycle: true, create: true, nativeValidationOwner: true, keyboardFocus: true, responsiveContainment: true,
+      activeFilter: true, scopedCounts: true, hiddenDrafts: true, ownedFeedbackRecovery: true, independentSaves: true, preservedReviewRecovery: true, nativeZoom };
+  } finally { await context.close(); }
+}
+
 async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, report) {
   const { context, traffic } = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
   const external = await createContext(browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
@@ -3428,19 +3799,23 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
     await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=system#settings-staff`, { waitUntil: 'networkidle' });
     await page.locator('#settings-form').waitFor({ state: 'visible' });
     await page.locator('#settings-nav-staff').click();
-    const row = page.locator('.settings-staff-row').filter({ has: page.getByLabel(`Authentication email for ${original.displayName || original.userPrincipalName}`, { exact: true }) });
+    const row = page.locator(`.settings-staff-row[data-staff-id="${original.id}"]`);
     await row.waitFor();
+    await row.locator('.settings-staff-summary').click();
     await row.getByLabel(/^Display name/).fill('Authoritative browser actor');
-    await row.getByLabel(/^Notification email/).fill('actor-revision@example.org');
-    const profileSaved = page.waitForResponse(response => response.request().method() === 'PATCH' &&
+    assert.equal(await row.getByLabel(/^Email address/).inputValue(), original.userPrincipalName,
+      'The editor displays the stored authentication email; session authenticationEmail is its normalized identity key.');
+    const profileSaved = page.waitForResponse(response => response.request().method() === 'PUT' &&
       new URL(response.url()).pathname === `/api/asap/staff/users/${original.id}`);
-    await row.getByRole('button', { name: 'Save profile', exact: true }).click();
+    await row.getByRole('button', { name: 'Save changes', exact: true }).click();
     const profileResponse = await profileSaved;
     assert.equal(profileResponse.status(), 200, await profileResponse.text());
-    await page.locator('#staff-access-status').filter({ hasText: /Staff profile saved/ }).waitFor();
+    await page.locator('#staff-access-status').filter({ hasText: /Staff changes saved/ }).waitFor();
     await page.waitForFunction(() => !document.getElementById('settings-form').inert);
     const revised = (await session(context, args.baseOrigin)).staff;
     assert.notEqual(revised.version, original.version, 'real SQL Staff Access metadata write advances rowversion');
+    assert.equal(revised.userPrincipalName, original.userPrincipalName);
+    assert.equal(revised.notificationEmail, revised.userPrincipalName);
     for (const key of ['id', 'tenantId', 'authenticationEmail', 'role', 'organizationId']) assert.equal(revised[key], original[key]);
     assert.equal(await page.locator('#staff-identity').textContent(), revised.displayName);
     await page.getByRole('button', { name: 'Profile', exact: true }).click();
@@ -3548,6 +3923,7 @@ async function runSettingsLayout(browser, args, axeSource, report) {
           { waitUntil: 'networkidle' });
         await page.locator(`#settings-${section.name}`).waitFor({ state: 'visible' });
         await page.waitForFunction(() => !document.getElementById('settings-form').hidden);
+        if (section.name === 'staff') await page.locator('#staff-add-toggle').click();
         assert.equal(await page.locator('.settings-save-bar.attention').count(), 0);
         assert.equal(await page.locator('.settings-save-bar').evaluate(bar => getComputedStyle(bar).position), 'static');
         assert.equal(await page.locator('#settings-save').isDisabled(), true);
@@ -3608,7 +3984,15 @@ async function runSettingsLayout(browser, args, axeSource, report) {
           const draft = page.locator('#ui-misconfigured-msg');
           const original = await draft.inputValue();
           await draft.fill(`${original} Layout draft`);
-          assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'sticky');
+          assert.equal(await page.locator('.settings-save-bar.attention').evaluate(bar => getComputedStyle(bar).position), 'static',
+            'The attention bar stays in flow while a form control owns focus.');
+          const firstDirtyFocus = await draft.evaluate(control => {
+            const bounds = control.getBoundingClientRect(), x = bounds.left + bounds.width / 2, y = bounds.top + bounds.height / 2;
+            return { active: document.activeElement === control, inViewport: x >= 0 && x < innerWidth && y >= 0 && y < innerHeight,
+              unobscured: document.elementFromPoint(x, y) === control };
+          });
+          assert.deepEqual(firstDirtyFocus, { active: true, inViewport: true, unobscured: true },
+            'First dirtiness preserves natural editor focus before any test scrolling or axe.');
           assert.equal(await page.locator('#settings-save').isDisabled(), false);
           assert.equal(await page.locator('#settings-discard').isVisible(), true);
           await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
@@ -3619,7 +4003,7 @@ async function runSettingsLayout(browser, args, axeSource, report) {
               return bounds.bottom <= bar.top && document.elementFromPoint(
                 bounds.left + bounds.width / 2, bounds.top + bounds.height / 2) === control;
             });
-          assert.equal(contentReachable, true, 'The last Settings control must remain reachable above the sticky save bar');
+          assert.equal(contentReachable, true, 'The last Settings control must remain reachable above the attention bar');
           await scan(page, axeSource, args.artifactRoot, report, name, 'settings-attention-save-bar');
           await draft.fill(original);
           assert.equal(await page.locator('.settings-save-bar.attention').count(), 0);
@@ -3628,13 +4012,29 @@ async function runSettingsLayout(browser, args, axeSource, report) {
           assert.equal(await page.locator('#settings-discard').isHidden(), true);
         }
         const layout = await page.evaluate(section => {
-          const bounds = id => {
+          const bounds = (id, fullWidth = false) => {
             const label = document.getElementById(id).closest('.settings-field');
-            const rect = label.getBoundingClientRect();
-            return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom,
-              width: rect.width, gridWidth: label.closest('.settings-grid').getBoundingClientRect().width };
+            const item = fullWidth ? label.closest('.settings-grid > .wide') : label;
+            const grid = label.closest('.settings-grid');
+            const rect = item.getBoundingClientRect();
+            const gridRect = grid.getBoundingClientRect();
+            return { id, top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom,
+              width: rect.width, gridWidth: gridRect.width, gridLeft: gridRect.left, gridRight: gridRect.right,
+              controls: fullWidth ? [...item.querySelectorAll('input, textarea, select, button')].map(control => {
+                const bounds = control.getBoundingClientRect();
+                return { id: control.id, left: bounds.left, right: bounds.right, top: bounds.top,
+                  bottom: bounds.bottom, width: bounds.width, height: bounds.height };
+              }).filter(control => control.width > 0 && control.height > 0) : [],
+              partners: fullWidth ? [...grid.children].filter(sibling => {
+                if (sibling === item) return false;
+                const bounds = sibling.getBoundingClientRect();
+                return bounds.width > 0 && bounds.height > 0 &&
+                  Math.min(rect.bottom, bounds.bottom) - Math.max(rect.top, bounds.top) > 1;
+              }).length : 0 };
           };
-          return { pairs: section.pairs.map(pair => pair.map(bounds)), wide: section.wide.map(bounds) };
+          return { pairs: section.pairs.map(pair => pair.map(id => bounds(id))),
+            wide: section.wide.map(id => bounds(id, true)),
+            staffUrlLabel: section.name === 'start' ? bounds('system-staff-url') : null };
         }, section);
         for (const [first, second] of layout.pairs) {
           if (name === 'desktop') {
@@ -3646,7 +4046,30 @@ async function runSettingsLayout(browser, args, axeSource, report) {
           }
         }
         for (const field of layout.wide) {
-          assert.ok(Math.abs(field.width - field.gridWidth) < 1, `${section.name} full-width field has an arbitrary partner`);
+          assert.ok(Math.abs(field.width - field.gridWidth) < 1 &&
+            Math.abs(field.left - field.gridLeft) < 1 && Math.abs(field.right - field.gridRight) < 1 &&
+            field.partners === 0, `${section.name} full-width field has an arbitrary partner`);
+          for (const control of field.controls) {
+            assert.ok(control.left >= field.left - 1 && control.right <= field.right + 1 &&
+              control.top >= field.top - 1 && control.bottom <= field.bottom + 1,
+              `${section.name} ${control.id} must stay inside its full-width group`);
+          }
+        }
+        if (section.name === 'start') {
+          const group = layout.wide.find(field => field.id === 'system-staff-url');
+          const label = layout.staffUrlLabel;
+          const input = group.controls.find(control => control.id === 'system-staff-url');
+          const action = group.controls.find(control => control.id === 'use-current-staff-url');
+          assert.ok(input && action, 'Staff URL and Use current address must both be visible within the wide group');
+          assert.ok(Math.abs(label.left - input.left) < 1 && Math.abs(label.right - input.right) < 1 &&
+            Math.abs(label.bottom - input.bottom) < 1, 'Staff URL input must fill and end its labeled field');
+          if (name === 'desktop') {
+            assert.ok(label.right < action.left && Math.abs(input.bottom - action.bottom) < 1,
+              'Use current address must sit beside and bottom-align with the Staff URL input');
+          } else {
+            assert.ok(label.bottom <= action.top && Math.abs(label.left - action.left) < 1,
+              'Use current address must stack below and align left with the Staff URL field on mobile');
+          }
         }
         if (section.name === 'polaris') {
           await page.locator('#polaris-host').focus();
@@ -3689,15 +4112,16 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.locator('#operations-scope').selectOption('2');
     await page.locator('[data-view="settings"]').click();
     await page.locator('#settings-form').waitFor({ state: 'visible' });
-    await page.getByRole('tab', { name: 'Staff access', exact: true }).click();
+    await page.getByRole('tab', { name: 'Polaris', exact: true }).click();
     const organizations = await context.request.get(`${args.baseOrigin}/api/asap/staff/organizations`);
     const library = (await organizations.json()).data.find(item => item.id === 2);
     assert.equal(library.isActive, true);
-    await page.waitForFunction(() => !document.querySelector('#staff-refresh').disabled);
+    await page.locator(`#settings-organization-catalog [data-organization-id="${library.id}"]`).waitFor();
+    await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy') && !document.querySelector('#settings-form').inert);
     await decideConfirmation(page, () => page.getByRole('button', { name: `Deactivate ${library.name}`, exact: true }).click(), dialog => dialog.accept());
     await page.locator('#settings-message').filter({ hasText: `${library.name} deactivated.` }).waitFor();
     await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy'));
-    assert.equal(await page.locator('#request-grid .grid-open').count(), 0);
+    assert.equal(await page.locator('#request-grid .request-title-link').count(), 0);
     assert.equal(await page.locator('#additional-copy-grid .grid-open').count(), 0);
     assert.equal(await page.locator('#operations-scope').inputValue(), 'all');
     const failQueue = route => route.fulfill({ status: 503, contentType: 'application/json',
@@ -3707,7 +4131,7 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.locator('[data-view="queue"]').click();
     await page.waitForFunction(() => new URL(location.href).searchParams.get('scope') === 'all');
     await page.locator('#app-status').filter({ hasText: 'Forced unavailable queue' }).waitFor();
-    assert.equal(await page.locator('#request-grid .grid-open').count(), 0);
+    assert.equal(await page.locator('#request-grid .request-title-link').count(), 0);
     for (const selector of ['#library-scope', '#additional-copy-library-scope', '#operations-scope']) {
       assert.equal(await page.locator(`${selector} option[value="2"]`).count(), 0);
     }
@@ -3724,8 +4148,9 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     await page.unroute('**/api/asap/staff/title-requests?*', failQueue);
     await page.unroute('**/api/asap/staff/additional-copies?*', failQueue);
     await page.locator('[data-view="settings"]').click();
-    await page.getByRole('tab', { name: 'Staff access', exact: true }).click();
-    await page.waitForFunction(() => !document.querySelector('#staff-refresh').disabled);
+    await page.getByRole('tab', { name: 'Polaris', exact: true }).click();
+    await page.locator(`#settings-organization-catalog [data-organization-id="${library.id}"]`).waitFor();
+    await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy') && !document.querySelector('#settings-form').inert);
     await decideConfirmation(page, () => page.getByRole('button', { name: `Activate ${library.name}`, exact: true }).click(), dialog => dialog.accept());
     await page.locator('#settings-message').filter({ hasText: `${library.name} activated.` }).waitFor();
     await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy'));
@@ -3829,10 +4254,11 @@ async function main() {
     await runStaffSuggestion(browser, args, axeSource, report);
     await runClosedDeletionControls(browser, args, axeSource, report);
     await runCurrentStaffPreferenceRevisions(browser, args, axeSource, report);
+    await runStaffRoster(browser, args, axeSource, report);
     await runSettingsLayout(browser, args, axeSource, report);
     await runOperationalCatalogCommits(browser, args, axeSource, report);
     await runRejectionNotificationAndReopen(browser, args, axeSource, report);
-    assert.equal(report.states.length, 61, 'Expected sixty-one major staff browser states');
+    assert.equal(report.states.length, 74, 'Expected seventy-four major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),
