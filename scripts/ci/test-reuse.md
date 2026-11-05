@@ -7,10 +7,29 @@ populations and the former two-executor workflow cannot qualify current tests.
 Reuse is per suite (dotnet, browser, frontend), never a reduced passing count.
 A successful original run must belong to the trusted repository/workflow,
 correct execution job and runner group. Checkout logs, Git commit/tree/blob
-identity, source and toolchain fingerprints, exact native test identities,
+identity, source and resolved test-dependency fingerprints, exact native test identities,
 outcomes, SHA-256 artifact digest and the 14-day lifetime are revalidated.
 Skipped or failed source steps, corrupt archives, altered population,
-ambiguous PR metadata, environment drift and unavailable lookup all fail closed.
+ambiguous PR metadata and unavailable lookup all fail closed.
+
+Selecting the complete required population is separate from requiring fresh
+execution. A valid PR diff containing documentation, CI/build tooling or unknown
+paths can reuse any original successful Full CI run when the effective inputs
+match, regardless of its originating event or the current trigger. PR, manual,
+branch, tag, release and deployment events share the same evidence contract.
+An identical literal commit or proven-equivalent input tree is not forced fresh
+because the event changed. Included source, CI/test tooling, the complete workflow execution
+contract, repository policy and discovered populations must still match. A new
+CI implementation needs a fresh baseline; evidence from the earlier logic cannot
+qualify it. No run numbers or commit ancestry are special-cased.
+
+Throwaway environment differences (VM/kernel/native packages, installed runtime
+versions, locale, Docker and the mutable SQL image) remain provenance rather than
+reuse keys. The environment key retains the configured policy epoch, resolved
+NuGet package contents and Playwright/browser definitions. Tool manifests and
+lock files remain included source inputs. Unknown runners, unavailable identity
+and ambient runtime extensions still disable reuse. Fresh tests resolve and use
+the current SQL image digest.
 
 Full CI execution plans and verifies dotnet, browser and frontend independently
 in one job on one clc-linux runner. The verifier always evaluates all three
@@ -30,9 +49,21 @@ without starting SQL or installing Chromium. Full reuse still runs current-sourc
 build, safety checks, native discovery, evidence revalidation and packaging.
 
 Current-commit build, publication, frontend verification, DACPAC/package content,
-manifest/digest checks and ValidateOnly always execute. Release tags,
-force-full and test-IIS qualification require fresh suites. Deployment remains
+manifest/digest checks and ValidateOnly always execute. Only explicit force-full
+or invalid/missing selection metadata demands fresh suites. Tags are verified
+against their peeled commit, including annotated tags; release and deployment
+metadata must identify that same tested source. Deployment remains
 separately gated and is outside ordinary implementation.
+
+To qualify reuse without duplicate suites, let one successful Full CI run
+establish original evidence for the final inputs. A later supported event at
+that commit or equivalent tree must report `REUSED` for all three suites at
+final verification and pass `Build, test and package`. Do not change relevant
+inputs between these runs. A test tag can exercise reuse while retaining its
+normal authorized test-IIS activation; creating such a tag can really deploy.
+Use `force_full_ci=true` when fresh testing is wanted explicitly.
+The planner and final verifier both honor metadata fallbacks and explicit fresh
+requirements; a saved plan alone never authorizes skipped tests.
 
 The exact JS/CSS backend exclusions are reviewed in test-reuse.json. Unknown
 files default to included. Browser consumers and asset/cache/publication

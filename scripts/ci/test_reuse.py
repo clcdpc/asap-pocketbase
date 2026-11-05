@@ -53,10 +53,10 @@ class Fixture:
             else:
                 selection["identities"] = sorted(fp.digest(str(i)) for i in range(2))
             self.selections[suite] = selection
-            environment = {"epoch": "image-v1", "runtime": "actual-version", "suite": suite}
+            environment = {"epoch": "image-v1", "nuget": "resolved-content", "runtime": "actual-version", "suite": suite}
             inputs = {"schema": self.config["schema"], "suite": suite,
                       "source": fp.source_fingerprint(self.entries, suite, self.config, self.contract),
-                      "environment": fp.digest(environment), "selection": selection}
+                      "environment": fp.environment_fingerprint(environment), "selection": selection}
             self.current["suites"][suite] = {**inputs, "fingerprint": fp.digest(inputs),
                                               "environment_inputs": environment, "unavailable": None}
         repository = {"id": self.config["repository_id"], "full_name": self.config["repository"]}
@@ -127,8 +127,8 @@ class Fixture:
         if path == f"/git/blobs/{self.workflow_sha}":
             return {"sha": self.workflow_sha, "encoding": "base64", "size": len(self.workflow_bytes),
                     "content": base64.b64encode(self.workflow_bytes).decode("ascii")}
-        if path == f"/git/trees/{self.current['tree']}?recursive=1":
-            return {"sha": self.current["tree"], "truncated": False,
+        if path == f"/git/trees/{self.source['tree']['sha']}?recursive=1":
+            return {"sha": self.source["tree"]["sha"], "truncated": False,
                     "tree": [dict(zip(("path", "mode", "type", "sha"), e)) for e in self.entries]}
         if path.startswith("/actions/artifacts/"):
             return copy.deepcopy(next(a for a in self.artifacts.values() if a["id"] == int(path.split("/")[-1])))
@@ -230,6 +230,177 @@ class GitIdentityTests(unittest.TestCase):
         self.assertNotEqual(first_tree, fp.checkout(second_merge, self.root)[1])
         self.assertEqual(head, self.git("rev-parse", "HEAD^2"))
 
+    def test_manual_full_baseline_reused_by_pr_with_ci_and_docs_through_final_verification(self):
+        fixture = Fixture()
+        self.git("checkout", "-qb", "pr")
+        files = {fixture.config["workflow"]: fixture.workflow_bytes,
+                 "scripts/ci/policy.py": b"# CI input\n", "docs/ci.md": b"Qualification documentation\n",
+                 "tests/a.test.js": b"", "tests/b.test.js": b""}
+        partitions = {key: {str(i): {"method": "Asap.Tests." + key + ".Case" + str(i), "name": str(i)}
+                            for i in values} for key, values in (("core", (1, 2)), ("browser", (3, 4)))}
+        reviewed = {"Browser": [value["method"] for value in partitions["browser"].values()]}
+        files["scripts/ci/reviewed-test-categories.json"] = fp.canonical(reviewed)
+        for path, contents in files.items():
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(contents)
+        head = self.commit()
+        fixture.entries = fp.tracked_entries(self.root)
+        fixture.source = {"sha": head, "tree": {"sha": self.git("rev-parse", "HEAD^{tree}")}, "parents": []}
+        fixture.run.update(event="workflow_dispatch", head_sha=head, head_branch="pr")
+        fixture.job["head_sha"] = head
+        for artifact in fixture.artifacts.values():
+            artifact["workflow_run"]["head_sha"] = head
+        fixture.logs = ("2026-10-29T10:00:00.000Z [command]/usr/bin/git log -1 --format=%H\n"
+                        f"2026-10-29T10:00:00.001Z {head}\n").encode()
+        environments = {s: copy.deepcopy(fixture.current["suites"][s]["environment_inputs"]) for s in fp.SUITES}
+        directory = self.root / ".artifacts/test-reuse"
+        selection_directory = self.root / ".artifacts/test-selection"
+        env = {**{key: os.environ[key] for key in ("PATH", "SystemRoot", "TEMP", "TMP") if key in os.environ},
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": head, "GITHUB_RUN_ID": "7",
+               "GITHUB_RUN_ATTEMPT": "2", "GITHUB_OUTPUT": str(self.root / "outputs"),
+               "GITHUB_REPOSITORY": fixture.config["repository"], "GH_TOKEN": "fixture-token",
+               "ASAP_FORCE_FULL_CI": "true"}
+        load, calculate, checkout, entries = test_selection.load, fp.calculate, fp.checkout, fp.tracked_entries
+        live_pr = {}
+
+        def discover(expression=None, root=None):
+            if expression is None:
+                return {uid: value for tests in partitions.values() for uid, value in tests.items()}
+            return copy.deepcopy(partitions[next(key for key, value in test_selection.FILTERS.items() if value == expression)])
+
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch.object(fp, "ROOT", self.root), \
+             mock.patch.object(fp, "calculate", side_effect=lambda expected, config: calculate(expected, config, self.root)), \
+             mock.patch.object(fp, "checkout", side_effect=lambda expected, root=None: checkout(expected, self.root)), \
+             mock.patch.object(fp, "tracked_entries", side_effect=lambda root=None: entries(self.root)), \
+             mock.patch.object(fp, "environment", side_effect=lambda *args: (copy.deepcopy(environments), {}, fp.SQL_TAG)), \
+             mock.patch.object(test_selection, "load", side_effect=lambda *args, verify=False: load(
+                 self.root, verify=verify, directory=selection_directory)), \
+             mock.patch.object(test_selection, "discover", side_effect=discover), \
+             mock.patch.object(reuse, "GitHub") as github, \
+             mock.patch.object(reuse, "api_client", return_value=fixture), \
+             mock.patch.object(reuse, "utcnow", return_value=fixture.now), \
+             mock.patch("sys.stdout", new_callable=io.StringIO):
+            # The only substituted boundaries are native discovery, installed
+            # tools and GitHub. Selection, Git identity, planning, recording and
+            # final provenance verification use their real implementations.
+            test_selection.prepare(self.root, selection_directory)
+            baseline = fp.calculate(head, fixture.config)
+            for suite in fp.SUITES:
+                with mock.patch.object(reuse, "utcnow", return_value=fixture.now - timedelta(minutes=90)):
+                    reuse.record(fixture.config, baseline, suite, results(baseline["suites"][suite]["selection"]),
+                                 self.root / "origin")
+                fixture.manifests[suite] = json.loads((self.root / "origin/evidence" / suite / "manifest.json").read_bytes())
+                fixture.reports[suite] = json.loads((self.root / "origin/evidence" / suite / "results.json").read_bytes())
+                fixture.archive(suite)
+
+            self.git("checkout", "-q", "main")
+            base = self.git("rev-parse", "HEAD")
+            self.git("merge", "--no-ff", "-qm", "synthetic merge", head)
+            tested = self.git("rev-parse", "HEAD")
+            self.assertNotEqual(tested, head)
+            self.assertEqual(self.git("rev-parse", "HEAD^{tree}"), baseline["tree"])
+            repo = {"full_name": fixture.config["repository"]}
+            pr = {"number": 1, "state": "open", "draft": False, "author_association": "COLLABORATOR",
+                  "head": {"sha": head, "repo": repo}, "base": {"sha": base, "ref": "main", "repo": repo}}
+            live_pr = copy.deepcopy(pr)
+            github.return_value.get.side_effect = lambda path: copy.deepcopy(live_pr)
+            event_path = self.root / "event.json"
+            event_path.write_bytes(fp.canonical({"pull_request": pr}))
+            os.environ.update(GITHUB_EVENT_NAME="pull_request", GITHUB_SHA=tested, GITHUB_RUN_ID="99",
+                              GITHUB_RUN_ATTEMPT="1", GITHUB_EVENT_PATH=str(event_path), ASAP_FORCE_FULL_CI="false",
+                              GITHUB_REF="refs/pull/1/merge", GITHUB_REF_TYPE="branch",
+                              **{s.upper() + "_OUTCOME": "skipped" for s in fp.SUITES})
+            test_selection.prepare(self.root, selection_directory)
+            selected = load(self.root, verify=True, directory=selection_directory)
+            self.assertFalse(selected["decision"]["fresh"])
+            self.assertIn("docs/ci.md", selected["decision"]["base_paths"])
+            self.assertIn(fixture.config["workflow"], selected["decision"]["base_paths"])
+            self.assertIn("scripts/ci/policy.py", selected["decision"]["base_paths"])
+            # A later throwaway VM can differ while effective inputs match.
+            for value in environments.values():
+                value.update(runtime="another-installed-version", kernel="another-kernel", native_packages="new-packages",
+                             sql_image="another-sql-image", docker="another-docker")
+            reuse.plan(directory)
+            matching_plan = json.loads((directory / "plan.json").read_bytes())
+            self.assertTrue(all(d["reuse"] for d in matching_plan["decisions"].values()), matching_plan)
+            fixture.calls.clear()
+            reuse.verify(directory)
+            rows = json.loads((directory / "verification.json").read_bytes())
+            self.assertTrue(all(row["status"] == "REUSED" for row in rows.values()))
+            self.assertFalse((directory / "evidence").exists())
+            self.assertIn("/actions/artifacts/10/zip", fixture.calls)
+
+            # Keep the literal tested commit fixed while changing the trigger.
+            tag = "v1.0.0-test.1"
+            self.git("tag", "-a", "-m", "same tested commit", tag, tested)
+            tag_ref = "refs/tags/" + tag
+            for event_name, ref, event in (
+                    ("workflow_dispatch", "refs/heads/pr", {}),
+                    ("workflow_dispatch", tag_ref, {}),
+                    ("push", "refs/heads/integration", {"ref": "refs/heads/integration", "before": head,
+                                                        "after": tested, "deleted": False, "forced": False}),
+                    ("push", tag_ref, {"ref": tag_ref, "after": self.git("rev-parse", tag_ref),
+                                       "deleted": False, "forced": False}),
+                    ("release", tag_ref, {"release": {"tag_name": tag}}),
+                    ("deployment", "", {"deployment": {"sha": tested}}),
+                    ("deployment_status", tag_ref, {"deployment": {"sha": tested}})):
+                with self.subTest(trigger=event_name, ref=ref):
+                    os.environ.update(GITHUB_EVENT_NAME=event_name, GITHUB_REF=ref, ASAP_DEPLOY_TEST_IIS="true",
+                                      GITHUB_REF_TYPE="tag" if ref.startswith("refs/tags/") else "branch")
+                    event_path.write_bytes(fp.canonical(event))
+                    test_selection.prepare(self.root, selection_directory)
+                    self.assertFalse(load(self.root, directory=selection_directory)["decision"]["fresh"])
+                    reuse.plan(directory)
+                    self.assertTrue(all(d["reuse"] for d in json.loads((directory / "plan.json").read_bytes())["decisions"].values()))
+                    reuse.verify(directory)
+                    self.assertTrue(all(row["status"] == "REUSED" for row in json.loads((directory / "verification.json").read_bytes()).values()))
+            os.environ.update(GITHUB_EVENT_NAME="pull_request", GITHUB_REF="refs/pull/1/merge",
+                              GITHUB_REF_TYPE="branch", ASAP_DEPLOY_TEST_IIS="false")
+            event_path.write_bytes(fp.canonical({"pull_request": pr}))
+
+            original_environments, original_partitions = copy.deepcopy(environments), copy.deepcopy(partitions)
+            original_archives = copy.deepcopy(fixture.archives)
+            for change in ("force", "invalid-metadata", "changed-dependency", "incomplete-population", "corrupt-evidence", "changed-ci-input"):
+                with self.subTest(change=change):
+                    environments, partitions = copy.deepcopy(original_environments), copy.deepcopy(original_partitions)
+                    fixture.archives = copy.deepcopy(original_archives)
+                    live_pr = copy.deepcopy(pr)
+                    os.environ["ASAP_FORCE_FULL_CI"] = "false"
+                    if change == "force":
+                        os.environ["ASAP_FORCE_FULL_CI"] = "true"
+                    elif change == "invalid-metadata":
+                        live_pr["head"]["sha"] = "f" * 40
+                    elif change == "changed-dependency":
+                        environments["dotnet"]["nuget"] = "different-resolved-package-content"
+                    elif change == "incomplete-population":
+                        partitions["core"]["5"] = {"method": "Asap.Tests.core.NewCase", "name": "NewCase"}
+                    elif change == "corrupt-evidence":
+                        fixture.archives[10] = b"corrupt archive"
+                    else:
+                        self.git("checkout", "-qb", "changed-input", head)
+                        (self.root / "scripts/ci/policy.py").write_text("# Changed CI input\n")
+                        self.git("add", "scripts/ci/policy.py")
+                        self.git("commit", "-qm", "changed CI input")
+                        pr["head"]["sha"] = self.git("rev-parse", "HEAD")
+                        self.git("checkout", "-q", "--detach", base)
+                        self.git("merge", "--no-ff", "-qm", "changed synthetic merge", pr["head"]["sha"])
+                        os.environ["GITHUB_SHA"] = self.git("rev-parse", "HEAD")
+                        live_pr = copy.deepcopy(pr)
+                        event_path.write_bytes(fp.canonical({"pull_request": pr}))
+                    test_selection.prepare(self.root, selection_directory)
+                    fixture.calls.clear()
+                    reuse.plan(directory)
+                    decisions = json.loads((directory / "plan.json").read_bytes())["decisions"]
+                    self.assertFalse(decisions["dotnet"]["reuse"])
+                    if change in ("force", "invalid-metadata"):
+                        self.assertEqual(fixture.calls, [])
+                    # A previously valid plan must not mask the later failure.
+                    reuse.write_json(directory / "plan.json", matching_plan)
+                    with self.assertRaises(reuse.EvidenceError):
+                        reuse.verify(directory)
+
 
 class DependencyTests(unittest.TestCase):
     def test_only_audited_frontend_implementation_bytes_allow_backend_reuse(self):
@@ -328,6 +499,15 @@ class DependencyTests(unittest.TestCase):
         self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
 
 class ProvenanceTests(unittest.TestCase):
+    def test_originating_event_alone_never_rejects_matching_same_commit_evidence(self):
+        for event in ("push", "workflow_dispatch", "release", "deployment", "deployment_status", "schedule"):
+            fixture = Fixture()
+            fixture.run["event"] = event
+            with self.subTest(event=event):
+                self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
+                fixture.run["head_repository"]["id"] = 42
+                self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
+
     def test_different_category_selections_cannot_share_execution_evidence(self):
         for current_categories, evidence_categories in ((["core"], ["unrecognized"]),
                                                         (["unrecognized"], ["core"])):
@@ -627,17 +807,21 @@ class ApiTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             reuse.SafeRedirect().redirect_request(request, None, 302, "", {}, "http://storage.example/artifact")
 
-    def test_forced_release_deployment_and_manual_requests(self):
-        for env in ({"ASAP_FORCE_FULL_CI": "true"}, {"GITHUB_EVENT_NAME": "release"},
+    def test_only_explicit_force_or_invalid_selection_requires_fresh_execution(self):
+        for env in ({"ASAP_FORCE_FULL_CI": "true"}, {"ASAP_FORCE_FULL_CI": "true", "GITHUB_EVENT_NAME": "release"}):
+            with mock.patch.dict(os.environ, env, clear=True):
+                self.assertTrue(reuse.forced_full())
+        for env in ({"GITHUB_EVENT_NAME": "release"},
                     {"GITHUB_REF_TYPE": "tag", "GITHUB_EVENT_NAME": "push", "GITHUB_REF_NAME": "v1.0.0"},
                     {"GITHUB_REF_TYPE": "tag", "GITHUB_EVENT_NAME": "push", "GITHUB_REF_NAME": "v1.0.0-test.24"},
                     {"ASAP_DEPLOY_TEST_IIS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch"}):
-            with mock.patch.dict(os.environ, env, clear=True):
-                self.assertTrue(reuse.forced_full())
-        for fresh in (True, False):
+            with mock.patch.dict(os.environ, env, clear=True), \
+                 mock.patch.object(test_selection, "load", return_value={"decision": {"fresh": False}}):
+                self.assertFalse(reuse.forced_full())
+        for fresh in (True, False, None, 0, "false"):
             with mock.patch.dict(os.environ, {}, clear=True), \
                  mock.patch.object(test_selection, "load", return_value={"decision": {"fresh": fresh}}):
-                self.assertEqual(reuse.forced_full(), fresh)
+                self.assertEqual(reuse.forced_full(), fresh is not False)
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(test_selection, "load", side_effect=ValueError):
             self.assertTrue(reuse.forced_full())
 
@@ -660,7 +844,7 @@ class EnvironmentTests(unittest.TestCase):
                                    return_value="mcr.microsoft.com/mssql/server@sha256:" + "1" * 64):
                 return fp.environment(fp.configuration(), root)
 
-    def test_observed_toolchain_changes_and_sql_digest_are_environment_inputs(self):
+    def test_throwaway_environment_drift_is_observed_without_invalidating_reuse(self):
         first, problems, image = self.environment()
         self.assertEqual(problems, {})
         self.assertIn("@sha256:", image)
@@ -672,6 +856,17 @@ class EnvironmentTests(unittest.TestCase):
         for suite in fp.SUITES:
             self.assertNotEqual(fp.digest(first[suite]), fp.digest(second[suite]))
             self.assertNotEqual(fp.digest(first[suite]), fp.digest(native_changed[suite]))
+            self.assertEqual(fp.environment_fingerprint(first[suite]), fp.environment_fingerprint(second[suite]))
+            self.assertEqual(fp.environment_fingerprint(first[suite]), fp.environment_fingerprint(native_changed[suite]))
+
+    def test_repository_policy_and_resolved_test_dependencies_still_invalidate(self):
+        environments, _, _ = self.environment()
+        for suite in fp.SUITES:
+            original = environments[suite]
+            for key in ("epoch", "nuget", "playwright"):
+                changed = {**original, key: "changed test input"}
+                with self.subTest(suite=suite, key=key):
+                    self.assertNotEqual(fp.environment_fingerprint(original), fp.environment_fingerprint(changed))
 
     def test_sql_identity_failure_disables_only_sql_dependent_reuse(self):
         _, problems, image = self.environment(sql_error=True)

@@ -25,9 +25,11 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(policy.paths_policy([path])["categories"], ["core"])
 
-    def test_unknown_implementation_and_deleted_contracts_force_fresh_execution(self):
+    def test_unknown_implementation_and_deleted_contracts_require_complete_population(self):
         for path in ("src/Retired/Source.cs", "unknown/fixture.json"):
-            self.assertTrue(policy.paths_policy([path])["fresh"])
+            selected = policy.paths_policy([path])
+            self.assertEqual(selected["categories"], policy.ALL)
+            self.assertFalse(selected["fresh"])
 
     def test_schema_deployment_shared_configuration_and_serialization_dependencies(self):
         for path in ("database/Asap.Database/Tables/SchemaVersion.sql", "src/Shared/SecurityContract.cs",
@@ -45,16 +47,17 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(policy.paths_policy(["tests/Asap.Tests/Sql/DatabaseBaselineTests.cs"])["categories"], policy.ALL)
         self.assertEqual(policy.paths_policy(["src/Asap.Web/Features/Patron/PatronSessionService.cs"])["categories"], ["core"])
 
-    def test_selection_and_enforcement_changes_force_fresh_full_validation(self):
+    def test_selection_and_enforcement_changes_allow_matching_full_evidence(self):
         for path in (".github/workflows/dotnet.yml", "scripts/ci/selection.py", "scripts/ci/reviewed-test-categories.json",
                      "scripts/ci/fingerprints.py", "scripts/ci/reuse.py", "scripts/ci/test_selection.py",
                      "scripts/deployment/Deploy-AsapTest.ps1", "tests/Asap.Tests/TestCategories.cs",
                      "tests/ci_workflow_contract.test.js", "tests/test_iis_deployment_contract.test.js",
-                     "tests/run_all.js", "tests/browser/run.cjs", "src/Asap.Web/Asap.Web.csproj"):
+                     "tests/run_all.js", "tests/browser/run.cjs", "src/Asap.Web/Asap.Web.csproj",
+                     "docs/implementation/ci.md", "README.md"):
             with self.subTest(path=path):
                 selected = policy.paths_policy([path])
                 self.assertEqual(selected["categories"], policy.ALL)
-                self.assertTrue(selected["fresh"])
+                self.assertFalse(selected["fresh"])
 
     def test_missing_invalid_or_unsupported_metadata_fails_closed(self):
         for env in ({}, {"GITHUB_EVENT_NAME": "schedule"}, {"GITHUB_EVENT_NAME": "push"},
@@ -65,11 +68,9 @@ class PolicyTests(unittest.TestCase):
                 self.assertTrue(selected["fresh"])
                 self.assertIn("fallback", selected["reason"])
 
-    def test_manual_full_release_and_test_iis_qualification(self):
-        for env in ({"ASAP_FORCE_FULL_CI": "true"}, {"GITHUB_EVENT_NAME": "release"},
-                    {"GITHUB_EVENT_NAME": "workflow_dispatch", "ASAP_FORCE_FULL_CI": "true"},
-                    {"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v1.0.0-test.1", "GITHUB_EVENT_NAME": "push"},
-                    {"GITHUB_EVENT_NAME": "workflow_dispatch", "ASAP_DEPLOY_TEST_IIS": "true"}):
+    def test_only_explicit_force_demands_fresh_manual_qualification(self):
+        for env in ({"ASAP_FORCE_FULL_CI": "true"},
+                    {"GITHUB_EVENT_NAME": "workflow_dispatch", "ASAP_FORCE_FULL_CI": "true"}):
             with self.subTest(env=env):
                 selected = policy.decision(env)
                 self.assertEqual(selected["categories"], policy.ALL)
@@ -77,9 +78,12 @@ class PolicyTests(unittest.TestCase):
         selected = policy.decision({"GITHUB_EVENT_NAME": "workflow_dispatch"})
         self.assertEqual(selected["categories"], policy.ALL)
         self.assertFalse(selected["fresh"])
+        selected = policy.decision({"GITHUB_EVENT_NAME": "workflow_dispatch", "ASAP_DEPLOY_TEST_IIS": "true"})
+        self.assertFalse(selected["fresh"])
 
     def test_invalid_path_lists_cannot_narrow_selection(self):
-        for paths in ([], None, ["../database.sql"], ["a\\b"], ["/root"], ["a\nb"], ["a//b"], [""]):
+        for paths in ([], None, ["../database.sql"], ["a\\b"], ["/root"], ["a\nb"], ["a//b"], [""],
+                      ["scripts/ci/reuse.py", "../invalid"]):
             with self.subTest(paths=paths), self.assertRaises(policy.SelectionError):
                 policy.paths_policy(paths)
 
@@ -128,6 +132,65 @@ class GitDiffTests(unittest.TestCase):
         self.assertEqual(paths, ["src/Asap.Web/Frontend/app.js"])
         self.assertEqual(policy.paths_policy(paths)["categories"], ["core"])
 
+    def test_lightweight_and_annotated_tag_pushes_allow_same_commit_reuse(self):
+        for annotated in (False, True):
+            tag = "v1.0.0-test." + str(int(annotated))
+            self.git("tag", *(["-a", "-m", "test qualification"] if annotated else []), tag, self.initial)
+            ref = "refs/tags/" + tag
+            event = {"before": "0" * 40, "after": self.git("rev-parse", ref), "ref": ref,
+                     "created": True, "deleted": False, "forced": False}
+            (self.root / "event.json").write_text(json.dumps(event))
+            env = {**self.env(self.initial, "push"), "GITHUB_REF": ref, "GITHUB_REF_TYPE": "tag"}
+            with self.subTest(annotated=annotated):
+                selected = policy.decision(env, self.root)
+                self.assertEqual(selected["categories"], policy.ALL)
+                self.assertFalse(selected["fresh"], selected)
+
+    def test_same_commit_manual_branch_release_and_deployment_events_allow_reuse(self):
+        tag = "v1.0.0-test.9"
+        self.git("tag", tag, self.initial)
+        tag_ref = "refs/tags/" + tag
+        cases = (
+            ("workflow_dispatch", tag_ref, {}),
+            ("release", tag_ref, {"release": {"tag_name": tag}}),
+            ("push", "refs/heads/topic", {"ref": "refs/heads/topic", "before": self.initial,
+                                         "after": self.initial, "deleted": False, "forced": False}),
+            ("push", "refs/heads/new", {"ref": "refs/heads/new", "before": "0" * 40,
+                                       "after": self.initial, "created": True, "deleted": False, "forced": False}),
+            ("deployment", "", {"deployment": {"sha": self.initial}}),
+            ("deployment_status", tag_ref, {"deployment": {"sha": self.initial}}),
+            ("schedule", "refs/heads/main", {}),
+        )
+        for event_name, ref, event in cases:
+            (self.root / "event.json").write_text(json.dumps(event))
+            env = {**self.env(self.initial, event_name), "GITHUB_REF": ref, "ASAP_DEPLOY_TEST_IIS": "true",
+                   "GITHUB_REF_TYPE": "tag" if ref.startswith("refs/tags/") else "branch"}
+            with self.subTest(event=event_name, ref=ref):
+                selected = policy.decision(env, self.root)
+                self.assertEqual(selected["categories"], policy.ALL)
+                self.assertFalse(selected["fresh"], selected)
+                self.assertTrue(policy.decision({**env, "ASAP_FORCE_FULL_CI": "true"}, self.root)["fresh"])
+
+    def test_invalid_tag_release_and_deployment_metadata_still_demands_fresh_execution(self):
+        tag = "v1.0.0-test.9"
+        self.git("tag", tag, self.initial)
+        ref = "refs/tags/" + tag
+        for event_name, event, extra in (
+                ("push", {"ref": ref, "after": "f" * 40, "deleted": False, "forced": False}, {}),
+                ("push", {"ref": ref, "after": self.initial, "deleted": True, "forced": False}, {}),
+                ("workflow_dispatch", {}, {"GITHUB_REF": "refs/tags/missing"}),
+                ("workflow_dispatch", {}, {"GITHUB_REF_TYPE": "branch"}),
+                ("release", {"release": {"tag_name": "different-tag"}}, {}),
+                ("deployment", {"deployment": {"sha": "f" * 40}}, {})):
+            (self.root / "event.json").write_text(json.dumps(event))
+            env = {**self.env(self.initial, event_name), "GITHUB_REF": ref, "GITHUB_REF_TYPE": "tag", **extra}
+            with self.subTest(event=event_name, extra=extra):
+                self.assertTrue(policy.decision(env, self.root)["fresh"])
+        tested = self.commit("code.txt", "another commit")
+        (self.root / "event.json").write_text("{}")
+        env = {**self.env(tested, "workflow_dispatch"), "GITHUB_REF": ref, "GITHUB_REF_TYPE": "tag"}
+        self.assertTrue(policy.decision(env, self.root)["fresh"])
+
     def test_base_changes_since_fork_are_included(self):
         event, env = self.integration(advance_base=True)
         paths = policy.changed_paths("pull_request", event, env, self.root, event["pull_request"])
@@ -163,6 +226,7 @@ class GitDiffTests(unittest.TestCase):
         with mock.patch.object(reuse.GitHub, "get", side_effect=RuntimeError("private details")):
             selected = policy.decision(env, self.root)
             self.assertEqual(selected["categories"], policy.ALL)
+            self.assertTrue(selected["fresh"])
             self.assertNotIn("private details", selected["reason"])
 
     def test_main_push_diff_and_missing_or_forced_metadata(self):
@@ -172,7 +236,7 @@ class GitDiffTests(unittest.TestCase):
         path = self.root / "event.json"
         path.write_text(json.dumps(event))
         self.assertEqual(policy.decision(env, self.root)["categories"], ["core"])
-        for change in ({"before": "0" * 40}, {"before": "f" * 40}, {"forced": True}, {"after": self.initial},
+        for change in ({"before": "0" * 40}, {"before": "f" * 40}, {"forced": "true"}, {"after": self.initial},
                        {"deleted": True}, {"ref": "refs/heads/other"}):
             path.write_text(json.dumps({**event, **change}))
             selected = policy.decision(env, self.root)
@@ -188,7 +252,7 @@ class GitDiffTests(unittest.TestCase):
         event = {"before": before, "after": tested, "ref": "refs/heads/main", "deleted": False, "forced": False}
         paths = policy.changed_paths("push", event, self.env(tested, "push"), self.root)
         self.assertIn("src/Unreviewed/Source.cs", paths)
-        self.assertTrue(policy.paths_policy(paths)["fresh"])
+        self.assertFalse(policy.paths_policy(paths)["fresh"])
 
 
 class PopulationTests(unittest.TestCase):
