@@ -22,6 +22,7 @@
     "Asap.Tests.Integration.PatronJourneyTests.PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport",
     "Asap.Tests.Integration.PatronJourneyTests.PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses",
     "Asap.Tests.Integration.PatronJourneyTests.PolarisSearchBrowserQueuesAuthoritativeBibsAndRecoversCombinedCopyExactlyOnce",
+    "Asap.Tests.Integration.PatronJourneyTests.RequestConfirmationBrowserPreservesChoicesCancellationAndAuthorizedRetries",
     "Asap.Tests.Integration.PatronJourneyTests.SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp",
     "Asap.Tests.Integration.PatronJourneyTests.SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference",
     "Asap.Tests.Integration.PatronJourneyTests.StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers",

@@ -92,9 +92,12 @@ const scenarios = [
         const panel = dialog(t.page).locator(label === 'Assign' ? '.inline-form' : '.action-choice');
         await panel.waitFor();
         await panel.locator('button[type=submit]:not([disabled])').waitFor();
-        if (label === 'Assign') await panel.getByRole('button', { name: 'Cancel', exact: true }).click();
-        else await t.page.keyboard.press('Escape');
+        assert.equal(await dialog(t.page).locator('.action-bar').isVisible(), false, 'Inline panel hides the toolbar');
+        assert.equal(await panel.evaluate(node => node.contains(document.activeElement)), true, 'Focus enters the panel');
+        if (label === 'Purchase') assert.equal(await panel.locator('button[type=submit]').textContent(), 'Confirm purchase');
+        await t.page.keyboard.press('Escape');
         await panel.waitFor({ state: 'hidden' });
+        assert.equal(await dialog(t.page).locator('.action-bar').isVisible(), true);
         assert.equal(await opener.evaluate(n => n === document.activeElement), true, label + ' restores focus');
       }
       await (await actionButton(t.page, 'Close silently')).click();

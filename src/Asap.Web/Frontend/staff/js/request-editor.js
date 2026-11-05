@@ -192,11 +192,13 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     });
     beginBibLink = (returnFocus = null, message = '') => {
       if (!form.isConnected || !isCurrent() || isPending() || !request.capabilities?.canChangeBib ||
-          !request.capabilities?.allowedActions?.includes('alreadyOwn') || !linkNeedsReload && !admit({ consumes: draft })) return;
+          !request.capabilities?.allowedActions?.includes('alreadyOwn') || !linking && context.hasInlineAction() ||
+          !linkNeedsReload && !admit({ consumes: draft })) return;
       context.showDetails?.();
       linking = true;
       linkReturnFocus = returnFocus || [...root.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own');
       linkPanel.hidden = false;
+      context.beginInlineAction(linkPanel, () => cancelBibLink());
       bib.setAttribute('aria-describedby', `${linkHelp.id} ${linkStatus.id}`);
       if (message) showBibLinkError(message);
       else if (linkNeedsReload) showBibLinkError('Reload the current request before making another change.');
@@ -209,6 +211,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       if (lookupContext) polarisLookup.close(lookupContext);
       linking = false;
       linkPanel.hidden = true;
+      context.endInlineAction(linkPanel);
       bib.removeAttribute('aria-describedby');
       if (linkReturnFocus?.isConnected) linkReturnFocus.focus();
       announce('Catalog linking canceled. Request edits remain unsaved.');
@@ -308,6 +311,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       verifiedBib = null;
       if (lookupContext) polarisLookup.invalidate(lookupContext);
       interactionScope.release(draft);
+      if (linking) context.endInlineAction(linkPanel);
       form.replaceWith(buildEditForm(request, configuration));
       const updated = root.querySelector('.edit-form');
       (updated.closest('[hidden]') ? root.querySelector('[role="tab"][aria-selected="true"]') : updated.querySelector('input'))?.focus();

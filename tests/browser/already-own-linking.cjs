@@ -37,6 +37,7 @@ const [baseURL, artifacts, staffId, tenantId, email, missing, invalid, stale, un
     assert.equal(await requestModal(target).getByRole('tab', { name: 'Details', exact: true }).getAttribute('aria-selected'), 'true');
     assert.equal(await requestModal(target).getByRole('button', { name: 'Search Polaris catalog', exact: true }).evaluate(n => n === document.activeElement), true);
     assert.equal(await target.locator('#request-dialog[open]').count(), 1);
+    assert.equal(await requestModal(target).locator('.action-bar').isVisible(), false);
   };
   const select = async (target = page) => {
     await requestModal(target).getByRole('button', { name: 'Search Polaris catalog', exact: true }).click();
@@ -127,6 +128,7 @@ const [baseURL, artifacts, staffId, tenantId, email, missing, invalid, stale, un
     await open(invalid); await link();
     await page.keyboard.press('Escape');
     assert.equal(await panel(page).isVisible(), false);
+    assert.equal(await requestModal(page).locator('.action-bar').isVisible(), true);
     assert.equal(await requestModal(page).getByRole('button', { name: 'Already own', exact: true }).evaluate(n => n === document.activeElement), true);
     assert.equal((await getDetail(invalid)).status, 'suggestion');
 
@@ -160,6 +162,7 @@ const [baseURL, artifacts, staffId, tenantId, email, missing, invalid, stale, un
     await final().click();
     const duplicateRecovery = requestModal(page).locator('.duplicate-recovery');
     await duplicateRecovery.waitFor();
+    assert.equal(await requestModal(page).locator('.action-bar').isVisible(), false);
     assert.match(await duplicateRecovery.textContent(), new RegExp(`Request ${duplicate}:`));
     assert.equal(await requestModal(page).getByLabel('Title', { exact: true }).inputValue(), 'Duplicate recovery title draft');
     assert.equal(await requestModal(page).getByLabel('Notes', { exact: true }).inputValue(), 'Duplicate recovery note draft');
@@ -168,6 +171,7 @@ const [baseURL, artifacts, staffId, tenantId, email, missing, invalid, stale, un
     assert.deepEqual(await getDetail(invalid), savedInvalid, 'Duplicate rejection leaves authoritative data and version unchanged');
     await scan('already-own-duplicate-recovery');
     await duplicateRecovery.getByRole('button', { name: 'Continue editing', exact: true }).click();
+    assert.equal(await requestModal(page).locator('.action-bar').isVisible(), false, 'Retained BIB linking still owns the toolbar');
     assert.equal(await requestModal(page).getByLabel('BIB ID', { exact: true }).evaluate(n => n === document.activeElement), true);
     const invalidDetailPath = new RegExp(`/api/asap/staff/title-requests/${invalid}(?:\\?.*)?$`);
     await page.route(invalidDetailPath, route => route.fulfill({ status: 503, json: { message: 'Duplicate follow-up read failed' } }));

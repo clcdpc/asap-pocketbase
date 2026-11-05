@@ -18,12 +18,35 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   let lease = null, actor = null, current = null, returnFocus = null, activeAttempt = null;
   let drafts = createDraftScope(), renderRevision = null, editor = null, workflows = null, copyParent = null, disposed = false, targetGeneration = 0;
   let selectedTab = 'details', tabRequestId = null;
+  let inlineOpeningEnter = false;
+  // Duplicate recovery can sit above retained BIB linking; dismiss the latest
+  // panel first and restore the toolbar only when both owners have finished.
+  const inlineActions = new Map();
 
   function isPresentationCurrent(mounted, owner) {
     return !disposed && mounted?.isCurrent() && sessionIdentity.isCurrent(owner);
   }
   function isCurrentSelection(snapshot) { return isPresentationCurrent(lease, actor) && current?.id === snapshot.id; }
   function hasPendingMutation() { return Boolean(activeAttempt?.pending && sessionIdentity.isCurrent(activeAttempt.owner) || copyParent && copyCreation.hasPendingMutation(copyParent)); }
+  function beginInlineAction(panel, cancel) {
+    workflows?.invalidate();
+    inlineActions.set(panel, cancel);
+    inlineOpeningEnter = true;
+    const bar = lease?.content.querySelector('.action-bar');
+    if (bar) bar.hidden = true;
+  }
+  function endInlineAction(panel) {
+    inlineActions.delete(panel);
+    const bar = lease?.content.querySelector('.action-bar');
+    if (bar) bar.hidden = inlineActions.size > 0;
+  }
+  function cancelInlineAction() {
+    if (hasPendingMutation()) return false;
+    const cancel = [...inlineActions.values()].at(-1);
+    if (!cancel) return false;
+    cancel();
+    return true;
+  }
   function allowRequestMutation(snapshot, declaration) {
     if (!isCurrentSelection(snapshot) || current.version !== snapshot.version || hasPendingMutation()) return false;
     if (editor?.needsBibLinkReload()) {
@@ -65,6 +88,8 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   function closeCopy(options) { return !copyParent || copyCreation.close(options, copyParent); }
   function disposeChildren() {
     renderRevision = null;
+    inlineActions.clear();
+    inlineOpeningEnter = false;
     closeCopy({ navigation: true, force: true }); copyParent = null;
     editor?.dispose(); workflows?.dispose(); editor = null; workflows = null;
     drafts.dispose();
@@ -91,10 +116,20 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     if (disposed || !sessionIdentity.isCurrent(target.owner) || !isNavigationCurrent(ticket)) return false;
     const { request, configuration, owner } = target;
     if (!options.authoritativeRefresh) selectedTab = 'details';
-    const mounted = host.acquire({ dispose: disposeMounted, onClose: close,
+    const mounted = host.acquire({ dispose: disposeMounted, onClose: close, hasInlineAction: () => inlineActions.size > 0,
       onEscape: () => { if (!hasPendingMutation() && workflows?.escape()) return; close(); } });
     lease = mounted; actor = owner;
     returnFocus = opener || document.activeElement; drafts = createDraftScope();
+    mounted.content.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' || !inlineOpeningEnter || !isPresentationCurrent(mounted, owner)) return;
+      // Focus moves during the opener's keydown. Its held-key repeats must not
+      // approve the newly opened panel; a fresh press keeps normal form behavior.
+      if (!event.repeat) { inlineOpeningEnter = false; return; }
+      if (inlineActions.size) { event.preventDefault(); event.stopPropagation(); }
+    }, { capture: true });
+    mounted.content.addEventListener('keyup', event => {
+      if (event.key === 'Enter' && isPresentationCurrent(mounted, owner)) inlineOpeningEnter = false;
+    }, { capture: true });
     for (const name of ['input', 'change']) mounted.content.addEventListener(name, event => {
       if (isPresentationCurrent(mounted, owner) && mounted.content.contains(event.target)) drafts.touch(event.target);
     });
@@ -406,6 +441,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     if (retained && editor.isDirty()) panel.append(element('p', { text: 'Your unsaved edits and selected BIB are retained. Save or revert those edits before closing this request as a duplicate.' }));
     const edit = element('button', { type: 'button', onclick: () => {
       if (!panel.isConnected || !live()) return;
+      endInlineAction(panel);
       panel.remove(); mounted.content.querySelector('.edit-form input[inputmode="numeric"]')?.focus(); announce('The request remains open. Edit it or select another BIB.');
     } }, 'Continue editing');
     const closeDuplicate = element('button', { type: 'button', className: 'secondary-button', onclick: () => {
@@ -417,6 +453,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       mounted.content.querySelector('.request-detail-tabs [role="tab"]')?.click();
       slot.append(panel);
     } else mounted.content.querySelector('.action-bar')?.after(panel);
+    beginInlineAction(panel, () => edit.click());
     (snapshot.status === 'closed' ? edit : closeDuplicate).focus();
     announce('The attempted change was not saved. Review the duplicate request and choose whether to close this request.', 'error');
   }
@@ -444,6 +481,10 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     const context = Object.freeze({ request: snapshot, actor: owner, root: mounted.content, scope,
       isCurrent: live, isPending: hasPendingMutation,
       showDetails: () => activateTab('details'),
+      hasInlineAction: () => inlineActions.size > 0,
+      beginInlineAction: (panel, cancel) => { if (live()) beginInlineAction(panel, cancel); },
+      endInlineAction: panel => { if (live()) endInlineAction(panel); },
+      cancelInlineAction: () => live() && cancelInlineAction(),
       admit: declaration => live() && allowRequestMutation(snapshot, declaration),
       confirm: async (options, draft = null, discardOnly = false) => {
         // Revert owns only this editor; unrelated inline drafts must survive it.

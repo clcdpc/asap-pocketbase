@@ -12,8 +12,8 @@ Routine regression checks and final evidence reconciliation are not new reviews.
 | Issue | Implementation | Pass 1 | Pass 2 | Technical disposition |
 | --- | --- | --- | --- | --- |
 | #389 Polaris search and direct actions | `7ebc90b`: compact catalog UI and scoped direct actions | Luna MAX: 2 findings fixed | Astra HIGH + Terra MAX: 1 finding fixed | Technically qualified |
-| #413 Already own Bib linking | Atomic verified association/action; unrelated drafts retained | Luna MAX: 1 finding fixed | Astra HIGH: 2 findings fixed | Technically qualified |
-| #423 Purchase/rejection confirmations | Pending | Pending | Pending | Pending |
+| #413 Already own Bib linking | `acc63cb`: atomic verified association/action; unrelated drafts retained | Luna MAX: 1 finding fixed | Astra HIGH: 2 findings fixed | Technically qualified |
+| #423 Purchase/rejection confirmations | Scoped inline-action toolbar/focus ownership; Confirm purchase | Luna MAX: no findings | Luna MAX browser scenarios: 1 finding fixed | Technically qualified |
 | #426 Detail footer Close | Pending | Pending | Pending | Pending |
 | #424 Pickup help boundary | Pending | Pending | Pending | Pending |
 | #425 Patron email link | Pending | Pending | Pending | Pending |
@@ -90,6 +90,34 @@ Evidence: `i413-pass2/remediation-browser/i413-pass2-remediation-browser.trx`,
 `already-own-link-37f16f34c9a44668abff21e64c2b1fa6/browser-results.json` under the
 local evidence root. Native actor/version races and UI role/scope/identity races
 were executed; separate SQL role/library/claim changes were inspected only.
+
+### #423
+
+Purchase/Reject hide the competing toolbar while retaining title, status and X;
+the final purchase action is Confirm purchase. Reminder/default, rejection
+selection/delivery and backend policies remain intact. Assign, Pickup, Bib
+linking and duplicate recovery share the title-detail visibility/focus owner;
+persistent hold resolution stays unchanged. Cancellation restores toolbar/focus.
+
+Pass 1 found no defect. Pass 2 used trusted Chromium gestures in the disposable
+SQL/Kestrel fixture and found that held Enter could submit immediately after
+opening Purchase. Scoped carry-over suppression fixes it while retaining fresh
+Enter confirmation and textarea repeats. Final seven affected Node files,
+Release build (zero warnings/errors), and #423 plus #413 browser owners pass
+(2/2, zero failures/skips). Six trusted held-Enter cases make zero premature
+action POSTs; deliberate confirmation and SQL status/history/outbox checks pass.
+Eight desktop/mobile/native-200% scans have zero serious/critical axe findings,
+overflow, missing images, page errors or external requests. Pass 2 also executed
+real double-clicks, tab exclusion, dirty Reject discard/keep/cancel and pending
+response close guards. A committed-success response loss was not separately
+injected here; existing recovery contracts remain.
+
+Final evidence: `i423-pass2/remediation/i423-pass2-remediation.trx` and
+`request-confirmations-dfb3865ae3bb41c0abf8ca6dea20b47a/browser-results.json` under
+the local root. Failed focused runs and the independent pre-fix probe are
+retained. Temporary test instrumentation was restored byte-for-byte before the
+implementation fix. Registered d1/i403/pr410 assertions are updated; their full
+runner executions remain final integrated gates.
 
 ## Integrated qualification
 
