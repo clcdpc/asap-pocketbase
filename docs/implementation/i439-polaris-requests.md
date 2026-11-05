@@ -14,8 +14,8 @@ Routine regression checks and final evidence reconciliation are not new reviews.
 | #389 Polaris search and direct actions | `7ebc90b`: compact catalog UI and scoped direct actions | Luna MAX: 2 findings fixed | Astra HIGH + Terra MAX: 1 finding fixed | Technically qualified |
 | #413 Already own Bib linking | `acc63cb`: atomic verified association/action; unrelated drafts retained | Luna MAX: 1 finding fixed | Astra HIGH: 2 findings fixed | Technically qualified |
 | #423 Purchase/rejection confirmations | `62c4c17`: scoped inline-action toolbar/focus ownership; Confirm purchase | Luna MAX: no findings | Luna MAX browser scenarios: 1 finding fixed | Technically qualified |
-| #426 Detail footer Close | Secondary footer Close reuses guarded host dismissal | Luna MAX: 1 recovery finding fixed | Luna MAX actual-browser comparisons: no findings | Technically qualified |
-| #424 Pickup help boundary | Pending | Pending | Pending | Pending |
+| #426 Detail footer Close | `398bb8c`: secondary footer Close reuses guarded host dismissal | Luna MAX: 1 recovery finding fixed | Luna MAX actual-browser comparisons: no findings | Technically qualified |
+| #424 Pickup help boundary | Scoped accessible pickup disclosure | Luna MAX: no findings | Luna MAX actual-browser scenarios: 1 held-Escape finding fixed | Technically qualified |
 | #425 Patron email link | Pending | Pending | Pending | Pending |
 | #396 Initial heading focus | Pending | Pending | Pending | Pending |
 | #442 Authorized workflow counts | Pending | Pending | Pending | Pending |
@@ -138,6 +138,27 @@ exactly to SHA256 `528aba548eb0cafebe2b3f5a788f8cb84996793f3bcd57c623f1f4a155967
 Evidence: `i426/i426-request-confirmations-test-run-7.trx`,
 `i426-pass2/native/i426-pass2.trx` and `i426-pass2/pass2-report.md` under the local
 root. No implicit save, revert, workflow action or added notification occurred.
+
+### #424
+
+The full explanation belongs to the pickup cell's native disclosure; other patron
+cells no longer trigger it. The required short text remains visible. Pass 1 had
+no findings. Pass 2 independently exercised pointer boundaries, Enter/Space,
+touch, SPA replacement and real wheel access to every clause at 390px and native
+200% zoom. It found that repeated Escape could cancel an underlying Purchase
+panel after closing help. The local keydown/keyup fence now owns that held press;
+a fresh Escape retains normal workflow cancellation.
+
+Final Node checks, zero-warning/error Web build and browser owner pass 1/1 with
+17 clean states. Trusted repeated Escape closes only help, retains panel/modal
+and focus, and posts no action; a fresh Escape cancels the panel normally.
+Evidence: `i424/i424-request-confirmations-test-run-7.trx`,
+`request-confirmations-83ce104702854834ae8559e873565d59/browser-results.json` and
+`i424-pass2/pass2-report.md`. Failed receipts from redundant wheel-test geometry
+are retained; that brittle extra assertion was removed from the keyboard-only
+remediation after independent Pass 2 had already proved scrolling. Temporary
+instrumentation was restored before remediation. All final states have zero
+serious/critical axe findings, overflow, page errors or external requests.
 
 ## Integrated qualification
 

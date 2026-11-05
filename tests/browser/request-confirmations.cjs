@@ -12,7 +12,7 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
   const browser = await chromium.launch({ headless: true, ...(process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH
     ? { executablePath: process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH } : {}) });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers });
-  const report = { states: [], errors: [], external: [], actions: [], heldEnter: [], cancellation: false, retries: false, otherPanels: false, close: {} };
+  const report = { states: [], errors: [], external: [], actions: [], heldEnter: [], cancellation: false, retries: false, otherPanels: false, close: {}, pickup: {} };
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   const guard = async ctx => ctx.route('**/*', route => {
     if (new URL(route.request().url()).origin === new URL(baseURL).origin) return route.continue();
@@ -32,6 +32,11 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
   const bar = (target = page) => dialog(target).locator('.action-bar');
   const review = (target = page) => dialog(target).locator('.action-choice');
   const opener = (name, target = page) => bar(target).getByRole('button', { name, exact: true });
+  const pickupCell = (target = page) => dialog(target).locator('.patron-context .detail-grid > div')
+    .filter({ has: target.locator('.recorded-pickup-help') });
+  const pickupHelp = (target = page) => pickupCell(target).locator('.recorded-pickup-help');
+  const pickupHelpToggle = (target = page) => pickupHelp(target).locator(':scope > summary');
+  const pickupHelpText = (target = page) => pickupHelp(target).locator('.recorded-pickup-help-content');
   const status = (target = page) => target.locator('#request-dialog-status');
   const getDetail = async id => {
     const response = await context.request.get(`${baseURL}/api/asap/staff/title-requests/${id}`);
@@ -145,6 +150,130 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     } else await target.screenshot({ path: path.join(artifacts, `${name}.png`), fullPage: true });
     report.states.push({ name, ...state });
   }
+  async function scanPickupHelp(name, target = page, nativeZoom = false, focusRequired = false) {
+    const toggle = pickupHelpToggle(target), content = pickupHelpText(target);
+    assert.equal(await pickupHelp(target).evaluate(node => node.open), true, `${name}: the disclosure is open`);
+    assert.equal(await content.isVisible(), true, `${name}: the explanation is visible`);
+    await target.evaluate(axe);
+    const state = await target.evaluate(async () => {
+      const modal = document.querySelector('#request-dialog'), summary = modal.querySelector('.recorded-pickup-help > summary');
+      const content = modal.querySelector('.recorded-pickup-help-content'), pickupCell = content.closest('dd');
+      const pickup = pickupCell.getBoundingClientRect();
+      const bounds = content.getBoundingClientRect();
+      return { violations: (await axe.run()).violations.filter(v => ['serious', 'critical'].includes(v.impact)),
+        width: innerWidth, documentWidth: document.documentElement.scrollWidth,
+        overflow: modal.scrollWidth > modal.clientWidth + 1 || content.scrollWidth > content.clientWidth + 1,
+        clipped: bounds.left < pickup.left - 1 || bounds.right > pickup.right + 1,
+        focusVisible: document.activeElement === summary && summary.matches(':focus-visible') &&
+          getComputedStyle(summary).outlineStyle !== 'none' && parseFloat(getComputedStyle(summary).outlineWidth) > 0,
+        shortExplanation: pickupCell.querySelector('.recorded-pickup-summary')?.textContent.trim(),
+        fullExplanation: content.textContent.trim() };
+    });
+    assert.deepEqual(state.violations, [], `${name}: serious/critical axe findings`);
+    assert.ok(state.documentWidth <= state.width && !state.overflow && !state.clipped, `${name}: pickup help overflows or is clipped`);
+    assert.equal(state.shortExplanation, 'Historical; holds use live Polaris pickup preference.');
+    assert.match(state.fullExplanation, /historical snapshot.*unfilled request.*live Polaris pickup preference.*Updating pickup changes the patron's account default.*existing holds keep their recorded destination/i);
+    if (focusRequired) assert.equal(state.focusVisible, true, `${name}: keyboard focus is visible`);
+    if (nativeZoom) {
+      const cdp = await target.context().newCDPSession(target);
+      try {
+        const metrics = await cdp.send('Page.getLayoutMetrics');
+        assert.equal(metrics.visualViewport.zoom, 2); state.browserZoom = metrics.visualViewport.zoom;
+        const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        await fs.writeFile(path.join(artifacts, `${name}.png`), Buffer.from(screenshot.data, 'base64'));
+      } finally { await cdp.detach(); }
+    } else await target.screenshot({ path: path.join(artifacts, `${name}.png`), fullPage: true });
+    report.states.push({ name, ...state });
+  }
+  async function verifyPickupHelp(name, target = page, { boundaries = false, nativeZoom = false } = {}) {
+    const toggle = pickupHelpToggle(target), disclosure = pickupHelp(target), content = pickupHelpText(target);
+    await toggle.waitFor({ state: 'visible' });
+    assert.equal(await toggle.getAttribute('title'), null, `${name}: the help does not rely on a native title tooltip`);
+    assert.equal(await toggle.getAttribute('aria-label'), 'Pickup details', `${name}: the help has an accessible name`);
+    assert.equal(await pickupCell(target).locator('.recorded-pickup-summary').textContent(), 'Historical; holds use live Polaris pickup preference.');
+    assert.equal(await disclosure.evaluate(node => node.open), false, `${name}: help starts closed`);
+    if (boundaries) {
+      assert.equal(await dialog(target).locator('.patron-context .detail-grid').getAttribute('title'), null);
+      const patron = dialog(target).locator('.patron-context .detail-grid > div')
+        .filter({ has: target.locator('dt', { hasText: /^Patron$/ }) });
+      const barcode = dialog(target).locator('.patron-context .detail-grid > div')
+        .filter({ has: target.locator('dt', { hasText: /^Barcode$/ }) });
+      const email = dialog(target).locator('.patron-context .detail-grid > div')
+        .filter({ has: target.locator('dt', { hasText: /^Email$/ }) });
+      for (const [label, trigger] of [
+        ['patron name', patron.locator('.patron-name-actions')], ['patron action', patron.locator('.grid-new-suggestion')],
+        ['barcode', barcode.locator('dd')], ['email', email.locator('dd')],
+        ['pickup value', pickupCell(target).locator('.recorded-pickup-summary')], ['help hover', toggle]
+      ]) {
+        await trigger.hover();
+        assert.equal(await content.isVisible(), false, `${name}: hovering ${label} does not open pickup help`);
+      }
+      const row = await dialog(target).locator('.patron-context').boundingBox();
+      await target.mouse.move(row.x + row.width - 3, row.y + row.height - 2);
+      assert.equal(await content.isVisible(), false, `${name}: unused patron-row space does not open pickup help`);
+    }
+    for (let tab = 0; tab < 36 && !await toggle.evaluate(node => node === document.activeElement); tab++) {
+      await target.keyboard.press('Tab');
+    }
+    assert.equal(await toggle.evaluate(node => node === document.activeElement), true, `${name}: Tab reaches pickup help`);
+    await target.keyboard.press('Enter');
+    await content.waitFor({ state: 'visible' });
+    await scanPickupHelp(name, target, nativeZoom, true);
+    await target.keyboard.press('Escape');
+    assert.equal(await disclosure.evaluate(node => node.open), false, `${name}: Escape dismisses pickup help`);
+    assert.equal(await dialog(target).isVisible(), true, `${name}: Escape leaves the request modal open`);
+    assert.equal(await toggle.evaluate(node => node === document.activeElement), true, `${name}: Escape restores help focus`);
+    await toggle.press('Space'); await content.waitFor({ state: 'visible' });
+    await toggle.press('Space');
+    assert.equal(await disclosure.evaluate(node => node.open), false, `${name}: Space opens and dismisses pickup help`);
+    report.pickup[name] = true;
+  }
+  async function verifyTouchPickupHelp() {
+    const touchContext = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1,
+      isMobile: true, hasTouch: true, extraHTTPHeaders: headers });
+    try {
+      await guard(touchContext);
+      const touchPage = await touchContext.newPage(); watch(touchPage); await open(untouchedId, touchPage);
+      const toggle = pickupHelpToggle(touchPage), disclosure = pickupHelp(touchPage), content = pickupHelpText(touchPage);
+      await toggle.tap(); await content.waitFor({ state: 'visible' });
+      await scanPickupHelp('request-pickup-touch', touchPage);
+      assert.equal(await disclosure.evaluate(node => node.open), true);
+      await toggle.tap();
+      assert.equal(await disclosure.evaluate(node => node.open), false, 'A second touch dismisses pickup help.');
+      assert.equal(await dialog(touchPage).isVisible(), true, 'Touch dismissal leaves the request modal open.');
+      report.pickup.touch = true;
+    } finally { await touchContext.close(); }
+  }
+  async function verifyPickupHelpDuringInlineAction() {
+    const actionsBefore = report.actions.length;
+    const panel = await choose('Purchase'), toggle = pickupHelpToggle(), content = pickupHelpText(), disclosure = pickupHelp();
+    await toggle.press('Enter'); await content.waitFor({ state: 'visible' });
+    assert.equal(await panel.isVisible(), true, 'Pickup help can open while a workflow panel is active.');
+    await toggle.evaluate(node => {
+      node.escapeEvents = [];
+      for (const type of ['keydown', 'keyup']) node.addEventListener(type, event => {
+        if (event.key === 'Escape') node.escapeEvents.push({ type: event.type, repeat: event.repeat, trusted: event.isTrusted });
+      }, { capture: true });
+    });
+    await page.keyboard.down('Escape');
+    assert.equal(await disclosure.evaluate(node => node.open), false, 'The initial Escape dismisses pickup help.');
+    await page.keyboard.down('Escape'); await page.keyboard.up('Escape');
+    assert.deepEqual(await toggle.evaluate(node => node.escapeEvents), [
+      { type: 'keydown', repeat: false, trusted: true },
+      { type: 'keydown', repeat: true, trusted: true },
+      { type: 'keyup', repeat: false, trusted: true }
+    ], 'The regression uses a trusted repeated Escape held through keyup.');
+    assert.equal(await panel.isVisible(), true, 'A repeated held Escape does not cancel the workflow panel.');
+    assert.equal(await dialog().isVisible(), true, 'A repeated held Escape does not close the request modal.');
+    assert.equal(await toggle.evaluate(node => node === document.activeElement), true, 'Help dismissal retains focus.');
+    await page.keyboard.press('Escape');
+    await panel.waitFor({ state: 'hidden' });
+    assert.equal(await dialog().isVisible(), true, 'A fresh Escape keeps the request modal open.');
+    assert.equal(await bar().isVisible(), true, 'A fresh Escape still cancels the inline workflow panel.');
+    assert.equal(await opener('Purchase').evaluate(node => node === document.activeElement), true, 'Workflow cancellation restores opener focus.');
+    assert.equal(report.actions.length, actionsBefore, 'Opening and dismissing pickup help causes no action.');
+    report.pickup.escapeWithInlineAction = true;
+  }
   async function verifyUnavailableClose(name, response, expectedMessage) {
     await open(untouchedId);
     const before = await getDetail(untouchedId), actionCount = report.actions.length;
@@ -212,6 +341,12 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     await page.route(`**/staff/title-requests/${untouchedId}/action`, route => route.fulfill({ status: 409,
       json: { code: 'stale_version', message: 'Unexpected action during an opening-only scenario' } }));
     const rowOpener = page.locator(`#request-grid .request-title-link[data-request-id="${untouchedId}"]`);
+    await verifyPickupHelp('request-pickup-desktop', page, { boundaries: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await verifyPickupHelp('request-pickup-mobile');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await verifyTouchPickupHelp();
+    await verifyPickupHelpDuringInlineAction();
     await footerClose().waitFor();
     assert.equal(await footerClose().isEnabled(), true, 'Clean requests expose an enabled footer Close button.');
     await scanCloseFooter('request-close-desktop');
@@ -349,6 +484,7 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
       report.close.native200 = true;
       await zoomPage.locator(`#request-grid .request-title-link[data-request-id="${untouchedId}"]`).click();
       await dialog(zoomPage).waitFor({ state: 'visible' }); await bar(zoomPage).waitFor();
+      await verifyPickupHelp('request-pickup-native-200', zoomPage, { nativeZoom: true });
       for (const name of ['Purchase', 'Reject']) {
         const zoomPanel = await choose(name, zoomPage); await scan(`${name.toLowerCase()}-native-200`, zoomPage, true);
         await cancel(zoomPanel, name, true, zoomPage);

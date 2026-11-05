@@ -579,9 +579,24 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     addDetail(details, 'Patron', patronName).replaceChildren(patronValue);
     addDetail(details, 'Barcode', request.barcode).replaceChildren(researchRecordValue(request.barcode, request.research, 'patron'));
     addDetail(details, 'Email', request.email);
-    addDetail(details, 'Recorded ASAP pickup', request.preferredPickupBranchName || request.preferredPickupBranchId)
-      .append(element('small', { text: 'Historical; holds use live Polaris pickup preference.' }));
-    details.title = "Recorded ASAP pickup is a historical snapshot. Each unfilled request uses the patron's live Polaris pickup preference when its hold is placed. Updating pickup changes the patron's account default; existing holds keep their recorded destination.";
+    const pickupCell = addDetail(details, 'Recorded ASAP pickup', request.preferredPickupBranchName || request.preferredPickupBranchId);
+    const pickupHelp = element('details', { className: 'recorded-pickup-help' });
+    const pickupHelpToggle = element('summary', { className: 'recorded-pickup-help-toggle', 'aria-label': 'Pickup details' }, [icon('info-circle'), 'Pickup details']);
+    let pickupEscapeHeld = false;
+    pickupHelp.append(pickupHelpToggle, element('div', { className: 'recorded-pickup-help-content' }, element('p', {
+      text: "The recorded location is a historical snapshot. Each unfilled request uses the patron's live Polaris pickup preference when its hold is placed. Updating pickup changes the patron's account default; existing holds keep their recorded destination."
+    })));
+    pickupHelp.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      if (pickupEscapeHeld) { event.preventDefault(); event.stopPropagation(); return; }
+      if (!pickupHelp.open) return;
+      event.preventDefault(); event.stopPropagation(); pickupEscapeHeld = true; pickupHelp.open = false; pickupHelpToggle.focus();
+    });
+    pickupHelp.addEventListener('keyup', event => {
+      if (event.key !== 'Escape' || !pickupEscapeHeld) return;
+      event.preventDefault(); event.stopPropagation(); pickupEscapeHeld = false;
+    });
+    pickupCell.append(element('small', { className: 'recorded-pickup-summary', text: 'Historical; holds use live Polaris pickup preference.' }), pickupHelp);
     patronContext.prepend(details);
     body.append(patronContext);
     detailsPanel.append(element('p', { className: 'field-help request-metadata',
