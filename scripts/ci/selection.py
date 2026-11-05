@@ -47,20 +47,12 @@ def full(reason, fresh=True):
 
 
 def paths_policy(paths):
-    """All current suites are mandatory. Unknown dependencies force fresh execution."""
+    """Select every required suite; fingerprints decide whether inputs were tested."""
     require(isinstance(paths, list) and 0 < len(paths) <= 3000, "Missing or excessive changed paths")
     for path in paths:
         require(isinstance(path, str) and path and not path.startswith(("/", chr(92)))
                 and chr(92) not in path and not any(p in ("", ".", "..") for p in path.split("/"))
                 and not any(ord(c) < 32 for c in path), "Invalid changed path")
-        if path.startswith((".github/", "scripts/", "database/")) or path.endswith(
-                (".csproj", ".sqlproj", ".props", ".targets")) or path in (
-                "tests/ci_workflow_contract.test.js", "tests/test_iis_deployment_contract.test.js",
-                "tests/run_all.js", "tests/browser/run.cjs", "tests/Asap.Tests/TestCategories.cs"):
-            return full("Execution, security, build or deployment contract changed: " + path)
-        if not (path.startswith(("src/Asap.Web/", "src/Shared/", "tests/Asap.Tests/", "tests/browser/"))
-                or re.fullmatch(r"tests/[^/]+\.test\.js", path)):
-            return full("Unreviewed dependency path: " + path)
     return full("Current suites required; reuse must independently match all dependencies", fresh=False)
 
 

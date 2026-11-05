@@ -25,9 +25,11 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(policy.paths_policy([path])["categories"], ["core"])
 
-    def test_unknown_implementation_and_deleted_contracts_force_fresh_execution(self):
+    def test_unknown_implementation_and_deleted_contracts_require_complete_population(self):
         for path in ("src/Retired/Source.cs", "unknown/fixture.json"):
-            self.assertTrue(policy.paths_policy([path])["fresh"])
+            selected = policy.paths_policy([path])
+            self.assertEqual(selected["categories"], policy.ALL)
+            self.assertFalse(selected["fresh"])
 
     def test_schema_deployment_shared_configuration_and_serialization_dependencies(self):
         for path in ("database/Asap.Database/Tables/SchemaVersion.sql", "src/Shared/SecurityContract.cs",
@@ -45,16 +47,17 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(policy.paths_policy(["tests/Asap.Tests/Sql/DatabaseBaselineTests.cs"])["categories"], policy.ALL)
         self.assertEqual(policy.paths_policy(["src/Asap.Web/Features/Patron/PatronSessionService.cs"])["categories"], ["core"])
 
-    def test_selection_and_enforcement_changes_force_fresh_full_validation(self):
+    def test_selection_and_enforcement_changes_allow_matching_full_evidence(self):
         for path in (".github/workflows/dotnet.yml", "scripts/ci/selection.py", "scripts/ci/reviewed-test-categories.json",
                      "scripts/ci/fingerprints.py", "scripts/ci/reuse.py", "scripts/ci/test_selection.py",
                      "scripts/deployment/Deploy-AsapTest.ps1", "tests/Asap.Tests/TestCategories.cs",
                      "tests/ci_workflow_contract.test.js", "tests/test_iis_deployment_contract.test.js",
-                     "tests/run_all.js", "tests/browser/run.cjs", "src/Asap.Web/Asap.Web.csproj"):
+                     "tests/run_all.js", "tests/browser/run.cjs", "src/Asap.Web/Asap.Web.csproj",
+                     "docs/implementation/ci.md", "README.md"):
             with self.subTest(path=path):
                 selected = policy.paths_policy([path])
                 self.assertEqual(selected["categories"], policy.ALL)
-                self.assertTrue(selected["fresh"])
+                self.assertFalse(selected["fresh"])
 
     def test_missing_invalid_or_unsupported_metadata_fails_closed(self):
         for env in ({}, {"GITHUB_EVENT_NAME": "schedule"}, {"GITHUB_EVENT_NAME": "push"},
@@ -79,7 +82,8 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(selected["fresh"])
 
     def test_invalid_path_lists_cannot_narrow_selection(self):
-        for paths in ([], None, ["../database.sql"], ["a\\b"], ["/root"], ["a\nb"], ["a//b"], [""]):
+        for paths in ([], None, ["../database.sql"], ["a\\b"], ["/root"], ["a\nb"], ["a//b"], [""],
+                      ["scripts/ci/reuse.py", "../invalid"]):
             with self.subTest(paths=paths), self.assertRaises(policy.SelectionError):
                 policy.paths_policy(paths)
 
@@ -163,6 +167,7 @@ class GitDiffTests(unittest.TestCase):
         with mock.patch.object(reuse.GitHub, "get", side_effect=RuntimeError("private details")):
             selected = policy.decision(env, self.root)
             self.assertEqual(selected["categories"], policy.ALL)
+            self.assertTrue(selected["fresh"])
             self.assertNotIn("private details", selected["reason"])
 
     def test_main_push_diff_and_missing_or_forced_metadata(self):
@@ -188,7 +193,7 @@ class GitDiffTests(unittest.TestCase):
         event = {"before": before, "after": tested, "ref": "refs/heads/main", "deleted": False, "forced": False}
         paths = policy.changed_paths("push", event, self.env(tested, "push"), self.root)
         self.assertIn("src/Unreviewed/Source.cs", paths)
-        self.assertTrue(policy.paths_policy(paths)["fresh"])
+        self.assertFalse(policy.paths_policy(paths)["fresh"])
 
 
 class PopulationTests(unittest.TestCase):
