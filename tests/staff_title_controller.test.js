@@ -14,9 +14,9 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
       const session = createSessionIdentity(); session.accept(actorA);
       const host = createDetailHost({ root: get('#request-dialog') });
       let generation = 0, complete; const posted = [], receipts = [], notices = [];
-      const source = operation === 'delete' ? { ...snapshot, status: 'closed' }
+      const source = { ...(operation === 'delete' ? { ...snapshot, status: 'closed' }
         : operation === 'reconcile' ? { ...snapshot, status: 'pending_hold', holdOperation: { id: '71', version: 'op-v1', canReconcile: true } }
-          : snapshot;
+          : snapshot), email: '"not@me"@example.org' };
       const options = { host, sessionIdentity: session, polarisLookup: { close() {}, invalidate() {} },
         copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
         announce: message => notices.push(message), beforeOpen: () => ({ isCurrent: () => true }),
@@ -29,6 +29,8 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
           return path.includes('/title-requests/') ? source : {};
         } };
       const first = createTitleDetailController(options); await first.open(source.id);
+      const emailCell = [...get('.patron-context .detail-grid').children].find(cell => cell.querySelector('dt')?.textContent === 'Email');
+      assert.equal(emailCell.querySelector('dd a').getAttribute('href'), 'mailto:%22not%40me%22@example.org', 'A quoted local-part @ stays encoded while its final separator stays literal.');
       if (operation === 'delete') session.updatePreferences({ ...actorA, version: 'actor-v2' }, session.preferences());
       const label = operation === 'claim' ? 'Claim' : operation === 'delete' ? 'Permanently delete request' : 'Reconcile provider state';
       const control = [...get('#request-dialog').querySelectorAll('button')].find(button => button.textContent.trim() === label);
@@ -188,7 +190,8 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
       const session = createSessionIdentity(); session.accept(actorA);
       const host = createDetailHost({ root: get('#request-dialog') });
       let complete, reject, finishAssignment, posted = 0, postedBody;
-      const source = { ...snapshot, claimedByStaffUserId: actorA.id, author: 'Author', formatLabel: 'Book', notes: 'Saved note\r\nAccepted history' };
+      const source = { ...snapshot, claimedByStaffUserId: actorA.id, author: 'Author', formatLabel: 'Book', notes: 'Saved note\r\nAccepted history',
+        email: outcome === 'retired' ? ' \r\n\t ' : outcome === 'failure' ? '' : ' \t"not@me+&?subject=unsolicited#fragment%25"@example.org\r\nBcc:other \t' };
       const controller = createTitleDetailController({ host, sessionIdentity: session,
         polarisLookup: { close() {}, invalidate() {} }, copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
         announce() {}, beforeOpen: () => ({ isCurrent: () => true }), isNavigationCurrent: () => true,
@@ -213,6 +216,37 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
       get('.inline-form').remove();
       tab('Details').click();
       assert.deepEqual([...get('.patron-context').querySelectorAll('dt')].map(node => node.textContent), ['Patron', 'Barcode', 'Email', 'Recorded ASAP pickup']);
+      const patronSummary = get('.patron-context .detail-grid');
+      const emailCell = [...patronSummary.children].find(cell => cell.querySelector('dt')?.textContent === 'Email');
+      const emailLink = emailCell.querySelector('dd a');
+      if (!source.email.trim()) {
+        assert.equal(emailCell.querySelector('dd').textContent, 'Not recorded');
+        assert.equal(emailLink, null, 'Empty and whitespace-only emails keep the existing empty presentation.');
+      } else {
+        const normalizedEmail = source.email.trim();
+        const expectedHref = 'mailto:%22not%40me%2B%26%3Fsubject%3Dunsolicited%23fragment%2525%22@example.org%0D%0ABcc%3Aother';
+        assert.equal(emailLink.textContent, normalizedEmail, 'The link displays the trimmed recipient text safely.');
+        assert.equal(emailLink.getAttribute('href'), expectedHref, 'Only encoded recipient characters are present, with the address separator retained.');
+        assert.doesNotMatch(emailLink.getAttribute('href'), /[\r\n?#]/, 'CR/LF, query and fragment characters cannot add mail headers or URI components.');
+        if (outcome === 'success') assert.match(emailLink.getAttribute('href'), /%2B.*%26.*%3F.*%23.*%25.*%0D%0A/i, 'Valid plus/ampersand and injection-boundary characters are encoded.');
+      }
+      const pickupCell = [...patronSummary.children].find(cell => cell.querySelector('dt')?.textContent === 'Recorded ASAP pickup');
+      const pickupHelp = pickupCell.querySelector('.recorded-pickup-help'), pickupHelpToggle = pickupHelp.querySelector('summary');
+      assert.equal(patronSummary.hasAttribute('title'), false, 'Pickup explanation no longer covers the whole patron row.');
+      assert.equal([...patronSummary.children].filter(cell => cell !== pickupCell).some(cell => cell.hasAttribute('title')), false);
+      assert.equal(pickupCell.querySelector('.recorded-pickup-summary').textContent, 'Historical; holds use live Polaris pickup preference.');
+      assert.equal(pickupHelpToggle.textContent.trim(), 'Pickup details', 'The disclosure has a useful accessible name.');
+      assert.equal(pickupHelpToggle.getAttribute('aria-label'), 'Pickup details');
+      assert.equal(pickupHelp.open, false);
+      assert.match(pickupHelp.textContent, /historical snapshot.*unfilled request.*live Polaris pickup preference.*Updating pickup changes the patron's account default.*existing holds keep their recorded destination/i);
+      pickupHelp.open = true; pickupHelpToggle.focus();
+      const escapePickupHelp = new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      pickupHelpToggle.dispatchEvent(escapePickupHelp);
+      assert.equal(escapePickupHelp.defaultPrevented, true);
+      assert.equal(pickupHelp.open, false, 'Escape dismisses the pickup disclosure.');
+      assert.equal(get('#request-dialog').open, true, 'Escape keeps the request modal open.');
+      assert.equal(document.activeElement, pickupHelpToggle, 'Dismissal returns focus to the pickup help control.');
+      pickupHelpToggle.dispatchEvent(new dom.window.KeyboardEvent('keyup', { key: 'Escape', bubbles: true, cancelable: true }));
       const form = get('.edit-form'), title = form.querySelector('input');
       title.value = 'Unsaved title'; title.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
       tab('Activity').click(); tab('Related requests').click(); tab('Activity').click();

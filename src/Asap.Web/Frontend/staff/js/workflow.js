@@ -28,7 +28,7 @@ export function createWorkflowApp() {
     onViewIntent: name => navigation.switchView(name), onSignOutIntent: () => session.signOut()
   });
   const announce = shell.announce, onReceipt = shell.recordReceipt, clearReceipt = shell.clearReceipt;
-  const polarisLookup = createPolarisLookup({ authorizedJson, isAbortError, announce });
+  const polarisLookup = createPolarisLookup({ authorizedJson, isAbortError, announce, sessionIdentity, onReceipt, clearReceipt });
   const analytics = createAnalyticsController({ root: get('#analytics-container'), sessionIdentity });
   const navigation = createNavigationController({ router, sessionIdentity, detailHost, announce,
     present: shell.presentView,
@@ -46,6 +46,7 @@ export function createWorkflowApp() {
     },
     getFeatures: () => [
       { key: 'session', inspectDeparture: session.inspectDeparture },
+      { key: 'catalog', inspectDeparture: polarisLookup.inspectDeparture },
       { key: 'operations', inspectDeparture: operations.inspectDeparture },
       { key: 'analytics', inspectDeparture: analytics.inspectDeparture },
       { key: 'bulk', inspectDeparture: bulk.inspectDeparture, discardDeparture: () => bulk.close({ navigation: true }) },
@@ -93,6 +94,7 @@ export function createWorkflowApp() {
   });
 
   const titleQueue = createTitleQueue({ root: get('#queue-view'), sessionIdentity, announce, polarisLookup,
+    onCatalogCommitted: result => { if (result.additionalCopyRequestId) copyQueue.markStale(); },
     getContext: navigation.context, onOpen: (id, opener, options = {}) => titleDetail.open(id, opener, { history: 'push', ...options }),
     onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) }),
     onScopeIntent: scope => navigation.changeQueueContext('queue', { scope }),

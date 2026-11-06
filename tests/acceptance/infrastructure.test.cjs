@@ -191,8 +191,11 @@ test('real screenshot plumbing frames unmasked synthetic content, primary and Mo
       for (const action of ['purchase', 'reject']) document.getElementById(action).onclick = () => {
         const form = document.createElement('form'); form.className = 'action-choice';
         const title = document.createElement('h3'); title.textContent = action === 'purchase' ? 'Purchase suggestion' : 'Reject suggestion';
-        const submit = document.createElement('button'); submit.type = 'submit'; submit.textContent = 'Submit';
-        form.append(title, submit); document.querySelector('#panel').replaceChildren(form);
+        const submit = document.createElement('button'); submit.type = 'submit'; submit.textContent = action === 'purchase' ? 'Confirm purchase' : 'Reject and close';
+        const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel';
+        cancel.onclick = () => { form.remove(); document.querySelector('.action-bar').hidden = false; document.getElementById(action).focus(); };
+        form.append(title, submit, cancel); document.querySelector('#panel').replaceChildren(form);
+        document.querySelector('.action-bar').hidden = true; submit.focus();
       };
       document.querySelector('.request-more').addEventListener('click', event => {
         if (event.target.closest('button')) event.currentTarget.open = false;
@@ -222,6 +225,7 @@ test('real screenshot plumbing frames unmasked synthetic content, primary and Mo
   }
   let review = await choose(page, 'Purchase');
   await checkpoint(page, directory, 'purchase-review', { visible: [review.locator('h3, button')] });
+  await review.getByRole('button', { name: 'Cancel', exact: true }).click();
   await actionButton(page, 'Close silently');
   assert.equal(await more.evaluate(node => node.open), true, 'A hidden action is revealed');
   await assert.rejects(checkpoint(page, directory, 'interfering-menu'), /No unrelated More menu/);

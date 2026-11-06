@@ -149,11 +149,11 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     syncQueueRoute();
   }
 
-  function activate(name) {
+  function activate(name, { focusHeading = true } = {}) {
     const previous = context.activeView;
     if (previous !== name) views[previous]?.deactivate?.();
     align({ activeView: name });
-    present(name);
+    present(name, { focusHeading });
     views[name]?.activate?.({ context, previous, panel: name === 'settings' ? router.requested().panel || undefined : undefined });
   }
 
@@ -267,7 +267,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       requestId: route.requestId, organizations, warning };
   }
 
-  async function navigateFromUrl() {
+  async function navigateFromUrl({ initial = false } = {}) {
     const owner = sessionIdentity.preferences();
     if (!owner) {
       if (getFeatures().some(feature => feature.inspectDeparture().blocked)) router.reject();
@@ -314,7 +314,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
         views.queue.setLibraries(target.organizations);
         views['additional-copies'].setLibraries(target.organizations);
       }
-      activate(target.name);
+      activate(target.name, { focusHeading: !(initial && target.name === 'queue') });
       if (target.requestId) {
         router.replaceRequest(target.requestId, target.name === 'additional-copies',
           { scope: context.scope, copyStatus: context.additionalCopyStatus },
