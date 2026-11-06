@@ -54,6 +54,15 @@ const [baseURL, artifacts, staffId, tenantId, email, missing, invalid, stale, un
     const response = await context.request.get(`${baseURL}/api/asap/staff/title-requests/${id}`);
     assert.equal(response.status(), 200); return response.json();
   };
+  const assertSavedEditor = async saved => {
+    assert.equal(await requestModal(page).getByLabel('Author', { exact: true }).inputValue(), saved.author || '');
+    assert.equal(await requestModal(page).getByLabel('BIB ID', { exact: true }).inputValue(), String(saved.bibid));
+    assert.equal(await status(page).textContent(), 'Pending hold');
+    assert.equal(await requestModal(page).locator('.request-save-state').getAttribute('data-state'), 'clean');
+    assert.equal(await requestModal(page).getByRole('button', { name: 'Save changes', exact: true }).isDisabled(), true);
+    assert.equal(await requestModal(page).getByRole('button', { name: 'Revert changes', exact: true }).isDisabled(), true);
+    assert.equal(await requestModal(page).locator('.pending-audit-preview').isHidden(), true);
+  };
   async function scan(name, target = page, nativeZoom = false) {
     await panel(target).scrollIntoViewIfNeeded();
     await target.evaluate(axe);
@@ -85,7 +94,9 @@ const [baseURL, artifacts, staffId, tenantId, email, missing, invalid, stale, un
   }
   try {
     await open(missing);
+    const savedMissing = await getDetail(missing);
     await requestModal(page).getByLabel('Title', { exact: true }).fill('Unrelated title draft');
+    await requestModal(page).getByLabel('Author', { exact: true }).fill('Unrelated Author draft');
     await requestModal(page).getByLabel('Notes', { exact: true }).fill('Unrelated note draft');
     await link(); await final().click();
     await panel(page).getByRole('alert').filter({ hasText: /Enter a positive Polaris/ }).waitFor();
@@ -122,8 +133,28 @@ const [baseURL, artifacts, staffId, tenantId, email, missing, invalid, stale, un
     await page.unroute(missingPath);
     assert.equal(await requestModal(page).getByLabel('Title', { exact: true }).inputValue(), 'Unrelated title draft');
     assert.equal(await requestModal(page).getByLabel('Notes', { exact: true }).inputValue(), 'Unrelated note draft');
+    assert.equal(await requestModal(page).getByLabel('Author', { exact: true }).inputValue(), 'Unrelated Author draft');
     assert.equal(await requestModal(page).locator('.request-save-state').textContent(), 'Unsaved changes');
-    assert.equal((await getDetail(missing)).title, 'Queue fixture');
+    const committedMissing = await getDetail(missing), actionsAfterLink = report.actions.length;
+    assert.equal(committedMissing.title, savedMissing.title);
+    assert.equal(committedMissing.author, savedMissing.author);
+    assert.equal(committedMissing.bibid, 9001);
+    assert.equal(committedMissing.bibidStaffVerified, true);
+    assert.equal(committedMissing.status, 'pending_hold');
+    await decideConfirmation(page, () => requestModal(page).getByRole('button', { name: 'Revert changes', exact: true }).click(), decision => decision.dismiss());
+    assert.equal(await requestModal(page).getByLabel('Author', { exact: true }).inputValue(), 'Unrelated Author draft');
+    await decideConfirmation(page, () => requestModal(page).getByRole('button', { name: 'Revert changes', exact: true }).click(), decision => decision.accept());
+    await assertSavedEditor(committedMissing);
+    assert.deepEqual(await getDetail(missing), committedMissing, 'Revert preserves the committed BIB action and persisted values');
+    await requestModal(page).getByRole('button', { name: 'Close', exact: true }).click();
+    await requestModal(page).waitFor({ state: 'hidden' });
+    await open(missing); await assertSavedEditor(committedMissing);
+    await requestModal(page).getByLabel('Author', { exact: true }).fill('Author draft to discard on Close');
+    await decideConfirmation(page, () => requestModal(page).getByRole('button', { name: 'Close', exact: true }).click(), decision => decision.accept());
+    await requestModal(page).waitFor({ state: 'hidden' });
+    await open(missing); await assertSavedEditor(committedMissing);
+    assert.equal(report.actions.length, actionsAfterLink, 'Revert, Close and reopening never submit the discarded edits');
+    assert.deepEqual(await getDetail(missing), committedMissing);
 
     await open(invalid); await link();
     await page.keyboard.press('Escape');

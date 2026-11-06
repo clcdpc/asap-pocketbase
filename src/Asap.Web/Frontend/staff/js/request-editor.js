@@ -308,6 +308,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       if (editorDirty && !await confirmChanges({ title: 'Revert request changes?',
         message: 'Discard unsaved request changes and revert this editor?',
         confirmLabel: 'Revert changes', cancelLabel: 'Keep editing', tone: 'danger' }, draft, true)) return;
+      retained = null;
       verifiedBib = null;
       if (lookupContext) polarisLookup.invalidate(lookupContext);
       interactionScope.release(draft);

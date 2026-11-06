@@ -727,6 +727,64 @@ test('explicit revert keeps the detail and clears only the discarded draft', () 
   assert.equal(unload.defaultPrevented, false);
   assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0);
 }));
+
+for (const discardAction of ['Revert changes', 'Close']) {
+  test(`Already own retained Author is discarded by ${discardAction}`, () => fixture(`?request=${id}`, async ui => {
+    const author = () => ui.get('.edit-form').elements[1];
+    const button = label => [...document.querySelectorAll('#request-dialog button')]
+      .find(button => button.textContent.trim() === label);
+    const assertClean = () => {
+      assert.equal(author().value, 'Persisted author');
+      assert.equal(ui.get('.request-save-state').dataset.state, 'clean');
+      assert.equal(button('Save changes').disabled, true);
+      assert.equal(button('Revert changes').disabled, true);
+      assert.equal(protectedUnload(ui), false);
+      assert.equal(ui.get('.edit-form input[inputmode="numeric"]').value, '9001');
+      assert.equal(ui.get('#request-dialog-status').textContent, 'Pending hold');
+    };
+    author().value = 'Unrelated Author draft';
+    author().dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
+    button('Already own').click();
+    button('Search Polaris catalog').click();
+    ui.get('#polaris-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+    await until(() => ui.get('#polaris-results button'), 'Polaris result');
+    ui.get('#polaris-results button').click();
+    await until(() => !ui.get('#polaris-dialog').open, 'BIB selected');
+    ui.setOperation(({ init }) => {
+      const body = JSON.parse(init.body);
+      assert.equal(body.action, 'alreadyOwn');
+      assert.equal(body.author, undefined);
+      Object.assign(ui.readRequest(), { version: 'v2', bibid: 9001, bibidStaffVerified: true, status: 'pending_hold' });
+      return response(200, { committed: true, request: ui.readRequest(), finalStatus: 'pending_hold' });
+    });
+    button('Save Bib ID and move to Pending hold').click();
+    await until(() => ui.get('#request-dialog-status').textContent === 'Pending hold', 'BIB action committed');
+    assert.equal(author().value, 'Unrelated Author draft');
+    assert.equal(ui.get('.request-save-state').dataset.state, 'dirty');
+    assert.equal(protectedUnload(ui), true);
+    assert.equal(ui.readRequest().author, 'Persisted author');
+
+    button(discardAction).click(); await settle();
+    assert.equal(author().value, 'Unrelated Author draft', 'Declining discard keeps the retained draft');
+    ui.allowDiscard();
+    button(discardAction).click(); await settle();
+    if (discardAction === 'Revert changes') {
+      assertClean();
+      const confirmations = ui.confirms.length;
+      await ui.closeDetail();
+      assert.equal(ui.confirms.length, confirmations, 'Reverted editor closes without another discard prompt');
+    } else {
+      await until(() => !ui.get('#request-dialog').open, 'discard closed the editor');
+    }
+    await ui.open();
+    assertClean();
+    ui.get('#refresh-queue').click(); await settle();
+    assertClean();
+    assert.equal(ui.calls.filter(call => call.url.endsWith('/action') && call.init.method === 'POST').length, 1,
+      'Discard and refresh leave the successful BIB action intact without another mutation');
+  }, { verified: false, request: { author: 'Persisted author', bibid: null } }));
+}
+
 test('empty authoritative publication is clean even with configured choices', () => fixture(`?request=${id}`, async ui => {
   assert.equal(ui.get('.edit-form select[aria-label="Publication timing"]').value, '');
   const unload = new ui.dom.window.Event('beforeunload', { cancelable: true });
