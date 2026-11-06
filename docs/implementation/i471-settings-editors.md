@@ -418,6 +418,20 @@ unchanged and Git clean; the harness, server and browser were cleaned up.
 Receipts are `466-pass2/report.md`, `aggregate-results.json` and `manifest.json`.
 No Pass 2 remediation or third issue-level review was needed.
 
+### Integrated patron fixture
+
+The retained configured-Patron journey now captures the editor-generated field,
+select-option and publication identities instead of entering hidden keys. Its
+configuration-change barrier and SQL history assertions follow those captured
+identities; required/optional selection, rejected saves, concurrency, committed
+response loss, identity replacement and outbox assertions remain intact. The
+Patron publication select retains its existing label-valued contract. The first
+local extra assertion incorrectly expected that select to contain the internal
+key; its failed receipt is retained. The corrected owning real-SQL/browser
+journey passes 1/1, and the Release build has zero warnings/errors. Receipts:
+`integration-build.log`, `integration-functional*` and
+`integration-functional2/integration-functional2.trx`.
+
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
 Complex implementation uses Sol MAX; focused implementation and Pass 1 use
