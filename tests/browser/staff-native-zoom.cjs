@@ -108,13 +108,21 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       await page.waitForFunction(id => document.querySelector(`#request-row-${id}-actions`)
         ?.matches(':popover-open') === false, sourceId);
       assert.equal(await more.evaluate(node => node === document.activeElement), true);
-      assert.equal(await more.evaluate(node => {
-        const bounds = node.getBoundingClientRect(), clip = node.closest('.gridjs-wrapper').getBoundingClientRect();
+      const restoredTrigger = await more.evaluate(node => {
+        const wrapper = node.closest('.gridjs-wrapper');
+        const bounds = node.getBoundingClientRect(), clip = wrapper.getBoundingClientRect();
         const hit = document.elementFromPoint((bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2);
-        return bounds.left >= Math.max(0, clip.left) && bounds.right <= Math.min(innerWidth, clip.right) &&
-          bounds.top >= Math.max(0, clip.top) && bounds.bottom <= Math.min(innerHeight, clip.bottom) &&
+        // Native zoom can round fractional column scroll positions by less than
+        // a CSS pixel. Match visibleEvidence's tolerance and retain the hit test.
+        const visible = bounds.left >= Math.max(0, clip.left) - 1 && bounds.right <= Math.min(innerWidth, clip.right) + 1 &&
+          bounds.top >= Math.max(0, clip.top) - 1 && bounds.bottom <= Math.min(innerHeight, clip.bottom) + 1 &&
           (hit === node || node.contains(hit));
-      }), true, 'Dismissal restores visible, unobscured trigger focus after full clipping');
+        return { visible, bounds: bounds.toJSON(), clip: clip.toJSON(), viewport: { width: innerWidth, height: innerHeight },
+          hitMatches: hit === node || node.contains(hit), scrollLeft: wrapper.scrollLeft,
+          scrollWidth: wrapper.scrollWidth, clientWidth: wrapper.clientWidth };
+      });
+      assert.equal(restoredTrigger.visible, true,
+        'Dismissal restores visible, unobscured trigger focus after full clipping: ' + JSON.stringify(restoredTrigger));
       // The global axe scan may scroll the table and correctly dismiss an
       // anchored popup. Verify Escape before that independent full-page audit.
       await scan('table');

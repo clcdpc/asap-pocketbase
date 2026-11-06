@@ -565,7 +565,8 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       if (body.mode !== 'bib' || !applyFallbackDetail) return route.continue();
       const response = await route.fetch();
       const detail = await response.json();
-      applyFallbackDetail = false;
+      // Keep this deterministic detail for both the holdings prefetch and the
+      // explicit selection verification until the route is removed below.
       await route.fulfill({ response, json: { ...detail, identifier: null, publication: '', format: null,
         holdingsSummary: { myLibraryCount: 3, otherLibraryCount: 4, consortiumCount: 7,
           isHoldable: true, hasHoldableAtMyLibrary: true },

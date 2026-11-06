@@ -294,7 +294,7 @@ Checkpoint audit (all captures show the surrounding application viewport):
 | Checkpoint | Intended visible evidence and readiness |
 | --- | --- |
 | `staff-shell` | Loaded queue heading and synthetic staff identity after queue loading completes |
-| Five `purchase-*-review` captures | Purchase heading, consequence, reminder choice where applicable and final Purchase/Cancel controls; review loaded, scrolled into view, More closed |
+| Five `purchase-*-review` captures | Purchase heading, consequence, reminder choice where applicable and final Confirm purchase/Cancel controls; review loaded, scrolled into view, toolbar hidden |
 | Five `purchase-*-complete` captures | Request title and resulting status after the response, UI badge and authoritative SQL/outbox/duplicate-submit assertions |
 | `reject-template-review` / `-complete` | Selected rejection template and Reject and close/Cancel; then request title and Closed after authoritative rejection/outbox checks and UI refresh |
 | `confirmation-desktop-mobile-zoom-{desktop,mobile,zoom}` / `-zoom-dialog` | Stacked discard dialog, warning and controls after keyboard/focus checks; viewport dimensions and zoom-corrected crop checked |

@@ -495,6 +495,26 @@ No changes/ready-form wait fixes that harness race, and the final owning case
 passes 1/1. Release build: zero warnings/errors. These are test/documentation
 changes only; final revision-wide CI results remain in the consolidated PR.
 
+### Upstream #469 integration
+
+#469 merged externally at `a3f0216` on November 6, 2026, after the first Full CI
+receipt. The task branch integrates that main commit without rewriting either
+implementation. Automatic merges of shared markup/styles, navigation tests and
+browser fixtures were clean. Settings ownership mechanisms remain unchanged;
+the catalog operation's departure guard is a separate pending-operation guard,
+not a new Settings override or dirty draft owner.
+
+The combined Release build has zero warnings/errors. Fresh native discovery
+finds 1,501 cases: 1,449 non-browser and 52 browser, with an exact disjoint UID
+union; 77 root frontend files are current. Shared navigation/draft checks pass
+273 journeys, all eight Settings destinations, scope/session ownership and
+three rendered source browser tests. The three owning real-SQL/browser cases
+pass 3/3 on the combined build; acceptance plumbing passes 83/83 without skips.
+The selected `i390`, `s1` and `pr410`
+acceptance suites must run again because shared navigation and styling changed.
+Other historical suites remain conditional; untouched upstream feature paths
+also retain their expanded native browser coverage in final Full CI.
+
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
 Complex implementation uses Sol MAX; focused implementation and Pass 1 use

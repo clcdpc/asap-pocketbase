@@ -19,6 +19,10 @@ journeys use the Testing Kestrel fixtures:
   editing with a native current-schema SQL fixture. It checks effective
   configuration, staff authority, current successful hold journals, additional-copy
   links and new submission/automatic claiming through HTTP and SQL.
+- `request-confirmations.cjs`: Purchase/Reject open, Cancel, keyboard/Escape,
+  template loading, recoverable failures, duplicate activation and authorized
+  retries; shared inline toolbar/focus behavior, saved-BIB policies and native
+  200% zoom, with persisted transition and outbox checks in its SQL owner.
 - `settings.cjs`: real Settings
   GET/editor POST/reload, ownership, override metadata and lossless identity;
   the Campaign 2 super-admin/library-admin cases cover automatically allocated immutable draft keys,
