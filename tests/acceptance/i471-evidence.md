@@ -1,9 +1,11 @@
 # #471 acceptance evidence and integration
 
-Baseline: PR #477 remote HEAD `854b51270fc4f97335a82f8f3dabf24723465065`,
-resolved through GitHub and `git fetch origin refs/pull/477/head` on November 6,
-2026. This is an independent tooling branch, not qualification of later #477
-commits. Source `src/` and `database/` are unchanged.
+The runner was originally developed independently against PR #477 application
+`854b51270fc4f97335a82f8f3dabf24723465065` on November 6, 2026. All six runner
+commits through `f010fb84` are now integrated with application fix `b614743d`.
+Integration preserves the qualified application/database bytes and the runner's
+runtime/browser helper bytes. Final combined-revision receipts are recorded in
+PR #477; the historical baseline receipts are not substituted for those checks.
 
 ## Criterion to evidence
 
@@ -57,7 +59,7 @@ Playwright network archives are never exported.
 From this tooling worktree, run against a full immutable application SHA:
 
 ```powershell
-.\scripts\review\Invoke-AsapReview.ps1 -Commit 854b51270fc4f97335a82f8f3dabf24723465065 -Suite i471
+.\scripts\review\Invoke-AsapReview.ps1 -Commit <full-combined-sha> -Suite i471,pr410
 ```
 
 `-ReadOnly` runs the empty-catalog probe and reports the ten write scenarios
@@ -66,22 +68,21 @@ Each launcher invocation records application/tooling SHAs and tooling digest,
 with per-scenario JSON, screenshots and sanitized failures under
 `$HOME/ASAP-Acceptance/`. Failed runs must be kept alongside passing reruns.
 
-The #477 owner should cherry-pick the local implementation commits, resolve
-overlaps in the runner/registry/docs, tooling snapshot inputs and shared browser
-helpers, then run `i471` on the settled combined source/tooling revision. Reuse
-the existing full frontend/.NET/SQL/browser CI gate for final qualification;
-this branch neither changes workflow policy nor starts CI. Older receipts do
-not qualify the final combined commit. Do not merge, deploy, tag or close issues
-as part of integrating this tooling.
+The six dependent runner commits integrated without conflicts. Run `i471` and
+`pr410` on the settled combined source/tooling revision and use the existing full
+frontend/.NET/SQL/browser CI gate for final qualification. The workflow's normal
+matching-input evidence policy remains unchanged. Merging and issue closure
+require separate authorization; integration never authorizes deployment or tags.
 
-## Product gap retained as a failing criterion
+## Empty-creator regression and correction
 
 `i471-empty-creator-reset` independently seeds a saved explicit empty creator list
 with Show common creators enabled. It requires the list's **Use system value**
-control and then checks a draft-only reset followed by Save. The pinned #477
-application omits that control: `renderSetRows()` returns from its empty branch
-before refreshing the group ownership controls. The SQL override exists, so
-this is distinct from inheritance and from hiding a disabled feature. Keep this
-assertion; the #477 owner must repair and qualify the application path. The
-broader inheritance journey uses a nonempty creator list so this known failure
-does not prevent the other scalar, template, set and item checks from executing.
+control and then checks a draft-only reset followed by Save. The original
+`854b512` application omitted that control because `renderSetRows()` returned
+before refreshing the group ownership controls, producing 10/11 passes.
+Application fix `b614743d` refreshes the empty group's status. The unchanged
+runner at `f010fb84` then passed 11/11 i471 and 21/21 pr410 scenarios against
+that fixed application. Keep the required assertion and original failed receipt.
+The broader inheritance journey uses a nonempty list so an empty-state failure
+cannot prevent the other scalar, template, set and item checks from executing.
