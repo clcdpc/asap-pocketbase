@@ -1477,7 +1477,12 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     dom.claims.replaceChildren();
     const formats = readFormats().filter(item => item.id);
     const staff = array(property(state.data, 'autoClaimStaff') ?? property(state.data, 'staffUsers'));
-    const formatOptions = formats.map(item => ({ value: item.id, label: item.label || 'Unresolved material format' }));
+    const formatLabels = formats.map(item => item.label || 'Unresolved material format');
+    const formatOptions = formats.map((item, index) => ({
+      value: item.id,
+      label: formatLabels.filter(label => label === formatLabels[index]).length > 1
+        ? formatLabels[index] + ', format ' + (index + 1) : formatLabels[index]
+    }));
     for (const [index, value] of values.entries()) {
       const formatId = stringId(property(value, 'materialFormatId') ?? property(value, 'formatId'));
       const staffId = stringId(property(value, 'staffUserId') ?? property(value, 'staffId'));

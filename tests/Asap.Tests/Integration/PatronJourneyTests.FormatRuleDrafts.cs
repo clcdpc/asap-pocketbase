@@ -71,6 +71,21 @@ public sealed partial class PatronJourneyTests
             Assert.HasCount(2, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
             var evidence = report.RootElement.GetProperty("formatRuleDrafts");
             Assert.IsTrue(evidence.GetProperty("roundTrip").GetBoolean());
+            var recovery = report.RootElement.GetProperty("formatRuleDraftSaveRecovery");
+            Assert.HasCount(2, recovery.GetProperty("rejected").EnumerateArray().ToArray());
+            Assert.IsTrue(recovery.GetProperty("rejected").EnumerateArray()
+                .All(item => item.GetProperty("status").GetInt32() == 400));
+            Assert.HasCount(3, recovery.GetProperty("attemptedPayloads").EnumerateArray().ToArray());
+            Assert.IsTrue(recovery.GetProperty("rejectedStateUnchanged").GetBoolean());
+            Assert.IsTrue(recovery.GetProperty("retryPayloadStable").GetBoolean());
+            Assert.AreEqual(200, recovery.GetProperty("committedResponse").GetProperty("status").GetInt32());
+            Assert.IsTrue(recovery.GetProperty("committedIdentitiesVerified").GetBoolean());
+            Assert.IsTrue(recovery.GetProperty("uncertainReplayBlocked").GetBoolean());
+            Assert.IsTrue(recovery.GetProperty("guardedReloadReconciled").GetBoolean());
+            Assert.AreEqual(1, await ReadCountWithParameterAsync("""
+                SELECT COUNT(*) FROM [asap].[AdministrativeAudit]
+                WHERE [OrganizationId] = @library AND [Action] = N'library_settings_updated';
+                """, ("@library", libraryId)), "Only the committed attempt writes successful system history.");
             Assert.AreEqual(fieldKey, evidence.GetProperty("savedKey").GetString());
             var newCode = evidence.GetProperty("newCode").GetString()!;
             var newKey = evidence.GetProperty("newKey").GetString()!;

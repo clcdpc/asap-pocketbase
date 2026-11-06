@@ -135,6 +135,7 @@ test('format cards retain complete drafts and use the actual container width at 
     await page.setViewportSize({ width, height });
     await nativeZoom(context, page, zoom);
     await page.locator('#format-rules-editor').evaluate((node, narrow) => { node.style.maxWidth = narrow ? '540px' : ''; }, narrow);
+    await publication.evaluate((node, narrow) => { node.style.maxWidth = narrow ? '360px' : ''; }, narrow);
     const geometry = await formatRuleGeometry(page, columns);
     geometry.publication = await publication.evaluate(node => {
       const bounds = element => {
@@ -150,6 +151,11 @@ test('format cards retain complete drafts and use the actual container width at 
         viewport: innerWidth, scrollWidth: document.documentElement.scrollWidth };
     });
     const p = geometry.publication;
+    if (narrow) {
+      assert.equal(p.viewport, 1440, 'Narrow publication qualification keeps the desktop viewport.');
+      assert.ok(Math.abs(p.container.width - 360) <= 1, 'The publication container itself is constrained to 360px.');
+      assert.ok(p.label.width >= 280 && p.actions.width >= 136, 'Wrapped rows retain an adequate label and complete action group.');
+    }
     assert.ok(p.scrollWidth <= p.viewport, name + ': publication reflow has no page overflow');
     for (const control of p.controls) {
       assert.ok(control.width > 0 && control.left >= p.row.left && control.right <= p.row.right,

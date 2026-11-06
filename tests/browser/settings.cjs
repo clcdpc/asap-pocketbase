@@ -1153,7 +1153,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   await scan(page, axeSource, args.artifactRoot, report, 'campaign2-forced-colors');
 }
 
-async function runLibraryFormatRuleDrafts(page, args, report, saveSettings, ready) {
+async function runLibraryFormatRuleDrafts(page, args, report, ready) {
   const read = () => page.evaluate(async scope => {
     const response = await fetch(`/api/asap/staff/settings?orgId=${scope}`);
     if (!response.ok) throw new Error(`Settings GET ${response.status}`);
@@ -1226,9 +1226,102 @@ async function runLibraryFormatRuleDrafts(page, args, report, saveSettings, read
   assert.equal(await namedTemplate.locator('.settings-template-preview-body').textContent(), 'Body for Example title');
   assert.equal(await namedTemplate.locator('.template-placeholder-trigger').first().isEnabled(), true);
 
+  const editorIdentities = () => page.evaluate(() => ({
+    formats: [...document.querySelectorAll('#material-formats-editor [data-domain-row]')].map(row => row.dataset.formatCode).sort(),
+    fields: [...document.querySelectorAll('#additional-fields-editor [data-domain-row]')].map(row => ({
+      key: row.dataset.fieldKey, options: [...row.querySelectorAll('[data-option-row]')].map(option => option.dataset.optionId)
+    })).sort((left, right) => left.key.localeCompare(right.key)),
+    publication: [...document.querySelectorAll('#publication-options-editor [data-domain-row]')].map(row => row.dataset.optionId).sort(),
+    templates: [...document.querySelectorAll('#email-templates-editor [data-domain-row]')].map(row => row.dataset.templateKey).sort(),
+    rules: [...document.querySelectorAll('#format-rules-editor [data-rule-code]')].map(row => ({
+      code: row.dataset.ruleCode, fields: [...row.querySelectorAll('[data-custom-rule-key]')].map(field => field.dataset.customRuleKey).sort()
+    })).sort((left, right) => left.code.localeCompare(right.code))
+  }));
+  const generatedIdentities = await editorIdentities();
+  const recovery = report.formatRuleDraftSaveRecovery = { rejected: [], attemptedPayloads: [] };
+  const settingsPost = request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/settings';
+  const interceptSave = async route => {
+    if (!settingsPost(route.request())) { await route.continue(); return; }
+    recovery.attemptedPayloads.push(route.request().postDataJSON());
+    if (recovery.attemptedPayloads.length < 3) { await route.continue(); return; }
+    // Forward the actual third POST and await its real committed acknowledgement.
+    // Only the browser-facing response is lost; no successful commit is fabricated.
+    const response = await route.fetch();
+    recovery.committedResponse = { status: response.status(), body: await response.json() };
+    await route.abort('failed');
+  };
+  await page.route('**/api/asap/staff/settings', interceptSave);
+  let payload;
+  try {
+    // A required Select with no enabled choice fails the owning service's real
+    // transaction after draft creation. Both rejected attempts must leave SQL
+    // unchanged and retain all generated IDs for an explicit safe retry.
+    await page.locator('#settings-nav-patron').click();
+    for (const enabled of await definition.locator('[data-option-field="enabled"]').all()) await enabled.uncheck();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const rejectedResponse = page.waitForResponse(response => settingsPost(response.request()));
+      await page.locator('#settings-save').click();
+      const rejected = await rejectedResponse;
+      const body = await rejected.text();
+      recovery.rejected.push({ status: rejected.status(), body });
+      assert.equal(rejected.status(), 400, body);
+      assert.match(body, /required select field must have at least one enabled option/i);
+      await page.waitForFunction(() => !document.getElementById('settings-form').inert &&
+        !document.getElementById('settings-save').disabled);
+      assert.deepEqual(await editorIdentities(), generatedIdentities, 'Rejected saves retain every generated control identity/reference.');
+      const unchanged = await read();
+      assert.equal(unchanged.version, initial.version, 'A rejected transaction does not advance the accepted settings version.');
+      assert.deepEqual(unchanged.stored, initial.stored, 'A rejected transaction leaves all accepted SQL-backed settings unchanged.');
+    }
+    assert.deepEqual(recovery.attemptedPayloads[1], recovery.attemptedPayloads[0], 'The explicit failed-save retry sends the identical payload.');
+    recovery.rejectedStateUnchanged = true;
+    recovery.retryPayloadStable = true;
+
+    for (const enabled of await definition.locator('[data-option-field="enabled"]').all()) await enabled.check();
+    const responseLost = page.waitForEvent('requestfailed', { predicate: settingsPost });
+    await page.locator('#settings-save').click();
+    await responseLost;
+    await page.locator('#settings-save-title').filter({ hasText: 'Outcome uncertain; reload needed' }).waitFor();
+    assert.equal(recovery.committedResponse.status, 200);
+    assert.equal(recovery.committedResponse.body.code, 'saved');
+    const corrected = structuredClone(recovery.attemptedPayloads[0]);
+    corrected.customFields.find(field => field.key === newKey).options.forEach(option => { option.enabled = true; });
+    payload = recovery.attemptedPayloads[2];
+    assert.deepEqual(payload, corrected, 'Only the corrected Enabled flags change; all IDs, references and remaining payload values stay stable.');
+    assert.deepEqual(await editorIdentities(), generatedIdentities, 'Response loss leaves the original generated draft identities mounted.');
+    const committed = await read();
+    assert.equal(committed.version, recovery.committedResponse.body.data.version);
+    assert.ok(committed.effective.formats.some(format => format.code === newCode && format.id));
+    assert.deepEqual(committed.stored.customFields.find(field => field.key === newKey).options.map(option => option.id), optionIds);
+    assert.ok(committed.stored.libraryOverride.publicationOptions.values.some(option => option.id === publicationKey));
+    assert.ok(committed.stored.templates.some(template => template.templateKey === templateKey && template.isCustom));
+    assert.deepEqual(committed.stored.formatRules.find(rule => rule.code === newCode).customFields[newKey],
+      { mode: 'required', labelOverride: 'New rule witness' });
+    recovery.committedIdentitiesVerified = true;
+
+    assert.equal(await page.locator('#settings-form').evaluate(form => form.inert), true);
+    assert.equal(await page.locator('#settings-save').isDisabled(), true);
+    await page.locator('#settings-scope').selectOption('system');
+    assert.equal(await page.locator('#settings-scope').inputValue(), args.scopeId, 'An uncertain save cannot transfer its draft to another scope.');
+    await page.locator('#settings-form').dispatchEvent('submit');
+    await page.waitForLoadState('networkidle');
+    assert.equal(recovery.attemptedPayloads.length, 3, 'An uncertain committed POST is never automatically or programmatically replayed.');
+    assert.deepEqual(await editorIdentities(), generatedIdentities);
+    recovery.uncertainReplayBlocked = true;
+
+    await decideConfirmation(page, () => page.locator('#settings-refresh').click(), dialog => dialog.accept());
+    await page.waitForFunction(() => !document.getElementById('settings-form').inert &&
+      document.getElementById('settings-save-title').textContent === 'No changes');
+    assert.deepEqual(await editorIdentities(), generatedIdentities, 'Guarded Refresh reconciles to the same saved identifiers and references.');
+    assert.equal(await page.locator('#settings-save').isDisabled(), true);
+    assert.equal(recovery.attemptedPayloads.length, 3);
+    recovery.guardedReloadReconciled = true;
+  } finally {
+    await page.unroute('**/api/asap/staff/settings', interceptSave);
+  }
+
   // Creating the field and format in one POST exercises the real transaction's
   // intermediate SaveChanges, which can persist a stolen rule if collection is wrong.
-  const payload = await saveSettings();
   assert.ok(payload.formats.some(format => format.code === newCode && format.id === null));
   assert.ok(payload.customFields.some(field => field.key === newKey && field.id === null));
   assert.deepEqual(payload.formatRules.find(rule => rule.code === args.formatCode).customFields[savedKey],
@@ -2238,11 +2331,11 @@ async function main() {
       return;
     }
     if (args.mode === 'library-format-rule-drafts') {
-      await runLibraryFormatRuleDrafts(page, args, report, saveSettings, waitForSettingsReady);
+      await runLibraryFormatRuleDrafts(page, args, report, waitForSettingsReady);
       await scan(page, axeSource, args.artifactRoot, report, 'desktop');
       await page.setViewportSize({ width: 390, height: 844 });
       await scan(page, axeSource, args.artifactRoot, report, 'mobile');
-      assert.equal(postedPayloads.length, 1, 'The combined new-format/new-field draft must persist in one POST.');
+      assert.equal(postedPayloads.length, 3, 'Two actual rejected attempts precede exactly one combined committed POST.');
       assert.deepEqual(pageErrors, []);
       assert.equal(traffic.externalRequests, 0);
       await page.close(); await context.close();

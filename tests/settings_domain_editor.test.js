@@ -769,6 +769,22 @@ const axe = require('axe-core');
     assert.deepStrictEqual([...sortedSelect.options].map(option => option.textContent), ['Alpha staff', 'Zebra staff']);
     assert.strictEqual(sortedSelect.value, '9223372036854775807', 'Sorting choices preserves the exact selected bigint.');
     assert.deepStrictEqual(sortedStaffData.autoClaimStaff.map(item => item.label), ['Zebra staff', 'Alpha staff'], 'Sorting must not mutate source data.');
+    const duplicateFormatLabels = JSON.parse(JSON.stringify(sortedStaffData));
+    for (const formats of [duplicateFormatLabels.stored.configuredSystem.formats,
+      duplicateFormatLabels.stored.formats, duplicateFormatLabels.effective.formats]) {
+      for (const format of formats) format.label = 'Shared readable label';
+    }
+    sortedEditors.populate(duplicateFormatLabels, false);
+    const duplicateFormatSelect = sortedRoot.querySelector('#format-claim-rules-editor select');
+    assert.deepStrictEqual([...duplicateFormatSelect.options].map(option => option.textContent),
+      ['Shared readable label, format 1', 'Shared readable label, format 2'],
+      'Auto-claim choices distinguish duplicate labels without exposing internal codes.');
+    for (const formatId of ['7', '8']) {
+      duplicateFormatSelect.value = formatId;
+      duplicateFormatSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+      assert.equal(sortedEditors.collect().values.claims[0].materialFormatId, formatId,
+        'Each readable choice selects its own exact underlying format identity.');
+    }
     sortedEditors.dispose();
 
     for (const invalidStaff of [
