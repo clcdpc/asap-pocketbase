@@ -92,9 +92,7 @@ def changed_paths(event_name, event, env, root=ROOT, current_pr=None):
         require(ancestor(base, "refs/remotes/origin/main", root),
                 "PR merge parent is outside trusted main history")
         for candidate in (pr, current):
-            advertised = candidate["base"]["sha"]
-            require(sha(advertised) and (ancestor(advertised, base, root) or ancestor(base, advertised, root)),
-                    "PR advertised base is outside the tested main lineage")
+            require(sha(candidate["base"]["sha"]), "Invalid advertised PR base SHA")
         merge_bases = git("merge-base", "--all", base, head, root=root).splitlines()
         require(len(merge_bases) == 1 and sha(merge_bases[0]), "PR merge base is ambiguous")
         baseline = merge_bases[0]

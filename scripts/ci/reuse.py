@@ -123,13 +123,6 @@ def successful(value):
     return value.get("status") == "completed" and value.get("conclusion") == "success"
 
 
-def completed_run(value):
-    # A downstream deployment failure does not undo successful qualification.
-    # The executor, reporting gate and original steps must independently succeed;
-    # active/neutral runs cannot provide completed qualification evidence.
-    return value.get("status") == "completed" and value.get("conclusion") in ("success", "failure", "timed_out", "cancelled")
-
-
 def passing_results(results, selection):
     require(all(type(results.get(key)) is int for key in ("total", "executed", "passed", "failed", "skipped")),
             "Test counters must be integers")
@@ -204,8 +197,8 @@ class Validator:
         require(integer(run_id) and integer(attempt) and integer(latest)
                 and attempt <= latest <= attempt + 10, "Invalid or excessive originating attempts")
         job_name = config["job"]
-        require(completed_run(run) and run["workflow_id"] == self.workflow["id"]
-                and run["path"] == config["workflow"], "Run/workflow did not complete qualification")
+        require(run["workflow_id"] == self.workflow["id"] and run["path"] == config["workflow"],
+                "Wrong originating workflow")
         key = run_id, attempt, latest
         if key in self.contexts:
             return self.contexts[key]
@@ -217,7 +210,7 @@ class Validator:
         # enforced below against the job-bound execution time, not run creation.
         require(timestamp(run["created_at"]) <= self.now, "Originating run has a future creation time")
         original = self.api.get(f"/actions/runs/{run_id}/attempts/{attempt}")
-        require(completed_run(original) and original["head_sha"] == run["head_sha"]
+        require(original["head_sha"] == run["head_sha"]
                 and original["run_attempt"] == attempt and original["id"] == run_id,
                 "Unsuccessful or mismatched originating attempt")
         jobs = list(self.api.pages(f"/actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs"))
@@ -232,6 +225,13 @@ class Validator:
         for later in range(attempt + 1, latest + 1):
             later_jobs = list(self.api.pages(f"/actions/runs/{run_id}/attempts/{later}/jobs", "jobs"))
             relevant = [job for job in later_jobs if job["name"] in (job_name, "Build, test and package")]
+            deployment_only = bool(later_jobs) and all(job["name"] == "Deploy exact artifact to test IIS"
+                                                     for job in later_jobs)
+            later_gates = [job for job in later_jobs if job["name"] == "Build, test and package"]
+            require(deployment_only or (len(later_gates) == 1 and successful(later_gates[0])),
+                    "Later attempt has no completed qualification or scheduled deployment-only retry")
+            require(all(job["run_id"] == run_id and job["head_sha"] == run["head_sha"] for job in later_jobs),
+                    "Later attempt job identity changed")
             require(all(successful(job) and job["run_id"] == run_id and job["head_sha"] == run["head_sha"]
                         for job in relevant), "A later qualification attempt did not succeed")
         job = matching[0]

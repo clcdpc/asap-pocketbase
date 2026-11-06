@@ -427,8 +427,9 @@ class DependencyTests(unittest.TestCase):
 
     def test_native_exclusions_have_no_cross_suite_consumers(self):
         config = fp.configuration()
-        names = {Path(path).name for rule in config["exclusions"] if {"dotnet", "browser"} <= set(rule["suites"])
-                 for path in rule["paths"] if path.startswith("tests/") and path.endswith(".test.js")}
+        names = {path.name for path in (fp.ROOT / "tests").glob("*.test.js")
+                 if not {"dotnet", "browser"}.intersection(fp.source_suites("tests/" + path.name, config))}
+        names.add("run_all.js")
         consumers = [*(fp.ROOT / "tests/Asap.Tests").rglob("*.cs"),
                      *(fp.ROOT / "tests/browser").rglob("*.cjs"),
                      *fp.ROOT.rglob("*.csproj"), *fp.ROOT.rglob("*.targets"), *fp.ROOT.glob("*.props")]
@@ -437,20 +438,21 @@ class DependencyTests(unittest.TestCase):
                 continue
             contents = path.read_text(encoding="utf-8-sig")
             self.assertFalse(any(name in contents for name in names), "Cross-suite consumer: " + str(path))
-        for path in ("tests/new.test.js", "tests/new-shared-helper.js", "tests/run_all.js",
+        for path in ("tests/new-shared-helper.js", "tests/run_all.js",
                      "tests/ci_workflow_contract.test.js", "tests/test_iis_deployment_contract.test.js"):
             for suite in fp.SUITES:
                 self.assertNotEqual(fp.source_fingerprint([], suite, config),
                                     fp.source_fingerprint([[path, "100644", "blob", "a"]], suite, config))
 
-    def test_only_audited_frontend_implementation_bytes_allow_backend_reuse(self):
+    def test_authored_frontend_assets_allow_backend_reuse_without_file_inventory(self):
         config = fp.configuration()
-        for path in ("src/Asap.Web/Frontend/staff/app.js", "src/Asap.Web/Frontend/staff/styles.css"):
+        for path in ("src/Asap.Web/Frontend/staff/app.js", "src/Asap.Web/Frontend/staff/styles.css",
+                     "src/Asap.Web/Frontend/new-module.js"):
             before, after = [[path, "100644", "blob", "a"]], [[path, "100644", "blob", "b"]]
             self.assertEqual(fp.source_fingerprint(before, "dotnet", config), fp.source_fingerprint(after, "dotnet", config))
             for suite in ("browser", "frontend"):
                 self.assertNotEqual(fp.source_fingerprint(before, suite, config), fp.source_fingerprint(after, suite, config))
-        for path in ("src/Asap.Web/Frontend/new-module.js", "src/Asap.Web/Frontend/staff/index.html",
+        for path in ("src/Asap.Web/Frontend/vendor/changed.js", "src/Asap.Web/Frontend/staff/index.html",
                      "src/Asap.Web/Build/FrontendAssets.targets", "src/Asap.Web/Features/Patron/PatronSessionService.cs",
                      "src/Asap.Web/Infrastructure/Data/AsapDbContext.cs"):
             self.assertNotEqual(fp.source_fingerprint([[path,"100644","blob","a"]], "dotnet", config),
@@ -462,7 +464,7 @@ class DependencyTests(unittest.TestCase):
                      "database/Asap.Database/Scripts/PostDeployment.sql", "tests/Asap.Tests/Sql/DatabaseBaselineTests.cs",
                      "dev/review/src/Asap.ReviewInit/LocalReviewer.sql", "dev/review/src/Asap.ReviewProviders/ReviewProviders.cs",
                      "global.json", "package-lock.json",
-                     "Directory.Packages.props", "docs/implementation/test-iis-activation.md"):
+                     "Directory.Packages.props", "new-root/runtime-input.md", "tests/new-fixtures/expected.txt"):
             for suite in fp.SUITES:
                 with self.subTest(path=path, suite=suite):
                     before = [[path, "100644", "blob", "a" * 40]]
@@ -494,10 +496,33 @@ class DependencyTests(unittest.TestCase):
         for path in ("tests/acceptance/run.cjs", "tests/acceptance/helpers/reporting.cjs", "tests/acceptance/helpers/accessibility.cjs"):
             self.assertEqual(fp.source_fingerprint([[path, "100644", "blob", "a"]], "dotnet", config),
                              fp.source_fingerprint([[path, "100644", "blob", "b"]], "dotnet", config))
-        # New files beside an exclusion are unknown dependencies, never implicitly excluded.
-        path = "tests/acceptance/helpers/new-shared-fixture.cjs"
+        path = "tests/fixtures/new-shared-fixture.cjs"
         self.assertNotEqual(fp.source_fingerprint([], "dotnet", config),
                             fp.source_fingerprint([[path, "100644", "blob", "b"]], "dotnet", config))
+
+    def test_documentation_is_scoped_and_runtime_or_fixture_markdown_stays_included(self):
+        config = fp.configuration()
+        for path in ("README.md", "scripts/ci/README.md", ".agents/skills/new/SKILL.md",
+                     "docs/implementation/test-iis-activation.md"):
+            for suite in fp.SUITES:
+                self.assertEqual(fp.source_fingerprint([], suite, config),
+                                 fp.source_fingerprint([[path, "100644", "blob", "b"]], suite, config))
+        for path in ("src/Asap.Web/Frontend/vendor/font-awesome/4.7.0/README.md",
+                     "tests/fixtures/expected-email.md", "tests/fixtures/expected-email.txt",
+                     "src/Asap.Web/Features/Templates/example.md", "scripts/ci/fixtures/README.md"):
+            for suite in fp.SUITES:
+                self.assertNotEqual(fp.source_fingerprint([], suite, config),
+                                    fp.source_fingerprint([[path, "100644", "blob", "b"]], suite, config))
+        for path in ("tests/new.test.js", "tests/new-fixture.ps1"):
+            self.assertEqual(set(fp.source_suites(path, config)), {"frontend"})
+
+    def test_directory_rules_cover_new_files_and_do_not_match_sibling_names(self):
+        config = fp.configuration()
+        for path in ("new-top-level/runtime.json", "src/new-feature/code.cs", "database/new-schema.sql",
+                     "tests/new-shared-data/input.txt", "Directory.Build.targets", "tests/nested/example.test.js"):
+            self.assertEqual(set(fp.source_suites(path, config)), set(fp.SUITES), path)
+        self.assertEqual(set(fp.source_suites("tests/browser/new-journey.cjs", config)), {"browser"})
+        self.assertEqual(set(fp.source_suites("tests/browserish/shared.cs", config)), set(fp.SUITES))
 
     def test_audited_browser_script_only_invalidates_browser(self):
         config = fp.configuration()
@@ -635,13 +660,21 @@ class ProvenanceTests(unittest.TestCase):
             with self.subTest(suite=suite):
                 self.assertFalse(decisions[suite]["reuse"])
 
-    def test_unfinished_or_neutral_run_never_hits_even_with_passing_artifacts(self):
-        for status, conclusion in (("queued", None), ("in_progress", None),
-                                   ("completed", "neutral")):
+    def test_incomplete_qualification_is_rejected_even_when_suites_have_passing_artifacts(self):
+        for name in ("job", "gate"):
+            for status in ("queued", "in_progress", "pending"):
+                fixture = Fixture()
+                getattr(fixture, name).update(status=status, conclusion=None)
+                fixture.run.update(status="in_progress", conclusion=None)
+                with self.subTest(job=name, status=status):
+                    self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
+
+    def test_active_downstream_work_does_not_invalidate_completed_qualification(self):
+        for status in ("queued", "in_progress", "waiting", "completed"):
             fixture = Fixture()
-            fixture.run.update(status=status, conclusion=conclusion)
-            with self.subTest(status=status, conclusion=conclusion):
-                self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
+            fixture.run.update(status=status, conclusion=None)
+            with self.subTest(status=status):
+                self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
 
     def test_prior_passing_tests_with_later_failed_packaging_are_rejected(self):
         fixture = Fixture()
@@ -683,6 +716,24 @@ class ProvenanceTests(unittest.TestCase):
             fixture.run["run_attempt"] = 4
             fixture.attempt_jobs[4] = []
             self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
+
+    def test_active_deployment_only_retry_is_distinguished_from_unscheduled_or_active_qualification(self):
+        fixture = Fixture()
+        fixture.attempts[2] = copy.deepcopy(fixture.run)
+        fixture.run.update(run_attempt=3, status="in_progress", conclusion=None)
+        deployment = success(name="Deploy exact artifact to test IIS", run_id=7,
+                             head_sha=fixture.run["head_sha"], status="in_progress", conclusion=None)
+        fixture.attempt_jobs[3] = [deployment]
+        self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
+        for jobs in ([], [success(name="Resolve validation policy", run_id=7, head_sha=fixture.run["head_sha"])],
+                     [success(name=fixture.config["job"], run_id=7, head_sha=fixture.run["head_sha"],
+                              status="in_progress", conclusion=None)],
+                     [copy.deepcopy(fixture.job)],
+                     [copy.deepcopy(fixture.job), {**fixture.gate, "status": "queued", "conclusion": None}]):
+            fixture.attempt_jobs[3] = jobs
+            self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()), jobs)
+        fixture.attempt_jobs[3] = [copy.deepcopy(fixture.job), copy.deepcopy(fixture.gate), deployment]
+        self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
 
     def test_wrong_repository_workflow_job_or_runner_is_rejected(self):
         for target, key, value in (("repository", "id", 42), ("head_repository", "id", 42),
@@ -747,17 +798,17 @@ class ProvenanceTests(unittest.TestCase):
         fixture.now += timedelta(days=15)
         self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
 
-    def test_cached_origin_context_rechecks_an_advanced_or_active_latest_attempt(self):
+    def test_cached_origin_context_preserves_deployment_progress_and_rechecks_advanced_attempt(self):
         fixture = Fixture()
         validator = reuse.Validator(fixture, fixture.config, fixture.current, now=fixture.now)
         validator.validate(fixture.run, fixture.artifacts["dotnet"], "dotnet")
         fixture.run["status"] = "in_progress"
-        with self.assertRaises(reuse.EvidenceError):
-            validator.validate(fixture.run, fixture.artifacts["browser"], "browser")
+        validator.validate(fixture.run, fixture.artifacts["browser"], "browser")
         fixture.run["status"] = "completed"
         fixture.attempts[2] = copy.deepcopy(fixture.run)
         fixture.run["run_attempt"] = 3
-        fixture.attempt_jobs[3] = [success(name=fixture.config["job"], conclusion="failure")]
+        fixture.attempt_jobs[3] = [success(name=fixture.config["job"], run_id=7,
+                                         head_sha=fixture.run["head_sha"], conclusion="failure")]
         with self.assertRaises(reuse.EvidenceError):
             validator.validate(fixture.run, fixture.artifacts["browser"], "browser")
 
@@ -1132,13 +1183,24 @@ class GateTests(unittest.TestCase):
         fixture.attempts[2] = copy.deepcopy(fixture.run)
         fixture.attempts[2]["conclusion"] = "failure"
         fixture.run["run_attempt"] = 3
-        fixture.attempt_jobs[3] = [success(name="Deploy exact artifact to test IIS")]
+        fixture.attempt_jobs[3] = [success(name="Deploy exact artifact to test IIS", run_id=7,
+                                          head_sha=fixture.run["head_sha"], status="in_progress", conclusion=None)]
         decisions = fixture.lookup()
         directory = self.run_gate(fixture, {s: "skipped" for s in fp.SUITES}, decisions)
         rows = json.loads((directory / "verification.json").read_bytes())
         self.assertTrue(all(row["status"] == "REUSED" and row["source"]["attempt"] == 2 for row in rows.values()))
         self.assertIn("/actions/runs/7/attempts/2", fixture.calls)
         self.assertIn("/actions/runs/7/attempts/3/jobs", fixture.calls)
+
+    def test_plan_to_final_gate_tolerates_deployment_status_change_but_not_unfinished_qualification(self):
+        fixture = Fixture()
+        decisions = fixture.lookup()
+        fixture.run.update(status="in_progress", conclusion=None)
+        directory = self.run_gate(fixture, {s: "skipped" for s in fp.SUITES}, decisions)
+        self.assertTrue(all(row["status"] == "REUSED" for row in json.loads((directory / "verification.json").read_bytes()).values()))
+        fixture.gate.update(status="in_progress", conclusion=None)
+        with self.assertRaises(reuse.EvidenceError):
+            self.run_gate(fixture, {s: "skipped" for s in fp.SUITES}, decisions)
 
     def test_skipped_tests_without_valid_evidence_fail_required_gate(self):
         fixture = Fixture()

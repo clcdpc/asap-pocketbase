@@ -49,9 +49,9 @@ checks and ValidateOnly remain mandatory even on complete evidence reuse.
 Test-IIS activation still requires existing explicit authorization and successful
 final qualification. There is no aggregation test job or additional runner.
 
-Browser and frontend source changes invalidate their evidence. Only the exact
-audited JS/CSS paths and standalone Node contracts listed in test-reuse.json
-can leave backend evidence valid.
+Browser and frontend source changes invalidate their evidence. The directory/file
+input policy in test-reuse.json assigns authored frontend JS/CSS and Node/browser
+runtime to their owning suites, preserving backend evidence when its inputs match.
 HTML entry points, vendor assets, manifests, new paths, backend/schema/test
 changes and execution/security/build/deployment tooling remain conservative.
 Current build/publication checks and frontend-serving/browser contracts still
@@ -65,8 +65,9 @@ merge base and both sides of renames. Every valid changed path selects the full
 required population, including documentation, build/CI tooling and unknown paths.
 The cumulative PR diff does not demand fresh execution: reuse independently
 compares the effective tested inputs, including CI/test tooling by default.
-Advertised base SHAs may lag or advance on the same main lineage without
-forcing fresh execution. Ambiguous or invalid metadata still forces fresh execution. Only explicit
+Advertised base SHAs may lag or advance beyond the runner's fetched objects
+without changing an unchanged tested merge. They do not authorize its actual
+parents. Ambiguous or invalid source/trust metadata still forces fresh execution. Only explicit
 force-full bypasses otherwise valid matching evidence. Triggering and originating
 events do not affect eligibility: PR, manual, branch, tag, release and deployment
 runs share the same fingerprint/evidence contract. Tag refs (including annotated
@@ -79,7 +80,8 @@ run/attempt/job, checkout logs, Git blob/tree identity, artifact digest, age and
 successful original steps. Lookup queries artifacts by their exact suite
 fingerprint, remains bounded/read-only, and is unaffected by unrelated run
 volume. Deployment-only retries preserve the independently successful original
-qualification; later failed qualification attempts still reject it. The final suite
+qualification, including active downstream deployment; later active/failed
+qualification and empty/ambiguous retry state still reject it. The final suite
 verifier re-fetches original evidence; a cached plan cannot authorize success.
 The full workflow, including browser execution and the required gate, is part
 of the execution contract. Reused evidence never becomes new original evidence.

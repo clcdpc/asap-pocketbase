@@ -214,12 +214,45 @@ class GitDiffTests(unittest.TestCase):
         with self.assertRaises(policy.SelectionError):
             policy.changed_paths("pull_request", event, env, self.root, event["pull_request"])
 
+    def test_unfetched_new_advertised_base_does_not_change_planning_or_final_verification(self):
+        event, _ = self.integration(advance_base=True)
+        tested, base = self.git("rev-parse", "HEAD"), event["pull_request"]["base"]["sha"]
+        self.git("branch", "tested-merge", tested)
+        self.git("checkout", "-q", "--detach", base)
+        self.git("branch", "-f", "main", base)
+        self.git("checkout", "-q", "main")
+        with tempfile.TemporaryDirectory() as name:
+            runner = Path(name) / "runner"
+            subprocess.check_call(["git", "clone", "--no-local", "--quiet", str(self.root), str(runner)])
+            policy.git("checkout", "-q", "--detach", tested, root=runner)
+            event_path = runner / ".git/event.json"
+            event_path.write_text(json.dumps(event))
+            env = {**self.env(tested), "GITHUB_EVENT_PATH": str(event_path), "GH_TOKEN": "fixture",
+                   "GITHUB_REF": "refs/pull/1/merge", "ASAP_FORCE_FULL_CI": "false"}
+            current = copy.deepcopy(event["pull_request"])
+            directory = runner / ".artifacts/test-selection"
+            suites = {suite: {"expected": 1} for suite in fp.SUITES}
+            with mock.patch.dict(os.environ, env), \
+                 mock.patch.object(reuse.GitHub, "get", side_effect=lambda path: copy.deepcopy(current)), \
+                 mock.patch.object(policy, "population", return_value=(suites, 0, {})), \
+                 mock.patch("sys.stdout"):
+                policy.prepare(runner, directory)
+                planned = policy.load(runner, directory=directory)
+                newer = self.commit("src/new-main-change.txt", "main advanced after runner clone")
+                self.assertNotEqual(newer, base)
+                self.assertNotEqual(subprocess.run(["git", "cat-file", "-e", newer], cwd=runner,
+                                                   stderr=subprocess.DEVNULL).returncode, 0)
+                current["base"]["sha"] = newer
+                verified = policy.load(runner, verify=True, directory=directory)
+                self.assertFalse(verified["decision"]["fresh"])
+                self.assertEqual(verified, planned)
+
     def test_changed_head_base_merge_parent_or_trust_cannot_use_selective_diff(self):
         event, env = self.integration()
         for field in ("head", "base", "draft", "trust", "fork", "closed"):
             current = copy.deepcopy(event["pull_request"])
             if field in ("head", "base"):
-                current[field]["sha"] = "f" * 40
+                current[field]["sha"] = "invalid" if field == "base" else "f" * 40
             elif field == "draft":
                 current["draft"] = True
             elif field == "trust":

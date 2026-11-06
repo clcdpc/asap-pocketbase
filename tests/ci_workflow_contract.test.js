@@ -550,7 +550,9 @@ async function main() {
       assert.equal(step(full, name).if, undefined, `${name} must never depend on a reuse HIT`);
     }
     assert.equal(step(full, 'Remove SQL Server test container').if, '${{ always() }}');
-    assert.ok(!reuse.exclusions.some((rule) => rule.paths.includes('.github/workflows/dotnet.yml')));
+    assert.equal(reuse.exclusions, undefined, 'Use one source ownership policy');
+    const executionInputs = reuse.source_inputs.find((rule) => rule.paths.includes('.github/workflows/dotnet.yml'));
+    assert.deepEqual(executionInputs.suites, ['dotnet', 'browser', 'frontend']);
   });
   await check('full qualification owns one runner, build, discovery and SQL lifecycle with sequential suites', async () => {
     assert.deepEqual(Object.keys(workflow.jobs), ['validation-policy', 'build-test-package', 'draft-validation', 'validation', 'deploy-test-iis']);
