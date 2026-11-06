@@ -148,7 +148,7 @@ async function main() {
     await page.reload({ waitUntil: 'networkidle' });
     assert.equal(await field.inputValue(), 'additional@example.org');
     assert.equal(await page.locator('#weekly-enabled').isChecked(), false);
-    await page.emulateMedia({ colorScheme: 'dark' }); await scan(page, 'desktop-dark');
+    await page.emulateMedia({ colorScheme: 'dark' }); await scan(page, 'desktop-dark-preference');
 
     const mobile = await bind(await browser.newContext({ viewport: { width: 390, height: 844 }, extraHTTPHeaders: headers }));
     await scan(mobile, 'mobile');
@@ -168,6 +168,34 @@ async function main() {
     assert.equal(zoom, 2);
     await zoomPage.waitForFunction(previous => Math.abs(devicePixelRatio / previous - 2) < 0.01, ratio);
     await scan(zoomPage, 'native-200-percent');
+    const visualGeometry = await zoomPage.evaluate(() => {
+      const selectors = ['#profile-form', '#notification-email-label', '#notification-email', '#notification-email-help',
+        '#weekly-email-label', '#weekly-email', '#weekly-email-help', '#weekly-enabled', '#purchase-default',
+        '#additional-copy-default', '#mine-default', '#profile-form .form-actions'];
+      return { width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth,
+        bounds: Object.fromEntries(selectors.map(selector => {
+          const rect = document.querySelector(selector).getBoundingClientRect();
+          return [selector, { left: rect.left, right: rect.right, width: rect.width }];
+        })) };
+    });
+    for (const [selector, rect] of Object.entries(visualGeometry.bounds)) {
+      assert.ok(rect.left >= 0 && rect.right <= visualGeometry.width, `200% viewport bounds: ${selector}`);
+    }
+    const visualSession = await zoomContext.newCDPSession(zoomPage);
+    const metrics = await visualSession.send('Page.getLayoutMetrics');
+    assert.equal(metrics.visualViewport.zoom, 2);
+    for (const [name, position] of [['top', 'top'], ['form', 'form'], ['bottom', 'bottom']]) {
+      await zoomPage.evaluate(where => {
+        const top = where === 'top' ? 0 : where === 'bottom' ? document.documentElement.scrollHeight :
+          document.querySelector('#profile-form').getBoundingClientRect().top + scrollY - 20;
+        scrollTo(0, top);
+      }, position);
+      await zoomPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const capture = await visualSession.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      await fs.writeFile(path.join(artifacts, `native-200-viewport-${name}.png`), Buffer.from(capture.data, 'base64'));
+    }
+    await visualSession.detach();
+    await fs.writeFile(path.join(artifacts, 'native-200-visual-report.json'), JSON.stringify(visualGeometry, null, 2));
     assert.equal(report.externalRequests, 0); assert.deepEqual(report.pageErrors, []);
   } finally {
     await fs.writeFile(path.join(artifacts, 'browser-results.json'), JSON.stringify(report, null, 2));

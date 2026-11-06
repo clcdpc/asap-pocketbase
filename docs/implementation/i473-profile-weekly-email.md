@@ -40,7 +40,7 @@ checkout are preserved. #454 is merged; #469 is open and is not incorporated.
 | Issue | Implementation | Pass 1 | Pass 2 | Focused evidence | Status |
 | --- | --- | --- | --- | --- | --- |
 | #441 | `84d01d7`, `a1ac681` | Luna MAX: forced partial-retry coverage added | Astra HIGH: state matrix and 20 independent probes pass | SQL 68/68; browser 1/1; focused Node/build pass | Technically qualified |
-| #440 | This implementation commit | Pending: Luna MAX | Pending: Luna MAX browser interaction | Release build; focused Node; 271 navigation/draft journeys; real-SQL browser 1/1 | Implementation complete; independent reviews pending |
+| #440 | `eac9497`; test/evidence correction in this commit | Luna MAX: no actionable findings | Browser scenarios passed; Terra MAX viewport-capture gap corrected | PopulationTests 6/6; real-SQL browser 1/1 | Technically qualified; integrated checks pending |
 
 Requested child models/reasoning will be selected explicitly. The parent
 session cannot switch its own model and retains the current Codex orchestration
@@ -59,7 +59,9 @@ configuration. Final reconciliation uses Astra EXTRA HIGH.
   previous identities cannot repaint the account value.
 - Browser checks verify present/missing/long values, selection, label/help
   association, no input/tab stop, changed-primary conflict refresh, save payload,
-  keyboard flow, and desktop/dark/mobile/200% zoom layouts.
+  keyboard flow, and desktop/dark OS preference/mobile/200% zoom layouts. The
+  Profile stays light under a dark OS preference; shared Staff dark-theme work is
+  deferred under #456, and this flow has no appearance setting.
 
 Focused implementation evidence:
 
@@ -69,19 +71,41 @@ Focused implementation evidence:
   `node tests/staff_dotnet_frontend.test.js`: passed. The focused controller
   cases cover safe text, present/missing state, payload exclusion, draft refresh,
   pending mutation, same-actor stale snapshot and identity replacement.
-- `node tests/staff_navigation_drafts_ui.test.js`: 271 journeys passed.
+- `node tests/staff_navigation_drafts_ui.test.js`: 271 journeys passed before
+  the final conflict-refresh refinement; the focused controller test and the
+  real-SQL browser journey passed again after that refinement.
+- `python -B -m unittest test_selection.PopulationTests -v` from `scripts/ci`:
+  6/6 passed after correcting the reviewed Browser test name.
 - MTP real-SQL browser run: 1/1 passed. The first attempt failed because
   Playwright could not find the native definition by `getByRole('definition')`;
   the test now checks the semantic `dt`/`dd` markup and explicit ARIA
   associations directly. Final command:
-  `dotnet tests/Asap.Tests/bin/Release/net10.0/Asap.Tests.dll --filter FullyQualifiedName~WeeklyProfileBrowserShowsPrimaryAccountInfoAndPreservesPreferenceContractsAcrossAccessibleLayouts --report-trx --report-trx-filename i440-weekly-profile-browser-20261105-03.trx --results-directory .artifacts/test-results/i440-weekly-profile-browser-20261105-03`.
-  Receipt: `.artifacts/test-results/i440-weekly-profile-browser-20261105-03/i440-weekly-profile-browser-20261105-03.trx`.
+  `dotnet tests/Asap.Tests/bin/Release/net10.0/Asap.Tests.dll --filter FullyQualifiedName~WeeklyProfileBrowserShowsPrimaryAccountInfoAndPreservesPreferenceContractsAcrossAccessibleLayouts --report-trx --report-trx-filename i440-weekly-profile-pass2-remediation-20261105-01.trx --results-directory .artifacts/test-results/i440-weekly-profile-pass2-remediation-20261105-01`.
+  Receipt: `.artifacts/test-results/i440-weekly-profile-pass2-remediation-20261105-01/i440-weekly-profile-pass2-remediation-20261105-01.trx` (1/1 passed, 34.7 seconds).
 - Browser report and screenshots:
-  `.artifacts/browser/weekly-profile-130bdf9c31454deeafe7ab0e88c89e91/`.
-  All six states (missing, long mobile, desktop, dark, mobile and native 200%
-  zoom) had zero serious/critical axe findings, no overflow and loaded images;
-  external requests and page errors were zero. Automated checks do not replace
-  human screen-reader acceptance.
+  `.artifacts/browser/weekly-profile-4ae23e22ef71436f8c1622bb4c6ccabe/`.
+  All six states (missing, long mobile, desktop, dark OS preference, mobile and
+  native 200% zoom) had zero serious/critical axe findings, no overflow and
+  loaded images; external requests and page errors were zero. Native 200% visual
+  evidence includes `native-200-viewport-{top,form,bottom}.png` and
+  `native-200-visual-report.json`. Automated checks do not replace human
+  screen-reader acceptance.
+
+Pass 1 and Pass 2 reconciliation:
+
+- Fresh Luna MAX Pass 1 found no actionable issues and independently passed the
+  profile-controller and frontend-structure Node tests.
+- Luna MAX Pass 2 exercised browser refresh, stale snapshots, identity changes,
+  pending/conflict recovery, text selection and SQL save/lost-response behavior;
+  no product defect remained. Terra MAX found that the full-page native 200%
+  screenshot cropped the right/lower portion of the form. The test now retains
+  its existing axe/overflow scan and adds real CDP viewport captures at the top,
+  form and bottom, with horizontal bounds checks for all Profile controls.
+- The focused browser scan is named `desktop-dark-preference` to describe the
+  tested OS preference without implying that a Profile dark theme exists.
+- Pass 2 also found a stale native-browser method name in
+  `scripts/ci/reviewed-test-categories.json`; the reviewed Browser population now
+  names the current method exactly.
 
 ## #441 recipient and recovery contract
 

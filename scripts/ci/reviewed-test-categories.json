@@ -28,7 +28,7 @@
     "Asap.Tests.Integration.PatronJourneyTests.StaffRemediationBrowserVerifiesKeyboardLabelsThemeAndProvisionedAccountMutations",
     "Asap.Tests.Integration.PatronJourneyTests.StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp",
     "Asap.Tests.Integration.PatronJourneyTests.SystemFormatRuleEditorPersistsItsActualPostThroughSqlAndReload",
-    "Asap.Tests.Integration.PatronJourneyTests.WeeklyProfileBrowserPreservesAdditionalPreferenceValidationDraftsAndAccessibleLayouts",
+    "Asap.Tests.Integration.PatronJourneyTests.WeeklyProfileBrowserShowsPrimaryAccountInfoAndPreservesPreferenceContractsAcrossAccessibleLayouts",
     "Asap.Tests.Integration.PatronJourneyTests.WeeklySummaryBrowserPreservesGestureIdentityRecoveryAndAuthorizedRunScope"
   ]
 }
