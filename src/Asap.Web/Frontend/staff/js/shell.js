@@ -63,7 +63,7 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
     }
   }
 
-  function presentView(name) {
+  function presentView(name, { focusHeading = true } = {}) {
     if (disposed) return;
     for (const [key, [selector]] of Object.entries(views)) get(selector).hidden = name !== key;
     for (const tab of tabs) {
@@ -72,7 +72,7 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
       if (active) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
     }
     const heading = get(views[name][1]);
-    if (heading.isConnected && sessionIdentity.actor()) heading.focus({ preventScroll: true });
+    if (focusHeading && heading.isConnected && sessionIdentity.actor()) heading.focus({ preventScroll: true });
   }
 
   function readinessScope(context = getContext()) {

@@ -367,6 +367,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
           mode: 'title',
           query: title.value,
           title: title.value,
+          sourceAuthor: author.value,
           returnFocus: catalogButton,
           canApply: true,
           isCurrent: () => isCurrentGeneration(token) && suggestion?.stage === 'create' &&

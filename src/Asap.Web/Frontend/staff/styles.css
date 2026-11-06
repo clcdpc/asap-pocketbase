@@ -115,6 +115,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .status-tabs { display: flex; gap: 2px; overflow-x: auto; overflow-y: hidden; box-shadow: inset 0 -1px var(--line); }
 .status-tabs button { flex: 0 0 auto; padding: 9px 14px; color: var(--muted); background: transparent; border-radius: 4px 4px 0 0; }
 .status-tabs button[aria-selected="true"] { color: var(--brand-dark); background: #fff; border-color: var(--line); border-bottom-color: #fff; font-weight: 700; }
+.status-count { font-variant-numeric: tabular-nums; font-weight: 700; }
+.status-count.quiet { color: var(--muted); font-weight: 400; }
 .settings-domain-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
 .settings-domain-heading > strong { min-width: 0; overflow-wrap: anywhere; }
 .settings-domain-heading > button { max-width: 100%; }
@@ -135,6 +137,15 @@ textarea { min-height: 108px; resize: vertical; }
 .gridjs-wrapper { width: 100%; overflow-x: auto; border-radius: 0; box-shadow: none; border-color: var(--line); }
 table.gridjs-table { width: 100%; min-width: 920px; max-width: none; table-layout: fixed; }
 #request-grid table.gridjs-table { min-width: 0; }
+/* Keep Title requests' original proportions fractional through table layout; Grid.js rounds pixel widths separately. */
+#request-grid th[data-request-column="patron"] { width: 14%; }
+#request-grid th[data-request-column="bibliographic"] { width: 23%; }
+#request-grid th[data-request-column="format"] { width: 8%; }
+#request-grid th[data-request-column="submitted"] { width: 10%; }
+#request-grid th[data-request-column="library"] { width: 10%; }
+#request-grid th[data-request-column="claim"] { width: 9%; }
+#request-grid th[data-request-column="status"] { width: 9%; }
+#request-grid th[data-request-column="actions"] { width: 17%; }
 #additional-copy-grid .gridjs-container { container: additional-copies / inline-size; }
 #additional-copy-grid table.gridjs-table { min-width: 0; }
 /* Grid.js parses column widths numerically; CSS owns the reserved action space. */
@@ -183,6 +194,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .claim-label { color: var(--muted); }
 .claim-label.mine { color: var(--success); font-weight: 700; }
 .request-table-help { display: none; margin: 8px 0; color: var(--muted); font-size: .84rem; }
+#status-count-help { display: block; }
 #request-grid td.gridjs-td, #request-grid th.gridjs-th { padding: 9px 8px; }
 #request-grid tbody tr { cursor: pointer; }
 #request-grid tbody tr:hover td { background: #f1f7fa; }
@@ -232,6 +244,12 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .profile-form { width: min(680px, 100%); padding: 22px; background: #fff; border: 1px solid var(--line); border-top: 3px solid var(--brand); }
 .profile-form > label:not(.check-field) { display: grid; gap: 5px; margin-bottom: 16px; font-weight: 700; }
 .profile-form small { color: var(--muted); font-weight: 400; }
+.profile-account-info { margin-bottom: 16px; }
+.profile-account-info dl { margin: 0; }
+.profile-account-info dl > div { display: grid; gap: 5px; min-width: 0; }
+.profile-account-info dt { font-weight: 700; }
+.profile-account-info dd { min-width: 0; margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.profile-account-info small { display: block; margin-top: 5px; }
 .check-field { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; }
 .check-field input { min-height: auto; width: 18px; height: 18px; margin-top: 2px; }
 .form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
@@ -671,6 +689,10 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .polaris-edit-tools p:empty { display: none; }
 .polaris-edit-tools { min-width: 0; }
 .polaris-edit-tools > button { max-width: 100%; white-space: normal; }
+.bib-link-panel { flex: 1 1 100%; min-width: 0; display: grid; gap: 8px; }
+.bib-link-panel h3 { margin: 0; }
+.bib-link-panel .form-actions { flex-wrap: wrap; justify-content: flex-start; margin-top: 2px; }
+.bib-link-panel button { max-width: 100%; white-space: normal; }
 .polaris-selection-context { flex-basis: 100%; }
 .request-research-links { display: contents; }
 .staff-format-notice { white-space: pre-wrap; }
@@ -722,17 +744,51 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .research-links a { overflow-wrap: anywhere; }
 .request-research-links .research-links { display: contents; }
 .request-research-links a { min-width: 0; }
-#polaris-dialog { width: min(700px, calc(100vw - 28px)); }
-.polaris-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); align-items: end; gap: 10px; }
+#polaris-dialog { width: min(760px, calc(100vw - 28px)); overflow: hidden; }
+#polaris-dialog > .dialog-shell { display: flex; flex-direction: column; max-height: calc(100dvh - 28px); }
+#polaris-dialog .dialog-header { position: static; flex: 0 0 auto; }
+#polaris-dialog .polaris-body { display: flex; flex-direction: column; min-height: 0; padding: 14px 18px 18px; }
+.polaris-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); flex: 0 0 auto; align-items: end; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--soft); }
+.polaris-form[hidden] { display: none; }
 .polaris-form label { display: grid; gap: 5px; font-weight: 700; }
 .polaris-form input, .polaris-form select { width: 100%; min-width: 0; }
-.polaris-form button { grid-column: 1 / -1; justify-self: start; }
+.polaris-search-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.polaris-search-actions button { max-width: 100%; white-space: normal; }
+.polaris-author-shortcut { color: var(--brand-dark); background: transparent; border: 0; padding: 8px 0; text-decoration: underline; cursor: pointer; font: inherit; font-size: .85rem; }
+.polaris-author-shortcut[hidden] { display: none; }
 #polaris-query-field[hidden] { display: none; }
 #polaris-pair-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 #polaris-pair-fields[hidden] { display: none; }
-.polaris-results { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 12px; }
-.polaris-result { border: 1px solid var(--line); border-radius: 4px; padding: 12px; min-width: 0; overflow-wrap: anywhere; }
-.polaris-result p { margin: 6px 0; }
+#polaris-status { flex: 0 0 auto; min-height: 1.5em; margin: 0; padding: 10px 2px; color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
+.polaris-result-pane { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.polaris-results { list-style: none; padding: 3px; margin: 0; display: grid; gap: 9px; }
+.polaris-results[hidden], .polaris-confirmation[hidden] { display: none; }
+.polaris-result { border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; min-width: 0; overflow-wrap: anywhere; }
+.polaris-result-heading { display: flex; align-items: center; gap: 8px; }
+.polaris-result-heading img { flex: 0 0 24px; object-fit: contain; }
+.polaris-result p { margin: 5px 0; }
+.polaris-metadata { color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.polaris-ownership { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 7px 0; font-size: .76rem; color: var(--muted); }
+.polaris-badge { padding: 3px 7px; border: 1px solid var(--line); border-radius: 3px; color: var(--brand-dark); background: var(--soft); font-weight: 700; }
+.polaris-badge.warning { color: var(--warning); }
+.polaris-result-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.polaris-result-actions button { max-width: 100%; padding: 7px 10px; white-space: normal; text-align: left; font-size: .8rem; }
+.polaris-queue-button { border: 1px solid #256837; background: #256837; color: #fff; }
+.polaris-copy-button { border: 1px solid #256837; background: #fff; color: #205c30; }
+.polaris-result-actions .polaris-action-help { flex-basis: 100%; margin: 0; font-size: .78rem; color: var(--muted); }
+.polaris-confirmation { min-width: 0; padding: 12px; border: 1px solid var(--line); overflow-wrap: anywhere; }
+.polaris-confirmation h3 { margin: 0 0 10px; font-size: 1.05rem; }
+.polaris-confirmation button { max-width: 100%; white-space: normal; }
+.polaris-confirmation .form-actions { flex-wrap: wrap; }
+.polaris-confirmation .form-actions button { flex: 0 0 auto; }
+.polaris-override-warning { color: var(--warning); font-weight: 700; }
+@media (max-height: 600px) {
+  #polaris-dialog .polaris-body { overflow-y: auto; }
+  .polaris-result-pane { flex-shrink: 0; max-height: 45dvh; }
+}
+@media (max-width: 520px) {
+  .polaris-form, #polaris-pair-fields { grid-template-columns: 1fr; }
+}
 .blocked-callout, .hold-operation { padding: 12px 14px; border-left: 4px solid var(--warning); background: #fff5df; }
 .hold-operation { margin-top: 16px; }
 .hold-operation h3 { margin: 0 0 8px; font-size: 1rem; }
@@ -771,7 +827,13 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 }
 .patron-context { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 20px; background: var(--soft); }
 .patron-context .detail-grid { flex: 1 1 240px; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 12px; margin: 0; font-size: .84rem; }
+.patron-context .detail-grid dd > a { color: var(--brand-dark); overflow-wrap: anywhere; text-decoration: underline; }
 .patron-context .grid-new-suggestion { flex: 0 0 32px; min-height: 32px; width: 32px; padding: 5px; color: #fff; background: var(--success); border: 0; border-radius: 4px; cursor: pointer; }
+.recorded-pickup-help { margin-top: 4px; }
+.recorded-pickup-help > summary { display: inline-flex; align-items: center; gap: 5px; min-height: 40px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--brand-dark); background: var(--surface); cursor: pointer; font-size: .76rem; font-weight: 700; list-style: none; }
+.recorded-pickup-help > summary::-webkit-details-marker { display: none; }
+.recorded-pickup-help-content { max-width: 26rem; margin-top: 4px; padding: 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); overflow-wrap: anywhere; }
+.recorded-pickup-help-content p { margin: 0; }
 .patron-name-actions { display: flex; align-items: center; gap: 8px; }
 .patron-name-actions > :first-child { min-width: 0; overflow-wrap: anywhere; }
 .patron-context dt { font-size: .7rem; }
@@ -789,7 +851,7 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .identifier-lock-help { margin: 0 0 8px; font-size: .84rem; }
 .request-footer-slot { flex: 0 0 auto; }
 .request-save-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 20px; border-top: 1px solid var(--line); background: #fff; }
-.request-save-footer .form-actions { flex: 0 0 auto; margin: 0; }
+.request-save-footer .form-actions { flex: 0 0 auto; flex-wrap: wrap; margin: 0; }
 .request-save-footer .form-actions > button { white-space: nowrap; padding-inline: 8px; font-size: .85rem; }
 .request-save-feedback { min-width: 0; font-size: .86rem; }
 .request-save-state[data-state="clean"] { color: var(--muted); font-weight: 400; }
@@ -804,7 +866,7 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
   .request-heading-context, .patron-context, .request-middle > [role="tabpanel"], .request-detail-tabs, .request-save-footer { padding-inline: 14px; }
   .request-save-footer { flex-wrap: wrap; }
   .request-save-footer .form-actions { flex: 1 1 100%; }
-  .request-save-footer .form-actions > button { flex: 1; }
+  .request-save-footer .form-actions > button { flex: 1 1 0; min-width: 0; white-space: normal; }
   .app-header { padding-inline: 14px; flex-wrap: wrap; }
   .session-actions { flex: 1 1 220px; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   #staff-identity { flex: 1 1 100px; min-width: 0; }
@@ -821,7 +883,6 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
   .compact-field select { min-width: 0; width: 100%; }
   .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .edit-form, .resolution-form { grid-template-columns: 1fr; }
-  .polaris-form, #polaris-pair-fields { grid-template-columns: 1fr; }
   .edit-form .wide, .resolution-form .wide { grid-column: 1; }
   .settings-header { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .settings-toolbar { justify-content: flex-start; }

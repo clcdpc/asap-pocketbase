@@ -27,7 +27,8 @@ async function toolbarGeometry(page, columns) {
       }) };
   });
   assert.deepEqual(geometry.buttons.map(b => b.label), labels, 'All six direct actions retain DOM/keyboard order');
-  assert.equal(await dialog(page).locator('.request-more, summary').count(), 0, 'No modal overflow menu');
+  // Recorded pickup has a field-specific disclosure outside the action toolbar.
+  assert.equal(await dialog(page).locator('.request-more, .action-bar summary').count(), 0, 'No modal overflow menu');
   const rows = new Map();
   for (const b of geometry.buttons) {
     const y = Math.round(b.y); rows.set(y, (rows.get(y) || 0) + 1);
@@ -92,9 +93,12 @@ const scenarios = [
         const panel = dialog(t.page).locator(label === 'Assign' ? '.inline-form' : '.action-choice');
         await panel.waitFor();
         await panel.locator('button[type=submit]:not([disabled])').waitFor();
-        if (label === 'Assign') await panel.getByRole('button', { name: 'Cancel', exact: true }).click();
-        else await t.page.keyboard.press('Escape');
+        assert.equal(await dialog(t.page).locator('.action-bar').isVisible(), false, 'Inline panel hides the toolbar');
+        assert.equal(await panel.evaluate(node => node.contains(document.activeElement)), true, 'Focus enters the panel');
+        if (label === 'Purchase') assert.equal(await panel.locator('button[type=submit]').textContent(), 'Confirm purchase');
+        await t.page.keyboard.press('Escape');
         await panel.waitFor({ state: 'hidden' });
+        assert.equal(await dialog(t.page).locator('.action-bar').isVisible(), true);
         assert.equal(await opener.evaluate(n => n === document.activeElement), true, label + ' restores focus');
       }
       await (await actionButton(t.page, 'Close silently')).click();

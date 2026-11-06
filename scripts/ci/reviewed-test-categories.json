@@ -9,6 +9,7 @@
     "Asap.Tests.Integration.FrontendCacheTests.PublishedFirstPartyFilesRequireRevalidationAndRetainConditionalResponses",
     "Asap.Tests.Integration.FrontendCacheTests.VendorAssetsStayCacheableAndOtherResponsesRetainTheirPolicy",
     "Asap.Tests.Integration.PatronJourneyTests.AdministrationAuditBrowserPreservesSectionsFiltersScopesDraftsAndApprovedLayouts",
+    "Asap.Tests.Integration.PatronJourneyTests.AlreadyOwnLinkBrowserPreservesDraftsAndRecoversInsideTheExistingRequestModal",
     "Asap.Tests.Integration.PatronJourneyTests.Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload",
     "Asap.Tests.Integration.PatronJourneyTests.ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery",
     "Asap.Tests.Integration.PatronJourneyTests.EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance",
@@ -20,6 +21,8 @@
     "Asap.Tests.Integration.PatronJourneyTests.OperationsBrowserLocalizesSqlUtcAndPreservesQueueIdentitiesAcrossScopes",
     "Asap.Tests.Integration.PatronJourneyTests.PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport",
     "Asap.Tests.Integration.PatronJourneyTests.PatronSubmitBrowserJourneyRunsWithIdentitySwitchAndDeferredResponses",
+    "Asap.Tests.Integration.PatronJourneyTests.PolarisSearchBrowserQueuesAuthoritativeBibsAndRecoversCombinedCopyExactlyOnce",
+    "Asap.Tests.Integration.PatronJourneyTests.RequestConfirmationBrowserPreservesChoicesCancellationAndAuthorizedRetries",
     "Asap.Tests.Integration.PatronJourneyTests.SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp",
     "Asap.Tests.Integration.PatronJourneyTests.SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference",
     "Asap.Tests.Integration.PatronJourneyTests.StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers",
@@ -28,6 +31,9 @@
     "Asap.Tests.Integration.PatronJourneyTests.StaffRemediationBrowserVerifiesKeyboardLabelsThemeAndProvisionedAccountMutations",
     "Asap.Tests.Integration.PatronJourneyTests.StaffRequestBrowserJourneyRunsAgainstRealSqlAndHttp",
     "Asap.Tests.Integration.PatronJourneyTests.SystemFormatRuleEditorPersistsItsActualPostThroughSqlAndReload",
+    "Asap.Tests.Integration.PatronJourneyTests.TitleRequestsTableLayoutFitsWideViewsAndContainsNarrowScrolling",
+    "Asap.Tests.Integration.PatronJourneyTests.TitleTabCountsBrowserUsesCompleteAuthorizedSqlDataAndRefreshesAfterMutation",
+    "Asap.Tests.Integration.PatronJourneyTests.WeeklyProfileBrowserShowsPrimaryAccountInfoAndPreservesPreferenceContractsAcrossAccessibleLayouts",
     "Asap.Tests.Integration.PatronJourneyTests.WeeklySummaryBrowserPreservesGestureIdentityRecoveryAndAuthorizedRunScope"
   ]
 }

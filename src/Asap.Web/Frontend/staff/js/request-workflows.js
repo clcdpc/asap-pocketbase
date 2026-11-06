@@ -31,6 +31,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
   function cancelDialogFormDraft(form, returnFocus) {
     if (!form.isConnected || isPending()) return;
     interactionScope.release(dialogForms.get(form));
+    context.endInlineAction(form);
     form.remove();
     if (returnFocus?.isConnected) returnFocus.focus();
     announce('Unsaved request changes discarded.');
@@ -54,14 +55,16 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     if (!choice) return;
     cancelActionChoiceLoad();
     interactionScope.release(dialogForms.get(choice.panel));
+    context.endInlineAction(choice.panel);
     choice.panel.remove();
     if (choice.returnFocus?.isConnected) choice.returnFocus.focus();
   }
 
-  function showForm(form) {
+  function showForm(form, cancel) {
+    context.beginInlineAction(form, cancel);
     const panel = root.querySelector('.request-workflow-panel');
     if (panel) panel.prepend(form);
-    else root.prepend(form);
+    else root.querySelector('.action-bar')?.after(form);
   }
 
   function buildActionBar(request) {
@@ -89,7 +92,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       bar.append(
         commandButton('Purchase', 'shopping-cart', event => showActionChoice(request, 'purchase', event.currentTarget), 'primary-button', !allowedActions.has('purchase')),
         assign,
-        commandButton('Already own', 'book', () => runAction(request, 'alreadyOwn'), 'secondary-button', !allowedActions.has('alreadyOwn')),
+        commandButton('Already own', 'book', event => runAction(request, 'alreadyOwn', undefined, {}, null, event.currentTarget), 'secondary-button', !allowedActions.has('alreadyOwn')),
         commandButton('Close silently', 'archive', () => runAction(request, 'silentClose'), 'secondary-button', !allowedActions.has('silentClose')),
         commandButton('Reject', 'ban', event => showActionChoice(request, 'reject', event.currentTarget), 'danger-button', !allowedActions.has('reject'))
       );
@@ -150,14 +153,14 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
   }
 
   function showActionChoice(request, action, returnFocus) {
-    if (!allowRequestMutation(request, { consumes: null })) return;
+    if (context.hasInlineAction() || !allowRequestMutation(request, { consumes: null })) return;
     context.showDetails?.();
     cancelActionChoiceLoad();
     root.querySelector('.action-choice')?.remove();
     const panel = element('form', { className: 'action-choice', 'aria-label': `${action} options` });
     const heading = element('h3', { text: action === 'reject' ? 'Reject suggestion' : 'Purchase suggestion' });
     const submit = element('button', { type: 'submit', className: action === 'reject' ? 'danger-button' : 'primary-button',
-      disabled: action === 'reject' }, action === 'reject' ? 'Reject and close' : 'Purchase');
+      disabled: action === 'reject' }, action === 'reject' ? 'Reject and close' : 'Confirm purchase');
     const cancel = commandButton('Cancel', 'times', dismissActionChoice);
     let input;
     if (action === 'purchase') {
@@ -190,8 +193,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         if (actionChoice === choice && panel.isConnected) submit.disabled = false;
       }
     });
-    if (root.querySelector('.request-workflow-panel')) showForm(panel);
-    else root.querySelector('.action-bar')?.after(panel);
+    showForm(panel, dismissActionChoice);
     (input || submit).focus();
     if (action !== 'reject') return;
     const load = reads.begin('action-choice');
@@ -216,7 +218,12 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       .finally(() => reads.finish('action-choice', load.token));
   }
 
-  async function runAction(request, action, targetStatus, choices = {}, draft = null) {
+  async function runAction(request, action, targetStatus, choices = {}, draft = null, returnFocus = null) {
+    if (action === 'alreadyOwn' &&
+        (request.bibidStaffVerified !== true || positivePolarisId(request.bibid) === null)) {
+      editor.beginBibLink(returnFocus);
+      return;
+    }
     const entersPendingHold = action === 'catalogFound' || action === 'alreadyOwn' ||
       targetStatus === 'pending_hold' || action === 'purchase' && Boolean(request.bibid);
     if (!allowRequestMutation(request, { consumes: draft })) {
@@ -244,16 +251,19 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     const labels = { alreadyOwn: 'Already own', catalogFound: request.autohold ? 'Ready for hold' : 'Close without hold',
       silentClose: 'Close silently', closeDuplicate: 'Close duplicate', close: 'Close request', reopen: 'Reopen request' };
     if (confirmations[action] && !await confirmCurrent(request, labels[action], confirmations[action], draft)) return;
-    await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
+    const result = await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
       version: request.version,
       action,
       status: targetStatus,
       ...choices
     }, 'Workflow action completed.', draft);
+    if (action === 'alreadyOwn' && ['bib_not_found', 'invalid_bib', 'bib_unverified', 'bib_required'].includes(result?.code)) {
+      editor.beginBibLink(returnFocus, result.message);
+    }
   }
 
   async function showAssignment(request, returnFocus) {
-    if (!isCurrentDialogRequest(request, 'title_request') || isPending()) return;
+    if (!isCurrentDialogRequest(request, 'title_request') || isPending() || context.hasInlineAction()) return;
     context.showDetails?.();
     const load = reads.begin('assignment-candidates');
     announce('Loading eligible staff...');
@@ -261,7 +271,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       const result = await send(`/api/asap/staff/assignment-candidates?libraryOrgId=${request.libraryOrgId}`, {
         signal: load.signal
       });
-      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request') || isPending()) return;
+      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request') || isPending() || context.hasInlineAction()) return;
       const select = element('select', { 'aria-label': 'Assign to staff member' });
       const candidates = byDisplayLabel(result.candidates, item => item.displayName || item.userPrincipalName || `Staff ${item.id}`);
       for (const candidate of candidates) {
@@ -284,7 +294,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
           assigneeId: select.value
         }, 'Request assigned.', draft);
       });
-      showForm(form);
+      showForm(form, () => cancelDialogFormDraft(form, returnFocus));
       if (!root.querySelector('.request-details-panel')?.hidden) select.focus();
       announce(candidates.length ? 'Choose an assignee.' : 'No eligible staff are available.');
     } catch (error) {
@@ -298,7 +308,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
   }
 
   async function showPickup(request, returnFocus) {
-    if (!isCurrentDialogRequest(request, 'title_request') || isPending()) return;
+    if (!isCurrentDialogRequest(request, 'title_request') || isPending() || context.hasInlineAction()) return;
     context.showDetails?.();
     const load = reads.begin('pickup-options');
     const clearLoading = announce('Loading current pickup preference...');
@@ -308,7 +318,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         body: {},
         signal: load.signal
       });
-      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request') || isPending()) return;
+      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request') || isPending() || context.hasInlineAction()) return;
       const select = element('select', { 'aria-label': 'Preferred pickup branch', required: 'required',
         'aria-required': 'true', 'aria-describedby': 'request-pickup-help request-pickup-warning' });
       for (const branch of options.pickupBranches || []) {
@@ -357,7 +367,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       }
       form.append(commandButton('Cancel', 'times', () => cancelDialogFormDraft(form, returnFocus)));
       const draft = trackDialogFormDraft(form);
-      showForm(form);
+      showForm(form, () => cancelDialogFormDraft(form, returnFocus));
       if (!root.querySelector('.request-details-panel')?.hidden) select.focus();
     } catch (error) {
       if (load.isCurrent() && isCurrentDialogRequest(request, 'title_request') &&
@@ -541,8 +551,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       else announce('That action is no longer available. Review the current request.', 'warning');
     },
     escape() {
-      if (!actionChoice || isPending()) return false;
-      dismissActionChoice(); return true;
+      return context.cancelInlineAction();
     },
     invalidate,
     dispose() { invalidate(); actionChoice = null; }

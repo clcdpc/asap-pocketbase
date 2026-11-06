@@ -114,7 +114,7 @@ public sealed partial class PatronJourneyTests
             var ordinaryRows = await verify.EmailOutbox.AsNoTracking()
                 .Where(item => item.BusinessKey != null && item.BusinessKey.StartsWith(normalPrefix))
                 .ToListAsync();
-            Assert.AreEqual(1, ordinaryRows.Count);
+            Assert.AreEqual(2, ordinaryRows.Count);
             Assert.IsTrue(ordinaryRows.All(item => !item.BusinessKey!.StartsWith("weekly-summary-force:", StringComparison.Ordinal)));
         }
         finally
@@ -390,16 +390,19 @@ public sealed partial class PatronJourneyTests
             }
             else
             {
-                Assert.HasCount(1, rows);
-                Assert.AreEqual(recipient.Id, rows[0].RecipientStaffUserId);
-                Assert.AreEqual("suppressed", rows[0].Status);
-                Assert.AreEqual(suppression, rows[0].SuppressionReason);
-                Assert.IsNull(rows[0].BodyText);
+                Assert.HasCount(2, rows);
+                var additional = rows.Single(item => item.RecipientAddressKind == "weekly_summary_additional");
+                Assert.AreEqual(recipient.Id, additional.RecipientStaffUserId);
+                Assert.AreEqual("suppressed", additional.Status);
+                Assert.AreEqual(suppression, additional.SuppressionReason);
+                Assert.IsNull(additional.BodyText);
+                Assert.AreEqual("pending", rows.Single(item => item.RecipientAddressKind == "weekly_summary_primary").Status);
             }
             Assert.AreEqual(1, await verify.AdministrativeAudits.CountAsync(item =>
                 item.Action == "weekly_summary_force_queued" && item.TargetId == auditKey &&
                 item.ActorStaffUserId == actor.Id && item.OrganizationId == scope));
-            Assert.HasCount(0, dispatcher!.EnqueuedIds, "Ineligible and suppressed recipients cannot dispatch delivery work.");
+            Assert.HasCount(suppression is null ? 0 : 1, dispatcher!.EnqueuedIds,
+                "An invalid additional address does not prevent an eligible primary copy.");
         }
         finally
         {
@@ -493,12 +496,14 @@ public sealed partial class PatronJourneyTests
             await using var verify = await contextFactory.CreateDbContextAsync();
             var queued = await verify.EmailOutbox.AsNoTracking()
                 .Where(item => item.BusinessKey != null && item.BusinessKey.StartsWith(businessKeyPrefix))
-                .ToListAsync();
+                .OrderBy(item => item.Id).ToListAsync();
             var expectedNew = await verify.TitleRequests.CountAsync(item =>
                 item.LibraryOrganizationId == scope && item.Status == "suggestion");
-            Assert.AreEqual(1, queued.Count);
+            Assert.AreEqual(2, queued.Count);
             Assert.AreEqual("pending", queued[0].Status);
-            Assert.AreEqual("weekly_summary", queued[0].RecipientAddressKind);
+            Assert.AreEqual("weekly_summary_primary", queued[0].RecipientAddressKind);
+            Assert.AreEqual("weekly_summary_additional", queued[1].RecipientAddressKind);
+            Assert.AreEqual(queued[0].BusinessKey + ":additional", queued[1].BusinessKey);
             Assert.AreEqual(
                 $"weekly-summary:{admin.Id}:{periodStart:yyyyMMdd}-{periodEnd:yyyyMMdd}",
                 queued[0].BusinessKey);
@@ -572,9 +577,10 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("completed", result.Code);
             Assert.AreEqual(1, result.Changed);
             await using var verify = await scopedContextFactory.CreateDbContextAsync();
-            var outbox = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
-                item.BusinessKey != null && item.BusinessKey.StartsWith(businessKeyPrefix));
-            Assert.AreEqual("pending", outbox.Status);
+            var outbox = await verify.EmailOutbox.AsNoTracking().Where(item =>
+                item.BusinessKey != null && item.BusinessKey.StartsWith(businessKeyPrefix)).ToArrayAsync();
+            Assert.HasCount(2, outbox);
+            Assert.IsTrue(outbox.All(item => item.Status == "pending"));
         }
         finally
         {
@@ -642,7 +648,8 @@ public sealed partial class PatronJourneyTests
 
             await using var verify = await scopedContextFactory.CreateDbContextAsync();
             var outbox = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
-                item.BusinessKey != null && item.BusinessKey.StartsWith(businessPrefix));
+                item.BusinessKey != null && item.BusinessKey.StartsWith(businessPrefix) &&
+                item.RecipientAddressKind == "weekly_summary_additional");
             Assert.AreEqual("current-weekly@example.org", outbox.ToAddress);
             Assert.AreEqual("pending", outbox.Status);
         }
@@ -810,7 +817,7 @@ public sealed partial class PatronJourneyTests
             var expectedCopies = await verify.AdditionalCopyRequests.CountAsync(item =>
                 item.LibraryOrganizationId == scope && item.Status == "open");
             Assert.AreEqual("pending", outbox.Status);
-            Assert.AreEqual("weekly_summary", outbox.RecipientAddressKind);
+            Assert.AreEqual("weekly_summary_primary", outbox.RecipientAddressKind);
             Assert.AreEqual(actor.AuthenticationEmail, outbox.RecipientAuthenticationEmail);
             StringAssert.Contains(outbox.Subject!, $"{expectedNew} new");
             StringAssert.Contains(outbox.Subject!, $"{expectedPurchases} awaiting bibs");

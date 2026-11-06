@@ -371,8 +371,13 @@ public sealed class EmailOutboxJobs(
             """
             SELECT
                 CASE
+                    -- Legacy single-recipient rows retain their original override authority.
                     WHEN @addressKind = N'weekly_summary' AND staff.[WeeklyActionSummaryEnabled] = 1
                         THEN COALESCE(NULLIF(LTRIM(RTRIM(staff.[WeeklyActionSummaryEmail])), N''), staff.[NotificationEmail])
+                    WHEN @addressKind = N'weekly_summary_primary' AND staff.[WeeklyActionSummaryEnabled] = 1
+                        THEN staff.[NotificationEmail]
+                    WHEN @addressKind = N'weekly_summary_additional' AND staff.[WeeklyActionSummaryEnabled] = 1
+                        THEN NULLIF(LTRIM(RTRIM(staff.[WeeklyActionSummaryEmail])), N'')
                     WHEN @addressKind = N'notification_email' THEN staff.[NotificationEmail]
                     ELSE NULL
                 END,
@@ -701,8 +706,13 @@ public sealed class EmailOutboxJobs(
             """
             SELECT
                 CASE
+                    -- Legacy single-recipient rows retain their original override authority.
                     WHEN @addressKind = N'weekly_summary' AND staff.[WeeklyActionSummaryEnabled] = 1
                         THEN COALESCE(NULLIF(LTRIM(RTRIM(staff.[WeeklyActionSummaryEmail])), N''), staff.[NotificationEmail])
+                    WHEN @addressKind = N'weekly_summary_primary' AND staff.[WeeklyActionSummaryEnabled] = 1
+                        THEN staff.[NotificationEmail]
+                    WHEN @addressKind = N'weekly_summary_additional' AND staff.[WeeklyActionSummaryEnabled] = 1
+                        THEN NULLIF(LTRIM(RTRIM(staff.[WeeklyActionSummaryEmail])), N'')
                     WHEN @addressKind = N'notification_email' THEN staff.[NotificationEmail]
                     ELSE NULL
                 END,
