@@ -523,6 +523,20 @@ checks pass afterward, retaining live/zombie and unrelated-permission behavior.
 Runtime cleanup, deadlines, runner resources, workflow policy and deployment
 authorization are unchanged. Final CI retains the real Linux lifecycle checks.
 
+The exact `865be876` Full CI run `42275392741` subsequently passed all three
+fresh suites: 77 frontend files, 1,449 non-browser cases and 52 browser cases,
+without failures or skips. Native IDs/counters, original evidence digests and
+the schema-13 exact-commit ZIP/Web/DACPAC hashes match; the required gate and
+ValidateOnly passed, and deployment was skipped. Receipts remain outside Git.
+
+Main then independently gained #475 Profile email and #478 schema-5 CI evidence
+policy. GitHub's existing PR merge still referenced `a3f0216`, so the task branch
+also integrates current main `e20c0698` before final qualification. The merge is
+clean; it adds no new #471 ownership mechanism or issue-review pass. The local
+acceptance source-preservation guard failed against its older main pin and now
+pins verified `e20c0698`; current CI policy and resources are preserved exactly.
+The consolidated PR records the resulting final revision's fresh qualification.
+
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
 Complex implementation uses Sol MAX; focused implementation and Pass 1 use
