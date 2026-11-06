@@ -189,13 +189,16 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    [DataRow("primary")]
-    [DataRow("additional")]
-    public async Task WeeklyRecipientDefinitiveNoSendFailureRetriesOnlyTheFailedCopy(string failingCopy)
+    [DataRow("primary", false)]
+    [DataRow("additional", false)]
+    [DataRow("primary", true)]
+    [DataRow("additional", true)]
+    public async Task WeeklyRecipientDefinitiveNoSendFailureRetriesOnlyTheFailedCopy(string failingCopy, bool forced)
     {
         await WithWeeklyRecipientsAsync("primary@example.org", "additional@example.org", true, async id =>
         {
-            await QueueWeeklyRecipientsAsync();
+            Guid? manualRunId = forced ? Guid.NewGuid() : null;
+            await QueueWeeklyRecipientsAsync(manualRunId);
             var rows = await ReadWeeklyRecipientRowsAsync(id);
             var failing = rows.Single(row => row.RecipientAddressKind == $"weekly_summary_{failingCopy}");
             var successful = rows.Single(row => row.Id != failing.Id);
@@ -203,16 +206,35 @@ public sealed partial class PatronJourneyTests
                 .DeliverAsync(successful.Id, CancellationToken.None);
             await CreateEmailOutboxJobs(new WeeklyNotConfiguredSender(), EmailOutboxRuntimeOptions.Default)
                 .DeliverAsync(failing.Id, CancellationToken.None);
-            var failed = (await ReadWeeklyRecipientRowsAsync(id)).Single(row => row.Id == failing.Id);
+            var partial = await ReadWeeklyRecipientRowsAsync(id);
+            var failed = partial.Single(row => row.Id == failing.Id);
+            var accepted = partial.Single(row => row.Id == successful.Id);
             Assert.AreEqual("failed", failed.Status);
             Assert.AreEqual("mail_not_configured", failed.LastErrorCode);
             Assert.IsNull(failed.ProviderMessageId);
+            Assert.AreEqual("sent", accepted.Status);
+            Assert.AreEqual("test-message", accepted.ProviderMessageId);
+            var restartedSender = new RecordingEmailSender();
+            var restarted = CreateEmailOutboxJobs(restartedSender, EmailOutboxRuntimeOptions.Default);
+            await QueueWeeklyRecipientsAsync(manualRunId);
+            var replayed = await ReadWeeklyRecipientRowsAsync(id);
+            Assert.HasCount(2, replayed, "Retrying the same operation cannot create either recipient again after partial success.");
+            foreach (var original in partial)
+            {
+                var replay = replayed.Single(row => row.Id == original.Id);
+                Assert.AreEqual(original.BusinessKey, replay.BusinessKey);
+                Assert.AreEqual(original.RecipientAddressKind, replay.RecipientAddressKind);
+                Assert.AreEqual(original.ToAddress, replay.ToAddress);
+                CollectionAssert.AreEqual(original.RowVersion, replay.RowVersion, "Queue replay preserves the independent partial outcomes.");
+                if (forced)
+                {
+                    StringAssert.StartsWith(replay.BusinessKey!, $"weekly-summary-force:{manualRunId:N}:{id}");
+                }
+            }
             var actor = await ReadConfiguredSuperAdminAsync();
             var retry = await factory!.Services.GetRequiredService<EmailOperationsService>()
                 .RetryAsync(actor, failed.Id, StaffVersion.Encode(failed.RowVersion), CancellationToken.None);
             Assert.AreEqual("queued", retry.Code);
-            var restartedSender = new RecordingEmailSender();
-            var restarted = CreateEmailOutboxJobs(restartedSender, EmailOutboxRuntimeOptions.Default);
             foreach (var row in rows)
             {
                 await restarted.DeliverAsync(row.Id, CancellationToken.None);
@@ -221,6 +243,11 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(completed.All(row => row.Status == "sent"));
             Assert.AreEqual(1, completed.Single(row => row.Id == successful.Id).AttemptCount);
             Assert.AreEqual(2, completed.Single(row => row.Id == failing.Id).AttemptCount);
+            var acceptedAfterRetry = completed.Single(row => row.Id == successful.Id);
+            Assert.AreEqual(accepted.ProviderMessageId, acceptedAfterRetry.ProviderMessageId);
+            Assert.AreEqual(accepted.SentUtc, acceptedAfterRetry.SentUtc);
+            CollectionAssert.AreEqual(accepted.RowVersion, acceptedAfterRetry.RowVersion,
+                "Retrying the failed copy leaves the accepted sibling's durable state unchanged.");
             Assert.HasCount(1, restartedSender.Envelopes);
             Assert.AreEqual(failing.Id, restartedSender.Envelopes[0].OutboxId);
         });

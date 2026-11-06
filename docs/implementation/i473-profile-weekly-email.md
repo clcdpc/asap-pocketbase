@@ -39,7 +39,7 @@ checkout are preserved. #454 is merged; #469 is open and is not incorporated.
 
 | Issue | Implementation | Pass 1 | Pass 2 | Focused evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| #441 | Implemented; focused qualification below | Pending: Luna MAX | Pending: Astra HIGH state matrix | SQL and Profile browser | Awaiting independent reviews |
+| #441 | `84d01d7`; focused qualification below | Luna MAX: P2 test gap corrected | Pending: Astra HIGH state matrix | SQL and Profile browser | Awaiting Pass 2 |
 | #440 | Pending | Pending: Luna MAX | Pending: Luna MAX browser interaction | Pending | Waiting for #441 |
 
 Requested child models/reasoning will be selected explicitly. The parent
@@ -87,7 +87,8 @@ configuration. Final reconciliation uses Astra EXTRA HIGH.
 | 5, 24: Profile validation, blank/normalized preference, primary preservation, stale rowversion | `PreferenceValidationPreservesPrimaryAndRowversion` |
 | 25: legacy pending/completed scheduled/forced operations | `LegacyOperationKeepsOriginalRecipientAndNeverBackfills` |
 
-Focused evidence (Release, local SQL Server 2022, deterministic providers):
+Implementation evidence at `84d01d7` (Release, local SQL Server 2022,
+deterministic providers):
 
 - `dotnet build Asap.sln --configuration Release --no-restore`: passed with
   zero warnings/errors. Initial restore was required for the new worktree.
@@ -109,6 +110,21 @@ Focused evidence (Release, local SQL Server 2022, deterministic providers):
   including 41 new recipient-state cases and retained workflow/Profile tests.
   Receipt: `.artifacts/i473-focused-sql/weekly-focused-final.trx`; filter:
   `(FullyQualifiedName~WeeklyRecipient|FullyQualifiedName~WeeklySummary|FullyQualifiedName~StaffProfilePersistsAllPreferencesAndEnforcesAntiforgeryAndVersion)&TestCategory!=Browser`.
+
+Pass 1 — independent requirements review by Luna MAX:
+
+- One supported P2 coverage gap; no implementation defect identified. The
+  original forced-run test replayed after both recipients succeeded, while
+  partial-success retry tests exercised scheduled operations only.
+- Parameterized the certified no-send failure scenario for both scheduled and
+  forced operations, with either recipient failing. A fresh worker replays the
+  same durable operation before retry. Assertions retain both recipient IDs,
+  keys, address kinds and destinations; only the certified failed row resends,
+  and the accepted sibling keeps its provider ID, timestamp and rowversion.
+- Product code unchanged. Release build passed with zero warnings/errors.
+  Targeted SQL/provider rerun: 4/4 passed, zero failed/skipped (23.2 seconds).
+  Receipt: `.artifacts/i473-focused-sql/pass1-forced-partial.trx`; filter:
+  `FullyQualifiedName~WeeklyRecipientDefinitiveNoSendFailureRetriesOnlyTheFailedCopy`.
 
 These automated checks do not constitute human screen-reader or live-mailbox
 acceptance. Full CI and integration/acceptance qualification follow #440.
