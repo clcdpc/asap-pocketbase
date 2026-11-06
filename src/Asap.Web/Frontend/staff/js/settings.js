@@ -819,7 +819,7 @@ export function createSettingsController({
     target?.scrollIntoView?.({ block: 'center', inline: 'nearest', behavior: 'instant' });
     queueStaffReveal(target);
     if (typeof notice.clearNavigation === 'function') notice.clearNavigation();
-    notice.clearNavigation = announce(`Showing ${destination.label} in ${settingsPanelLabels.get(destination.panel)}. Unsaved changes are preserved.`);
+    notice.clearNavigation = announce(`Showing ${destination.label} in ${settingsPanelLabels.get(destination.panel)}. ${destination.recovery ? `${destination.recovery} ` : ''}Unsaved changes are preserved.`);
   }
 
   function beginSettingsMutation(slot, consumes, preserves = []) {
@@ -1849,17 +1849,19 @@ export function createSettingsController({
       const position = [...dom.staffUsers.children].indexOf(row) + 1;
       const scope = scopedStaffOrganizationId();
       const unavailable = !isSettingsContextCurrent(ownerContext) || staffRows.get(id) !== record ||
-        !dom.staffUsers.contains(row) || record.unavailable ||
+        !dom.staffUsers.contains(row) ||
         scope && String(property(record.user, 'organizationId')) !== scope;
       return [{ key: 'editor', panel: 'staff', label: `Staff-account edits (roster row ${position})`,
-        unavailable: unavailable ? 'This account is no longer available in the current roster context. Its draft is retained. Open Staff access to cancel the retained draft, or use Refresh roster to review current accounts.' : null,
+        unavailable: unavailable ? 'This staff draft is no longer available in the current Settings context. Review current access and explicitly reload Settings before retrying.' : null,
+        recovery: record.unavailable ? 'This account is no longer in the current roster. Cancel discards only this retained staff draft.' : null,
         reveal() {
+          if (unavailable || !drafts.owns(record.draft)) return null;
           if (property(record.user, 'active') === false) {
             dom.staffShowInactive.checked = true;
             updateStaffVisibility();
           }
           setOpen(true);
-          return email;
+          return record.unavailable ? cancel : email;
         } }];
     } });
     staffDrafts.set(record.draft, () => row.isConnected && (!state.awaitingReloadMutation ||

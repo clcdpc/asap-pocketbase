@@ -32,6 +32,10 @@ exports.verifySettingsDraftBlockers = async (page, args, report, ready, scan) =>
   const second = (await api('post', '/api/asap/staff/users', {
     email: `draft-b-${args.formatCode}@example.org`, role: 'staff', organizationId: Number(args.scopeId)
   }, 201)).user;
+  let displacedSecond = null;
+  const moveSecond = async (organizationId, version) => api('put', `/api/asap/staff/users/${second.id}`, {
+    version, email: second.userPrincipalName, displayName: second.displayName, role: second.role, organizationId
+  });
   witness.staffIds = [first.id, second.id];
   const row = id => page.locator(`.settings-staff-row[data-staff-id="${id}"]`);
   const link = async id => {
@@ -110,6 +114,50 @@ exports.verifySettingsDraftBlockers = async (page, args, report, ready, scan) =>
     assert.equal((await read()).workflow.suggestionLimitMessage, 'private Workflow draft');
     assert.equal(writes.length, 1, 'The original action dispatches only after all blockers are explicitly resolved.');
     witness.multipleOwnersAndRetry = true;
+
+    await page.setViewportSize({ width: 1280, height: 900 }); await staff(); await open(first.id); await open(second.id);
+    await row(second.id).getByLabel(/^Display name/).fill('private unavailable Staff draft');
+    await row(second.id).getByLabel(/^Display name/).press('Escape');
+    // A real external move removes this dirty account from the selected
+    // roster. Saving its sibling must preserve the now-unavailable draft.
+    displacedSecond = await moveSecond(2, second.version);
+    await row(first.id).getByLabel(/^Display name/).fill('Accepted preserving roster save');
+    const preservingSave = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().endsWith(`/users/${first.id}`));
+    await row(first.id).getByRole('button', { name: 'Save changes', exact: true }).click();
+    assert.equal((await preservingSave).status(), 200); await settled();
+    await row(second.id).getByText('This account is no longer in the current roster. Your draft is retained. Cancel to discard this draft.', { exact: true }).waitFor({ state: 'attached' });
+    await page.locator('#settings-nav-workflow').click(); await message.fill('private unavailable Workflow draft');
+    await page.locator('#settings-save').click(); await blocked(1);
+    const unavailableAction = await (await link(second.id)).elementHandle(), beforeUnavailableNavigation = writes.length;
+    await unavailableAction.press('Enter');
+    witness.unavailableRecoveryTarget = await page.evaluate(() => ({ activeId: document.activeElement?.id,
+      activeText: document.activeElement?.textContent, staffVisible: !document.getElementById('settings-staff').hidden }));
+    assert.equal(await page.locator('#settings-staff').isVisible(), true, 'Unavailable recovery must open Staff access.');
+    const unavailableCancel = row(second.id).getByRole('button', { name: 'Cancel', exact: true });
+    await focus('Unavailable retained Staff draft Cancel', unavailableCancel);
+    assert.match(await page.locator('#app-status').textContent(), /no longer in the current roster.*Cancel/);
+    assert.equal(await row(second.id).getByLabel(/^Display name/).inputValue(), 'private unavailable Staff draft');
+    assert.equal(await message.inputValue(), 'private unavailable Workflow draft');
+    assert.equal(writes.length, beforeUnavailableNavigation, 'Unavailable recovery navigation preserves both drafts without a write.');
+    assert.equal(await row(second.id).getByRole('button', { name: 'Save changes', exact: true }).isDisabled(), true);
+    await scan('draft-unavailable-recovery');
+    await unavailableCancel.press('Enter');
+    assert.equal(await row(second.id).count(), 0); assert.equal(await message.inputValue(), 'private unavailable Workflow draft');
+    assert.equal(writes.length, beforeUnavailableNavigation, 'Only explicit Cancel discards the unavailable Staff draft.');
+    await page.locator('#settings-nav-workflow').click(); await saveSettings();
+    assert.equal((await read()).workflow.suggestionLimitMessage, 'private unavailable Workflow draft');
+    witness.unavailableStaffRecovery = true;
+    await moveSecond(Number(args.scopeId), displacedSecond.user.version); displacedSecond = null;
+    const beforeStaleRecovery = writes.length;
+    await page.locator('#settings-scope').selectOption('system'); await ready('system');
+    await unavailableAction.evaluate(button => { const list = document.getElementById('settings-draft-blockers'); list.hidden = false; list.append(button); });
+    await unavailableAction.press('Enter');
+    await page.locator('#settings-message').filter({ hasText: 'earlier Settings context' }).waitFor();
+    assert.equal(await page.locator('#settings-scope').inputValue(), 'system');
+    assert.equal(await page.locator('#settings-staff').isHidden(), true); assert.equal(writes.length, beforeStaleRecovery);
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'No changes');
+    await page.locator('#settings-scope').selectOption(args.scopeId); await ready(args.scopeId);
+    witness.unavailableRecoveryStaleContext = true;
 
     await page.setViewportSize({ width: 1280, height: 900 }); await staff(); await open(first.id); await open(second.id);
     await row(first.id).getByLabel(/^Display name/).fill('private saved blocker');
@@ -240,6 +288,7 @@ exports.verifySettingsDraftBlockers = async (page, args, report, ready, scan) =>
   } finally {
     page.off('request', record);
     witness.writes = writes;
+    if (displacedSecond) await moveSecond(Number(args.scopeId), displacedSecond.user.version);
     await post({ workflow: { suggestionLimitMessage: original.stored.libraryOverride.workflow?.suggestionLimitMessage ?? null,
       suggestionLimit: original.stored.libraryOverride.workflow?.suggestionLimit ?? null } });
     await reload(); await page.setViewportSize({ width: 1280, height: 900 });

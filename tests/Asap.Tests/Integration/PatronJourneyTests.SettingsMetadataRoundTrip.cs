@@ -128,7 +128,8 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(report.RootElement.GetProperty("inheritanceInteractionWitness").GetProperty("cancelPreservedAndAcceptDiscardedBoth").GetBoolean());
             var blockers = report.RootElement.GetProperty("draftBlockers");
             foreach (var flag in new[] { "multipleOwnersAndRetry", "failedAndUncertainBlockerRecovery", "equalDisplayResetPreserved",
-                "settingsFieldsAndDisclosures", "staleContextActionRetired", "retiredOwnerRecovered", "noNavigationWrites" })
+                "settingsFieldsAndDisclosures", "staleContextActionRetired", "retiredOwnerRecovered", "noNavigationWrites",
+                "unavailableStaffRecovery", "unavailableRecoveryStaleContext" })
             {
                 Assert.IsTrue(blockers.GetProperty(flag).GetBoolean(), flag);
             }
@@ -150,7 +151,11 @@ public sealed partial class PatronJourneyTests
         {
             await ExecuteNonQueryAsync("""
                 DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] = @org;
-                DELETE FROM [asap].[StaffUser] WHERE [OrganizationId] = @org;
+                DELETE audit FROM [asap].[AdministrativeAudit] audit
+                JOIN [asap].[StaffUser] staff ON audit.[TargetType] = N'StaffUser' AND audit.[TargetId] = CONVERT(nvarchar(100), staff.[Id])
+                WHERE staff.[UserPrincipalName] IN (N'draft-a-' + @suffix + N'@example.org', N'draft-b-' + @suffix + N'@example.org');
+                DELETE FROM [asap].[StaffUser] WHERE [OrganizationId] = @org
+                    OR [UserPrincipalName] IN (N'draft-a-' + @suffix + N'@example.org', N'draft-b-' + @suffix + N'@example.org');
                 DELETE FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] = @org;
                 DELETE FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] = @org;
                 DELETE FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] = @org;

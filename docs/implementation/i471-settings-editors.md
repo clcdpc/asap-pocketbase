@@ -62,7 +62,7 @@ reruns and final receipt reconciliation do not add review passes.
 | #462 Add rule feedback | `423c352`, `7b2cd22` | Luna MAX: 1 test gap fixed | Luna MAX: independent browser matrix, no findings | Retained domain/browser matrix and real-SQL Add/save/reload pass | Technically qualified; final integration pending |
 | #465 Common creator rows | `a2501ad`, `49b3951`, `8fbe412` | Luna MAX: Move down test gap fixed | Terra MAX: narrow native-200 focus reveal fixed | Five rendered sizes; owning SQL/browser 1/1 pass | Technically qualified; final integration pending |
 | #463 Direct edit/inheritance | `56c514d`, `72c7258`, `e66947c` | Luna MAX: empty template lineage fixed | Astra HIGH + Terra MAX: combined save, comparison expansion and mobile Discard fixed | Real-SQL ownership/history matrix; retained SQL/browser regressions; four frontend files; format/picker native zoom | Technically qualified; final integration pending |
-| #466 Blocking draft navigation | Initial implementation | Pending | Pending | 16 Settings files, shared draft regressions; retained SQL/browser metadata identity with desktop/mobile/native200 | Initial qualification complete; independent reviews pending |
+| #466 Blocking draft navigation | `6618b70` | Luna MAX: unavailable Staff recovery and domain coverage fixed | Pending | Settings/draft regressions; eight-domain routes; retained SQL/browser identity and desktop/mobile/native200 | Pass 1 remediated; Pass 2 pending |
 
 ### #461 evidence
 
@@ -349,6 +349,48 @@ capture was blank despite passing geometry and is not rendered visual evidence;
 the passing corrected CDP rerun supplies visually inspected captures. Human
 assistive-technology acceptance and both independent review passes remain
 separate; this record does not self-approve the issue.
+
+### #466 Pass 1 remediation
+
+Fresh Luna MAX found one P2: a still-owned dirty Staff row omitted by a
+preserving roster refresh explained Staff recovery but focused overall Settings
+reload. Its current action now opens Staff access, expands that retained row,
+focuses Cancel and announces that Cancel discards only the retained Staff draft.
+Navigation preserves both drafts and keeps Save disabled for the unavailable
+account. Owner/context/admission checks still reject retired or foreign owners;
+the overall Settings reload target remains for the corresponding stale or
+uncertain recovery messages. No admission or preservation declaration changed.
+
+The owning real-SQL/browser regression moves the dirty account to another
+library, then saves its sibling to produce the genuine preserving-refresh
+omission. Red records Staff access hidden and `settings-refresh` focused. Green
+retains both values with no navigation write, exposes the exact Cancel control,
+allows only explicit Cancel to resolve that owner, and then saves the original
+Workflow action. The captured recovery action is rejected after a scope change.
+The fixture restores the moved account and cleans its owned cross-library audit
+rows. The retained Browser identity passes 1/1 with zero failures/skips; its
+11 normal scans and two actual native-200 states have clean accessibility,
+overflow, image, page-error and external-request checks. The recovery and native
+screenshots were inspected.
+
+One compact controller fixture also exercises all eight previously source-only
+domain destinations: Publication options, Common creators, Allowed patron codes,
+Providers, Material formats, Custom fields, Auto-claim rules and Additional
+templates. Each real edit blocks a Staff save through the single main Settings
+owner; its action reaches the correct section/control or disclosure, preserves
+both drafts, exposes no private values in the warning and sends no mutation.
+All eight cells pass, as does the retained Staff Access file. This fixture adds
+one frontend file, not eight native cases; it makes no SQL or geometry claim.
+
+The fresh Release build has zero warnings/errors; current native discovery is
+still 1486 tests with no new Browser identity/category entry. Receipts are
+`466-pass1-red/466-pass1-red.trx`, `466-pass1-red-browser/`,
+`466-pass1-green/466-pass1-green.trx`, `466-pass1-green-browser/`,
+`466-pass1-domain-matrix3.log`, `466-pass1-staff-access.log`,
+`466-pass1-green-build.log` and `466-pass1-discovery.json`. Initial fixture-load
+failures remain in the earlier matrix logs. This is the single aggregate Pass 1
+remediation; the independent adversarial Pass 2 and final integration remain
+pending.
 
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
