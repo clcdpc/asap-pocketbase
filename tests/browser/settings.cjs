@@ -1571,6 +1571,16 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     addedRow = rows.last();
     assert.equal(await addedRow.locator('input').evaluate(input => input === document.activeElement), true);
     await addedRow.locator('input').fill(removableCreator);
+    const creatorOrderBeforeMoveDown = [...creatorBaseRows, systemCreator, removableCreator];
+    await rows.nth(1).getByRole('button', { name: 'Move down', exact: true }).click();
+    assert.deepEqual(await creatorValues(), [creatorBaseRows[0], systemCreator, creatorBaseRows[1], removableCreator],
+      'Move down reorders an interior creator row in the complete list draft.');
+    assert.equal(await rows.nth(2).locator('[data-row-action="down"]')
+      .evaluate(button => button === document.activeElement), true,
+    'Move down retains focus on the moved row action at its interior destination.');
+    await rows.nth(2).getByRole('button', { name: 'Move up', exact: true }).click();
+    assert.deepEqual(await creatorValues(), creatorOrderBeforeMoveDown,
+      'Moving the creator back restores the list order before the remaining action checks.');
     const moveFrom = await rows.count() - 1;
     await rows.nth(moveFrom).getByRole('button', { name: 'Move up', exact: true }).click();
     const movedValues = await creatorValues();
