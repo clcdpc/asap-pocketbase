@@ -11,6 +11,13 @@ const { parse, run, runScenarios } = require('./run.cjs');
 const { screenshot, registerScreenshotPage } = require('./helpers/accessibility.cjs');
 const appSha = 'a'.repeat(40), toolSha = 'b'.repeat(40);
 const repository = path.resolve(__dirname, '../..');
+test('confirmation failure is observed while its trigger is still pending', async () => {
+  const { decideConfirmation } = require('../browser/confirmation.cjs');
+  const page = { locator: () => ({ waitFor: async () => { throw new Error('Synthetic confirmation unavailable'); } }) };
+  const action = new Promise(resolve => setTimeout(resolve, 25));
+  await assert.rejects(decideConfirmation(page, () => action, () => {}), /Synthetic confirmation unavailable/);
+  await action;
+});
 const clone = value => JSON.parse(JSON.stringify(value));
 function state() {
   return { Sha: appSha, Auth: 'Local', ToolingVersion: '0.4.0', ToolingSha: toolSha };

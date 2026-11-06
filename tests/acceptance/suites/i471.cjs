@@ -120,7 +120,7 @@ async function compactRows(t, scope) {
     await save(t); await open(t, scope, 'workflow');
     const accepted = await read(t, scope), writes = t.mutations.length;
     await rows.first().locator('input').fill('Discard this draft');
-    await decideConfirmation(t.page, () => t.page.locator('#settings-discard').click(), dialog => dialog.cancel());
+    await decideConfirmation(t.page, () => t.page.locator('#settings-discard').click(), dialog => dialog.dismiss());
     assert.equal(await rows.first().locator('input').inputValue(), 'Discard this draft');
     await discard(t);
     assert.deepEqual((await read(t, scope)).stored, accepted.stored); assert.equal(t.mutations.length, writes);
@@ -229,10 +229,10 @@ const scenarios = [
       await open(t, scope, 'workflow'); assert.equal(await limit.inputValue(), String(inheritedLimit + 2));
       await t.page.locator('#common-authors-enabled').check();
       for (const selector of ['#common-creators-inherit-field', '#patron-codes-inherit-field']) {
-        await decideConfirmation(t.page, () => t.page.locator(selector + ' .settings-use-system').click(), dialog => dialog.accept());
+        await decideConfirmation(t.page, () => t.page.locator(selector + ' .settings-use-system').press('Enter'), dialog => dialog.accept());
       }
       await t.page.locator('#settings-nav-patron').click();
-      await decideConfirmation(t.page, () => t.page.locator('#publication-options-inherit-field .settings-use-system').click(), dialog => dialog.accept());
+      await decideConfirmation(t.page, () => t.page.locator('#publication-options-inherit-field .settings-use-system').press('Enter'), dialog => dialog.accept());
       await t.page.locator(`#material-formats-editor [data-format-code="book"] > .settings-inheritance .settings-use-system`).click();
       await t.page.locator('#settings-nav-templates').click();
       const template = t.page.locator('[data-template-key="suggestion_submitted"]');

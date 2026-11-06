@@ -22,8 +22,9 @@ exports.answerNextConfirmation = (page, respond) => {
 
 exports.decideConfirmation = async (page, action, respond) => {
   const decision = exports.answerNextConfirmation(page, respond);
-  await action();
-  await decision;
+  // Observe both failures immediately: an unavailable confirmation may reject
+  // while Playwright is still waiting for the triggering control to be usable.
+  await Promise.all([Promise.resolve().then(action), decision]);
 };
 
 exports.rejectNativeDialogs = (page, errors) => {
