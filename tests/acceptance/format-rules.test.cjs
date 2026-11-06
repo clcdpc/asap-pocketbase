@@ -105,6 +105,38 @@ test('format cards retain complete drafts and use the actual container width at 
   await page.keyboard.press('Tab');
   assert.equal(await page.evaluate(() => Boolean(document.activeElement.closest('.settings-rule-details'))), false);
   assert.deepEqual(await page.evaluate(() => [window.editors.snapshot(), window.editors.collect().changed, window.ruleChanges]), [baseline, false, 0]);
+
+  const availabilityFormatRows = page.locator('#material-formats-editor [data-domain-row]');
+  const availabilityCodes = await page.evaluate(() => ({
+    formats: [...document.querySelectorAll('#material-formats-editor [data-domain-row]')].map(row => row.dataset.formatCode),
+    rules: [...document.querySelectorAll('#format-rules-editor [data-rule-code]')].map(row => row.dataset.ruleCode),
+    expanded: [...document.querySelectorAll('#format-rules-editor [data-rule-code] [data-rule-toggle]')]
+      .map(toggle => toggle.getAttribute('aria-expanded'))
+  }));
+  await page.locator('#add-material-format').click();
+  const transientMaterial = availabilityFormatRows.last();
+  const transientCode = await transientMaterial.getAttribute('data-format-code');
+  assert.match(transientCode, /^custom_[a-f0-9]{32}$/);
+  assert.equal(await addRule.isDisabled(), false,
+    'Adding an unrepresented custom material format enables Add rule.');
+  assert.equal(await ruleAvailability.isHidden(), true);
+  assert.equal(await cards.count(), initialRuleCount, 'The new material format has no rule until Add rule is activated.');
+  assert.equal(await page.locator(`#format-rules-editor [data-rule-code="${transientCode}"]`).count(), 0);
+  await transientMaterial.locator('.settings-row-actions [data-row-action="delete"]').press('Enter');
+  assert.equal(await addRule.isDisabled(), true,
+    'Removing the unruled custom format returns Add rule to the exhausted state.');
+  assert.equal(await ruleAvailability.innerText(), 'All available formats already have rules.');
+  assert.deepEqual(await page.evaluate(() => ({
+    formats: [...document.querySelectorAll('#material-formats-editor [data-domain-row]')].map(row => row.dataset.formatCode),
+    rules: [...document.querySelectorAll('#format-rules-editor [data-rule-code]')].map(row => row.dataset.ruleCode),
+    expanded: [...document.querySelectorAll('#format-rules-editor [data-rule-code] [data-rule-toggle]')]
+      .map(toggle => toggle.getAttribute('aria-expanded'))
+  })), availabilityCodes, 'Removing an unruled format preserves existing identities and accordion state.');
+  assert.equal((await page.evaluate(() => window.editors.collect())).changed, false,
+    'Adding and removing the unruled format leaves no dirty settings draft.');
+  assert.equal(await page.evaluate(() => window.editors.snapshot()), baseline);
+  assert.deepEqual(mutations, [], 'The availability transition performs no Settings POST.');
+
   await button.click();
   const title = first.locator('[data-format-label="title"]');
   const material = page.locator('#material-formats-editor [data-domain-row]').first();
