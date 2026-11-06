@@ -69,16 +69,42 @@ public sealed partial class PatronJourneyTests
                 item.GetProperty("materialFormatId").GetString() == formatId);
             JsonElement RawProvider(JsonDocument document) => Raw(document, "providers").EnumerateArray().Single(item => item.GetProperty("id").GetString() == providerId);
 
+            var initialOwnedRules = initial.RootElement.GetProperty("stored").GetProperty("formatRules").GetRawText();
+            var initialOwnedFormats = Raw(initial, "formats").GetRawText();
+            Assert.AreEqual(0, await ReadCountWithParameterAsync(
+                "SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] = @org;", ("@org", library)));
             await SaveAsync(scope, new()
             {
                 ["workflow"] = new { suggestionLimit = 5, commonAuthorsEnabled = false, commonAuthorsList = Array.Empty<string>(), allowedPatronCodeIds = Array.Empty<int>() },
                 ["patron"] = new { successTitle = "Library title", successMessage = rawMessage, publicationOptions = Array.Empty<object>() },
                 ["providers"] = new[] { new { id = providerId, pinOverrides = true, label = "System catalog", isEnabled = false } },
                 ["formats"] = new[] { new { id = formatId, version = format.GetProperty("version").GetString(), pinOverrides = true,
-                    label = "Shared format", sortOrder = 0, isEnabled = false, message = "", author = new { mode = "optional", label = "  " } } },
+                    label = "Library shared format", sortOrder = 0, isEnabled = false, message = "" } },
+                ["formatRules"] = new[] { new { code = key, pinOverrides = true, author = new { mode = "optional", label = "  " },
+                    customFields = initial.RootElement.GetProperty("stored").GetProperty("formatRules").EnumerateArray()
+                        .Single(item => item.GetProperty("code").GetString() == key).GetProperty("customFields") } },
                 ["templates"] = new[] { new { templateKey = $"rejection:{key}", sourceTemplateId = templateId, subject = "System subject", body = rawMessage } }
             });
             using var pinned = await ReadSettingsDocumentAsync(client, scope);
+            Assert.AreEqual(1, await ReadCountWithParameterAsync("""
+                SELECT COUNT(*) FROM [asap].[MaterialFormatOverride]
+                WHERE [LibraryOrganizationId] = @org AND [MaterialFormatId] = @format
+                  AND [Label] = N'Library shared format' AND [AuthorLabel] = N'  '
+                  AND [AuthorMode] = N'optional' AND [SortOrder] = 0 AND [IsEnabled] = 0 AND [Message] = N'';
+                """, ("@org", library), ("@format", long.Parse(formatId!))));
+            Assert.AreEqual("Library shared format", RawFormat(pinned).GetProperty("label").GetString());
+            Assert.IsFalse(string.IsNullOrWhiteSpace(RawFormat(pinned).GetProperty("id").GetString()));
+            Assert.AreNotEqual(format.GetProperty("version").GetString(), RawFormat(pinned).GetProperty("version").GetString());
+            Assert.AreNotEqual(initial.RootElement.GetProperty("version").GetString(), pinned.RootElement.GetProperty("version").GetString());
+            Assert.AreEqual(initialOwnedRules, pinned.RootElement.GetProperty("stored").GetProperty("formatRules").GetRawText());
+            Assert.AreEqual(initialOwnedFormats, JsonSerializer.Serialize(Raw(pinned, "formats").EnumerateArray()
+                .Where(item => item.GetProperty("kind").GetString() != "systemOverride")));
+            Assert.AreEqual(1, await ReadCountWithParameterAsync("""
+                SELECT COUNT(*) FROM [asap].[AdministrativeAudit]
+                WHERE [OrganizationId] = @org AND [ActorStaffUserId] = @actor AND [Action] = N'library_settings_updated'
+                  AND [TargetType] = N'Configuration' AND JSON_VALUE([DetailsJson], '$.action') = N'save'
+                  AND [DetailsJson] LIKE N'%"formatRules"%' AND [DetailsJson] LIKE N'%"formats"%';
+                """, ("@org", library), ("@actor", actor.Id)));
             Assert.AreEqual(5, Raw(pinned, "workflow").GetProperty("suggestionLimit").GetInt32());
             Assert.IsFalse(Raw(pinned, "workflow").GetProperty("commonAuthorsEnabled").GetBoolean());
             Assert.AreEqual(rawMessage, Raw(pinned, "patron").GetProperty("successMessage").GetString());
@@ -119,7 +145,7 @@ public sealed partial class PatronJourneyTests
             });
             using var later = await ReadSettingsDocumentAsync(client, scope);
             var effectiveFormat = later.RootElement.GetProperty("effective").GetProperty("formats").EnumerateArray().Single(item => item.GetProperty("id").GetString() == formatId);
-            Assert.AreEqual("Shared format", effectiveFormat.GetProperty("label").GetString());
+            Assert.AreEqual("Library shared format", effectiveFormat.GetProperty("label").GetString());
             Assert.IsFalse(effectiveFormat.GetProperty("isEnabled").GetBoolean());
             Assert.AreEqual("", effectiveFormat.GetProperty("message").GetString());
             Assert.AreEqual(acceptedProvider, RawProvider(later).GetRawText());

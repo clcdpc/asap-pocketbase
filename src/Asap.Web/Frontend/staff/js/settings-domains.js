@@ -708,7 +708,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       label.hidden = false;
       label.before(wrapper); wrapper.append(label);
     }
-    wrapper.querySelector(':scope > .settings-inheritance')?.remove();
+    const previous = wrapper.querySelector(':scope > .settings-inheritance');
+    const comparison = status.querySelector('details.settings-system-comparison');
+    if (comparison) comparison.open = Boolean(previous?.querySelector('details.settings-system-comparison')?.open);
+    previous?.remove();
     wrapper.append(status);
   }
 
@@ -795,8 +798,6 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       const [group, propertyName] = name.split('.');
       const inherited = propertyName ? source[group][propertyName] : source[group];
       const rawKey = propertyName ? `${group}${propertyName[0].toUpperCase()}${propertyName.slice(1)}` : group;
-      const wrapper = control.closest('label');
-      wrapper?.parentElement.querySelector(`[data-rule-inheritance="${name}"]`)?.remove();
       const local = intent?.fields?.[name];
       const owned = intent?.reset ? false : local ? local === 'pin' : property(accepted, rawKey) !== null && property(accepted, rawKey) !== undefined;
       const status = inheritanceStatus({ owned, value: control.value, systemValue: inherited ?? '',
@@ -846,6 +847,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       : name === 'codes' ? [...values].sort((left, right) => Number(left) - Number(right)) : values;
     const status = inheritanceStatus({ owned: !inheritedGroup(name), value: comparison(current),
       systemValue: comparison(setValues(name, true)), pending: groupIntents.has(name), label,
+      comparisonOpen: wrapper.querySelector('details.settings-system-comparison')?.open,
       matchesSystem: JSON.stringify(comparable(current)) === JSON.stringify(comparable(setValues(name, true))),
       onReset: async () => {
         const owner = state.data, stamp = readSnapshot();
@@ -1977,12 +1979,13 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     for (const [index, name] of fields.entries()) {
       const control = row.querySelector(selectors[index]);
       const local = intent?.fields?.[name];
+      const comparisonOpen = row.querySelector(`[data-template-status="${name}"] .settings-system-comparison`)?.open;
       row.querySelector(`[data-template-status="${name}"]`)?.remove();
       const raw = value[`raw${name[0].toUpperCase()}${name.slice(1)}`];
       const owned = intent?.reset ? false : local ? local === 'pin' : name === 'enabled' ? value.hadOverride : raw !== null && raw !== undefined;
       const status = inheritanceStatus({ owned,
         value: name === 'enabled' ? control.checked : control.value,
-        systemValue: inheritedDisplay(name),
+        systemValue: inheritedDisplay(name), comparisonOpen,
         pending: Boolean(intent?.reset || local), label: `${value.displayName} ${name}`, onReset: () => {
           const old = templateIntents.get(id);
           templateIntents.set(id, { reset: false, fields: { ...old?.fields, [name]: 'reset' } });

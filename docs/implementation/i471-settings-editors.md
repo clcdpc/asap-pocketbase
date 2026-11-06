@@ -251,6 +251,37 @@ errors. Receipts remain external: `463-pass1-domain-red.log`,
 `463-pass1-discovery.json`. These are focused remediation checks, not another
 independent review or a claim of final integration qualification.
 
+Pass 2 identified three supported P2s. A first shared-format Label edit and a
+built-in Author edit now reuse the same pending EF override inside Global Save,
+preserving its atomic transaction and existing validation/version checks.
+Status refresh retains long comparison expansion for scalar, template and
+dynamic field/group presentations. A footer pointer gesture retains its resolved
+static position while focus enters an action, preventing mobile Discard from
+moving between pointerdown and pointerup; keyboard, caret and picker rules remain.
+
+The retained SQL matrix now submits both editors' writes together and verifies
+one physical row with both values, identity/version, actor/section audit metadata,
+reload behavior and unchanged owned format/custom-field rules. Its red run
+reproduced SQL2627. The production metadata Browser journey now types with both
+long references expanded and exercises the first mobile Discard click, Cancel,
+and Accept with two drafts. Red recorded both closed comparisons and the 92px
+footer shift; green retains focus/expansion, confirms on the first click, restores
+both accepted values and sends zero Library POSTs. Six actual browser scans have
+zero serious/critical axe findings, overflow, missing images, page errors or
+external requests. The retained format/picker native-zoom fixtures each pass.
+
+Focused receipts remain external: `463-pass2-red/463-pass2-red.trx` (both cases
+failed), `463-pass2-green/463-pass2-green.trx` (SQL case passed; the new Browser
+assertion initially checked before asynchronous Discard population completed),
+and `463-pass2-green2/463-pass2-green2.trx` (Browser case passed after awaiting the
+existing accepted-state completion signal). All failed evidence is retained.
+The direct-domain, template-editor, staff-scope and accessibility-layout frontend
+files pass; both Release builds have zero warnings/errors. Final discovery is
+`463-pass2-final-discovery.json`: both focused identities are retained, no new
+Browser method or temporary independent probe remains. `463-pass2-remediation.json`
+records the exact candidate, counts and receipt selection. Broader integration
+qualification and human assistive-technology acceptance remain separate.
+
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
 Complex implementation uses Sol MAX; focused implementation and Pass 1 use

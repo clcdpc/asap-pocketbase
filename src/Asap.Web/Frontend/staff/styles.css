@@ -650,6 +650,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 /* Keep a newly dirty bar from covering focused form controls or moving an
    editor's caret. The patron-code picker measures and clears its sticky footer. */
 .settings-form:has(:focus:not(.settings-save-bar *, #patron-code-picker)) .settings-save-bar.attention { position: static; }
+.settings-save-bar.attention.retain-static:focus-within { position: static; }
 @media (max-height: 480px) {
   .settings-form:not(:has(#settings-workflow:not([hidden]))) .settings-save-bar.attention { position: static; }
 }

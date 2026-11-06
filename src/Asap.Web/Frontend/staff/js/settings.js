@@ -1154,6 +1154,7 @@ export function createSettingsController({
     const name = `${section}.${key}`;
     const intent = state.scalarIntents.get(name);
     for (const field of root.querySelectorAll(`[data-setting-section="${section}"][data-setting-key="${key}"]`)) {
+      const comparisonOpen = field.querySelector('.settings-system-comparison')?.open;
       field.querySelector('.settings-inheritance')?.remove();
       const input = fieldInput(field);
       const fields = section === 'workflow' ? WORKFLOW_FIELDS : section === 'patron' ? PATRON_FIELDS : EMAIL_FIELDS;
@@ -1166,7 +1167,7 @@ export function createSettingsController({
       const comparison = kind === 'id' ? [...input.options].find(option => option.value === stringValue(inherited))?.textContent ||
         inheritedTemplate?.displayName || (inherited ? 'Unavailable rejection template' : 'Use no rejection template') : normalize(inherited);
       field.append(inheritanceStatus({ owned: intent ? intent === 'pin' : hasRawOverride(section, key),
-        value: readControl(input, kind), systemValue: comparison, pending: Boolean(intent),
+        value: readControl(input, kind), systemValue: comparison, pending: Boolean(intent), comparisonOpen,
         matchesSystem: kind === 'id' ? readControl(input, kind) === normalize(inherited) : undefined,
         label: field.querySelector('label, span')?.textContent || key,
         onReset: () => {
@@ -1349,6 +1350,7 @@ export function createSettingsController({
 
   function refreshBuiltinTemplateStatus(key, role, control) {
     const fieldset = control.closest('[data-template-key]');
+    const comparisonOpen = fieldset.querySelector(`[data-template-status="${role}"] .settings-system-comparison`)?.open;
     fieldset.querySelector(`[data-template-status="${role}"]`)?.remove();
     const source = templateRows(state.data).find(row => Number(row.organizationId) === 1 && row.templateKey === key);
     const accepted = templateRows(state.data).find(row => Number(row.organizationId) === organizationId() && !row.isCustom &&
@@ -1357,7 +1359,7 @@ export function createSettingsController({
     const inheritedControl = control.cloneNode(false);
     inheritedControl.value = source?.[role] ?? '';
     const status = inheritanceStatus({ owned: intent ? intent === 'pin' : accepted?.[role] !== null && accepted?.[role] !== undefined,
-      value: control.value, systemValue: inheritedControl.value,
+      value: control.value, systemValue: inheritedControl.value, comparisonOpen,
       pending: Boolean(intent), label: `${key} ${role}`, onReset: () => {
         if (dom.form.inert || state.awaitingReload || !control.isConnected) return;
         state.templateIntents.set(`${key}.${role}`, 'reset');
@@ -2887,6 +2889,16 @@ export function createSettingsController({
     if (disposed || state.bound) return;
     state.bound = true;
     listen(dom.form, 'submit', saveSettings);
+    // Preserve the resolved footer position while pointer focus enters it.
+    // Otherwise leaving a focused editor switches static -> sticky between
+    // pointerdown and pointerup, moving the action away from the pointer.
+    listen(dom.saveBar, 'pointerdown', event => {
+      if (event.button !== 0) return;
+      dom.saveBar.classList.toggle('retain-static', window.getComputedStyle(dom.saveBar).position === 'static');
+    }, true);
+    listen(dom.saveBar, 'focusout', event => {
+      if (!dom.saveBar.contains(event.relatedTarget)) dom.saveBar.classList.remove('retain-static');
+    });
     const trackInheritanceEdit = event => {
       const control = event.target;
       if (isSystem() || !state.data || !control.matches('input, textarea, select') || control.disabled) return;

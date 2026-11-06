@@ -1,5 +1,5 @@
 // Presentation only. Each editor owns presence, normalization and save intent.
-export function inheritanceStatus({ owned, value, systemValue, pending = false, onReset, label, showComparison = true, matchesSystem }) {
+export function inheritanceStatus({ owned, value, systemValue, pending = false, onReset, label, showComparison = true, matchesSystem, comparisonOpen = false }) {
   const document = globalThis.document;
   const container = document.createElement('div');
   container.className = 'settings-inheritance';
@@ -16,6 +16,7 @@ export function inheritanceStatus({ owned, value, systemValue, pending = false, 
     const comparison = document.createElement(text.length > 100 || text.includes('\n') ? 'details' : 'span');
     comparison.className = 'settings-system-comparison';
     if (comparison.localName === 'details') {
+      comparison.open = comparisonOpen;
       const summary = document.createElement('summary');
       summary.textContent = 'System value';
       const content = document.createElement('p');

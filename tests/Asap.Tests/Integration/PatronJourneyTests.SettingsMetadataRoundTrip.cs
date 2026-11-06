@@ -28,7 +28,8 @@ public sealed partial class PatronJourneyTests
                 INSERT INTO [asap].[ExternalSearchProvider]
                     ([OrganizationId], [ProviderKey], [Label], [UrlTemplate], [IsEnabled], [SortOrder])
                 VALUES (1, N'audit_provider_a_' + @suffix, N'System provider A', N'https://catalog.example.org/a?q={query}', 1, 9811),
-                       (1, N'audit_provider_b_' + @suffix, N'System provider B', N'https://catalog.example.org/b?q={query}', 1, 9813);
+                       (1, N'audit_provider_b_' + @suffix, N'System provider B', N'https://catalog.example.org/b?q={query}', 1, 9813),
+                       (1, N'audit_provider_inherited_' + @suffix, N'Inherited provider', N'https://catalog.example.org/inherited?q={query}', 1, 9815);
                 INSERT INTO [asap].[MaterialFormat]
                     ([OwnerOrganizationId], [Code], [Label], [SortOrder], [IsEnabled], [CreatedUtc], [UpdatedUtc])
                 VALUES (1, N'audit_format_a_' + @suffix, N'System format A', 9707, 1, SYSUTCDATETIME(), SYSUTCDATETIME()),
@@ -124,6 +125,7 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(report.RootElement.GetProperty("libraryOverrideMetadataRoundTrip").GetBoolean());
             Assert.IsTrue(report.RootElement.GetProperty("templateResetOnlyNoLineage").GetBoolean());
             Assert.IsTrue(report.RootElement.GetProperty("templateResetKeepsSiblingPinsAndRawRows").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("inheritanceInteractionWitness").GetProperty("cancelPreservedAndAcceptDiscardedBoth").GetBoolean());
             Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
             Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
             using var after = await ReadSettingsDocumentAsync(client, libraryId.ToString());
@@ -145,7 +147,7 @@ public sealed partial class PatronJourneyTests
                 DELETE FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] = @org;
                 DELETE FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] = @org;
                 DELETE FROM [asap].[ExternalSearchProvider]
-                WHERE [ProviderKey] IN (N'audit_provider_a_' + @suffix, N'audit_provider_b_' + @suffix);
+                WHERE [ProviderKey] IN (N'audit_provider_a_' + @suffix, N'audit_provider_b_' + @suffix, N'audit_provider_inherited_' + @suffix);
                 DELETE FROM [asap].[MaterialFormat] WHERE [Code] IN
                     (N'audit_format_a_' + @suffix, N'audit_format_b_' + @suffix, N'audit_inherited_' + @suffix,
                      N'audit_custom_' + @suffix, N'audit_sparse_' + @suffix, N'audit_retired_' + @suffix);

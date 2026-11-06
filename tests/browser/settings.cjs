@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { URL } = require('node:url');
 const { verifyEmailTemplateCards } = require('./email-template-cards.cjs');
+const { verifyInheritanceInteractions } = require('./settings-inheritance-interactions.cjs');
 const { contrast } = require('./settings-accessibility.cjs');
 const settingsSpacingRecorder = require('./settings-spacing.cjs');
 
@@ -2623,6 +2624,8 @@ async function main() {
       return;
     }
     if (args.mode === 'library-metadata') {
+      await verifyInheritanceInteractions(page, args, report, waitForSettingsReady,
+        name => scan(page, axeSource, args.artifactRoot, report, name, false, false));
       await runLibraryOverrideMetadataEditor(page, args, report, saveSettings, waitForSettingsReady);
       await scan(page, axeSource, args.artifactRoot, report, 'desktop');
       await page.setViewportSize({ width: 390, height: 844 });

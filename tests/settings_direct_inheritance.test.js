@@ -110,6 +110,26 @@ const { JSDOM } = require('jsdom');
       publicationOptions: set([{ id: 'different-library-choice', label: 'Any year', enabled: true, sortOrder: 0 }]) } } }, false);
     assert.doesNotMatch(root.querySelector('#publication-options-inherit-field').textContent, /Matches system/,
       'Equal visible labels with different public selection IDs are different whole-list values.');
+    const longReference = 'System reference '.repeat(12);
+    editors.populate({ ...data, stored: { ...data.stored,
+      configuredSystem: { ...configured, formats: [{ ...systemFormat, message: longReference }],
+        providers: [{ ...provider, urlTemplate: provider.urlTemplate + longReference.replaceAll(' ', '') }],
+        templates: [{ ...source, body: longReference }] },
+      templates: [{ ...source, body: longReference }, lineage, customTemplate] } }, false);
+    const providerUrl = providerRow().querySelector('input[type="url"]');
+    edit(providerUrl, 'https://library.example.org?q={query}');
+    for (const [control, status] of [
+      [providerUrl, () => providerRow().querySelector('[data-provider-status="urlTemplate"]')],
+      [rule().querySelector('[data-rule-property="message"]'), () => rule().querySelector('[data-rule-inheritance="message"]')],
+      [template().querySelector('.template-body'), () => template().querySelector('[data-template-status="body"]')]
+    ]) {
+      const beforeExpansion = editors.snapshot();
+      status().querySelector('details').open = true; control.focus();
+      assert.equal(editors.snapshot(), beforeExpansion, 'Comparison expansion and focus do not change draft ownership.');
+      edit(control, control.value + 'x');
+      assert.equal(status().querySelector('details').open, true, 'Dynamic field comparisons stay expanded while typing.');
+      assert.equal(document.activeElement, control);
+    }
     const systemProvider = { ...provider, label: null, urlTemplate: null, isEnabled: false, overridden: false };
     const systemData = { ...data, orgId: 'system', stored: { ...data.stored,
       configuredSystem: { ...configured, providers: [systemProvider] }, libraryOverride: null,

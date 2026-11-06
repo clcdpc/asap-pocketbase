@@ -488,7 +488,11 @@ public sealed partial class AdministrationService
                     {
                         continue;
                     }
-                    var overrideRow = await context.MaterialFormatOverrides.SingleOrDefaultAsync(
+                    // Both editors compose one shared override before this transaction saves.
+                    // A row added by the formats entry is not returned by the SQL query yet.
+                    var overrideRow = context.MaterialFormatOverrides.Local.SingleOrDefault(
+                        row => row.LibraryOrganizationId == organizationId && row.MaterialFormatId == target.Id) ??
+                        await context.MaterialFormatOverrides.SingleOrDefaultAsync(
                         row => row.LibraryOrganizationId == organizationId && row.MaterialFormatId == target.Id,
                         cancellationToken);
                     if (overrideRow is null)
