@@ -58,11 +58,16 @@ reruns and final receipt reconciliation do not add review passes.
 
 | Issue (implementation order) | Implementation | Pass 1 | Pass 2 | Focused tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| #461 Hidden identities/readable labels | `7be87eb`, `583de79`, `2990e78` | Luna MAX: 3 findings fixed | Astra HIGH + Terra MAX: clipping and history-witness gap fixed | Retained editor/collision tests; real SQL/browser save/recovery/history; desktop/mobile/native200 | Technically qualified; final integration pending |
-| #462 Add rule feedback | `423c352`, `7b2cd22` | Luna MAX: 1 test gap fixed | Luna MAX: independent browser matrix, no findings | Retained domain/browser matrix and real-SQL Add/save/reload pass | Technically qualified; final integration pending |
-| #465 Common creator rows | `a2501ad`, `49b3951`, `8fbe412` | Luna MAX: Move down test gap fixed | Terra MAX: narrow native-200 focus reveal fixed | Five rendered sizes; owning SQL/browser 1/1 pass | Technically qualified; final integration pending |
-| #463 Direct edit/inheritance | `56c514d`, `72c7258`, `e66947c` | Luna MAX: empty template lineage fixed | Astra HIGH + Terra MAX: combined save, comparison expansion and mobile Discard fixed | Real-SQL ownership/history matrix; retained SQL/browser regressions; four frontend files; format/picker native zoom | Technically qualified; final integration pending |
-| #466 Blocking draft navigation | `6618b70` | Luna MAX: unavailable Staff recovery and domain coverage fixed | Pending | Settings/draft regressions; eight-domain routes; retained SQL/browser identity and desktop/mobile/native200 | Pass 1 remediated; Pass 2 pending |
+| #461 Hidden identities/readable labels | `7be87eb`, `583de79`, `2990e78` | Luna MAX: 3 findings fixed | Astra HIGH + Terra MAX: clipping and history-witness gap fixed | Retained editor/collision tests; real SQL/browser save/recovery/history; desktop/mobile/native200 | Technically qualified |
+| #462 Add rule feedback | `423c352`, `7b2cd22` | Luna MAX: 1 test gap fixed | Luna MAX: independent browser matrix, no findings | Retained domain/browser matrix and real-SQL Add/save/reload pass | Technically qualified |
+| #465 Common creator rows | `a2501ad`, `49b3951`, `8fbe412` | Luna MAX: Move down test gap fixed | Terra MAX: narrow native-200 focus reveal fixed | Five rendered sizes; owning SQL/browser 1/1 pass | Technically qualified |
+| #463 Direct edit/inheritance | `56c514d`, `72c7258`, `e66947c` | Luna MAX: empty template lineage fixed | Astra HIGH + Terra MAX: combined save, comparison expansion and mobile Discard fixed | Real-SQL ownership/history matrix; retained SQL/browser regressions; four frontend files; format/picker native zoom | Technically qualified |
+| #466 Blocking draft navigation | `6618b70`, `374ee38` | Luna MAX: unavailable Staff recovery and domain coverage fixed | Astra HIGH: 13 independent browser cells pass, no findings | Settings/draft regressions; eight-domain routes; retained SQL/browser identity and desktop/mobile/native200 | Technically qualified |
+
+Each row records focused issue qualification after exactly two independent
+passes. The consolidated PR records final revision-wide test discovery,
+acceptance invocation, CI run links and evidence reconciliation separately.
+Focused checkpoint counts below do not substitute for those final gates.
 
 ### #461 evidence
 
@@ -347,8 +352,8 @@ Receipts remain outside Git under `466-*` in the shared evidence root:
 red/green retired-owner recovery receipts are retained. The first native PNG
 capture was blank despite passing geometry and is not rendered visual evidence;
 the passing corrected CDP rerun supplies visually inspected captures. Human
-assistive-technology acceptance and both independent review passes remain
-separate; this record does not self-approve the issue.
+assistive-technology acceptance remains separate. These initial checks preceded
+the independent review passes recorded below.
 
 ### #466 Pass 1 remediation
 
@@ -389,8 +394,29 @@ still 1486 tests with no new Browser identity/category entry. Receipts are
 `466-pass1-domain-matrix3.log`, `466-pass1-staff-access.log`,
 `466-pass1-green-build.log` and `466-pass1-discovery.json`. Initial fixture-load
 failures remain in the earlier matrix logs. This is the single aggregate Pass 1
-remediation; the independent adversarial Pass 2 and final integration remain
-pending.
+remediation; the independent adversarial Pass 2 follows below.
+
+### #466 Pass 2 adversarial verification
+
+Fresh Astra HIGH independently executed 13 unique Chromium cells against
+`374ee38`: 12 shipped-controller/navigation workflows and one browser-executed
+draft-admission contract. All passed, with no actionable application finding.
+The matrix challenged replacement blockers and saved old actions, multiple
+owners and multiple destinations within one Settings owner, equal-display reset
+intent followed by explicit null Save, delayed reads, same-ID role/library
+replacement, rejected/conflicted/uncertain writes, unavailable-row recovery,
+retired versus fresh owners, PUT-only preservation, disposal, inactive-row reveal
+and accepted scope changes. Navigation caused no mutations and preserved the
+expected drafts and ownership protections.
+
+The 492x650 pressure state had zero serious/critical axe findings, overflow or
+unexpected missing images, with a contained visible 3px keyboard-focus outline.
+This independent harness used actual shipped markup/modules with synthetic HTTP;
+it makes no new SQL, server-authorization, native-zoom, CI or human AT claim.
+Initial harness-only setup failures were retained and explained. Source remained
+unchanged and Git clean; the harness, server and browser were cleaned up.
+Receipts are `466-pass2/report.md`, `aggregate-results.json` and `manifest.json`.
+No Pass 2 remediation or third issue-level review was needed.
 
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
