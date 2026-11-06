@@ -58,11 +58,51 @@ reruns and final receipt reconciliation do not add review passes.
 
 | Issue (implementation order) | Implementation | Pass 1 | Pass 2 | Focused tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| #461 Hidden identities/readable labels | Pending | Pending | Pending | Pending | Pending |
+| #461 Hidden identities/readable labels | `7be87eb`, `583de79`, `2990e78` | Luna MAX: 3 findings fixed | Astra HIGH + Terra MAX: clipping and history-witness gap fixed | Retained editor/collision tests; real SQL/browser save/recovery/history; desktop/mobile/native200 | Technically qualified; final integration pending |
 | #462 Add rule feedback | Pending | Pending | Pending | Pending | Pending |
 | #465 Common creator rows | Pending | Pending | Pending | Pending | Pending |
 | #463 Direct edit/inheritance | Pending | Pending | Pending | Pending | Pending |
 | #466 Blocking draft navigation | Pending | Pending | Pending | Pending | Pending |
+
+### #461 evidence
+
+All five routine identifier controls are removed; exact existing keys, IDs,
+owners, versions and template lineage are retained explicitly. New draft keys
+use reserved UUID-based allocation, independent of display labels. Serializers
+use stable selectors/state. Configured effective format labels drive headings;
+duplicate readable names use positional context. Publication rows compact at
+desktop and wrap at narrow widths; Auto-claim duplicate labels remain selectable
+by distinct IDs. No server/schema behavior changed.
+
+Pass1 (independent Luna MAX) found ambiguous Auto-claim labels, an incorrectly
+constrained publication probe, and missing failed/uncertain-save identity proof.
+All three were fixed. Pass2 used an independent identity transition matrix and
+raw SQL/HTTP probes (Astra HIGH), plus actual rendered/keyboard pressure tests
+(Terra MAX). Five independent invalid/stale probes returned400/400/400/400/409
+with accepted GET, rows, references, versions and audit unchanged. Three unique
+native cases passed. Terra found a pre-existing checkbox-width defect inside
+the touched option editor; Astra found an unseeded historical-selection gap.
+One final remediation fixed both, without another independent review.
+
+Focused qualification includes the retained Settings sweep (initial13/15, two
+supported corrections and passing affected reruns), the new collision/deletion
+identity test, placeholder targeting, a5/5 corrected native rerun and the
+initial passing System-rule case. Initial failed receipts are retained. Final
+Pass2 remediation build passed with zero warnings/errors; the revised historical
+SQL/browser case passed1/1, zero failures/skips. It uses real400/400 rollback and
+stable retry payloads, a real committed response deliberately lost to the
+browser, blocked replay/scope transfer, and guarded Refresh reconciliation.
+Populated request/event rows, rowversion, raw selections and history match
+before/save/reset; owned format/field/option/rule/claim/template rows match across
+inherited reset. Desktop, actual360px container, mobile and native zoom2 geometry
+pass with18px checkboxes, visible Enabled text, no overlap/overflow and zero
+serious-critical axe findings. Human AT is not claimed.
+
+Detailed receipts outside Git:461-results.json,461-pass1-results.json,
+461-pass2-data/report.md,461-pass2-visual/report.json,
+461-pass2-remediation-results.json and their raw TRX/SQL/PNG companions under
+the shared evidence root below. The visual report's initial `passed` refers to
+its asserted publication scenarios, not its separately reported clipping defect.
 
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
