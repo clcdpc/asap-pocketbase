@@ -1,19 +1,38 @@
-name: Label new issues for triage
+name: Maintain issue triage label
 
 on:
   issues:
-    types: [opened]
+    types: [opened, labeled, unlabeled]
 
 permissions:
   issues: write
 
 jobs:
-  label-new-issue:
+  label-issue:
+    if: ${{ github.event.action == 'opened' || github.event.label.name == 'meta-issue' }}
     runs-on: ubuntu-latest
+    # Skipped, unrelated label events must not replace pending reconciliation.
+    concurrency:
+      group: issue-triage-${{ github.event.issue.number }}
+      cancel-in-progress: false
     steps:
-      - name: Mark newly opened issue for triage
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-        run: gh issue edit "$ISSUE_NUMBER" --add-label "needs-triage"
+      - name: Reconcile issue triage label
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issue = { ...context.repo, issue_number: context.issue.number };
+            // Queued events may arrive out of order; reconcile current labels.
+            const { data: current } = await github.rest.issues.get(issue);
+            const labels = new Set(current.labels.map((label) => label.name));
+            if (!labels.has('meta-issue') && !labels.has('needs-triage')) {
+              await github.rest.issues.addLabels({ ...issue, labels: ['needs-triage'] });
+            } else if (labels.has('meta-issue') && labels.has('needs-triage')) {
+              try {
+                await github.rest.issues.removeLabel({ ...issue, name: 'needs-triage' });
+              } catch (error) {
+                // Another actor may have removed the label since the read.
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            }
