@@ -33,7 +33,7 @@ def running(pid):
     try:
         # A transient zombie is no longer executing; the container init reaps it.
         return Path(f"/proc/{pid}/stat").read_text().split(")", 1)[1].split()[0] != "Z"
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return False
 
 
@@ -42,6 +42,18 @@ class CounterTests(unittest.TestCase):
         patch = mock.patch.dict(os.environ, ASAP_CI_SQL_CONTAINER="asap-sql-counter-fixture")
         patch.start()
         self.addCleanup(patch.stop)
+
+    def test_process_probe_handles_exit_during_stat_read(self):
+        for error in (FileNotFoundError, ProcessLookupError):
+            with self.subTest(error=error.__name__), mock.patch.object(Path, "read_text", side_effect=error):
+                self.assertFalse(running(10))
+        with mock.patch.object(Path, "read_text", return_value=process_line()):
+            self.assertTrue(running(10), "A live process must still fail cleanup checks")
+        with mock.patch.object(Path, "read_text", return_value=process_line().replace(") S ", ") Z ")):
+            self.assertFalse(running(10))
+        with mock.patch.object(Path, "read_text", side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                running(10)
 
     def test_cpu_uses_deltas_and_excludes_guest_double_counting(self):
         before = perf.cpu_counters("cpu 100 0 50 500 20 5 5 10 1000 0\n")

@@ -515,6 +515,14 @@ acceptance suites must run again because shared navigation and styling changed.
 Other historical suites remain conditional; untouched upstream feature paths
 also retain their expanded native browser coverage in final Full CI.
 
+Draft run `42269160637` exposed a Linux cleanup-test observation race: an owned
+process disappeared during `/proc/<pid>/stat` reading, raising ProcessLookupError.
+The test-only probe now treats that as exited, alongside FileNotFoundError.
+Its deterministic regression failed before the fix; all 12 portable counter/probe
+checks pass afterward, retaining live/zombie and unrelated-permission behavior.
+Runtime cleanup, deadlines, runner resources, workflow policy and deployment
+authorization are unchanged. Final CI retains the real Linux lifecycle checks.
+
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
 Complex implementation uses Sol MAX; focused implementation and Pass 1 use
