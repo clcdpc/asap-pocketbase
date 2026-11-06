@@ -2890,11 +2890,13 @@ public sealed partial class PatronJourneyTests
                 Assert.IsTrue(report.RootElement.GetProperty("suggestionLimitPlaceholderRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("wildcardOriginNormalized").GetBoolean());
                 var states = report.RootElement.GetProperty("states").EnumerateArray().ToArray();
-                Assert.HasCount(14, states);
+                Assert.HasCount(17, states);
                 CollectionAssert.AreEquivalent(new[]
                 {
                     "system-desktop", "system-mobile", "library-desktop", "library-mobile",
+                    "common-creators-system-desktop",
                     "common-creators-system-mobile-off", "common-creators-system-mobile-on",
+                    "common-creators-library-inherited-desktop", "common-creators-library-owned-desktop",
                     "common-creators-library-mobile-off", "common-creators-library-mobile-on",
                     "suggestion-placeholder-mobile", "organizations-system-desktop",
                     "organizations-system-mobile", "organizations-library-mobile",

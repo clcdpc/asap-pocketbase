@@ -746,6 +746,18 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     for (const button of row.querySelectorAll('.settings-row-actions button')) button.disabled = disabled;
   }
 
+  function updateCreatorRowsDisabled(container, disabled) {
+    const rows = [...(container?.querySelectorAll('[data-domain-row]') || [])];
+    for (const [index, row] of rows.entries()) {
+      for (const control of rowControls(row)) control.disabled = disabled;
+      for (const button of row.querySelectorAll('.settings-row-actions button')) {
+        const action = button.dataset.rowAction;
+        const atBoundary = (action === 'up' && index === 0) || (action === 'down' && index === rows.length - 1);
+        button.disabled = disabled || atBoundary;
+      }
+    }
+  }
+
   function updateSetDisabled(container, input, addButton) {
     const disabled = !state.system && Boolean(input?.checked);
     updateRowDisabled(container, disabled);
@@ -755,7 +767,18 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   function setEditorControls(type, container) {
     const input = type === 'publication' ? dom.publicationUseSystem : dom.creatorsUseSystem;
     const addButton = type === 'publication' ? addButtons.publication : addButtons.creators;
+    if (type === 'creator') {
+      updateCreatorRowsDisabled(container, !state.system && Boolean(input?.checked));
+      if (addButton) addButton.disabled = !state.system && Boolean(input?.checked);
+      return;
+    }
     updateSetDisabled(container, input, addButton);
+  }
+
+  function focusSetRow(index, action) {
+    const row = dom.creators.querySelectorAll('[data-domain-row]')[index];
+    const target = action ? row?.querySelector(`[data-row-action="${action}"]:not(:disabled)`) : null;
+    (target || row?.querySelector('input') || addButtons.creators)?.focus();
   }
 
   function updateCodeWarning() {
@@ -781,7 +804,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
           value,
           'data-domain-editable': 'true'
         });
-      const row = element('div', { className: 'settings-editor-row', 'data-domain-row': 'true' }, [
+      const row = element('div', {
+        className: type === 'creator' ? 'settings-editor-row settings-creator-row' : 'settings-editor-row',
+        'data-domain-row': 'true'
+      }, [
         field('Creator', input),
         actions(index, values.length, (from, offset) => {
           if (type === 'creator' && creatorsOptionsHidden()) return;
@@ -790,12 +816,14 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
           const current = readSetRows(container, type);
           [current[from], current[next]] = [current[next], current[from]];
           renderSetRows(container, current, type);
+          if (type === 'creator') focusSetRow(next, offset < 0 ? 'up' : 'down');
           onChange();
         }, from => {
           if (type === 'creator' && creatorsOptionsHidden()) return;
           const current = readSetRows(container, type);
           current.splice(from, 1);
           renderSetRows(container, current, type);
+          if (type === 'creator') focusSetRow(Math.min(from, current.length - 1));
           onChange();
         })
       ]);
@@ -2063,6 +2091,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       }
       if (name === 'rules') expandedRuleCodes.add(added.code);
       renderDomain(name, values);
+      if (name === 'creators') focusSetRow(values.length - 1);
       if (name === 'publication') focusPublicationRow(values.length - 1);
       if (name === 'formats') dom.formats.lastElementChild?.querySelector('[data-material-field="label"]')?.focus();
       if (name === 'templates') {

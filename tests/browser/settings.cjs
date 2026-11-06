@@ -1403,6 +1403,37 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     '[data-setting-section="workflow"][data-setting-key="commonAuthorsEnabled"] .settings-override-toggle');
   const useSystem = page.locator('#common-creators-use-system');
   const rows = page.locator('#common-creators-editor [data-domain-row]');
+  const creatorValues = () => rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value));
+  const creatorGeometry = () => page.evaluate(() => {
+    const rect = node => {
+      const bounds = node.getBoundingClientRect();
+      return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom,
+        width: bounds.width, height: bounds.height };
+    };
+    const editor = document.getElementById('common-creators-editor');
+    return { viewport: { width: innerWidth, height: innerHeight }, scrollWidth: document.documentElement.scrollWidth,
+      editor: rect(editor), rows: [...editor.querySelectorAll('.settings-creator-row')].map(row => ({
+        row: rect(row), field: rect(row.querySelector('.settings-domain-field')),
+        label: rect(row.querySelector('.settings-domain-field span')), input: rect(row.querySelector('input')),
+        actions: rect(row.querySelector('.settings-row-actions')),
+        buttons: [...row.querySelectorAll('.settings-row-actions button')].map(button => ({
+          label: button.getAttribute('aria-label'), disabled: button.disabled, ...rect(button)
+        }))
+      })) };
+  });
+  const assertCreatorContainment = (geometry, name) => {
+    assert.ok(geometry.scrollWidth <= geometry.viewport.width, `${name}: no page-level horizontal overflow: ${JSON.stringify(geometry)}`);
+    for (const row of geometry.rows) {
+      assert.ok(row.label.bottom <= row.input.top + 1 && Math.abs(row.label.left - row.input.left) < 1 &&
+        Math.abs(row.label.right - row.input.right) < 1,
+      `${name}: Creator label sits above and aligns with its input: ${JSON.stringify({ row })}`);
+      for (const part of [row.field, row.input, row.actions, ...row.buttons]) {
+        assert.ok(part.left >= row.row.left - 1 && part.right <= row.row.right + 1,
+          `${name}: creator content stays inside its row: ${JSON.stringify({ row, part })}`);
+      }
+      assert.ok(row.input.width > 0 && row.actions.width > 0, `${name}: creator input and actions remain visible.`);
+    }
+  };
   const setEnabledByKeyboard = async value => {
     if (await enabled.isChecked() !== value) {
       await enabled.focus();
@@ -1416,15 +1447,31 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     while (await rows.count() < values.length) await page.locator('#add-common-creator').click();
     for (const [index, value] of values.entries()) await rows.nth(index).locator('input').fill(value);
   };
+  const waitForScopeLoad = async (scope, responsePromise) => {
+    await ready(scope);
+    const response = await responsePromise;
+    assert.equal(response.status(), 200, `Settings load for ${scope} succeeds before creator interactions.`);
+    await page.waitForFunction(expectedScope => {
+      const refresh = document.getElementById('settings-refresh');
+      const message = document.getElementById('settings-message');
+      return document.getElementById('settings-scope')?.value === expectedScope && refresh && !refresh.disabled &&
+        !message?.classList.contains('error');
+    }, scope);
+  };
   const switchScope = async scope => {
     const selectedScope = page.locator('#settings-scope');
     if (await selectedScope.inputValue() !== scope) {
+      const settingsReload = page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/settings' &&
+          url.searchParams.get('orgId') === scope;
+      });
       if (await page.locator('#settings-save').isEnabled()) {
         await decideConfirmation(page, () => selectedScope.selectOption(scope), dialog => dialog.accept());
       } else {
         await selectedScope.selectOption(scope);
       }
-      await ready(scope);
+      await waitForScopeLoad(scope, settingsReload);
     }
     await page.locator('#settings-nav-workflow').click();
     await page.locator('#settings-workflow').waitFor({ state: 'visible' });
@@ -1445,8 +1492,13 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
       `${label}: creator actions inherit the fieldset disabled state.`);
   };
   const reloadScope = async scope => {
+    const settingsReload = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/settings' &&
+        url.searchParams.get('orgId') === scope;
+    });
     await page.reload({ waitUntil: 'networkidle' });
-    await ready(scope);
+    await waitForScopeLoad(scope, settingsReload);
     await page.locator('#settings-nav-workflow').click();
     await page.locator('#settings-workflow').waitFor({ state: 'visible' });
   };
@@ -1489,6 +1541,7 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
   await switchScope('system');
   const systemSnapshot = await readEditor();
   await switchScope(libraryScope);
+  let journeyError = null;
   try {
     await switchScope('system');
     const systemInitially = await readEditor();
@@ -1503,8 +1556,59 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     await page.locator('#common-authors-label').fill(systemDraft.label);
     await page.locator('#common-authors-help').fill(systemDraft.help);
     await page.locator('#common-authors-message').fill(systemDraft.message);
-    const systemCreator = `Collapsed feature creator ${args.identity.staffId}`;
-    await setCreatorRows([...systemInitially.creators, systemCreator]);
+    const creatorBaseRows = [...systemInitially.creators];
+    while (creatorBaseRows.length < 2) creatorBaseRows.push(`Existing creator ${creatorBaseRows.length + 1} ${args.identity.staffId}`);
+    await setCreatorRows(creatorBaseRows);
+    const systemCreator = `Long common creator name ${args.identity.staffId}: ${'extended catalog label '.repeat(8).trimEnd()}`;
+    const removableCreator = `Movable creator draft ${args.identity.staffId}`;
+    await page.locator('#add-common-creator').click();
+    let addedRow = rows.last();
+    assert.equal(await addedRow.locator('input').evaluate(input => input === document.activeElement), true,
+      'Adding a creator moves focus to its new Creator input.');
+    assert.equal(await addedRow.getByLabel('Creator', { exact: true }).count(), 1);
+    await addedRow.locator('input').fill(systemCreator);
+    await page.locator('#add-common-creator').click();
+    addedRow = rows.last();
+    assert.equal(await addedRow.locator('input').evaluate(input => input === document.activeElement), true);
+    await addedRow.locator('input').fill(removableCreator);
+    const moveFrom = await rows.count() - 1;
+    await rows.nth(moveFrom).getByRole('button', { name: 'Move up', exact: true }).click();
+    const movedValues = await creatorValues();
+    assert.equal(movedValues[moveFrom - 1], removableCreator, 'Move up reorders the complete list draft.');
+    assert.equal(await rows.nth(moveFrom - 1).getByRole('button', { name: 'Move up', exact: true })
+      .evaluate(button => button === document.activeElement), true, 'Move up retains focus on its moved row action.');
+    await rows.nth(moveFrom - 1).getByRole('button', { name: 'Delete', exact: true }).click();
+    const expectedSystemRows = [...creatorBaseRows, systemCreator];
+    assert.deepEqual(await creatorValues(), expectedSystemRows, 'Delete removes only its target from the whole-list draft.');
+    assert.equal(await rows.nth(moveFrom - 1).locator('input').evaluate(input => input === document.activeElement), true,
+      'Delete moves focus to the next surviving Creator input.');
+    assert.equal(await rows.first().getByRole('button', { name: 'Move up', exact: true }).isDisabled(), true,
+      'The first creator cannot move up.');
+    assert.equal(await rows.last().getByRole('button', { name: 'Move down', exact: true }).isDisabled(), true,
+      'The last creator cannot move down.');
+    const firstCreatorInput = rows.first().getByLabel('Creator', { exact: true });
+    await firstCreatorInput.focus(); await page.keyboard.press('Tab');
+    assert.equal(await rows.first().locator('[data-row-action="down"]').evaluate(button => button === document.activeElement), true,
+      'Keyboard order skips the disabled first-row action and reaches Move down.');
+    assert.equal(await rows.first().locator('[data-row-action="down"]').evaluate(button => button.matches(':focus-visible')), true,
+      'Keyboard navigation keeps the row action visibly focused.');
+    await page.keyboard.press('Tab');
+    assert.equal(await rows.first().locator('[data-row-action="delete"]').evaluate(button => button === document.activeElement), true);
+    await page.keyboard.press('Tab');
+    assert.equal(await rows.nth(1).locator('input').evaluate(input => input === document.activeElement), true,
+      'Tab follows row actions to the next Creator input.');
+    report.commonCreatorInteractions = true;
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await rows.last().scrollIntoViewIfNeeded();
+    const systemDesktopGeometry = await creatorGeometry();
+    assertCreatorContainment(systemDesktopGeometry, 'System desktop');
+    assert.ok(systemDesktopGeometry.rows.every(row => row.actions.left > row.input.right &&
+      Math.abs(row.actions.top - row.input.top) < 1 && Math.abs(row.actions.bottom - row.input.bottom) < 1),
+    `At desktop width, creator actions share the input row: ${JSON.stringify(systemDesktopGeometry)}`);
+    report.commonCreatorLayouts.push({ name: 'system-desktop', ...systemDesktopGeometry });
+    await page.screenshot({ path: path.join(args.artifactRoot, 'common-creators-system-desktop.png'), fullPage: true });
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-system-desktop');
     await rows.last().locator('input').focus();
     await enabled.evaluate(node => {
       node.checked = false;
@@ -1516,7 +1620,6 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
       'Hiding focused editable options returns focus to Show common creators.');
     const retainedAdd = page.locator('#add-common-creator');
     const retainedDelete = rows.last().locator('.settings-row-actions button[aria-label="Delete"]');
-    const expectedSystemRows = [...systemInitially.creators, systemCreator];
     await retainedAdd.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     await retainedDelete.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     assert.deepEqual(await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value)), expectedSystemRows,
@@ -1533,32 +1636,43 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     await assertOptionsDisabled('System reloaded off state');
     assert.deepEqual(await page.locator('#common-creators-editor [data-domain-row] input').evaluateAll(inputs => inputs.map(input => input.value)), expectedSystemRows,
       'The hidden System scalar and list drafts survive accepted save and full reload.');
+    await setEnabledByKeyboard(true);
+    await rows.first().locator('input').fill(`Discarded creator draft ${args.identity.staffId}`);
+    await page.locator('#add-common-creator').click();
+    await rows.last().locator('input').fill(`Discarded added creator ${args.identity.staffId}`);
+    assert.equal(await page.locator('#settings-save').isEnabled(), true,
+      'Creator edits and additions reach the existing global Save action.');
+    const discardReload = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/settings' &&
+        url.searchParams.get('orgId') === 'system';
+    });
+    await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
+    const discardResponse = await discardReload;
+    assert.equal(discardResponse.status(), 200, 'Global Discard reloads accepted System settings successfully.');
+    await page.waitForFunction(expectedRows => {
+      const refresh = document.getElementById('settings-refresh');
+      const save = document.getElementById('settings-save');
+      const message = document.getElementById('settings-message');
+      const creators = [...document.querySelectorAll('#common-creators-editor [data-domain-row] input')]
+        .map(input => input.value);
+      return refresh && !refresh.disabled && save?.disabled && !message?.classList.contains('error') &&
+        JSON.stringify(creators) === JSON.stringify(expectedRows);
+    }, expectedSystemRows);
+    assert.deepEqual(await creatorValues(), expectedSystemRows,
+      'Global Discard restores the accepted whole creator list and removes the unsaved row.');
+    report.commonCreatorDiscard = true;
     await page.setViewportSize({ width: 390, height: 844 });
     await scan(page, axeSource, args.artifactRoot, report, 'common-creators-system-mobile-off');
     await setEnabledByKeyboard(true);
     await scan(page, axeSource, args.artifactRoot, report, 'common-creators-system-mobile-on');
-    const geometry = await page.evaluate(() => {
-      const region = document.getElementById('common-authors-options').getBoundingClientRect();
-      return {
-        viewport: innerWidth,
-        scrollWidth: document.documentElement.scrollWidth,
-        region: { left: region.left, right: region.right, width: region.width },
-        controls: [...document.querySelectorAll('#common-authors-options input, #common-authors-options textarea, #common-authors-options button')]
-          .filter(control => control.getBoundingClientRect().width > 0)
-          .map(control => {
-            const bounds = control.getBoundingClientRect();
-            return { id: control.id || control.getAttribute('aria-label') || control.textContent.trim(), left: bounds.left, right: bounds.right };
-          })
-      };
-    });
-    assert.ok(geometry.region.width > 0 && geometry.region.left >= -1 && geometry.region.right <= geometry.viewport + 1,
-      `The mobile options region fits its viewport: ${JSON.stringify(geometry)}`);
-    assert.ok(geometry.scrollWidth <= geometry.viewport);
-    assert.ok(geometry.controls.every(control => control.left >= geometry.region.left - 1 && control.right <= geometry.region.right + 1),
-      `Every mobile creator control fits its region: ${JSON.stringify(geometry)}`);
+    const mobileGeometry = await creatorGeometry();
+    assertCreatorContainment(mobileGeometry, 'System mobile');
+    assert.ok(mobileGeometry.rows.every(row => row.actions.top >= row.input.top - 1),
+      `Mobile rows may reflow below their flexible Creator input: ${JSON.stringify(mobileGeometry)}`);
+    report.commonCreatorLayouts.push({ name: 'system-mobile', ...mobileGeometry });
+    await page.screenshot({ path: path.join(args.artifactRoot, 'common-creators-system-mobile.png'), fullPage: true });
     await page.setViewportSize({ width: 1280, height: 900 });
-    await restoreSystem(systemSnapshot);
-    report.systemCommonAuthorsRoundTrip = true;
 
     await switchScope(libraryScope);
     const libraryInitially = await readEditor();
@@ -1567,11 +1681,39 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     if (!libraryInitially.enabledOverridden) await enabledOverride.check();
     await setEnabledByKeyboard(true);
     assert.equal(await options.isVisible(), true);
+    if (!await useSystem.isChecked()) await useSystem.check();
+    const inheritedSystemCreators = (systemConfig.stored?.configuredSystem?.commonCreators?.values || [])
+      .map(creator => typeof creator === 'string' ? creator : creator.value);
+    assert.deepEqual(await creatorValues(), inheritedSystemCreators,
+      'Use system renders the whole accepted System creator list in Library context.');
+    assert.equal(await rows.first().locator('input').isDisabled(), true,
+      'Inherited creator inputs remain disabled.');
+    assert.equal(await rows.first().getByRole('button', { name: 'Move down', exact: true }).isDisabled(), true,
+      'Inherited row actions remain disabled.');
+    assert.equal(await page.locator('#add-common-creator').isDisabled(), true,
+      'The inherited Library list cannot add a row.');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const inheritedGeometry = await creatorGeometry();
+    assertCreatorContainment(inheritedGeometry, 'Library inherited desktop');
+    assert.ok(inheritedGeometry.rows.every(row => row.actions.left > row.input.right &&
+      Math.abs(row.actions.top - row.input.top) < 1),
+    `An inherited list keeps the compact row layout: ${JSON.stringify(inheritedGeometry)}`);
+    report.commonCreatorLayouts.push({ name: 'library-inherited-desktop', ...inheritedGeometry });
+    await page.screenshot({ path: path.join(args.artifactRoot, 'common-creators-library-inherited-desktop.png'), fullPage: true });
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-inherited-desktop');
     if (await useSystem.isChecked()) await useSystem.uncheck();
     const libraryCreator = `Collapsed Library creator ${args.identity.staffId}`;
     await page.locator('#add-common-creator').click();
     await rows.last().locator('input').fill(libraryCreator);
     const libraryDraftRows = await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value));
+    const libraryOwnedGeometry = await creatorGeometry();
+    assertCreatorContainment(libraryOwnedGeometry, 'Library owned desktop');
+    assert.ok(libraryOwnedGeometry.rows.every(row => row.actions.left > row.input.right &&
+      Math.abs(row.actions.top - row.input.top) < 1),
+    `A library-owned list keeps the compact row layout: ${JSON.stringify(libraryOwnedGeometry)}`);
+    report.commonCreatorLayouts.push({ name: 'library-owned-desktop', ...libraryOwnedGeometry });
+    await page.screenshot({ path: path.join(args.artifactRoot, 'common-creators-library-owned-desktop.png'), fullPage: true });
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-owned-desktop');
     await rows.last().locator('input').focus();
     await enabled.evaluate(node => {
       node.checked = false;
@@ -1612,12 +1754,19 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     await setEnabledByKeyboard(true);
     await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-mobile-on');
     await page.setViewportSize({ width: 1280, height: 900 });
+    await restoreSystem(systemSnapshot);
+    report.systemCommonAuthorsRoundTrip = true;
     await restoreLibrary(librarySnapshot);
     report.libraryCommonAuthorsRoundTrip = true;
-  } finally {
-    await restoreSystem(systemSnapshot);
-    await restoreLibrary(librarySnapshot);
+  } catch (error) {
+    journeyError = error;
   }
+  const cleanupErrors = [];
+  try { await restoreSystem(systemSnapshot); } catch (error) { cleanupErrors.push(error); }
+  try { await restoreLibrary(librarySnapshot); } catch (error) { cleanupErrors.push(error); }
+  const errors = [journeyError, ...cleanupErrors].filter(Boolean);
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'Common creator journey and restoration failed.');
 }
 
 async function runSuggestionLimitPlaceholder(page, axeSource, args, report, saveSettings, ready, postedPayloads) {
@@ -2220,6 +2369,7 @@ async function main() {
     libraryEmptyPatronCodeReplacementRoundTrip: false, libraryPatronCodeResetRoundTrip: false,
     systemTimeoutDependenciesRoundTrip: false, libraryTimeoutDependenciesRoundTrip: false,
     systemCommonAuthorsRoundTrip: false, libraryCommonAuthorsRoundTrip: false,
+    commonCreatorDiscard: false, commonCreatorLayouts: [],
     suggestionLimitPlaceholderRoundTrip: false,
     wildcardOriginNormalized: false, systemFormatRuleRoundTrip: false, systemFormatRulePost: null,
     systemFormatRulePostCount: 0,
@@ -3099,6 +3249,12 @@ async function main() {
   assert.equal(report.libraryTimeoutDependenciesRoundTrip, true);
   assert.equal(report.systemCommonAuthorsRoundTrip, true);
   assert.equal(report.libraryCommonAuthorsRoundTrip, true);
+  assert.equal(report.commonCreatorInteractions, true);
+  assert.equal(report.commonCreatorDiscard, true);
+  assert.ok(report.commonCreatorLayouts.some(layout => layout.name === 'system-desktop'));
+  assert.ok(report.commonCreatorLayouts.some(layout => layout.name === 'system-mobile'));
+  assert.ok(report.commonCreatorLayouts.some(layout => layout.name === 'library-inherited-desktop'));
+  assert.ok(report.commonCreatorLayouts.some(layout => layout.name === 'library-owned-desktop'));
   assert.equal(report.suggestionLimitPlaceholderRoundTrip, true);
   assert.equal(report.wildcardOriginNormalized, true);
   console.log('Settings editor browser journey passed.');

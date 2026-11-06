@@ -471,6 +471,14 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-icon-button { width: 40px; height: 40px; padding: 0; color: var(--brand-dark); background: #fff; border: 1px solid #9aa5ae; border-radius: 4px; cursor: pointer; }
 .settings-icon-button:hover { background: #e2edf1; }
 .settings-editor-row > .settings-row-actions { grid-column: 1 / -1; }
+#common-creators-editor { container-type: inline-size; }
+#common-creators-editor .settings-creator-row { grid-template-columns: minmax(0, 1fr); }
+#common-creators-editor .settings-creator-row > .settings-row-actions { grid-column: auto; justify-content: flex-start; flex-wrap: wrap; }
+#common-creators-editor .settings-row-actions button { flex: 0 0 40px; }
+@container (min-width: 520px) {
+  #common-creators-editor .settings-creator-row { grid-template-columns: minmax(0, 1fr) auto; }
+  #common-creators-editor .settings-creator-row > .settings-row-actions { justify-content: flex-end; flex-wrap: nowrap; }
+}
 #publication-options-editor { container-type: inline-size; }
 #publication-options-editor .settings-option-row { grid-template-columns: minmax(0, 1fr); }
 #publication-options-editor .settings-option-row > .settings-row-actions { grid-column: auto; justify-content: flex-start; }
