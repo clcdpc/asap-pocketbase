@@ -741,6 +741,8 @@ for (const discardAction of ['Revert changes', 'Close']) {
       assert.equal(protectedUnload(ui), false);
       assert.equal(ui.get('.edit-form input[inputmode="numeric"]').value, '9001');
       assert.equal(ui.get('#request-dialog-status').textContent, 'Pending hold');
+      assert.doesNotMatch(ui.get('.bib-link-outcome')?.textContent || '', /Other request edits remain unsaved/,
+        'A clean editor must not claim that other edits remain unsaved');
     };
     author().value = 'Unrelated Author draft';
     author().dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
@@ -763,12 +765,25 @@ for (const discardAction of ['Revert changes', 'Close']) {
     assert.equal(ui.get('.request-save-state').dataset.state, 'dirty');
     assert.equal(protectedUnload(ui), true);
     assert.equal(ui.readRequest().author, 'Persisted author');
+    assert.match(ui.get('.bib-link-outcome').textContent, /BIB association and Already own action saved.*Pending hold.*Other request edits remain unsaved/);
 
     button(discardAction).click(); await settle();
     assert.equal(author().value, 'Unrelated Author draft', 'Declining discard keeps the retained draft');
+    assert.match(ui.get('.bib-link-outcome').textContent, /Other request edits remain unsaved/,
+      'Declining discard must keep the accurate unsaved-edits status');
     ui.allowDiscard();
     button(discardAction).click(); await settle();
     if (discardAction === 'Revert changes') {
+      assertClean();
+      assert.match(ui.get('.bib-link-outcome').textContent, /BIB association and Already own action saved.*Pending hold/,
+        'Revert preserves the successful BIB result');
+      author().value = 'Fresh Author draft after Revert';
+      author().dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
+      assert.equal(protectedUnload(ui), true);
+      assert.match(ui.get('.bib-link-outcome').textContent, /Other request edits remain unsaved/,
+        'The banner must still report a fresh draft after Revert');
+      author().value = 'Persisted author';
+      author().dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
       assertClean();
       const confirmations = ui.confirms.length;
       await ui.closeDetail();

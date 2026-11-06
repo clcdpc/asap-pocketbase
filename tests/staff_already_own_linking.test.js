@@ -248,7 +248,15 @@ async function setup(ui, initial = source) {
       if (perturb === 'selection') t.apply();
       if (perturb === 'BIB input') t.change('BIB ID', '9002');
       if (perturb === 'identifier input') t.change('Identifier', 'UNSAVED-ID');
-      if (perturb === 'editor revert') { t.button('Revert changes').click(); await settle(); t.button('Already own').click(); }
+      if (perturb === 'editor revert') {
+        t.button('Revert changes').click(); await settle();
+        assert.equal(t.controller.isDirty(), false);
+        const outcome = t.root.querySelector('.bib-link-outcome');
+        assert.equal(outcome.getAttribute('role'), 'alert');
+        assert.match(outcome.textContent, /The request outcome could not be confirmed\. Reload before trying again\./);
+        assert.doesNotMatch(outcome.textContent, /Other request edits remain unsaved/);
+        t.button('Already own').click();
+      }
       const readsBeforeReload = t.calls.filter(call => !call.init.method && call.path.includes('/title-requests/')).length;
       t.failDetail(false);
       t.final().click(); await settle();

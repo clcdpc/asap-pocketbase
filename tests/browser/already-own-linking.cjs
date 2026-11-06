@@ -62,6 +62,8 @@ const [baseURL, artifacts, staffId, tenantId, email, missing, invalid, stale, un
     assert.equal(await requestModal(page).getByRole('button', { name: 'Save changes', exact: true }).isDisabled(), true);
     assert.equal(await requestModal(page).getByRole('button', { name: 'Revert changes', exact: true }).isDisabled(), true);
     assert.equal(await requestModal(page).locator('.pending-audit-preview').isHidden(), true);
+    assert.doesNotMatch((await requestModal(page).locator('.bib-link-outcome').allTextContents()).join(' '),
+      /Other request edits remain unsaved/, 'A clean editor must not claim that other edits remain unsaved');
   };
   async function scan(name, target = page, nativeZoom = false) {
     await panel(target).scrollIntoViewIfNeeded();
@@ -135,6 +137,8 @@ const [baseURL, artifacts, staffId, tenantId, email, missing, invalid, stale, un
     assert.equal(await requestModal(page).getByLabel('Notes', { exact: true }).inputValue(), 'Unrelated note draft');
     assert.equal(await requestModal(page).getByLabel('Author', { exact: true }).inputValue(), 'Unrelated Author draft');
     assert.equal(await requestModal(page).locator('.request-save-state').textContent(), 'Unsaved changes');
+    assert.match(await requestModal(page).locator('.bib-link-outcome').textContent(),
+      /BIB association and Already own action saved.*Pending hold.*Other request edits remain unsaved/);
     const committedMissing = await getDetail(missing), actionsAfterLink = report.actions.length;
     assert.equal(committedMissing.title, savedMissing.title);
     assert.equal(committedMissing.author, savedMissing.author);
@@ -143,8 +147,11 @@ const [baseURL, artifacts, staffId, tenantId, email, missing, invalid, stale, un
     assert.equal(committedMissing.status, 'pending_hold');
     await decideConfirmation(page, () => requestModal(page).getByRole('button', { name: 'Revert changes', exact: true }).click(), decision => decision.dismiss());
     assert.equal(await requestModal(page).getByLabel('Author', { exact: true }).inputValue(), 'Unrelated Author draft');
+    assert.match(await requestModal(page).locator('.bib-link-outcome').textContent(), /Other request edits remain unsaved/);
     await decideConfirmation(page, () => requestModal(page).getByRole('button', { name: 'Revert changes', exact: true }).click(), decision => decision.accept());
     await assertSavedEditor(committedMissing);
+    assert.match(await requestModal(page).locator('.bib-link-outcome').textContent(),
+      /BIB association and Already own action saved.*Pending hold/, 'Revert preserves the successful BIB result');
     assert.deepEqual(await getDetail(missing), committedMissing, 'Revert preserves the committed BIB action and persisted values');
     await requestModal(page).getByRole('button', { name: 'Close', exact: true }).click();
     await requestModal(page).waitFor({ state: 'hidden' });

@@ -390,8 +390,14 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     const panel = lease?.content.querySelector('.request-workflow-panel');
     if (!panel) return;
     panel.querySelector('.bib-link-outcome')?.remove();
-    panel.append(element('p', { className: 'bib-link-outcome', role: error ? 'alert' : 'status',
-      text: `${message}${editor?.isDirty() ? ' Other request edits remain unsaved.' : ''}` }));
+    panel.append(element('p', { className: 'bib-link-outcome', role: error ? 'alert' : 'status' },
+      [message, element('span', { className: 'bib-link-draft-status' })]));
+    updateBibLinkDraftStatus(editor?.isDirty());
+  }
+  function updateBibLinkDraftStatus(dirty) {
+    const status = lease?.content.querySelector('.bib-link-draft-status');
+    const message = dirty ? ' Other request edits remain unsaved.' : '';
+    if (status && status.textContent !== message) status.textContent = message;
   }
   async function mutateOperation(snapshot, operation, action, body, draft = null) {
     if (!allowRequestMutation(snapshot, { consumes: draft })) return;
@@ -525,7 +531,8 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       openCopy: opener => live() ? openCopy(snapshot, context, opener) : Promise.resolve(false)
     });
     editor = createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot,
-      closeDetail: () => host.requestClose(), verified, retained, request: send });
+      closeDetail: () => host.requestClose(), onDirtyChange: dirty => { if (live()) updateBibLinkDraftStatus(dirty); },
+      verified, retained, request: send });
     workflows = createRequestWorkflows({ context, editor, announce, request: send });
     const status = statusLabel(request.status);
     lease?.heading(request.title, `${request.libraryOrgName} · Request ${request.id}`, {
